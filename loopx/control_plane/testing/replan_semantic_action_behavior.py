@@ -642,16 +642,16 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("quota does not expose the semantic replan contract")
     if not (
         action.get("must_attempt") is True
-        and action.get("delivery_allowed") is True
+        and action.get("delivery_allowed") is False
         and action.get("quiet_noop_allowed") is False
     ):
-        raise ValueError("semantic replan must require one executable action")
+        raise ValueError("semantic replan must require its Host action without ordinary delivery authority")
     return {
         "decision": "execute",
         "selected_todo_id": None,
         "user_action_required": bool(user.get("action_required")),
         "must_attempt_work": True,
-        "delivery_allowed": True,
+        "delivery_allowed": False,
         "quiet_noop_allowed": False,
         "external_write_requested": False,
         "replan_obligation_id": obligation.get("obligation_id"),

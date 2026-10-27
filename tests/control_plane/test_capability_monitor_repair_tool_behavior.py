@@ -198,10 +198,15 @@ def test_actor_rejects_bounded_json_registry_preview_after_quota(
 
 
 def test_actor_allows_bounded_fixture_layout_preview_before_repair(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
     fixture_root = tmp_path / "actor"
     fixture = _build_capability_repair_fixture(fixture_root)
+    # Construct canonical authority once; the actor reuses this prepared fixture.
+    monkeypatch.setattr(
+        "loopx.control_plane.testing.capability_monitor_repair_tool_behavior._build_capability_repair_fixture",
+        lambda root: fixture,
+    )
     state_path = (
         fixture.project_root
         / ".codex/goals/portfolio-goal/ACTIVE_GOAL_STATE.md"

@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from tests.control_plane.test_turn_host_decision_capture import _fixture_module
 
 
@@ -35,12 +35,12 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
     f = _fixture_module()
     project, runtime, workspace, registry = f._write_fixture(tmp_path, turn_count=2)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
-    code, listed = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID])
-    assert code == 0, listed
     state = project / ".codex/goals" / f.GOAL_ID / "ACTIVE_GOAL_STATE.md"
     initialize_canonical_authority(runtime, f.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=f.GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"]),
+        build_todo_runtime_shadow_projection(goal_id=f.GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state)),
         state_path=state, provider=provider)
+    code, listed = f._run_cli([*prefix, "todo", "list", "--goal-id", f.GOAL_ID])
+    assert code == 0, listed
     candidate = {
         "result_kind": "validated_progress", "classification": "artifact_checked",
         "summary": "The isolated artifact was checked.",

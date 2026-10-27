@@ -9,6 +9,7 @@ import pytest
 from canonical_authority_fixture import (
     initialize_canonical_authority,
     isolate_sqlite_runtime,
+    read_fixture_todos,
 )
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
@@ -51,9 +52,8 @@ def test_in_flight_turn_replay_preserves_open_todo_and_fresh_turn_admission(
         listed = cli("todo", "list", "--goal-id", GOAL_ID)
         return next(item for item in listed["todos"] if item["todo_id"] == TODO_ID)
 
-    listed = cli("todo", "list", "--goal-id", GOAL_ID)
     projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="soft_claim",
+        goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim",
     )
     initialize_canonical_authority(
         runtime, GOAL_ID, projection, state_path=state, provider=provider,

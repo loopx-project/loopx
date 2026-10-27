@@ -9,7 +9,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 def test_next_turn_reuses_declared_runtime_capability(tmp_path):
-    project, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    project, runtime, registry = _write_fixture(tmp_path, required_capability="network", provider="sqlite")
     before = registry.read_bytes()
     args = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     rc, first = _run_cli(registry, runtime, *args, "--available-capability", "network")
@@ -29,7 +29,7 @@ def test_next_turn_reuses_declared_runtime_capability(tmp_path):
 
 
 def test_goal_inheritance_local_failure_recovery_and_forget(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", claimed=False)
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", claimed=False, provider="sqlite")
     data = json.loads(registry.read_text())
     data["goals"][0]["coordination"]["available_capabilities"] = ["network"]
     data["goals"][0]["coordination"]["registered_agents"].append("agent-b")
@@ -58,7 +58,7 @@ def test_goal_inheritance_local_failure_recovery_and_forget(tmp_path):
 
 
 def test_owner_authority_and_optional_enablement_are_not_remembered(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="credentials")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="credentials", provider="sqlite")
     args = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     rc, first = _run_cli(registry, runtime, *args, "--available-capability", "credentials",
                          "--available-capability", "material_lifecycle")
@@ -69,7 +69,7 @@ def test_owner_authority_and_optional_enablement_are_not_remembered(tmp_path):
 
 
 def test_observation_does_not_cross_registry_or_agent(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", claimed=False)
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", claimed=False, provider="sqlite")
     data = json.loads(registry.read_text())
     data["goals"][0]["coordination"]["registered_agents"].append("agent-b")
     registry.write_text(json.dumps(data))
@@ -85,7 +85,7 @@ def test_observation_does_not_cross_registry_or_agent(tmp_path):
 
 
 def test_turn_plan_stays_read_only_and_settlement_rechecks_memory(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", provider="sqlite")
     scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     rc, plan = _run_cli(registry, runtime, "turn", "plan", *scope, "--available-capability", "network")
     assert rc == 0, plan
@@ -109,7 +109,7 @@ def test_executing_managed_turn_remembers_through_turn_start_hook(
     tmp_path, capsys, monkeypatch
 ):
     project, runtime, registry = _write_fixture(
-        tmp_path, required_capability="network"
+        tmp_path, required_capability="network", provider="sqlite",
     )
 
     def completed_turn(*args, **kwargs):
@@ -173,7 +173,7 @@ def test_executing_managed_turn_remembers_through_turn_start_hook(
 
 
 def test_agent_alias_uses_existing_identity_normalization(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", provider="sqlite")
     rc, first = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
                          "--agent-id", AGENT_ID.upper(), "--available-capability", "network")
     assert rc == 0, first

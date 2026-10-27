@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "tests" / "control_plane"))
+from canonical_authority_fixture import initialize_canonical_source_fixture  # noqa: E402
+
 GOAL_ID = "backlog-hygiene-goal"
 
 
@@ -112,6 +115,7 @@ def write_fixture(
         + "\n",
         encoding="utf-8",
     )
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state_path, provider="sqlite")
     return registry_path, runtime
 
 

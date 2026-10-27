@@ -156,6 +156,12 @@ def _build_capability_repair_fixture(root: Path) -> _SelectedTodoToolFixture:
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
 
+    from .canary_harness import import_fixture_authority
+
+    import_fixture_authority(
+        global_registry_path, SELECTED_TODO_TOOL_FIXTURE_GOAL_ID, provider="sqlite",
+    )
+
     prompt = build_heartbeat_prompt(
         goal_id=SELECTED_TODO_TOOL_FIXTURE_GOAL_ID,
         thin=True,

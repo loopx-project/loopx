@@ -125,11 +125,13 @@ def _write_fixture(
     *,
     required_capability: str | None = None,
     claimed: bool = True,
+    provider: str | None = None,
 ) -> tuple[Path, Path, Path]:
     """Write unmigrated source input; canonical consumers must initialize authority.
 
     Use ``_initialize_fixture_authority`` after source edits for ordinary reads
-    or writes. Claim-authoring scenarios must also opt out of the initial claim.
+    or writes, or select ``provider`` when initial authoring is already complete.
+    Claim-authoring scenarios must also opt out of the initial claim.
     """
     project = root / "project"
     runtime = root / "runtime"
@@ -198,6 +200,8 @@ def _write_fixture(
         + "\n",
         encoding="utf-8",
     )
+    if provider is not None:
+        _initialize_fixture_authority(project, runtime, provider=provider)
     return project, runtime, registry_path
 
 

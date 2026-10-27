@@ -4,7 +4,7 @@ import json
 import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.runtime_shadow import build_runtime_shadow_source_snapshot
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired, read_canonical_todos_if_promoted
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 
 
@@ -33,11 +33,24 @@ def test_real_quota_capability_gate_does_not_enable_repair_outputs(tmp_path, mon
                                                              state_path=state, registry_path=registry)
         initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
     before = state.read_bytes()
-    authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     args = ["quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
             "--include-detail", "agent-todos", ]
     if network_available:
         args += ["--available-capability", "network"]
+    if provider == "markdown":
+        # Markdown is authored source, no longer an ordinary authority backend.
+        # Availability of a host capability cannot bypass that migration gate.
+        with pytest.raises(CanonicalAuthorityRequired):
+            read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
+        code, rejected = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
+        assert code == 1 and rejected["error_code"] == "canonical_authority_required", rejected
+        assert rejected["write_admitted"] is False
+        assert rejected["decision_read_from_provider"] is False
+        assert rejected["legacy_fallback_used"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "authority").exists()
+        return
+    authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a")
     code, packet = run_json_cli_result(*args, registry_path=registry, runtime_root=runtime)
     assert code == 0, packet
     gate = packet["capability_gate"]

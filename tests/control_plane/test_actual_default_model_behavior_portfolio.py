@@ -348,7 +348,7 @@ def _replan_semantic_action_actor(_: str) -> dict[str, Any]:
         "replan_semantic_action_behavior_receipt_v0",
         selected_todo_id=None,
         user_action_required=False,
-        delivery_allowed=True,
+        delivery_allowed=False,
         semantic_action_accepted=True,
         context_delivery="host_projected",
         selected_semantic_outcomes=["fresh_vision_path_outcome"],
@@ -1659,7 +1659,10 @@ def test_portfolio_real_tool_scenarios_choose_from_latest_quota_result(
         **_real_tool_actors(tmp_path / "real-tool-actors"),
     )
 
-    assert result["qualification_passed"] is True
+    assert result["qualification_passed"] is True, [
+        (row["scenario_id"], row.get("failure_codes"), row.get("repeat_diagnostics"))
+        for row in result["scenarios"] if row["status"] != "passed"
+    ]
     boundary = result["boundary"]
     assert boundary["tools_enabled"] is True
     assert boundary["tool_enabled_scenario_count"] == 5

@@ -72,6 +72,7 @@ def required_vision_scenario_contract(
         "selected_todo_id": None,
         "user_action_required": False,
         "must_attempt_work": True,
+        "delivery_allowed": False,
         "quiet_noop_allowed": False,
     }
     if any(contract.get(field) != value for field, value in required.items()):

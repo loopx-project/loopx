@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 import pytest
+from canonical_authority_fixture import read_fixture_todos, initialize_canonical_source_fixture
 
 from loopx.control_plane.effect_runtime import restart_effect_runtime
 
@@ -81,19 +82,16 @@ def cli(registry: Path, runtime: Path, *args: str) -> tuple[int, dict]:
     return result.returncode, json.loads(result.stdout)
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_future_vision_wait_is_quiet_without_binding_or_poll(tmp_path, isolated_effect, monkeypatch, provider):
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
     registry, runtime, state = fixture(tmp_path)
-    if provider != "legacy":
-        if provider == "sqlite":
-            monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
-        rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-        assert rc == 0, listed
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=listed["todos"])
-        initialize_canonical_authority(runtime, GOAL, projection, state_path=state, provider=provider)
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL, handoff_mode="soft_claim", todos=read_fixture_todos(state))
+    initialize_canonical_authority(runtime, GOAL, projection, state_path=state, provider=provider)
     original_state = state.read_bytes()
     args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL,
             "--agent-id", AGENT, "--turn-instance-id", "scheduled-before-due")
@@ -140,6 +138,7 @@ def test_future_vision_wait_is_quiet_without_binding_or_poll(tmp_path, isolated_
 
 def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     registry, runtime, state = fixture(tmp_path, "resume_at:2026-01-01T00:00:00Z")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
     original = state.read_bytes()
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
                     "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "scheduled-due")
@@ -170,10 +169,8 @@ def test_real_cli_worker_keeps_automatic_wait_alive_and_honors_explicit_stop(
     registry, runtime, state = fixture(tmp_path)
     if provider == "sqlite":
         monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
-    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-    assert rc == 0, listed
     initialize_canonical_authority(runtime, GOAL, build_todo_runtime_shadow_projection(
-        goal_id=GOAL, handoff_mode="soft_claim", todos=listed["todos"],
+        goal_id=GOAL, handoff_mode="soft_claim", todos=read_fixture_todos(state),
     ), state_path=state, provider=provider)
     original_state = state.read_bytes()
     packets, sleeps = [], []
@@ -225,6 +222,7 @@ def test_independent_work_is_not_silenced_by_scheduled_wait(tmp_path, isolated_e
         output.write("\n- [ ] [P2] Validate independent public evidence.\n"
                      f"  <!-- loopx:todo todo_id=todo_independent status=open claimed_by={AGENT} "
                      "task_class=advancement_task action_kind=validate -->\n")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
                     "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "independent-work")
     assert rc == 0, guard
@@ -243,11 +241,9 @@ def test_bound_monitor_keeps_exact_turn_and_agent_fences(tmp_path, isolated_effe
                      f"  <!-- loopx:todo todo_id=todo_result_monitor status=open claimed_by={AGENT} "
                      "task_class=continuous_monitor action_kind=observe target_key=public-result "
                      "cadence=10m next_due_at=2026-01-01T00:00:00Z -->\n")
-    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
-    assert rc == 0, listed
     initialize_canonical_authority(
         runtime, GOAL,
-        build_todo_runtime_shadow_projection(goal_id=GOAL, todos=listed["todos"], handoff_mode="soft_claim"),
+        build_todo_runtime_shadow_projection(goal_id=GOAL, todos=read_fixture_todos(state), handoff_mode="soft_claim"),
         state_path=state,
     )
     rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",

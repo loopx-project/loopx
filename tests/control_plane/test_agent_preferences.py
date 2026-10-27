@@ -1,6 +1,8 @@
 """Production CLI -> durable store -> next-turn disclosure; no provider mocks."""
 import json
+import re
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
@@ -10,25 +12,24 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_inactive_preferences_are_silent_and_participating_hook_delivers_current_view(tmp_path, monkeypatch, provider):
     nested = tmp_path / ("workspace  dir" * 12)
     nested.mkdir()
     project, runtime, registry = _write_fixture(nested, required_capability="network")
-    if provider != "legacy":
-        from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
-        from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-        from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
-        if provider == "sqlite":
-            isolate_sqlite_runtime(tmp_path, monkeypatch)
-        goal = json.loads(registry.read_text())["goals"][0]
-        state = project / goal["state_file"]
-        # Initialize from the complete source owner, never a bounded quota display.
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
-            todos=fields["agent_todos"]["items"] + fields.get("user_todos", {}).get("items", []), handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    goal = json.loads(registry.read_text())["goals"][0]
+    state = project / goal["state_file"]
+    # Initialize from the complete source owner, never a bounded quota display.
+    fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
+        todos=fields["agent_todos"]["items"] + fields.get("user_todos", {}).get("items", []), handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     before = registry.read_bytes()
     scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     def call(action, *args):
@@ -125,7 +126,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
 
 
 def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_path):
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", provider="sqlite")
     scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     def call(action, *args):
         return _run_cli(registry, runtime, "semantic-preference", "agent", action, *scope, *args)
@@ -178,7 +179,7 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
 
 @pytest.mark.parametrize("other_scope", ["goal", "agent"])
 def test_shared_runtime_preserves_unconfigured_scope_projection(tmp_path, other_scope):
-    _, runtime, registry = _write_fixture(tmp_path / "first", required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path / "first", required_capability="network", provider="sqlite")
     document = json.loads(registry.read_text())
     peer = "peer-without-preferences"
     if other_scope == "goal":
@@ -186,6 +187,9 @@ def test_shared_runtime_preserves_unconfigured_scope_projection(tmp_path, other_
         other_goal = json.loads(other_registry.read_text())["goals"][0]
         other_goal["id"] = "other-goal"
         document["goals"].append(other_goal)
+        from canonical_authority_fixture import initialize_canonical_source_fixture
+        initialize_canonical_source_fixture(runtime, "other-goal",
+            state_path=Path(other_goal["repo"]) / other_goal["state_file"], provider="sqlite")
         scope = ("--goal-id", "other-goal", "--agent-id", AGENT_ID)
     else:
         document["goals"][0]["coordination"]["registered_agents"].append(peer)
@@ -210,7 +214,13 @@ def test_shared_runtime_preserves_unconfigured_scope_projection(tmp_path, other_
     after = projections()
     for old, new in zip(before, after):
         assert new.get("turn_start_capability_hook_dispatch") == old.get("turn_start_capability_hook_dispatch")
-    assert extract_turn_authority(after[1]) == extract_turn_authority(before[1])
+    old_authority, new_authority = map(extract_turn_authority, (before[1], after[1]))
+    for authority in (old_authority, new_authority):
+        # The complete observation includes a fresh clock. Keep every signed
+        # action dimension; only the raw observation's digest may differ.
+        observed_digest = authority["action_signature"].pop("source_decision_hash")
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", observed_digest)
+    assert new_authority == old_authority
     rc, empty = _run_cli(registry, runtime, "semantic-preference", "agent", "read", *scope)
     assert rc == 0 and empty["current"]["items"] == []
     assert len(list((runtime / "agent-preferences").iterdir())) == 1
@@ -218,7 +228,7 @@ def test_shared_runtime_preserves_unconfigured_scope_projection(tmp_path, other_
 
 def test_fresh_hook_uses_one_real_provider_snapshot_for_body(tmp_path, monkeypatch):
     from loopx.capabilities.semantic_preference import agent_preferences as adapter
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", provider="sqlite")
     original = adapter.agent_preferences
     calls = []
     def traced(**kwargs):
@@ -250,7 +260,7 @@ def test_permission_denied_hook_is_not_empty_and_recovers(tmp_path, denied_targe
     import os
     if os.name == "nt" or os.geteuid() == 0:
         pytest.skip("mode 000 read denial needs a non-root POSIX host")
-    _, runtime, registry = _write_fixture(tmp_path, required_capability="network")
+    _, runtime, registry = _write_fixture(tmp_path, required_capability="network", provider="sqlite")
     scope = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     rc, written = _run_cli(registry, runtime, "semantic-preference", "agent", "remember", *scope,
         "--key", "review", "--statement", "Use the designated reviewer.",

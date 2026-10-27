@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from canonical_authority_fixture import initialize_canonical_source_fixture
+
 from loopx.control_plane.work_items.work_lane_context import outcome_followthrough_hint
 from loopx.status import compact_post_handoff_run
 
@@ -37,6 +39,7 @@ def test_refresh_history_preserves_labels_without_inventing_delivery(tmp_path: P
             "authority_sources": [],
         }],
     }), encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, "delivery-semantics", state_path=state, provider="sqlite")
 
     def cli(*args: str) -> dict:
         completed = subprocess.run(

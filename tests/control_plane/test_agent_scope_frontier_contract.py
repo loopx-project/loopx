@@ -8,6 +8,8 @@ import subprocess
 import sys
 
 import pytest
+from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from examples.control_plane.quota_plan_fixtures import (
     SCOPED_AGENT_ID,
@@ -165,6 +167,10 @@ def test_cli_should_run_reads_disposable_state_and_emits_v1(tmp_path):
             "  <!-- loopx:todo todo_id=todo_prerequisite status=open "
             "task_class=advancement_task claimed_by=codex-main-control -->\n"
         )
+    advance_canonical_fixture_authority(runtime, "half-speed",
+        build_todo_runtime_shadow_projection(goal_id="half-speed", todos=read_fixture_todos(state),
+                                             handoff_mode="soft_claim"),
+        operation_id="source-prerequisite-fixture")
     result = subprocess.run(
         [
             sys.executable,

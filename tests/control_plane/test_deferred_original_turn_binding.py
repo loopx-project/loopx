@@ -17,7 +17,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 @pytest.mark.parametrize("hidden_count", [0, 60])
 @pytest.mark.parametrize("checked", [False, True])
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_deferred_replay_keeps_original_binding_during_replan(
     tmp_path: Path, hidden_count: int, checked: bool, provider: str,
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
@@ -26,7 +26,7 @@ def test_deferred_replay_keeps_original_binding_during_replan(
         from canonical_authority_fixture import isolate_sqlite_runtime
 
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
     turn = "turn-original-deferred"
     guard = ("quota", "should-run", "--runtime-profile", "codex_app_ssh_goal",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -53,16 +53,15 @@ def test_deferred_replay_keeps_original_binding_during_replan(
         for i in range(hidden_count))
     text = text.replace("## Agent Todo\n\n", "## Agent Todo\n\n" + rows)
     state.write_text(text)
-    if provider != "legacy":
-        from canonical_authority_fixture import initialize_canonical_authority
-        from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-        from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from canonical_authority_fixture import advance_canonical_fixture_authority
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
-        todos = parse_active_state_todos(text, item_limit=None)["agent_todos"]["items"]
-        initialize_canonical_authority(runtime, GOAL_ID,
-            build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
-                todos=todos, handoff_mode="soft_claim", leases=[]),
-            state_path=state, provider=provider)
+    todos = parse_active_state_todos(text, item_limit=None)["agent_todos"]["items"]
+    advance_canonical_fixture_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID,
+            todos=todos, handoff_mode="soft_claim", leases=[]),
+        operation_id="deferred-candidate-frontier")
 
     from loopx.cli import main
     from loopx.cli_commands import quota

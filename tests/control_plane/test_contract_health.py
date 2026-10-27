@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_source_fixture
 from loopx.contract import check_contract
 from loopx.control_plane.goals.contract_health import (
     contract_error_diagnostic,
@@ -115,6 +116,9 @@ def _registry(tmp_path: Path) -> tuple[Path, Path, Path]:
                 "authority_sources": [],
             }
         )
+    for goal in goals:
+        initialize_canonical_source_fixture(runtime_root, goal["id"],
+            state_path=tmp_path / goal["state_file"], provider="sqlite")
     registry_path = tmp_path / ".loopx" / "registry.json"
     registry_path.parent.mkdir(parents=True)
     registry_path.write_text(

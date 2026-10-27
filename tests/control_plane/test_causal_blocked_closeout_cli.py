@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.cli import main as cli_main
 from test_quota_settlement_cli import (
     AGENT_ID, ALTERNATIVE_TODO_ID, GOAL_ID, TODO_ID,
@@ -73,12 +73,11 @@ def test_pending_causal_wait_settles_once_and_releases_independent_work(
             "\n- [ ] [P2] Complete the transitive prerequisite.\n"
             f"  <!-- loopx:todo todo_id=todo_cycle_third status=open claimed_by={dependency_owner} task_class=advancement_task -->\n"
         ))
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
+    authored_todos = read_fixture_todos(state)
     if defer:
-        next(todo for todo in listed["todos"] if todo["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
+        next(todo for todo in authored_todos if todo["todo_id"] == TODO_ID)["claimed_by"] = AGENT_ID
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease" if defer else "soft_claim", leases=[],
+        goal_id=GOAL_ID, todos=authored_todos, handoff_mode="hard_lease" if defer else "soft_claim", leases=[],
     ), state_path=state, provider=provider)
     binding = ("--agent-id", AGENT_ID, "--todo-id", TODO_ID,
                "--turn-instance-id", f"causal-blocked-{kind}-{provider}")

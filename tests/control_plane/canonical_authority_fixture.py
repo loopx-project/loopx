@@ -99,6 +99,38 @@ def read_fixture_todos(state_path: Path) -> list[dict]:
     ]
 
 
+def advance_canonical_fixture_authority(
+    runtime_root: Path, goal_id: str, projection: dict, *, operation_id: str,
+) -> dict:
+    """Advance an already initialized disposable store through its real CAS.
+
+    Consumer fixtures may author a later synthetic state, but must not replace
+    storage bytes, reset lineage, re-import Markdown or re-engage its fence.
+    """
+    module = Path(__file__).resolve().parents[2] / "loopx/control_plane/coordination/local_authority_provider.ts"
+    script = (
+        f"import {{openLocalAuthorityStore}} from {json.dumps(module.as_uri())};"
+        "let input='';for await(const chunk of process.stdin)input+=chunk;"
+        "const request=JSON.parse(input);"
+        "const store=await openLocalAuthorityStore(request.root,request.goal);"
+        "const head=await store.loadAuthority();"
+        "if(head.status!=='loaded')throw new Error(JSON.stringify(head));"
+        "const result=await store.commitAuthority({expected_provider_revision:head.provider_revision,"
+        "operation_id:request.operation_id,events:[],next_projection:request.projection,receipts:[]});"
+        "process.stdout.write(JSON.stringify(result));"
+    )
+    process = subprocess.run(
+        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e", script],
+        input=json.dumps({"root": str(runtime_root), "goal": goal_id,
+                         "projection": projection, "operation_id": operation_id}),
+        capture_output=True, text=True, check=False, timeout=45,
+    )
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    assert result["status"] == "applied", result
+    return result
+
+
 def initialize_canonical_source_fixture(
     runtime_root: Path, goal_id: str, *, state_path: Path,
     provider: str = "file", handoff_mode: str = "soft_claim",

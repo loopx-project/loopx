@@ -130,7 +130,7 @@ def _explore_context_action(
     context = channel["work_context"]
     assert context["complete"] is True
     read, = [source for source in context["sources"]
-             if source["kind"] == "explore_turn_context"]
+             if source.get("kind") == "explore_turn_context"]
     assert read["ordering"] == "before_work"
     assert read["content"]["goal_id"] == "replan-semantic-action-fixture"
     assert read["content"]["agent_id"] == "codex-replan-semantic-action"

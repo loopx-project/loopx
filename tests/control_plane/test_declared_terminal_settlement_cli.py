@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 import test_quota_settlement_cli as cli
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
@@ -60,10 +60,8 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, *, 
     def run(*args: str) -> tuple[int, dict[str, Any]]:
         return cli._run_cli(registry_path, runtime, *args, cwd=workspace)
 
-    code, listed = run("todo", "list", "--goal-id", cli.GOAL_ID)
-    assert code == 0, listed
     projection = build_todo_runtime_shadow_projection(
-        goal_id=cli.GOAL_ID, todos=listed["todos"], handoff_mode="hard_lease", leases=[],
+        goal_id=cli.GOAL_ID, todos=read_fixture_todos(state), handoff_mode="hard_lease", leases=[],
     )
     # Actor audit is canonical-only; legacy Markdown import cannot author it.
     historical = [row for row in projection["todos"] if row["todo_id"].startswith("todo_historical_")]

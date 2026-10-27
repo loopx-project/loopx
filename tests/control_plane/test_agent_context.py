@@ -159,12 +159,10 @@ def test_shared_host_delivers_signed_context_and_original_legacy_detail(legacy_r
     prompt = render_prompt(authority)
     assert json.dumps(envelope["agent_context"], ensure_ascii=False,
                       sort_keys=True, separators=(",", ":")) in prompt
-    if legacy_reference:
-        assert authority["detail_ref"] == envelope["detail_ref"]
-        assert authority["action_signature"] == envelope["action_signature"]
-    else:
-        assert "detail_ref" not in authority
-        assert "action_signature" not in authority
+    # The captured source accompanies current inline work context as well as
+    # historical context references; both retain the original signed carrier.
+    assert authority["detail_ref"] == envelope["detail_ref"]
+    assert authority["action_signature"] == envelope["action_signature"]
     invalid = deepcopy(envelope)
     invalid["agent_context"]["scope"]["agent_id"] = "different-agent"
     with pytest.raises(ValueError, match="action signature"):

@@ -220,6 +220,12 @@ def _build_fixture(
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(registry_text + "\n", encoding="utf-8")
 
+    from .canary_harness import import_fixture_authority
+
+    import_fixture_authority(
+        global_registry_path, SELECTED_TODO_TOOL_FIXTURE_GOAL_ID, provider="sqlite",
+    )
+
     if prior_in_flight_progress:
         run = {
             "generated_at": "2026-08-12T00:01:00+00:00",

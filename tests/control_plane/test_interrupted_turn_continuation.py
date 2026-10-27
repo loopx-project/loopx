@@ -6,12 +6,14 @@ from pathlib import Path
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _run_generated_cli,
     _spend_run_count, _write_fixture, _configure_read_only_todo,
+    _initialize_fixture_authority,
 )
 
 
 def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Path) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     prior_turn = "interrupted-original"
     recovery_turn = "interrupted-recovery"
 
@@ -69,6 +71,7 @@ def test_original_turn_can_resume_and_settle_without_mutating_todo(tmp_path: Pat
 def test_later_turn_refusal_names_the_earlier_turn_that_owes_closeout(tmp_path: Path) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     prior_turn = "owed-original"
     current_turn = "owed-current"
 
