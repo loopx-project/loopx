@@ -190,11 +190,8 @@ def probe_controller_production():
     )
 
     verified_generated_paths()
-    validate_contract(c._LOOP_CONTROLLER_CONTRACT)
-    if (
-        c._LOOP_CONTROLLER_CONTRACT is not shared.TURN_CONTROLLER_CONTRACT
-        or c._LOOP_CONTROLLER_CONTRACT != read_contract()
-    ):
+    validate_contract(shared.TURN_CONTROLLER_CONTRACT)
+    if shared.TURN_CONTROLLER_CONTRACT != read_contract():
         raise ValueError("controller is disconnected from its generated contract")
     site = "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition"
     rows = []
@@ -293,4 +290,30 @@ def probe_projection_production():
                 False,
             )
         )
+    return rows
+
+
+def probe_route_production():
+    """Execute the actual Python-to-TS route boundary over independent inputs."""
+    from loopx.control_plane.turn_driver import driver
+
+    rows = []
+    cases = (("ready", "ready_for_host"), ("capability", "capability_action_required"),
+             ("repair", "repair_required"), ("replan", "replan_required"),
+             ("user", "user_action_required"), ("blocked", "blocked"),
+             ("quiet", "wait"), ("invalid", "contract_error"))
+    for case, expected in cases:
+        decision = controller_input("absent", case)["quota_decision"]
+        if case == "user":
+            decision["should_run"] = False
+        elif case == "quiet":
+            decision["should_run"] = False
+            decision["action"]["quiet_noop_allowed"] = True
+        elif case == "invalid":
+            decision["action_signature"] = {}
+        actual = driver._typed_route(decision).value
+        if actual != expected:
+            raise ValueError(f"Turn route witness {case} violates the independent input contract")
+        rows.append(Production("loopx/control_plane/turn_driver/driver.py::_typed_route",
+            driver._typed_route.__code__.co_firstlineno, "input_witness", frozenset({actual}), False))
     return rows

@@ -1,3 +1,4 @@
+import { normalizeHostFailure } from "./host_failure.ts";
 import transactionContract from "../turn_transaction_contract.json" with {
   type: "json",
 };
@@ -160,29 +161,6 @@ export function journalPhaseViolation(
   return null;
 }
 
-const hostFailureKinds: ReadonlySet<string> = new Set([
-  "auth_failed",
-  "contract_rejected",
-  "executor_timeout",
-  "output_budget_exhausted",
-  "provider_capacity",
-  "provider_overloaded",
-  "quota_exhausted",
-  "rate_limited",
-  "session_missing",
-  "transport_lost",
-  "unknown",
-]);
-const hostRetryPolicies: Readonly<Record<string, {
-  maxAttempts: number;
-  baseBackoffSeconds: number;
-}>> = Object.freeze({
-  executor_timeout: { maxAttempts: 2, baseBackoffSeconds: 5 },
-  provider_capacity: { maxAttempts: 3, baseBackoffSeconds: 30 },
-  provider_overloaded: { maxAttempts: 3, baseBackoffSeconds: 30 },
-  rate_limited: { maxAttempts: 3, baseBackoffSeconds: 60 },
-  transport_lost: { maxAttempts: 3, baseBackoffSeconds: 10 },
-});
 
 function asObject(value: unknown): JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -340,58 +318,20 @@ function preparedEffectCheck(
   };
 }
 
-function hasExactKeys(value: JsonObject, expected: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === expected.length &&
-    expected.every((key) => Object.hasOwn(value, key));
-}
-
 function hostRetryPolicyCheck(journal: JsonObject): TurnRecoveryCheck | null {
   if (!Object.hasOwn(journal, "host_failure")) return null;
-  const failure = asObject(journal.host_failure);
+  let failure: JsonObject;
+  try { failure = normalizeHostFailure(journal.host_failure); }
+  catch (error) {
+    if (!(error instanceof EffectRuntimeRequestError)) throw error;
+    return {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_contract_invalid"};
+  }
   const retry = asObject(failure.retry);
   const attempt = failure.attempt;
-  const hostAttemptCount = journal.host_attempt_count;
+  const kind = String(failure.kind);
   const retryable = failure.retryable;
-  const kind = typeof failure.kind === "string" ? failure.kind : "";
-  const policy = hostRetryPolicies[kind];
-  const expectedRetryable = policy !== undefined;
-  const expectedBackoff = policy && Number.isInteger(attempt)
-    ? Math.min(policy.baseBackoffSeconds * (2 ** Math.max(0, Number(attempt) - 1)), 300)
-    : null;
-  const failureFieldsValid = hasExactKeys(
-    failure,
-    expectedRetryable
-      ? ["schema_version", "kind", "attempt", "retryable", "retry"]
-      : ["schema_version", "kind", "attempt", "retryable"],
-  );
-  const contractValid =
-    failureFieldsValid &&
-    failure.schema_version === "loopx_turn_host_failure_v0" &&
-    hostFailureKinds.has(kind) &&
-    Number.isInteger(attempt) &&
-    Number(attempt) >= 1 &&
-    hostAttemptCount === attempt &&
-    typeof retryable === "boolean" &&
-    retryable === expectedRetryable &&
-    (
-      retryable === false
-        ? !Object.hasOwn(failure, "retry")
-        : hasExactKeys(
-          retry,
-          ["strategy", "max_attempts", "backoff_seconds"],
-        ) &&
-          retry.strategy === "same_configuration" &&
-          retry.max_attempts === policy?.maxAttempts &&
-          retry.backoff_seconds === expectedBackoff
-    );
-  if (!contractValid) {
-    return {
-      kind: "host_retry_policy",
-      outcome: "failed",
-      reason: "host_retry_contract_invalid",
-    };
-  }
+  if (journal.host_attempt_count !== attempt)
+    return {kind: "host_retry_policy", outcome: "failed", reason: "host_retry_contract_invalid"};
   if (retryable === true && Number(attempt) >= Number(retry.max_attempts)) {
     return {
       kind: "host_retry_policy",
