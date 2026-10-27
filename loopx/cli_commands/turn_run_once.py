@@ -311,6 +311,7 @@ def execute_turn_run_once(
             effect_ref: str,
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
+            pending_judgment = current_checkpoint.enabled() and not result.get("checkpoint_read_context_id")
             refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (

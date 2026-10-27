@@ -108,7 +108,7 @@ from .control_plane.goals.vision_checkpoint import (
 from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
 from .control_plane.goals.checkpoint_context_io import (
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
-    first_delivery_context_enrolled, result_work_required, checkpoint_continuation_required, result_work_read_id,
+    first_delivery_context_enrolled, result_work_required, checkpoint_continuation_required, result_work_read_id, TurnResultWork,
 )
 from .registry import registry_goals as registry_goals, resolve_state_file as resolve_state_file
 from .runtime import validate_goal_id_path_segment
@@ -949,6 +949,13 @@ def refresh_state_run(
                 refresh_recovery["decision"] == "append" and not first_delivery_checkpoint
                 and result_work_required(settlement_readback)
             )
+            if (result_work_checkpoint and completion_todo_id == settlement_identity.todo_id
+                    and completion_turn_key == settlement_identity.turn_instance_id
+                    and TurnResultWork(registry_path, runtime_root, settlement_identity, goal_ref).result_committed()):
+                # The typed Todo fence already proves this original result.
+                # A disposable work read cannot reopen its completed validation.
+                # Existing writeback recovery still owns the remaining effects.
+                result_work_checkpoint = False
             if result_work_checkpoint:
                 work_read_id = result_work_read_id(runtime_root, settlement_identity)
             if first_delivery != first_delivery_checkpoint and not default_checkpoint:

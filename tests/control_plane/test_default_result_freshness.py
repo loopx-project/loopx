@@ -31,7 +31,7 @@ def _default_fixture(provider, tmp_path, monkeypatch, *, handoff_mode="soft_clai
 def test_default_guard_restores_actual_basis_and_result_commit(provider, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
-    guard_args = ("quota", "should-run", "--codex-app", *identity, "--scan-path", str(project))
+    guard_args = ("quota", "should-run", "--codex-app", *identity)
     rc, first = _run_cli(registry, runtime, *guard_args, cwd=project)
     assert rc == 0 and "delivery_result_context" in first, json.dumps(first)
     context = first["delivery_result_context"]
@@ -52,14 +52,14 @@ def test_default_guard_restores_actual_basis_and_result_commit(provider, tmp_pat
     assert rc == 0 and saved["completed"], saved
     # Completing the Todo alone does not close its original refresh/spend.
     rc, pending = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--scan-path", str(project), cwd=project)
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
     assert pending["heartbeat_receipt"]["turn_instance_id"] == context["settlement_identity"]["turn_instance_id"], pending
     state.write_text(state.read_text(encoding="utf-8") + "\nRequirement after success.\n", encoding="utf-8")
     rc, replay = _run_cli(registry, runtime, *complete, cwd=project)
     assert rc == 0 and replay["idempotent_replay"], replay
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_concurrent_default_reads_share_original_turn_and_basis(provider, tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
@@ -68,7 +68,7 @@ def test_concurrent_default_reads_share_original_turn_and_basis(provider, tmp_pa
     def read():
         barrier.wait()
         return _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--scan-path", str(project), cwd=project)
+            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: read(), range(2)))
     assert all(rc == 0 for rc, _ in results), json.dumps(results, indent=2)
@@ -120,13 +120,12 @@ def test_successful_result_replay_precedes_later_goal_source_loss(provider, sour
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_already_bound_historical_receipt_retains_original_policy(provider, tmp_path, monkeypatch):
     from tests.control_plane.test_quota_settlement_cli import _historical_turn
     project, runtime, registry, _ = _default_fixture(provider, tmp_path, monkeypatch)
     args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID,
-        "--scan-path", str(project))
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     rc, first = _run_cli(registry, runtime, *args, cwd=project)
     assert rc == 0, first
     # Synthetic pre-default persisted admission; never rewrite active state.
@@ -146,7 +145,7 @@ def test_default_commit_keeps_basis_after_unrelated_todo_revision(provider, tmp_
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
     rc, work = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity,
-        "--scan-path", str(project), cwd=project)
+        cwd=project)
     assert rc == 0, work
     rc, peer = _run_cli(registry, runtime, "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
         "--text", "Validate an independent follow-up.", "--claimed-by", AGENT_ID, cwd=project)
@@ -157,11 +156,11 @@ def test_default_commit_keeps_basis_after_unrelated_todo_revision(provider, tmp_
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_damaged_work_input_blocks_default_dispatch_and_preserves_admission(provider, tmp_path, monkeypatch):
     project, runtime, registry, _ = _default_fixture(provider, tmp_path, monkeypatch)
     args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--scan-path", str(project))
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
     rc, first = _run_cli(registry, runtime, *args, cwd=project)
     assert rc == 0, first
     path = next((runtime / "goals" / GOAL_ID / "checkpoint-contexts").glob("*.json"))
@@ -218,7 +217,7 @@ json.dump({{"schema_version":"loopx_turn_result_v0", "turn_key":r["turn_key"],
     args = ("turn", "run-once", "--host", "generic-cli", "--goal-id", goal, "--agent-id", agent,
             "--project", str(project), "--host-adapter-command-json", json.dumps([sys.executable, str(host_path)]),
             "--validation-command-json", json.dumps([sys.executable, str(validator_path)]),
-            "--scan-root", str(project), "--no-global-sync", "--execute")
+            "--no-global-sync", "--execute")
     # Gap1 admissions already in flight keep result-only semantics after the
     # new checkpoint default ships. Seed the real old receipt, never downgrade
     # a receipt admitted under current_agent_v1.
@@ -343,7 +342,7 @@ raise SystemExit(main())
                 context_path.write_text("{", encoding="utf-8")
         rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", goal, "--agent-id", agent, "--todo-id", "todo_fixture0001",
-            "--scan-path", str(project), cwd=project)
+            cwd=project)
         assert rc == 0 and guard.get("ok") is True, guard
         assert guard["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == failed["turn_key"]
         assert guard.get("result_committed") is True and "delivery_result_context" not in guard, guard
@@ -435,16 +434,23 @@ def test_default_mcp_reads_before_work_and_rejects_stale_result(provider, receip
     assert result["ok"] is True, result
     # Ordinary successful settlement releases the next default work identity.
     next_work = json.loads(control.should_run())
+    # Main requires claiming an unowned successor before admitting its work.
+    selected = next_work.get("selected_todo") or {}
+    assert selected.get("claim_required_before_work") is True, next_work
+    claimed = json.loads(control.claim_task(selected["todo_id"], agent))
+    assert claimed["ok"] is True, claimed
+    next_work = json.loads(control.should_run())
     assert next_work.get("delivery_result_context"), next_work
     assert next_work["delivery_result_context"]["settlement_identity"]["turn_instance_id"] != original["settlement_identity"]["turn_instance_id"]
 
 
 @pytest.mark.parametrize("operation", ["add", "complete"])
-def test_legacy_work_read_does_not_restore_retired_mutation_authority(operation, tmp_path, monkeypatch):
+def test_unpromoted_work_read_does_not_restore_retired_mutation_authority(operation, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture("legacy", tmp_path, monkeypatch)
     rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
-    assert rc == 0 and "delivery_result_context" in admitted, admitted
+    assert rc == 1 and admitted["error_code"] == "canonical_authority_required", admitted
+    assert "delivery_result_context" not in admitted
     original = state.read_bytes()
     args = (("--role", "agent", "--text", "Independent candidate.") if operation == "add"
             else ("--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--note", "Verified candidate."))

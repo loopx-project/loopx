@@ -449,7 +449,7 @@ def first_delivery_progress(
     except (ValueError, OSError):
         direction = {}
         unknown = True
-    return effect_runtime_result("turn.first_delivery.evaluate", {
+    progress = effect_runtime_result("turn.first_delivery.evaluate", {
         "phase": "project", "result_committed": committed,
         "checkpoint_continuation": checkpoint_continuation_required(readback),
         "completion_event": readback.completion_event,
@@ -470,6 +470,7 @@ def first_delivery_progress(
             "status", "no_followup", "completion_continuation",
             "completion_requested_continuation", "completion_turn_key")},
     })
+    return {**progress, "settlement_identity": identity.as_dict()}
 
 
 def _delivery_observation_todos(root: Path, goal_id: str, registry_path: Path | None) -> list[dict[str, Any]]:
@@ -743,14 +744,18 @@ def read_checkpoint_context(
                         previous_receipt = json.loads(_receipt_path(root, identity, purpose).read_text(encoding="utf-8"))
                     except FileNotFoundError:
                         pass
+                prior = readback.writeback_run
                 if purpose == "delivery_result" and (previous_receipt or {}).get("commit_attempt") is not None:
+                    # An indexed progress writeback may precede an uncommitted
+                    # terminal result. Inspect its artifacts first; the typed
+                    # owner then distinguishes that proof from a done Todo.
                     attempt = _inspect_attempt(root, identity, purpose)
-                    if attempt.get("status") == "committed":
-                        raise CheckpointReadContextRejected({"ok": False,
-                            "error_code": "delivery_result_already_committed", "reread_required": False,
-                            "error": "Progress is already committed. Replay its original writeback; do not replace its work basis."})
                     previous_receipt = _read_context_receipt(_receipt_path(root, identity, purpose))
-                result = _resolve(root, phase="read", identity=identity.as_dict(), prior=readback.writeback_run,
+                    if attempt.get("status") == "committed":
+                        # Inspection verified this exact row against the index
+                        # and artifacts; a later direction row is a different effect.
+                        prior = previous_receipt["commit_attempt"]["index_record"]
+                result = _resolve(root, phase="read", identity=identity.as_dict(), prior=prior,
                     writeback_committed=readback.writeback.failure is None,
                     quota_spend_committed=readback.spend_run is not None or readback.spend_event is not None,
                     semantic_replan_guard=readback.semantic_replan_guard,
@@ -758,6 +763,8 @@ def read_checkpoint_context(
                     receipt=previous_receipt,
                     result_only=purpose == "delivery_result" and result_work_required(readback),
                     checkpoint_continuation=continuation,
+                    settlement_complete=readback.settlement.failure is None,
+                    quota_spent=readback.spend_run is not None,
                     full_frontier=continuation and purpose != "delivery_result",
                     admitted_turn=readback.heartbeat_receipt is not None,
                     read_context_id=uuid4().hex, dependency_todo_ids=dependency_todo_ids or [],

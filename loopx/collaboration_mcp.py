@@ -659,7 +659,10 @@ class Delegations:
             return self.read(operation_id)
         if should_spawn:
             if publish_committed:
-                self.execute(operation_id)
+                if prepared_source_request_id is None:
+                    self.execute(operation_id)
+                else:
+                    self.execute(operation_id, prepared_source_request_id=prepared_source_request_id)
             elif prepared_source_request_id is None:
                 self._spawn(operation_id)
             else:

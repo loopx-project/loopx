@@ -182,8 +182,25 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
         error: "Original validation may have executed; reconcile its outcome before replacing the work read."};
     }
     if (use !== "supplement_checkpoint") {
-      if (jsonObject(request.receipt)?.commit_attempt != null) {
-        return {...rejected("checkpoint_commit_unknown"), reread_required: false,
+      const receipt = jsonObject(request.receipt);
+      const attempt = jsonObject(receipt?.commit_attempt);
+      const indexed = jsonObject(attempt?.index_record);
+      const prior = jsonObject(request.prior);
+      // A proved writeback is not a completed Todo. Historical result-only
+      // Turns and settled delegated progress may still need terminal validation.
+      // Its original append/artifacts are inspected by the IO owner before
+      // this read; only matching proof on those lanes may release the marker.
+      // Pending current checkpoint lanes retain exact writeback replay.
+      const committedWork = use === "delivery_result" && request.result_only === true &&
+        prior !== null && indexed !== null &&
+        jsonObject(prior.result_work_context)?.read_context_id === receipt?.read_context_id &&
+        canonicalAuthoritySha256(prior.settlement_identity) === canonicalAuthoritySha256(identity) &&
+        canonicalAuthoritySha256(prior.refresh_recovery) === canonicalAuthoritySha256(indexed.refresh_recovery) &&
+        canonicalAuthoritySha256(prior.result_work_context) === canonicalAuthoritySha256(indexed.result_work_context);
+      if (receipt?.commit_attempt != null && (!committedWork ||
+          (request.checkpoint_continuation !== false &&
+            !(request.settlement_complete === true && request.quota_spent === true)))) {
+        return {...rejected(committedWork ? "delivery_result_already_committed" : "checkpoint_commit_unknown"), reread_required: false,
           error: "A first delivery append may have started; inspect the original Turn and artifacts before another judgment."};
       }
       if ((request.prior != null && !(use === "delivery_result" && request.result_only === true)) || request.admitted_turn !== true) {

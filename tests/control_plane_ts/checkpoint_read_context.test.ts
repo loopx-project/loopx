@@ -64,6 +64,31 @@ const check = (receipt: unknown, overrides: JsonObject = {}) => evaluate({
   phase: "check", identity, facts, read_context_id: "read-A", receipt, ...overrides,
 });
 
+test("only matching historical or settled progress permits another read for an unfinished result", () => {
+  const original = read({purpose: "delivery_result", admitted_turn: true, result_only: true, prior: null});
+  assert.equal(original.ok, true);
+  const prior = {settlement_identity: identity, result_work_context: {read_context_id: "read-A"},
+    refresh_recovery: {mutation_digest: "original"}};
+  const receipt = {...original.receipt as JsonObject, commit_attempt: {index_record: prior}};
+  const reread = (overrides: JsonObject = {}) => read({purpose: "delivery_result", admitted_turn: true, checkpoint_continuation: false,
+    result_only: true, read_context_id: "read-B", prior, receipt, ...overrides});
+  assert.equal(reread().ok, true);
+  assert.equal((reread().receipt as JsonObject).commit_attempt, undefined);
+  assert.equal(reread({checkpoint_continuation: true}).error_code, "delivery_result_already_committed");
+  assert.equal(reread({checkpoint_continuation: true, settlement_complete: true, quota_spent: true}).ok, true);
+  assert.equal(reread({checkpoint_continuation: true, settlement_complete: false}).error_code, "delivery_result_already_committed");
+  assert.equal(reread({checkpoint_continuation: true, settlement_complete: true, quota_spent: false}).error_code, "delivery_result_already_committed");
+  assert.equal(reread({checkpoint_continuation: true, settlement_complete: true, quota_spent: true, prior: null}).error_code, "checkpoint_commit_unknown");
+  for (const changed of [null, {...prior, settlement_identity: {...identity, agent_id: "other"}},
+    {...prior, result_work_context: {read_context_id: "another-read"}},
+    {...prior, refresh_recovery: {mutation_digest: "replacement"}}]) {
+    assert.equal(reread({prior: changed}).error_code, "checkpoint_commit_unknown");
+  }
+  assert.equal(reread({facts: {...facts, todos: facts.todos.map(todo => todo.todo_id === "task"
+    ? {...todo, status: "done", completion_turn_key: identity.turn_instance_id} : todo)}}).error_code,
+  "delivery_result_already_committed");
+});
+
 test("primary owner requirements stay in the Goal basis when an Agent rolls back derived state", () => {
   const a = [{path: "/owner/goal.md", prose: "Export records without envelopes"}];
   const b = [{path: "/owner/goal.md", prose: "Export versioned envelopes"}];
