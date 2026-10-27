@@ -219,12 +219,37 @@ action consequences or relying on fixed alignment offsets.
 Reading a citation opens only the requested original, preserving the explicit
 open or closed state of the full analysis and returning to the exact citation.
 
+Search results use the same reading hierarchy: compact title, recorded time and
+status in the list; opening a row restores its complete title and body. Keep
+protocol identities and source references in one disclosure, with version
+comparison beside it. Counts stay compact; coverage and comparison-method
+explanations use contextual help. Reading failures retain a visible state and
+the existing recovery action. Do not clamp the opened document or its evidence.
+
+搜索列表以标题、时间和记录状态供浏览，展开后完整呈现正文。来源与标识合并按需查看，
+版本比较保留原位入口；范围、口径用共享帮助，真实读取失败和恢复动作仍可见。
+
 When an explicit analysis supplies a whole-history translation, use it throughout
 the matching research snapshot, including routes, decisions and expanded history.
 Offer one in-place original/translation switch; keep coverage and source/version
 detail in contextual help, with incomplete or inapplicable coverage visible.
 Keep original evidence directly readable. A language switch only reads; missing
 or failed translations retain original text and never silently launch a model.
+
+Review the displayed translation against its original and cited context, including
+quantities, their referents, negation and uncertainty. Field coverage and preserved
+literals do not establish readable meaning. When the source supports a quantity,
+state it in ordinary localized prose; an opaque English compound in parentheses
+is insufficient. Keep exact source terms available, and leave ambiguous counts,
+units or identifiers unresolved rather than guessing. Correct saved translations
+through their existing versioned analysis owner; review does not itself rerun a
+model or rewrite a saved result. Record remaining content failures in the
+existing task and review.
+
+译文验收须对照原文及引用语境，核对数量所指、否定和不确定性。字段齐全、原始标记
+未变，不代表含义已经清楚。有来源支持的数量用界面语言正文说清，不能只留下括号内
+的连写英文；准确原词仍可查，含义不明的计数、单位和标识不猜测。修订沿版本化分析
+处理，评审不自动重跑模型或覆盖已存结果；剩余正文问题记入原任务和评审。
 
 刷新和前进后退保留视图、时间分组与证据焦点；标签之间保留阅读位置。选择状态按
 Goal 和来源隔离。研究中从侧栏切换 Goal 仍停留在研究页，读取新 Goal 自身证据；
@@ -930,6 +955,8 @@ automated readability score or an additional owner approval.
 - [ ] Open a representative item and read its complete requirements, rationale
       and evidence once. Check keyboard/touch access, delayed loading, closing
       and return to the same item. Long content remains readable when expanded.
+      For translated research, apply the original/context comparison above to
+      actual saved output, not only a synthetic translation or its coverage count.
 - [ ] Inspect the entire page as well as the first viewport at desktop and
       narrow widths. Count repeated explanations across regions, remove or share
       them, and check that failures, uncertainty and action consequences remain

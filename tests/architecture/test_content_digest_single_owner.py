@@ -177,6 +177,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.periodic_report.machine_defaults",
     "loopx.capabilities.progress_review.receipt",
     "loopx.chat_action_normalization",
+    "loopx.capabilities.manager_context.chat_history",
     "loopx.cli_commands.quota_capture",
     "loopx.configuration_transaction",
     "loopx.control_plane.agents.execution_facts",
@@ -195,6 +196,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.goals.deletion_service",
     "loopx.control_plane.goals.goal_amendment_proposal",
     "loopx.control_plane.projects.registry_codec",
+    "loopx.control_plane.scheduler.monitor_batch_receipts",
     "loopx.control_plane.status.goal_source",
     "loopx.control_plane.testing.cli_output_semantics",
     "loopx.control_plane.testing.release_commit_qualification",
@@ -204,6 +206,7 @@ CONSUMER_MODULES = (
     "loopx.control_plane.todos.completion_validation_store",
     "loopx.control_plane.todos.machine_section_projection",
     "loopx.control_plane.turn_driver.codex_sessions",
+    "loopx.control_plane.turn_driver.decision_capture",
     "loopx.control_plane.turn_driver.operation_requests",
     "loopx.control_plane.work_items.governed_transition_proposal",
     "loopx.control_plane.work_items.progress_review_policy",
@@ -221,6 +224,10 @@ CONSUMER_MODULES = (
 # A consumer that hands `re` a pattern this file cannot fold. Folding reads
 # every construction except the declared readers, each fenced below.
 UNREADABLE_CONSUMER_CONSTRUCTIONS: dict[str, str] = {
+    "loopx.control_plane.scheduler.monitor_batch_receipts": (
+        "_read_receipt locates an escaped operation-bound HTML receipt marker, "
+        "not a whole-value digest. Its sole dynamic regex is fenced below."
+    ),
     "loopx.capabilities.benchmark_toolkit.integrity": (
         "_marker_present matches an escaped caller-supplied filename/token inside "
         "command text with explicit basename boundaries; it does not validate a "
@@ -1269,6 +1276,24 @@ def test_cli_output_dynamic_prose_pattern_is_fenced_to_its_literal_question() ->
     assert isinstance(literal, ast.Constant) and isinstance(literal.value, str) and literal.value
 
 
+def test_monitor_receipt_dynamic_pattern_only_locates_its_operation_marker() -> None:
+    dotted = "loopx.control_plane.scheduler.monitor_batch_receipts"
+    module = importlib.import_module(dotted)
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    reader = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_read_receipt")
+    calls = [node for node in ast.walk(reader) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and ast.unparse(node.func) == "re.findall"]
+    assert len(calls) == 1
+    unreadable = [site for site in _module_of(dotted)["constructions"] if not site["readable"]]
+    assert [site["line"] for site in unreadable] == [calls[0].lineno]
+    pattern = calls[0].args[0]
+    assert isinstance(pattern, ast.BinOp) and isinstance(pattern.op, ast.Add)
+    assert ast.unparse(pattern.left) == "re.escape(marker)"
+    assert isinstance(pattern.right, ast.Constant) and pattern.right.value == r"([A-Za-z0-9+/=]+) -->"
+    assert any(isinstance(node, ast.Assign) and ast.unparse(node) == "marker = _receipt_marker(operation_id)"
+               for node in reader.body)
+
+
 # --- layer 4: behaviour, per spelling and per surface -------------------------------------
 
 
@@ -1327,6 +1352,27 @@ def test_the_owner_is_a_leaf_and_exports_only_the_two_shapes() -> None:
         if isinstance(value, re.Pattern)
     }
     assert patterns == set(CANONICAL_EXPORTS), patterns
+
+
+def test_context_capture_reader_checks_bare_shape_and_original_bytes(tmp_path: Path) -> None:
+    from hashlib import sha256
+
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    raw = b'{"ok":true}\n'
+    capture = tmp_path / "capture.json"
+    capture.write_bytes(raw)
+    digest = sha256(raw).hexdigest()
+    path, received, payload = read_context_capture_file(str(capture), digest)
+    assert path == capture.resolve()
+    assert received == raw and payload == {"ok": True}
+
+    for invalid in (*BARE_REJECTS, f"sha256:{digest}", digest.upper(), f"{digest}\n"):
+        with pytest.raises(ValueError, match="exact SHA-256"):
+            read_context_capture_file(str(capture), invalid)
+    for wrong_bytes in BARE_ACCEPTS:
+        with pytest.raises(ValueError, match="capture digest mismatch"):
+            read_context_capture_file(str(capture), wrong_bytes)
 
 
 def test_periodic_report_generation_receipt_checks_both_digest_fields() -> None:

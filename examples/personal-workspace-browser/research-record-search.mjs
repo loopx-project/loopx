@@ -29,7 +29,7 @@ goal='synthetic-record-search'
 events=[build_explore_node_event(goal_id=goal,node_id='question',title='Synthetic candidate comparison',recorded_at='2026-01-01T00:00:00Z')]
 for index in range(75):
     events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
-        title=f'Candidate {index}',summary='Original observation; complete costs remain unknown.',
+        title=f'Candidate {index} — '+('研究问题与完整原始结论 / original question and retained evidence. '*3)+'END OF ORIGINAL TITLE',summary='Original observation; complete costs remain unknown.',
         status='tentative',recorded_at='2026-01-01T01:00:00Z'))
 measurement=dict(metric='Synthetic score', unit='points', higher_is_better=True, comparison_scope='synthetic:fixed', input_revision='input:v1', evaluation_ref='method:v1', candidate_ref='candidate:amber', evidence_ref='result:amber')
 events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id='retained-finding',
@@ -53,6 +53,8 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       const url = `${owner.base}/chat/?goalId=synthetic-record-search&view=research&statusUrl=%2Fstatus.json`;
       await page.goto(url);
       const history = page.locator(".research-history");
+      await page.waitForFunction(() => document.querySelector('.research-history')?.getAttribute('aria-busy') === 'false');
+      await page.screenshot({path: resolve(outputDir, "research-record-first-1440.png"), animations: "disabled"});
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       const search = history.getByRole("searchbox", {name: "Search research records"});
       const results = history.locator(".research-record-search");
@@ -68,23 +70,56 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert(await search.evaluate(element => element === document.activeElement), "The search entry moves keyboard focus to the input");
       await page.waitForFunction(() => document.querySelector('.research-history')?.getAttribute('aria-busy') === 'false');
       assert.equal(await results.locator("li").count(), 50);
+      // Long mixed-language records remain scannable; one keyboard action restores
+      // the complete title and body without exposing source diagnostics.
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await results.evaluate(element => element.scrollIntoView({block: "start"}));
+        await page.screenshot({path: resolve(outputDir, `research-record-list-${width}.png`), animations: "disabled"});
+      }
+      const longRecord = results.locator(".research-history-records > li > details").nth(1);
+      const longTitle = longRecord.locator(":scope > summary > strong");
+      assert(await longTitle.evaluate(element => element.clientHeight < element.scrollHeight), "Collapsed long titles leave room for other records");
+      const longSummary = longRecord.locator(":scope > summary");
+      await longSummary.focus();
+      await page.keyboard.press("Enter");
+      assert.match(await longRecord.innerText(), /END OF ORIGINAL TITLE/);
+      assert(await longTitle.evaluate(element => element.clientHeight >= element.scrollHeight), "The opened title is complete at 390px");
+      assert.doesNotMatch(await longRecord.innerText(), /Record ID|Result ID/);
+      await page.screenshot({path: resolve(outputDir, "research-record-long-390.png"), animations: "disabled"});
+      await page.keyboard.press("Enter");
+      assert(await longSummary.evaluate(element => element === document.activeElement), "Closing preserves the exact record entry");
+      const scopeHelp = results.getByRole("button", {name: /[Ss]earch scope/});
+      await scopeHelp.focus();
+      await page.getByRole("tooltip").getByText("Search covers the complete loaded history.", {exact: true}).waitFor();
+      await page.keyboard.press("Escape");
+      assert(await scopeHelp.evaluate(element => element === document.activeElement));
+      await scopeHelp.click();
+      await page.getByRole("tooltip").getByText("Search covers the complete loaded history.", {exact: true}).waitFor();
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({width: 1440, height: 900});
       const all = await download();
       assert.equal(all.goal_id, "synthetic-record-search");
       assert.equal(all.records.length, 79, "Download includes matches beyond both HTTP and display paging");
       assert.deepEqual(all.coverage, {loaded_records: 79, exported_records: 79, history_complete: true, refresh_failed: false});
       await search.fill("AMBER-V1 run:old");
-      await results.getByText("1 matches in 79 loaded records", {exact: true}).waitFor();
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       assert.equal(await results.locator("li").count(), 1, "Search reaches beyond both the display limit and HTTP page boundary");
       await results.locator(".research-history-records > li > details > summary").click();
       assert.match(await results.locator("li").innerText(), /质量下降.*original negative evidence/);
-      assert.match(await results.locator("li").innerText(), /candidate:amber-v1/);
+      const sources = results.locator(".research-record-sources");
+      assert.doesNotMatch(await results.locator("li").innerText(), /run:old|candidate:amber-v1/, "Reading the observation does not expose protocol metadata by default");
+      await sources.locator(":scope > summary").focus();
+      await page.keyboard.press("Enter");
+      assert.match(await sources.innerText(), /run:old|candidate:amber-v1/);
+      await page.keyboard.press("Enter");
       assert.doesNotMatch(await results.locator("li").innerText(), /amber-v2|Later observation/);
       const status = results.getByRole("combobox", {name: "Recorded status"});
       await status.selectOption("confirmed");
       await readEmptyScope(page, results, "No matching records. Try another term or clear the filters.");
       assert.equal(await downloadButton.isDisabled(), true);
       await status.selectOption("refuted");
-      await results.getByText("1 matches in 79 loaded records", {exact: true}).waitFor();
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       await results.locator(".research-history-records > li > details > summary").click();
       const selected = await download();
       assert.deepEqual(selected.filters, {query: "AMBER-V1 run:old", status: "refuted"});
@@ -98,6 +133,14 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await comparisonSummary.focus();
       await page.keyboard.press("Enter");
       await comparison.getByRole("combobox", {name: "Compare with"}).waitFor();
+      const comparisonHelp = comparison.getByRole("button", {name: "Comparison scope and record identities", exact: true});
+      await comparisonHelp.focus();
+      const identities = page.getByRole("tooltip");
+      assert.match(await identities.innerText(), /Compares original records/);
+      for (const record of all.records.filter(record => record.result_id === "retained-finding").slice(0, 2)) {
+        assert.match(await identities.innerText(), new RegExp(record.event_id));
+      }
+      await page.keyboard.press("Escape");
       assert.match(await comparison.innerText(), /Later observation/);
       assert.match(await comparison.innerText(), /质量下降/);
       assert.match(await comparison.innerText(), /candidate:amber-v1/);
@@ -133,20 +176,20 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       });
       await downloadButton.click();
       await results.getByRole("alert").getByText(/Could not start the download/).waitFor();
-      await results.scrollIntoViewIfNeeded();
+      await results.evaluate(element => element.scrollIntoView({block: "start"}));
       await page.screenshot({path: resolve(outputDir, "research-record-export-download-error.png")});
       assert.deepEqual((await download()).records, selected.records);
       assert.equal(await results.getByRole("alert").count(), 0);
       for (const width of [1440, 390]) {
         await page.setViewportSize({width, height: 900});
-        await results.scrollIntoViewIfNeeded();
+        await results.evaluate(element => element.scrollIntoView({block: "start"}));
         assert(await results.evaluate(element => element.scrollWidth <= element.clientWidth + 1), "Results fit the viewport");
         await page.screenshot({path: resolve(outputDir, `research-record-search-${width}.png`), animations: "disabled"});
       }
       // A failed refresh keeps the selected query and old evidence visibly stale.
       await page.route("**/api/chat/explore-results?*", route => route.fulfill({status: 503, json: {error: "Synthetic interruption"}}));
       await history.getByRole("button", {name: "Refresh history", exact: true}).click();
-      await results.getByText(/Refresh failed; showing previously read records/).waitFor();
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).getByText(/Refresh failed/).waitFor();
       assert.equal(await search.inputValue(), "AMBER-V1 run:old");
       assert.equal(await results.locator("li").count(), 1);
       const stale = await download();
@@ -156,11 +199,11 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.match(await comparison.innerText(), /candidate:amber-v2/);
       await comparisonSummary.click();
       assert.deepEqual(stale.records, selected.records);
-      await results.scrollIntoViewIfNeeded();
+      await results.evaluate(element => element.scrollIntoView({block: "start"}));
       await page.screenshot({path: resolve(outputDir, "research-record-export-stale.png")});
       await page.unroute("**/api/chat/explore-results?*");
       await history.getByRole("button", {name: "Refresh history", exact: true}).click();
-      await results.getByText("1 matches in 79 loaded records", {exact: true}).waitFor();
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       assert.equal((await download()).coverage.refresh_failed, false);
       await results.getByRole("button", {name: "Clear filters"}).click();
       await results.getByRole("button", {name: /Show more records/}).click();
@@ -177,6 +220,9 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await search.fill("amber-v1");
       await readEmptyScope(page, results, "No matches in the loaded records; the remaining history is not verified.");
       assert.equal(await downloadButton.isDisabled(), true);
+      await results.getByRole("button", {name: "No matches in loaded records", exact: true}).click();
+      await page.getByRole("tooltip").getByText("History is incomplete; remaining records have not been verified.", {exact: true}).waitFor();
+      await page.keyboard.press("Escape");
       await results.getByRole("button", {name: "Clear filters"}).click();
       const partial = await download();
       assert.equal(partial.coverage.history_complete, false);
@@ -186,10 +232,10 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await search.fill("amber-v1");
       await page.unroute("**/api/chat/explore-results?*");
       await history.getByRole("button", {name: "Refresh history", exact: true}).click();
-      await results.getByText("1 matches in 79 loaded records", {exact: true}).waitFor();
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       await page.goto(url.replace("synthetic-record-search", "synthetic-other-research"));
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
-      await results.getByText("1 matches in 1 loaded records", {exact: true}).waitFor();
+      await results.getByRole("status", {name: "1 matches in 1 loaded records", exact: true}).waitFor();
       assert.equal(await search.inputValue(), "", "Another Goal starts with its own search scope");
       assert.doesNotMatch(await results.innerText(), /amber|Earlier negative/);
       const other = await download();
@@ -202,7 +248,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await page.goto(url);
       await history.getByRole("button", {name: "Search research records", exact: true}).click();
       await search.fill("amber-v1");
-      await results.getByText("1 matches in 79 loaded records", {exact: true}).waitFor();
+      await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       // A pending refresh cannot export an intermediate mixture of pages.
       let release, observed;
       const hold = new Promise(resolve => {release = resolve;});
@@ -226,6 +272,13 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await results.getByText(/比较记录版本/).click();
       await results.getByRole("combobox", {name: "比较对象"}).waitFor();
       assert.match(await comparison.innerText(), /未测量/);
+      await results.evaluate(element => element.scrollIntoView({block: "start"}));
+      await page.screenshot({path: resolve(outputDir, "research-record-chinese-390.png"), animations: "disabled"});
+      await comparison.locator(":scope > summary").click();
+      await sources.locator(":scope > summary").click();
+      assert.match(await sources.innerText(), /run:old|candidate:amber-v1/);
+      await results.evaluate(element => element.scrollIntoView({block: "start"}));
+      await page.screenshot({path: resolve(outputDir, "research-record-sources-390.png"), animations: "disabled"});
       await results.getByRole("button", {name: "清除筛选"}).click();
       const chineseDownload = results.getByRole("button", {name: "下载匹配记录（JSON）", exact: true});
       const received = page.waitForEvent("download");

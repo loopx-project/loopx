@@ -2,6 +2,7 @@ import {useState} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {changedResearchFields, researchComparisonFields, researchRecordVersions, type ResearchComparisonField} from "./research-record-versions.ts";
 import {ExploreMeasurements} from "./explore-measurements";
+import {ContextHelp} from "./context-help";
 
 const labels: Record<ResearchComparisonField, [string, string]> = {
   title: ["Title", "标题"], summary: ["Original text", "原文"], status: ["Recorded status", "记录状态"],
@@ -43,12 +44,18 @@ export function ResearchRecordComparison({events, selected, zh, stateLabel, time
       <label>{zh ? "比较对象" : "Compare with"}<select value={comparison.event_id} onChange={event => setChosen(event.target.value)}>
         {alternatives.map(event => <option key={event.event_id} value={event.event_id}>{timeLabel(event.recorded_at)} · {event.title} · {event.event_id}</option>)}
       </select></label>
-      <p>{zh ? "比较原始记录，不代表同条件评测或研究质量变化。" : "Compares original records, not matched evaluations or changes in research quality."}</p>
-      <div className="research-comparison-pair">
-        {[selected, comparison].map((event, i) => <div key={event.event_id}><strong>{i === 0 ? (zh ? "所选记录" : "Selected record") : (zh ? "对照记录" : "Comparison record")}</strong><p>{timeLabel(event.recorded_at)}</p><code>{event.event_id}</code></div>)}
+      <div className="research-comparison-controls">
+        <span role="status">{zh ? `${changed.length} 个字段不同` : `${changed.length} fields differ`}</span>
+        <ContextHelp label={zh ? "比较范围与记录标识" : "Comparison scope and record identities"}>
+          <p>{zh ? "比较原始记录，不代表同条件评测或研究质量变化。" : "Compares original records, not matched evaluations or changes in research quality."}</p>
+          <p>{zh ? "所选记录" : "Selected record"}<code>{selected.event_id}</code></p>
+          <p>{zh ? "对照记录" : "Comparison record"}<code>{comparison.event_id}</code></p>
+        </ContextHelp>
+        <label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)}/>{zh ? "包括相同字段" : "Include unchanged fields"}</label>
       </div>
-      <p role="status">{zh ? `${changed.length} 个字段不同` : `${changed.length} fields differ`}</p>
-      <label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)}/>{zh ? "包括相同字段" : "Include unchanged fields"}</label>
+      <div className="research-comparison-pair research-comparison-identities">
+        {[selected, comparison].map((event, i) => <div key={event.event_id}><strong>{i === 0 ? (zh ? "所选记录" : "Selected record") : (zh ? "对照记录" : "Comparison record")}</strong><p>{timeLabel(event.recorded_at)}</p></div>)}
+      </div>
       {(showAll ? researchComparisonFields : changed).map(field => <section key={field} className="research-comparison-field">
         <h4>{labels[field][zh ? 1 : 0]}</h4>
         <div className="research-comparison-pair">{[selected, comparison].map((event, i) => <div key={event.event_id}>

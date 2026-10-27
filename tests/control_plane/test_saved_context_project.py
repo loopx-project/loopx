@@ -81,7 +81,7 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
 
 
 
-@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("enabled", [None, False, True], ids=["omitted", "off", "on"])
 @pytest.mark.parametrize("cache_location", ["default", "new", "existing"])
 def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, monkeypatch, enabled, cache_location):
     from loopx.control_plane.turn_driver.codex_context import read_codex_context_reference
@@ -106,7 +106,9 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
     args = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
         "--goal-id", "saved-goal", "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn",
-        "--codex-app", "--context-delivery", "on" if enabled else "off", "--codex-context-dir", str(context)]
+        "--codex-app", "--codex-context-dir", str(context)]
+    if enabled is not None:
+        args += ["--context-delivery", "on" if enabled else "off"]
     if cache_location != "default":
         args += ["--decision-output-root", str(root)]
     code, result = _run_cli(registry, runtime, *args, cwd=tmp_path)
@@ -129,16 +131,27 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
         assert "content" not in result and "schema_version" not in result
         assert not list(context.iterdir())
         assert root.exists() == (cache_location == "existing")
+        # A generic reader has no native observer. Keep its complete-read
+        # obligations instead of promising an input proof that never ran.
+        instruction = result["instruction"]
+        assert "Native input observation" not in instruction
+        assert "Check each model-visible content's UTF-8 byte length" in instruction
+        assert "complete coverage and the original SHA-256" in instruction
+        assert "If incomplete, reread the affected range of this same capture" in instruction
     command = shlex.split(result["command"])
     code, page = _run_cli(registry, runtime, *command[3:], cwd=tmp_path)
     assert code == 0 and json.loads(page["content"]) == original
 
 
 @pytest.mark.parametrize("body", ["Exact requirement.\n" * 700, "完整要求与来源🙂\n" * 700], ids=["ascii", "utf8"])
-def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp_path, monkeypatch, body):
+@pytest.mark.parametrize("deep_path", [False, True], ids=["short", "deep"])
+def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp_path, monkeypatch, body, deep_path):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
     from loopx.control_plane.turn_driver.codex_input_trace import _capture_page_range
 
+    if deep_path:
+        tmp_path = tmp_path / ("capture-location-" * 9) / ("original-context-" * 9)
+        tmp_path.mkdir(parents=True)
     context = tmp_path / "native"
     context.mkdir(mode=0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "native-session")
@@ -155,6 +168,9 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
         "--capture-sha256", digest, "--goal-id", "goal", "--agent-id", "agent", "--turn-instance-id", "turn",
         "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(context), cwd=tmp_path)
     assert code == 0 and result["mode"] == "full", result
+    # Include the final recovery, activation and instruction fields: an inline
+    # content cap alone does not bound the actual native guard stdout.
+    assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
     delivered = Path(result["path"]).read_bytes()
     delivered_digest = hashlib.sha256(delivered).hexdigest()
     assert result["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
@@ -166,6 +182,7 @@ def test_saved_projection_first_page_continues_exact_bytes_and_keeps_restart(tmp
         argv = shlex.split(page["next_command"])
         code, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == len(combined)
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
         combined += page["content"].encode()
     assert combined == delivered and hashlib.sha256(combined).hexdigest() == delivered_digest
     argv = shlex.split(result["command"])
@@ -203,7 +220,7 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
     monkeypatch.setattr(decision_capture, "write_decision_capture", fail_optional_wire)
     if failure == "inline_read":
         from loopx.cli_commands import quota_capture
-        monkeypatch.setattr(quota_capture, "read_context_capture", lambda args: {"ok": False})
+        monkeypatch.setattr(quota_capture, "read_context_capture", lambda args, **kwargs: {"ok": False})
     digest = hashlib.sha256(raw).hexdigest()
     args = build_parser().parse_args(["--format", "json", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
@@ -297,7 +314,7 @@ def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
 @pytest.mark.parametrize("host", ["app_server", "benchmark", "app_machine", "app_code_mode"])
-def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path, monkeypatch, host):
+def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
@@ -308,7 +325,8 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     binary, env, workspace, home = _native_fixture(tmp_path)
-    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0", CODEX_ROLLOUT_TRACE_ROOT=str(workspace / "traces"))
+    env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
+    env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
     project, runtime, registry = _write_fixture(workspace)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = read_fixture_todos(state)
@@ -375,7 +393,7 @@ def test_native_saved_preflight_uses_current_input_without_guard_replay(tmp_path
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 descriptor = json.loads(output.split("\nOutput:\n", 1)[-1])
                 assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
-                wire = json.loads((Path(descriptor["path"]).parent / "presentation.json").read_text()) if name == "cold" else json.loads(Path(descriptor["path"]).read_text())
+                wire = json.loads((Path(descriptor["path"]).parent / "delivery.json").read_text())
                 assert descriptor["target"] == wire["target"]
                 observed[name] = (wire, descriptor)
                 data = Path(descriptor["path"]).read_bytes()

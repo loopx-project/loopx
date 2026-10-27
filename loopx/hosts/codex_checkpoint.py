@@ -102,7 +102,12 @@ def _verify_interrupted_guard(turns: list[dict], guard: dict) -> None:
         argv = _guard_cli_arguments(command, guard)
         try:
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                return vars(parser.parse_args(argv))
+                parsed = vars(parser.parse_args(argv))
+            # A sealed command is independent of today's machine preference.
+            # Legacy omitted transport flags mean off; explicit on stays distinct.
+            if parsed.get("context_delivery") is None:
+                parsed["context_delivery"] = "off"
+            return parsed
         except (SystemExit, ValueError) as error:
             raise ValueError("native pending guard arguments are invalid") from error
     args = arguments(item.get("command", ""))

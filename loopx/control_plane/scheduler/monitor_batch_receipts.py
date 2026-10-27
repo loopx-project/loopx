@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..content_digest import BARE_SHA256_PATTERN
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..todos.path_resolution import resolve_todo_state_path
 
@@ -34,6 +35,46 @@ def _read_receipt(text: str, operation_id: str) -> dict[str, Any] | None:
     if not isinstance(receipt, dict):
         raise ValueError("Monitor batch operation receipt must be an object")
     return receipt
+
+
+def is_monitor_receipt_line(line: str, *, goal_id: str) -> bool:
+    """Recognize only the historical writer's complete, identity-bound line.
+
+    This codec check establishes generated ownership, not replay authority.
+    The original bytes remain available to the typed replay validator.
+    """
+    match = re.fullmatch(r"<!-- loopx:monitor-batch:([0-9a-f]{64}) ([A-Za-z0-9+/=]+) -->",
+        line.rstrip("\r\n"))
+    if match is None:
+        return False
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate Monitor receipt field")
+            result[key] = value
+        return result
+
+    try:
+        receipt = json.loads(base64.b64decode(match[2], validate=True), object_pairs_hook=unique_object)
+    except (ValueError, UnicodeError, RecursionError):
+        return False
+    if not isinstance(receipt, dict) or set(receipt) != {
+            "schema_version", "goal_id", "operation_id", "request_sha256", "writeback"}:
+        return False
+    operation = receipt.get("operation_id")
+    writeback = receipt.get("writeback")
+    return (receipt.get("schema_version") == "loopx_monitor_batch_receipt_v0"
+        and receipt.get("goal_id") == goal_id
+        and isinstance(operation, str) and bool(operation)
+        and hashlib.sha256(operation.encode()).hexdigest() == match[1]
+        and isinstance(receipt.get("request_sha256"), str)
+        and BARE_SHA256_PATTERN.fullmatch(receipt["request_sha256"]) is not None
+        and isinstance(writeback, dict)
+        and writeback.get("schema_version") == "monitor_poll_todo_writeback_v0"
+        and writeback.get("goal_id") == goal_id
+        and writeback.get("monitor_effect_id") == operation)
 
 
 def _plan(request: dict[str, Any], **facts: Any) -> dict[str, Any]:

@@ -17,7 +17,7 @@ def _history_page_brief():
         "inputs": [], "acceptance": ["Return the original conclusion"], "return_requirement": "Return here"}
 
 
-def test_history_page_keeps_one_original_collaboration_carrier(flow, monkeypatch):
+def test_history_page_keeps_one_original_collaboration_carrier(flow, monkeypatch):  # noqa: F811
     from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
 
     root, registry, store, create = flow
@@ -43,7 +43,7 @@ def test_history_page_keeps_one_original_collaboration_carrier(flow, monkeypatch
     assert reads == [(sid, tid)]
 
 
-def test_return_delivery_readback_survives_a_separate_history_page(flow):
+def test_return_delivery_readback_survives_a_separate_history_page(flow):  # noqa: F811
     from loopx.capabilities.manager_context import acknowledge
     from loopx.capabilities.manager_context.roundtrip import drain, report, project_chat_session_snapshot
 
@@ -68,7 +68,7 @@ def test_return_delivery_readback_survives_a_separate_history_page(flow):
     assert sum(bool(row.get("collaboration")) for row in rows) == 1
 
 
-def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordinary, monkeypatch):
+def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordinary, monkeypatch):  # noqa: F811
     from urllib.parse import urlencode
     from loopx.chat_server import ChatHTTPServer
 

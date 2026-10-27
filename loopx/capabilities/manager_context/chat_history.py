@@ -4,8 +4,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import re
 from typing import Any
+
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 
 def page_chat_messages(session_id: str, messages: list[dict[str, Any]], *,
@@ -25,7 +26,7 @@ def page_chat_messages(session_id: str, messages: list[dict[str, Any]], *,
             if (source != session_id or type(offset) is not int or type(total) is not int
                     or not 0 < offset < total <= len(messages)
                     or not isinstance(expected_digest, str)
-                    or not re.fullmatch(r"[a-f0-9]{64}", expected_digest)):
+                    or not BARE_SHA256_PATTERN.fullmatch(expected_digest)):
                 raise ValueError()
         except (ValueError, TypeError, UnicodeDecodeError) as exc:
             raise ValueError("invalid history cursor") from exc

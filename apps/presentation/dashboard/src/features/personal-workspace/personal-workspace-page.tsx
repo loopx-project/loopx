@@ -3000,7 +3000,7 @@ export function PersonalWorkspacePage({
               <span>{t("workspace.unavailable")}</span>
             </div> : null}
             {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
-              <div className="personal-history-notice" role="status">
+              <div className={conversationHistoryState.phase === "loading" ? "sr-only" : "personal-history-notice"} role="status">
                 <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
                   {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
                     ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>

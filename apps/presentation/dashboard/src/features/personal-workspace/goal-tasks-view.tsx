@@ -198,7 +198,7 @@ export function GoalTasksView({
     && conversation.slice(latestUserIndex + 1).some((item) => item.message.role === "assistant" && item.message.pending);
 
   return (
-    <section aria-label={t("header.tasks")} className={`personal-task-board${listView ? " is-list-view" : ""}`}>
+    <section aria-label={t("header.tasks")} className={`personal-task-board${listView ? " is-list-view" : ""}`} tabIndex={-1}>
       <header className="personal-task-view-toolbar">
         <div><strong>{t("header.tasks")}</strong></div>
         <div className="personal-task-view-switch" role="group" aria-label={t("tasks.viewLabel")}>

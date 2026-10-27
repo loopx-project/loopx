@@ -77,7 +77,8 @@ def _input_text(request):
     return "\n".join(text)
 
 
-def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None):
+def _app_server(binary, env, workspace, home, trusted, additional_context=None, *, sandbox="read-only", resume=None,
+                turn_timeout_sec=30):
     with (home / "stderr.txt").open("w") as stderr, StdioNativeGoalTransport.spawn(
         [binary, "app-server", "--listen", "stdio://"], cwd=str(workspace), env=env,
         stderr=stderr, response_timeout_sec=20,
@@ -92,7 +93,9 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
             # bypass flag as app-server trust propagation.
             listed = native.request("hooks/list", {"cwds": [str(workspace)]})
             handlers = [h for entry in listed["data"] for h in entry["hooks"]]
-            assert len(handlers) == 2
+            fixture_hooks = json.loads((home / "hooks.json").read_text())["hooks"]
+            expected_handlers = sum(len(group["hooks"]) for groups in fixture_hooks.values() for group in groups)
+            assert expected_handlers > 0 and len(handlers) == expected_handlers
             assert all(h["sourcePath"] == str((home / "hooks.json").resolve()) for h in handlers)
             params["config"] = {"hooks.state": {
                 h["key"]: {"trusted_hash": h["currentHash"]} for h in handlers}}
@@ -104,7 +107,7 @@ def _app_server(binary, env, workspace, home, trusted, additional_context=None, 
         if additional_context is not None:
             turn_params["additionalContext"] = additional_context
         turn = native.request("turn/start", turn_params)["turn"]["id"]
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + turn_timeout_sec
         while time.monotonic() < deadline:
             event = native.next_event(timeout_sec=1)
             if event and event.get("method") == "turn/completed":

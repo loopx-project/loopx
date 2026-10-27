@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (45)
+## 已接受 (46)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -46,6 +46,7 @@
 | [RFC：Human Attention Wishlist v0](human-attention-wishlist-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：用户确认的垂域操作（v0）](human-confirmed-domain-operations-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：智能化审阅与动态展示面 v0](intelligent-review-presentation-surfaces-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：LoopX × LayerFS——复杂工程探索与效果评测（v0）](layerfs-engineering-exploration-evaluation-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：团队实时工作区 v0](live-team-workspace-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Harness Benchmark 与研究计划 v0](long-horizon-harness-benchmark-research-program-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |

@@ -740,7 +740,7 @@ function completeGoalNarrative(content: JsonObject): boolean {
       || typeof content.text !== "string" || typeof content.state_file !== "string" || !content.state_file
       || typeof content.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(content.revision)) return false;
   let end = 0;
-  return content.excluded_todo_regions.every(value => {
+  if (!content.excluded_todo_regions.every(value => {
     const region = jsonObject(value);
     if (!region || !["user", "agent", "archive"].includes(String(region.role))
         || !Number.isSafeInteger(region.start_line) || !Number.isSafeInteger(region.end_line)
@@ -748,7 +748,41 @@ function completeGoalNarrative(content: JsonObject): boolean {
         || typeof region.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(region.revision)) return false;
     end = Number(region.end_line);
     return true;
-  });
+  })) return false;
+  if (!Object.hasOwn(content, "excluded_monitor_receipts")) return true;
+  const receipts = content.excluded_monitor_receipts;
+  const compact = jsonObject(receipts);
+  let ranges: unknown[];
+  let expectedCount: number;
+  if (compact) {
+    if (Object.keys(compact).some(key => !["count", "line_ranges"].includes(key))
+        || !Number.isSafeInteger(compact.count) || Number(compact.count) <= 0
+        || !Array.isArray(compact.line_ranges)) return false;
+    ranges = compact.line_ranges;
+    expectedCount = Number(compact.count);
+  } else {
+    // Already captured source observations retain their original readback.
+    if (!Array.isArray(receipts) || !receipts.length) return false;
+    ranges = [];
+    for (const value of receipts) {
+      const region = jsonObject(value);
+      if (!region || region.start_line !== region.end_line || typeof region.revision !== "string"
+          || !ENVELOPED_SHA256_PATTERN.test(region.revision)) return false;
+      ranges.push([region.start_line, region.end_line]);
+    }
+    expectedCount = receipts.length;
+  }
+  end = 0;
+  let count = 0;
+  return ranges.length > 0 && ranges.every(range => {
+    if (!Array.isArray(range) || range.length !== 2 || !range.every(Number.isSafeInteger)
+        || range[0] <= end || range[1] < range[0]
+        || (content.excluded_todo_regions as JsonObject[]).some(todo =>
+          range[0] <= Number(todo.end_line) && range[1] >= Number(todo.start_line))) return false;
+    end = range[1];
+    count += range[1] - range[0] + 1;
+    return true;
+  }) && Number.isSafeInteger(count) && count === expectedCount;
 }
 
 /** Deliver full registered sources once. Unowned mixed Goal documents remain
@@ -809,7 +843,7 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       pending.push(read);
     } else if (read.source === "goal_state") {
       if (completeGoalNarrative(content!)) sources.push({...read,
-        reason: `${String(read.reason ?? "")} This registered source delivers all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims.`,
+        reason: `${String(read.reason ?? "")} This registered source delivers all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims.${content!.excluded_monitor_receipts ? " Recognized historical Monitor receipt lines retain source lineage instead of repeating their encoded bodies; the original file remains available for receipt recovery." : ""}`,
         content: content!});
       else {
         pending.push(read);

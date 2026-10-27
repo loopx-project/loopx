@@ -232,6 +232,72 @@ test("a model report requires the exact live calendar window and original task, 
   ]) assert.throws(() => admitStewardManagedTurn(invalid));
 });
 
+test("a quota refusal admits one fresh report identity only with native no-effects and usable-allowance evidence", () => {
+  const p = original();
+  const prior = {operation: "native_turn", host: "codex-app-server", actor: p.actor,
+    turn_instance_id: "report.cadence_original", todo_id: "todo_report", validation_command: ["python", "validate.py"],
+    work_kind: "report", report_window_id: "cadence_original", report_subscription_revision: "sha256:original"};
+  const effects = {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    status: "failed", result_kind: "host_failure", effects,
+    host_failure: {schema_version: "loopx_turn_host_failure_v0", kind: "unknown", attempt: 1},
+    receipt: {ok: true, failed_phase: "host_execute", status: "failed", completed_phases: [],
+      lineage: {goal_id: p.actor.goal_id, agent_id: "steward", todo_id: prior.todo_id}}};
+  const source = {turn_id: "1".repeat(32), session_id: p.session.session_id, status: "completed",
+    origin: "native_loopx", loopx_execution: true, delta_count: 0, upstream_turn_id: "quota-native-turn",
+    loopx_request: prior, response: {native_loopx: result}};
+  const observation = {thread_id: "original-native-thread", turn_id: source.upstream_turn_id,
+    only_original_user_item: true, codex_error_info: "usageLimitExceeded", quota_available: true, quota_observed_at: 100};
+  const recovery = {original_turn_id: source.turn_id, native_observation: observation};
+  const request = {...prior, turn_instance_id: prior.turn_instance_id + ".quota-recovery", report_quota_recovery: recovery};
+  const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
+    goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
+    journal_status: "failed", completed_phases: [], recorded_effects: {...effects, host_invoked: null}};
+  const basis = {original: source, inspection, generation_present: false, observed_at: 101};
+  const input = {...p, session: {...p.session, upstream_thread_id: observation.thread_id}, request,
+    report_quota_basis: basis,
+    report_window: {window_id: prior.report_window_id, subscription_revision: prior.report_subscription_revision,
+      goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
+    report_subscription: {enabled: true, profile_preset: "portfolio-progress",
+      route_ref: `steward-private:${p.binding.binding_id}:${p.source}`, effective_revision: prior.report_subscription_revision},
+    report_todo: {todo_id: prior.todo_id, target_key: prior.report_window_id,
+      claimed_by: "steward", action_kind: "generate_periodic_report", status: "open"}};
+  const before = structuredClone(input);
+  assert.equal(admitStewardManagedTurn(input).observation_only, false);
+  assert.deepEqual(input, before);
+  for (const invalid of [
+    {...input, report_quota_basis: null}, {...input, request: {...request, report_quota_recovery: null}},
+    {...input, request: {...request, turn_instance_id: prior.turn_instance_id}},
+    {...input, request: {...request, todo_id: "todo_other"}},
+    {...input, request: {...request, report_window_id: "another-window"}},
+    {...input, request: {...request, report_subscription_revision: "changed"}},
+    {...input, report_subscription: {...input.report_subscription, enabled: false}},
+    {...input, goal_active: false}, {...input, binding: {...input.binding, grant: "revoked"}},
+    {...input, session: {...input.session, active_turn_id: "user-work"}}, {...input, queued_turn_count: 1},
+    {...input, session: {...input.session, upstream_thread_id: "another-thread"}},
+    ...["quota_available", "only_original_user_item"].map(key => ({...input, request: {...request,
+      report_quota_recovery: {...recovery, native_observation: {...observation, [key]: false}}}})),
+    ...["other", "serverOverloaded", null].map(codex_error_info => ({...input, request: {...request,
+      report_quota_recovery: {...recovery, native_observation: {...observation, codex_error_info}}}})),
+    ...[0, 102, "100", null].map(quota_observed_at => ({...input, request: {...request,
+      report_quota_recovery: {...recovery, native_observation: {...observation, quota_observed_at}}}})),
+    {...input, request: {...request, report_quota_recovery: {...recovery, original_turn_id: "2".repeat(32)}}},
+    {...input, report_quota_basis: {...basis, original: {...source, delta_count: 1}}},
+    {...input, report_quota_basis: {...basis, original: {...source, status: "running"}}},
+    {...input, report_quota_basis: {...basis, original: {...source,
+      loopx_request: {...prior, report_quota_recovery: recovery}}}},
+    {...input, report_quota_basis: {...basis, generation_present: true}},
+    ...["state_written", "quota_spent", "scheduler_acknowledged"].map(key => ({...input,
+      report_quota_basis: {...basis, original: {...source, response: {native_loopx: {...result,
+        effects: {...effects, [key]: true}}}}}})),
+    ...["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].map(key => ({...input,
+      report_quota_basis: {...basis, inspection: {...inspection, [key]: false}}})),
+    {...input, report_quota_basis: {...basis, inspection: {...inspection, completed_phases: ["host_execute"]}}},
+    {...input, report_quota_basis: {...basis, inspection: {...inspection,
+      recorded_effects: {...inspection.recorded_effects, state_written: null}}}},
+  ]) assert.throws(() => admitStewardManagedTurn(invalid));
+});
+
 test("a retained pre-publication launch refusal can resume only its original native transaction", () => {
   const p = original();
   const prior = {operation: "native_turn", host: "codex-app-server", actor: p.actor,

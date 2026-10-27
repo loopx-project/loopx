@@ -237,3 +237,44 @@ def test_code_mode_requires_exact_live_parent_and_complete_model_visible_output(
     (bundle / "payloads/input.json").write_text(json.dumps(request))
     (bundle / "trace.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
     assert codex_context_in_active_input(observation, baseline=baseline, session_id="session") is (failure is None)
+
+
+@pytest.mark.parametrize("code_mode", [False, True])
+@pytest.mark.parametrize("failure", [None, "no_runtime", "other_runtime", "duplicate_runtime",
+                                    "unfinished", "late_completion", "ended", "missing_bytes", "wrong_output"])
+def test_streamed_tool_needs_complete_response_before_its_live_runtime(tmp_path, code_mode, failure):
+    observation, baseline, request, original = fixture(tmp_path)
+    bundle = Path(observation["trace_bundle"])
+    start, completion, tool = [row["payload"] for row in original]
+    payloads = [start]
+    if code_mode:
+        source = 'text(await tools.exec_command({cmd:"loopx quota should-run"}));'
+        payloads.append({"type": "code_cell_started", "runtime_cell_id": "cell",
+            "model_visible_call_id": "parent", "source_js": source})
+        tool.update(requester={"type": "code_cell", "runtime_cell_id": "cell"},
+                    model_visible_call_id=None, code_mode_runtime_tool_id="child")
+        output = {"output_items": [{"type": "custom_tool_call", "name": "exec", "call_id": "parent", "input": source}]}
+        (bundle / "payloads/output.json").write_text(json.dumps(output))
+    payloads.append(tool)
+    runtime = {"type": "tool_call_runtime_started", "tool_call_id": "guard"}
+    payloads += [completion, runtime]
+    if failure == "no_runtime":
+        payloads.remove(runtime)
+    elif failure == "other_runtime":
+        runtime["tool_call_id"] = "other"
+    elif failure == "duplicate_runtime":
+        payloads.append(dict(runtime))
+    elif failure == "unfinished":
+        payloads.remove(completion)
+    elif failure == "late_completion":
+        payloads[-2:] = [runtime, completion]
+    elif failure == "ended":
+        payloads.append({"type": "tool_call_runtime_ended", "tool_call_id": "guard"})
+    elif failure == "missing_bytes":
+        request["input"].pop(1)
+    elif failure == "wrong_output":
+        (bundle / "payloads/output.json").write_text(json.dumps({"output_items": []}))
+    (bundle / "payloads/input.json").write_text(json.dumps(request))
+    rows = [{**original[0], "seq": i, "payload": payload} for i, payload in enumerate(payloads)]
+    (bundle / "trace.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    assert codex_context_in_active_input(observation, baseline=baseline, session_id="session") is (failure is None)

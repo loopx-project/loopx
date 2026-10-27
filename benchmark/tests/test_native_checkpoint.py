@@ -930,6 +930,21 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(tmp_path, monk
     rendered[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
         "LOOPX_TURN=turn-1\n" + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
     _verify_interrupted_guard(rendered, guard)
+    for setting in ("off", "on"):
+        explicit = copy.deepcopy(turns)
+        explicit[-1]["items"][-1]["command"] = shlex.join([
+            "/bin/bash", "-lc", shlex.join(argv + ["--context-delivery", setting])])
+        _verify_interrupted_guard(explicit, {**guard, "context_delivery": setting})
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(turns, {**guard, "context_delivery": "on"})
+    with pytest.raises(ValueError, match="routes or identity"):
+        _verify_interrupted_guard(turns, {**guard, "context_delivery": None})
+    # Equivalent implicit/explicit off commands cannot hide an earlier call.
+    repeated = copy.deepcopy(turns)
+    repeated[-1]["items"].append({**item, "id": "later-call", "command": shlex.join([
+        "/bin/bash", "-lc", shlex.join(argv + ["--context-delivery", "off"])])})
+    with pytest.raises(ValueError, match="ambiguous"):
+        _verify_interrupted_guard(repeated, guard)
     # A caller cannot change the captured presentation/authority mode on restore.
     opposite = list(argv)
     if "--turn-envelope" in opposite:

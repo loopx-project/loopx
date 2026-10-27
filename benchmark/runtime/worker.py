@@ -150,6 +150,9 @@ def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
                 stderr=stderr,
                 text=True,
                 start_new_session=True,
+                # Opted-in replay checkpoints require owner-only native writes.
+                # This affects the isolated child, never the parent or off mode.
+                umask=0o077 if os.name == "posix" and env.get("LOOPX_CONTEXT_DELIVERY") == "on" else -1,
             )
         yield process
     finally:
@@ -514,19 +517,16 @@ def run_once(env: dict[str, str]) -> dict:
         if execution.context_delivery != "off":
             from benchmark.runtime.context_delivery import prepare_context_delivery
 
-            prior_trace = env.get("CODEX_ROLLOUT_TRACE_ROOT")
             try:
-                prepare_context_delivery(env, home)
+                context_env = dict(env)
+                prepare_context_delivery(context_env, home)
+                env.update(context_env)
                 receipt["context_transport"] = {"available": True}
             except Exception as exc:
                 # Optional presentation cannot block an otherwise admitted
-                # trial. Unsupported hooks/diagnostics keep ordinary full IO.
+                # trial. Unavailable native hooks keep ordinary full IO.
                 env.pop("LOOPX_CODEX_CONTEXT_DIR", None)
                 env.pop("LOOPX_CODEX_CONTEXT_TRUST_ARGS", None)
-                if prior_trace is None:
-                    env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
-                else:
-                    env["CODEX_ROLLOUT_TRACE_ROOT"] = prior_trace
                 receipt["context_transport"] = {"available": False, **_error_tail(exc)}
         body = "Finish the task."
         if stage == "plan":

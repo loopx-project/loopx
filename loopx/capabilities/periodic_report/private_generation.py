@@ -250,6 +250,17 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
     bundle = _read(folder / "generation-bundle.json")
     checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
         render_periodic_report_markdown(bundle["document"]), render_periodic_report_html(bundle["document"])])
+    if checked != bundle:
+        # Rendering can improve after a window was frozen. Reconstruct only the
+        # exact prior presentation; never rewrite or regenerate it.
+        # Both candidates still require full bundle, source and body equality.
+        checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
+            render_periodic_report_markdown(bundle["document"], _legacy_layout=True),
+            render_periodic_report_html(bundle["document"], _legacy_layout=True)])
+    if checked != bundle:
+        checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
+            render_periodic_report_markdown(bundle["document"], _legacy_source_links=True),
+            render_periodic_report_html(bundle["document"], _legacy_source_links=True)])
     candidate = _read(folder / "publication-candidate.json")
     expected_candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],
         agent_id=window["agent_id"], generation_id=checked["generation_receipt"]["generation_id"],
@@ -264,6 +275,8 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
             or receipt["publication_candidate_sha256"] != _canonical_digest(candidate)
             or receipt["request_digest"] != request["request_digest"]
             or receipt["body_sha256"] != hashlib.sha256(report_bytes).hexdigest()
-            or report_bytes.decode("utf-8") != render_periodic_report_markdown(bundle["document"])["content"]):
+            or report_bytes.decode("utf-8") != next(
+                artifact["content"] for artifact in checked["artifacts"]
+                if artifact["renderer_kind"] == "markdown")):
         raise ValueError("frozen generation or full report body changed")
     return receipt

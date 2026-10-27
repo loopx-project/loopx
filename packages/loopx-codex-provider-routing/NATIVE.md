@@ -121,6 +121,25 @@ services without a proven restart owner) remain visible holds; installation
 does not turn them into termination targets. Discovery is best effort within
 the current user's kernel visibility, not a claim to inspect auth cached inside
 another user's process or a virtual machine.
+
+Version 0.12.9 also explains unmanaged holders through Darwin's optional kernel
+responsibility probe. Reparented XPC processes can retain a different manager
+from the current App. A responsible PID/name is diagnostic provenance, never
+App ownership or restart permission. For a verified installed Lima hostagent,
+the inventory cross-checks its private pidfile and the original Lima/Colima
+catalog's running instance; raw arguments, environment and catalog paths stay
+private. Missing SPI/permissions, changed launch identities, ambiguous instances
+or unavailable manager reads preserve an explicit hold. No guest command runs.
+The existing App/LaunchAgent restart path is unchanged; externally managed
+workloads require their own idle/recovery qualification. This read-only CLI
+diagnostic is a staged prerequisite: the settings page still shows its existing
+busy cause, and VM recovery/new-auth adoption remain unqualified.
+
+0.12.9 的只读占用清单会核对脱离 App 进程树的 XPC 责任进程，并对已核验的
+Lima/Colima 管理器交叉读取原实例。识别到管理器不等于业务空闲或可以重启；
+未知或变化的身份保留等待，不执行 guest 命令，不新增强关目标。设置页的完整
+占用诊断与外部工作负载恢复仍待交付，不能把这一步视为真实换号已生效。
+
 An operator-owned service independent of the App can run the same observer:
 
 ```sh
