@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -144,6 +146,87 @@ def _configure_provider(home, url):
         'responses_websockets_v2=false\n'
         f'[model_providers.fixture]\nname="Synthetic local"\nbase_url="{url}"\n'
         'wire_api="responses"\nrequires_openai_auth=false\n')
+
+
+@pytest.mark.parametrize("early_yield", [False, True])
+def test_native_reader_requires_complete_hook_output_even_when_model_saw_page(tmp_path, early_yield):
+    """A completed process cannot turn an unobserved early page into a baseline.
+
+    The gate, rather than elapsed time, keeps the yielding reader alive. Future
+    hosts may deliver accumulated output to the hook; accept that only when its
+    complete page is actually observed. Inference remains entirely local.
+    """
+    from loopx.control_plane.turn_driver import codex_context as context
+
+    binary, env, workspace, home = _native_fixture(tmp_path)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    root, capture = workspace / "context", workspace / "capture"
+    root.mkdir(mode=0o700)
+    capture.mkdir(mode=0o700)
+    gate, view_file, observations = workspace / "release", workspace / "view.json", home / "observed.jsonl"
+    hook = home / "observe.py"
+    hook.write_text(
+        "import json, pathlib, sys\n"
+        "from loopx.control_plane.turn_driver.codex_context import codex_context_hook\n"
+        "event=json.load(sys.stdin)\n"
+        f"result=codex_context_hook({str(root)!r},event)\n"
+        f"with pathlib.Path({str(observations)!r}).open('a') as f: f.write(json.dumps(event)+'\\n')\n"
+        "print(json.dumps(result))\n")
+    handler = {"type": "command", "command": shlex.join([sys.executable, str(hook)]), "timeout": 10}
+    (home / "hooks.json").write_text(json.dumps({"hooks": {
+        name: [{"hooks": [handler]}] for name in ("SessionStart", "PostToolUse")}}))
+    publish = workspace / "publish.py"
+    publish.write_text(
+        "import json, pathlib, time\n"
+        "from loopx.control_plane.turn_driver.codex_context import project_codex_context\n"
+        "from loopx.cli_commands.quota_capture import native_context_capture_view\n"
+        f"capture=pathlib.Path({str(capture)!r})\n"
+        "body={'complete':True,'sources':[{'source':'selected_todo','content':{'todo':"
+        "{'todo_id':'todo_fixture','text':'Preserve the original requirement. '*40,'status':'open'}}}]}\n"
+        f"full=project_codex_context(body,directory={str(root)!r},capture_directory=capture,"
+        "goal_id='fixture',agent_id='agent',surface='work_context',capture_id='fixture-capture')\n"
+        f"view=native_context_capture_view(full,capture,context_directory={str(root)!r})\n"
+        "text=json.dumps(view,separators=(',',':'))\n"
+        f"pathlib.Path({str(view_file)!r}).write_text(text)\n"
+        "print(text,flush=True)\n"
+        + (f"while not pathlib.Path({str(gate)!r}).exists(): time.sleep(0.01)\n" if early_yield else ""))
+
+    def response(request, number, message):
+        if number == 1:
+            name, args = "exec_command", {"cmd": shlex.join([sys.executable, str(publish)]),
+                "yield_time_ms": 1000 if early_yield else 10000, "max_output_tokens": 5000}
+        elif early_yield and number == 2:
+            match = re.search(r"Process running with session ID (\d+)", _input_text(request))
+            assert match, "The native reader must yield before the fixture releases its gate"
+            gate.write_text("release")
+            name, args = "write_stdin", {"session_id": int(match[1]), "chars": "",
+                "yield_time_ms": 10000, "max_output_tokens": 5000}
+        else:
+            return message
+        return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
+            "name": name, "arguments": json.dumps(args)}
+
+    try:
+        with local_inference_provider(response) as (url, _, requests):
+            _configure_provider(home, url)
+            result = subprocess.run([binary, "exec", "--dangerously-bypass-hook-trust", "--skip-git-repo-check",
+                "--sandbox", "danger-full-access", "--json", "-C", str(workspace), "Synthetic reader fixture."],
+                env=env, capture_output=True, text=True, timeout=40)
+    finally:
+        gate.write_text("release")
+    assert result.returncode == 0, result.stderr
+    view = json.loads(view_file.read_text())
+    assert view["offset"] == 0 and view["eof"] is True
+    assert view_file.read_text() in _input_text(requests[1])  # actual complete model-input page
+    events = [json.loads(line) for line in observations.read_text().splitlines()]
+    observed = [page for event in events if event["hook_event_name"] == "PostToolUse"
+        for page in context._context_pages(event.get("tool_response"))]
+    state = json.loads((root / "session.json").read_text())
+    complete_hook = any(page == view for page in observed)
+    assert bool(state.get("candidate")) is complete_hook
+    assert bool(state.get("pending")) is not complete_hook
+    if not early_yield:
+        assert complete_hook
 
 
 @pytest.mark.parametrize("source", ["inline", "file"])

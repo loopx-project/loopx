@@ -273,6 +273,14 @@ page before following next_command; when the retained-history limit is unknown,
 read one bounded output at a time. This is not a guarantee of model retention.
 Forward exec stdout directly in code mode. Repeating the packet in
 a hashing tool call does not establish that its original bytes were retained.
+Keep these short local reader commands in the foreground; for `exec_command`,
+use its normal 10000 ms wait rather than an aggressive early yield. A native
+host can deliver a page before the process exits but give `PostToolUse` only the
+remaining output when polling finishes. Complete model-visible text then does
+not imply complete hook coverage. If a reader yields, consume all its output
+chunks; missing hook coverage keeps the next decision on full delivery. Do not
+fabricate a read receipt or rerun admission to make it differential. Continuing
+that captured decision after context loss still uses its exact full recovery.
 The reader verifies the immutable capture digest. Native lifecycle delivery uses
 the same byte-range validator as explicit input observations: before merging
 reader ranges, the post-tool adapter checks actual UTF-8 content against the
@@ -508,6 +516,11 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 后续命令与换行）限制为 7900 字节。先消费内联页，再跟随 next_command；保留历史
 上限未知时，每次只读一个有界输出。该上限不证明模型保留。Code Mode 直接转发
 exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
+这些短时本地读取命令应前台等到结束；`exec_command` 使用正常的 10000 ms 等待，
+避免激进提前返回。原生宿主可能先把页面交给模型，却只把轮询结束时剩余的输出交给
+`PostToolUse`；模型可见正文完整不等于 hook 观察范围完整。读取器若提前返回，仍须
+消费全部输出片段；hook 覆盖缺失时，下次决定继续全量投递。不伪造读取回执或重跑
+准入来制造差分；丢失上下文后继续该已捕获决定，仍沿它的精确全量恢复引用读取。
 原生配置同时返回 `config_overrides`：应用后，续读输出上限为 64000 字节，原生历史
 上限为 20000 token，首次 guard 仍保持 7900 字节。开启的 benchmark worker 在其
 隔离会话内自动应用；持久指引要求每次续读直接输出预算 22000 token、Code Mode

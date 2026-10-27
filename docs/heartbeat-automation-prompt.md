@@ -486,6 +486,11 @@ reader budget declaration. The initial guard stays small. Its instruction reques
 22000 tokens per reader result and 24000 for code-mode emission, with one directly
 forwarded stdout per call. Unconfigured hosts retain the small-page default;
 the isolated benchmark worker applies this profile automatically when opted in.
+Keep short context readers in the foreground (`exec_command`'s normal 10000 ms
+wait). Early output followed by polling can leave the native post-tool hook with
+only an empty tail, so a visibly complete page still cannot establish a baseline.
+Consume every chunk if a command yields and preserve full fallback when hook
+coverage is incomplete; do not re-admit or invent a retention receipt.
 Preserve other configuration. Review and
 trust only these exact hooks through Codex's native hook trust surface; the CLI
 does not install files, approve hashes, enable diagnostics or run a guard.
