@@ -846,8 +846,9 @@ class ChatSessionStore(ChatIngressStore):
             _append_jsonl(path, payload)
         return payload
 
-    def messages(self, session_id: str) -> list[dict[str, Any]]:
-        return _read_jsonl(self._session_dir(session_id) / "messages.jsonl")
+    def messages(self, session_id: str, *, strict: bool = False) -> list[dict[str, Any]]:
+        return _read_jsonl(self._session_dir(session_id) / "messages.jsonl",
+                          raise_on_error=strict, strict=strict)
 
     def prepared_managed_turn_request(
         self,
@@ -1973,7 +1974,7 @@ class ChatSessionStore(ChatIngressStore):
             and payload.get("status") in RESUMABLE_SESSION_STATES,
         }
 
-    def session_snapshot(self, session_id: str) -> dict[str, Any]:
+    def session_snapshot(self, session_id: str, *, strict_messages: bool = False) -> dict[str, Any]:
         payload = self.load_session(session_id)
         if payload is None:
             raise KeyError("chat session was not found")
@@ -1990,6 +1991,7 @@ class ChatSessionStore(ChatIngressStore):
             "ok": True,
             "schema_version": CHAT_STORE_SCHEMA_VERSION,
             "session": self.public_session(payload),
-            "messages": self.messages(session_id),
+            "messages": (self.messages(session_id, strict=True) if strict_messages
+                         else self.messages(session_id)),
             "active_turn": active_turn,
         }

@@ -1229,6 +1229,7 @@ function buildPersonalHomeModel(
   };
 }
 function PersonalGoalHome({
+  appEntry,
   goalArchiveLoadState,
   sourceError,
   selectedView,
@@ -1259,6 +1260,7 @@ function PersonalGoalHome({
   statusSourceControl,
   theme,
 }: {
+  appEntry: ReturnType<typeof useAppStewardTarget>;
   goalArchiveLoadState: WorkspaceGoalArchiveLoadState;
   /** The current source's latest read failed; the retained payload is stale. */
   sourceError: string | null;
@@ -1379,10 +1381,6 @@ function PersonalGoalHome({
       },
     };
   }, [sourceError, scopedModel, t]);
-  const appEntryEnabled = !readOnly && statusSourceControl.activeSource.kind === "local"
-    && !requestedGoalId && !rootGoalId && !requestedWorkspaceRef && !requestedBoundConversation
-    && selectedWorkAgentId == null && !selectedWorkSessionId && selectedView !== "chat";
-  const appEntry = useAppStewardTarget(appEntryEnabled);
   const appEntryBlocked = appEntry.loading || appEntry.unavailable;
   const boundConversation = requestedBoundConversation ?? appEntry.target;
   const selectedGoalId = rootGoalId && !model.goals.some(goal => goal.goalId === requestedGoalId)
@@ -1816,9 +1814,12 @@ function PersonalGoalHome({
         newSessionRequired.current.delete(sessionKey);
         if (!activeTurnId) return;
         // A source index can observe the Turn this very composer is already
-        // streaming. Keep its observer instead of creating a second reply.
-        if (targetContext.kind === "bound" && activeTurnIds.current.get(targetContextId) === activeTurnId
-          && streamControllers.current.has(targetContextId)) return;
+        // streaming. Exact contexts already key ownership by their Session;
+        // keep that live observer instead of replacing its controls and reply.
+        if ((targetContext.kind === "bound" || targetContext.kind === "managed")
+          && targetContext.sessionId === created.session_id
+          && activeTurnIds.current.get(targetContextId) === activeTurnId
+          && streamControllers.current.get(targetContextId)?.signal.aborted === false) return;
         const recoveryKey = `${created.session_id}:${activeTurnId}`;
         if (recoveringTurnKeys.current.has(recoveryKey)) return;
         const observer = new AbortController();
@@ -3784,8 +3785,9 @@ export function DashboardPage() {
     );
   }
 
-  const home = (
+  const home = (appEntry: ReturnType<typeof useAppStewardTarget>) => (
     <PersonalGoalHome
+      appEntry={appEntry}
       boundConversation={search.conversationBinding !== undefined || search.conversationSession !== undefined
         ? { bindingId: search.conversationBinding ?? "", sessionId: search.conversationSession ?? "" } : null}
       onOpenOriginalConversation={target => void navigate({search: current => ({...current, goalId: "", workspace: undefined,
@@ -3856,15 +3858,16 @@ export function DashboardPage() {
       theme={theme}
     />
   );
-  const defaultStewardEntry = search.view === "conversation" && !search.goalId && !search.rootGoalId
-    && search.workspace === undefined && search.workAgent === undefined && search.workSession === undefined
+  const stewardEntryEnabled = !search.goalId && !search.rootGoalId
+    && !search.workspace && search.workAgent === undefined && !search.workSession
     && search.conversationBinding === undefined && search.conversationSession === undefined
     && activeStatusSource.kind === "local" && !activeStatusSource.readOnly;
-  return defaultStewardEntry ? <AppStewardEntry onOpen={target => void navigate({replace: true,
+  return <AppStewardEntry enabled={stewardEntryEnabled} intercept={stewardEntryEnabled && search.view === "conversation"}
+    onOpen={target => void navigate({replace: true,
     search: current => "goalId" in current && current.statusUrl === search.statusUrl && current.view === "conversation"
-      && !current.goalId && !current.rootGoalId && current.workspace === undefined && current.workAgent === undefined
-      && current.workSession === undefined && current.conversationBinding === undefined && current.conversationSession === undefined
+      && !current.goalId && !current.rootGoalId && !current.workspace && current.workAgent === undefined
+      && !current.workSession && current.conversationBinding === undefined && current.conversationSession === undefined
       ? {...current, conversationBinding: target.bindingId, conversationSession: target.sessionId} : current})}>
     {home}
-  </AppStewardEntry> : home;
+  </AppStewardEntry>;
 }

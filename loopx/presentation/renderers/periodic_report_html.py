@@ -5,7 +5,6 @@ import json
 from collections.abc import Mapping, Sequence
 from html import escape
 from typing import Any
-from urllib.parse import urlparse
 
 from ...capabilities.periodic_report.adapters import (
     ARTIFACT_SCHEMA,
@@ -15,7 +14,9 @@ from ...capabilities.periodic_report.adapters import (
 )
 from ..public_safety import redact_public_text
 from .periodic_report_markdown import (
+    _source_references,
     periodic_report_labels,
+    periodic_report_source_url,
     render_periodic_report_markdown,
 )
 
@@ -38,12 +39,9 @@ def _safe_attr(value: object, *, maximum: int) -> str:
     return escape(str(redact_public_text(value, limit=maximum)), quote=True)
 
 
-def _safe_http_url(value: object) -> str | None:
-    raw = str(redact_public_text(value, limit=500))
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return escape(raw, quote=True)
+def _safe_http_url(value: object, *, _legacy_source_links: bool = False) -> str | None:
+    url = periodic_report_source_url(value, _legacy_source_links=_legacy_source_links)
+    return escape(url, quote=True) if url else None
 
 
 def _document_digest(document: Mapping[str, Any]) -> str:
@@ -207,13 +205,15 @@ def _render_item(
     *,
     index: int,
     labels: Mapping[str, str],
+    references: Mapping[str, int],
+    _legacy_source_links: bool = False,
 ) -> str:
     title = _safe_text(item.get("title"), maximum=240)
     summary = _safe_text(item.get("summary"), maximum=1000)
     status = _safe_text(item.get("status"), maximum=80)
     next_action = _safe_text(item.get("next_action"), maximum=500)
     source_ref = item.get("source_ref")
-    source_url = _safe_http_url(source_ref)
+    source_url = _safe_http_url(source_ref, _legacy_source_links=_legacy_source_links)
     content_kind = _safe_attr(item.get("content_kind") or "unspecified", maximum=128)
     search_text = " ".join(
         str(item.get(field) or "")
@@ -244,6 +244,12 @@ def _render_item(
             'target="_blank" rel="noopener noreferrer">'
             f'{labels["source_link"]}</a>'
         )
+    elif isinstance(source_ref, str) and source_ref in references:
+        number = references[source_ref]
+        source = (
+            f'<a class="source-ref" href="#report-source-{number}" data-report-source-link>'
+            f'{labels["source"]} {number}</a>'
+        )
     elif source_ref:
         source = (
             f'<span class="source-ref">{_safe_text(source_ref, maximum=500)}</span>'
@@ -271,12 +277,15 @@ def _render_section(
     section_index: int,
     item_start: int,
     labels: Mapping[str, str],
+    references: Mapping[str, int],
+    _legacy_source_links: bool = False,
 ) -> tuple[str, int]:
     section_id = _safe_attr(section.get("section_id"), maximum=128)
     title = _safe_text(section.get("title"), maximum=160)
     items = _primary_items(section)
     rows = "".join(
-        _render_item(item, index=item_start + offset, labels=labels)
+        _render_item(item, index=item_start + offset, labels=labels, references=references,
+                     _legacy_source_links=_legacy_source_links)
         for offset, item in enumerate(items)
     )
     if not rows:
@@ -297,6 +306,8 @@ def _render_supporting_sections(
     sections: Sequence[Mapping[str, Any]],
     *,
     labels: Mapping[str, str],
+    references: Mapping[str, int],
+    _legacy_source_links: bool = False,
 ) -> str:
     groups = []
     for section in sections:
@@ -313,13 +324,20 @@ def _render_supporting_sections(
             )
             label = " · ".join(value for value in (kind, status) if value)
             next_action = _safe_text(item.get("next_action"), maximum=500)
-            source_url = _safe_http_url(item.get("source_ref"))
+            source_url = _safe_http_url(item.get("source_ref"), _legacy_source_links=_legacy_source_links)
             source = (
                 f'<a href="{source_url}" target="_blank" '
                 'rel="noopener noreferrer">Source ↗</a>'
                 if source_url
                 else ""
             )
+            reference = item.get("source_ref")
+            if isinstance(reference, str) and reference in references:
+                number = references[reference]
+                source = (
+                    f'<a href="#report-source-{number}" data-report-source-link>'
+                    f'{labels["source"]} {number}</a>'
+                )
             notes.append(
                 '<article class="supporting-note">'
                 f'<p class="supporting-label">{label}</p>'
@@ -370,6 +388,48 @@ def _render_source_receipts(
         f'<th>{labels["items"]}</th><th>{labels["snapshot"]}</th>'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
     )
+
+
+def _render_source_references(references: Mapping[str, int], labels: Mapping[str, str]) -> str:
+    if not references:
+        return ""
+    rows = "".join(
+        f'<li id="report-source-{number}" data-report-source tabindex="-1">'
+        f'<code>{_safe_text(reference, maximum=500)}</code></li>'
+        for reference, number in references.items()
+    )
+    return f'<section class="source-index"><h3>{labels["source_references"]}</h3><ol>{rows}</ol></section>'
+
+
+# Kept separate from the prior bytes for exact frozen-artifact reconstruction.
+_SOURCE_CSS = """
+.layout > main, .layout > .rail { min-width: 0; }
+.source-index { margin-bottom: 18px; }
+.source-index h3 { margin: 0 0 10px; font: 600 13px/1.4 var(--sans); }
+.source-index ol { padding-left: 24px; }
+.source-index li { padding: 5px 0; font-size: 12px; }
+.source-index code { overflow-wrap: anywhere; font: 11px/1.6 var(--mono); }
+@media print { .supporting { display: block !important; } }
+"""
+
+_SOURCE_SCRIPT = """
+(() => {
+  const appendix = document.querySelector('[data-supporting-context]');
+  const reveal = (hash) => {
+    const target = document.getElementById(hash.slice(1));
+    if (!target || !target.hasAttribute('data-report-source')) return;
+    appendix.open = true;
+    requestAnimationFrame(() => { target.scrollIntoView({block: 'center'}); target.focus({preventScroll: true}); });
+  };
+  document.querySelectorAll('[data-report-source-link]').forEach((link) =>
+    link.addEventListener('click', () => reveal(link.hash)));
+  window.addEventListener('hashchange', () => reveal(location.hash));
+  reveal(location.hash);
+  let wasOpen;
+  window.addEventListener('beforeprint', () => { if (wasOpen === undefined) wasOpen = appendix.open; appendix.open = true; });
+  window.addEventListener('afterprint', () => { if (wasOpen !== undefined) appendix.open = wasOpen; wasOpen = undefined; });
+})();
+"""
 
 
 _CSS = """
@@ -602,12 +662,15 @@ _SCRIPT = """
 """
 
 
-def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
+def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_links: bool = False,
+                                _legacy_layout: bool = False) -> dict[str, Any]:
     """Render one dense, self-contained report without changing its semantics."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
     validate_periodic_report_editorial(document)
+    _legacy_layout = _legacy_layout or _legacy_source_links
+    references = {} if _legacy_layout else _source_references(document)
     sections = _items(document.get("sections"))
     primary_sections = [
         section
@@ -624,7 +687,8 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
     item_count = sum(len(_primary_items(section)) for section in sections)
     supporting_item_count = sum(len(_supporting_items(section)) for section in sections)
     document_digest = _document_digest(document)
-    markdown_artifact = render_periodic_report_markdown(document)
+    markdown_artifact = render_periodic_report_markdown(document, _legacy_source_links=_legacy_source_links,
+                                                       _legacy_layout=_legacy_layout)
 
     filters = [
         '<a class="section-filter" href="#report-top" data-section-filter="all" '
@@ -645,6 +709,8 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
             section_index=section_index,
             item_start=next_item_index,
             labels=labels,
+            references=references,
+            _legacy_source_links=_legacy_source_links,
         )
         rendered_sections.append(section_html)
 
@@ -658,6 +724,8 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
     summary = _safe_text(editorial.get("summary"), maximum=600)
     period_label = _safe_text(editorial.get("period_label"), maximum=160)
     highlights = _items(editorial.get("highlights"))
+    if highlights and not _legacy_layout:
+        summary = ""
     if highlights:
         facts = []
         for highlight in highlights[:4]:
@@ -680,7 +748,8 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
             f'<div class="fact"><strong>{len(sources)}</strong><span>{labels["sources"]}</span></div>'
             "</div>"
         )
-    supporting_sections = _render_supporting_sections(sections, labels=labels)
+    supporting_sections = _render_supporting_sections(sections, labels=labels, references=references,
+        _legacy_source_links=_legacy_source_links)
     content = (
         "<!doctype html>\n"
         f'<html lang="{language}"><head><meta charset="utf-8">'
@@ -688,7 +757,7 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
         '<meta http-equiv="Content-Security-Policy" '
         "content=\"default-src 'none'; style-src 'unsafe-inline'; "
         "script-src 'unsafe-inline'; img-src data:\">"
-        f"<title>{title}</title><style>{_CSS}</style></head><body>"
+        f"<title>{title}</title><style>{_CSS}{_SOURCE_CSS if references else ''}</style></head><body>"
         '<div class="shell" id="report-top" data-renderer="html_artifact_v0" '
         'data-presentation="editorial_dense_v2">'
         '<header class="masthead"><div class="mast-grid"><div>'
@@ -709,6 +778,7 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
         '<details class="supporting" data-supporting-context><summary>'
         f'{labels["supporting_context"]}</summary><div class="supporting-body">'
         f"{supporting_sections}"
+        f"{_render_source_references(references, labels)}"
         '<dl class="metadata">'
         f'<dt>{labels["profile"]}</dt><dd>{profile_id} · {profile_version}</dd>'
         f'<dt>{labels["generated"]}</dt><dd>{generated_at}</dd>'
@@ -722,7 +792,7 @@ def render_periodic_report_html(document: Mapping[str, Any]) -> dict[str, Any]:
         f'data-copy-failed="{_safe_attr(labels["copy_failed"], maximum=80)}"></div>'
         '<script type="application/json" data-report-markdown>'
         f"{_embedded_json(markdown_artifact['content'])}</script>"
-        f"<script>{_SCRIPT}</script></body></html>\n"
+        f"<script>{_SCRIPT}{_SOURCE_SCRIPT if references else ''}</script></body></html>\n"
     )
     content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
     return {

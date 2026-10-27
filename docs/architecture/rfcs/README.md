@@ -273,6 +273,14 @@ Paired diffs do not certify translation accuracy.
 
 ## Planning, Research, And Adaptive Intelligence
 
+- [LoopX × LayerFS — Engineering Exploration and Evaluation v0](layerfs-engineering-exploration-evaluation-v0.md)
+  ([中文版](layerfs-engineering-exploration-evaluation-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal only; no provider integration or measured benefit.
+  - **Current boundary:** Optional execution-workspace provider under existing
+    Explore/Host owners; real-environment branch/handoff conformance, then warm
+    worktree comparisons and native/passive/governed outcome/cost attribution.
+    Filesystem checkpoints do not qualify complete research-state continuation.
+
 - [Goal-scoped Capability Portfolio and Connector Lifecycle v0](goal-scoped-capability-portfolio-v0.md)
   ([中文版](goal-scoped-capability-portfolio-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal; catalog, Agent-context hooks and connector

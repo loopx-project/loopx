@@ -516,46 +516,6 @@ provider 的打包和生命周期，不是另一个控制面 owner。详见
 
 </details>
 
-## 贡献
-
-一起让长程 Agent 工作更容易运行、检查和信任。可以从宿主集成、可复现问题、
-工作流文档或边界清楚的证据研究开始。
-
-公开、可认领的任务见 [Contributor Tasks](docs/development/contributor-tasks.md)。贡献前请读
-[Contributing](CONTRIBUTING.md)，尤其是 public/private 边界、smoke 保留规则和
-benchmark 证据边界。
-
-项目角色与维护权限见 [Governance](.github/GOVERNANCE.md)，创建者与贡献者归属见
-[Authors and Contributors](docs/project/authors.md)，关键公开演进见
-[Project History](docs/project/history.md)，名称与标识使用见
-[Name and Marks](docs/project/trademarks.md)。
-
-不要提交 `.loopx/`、`.codex/goals/`、live `ACTIVE_GOAL_STATE.md`、内部链接、
-raw benchmark task/log/trajectory/verifier output、credentials、token、私有路径或
-未脱敏的用户与团队信息。
-
-## 用户群与反馈
-
-LoopX 已在真实长程 agent 目标上持续运行，并处于活跃迭代期。最需要真实长程
-agent 项目里的反馈：控制面帮到了哪里、哪里太重，哪些 gate、handoff 或 scope
-仍然不够清楚。
-
-- 可复现 bug、安装问题、功能建议：请提
-  [GitHub Issue](https://github.com/loopx-project/loopx/issues)。
-- 文档修正、showcase 补充、小型 public-safe 示例：欢迎开 PR。
-- 参与社区讨论：可加入 [Discord 社区](https://discord.gg/XmGgQyCFZd)，也可在
-  下方直接加入飞书群或通过微信申请入群。
-
-渠道分工、支持边界和官方发布源见 [Support](.github/SUPPORT.md)。
-
-<p align="center">
-  <a href="docs/assets/loopx-lark-developer-group.png"><img src="docs/assets/loopx-lark-developer-group.png" alt="LoopX 飞书开发群二维码" width="280"></a>
-  <a href="docs/assets/loopx-wechat-contact.png"><img src="docs/assets/loopx-wechat-contact.png" alt="LoopX 微信联系人二维码" width="220"></a>
-</p>
-<p align="center">
-  <sub><strong>飞书：</strong>扫码直接加入<br><strong>微信：<code>huangrt00</code></strong> · 好友申请备注 LoopX</sub>
-</p>
-
 ## 合作伙伴项目
 
 LoopX 欢迎与其他开源项目协作，共建长程 Agent 生态。已确认的合作伙伴包括：
@@ -798,6 +758,63 @@ integration 和进阶路径仍是 optional、default-off 或 experimental。Loop
 当前投入按[技术方向地图](docs/project/technical-directions.zh-CN.md)组织：长程
 benchmark 证据、operator surface 与 IM integration、shared-goal 跨 host 协作，以及
 明确分阶段的架构与研究孵化器。
+
+<a id="贡献"></a>
+<a id="用户群与反馈"></a>
+
+## 社区与贡献
+
+一起探索长程 Agent 团队的工作方式。分享你的工作流、复现一个问题、接入新的宿主，
+或展示 Agent 做出的成果。代码、文档、示例、评审和边界清楚的证据研究，都欢迎参与。
+
+- **了解项目：**[使用文档](https://loopx-project.github.io/loopx/docs/) ·
+  [技术博客](https://loopx-project.github.io/loopx/blog/zh/) ·
+  [技术方向](docs/project/technical-directions.md)。
+- **提问与分享：** 在 [GitHub Discussions](https://github.com/loopx-project/loopx/discussions)
+  交流使用问题、比较工作流、展示你的项目。
+- **报告问题或建议功能：** 提交
+  [GitHub Issue](https://github.com/loopx-project/loopx/issues/new/choose)，说明版本、
+  宿主／运行时、预期行为，并附上可公开的复现步骤。
+- **开始第一次贡献：** 从 [Contributor Tasks](docs/development/contributor-tasks.md)
+  选择公开任务，也可以直接提交独立完整的修复。
+  [贡献指南](CONTRIBUTING.md)介绍环境搭建、验证与 PR 流程；较大改动请先讨论。
+- **加入交流：**[Discord](https://discord.gg/XmGgQyCFZd) ·
+  [飞书开发群](docs/assets/loopx-lark-developer-group.png) ·
+  [微信](docs/assets/loopx-wechat-contact.png)。
+
+渠道分工、支持边界和官方发布源见 [Support](.github/SUPPORT.md)，
+社区参与约定见[行为准则](CODE_OF_CONDUCT.md)。
+
+<details>
+<summary>分享代码、日志或示例之前</summary>
+
+不要提交 `.loopx/`、`.codex/goals/`、live `ACTIVE_GOAL_STATE.md`、内部链接、
+原始 Agent 会话、raw benchmark task/log/trajectory/verifier output、credentials、
+token、私有日志、私有路径、操作员产物或未脱敏的用户与团队信息。
+
+</details>
+
+### 贡献者
+
+感谢每一位贡献代码、文档、问题报告、评审和真实使用反馈的朋友。
+你们让长程 Agent 工作更容易运行、检查和信任。
+
+[![LoopX GitHub 贡献者](https://contrib.rocks/image?repo=loopx-project/loopx&columns=12&max=120)](https://github.com/loopx-project/loopx/graphs/contributors)
+
+[全部 GitHub 贡献者](https://github.com/loopx-project/loopx/graphs/contributors) ·
+[创建者与贡献记录](docs/project/authors.md) ·
+[项目治理](.github/GOVERNANCE.md) · [项目历史](docs/project/history.md) ·
+[名称与标识](docs/project/trademarks.md)。
+
+### 社区群聊
+
+<p align="center">
+  <a href="docs/assets/loopx-lark-developer-group.png"><img src="docs/assets/loopx-lark-developer-group.png" alt="LoopX 飞书开发群二维码" width="280"></a>
+  <a href="docs/assets/loopx-wechat-contact.png"><img src="docs/assets/loopx-wechat-contact.png" alt="LoopX 微信联系人二维码" width="220"></a>
+</p>
+<p align="center">
+  <sub><strong>飞书：</strong>扫码直接加入<br><strong>微信：<code>huangrt00</code></strong> · 好友申请备注 LoopX</sub>
+</p>
 
 ## Star 趋势
 

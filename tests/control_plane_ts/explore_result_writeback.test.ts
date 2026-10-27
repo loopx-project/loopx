@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
+import {exploreResultWritebackAffordance, normalizeExploreResultAttachment, planExploreQuestionEvolution} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 
 const attachment = {
   schema_version: "explore_result_attachment_v0", node_id: "tail-bound",
@@ -291,4 +291,25 @@ test("scope reuse rejects unknown, unlinked, non-question and incomplete scopes"
     vision_packet: {path_delta: delta}, linked_scope: linkedScope}), /question/);
   assert.deepEqual(normalizeExploreResultAttachment({attachment: scope,
     vision_packet: {path_delta: delta}}), resolved);
+});
+
+// Filling factual fields must not silently choose an epistemic judgment.
+test("writeback templates require a deliberate finding status independently of question closure", () => {
+  const affordance = exploreResultWritebackAffordance();
+  for (const key of ["attachment_template", "path_delta_attachment_template", "linked_question_attachment_template"]) {
+    const template = affordance[key] as Record<string, unknown>;
+    const path = key !== "attachment_template";
+    const input = path ? {...scope, status: template.status} : {...attachment, status: template.status};
+    const normalize = (row: Record<string, unknown>) => normalizeExploreResultAttachment({
+      attachment: row, ...(path ? {vision_packet: {path_delta: delta}} : {}),
+    });
+    assert.throws(() => normalize(input), /finding status/);
+    for (const status of ["tentative", "confirmed", "refuted"]) {
+      const chosen = normalize({...input, status});
+      assert.equal(chosen.status, status);
+      assert.equal(Object.hasOwn(chosen, "question_update"), false);
+      assert.deepEqual(normalize({...input, status, question_update: {status: "resolved"}}).question_update,
+        {status: "resolved"});
+    }
+  }
 });

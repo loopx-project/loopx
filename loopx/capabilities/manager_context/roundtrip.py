@@ -282,15 +282,30 @@ def project_chat_return_deliveries(root, session_id, messages):
     ]
 
 
-def project_chat_session_snapshot(root, store, session_id, *, registry):
+def project_chat_session_snapshot(root, store, session_id, *, registry,
+                                  message_limit=None, message_cursor=None):
     """Project return delivery state into one existing Chat snapshot."""
 
-    snapshot = store.session_snapshot(session_id)
+    snapshot = (store.session_snapshot(session_id, strict_messages=True) if message_limit is not None
+                else store.session_snapshot(session_id))
+    from .chat_history import page_chat_messages
+    page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
+                              cursor=message_cursor) if message_limit is not None else None)
+    context_messages = snapshot["messages"]
+    if page is not None:
+        context_messages = context_messages[:page["message_page"]["total"]]
+        snapshot["messages"] = page["messages"]
     snapshot["messages"] = project_chat_return_deliveries(
         root, session_id, snapshot["messages"]
     )
     from .presentation import project_collaboration
-    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"], registry=registry)
+    # Use the frozen context to choose the carrier, projecting only this page.
+    # A question and answer can straddle pages without duplicating a commitment
+    # or re-reading every off-page Turn for each page.
+    snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
+        registry=registry, context_messages=context_messages)
+    if page is not None:
+        snapshot["message_page"] = page["message_page"]
     return snapshot
 
 

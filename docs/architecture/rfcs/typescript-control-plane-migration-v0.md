@@ -15,6 +15,41 @@
 
 ---
 
+### Goal agent-context delegation projection converges in TypeScript (2026-10-25)
+
+`capability_hook.agent_context.project`
+(`loopx/control_plane/goal_agent_context.ts` + `projectDelegationContext` in
+`loopx/control_plane/subagent_context.ts`) now composes
+`loopx_delegation_context_v0` from Python facts: `configuration_state`,
+per-route `readiness`/`runtime_readiness`, six-route cap/truncation,
+operation-receipt summary and blocked fallback
+`delegation_context_unavailable`.
+`loopx/control_plane/collaboration/delegation_context.py` shrinks from 182
+rule-owner lines to 84 facts-reader lines: guarded config JSON (symlink/escape),
+registered Agent ids, executor probe once per distinct `host_args`, and
+operation inventory only in `after_delegate_result`.
+`loopx/control_plane/agent_context.py` loses its duplicate enabled gate and
+lazy Python join; TS `boundedDelegationContext` re-validation folds into the
+single owner.
+With N requester bindings, `loopx agent-context` crossings fall `before_plan`
+2N+1 → 1; `after_delegate_result` 2N+3 → 3 (inventory retains its existing
+two-crossing TS transaction).
+The same reduction applies inside `loopx quota should-run`
+(`live_decision` planning context).
+Packets remain byte-identical, including `context_id`, for 3-/8-binding
+fixtures in both phases
+(`tests/control_plane_ts/fixtures/goal_agent_context_delegation.json`); CLI
+JSON size is unchanged.
+Production LOC: Python −99, TypeScript +98. Compact orchestration policy and
+executor environment probe (`managed_executor_binding_from_host_args`) remain
+Python-supplied facts; `not_configured` remains reachable only through the
+replayed-observation decoder.
+Delete `loopx/control_plane/collaboration/delegation_context.py` and request
+field `delegation_facts` when TS reads the Goal registry, local delegation
+configuration and Turn host executor projection in-process, leaving Python
+entrypoints (`agent-context`, `quota should-run`, goal inspection) passing only
+phase/scope/observations.
+
 ### Scheduler hint projection
 
 The complete scheduler hint is projected by `scheduler/hint.ts` in one

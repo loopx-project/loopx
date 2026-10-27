@@ -77,7 +77,8 @@ def test_scheduler_modes_do_not_add_an_outer_loop_to_native_goal():
     ("official", True), ("single", False), ("native-goal", False),
     ("heartbeat-resume", False), ("heartbeat-explore", False),
 ])
-def test_only_official_delegates_continuation_to_sforge(profile, resumes, monkeypatch):
+def test_only_official_delegates_continuation_and_stop_hook_to_sforge(
+        profile, resumes, monkeypatch):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
     from sforge.harness.config import SForgeConfig
@@ -86,12 +87,39 @@ def test_only_official_delegates_continuation_to_sforge(profile, resumes, monkey
     worker = SForgeWorker(SForgeConfig(agent_model="fixture-model", agent_effort="xhigh"),
                           profile=profile, cwd="/task")
     assert (worker.resume_cmd is not None) is resumes
+    assert (worker.stop_hook is not None) is (profile == "official")
     assert worker.timeout_seconds == 64800
     assert worker.task_entry == ("loopx-planned" if profile.startswith("heartbeat-") else "seeded-todo")
     if profile in {"official", "single"}:
         command = worker.format_run_cmd("/task.md", internet=False)
         assert 'model_reasoning_effort="xhigh"' in command
         assert 'web_search="disabled"' in command
+
+
+@pytest.mark.parametrize("profile", [
+    "official", "single", "native-goal", "heartbeat-resume", "heartbeat-explore",
+])
+def test_runtime_protocol_attests_only_official_stop_hook(profile, monkeypatch):
+    from types import SimpleNamespace
+    pytest.importorskip("sforge")
+    pytest.importorskip("harbor")
+    from sforge.harness.config import SForgeConfig
+    run_agent = pytest.importorskip("sforge.harness.run_agent")
+    runtime_protocol = getattr(run_agent, "_runtime_protocol", None)
+    if runtime_protocol is None:
+        pytest.skip("SForge provider does not expose the signed runtime protocol builder")
+    from benchmark.runtime.sforge import SForgeWorker
+    monkeypatch.setenv("CODEX_AUTH_JSON_PATH", "/private-credential")
+    worker = SForgeWorker(SForgeConfig(agent_model="fixture-model", agent_effort="xhigh"),
+                          profile=profile, cwd="/task")
+    protocol = runtime_protocol(
+        agent=worker, backend=SimpleNamespace(backend_name="docker"),
+        model="fixture-model", effective_timeout=64800, eval_interval=300,
+        disable_stop_hook=False, disable_auto_eval=False,
+        disable_auto_resume=False, internet=False, max_submissions=None,
+        submission_cooldown=3600,
+    )
+    assert protocol["stop_hook_enabled"] is (profile == "official")
 
 
 def test_invalid_worker_inputs_fail_before_install(monkeypatch):
@@ -353,7 +381,7 @@ def test_native_goal_continue_is_a_native_goal_opt_in(tmp_path, monkeypatch, ena
     assert profile.get("native_goal_continue") is (True if enabled else None)
     with pytest.raises(ValueError, match="native-goal"):
         SForgeWorker(config, profile="heartbeat-resume", cwd="/task", native_goal_continue=True)
-    with pytest.raises(ValueError, match="context_delivery"):
+    with pytest.raises(ValueError, match="native_goal_continue"):
         SForgeWorker(config, profile="native-goal", cwd="/task", native_goal_continue="1")
 
 

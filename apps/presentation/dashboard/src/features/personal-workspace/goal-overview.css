@@ -92,11 +92,8 @@
 .personal-composer-folded .personal-composer-tools > summary::-webkit-details-marker { display: none; }
 .personal-composer-folded .personal-composer-tools > summary:hover { background: var(--pw-hover); color: var(--pw-text); }
 .personal-composer-folded .personal-composer-tools > summary { display: block; max-width: min(60vw, 420px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The folded composer's rows pop up as one panel, so a derived row above the shipped prompts never widens the trigger. */
-.personal-composer-folded .personal-composer-tools .personal-composer-tools-panel { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 20; display: grid; gap: 6px; width: max-content; max-width: min(320px, calc(100vw - 32px)); padding: 6px; border: 1px solid var(--pw-line); border-radius: 12px; background: var(--pw-card); box-shadow: 0 12px 32px rgb(0 0 0 / 8%), 0 1px 2px rgb(0 0 0 / 6%); animation: goal-panel-enter var(--motion-base) var(--ease-out); }
-.personal-composer-folded .personal-composer-tools .personal-quick-prompts, .personal-composer-folded .personal-composer-tools .personal-goal-suggestions { display: grid; gap: 4px; margin: 0; }
-.personal-composer-folded .personal-composer-tools .personal-goal-suggestions { padding-bottom: 6px; border-bottom: 1px solid var(--pw-line); }
-.personal-composer-folded .personal-quick-prompts button, .personal-composer-folded .personal-goal-suggestions button { justify-content: flex-start; }
+/* ComposerActions owns the one scrollable popup; the folded trigger sits on its right. */
+.personal-composer-folded .personal-composer-actions-panel { left: auto; right: 0; }
 .personal-composer-pill { display: flex; align-items: center; gap: 10px; flex: 0 1 560px; min-width: 0; min-height: 44px; padding: 0 16px; border: 1px solid var(--pw-line-strong); border-radius: 16px; background: var(--pw-card); color: var(--pw-faint); cursor: text; font: inherit; font-size: var(--text-body); line-height: var(--leading-body); text-align: left; transition: border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); animation: goal-panel-enter var(--motion-section) var(--ease-out); }
 .personal-composer-pill span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-composer-pill:hover { border-color: var(--pw-muted); color: var(--pw-muted); }

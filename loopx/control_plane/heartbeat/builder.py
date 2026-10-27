@@ -534,6 +534,7 @@ def build_heartbeat_prompt(
         brief_prompt_command=str(commands["brief_prompt_command"]),
         thin_prompt_command=str(commands["thin_prompt_command"]),
         **({"captured_envelope": True} if turn_envelope else {}),
+        **({"captured_context": True} if native_goal_host and context_delivery == "on" else {}),
         **reward_memory_rule_kwargs,
     )
     task_body = bind_exact_turn_settlement_task_body(

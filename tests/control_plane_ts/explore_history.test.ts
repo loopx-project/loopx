@@ -177,3 +177,25 @@ test("three unchanged research checkpoints retain their actual findings and miss
     assert.equal(view.edges.length, 0, "the real solver recorded no typed relationships; chronology cannot supply them");
   }
 });
+
+test("decision history groups by declared question, never title, after time filtering", async () => {
+  const {buildExploreTimeline, groupExploreTimelineDecisions} = await import("../../loopx/control_plane/presentation/explore_timeline.ts");
+  const question = (id: string) => event({event_id: id, result_id: id, title: "Same question"});
+  const decision = (id: string, node: string, at: string, status = "tentative") => event({event_id: id,
+    event_kind: "finding", result_id: id, node_id: node, title: "Same question", status, recorded_at: at,
+    summary: "Input revision: fixed Applicability: synthetic Observation: evidence Interpretation: Outcome: continue changed: - inspect evidence"});
+  const rows = [question("a"), question("b"), decision("old", "a", "2026-01-01T01:00:00Z", "refuted"),
+    decision("other", "b", "2026-01-01T02:00:00Z"), decision("latest", "a", "2026-01-01T20:00:00Z"),
+    decision("backfill", "a", "2026-01-01T03:00:00Z"), decision("unknown", "a", "unknown"),
+    decision("unlinked-one", "", "unknown"), decision("unlinked-two", "", "unknown")];
+  const view = projectExploreHistory(rows, goal), timeline = buildExploreTimeline(view.nodes, view.edges, view.events);
+  const groups = groupExploreTimelineDecisions(timeline, null);
+  assert.deepEqual(groups.map(group => group.items.map(item => item.event.event_id)),
+    [["latest", "backfill", "old", "unknown"], ["other"], ["unlinked-two"], ["unlinked-one"]]);
+  assert.equal(groups[0]!.title, groups[1]!.title, "Identical wording does not merge distinct questions");
+  assert.equal(groups[0]!.items[2]!.event.status, "refuted", "Historical negative evidence survives grouping");
+  assert.deepEqual(groupExploreTimelineDecisions(timeline, 0).map(group => group.items.map(item => item.event.event_id)),
+    [["backfill", "old"], ["other"]], "Filter first; group ordering and counts reflect the selected interval");
+  assert.deepEqual(groupExploreTimelineDecisions(timeline, 1), []);
+  assert.equal(view.nodes.find(node => node.id === "a")!.latest.status, "open", "Presentation never changes the state owner");
+});

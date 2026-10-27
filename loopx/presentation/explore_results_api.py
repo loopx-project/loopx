@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 import subprocess
 
 from ..control_plane.todos.list_readback import list_goal_todos
+from ..control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
 
 from ..capabilities.explore.result_log import (
     build_explore_result_projection,
@@ -20,12 +21,18 @@ def _result_rows(runtime_root, goal_id, registry_path):
     )
     # Reuse canonical active/history readback; an association is not adoption.
     todos = {}
-    for view in ({}, {"status": "done", "read_scope": "completed_history"}):
-        for todo in list_goal_todos(
-            registry_path=registry_path, runtime_root_arg=str(runtime_root),
-            goal_id=goal_id, role="agent", **view,
-        )["todos"]:
-            todos[todo["todo_id"]] = todo
+    try:
+        for view in ({}, {"status": "done", "read_scope": "completed_history"}):
+            for todo in list_goal_todos(
+                registry_path=registry_path, runtime_root_arg=str(runtime_root),
+                goal_id=goal_id, role="agent", **view,
+            )["todos"]:
+                todos[todo["todo_id"]] = todo
+    except LocalCoordinationAuthorityUnavailable:
+        # Task authority is independent of the verified evidence log. Reuse
+        # the source reader's unavailable-associations view; never present a
+        # partial list as complete or fall back to legacy task state.
+        return _finding_rows(events, None, goal_id=goal_id)
     return _finding_rows(events, todos.values(), goal_id=goal_id)
 
 

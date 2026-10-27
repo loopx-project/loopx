@@ -10,14 +10,13 @@ import os
 import stat
 import shlex
 from pathlib import Path
-import tempfile
 
 
 def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, turn_id: str) -> str:
     """Delay presentation of the original preflight until its native tool call.
 
-    No model input exists at host preflight time. Keep the original source/hash
-    and let the product's current-input observer choose full/delta later.
+    Keep the original source/hash. The product's lifecycle owner chooses the
+    full/delta view when the native tool actually presents it.
     """
     from loopx.command_invocation import loopx_cli_argv
 
@@ -31,7 +30,8 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
         + "\n```\nConsume any returned page content, then follow next_command through eof. "
         "If no page content is returned, run command and follow all next_command pages. Reconstruct any delta against "
         "its exact retained baseline before following the original interaction_contract. "
-        "If projection is unavailable, the baseline is absent/uncertain, or a response is incomplete, "
+        "Normal completed reads use the explicit native-hook continuity assumption. "
+        "If projection is unavailable, the baseline was invalidated, or a response is incomplete, "
         "follow its full recovery reference. If the projection command itself fails, read the original "
         "complete packet with:\n```sh\n" + shlex.join(full) + "\n```\nFollow every next_command. "
         "Neither presentation nor recovery renews this decision's authority or freshness. ")
@@ -42,18 +42,10 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
     from loopx.control_plane.turn_driver.codex_stdio import StdioNativeGoalTransport
 
     root = home / "loopx-context"
-    traces = home / "context-traces"
-    for directory in (root, traces):
-        directory.mkdir(mode=0o700, exist_ok=True)
-        info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise ValueError("context diagnostics require private, physical trial directories")
-    # Opt-in diagnostics are private to this trial, never global or a retention
-    # assertion. Include all IO/model-input costs when comparing this treatment.
-    # Keep candidate references across resumed wakes, but inspect only this
-    # native invocation's diagnostics. Older traces are evidence, not a growing
-    # hot-path scan or a reason to distrust intact current model input.
-    env["CODEX_ROLLOUT_TRACE_ROOT"] = tempfile.mkdtemp(prefix="wake-", dir=traces)
+    root.mkdir(mode=0o700, exist_ok=True)
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError("context delivery requires a private, physical trial directory")
     env["LOOPX_CODEX_CONTEXT_DIR"] = str(root)
     configuration = codex_context_configuration(str(root), goal_id=env["LOOPX_GOAL_ID"],
         agent_id=env["LOOPX_AGENT_ID"], scenario="codex_benchmark_heartbeat", cli_argv=[env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]])
@@ -82,17 +74,32 @@ def prepare_context_delivery(env: dict[str, str], home: Path) -> None:
             listed = native.request("hooks/list", {"cwds": [env["LOOPX_PROJECT"]]})
     hooks = [hook for entry in listed["data"] for hook in entry["hooks"]
              if hook.get("sourcePath") == str(path.resolve())]
-    if len(hooks) != 2 or path.read_text() != content:
+    # Match the generated handler multiset, not just its size. Native discovery
+    # can reorder it; duplicates, disabled handlers and substitutions cannot
+    # stand in for an expected event/command/settings combination.
+    expected = [{"eventName": event[0].lower() + event[1:],
+                 "handlerType": handler["type"], "command": handler["command"],
+                 "matcher": group.get("matcher"), "timeoutSec": handler.get("timeout"),
+                 "async": handler.get("async", False)}
+                for event, groups in configuration["hooks"].items()
+                for group in groups for handler in group["hooks"]]
+    if not expected or len(hooks) != len(expected) or path.read_text() != content:
         raise ValueError("native host did not discover the exact trial context hooks")
-    entries = []
+    entries, keys = [], set()
     for hook in hooks:
+        actual = {field: hook.get(field) for field in expected[0]}
+        if hook.get("enabled") is not True or type(hook.get("async")) is not bool or actual not in expected:
+            raise ValueError("native host did not discover the exact trial context hooks")
+        expected.remove(actual)
         key, digest = hook.get("key"), hook.get("currentHash")
-        if not isinstance(key, str) or not key or not isinstance(digest, str) or not digest:
-            raise ValueError("native host returned no context-hook trust identity")
+        if not isinstance(key, str) or not key or key in keys or not isinstance(digest, str) or not digest:
+            raise ValueError("native host returned no unique context-hook trust identity")
+        keys.add(key)
         entries.append(f"{json.dumps(key)} = {{ trusted_hash = {json.dumps(digest)} }}")
     # CLI override keys are dot-separated; native keys contain paths/dots.
     # Carry the entire table as TOML so native keys remain literal strings.
     # This isolated trial's native developer instructions survive compaction;
     # a failed SessionStart handler cannot erase the read-only recovery route.
-    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(["-c", "hooks.state={" + ",".join(entries) + "}",
-        "-c", "developer_instructions=" + json.dumps(configuration["developer_instructions"])])
+    native_args = ["-c", "hooks.state={" + ",".join(entries) + "}",
+        "-c", "developer_instructions=" + json.dumps(configuration["developer_instructions"])]
+    env["LOOPX_CODEX_CONTEXT_TRUST_ARGS"] = json.dumps(native_args)

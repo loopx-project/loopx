@@ -454,7 +454,9 @@ def main() -> int:
         assert "--port 8767" in default_chat_plist, default_chat_plist
         assert "--replace-existing-loopx-chat" in default_chat_plist, default_chat_plist
         assert "--no-open" in default_chat_plist, default_chat_plist
-        assert "--runtime-root" not in shlex.split(plistlib.loads(chat_plist.read_bytes())["ProgramArguments"][2])
+        from loopx.runtime_activation import _chat_runtime_root
+        pinned_runtime = _chat_runtime_root(chat_plist)
+        assert pinned_runtime == Path(plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_RUNTIME_ROOT"])
         assert f"export CODEX_HOME={(home / '.codex').resolve()};" in default_chat_plist, default_chat_plist
         assert "export LOOPX_PYTHON=" in default_plist, default_plist
         assert "export LOOPX_PYTHON=" in default_chat_plist, default_chat_plist
@@ -467,6 +469,16 @@ def main() -> int:
         assert "/loopx --registry" in default_plist, default_plist
         assert "/loopx-canary" not in default_plist, default_plist
         assert not (home / "Library" / "LaunchAgents" / "com.loopx.dashboard.plist").exists(), "retired dashboard LaunchAgent should not be installed"
+        # An implicit package workspace is pinned on first installation; a
+        # later release directory must not change existing conversation refs.
+        pinned = json.loads(plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_SCAN_PATHS_JSON"])
+        assert pinned == [str((REPO_ROOT / "loopx").resolve())]
+        successor = home / "successor-release"
+        (successor / "loopx").mkdir(parents=True)
+        run_script(fake_bin, home, ["restart"], schema_version=2,
+                   extra_env={"LOOPX_REPO_ROOT": str(successor)})
+        assert json.loads(plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_SCAN_PATHS_JSON"]) == pinned
+        assert _chat_runtime_root(chat_plist) == pinned_runtime
 
         # KeepAlive restarts never re-enter this installer, so each agent
         # carries its own retention step for both of its streams.
@@ -519,6 +531,12 @@ def main() -> int:
         assert str(custom_registry) in status_plist.read_text()
         status_command = shlex.split(plistlib.loads(status_plist.read_bytes())["ProgramArguments"][2])
         assert [status_command[i + 1] for i, word in enumerate(status_command[:-1]) if word == "--scan-path"] == [str(p) for p in workspaces]
+        # Pre-environment plists still own their explicit CLI workspaces.
+        legacy = plistlib.loads(chat_plist.read_bytes())
+        legacy["EnvironmentVariables"].pop("LOOPX_CHAT_SCAN_PATHS_JSON")
+        chat_plist.write_bytes(plistlib.dumps(legacy))
+        run_script(fake_bin, home, ["restart"], schema_version=2)
+        assert json.loads(plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]["LOOPX_CHAT_SCAN_PATHS_JSON"]) == [str(p) for p in workspaces]
         before = chat_plist.read_bytes()
         rejected = run_script(fake_bin, home, ["install"], schema_version=2,
                               extra_env={"LOOPX_CHAT_SCAN_PATHS_JSON": '["relative"]'}, check=False)

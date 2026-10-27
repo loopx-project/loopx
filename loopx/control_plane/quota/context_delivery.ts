@@ -1,6 +1,6 @@
 /** Presentation of immutable quota, Turn and work-context captures. No admission or state writes.
- * A candidate delta is usable only at a host's final model-input assembly boundary;
- * a previous CLI output or a successful capture handoff is not retention proof. */
+ * Confirmed final input and explicit native-hook continuity assumptions remain
+ * distinct; successful capture handoff alone is never retained-input proof. */
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -148,7 +148,7 @@ function splitContext(context: JsonObject): Split {
  * Keep one exact codec for quota and Turn; source-only callers use the same codec. */
 const SURFACES = ["work_context", "quota_packet", "turn_envelope"] as const;
 type Surface = typeof SURFACES[number];
-type Delta = {value: unknown} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
+type Delta = {value: unknown} | {from: Path} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
   | {items: Record<string, Delta>; values?: Record<string, unknown>; length?: number};
 const pathKey = (path: Path): string => JSON.stringify(path);
 
@@ -279,72 +279,120 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
 
 /** Group complete CURRENT literals, not baseline references. Keep the cheaper
  * ordinary edit when grouping would grow metadata; both containers share this rule. */
-function groupCurrentValues(delta: Exclude<Delta, {value: unknown}>): Delta {
+function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path}>, size: (value: unknown) => number): Delta {
   const children = Object.entries("items" in delta ? delta.items : delta.changed ?? {});
   const values = children.filter(([, child]) => "value" in child);
   if (values.length < 2) return delta;
   const nested = Object.fromEntries(children.filter(([, child]) => !("value" in child)));
-  const grouped: Exclude<Delta, {value: unknown}> = { ...delta,
+  const grouped: Exclude<Delta, {value: unknown} | {from: Path}> = { ...delta,
     ...("items" in delta ? {items: nested} : {changed: nested}),
     values: Object.fromEntries(values.map(([key, child]) => [key, (child as {value: unknown}).value])),
   };
   if (!("items" in grouped) && !Object.keys(nested).length) delete grouped.changed;
-  return bytes(grouped) < bytes(delta) ? grouped : delta;
+  return size(grouped) < size(delta) ? grouped : delta;
 }
 
 function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | null {
+  // Contexts have passed strict JSON digest validation; patch containers remain
+  // immutable after sizing. Reuse child sizes within this one tree calculation.
+  const sizes = new WeakMap<object, number>();
+  const size = (value: unknown): number => {
+    if (value === null || typeof value !== "object") return bytes(value);
+    const prior = sizes.get(value);
+    if (prior !== undefined) return prior;
+    let total = 2, count = 0;
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) total += (i ? 1 : 0)
+        + (value[i] === undefined ? 4 : size(value[i]));
+    } else {
+      for (const [key, item] of Object.entries(value)) {
+        if (item === undefined) continue;
+        total += (count++ ? 1 : 0) + bytes(key) + 1 + size(item);
+      }
+    }
+    sizes.set(value, total);
+    return total;
+  };
   const exact = new Set(forced.map(pathKey)), ancestors = new Set<string>();
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
+  // Binding or source reordering can relocate already-read authoring. Index
+  // exact strings once; a reusable target may copy them from the immutable
+  // base. Forced current controls still take precedence over this index.
+  const strings = new Map<string, {from: Path}>();
+  const index = (value: unknown, path: Path) => {
+    if (typeof value === "string") {
+      const reference = {from: path}, previous = strings.get(value);
+      if (bytes(reference) < bytes({value}) && (!previous || bytes(reference) < bytes(previous)))
+        strings.set(value, reference);
+    } else if (Array.isArray(value)) value.forEach((v, i) => index(v, [...path, i]));
+    else if (jsonObject(value)) Object.entries(value as JsonObject).forEach(([k, v]) => index(v, [...path, k]));
+  };
+  index(before, []);
   const visit = (a: unknown, b: unknown, path: Path): Delta | null => {
     const key = pathKey(path);
     if (exact.has(key)) return {value: clone(b)};
     if (!ancestors.has(key) && equal(a, b)) return null;
+    if (typeof b === "string" && strings.has(b)) return clone(strings.get(b)!);
     let delta: Delta;
-    if (jsonObject(a) && jsonObject(b)) {
-      const old = a as JsonObject, next = b as JsonObject;
+    if ((jsonObject(a) || a === undefined) && jsonObject(b)) {
+      const old = (a ?? {}) as JsonObject, next = b as JsonObject;
       const changed: [string, Delta][] = [];
       for (const [field, value] of Object.entries(next)) {
-        const child = Object.hasOwn(old, field) ? visit(old[field], value, [...path, field]) : {value: clone(value)};
+        const child = visit(Object.hasOwn(old, field) ? old[field] : undefined, value, [...path, field]);
         if (child) changed.push([field, child]);
       }
       const removed = Object.keys(old).filter(field => !Object.hasOwn(next, field));
-      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})});
-    } else if (Array.isArray(a) && Array.isArray(b)) {
+      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})}, size);
+    } else if ((Array.isArray(a) || a === undefined) && Array.isArray(b)) {
+      const old = a as unknown[] | undefined;
       const items: [string, Delta][] = [];
       b.forEach((value, i) => {
-        const child = i < a.length ? visit(a[i], value, [...path, i]) : {value: clone(value)};
+        const child = visit(old?.[i], value, [...path, i]);
         if (child) items.push([String(i), child]);
       });
-      delta = groupCurrentValues({items: Object.fromEntries(items), ...(a.length !== b.length ? {length: b.length} : {})});
+      delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})}, size);
     } else return {value: clone(b)};
     // Sizing does not publish a value. Copy only a replacement that is chosen,
     // rather than every unchanged subtree and every discarded ancestor value.
-    return bytes(delta) < bytes({value: b}) ? delta : {value: clone(b)};
+    return size(delta) < size({value: b}) ? delta : {value: clone(b)};
   };
   return visit(before, after, []);
 }
 
 /** Array indices address the exact hashed baseline, not inferred entity ids.
  * Reorders, duplicate values and length changes are lossless structural edits.
- * Full strings are replaced; no timestamp/revision normalization or prose diff. */
-function applyTree(before: unknown, delta: Delta | null): unknown {
+ * A relocated string may reference the exact immutable base. No timestamp,
+ * revision normalization, fuzzy identity or prose diff is involved. */
+function applyTree(before: unknown, delta: Delta | null, baseline: unknown = before): unknown {
   if (delta === null) return clone(before);
   if ("value" in delta) return clone(delta.value);
+  if ("from" in delta) {
+    if (Object.keys(delta).length !== 1 || !Array.isArray(delta.from)) throw new Error("invalid string reference");
+    let value = baseline;
+    for (const key of delta.from) {
+      if (!(typeof key === "string" || typeof key === "number" && Number.isSafeInteger(key) && key >= 0)
+          || value === null || typeof value !== "object" || !Object.hasOwn(value, key))
+        throw new Error("string reference is not an own baseline path");
+      value = (value as Record<string | number, unknown>)[key];
+    }
+    if (typeof value !== "string") throw new Error("string reference has no exact baseline string");
+    return value;
+  }
   if ("items" in delta) {
-    if (!Array.isArray(before)) throw new Error("array baseline missing");
-    const result = clone(before);
+    if (before !== undefined && !Array.isArray(before)) throw new Error("array baseline missing");
+    const source = (before ?? []) as unknown[], result = clone(source);
     if (delta.length !== undefined) result.length = delta.length;
     for (const [key, value] of Object.entries(delta.values ?? {})) result[Number(key)] = clone(value);
-    for (const [key, item] of Object.entries(delta.items)) result[Number(key)] = applyTree(before[Number(key)], item);
+    for (const [key, item] of Object.entries(delta.items)) result[Number(key)] = applyTree(source[Number(key)], item, baseline);
     return result;
   }
-  const source = requireJsonObject(before, "object baseline"), result = clone(source);
+  const source = before === undefined ? {} : requireJsonObject(before, "object baseline"), result = clone(source);
   for (const key of delta.removed ?? []) delete result[key];
   for (const [key, value] of Object.entries(delta.values ?? {}))
     Object.defineProperty(result, key, {value: clone(value), enumerable: true, writable: true, configurable: true});
   for (const [key, item] of Object.entries(delta.changed ?? {})) {
     // Avoid prototype setters for JSON property names such as __proto__.
-    Object.defineProperty(result, key, {value: applyTree(Object.hasOwn(source, key) ? source[key] : undefined, item),
+    Object.defineProperty(result, key, {value: applyTree(Object.hasOwn(source, key) ? source[key] : undefined, item, baseline),
       enumerable: true, writable: true, configurable: true});
   }
   return result;
@@ -356,13 +404,15 @@ function targetBinding(request: JsonObject, context: JsonObject, surface: Surfac
   for (const key of ["goal_id", "agent_id", "session_id", "context_epoch"]) {
     binding[key] = requireNonEmptyString(scope[key], `scope.${key}`);
   }
+  if (scope.continuity_generation !== undefined)
+    binding.continuity_generation = requireNonEmptyString(scope.continuity_generation, "scope.continuity_generation");
   binding.capture_id = requireNonEmptyString(request.capture_id, "capture_id");
   binding.context_digest = digest(context);
   return binding;
 }
 
 function compatible(base: JsonObject, target: JsonObject): boolean {
-  return ["goal_id", "agent_id", "session_id", "context_epoch", "projection_version", "surface"]
+  return ["goal_id", "agent_id", "session_id", "context_epoch", "projection_version", "surface", "continuity_generation"]
     .every(key => base[key] === target[key]);
 }
 function surfaceOf(value: unknown): Surface {
@@ -370,17 +420,21 @@ function surfaceOf(value: unknown): Surface {
   return value as Surface;
 }
 
-/** Final-input host boundary only. Unsupported/uncertain retention returns full;
- * the host ACKs intact delivery, never file creation or an Agent assertion. */
+/** Hosts may confirm final-input retention, or explicitly select the native
+ * hook delivery assumption. These bases are distinct; neither grants authority. */
 export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
   const full = (reason: string): JsonObject => ({schema_version: VERSION, mode: "full", target,
     ancestry: 0, reason, context: clone(context)});
   const baseline = jsonObject(request.baseline), retained = jsonObject(request.retained);
+  const continuity = jsonObject(request.continuity);
   const binding = jsonObject(baseline?.target), prior = jsonObject(baseline?.context);
-  if (!binding || !prior || !retained || retained.complete !== true
-      || !equal(retained.target, binding) || !compatible(binding, target)
+  const confirmed = !continuity && retained?.complete === true && equal(retained.target, binding);
+  const assumed = !retained && continuity?.basis === "native_hook_assumption"
+    && continuity.capture_bytes_verified === true
+    && equal(continuity.target, binding);
+  if (!binding || !prior || (!confirmed && !assumed) || !compatible(binding, target)
       || binding.context_digest !== digest(prior)) return full("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return full("full_refresh_due");
@@ -389,10 +443,17 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   const changes = changeTree(prior, context, after.paths);
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
     ancestry: Number(depth) + 1, changes,
-    instruction: "Current controls are inline even when unchanged. Other fields inherit the confirmed baseline; all requirements remain binding. A value replaces its subtree; values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+    ...(assumed ? {continuity_basis: "native_hook_assumption"} : {}),
+    instruction: "Current controls are inline even when unchanged. Other fields inherit the "
+      + (assumed ? "exact baseline under the native-hook continuity assumption" : "confirmed baseline")
+      + "; all requirements remain binding. A value replaces its subtree; from copies the exact string at that path in the base capture, never in current changes. Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
-  return delta;
+  // Native consumers page the wire before they can use its baseline. Deliver
+  // the existing basis and interpretation before the potentially large tree;
+  // do not duplicate them in a second host instruction or change strict IO.
+  return assumed ? {schema_version: VERSION, mode: "delta",
+    continuity_basis: delta.continuity_basis, instruction: delta.instruction, ...delta} : delta;
 }
 
 /** Validate the exact change tree against the immutable CURRENT capture before

@@ -96,6 +96,24 @@ export function selectExploreTimelineDecisions(timeline: ExploreTimeline, phase:
     .sort((a, b) => (b.at ?? -Infinity) - (a.at ?? -Infinity));
 }
 
+/** Question containment only: matching titles never establish a shared decision.
+ * Filter before grouping so counts and records describe the selected time range.
+ * Preserve every event, including revisions, ties and unknown record times. */
+export function groupExploreTimelineDecisions(timeline: ExploreTimeline, phase: number | null) {
+  const groups = new Map<string, {id: string; title: string; items: TimelineFinding[]}>();
+  for (const item of selectExploreTimelineDecisions(timeline, phase)) {
+    const nodeId = item.event.node_id;
+    const id = nodeId ? `node:${nodeId}` : `event:${item.event.event_id}`;
+    let group = groups.get(id);
+    if (!group) {
+      group = {id, title: timeline.nodes.get(nodeId)?.node.latest.title || item.event.title, items: []};
+      groups.set(id, group);
+    }
+    group.items.push(item);
+  }
+  return [...groups.values()];
+}
+
 /** Routes are connected components of recorded typed edges and parent grouping only. */
 function routesOf(nodes: readonly ExploreHistoryNode[], edges: readonly ExploreHistoryEvent[]) {
   const known = new Set(nodes.map(node => node.id));

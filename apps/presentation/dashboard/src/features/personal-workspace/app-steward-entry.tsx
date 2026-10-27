@@ -37,26 +37,36 @@ export function useAppStewardTarget(enabled: boolean) {
     unavailable: ready && read.unavailable, retry};
 }
 
-export function AppStewardEntry({children, onOpen}: {children: ReactNode; onOpen: (target: BoundConversationTarget) => void}) {
+export function AppStewardEntry({children, enabled, intercept, onOpen}: {
+  children: (entry: ReturnType<typeof useAppStewardTarget>) => ReactNode;
+  enabled: boolean;
+  intercept: boolean;
+  onOpen: (target: BoundConversationTarget) => void;
+}) {
   const {locale} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
-  const entry = useAppStewardTarget(true);
+  const entry = useAppStewardTarget(enabled);
   const open = useRef(onOpen);
   open.current = onOpen;
-  useEffect(() => {if (entry.target) open.current(entry.target);}, [entry.target]);
-  if (!entry.loading && !entry.unavailable && !entry.target) return children;
+  useEffect(() => {if (intercept && entry.target) open.current(entry.target);}, [intercept, entry.target]);
+  const blocked = intercept && (entry.loading || entry.unavailable || Boolean(entry.target));
   const settings = new URL(window.location.href);
   settings.searchParams.set("view", "overview");
   settings.searchParams.set("settings_scope", "machine");
   settings.searchParams.set("settings_tab", "lark");
-  return <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-5 p-6 text-slate-900 dark:text-zinc-100">
-    <h1 className="text-xl font-semibold">{zh ? "LoopX 管家" : "LoopX steward"}</h1>
-    {!entry.unavailable ? <p role="status">{zh ? "正在打开管家对话…" : "Opening the steward conversation…"}</p> : <>
-      <p role="alert">{zh ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry."}</p>
-      <div className="flex flex-wrap gap-3">
-        <Button onClick={entry.retry}>{zh ? "重试" : "Retry"}</Button>
-        <a className="inline-flex min-h-9 items-center underline underline-offset-4" href={settings.href}>{zh ? "打开会话设置" : "Open conversation settings"}</a>
-      </div>
-    </>}
-  </main>;
+  return <>
+    {/* Keep the workspace and its readers mounted across entry/navigation.
+        The same readback gates its queue while discovery is unresolved. */}
+    <div style={{display: blocked ? "none" : "contents"}}>{children(entry)}</div>
+    {blocked ? <main className="mx-auto flex min-h-dvh max-w-xl flex-col justify-center gap-5 p-6 text-slate-900 dark:text-zinc-100">
+      <h1 className="text-xl font-semibold">{zh ? "LoopX 管家" : "LoopX steward"}</h1>
+      {!entry.unavailable ? <p role="status">{zh ? "正在打开管家对话…" : "Opening the steward conversation…"}</p> : <>
+        <p role="alert">{zh ? "原管家会话暂不可用。请检查所选连接后重试。" : "The original steward conversation is unavailable. Check the selected connection and retry."}</p>
+        <div className="flex flex-wrap gap-3">
+          <Button onClick={entry.retry}>{zh ? "重试" : "Retry"}</Button>
+          <a className="inline-flex min-h-9 items-center underline underline-offset-4" href={settings.href}>{zh ? "打开会话设置" : "Open conversation settings"}</a>
+        </div>
+      </>}
+    </main> : null}
+  </>;
 }

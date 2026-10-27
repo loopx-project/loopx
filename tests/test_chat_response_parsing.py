@@ -10,6 +10,30 @@ from loopx.chat import (
 )
 
 
+@pytest.mark.parametrize("change", [None, {"effects_settled": False}, {"effects_settled": "true"},
+    {"remaining": ""}, {"remaining": "x" * 1001}, {"dependency": 4}, {"grant": "workspace_write"}])
+def test_unfinished_work_is_explicit_bounded_data_never_inferred_from_prose(change):
+    work = {"remaining": "Finish the remaining verified update", "dependency": "Original source is temporarily unavailable",
+            "effects_settled": True}
+    response = parse_agent_response(CHAT_REVIEW_OPEN_TAG + json.dumps({
+        "message": "This request is still incomplete.", "unfinished_work": {**work, **(change or {})},
+    }) + CHAT_REVIEW_CLOSE_TAG)
+    assert response.get("unfinished_work") == (work if change is None else None)
+    assert "unfinished_work" not in parse_agent_response("Incomplete: retry when the source recovers.")
+
+
+@pytest.mark.parametrize("field", ["gate", "protected_action", "context_handoff", "goal_draft", "proposals"])
+def test_unfinished_work_cannot_accompany_a_gate_protected_action_or_handoff(field):
+    work = {"remaining": "Remaining work", "dependency": "A temporary dependency", "effects_settled": True}
+    payload = {"message": "Waiting", "unfinished_work": work, field: [{"kind": "todo", "text": "Another job"}]
+               if field == "proposals" else {"unresolved": True}}
+    if field == "context_handoff":
+        payload[field] = {"goal_id": "existing-work", "agent_id": "existing-worker", "brief": {
+            "schema_version": "collaboration_brief_v0", "purpose": "Verify the original work", "context": "Original source",
+            "constraints": [], "inputs": [], "acceptance": ["Verified original result returned"], "return_requirement": "Return the actual result"}}
+    assert "unfinished_work" not in parse_agent_response(CHAT_REVIEW_OPEN_TAG + json.dumps(payload) + CHAT_REVIEW_CLOSE_TAG)
+
+
 @pytest.mark.parametrize("goal_id", ["release-work", "legacy.goal_1", "", "../foreign", "/private/work", 123])
 def test_todo_target_is_preserved_or_rejected_without_becoming_unscoped(goal_id):
     payload = {"message": "Preview only", "proposals": [{"kind": "todo", "goal_id": goal_id,

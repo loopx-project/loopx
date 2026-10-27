@@ -272,7 +272,8 @@ export const navigationSortingScenario = {
       await remote.getByLabel("本机 SSH Host").fill("remote-lab");
       await remote.getByText("ssh -N -L 8876:127.0.0.1:8766 remote-lab", { exact: true }).waitFor({ state: "visible" });
       await remote.getByRole("button", { name: "添加只读来源" }).click();
-      await remote.getByText("远端只读投影", { exact: true }).waitFor({ state: "visible" });
+      await readContextHelp(remote, remote.locator(".personal-read-only-notice"), "只读来源",
+        "你可以查看 Goal、Task、证据与运行状态；写入、纠偏和 Agent 会话仍留在来源主机。");
       await remote.getByRole("button", { name: "添加 SSH 隧道来源" }).click();
       await remote.getByRole("tab", { name: "手动 URL" }).click();
       await remote.getByLabel("名称").fill("Remote build host");

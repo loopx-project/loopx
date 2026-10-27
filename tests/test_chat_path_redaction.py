@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -18,6 +19,37 @@ from loopx.chat import (
 )
 from loopx.chat_acp import ACPStdioAdapter
 from loopx.chat_status_api import ChatStatusRequestMixin
+
+
+def test_windows_near_root_finishes_without_exponential_case_backtracking():
+    # A near miss must reach the generic private-path rule rather than explore
+    # every equivalent upper/lower-case spelling of the protected prefix. Run
+    # in a disposable process so a regression cannot stall the whole suite.
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import json
+from loopx.chat import VisibleResponseStreamFilter, redact_local_paths
+root = 'Q:/' + 'a' * 32 + 'z'
+candidate = 'q:/' + 'a' * 32 + 'y/report.txt'
+stream = VisibleResponseStreamFilter(protected_paths=[root])
+visible = stream.feed(candidate[:20]) + stream.feed(candidate[20:]) + stream.finish()
+print(json.dumps({'batch': redact_local_paths(candidate, protected_paths=[root]), 'stream': visible}))
+"""],
+        cwd=Path(__file__).resolve().parents[1], capture_output=True,
+        encoding="utf-8", check=True, timeout=20,
+    )
+    assert json.loads(result.stdout) == {"batch": "[local-path]", "stream": "[local-path]"}
+
+
+@pytest.mark.parametrize("component", ["Straße", "İ", "ΐ"])
+def test_windows_root_retains_multicharacter_unicode_case_aliases(component):
+    root = f"Q:/{component}/workspace"
+    for alias in (component, component.lower(), component.upper()):
+        candidate = f"q:/{alias}/workspace/report.md"
+        for spelling in (candidate, quote(candidate, safe="/:")):
+            assert redact_local_paths(spelling, protected_paths=[root]) == "[project]"
+            stream = VisibleResponseStreamFilter(protected_paths=[root])
+            assert stream.feed(spelling[:5]) + stream.feed(spelling[5:]) + stream.finish() == "./report.md"
 
 
 @pytest.mark.parametrize(

@@ -185,7 +185,7 @@ def test_partial_link_failure_replays_without_duplicate_or_primary_rollback(
     assert second["ok"] and second["graph"]["appended_event_count"] == 0
 
 
-@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "conflict", "off-without-result",
+@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "blank-status", "conflict", "off-without-result",
                                 "path-disabled", "path-missing", "path-no-evidence", "path-overflow"])
 def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     from canonical_authority_fixture import initialize_canonical_authority
@@ -228,6 +228,8 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
         packet["explore_result"] = None
     if case == "invalid":
         packet["explore_result"]["evidence_refs"] = []
+    if case == "blank-status":
+        packet["explore_result"]["status"] = ""
     if case.startswith("path-"):
         packet["explore_result"] = {
             key: ATTACHMENT[key] for key in

@@ -1,3 +1,4 @@
+import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
 import {ChevronRight, RefreshCw} from "lucide-react";
 import {fetchExploreResults, readTodoRequest, type ExploreResultPage} from "../../data/chat";
@@ -59,9 +60,10 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
   }, [goalId, cursor, revision, active, readSourceUrl]);
   const selected = page?.items.find(item => item.finding_id === selectedId);
   const sections = selected ? parseExploreFindingSections(selected.summary) : null;
+  const findingCopy = exploreFindingCopy(zh);
   const statuses: Record<string, string> = zh
-    ? {tentative: "待检查", confirmed: "来源记为确认", refuted: "已反驳", open: "未完成", done: "已完成", blocked: "受阻", deferred: "已延后"}
-    : {tentative: "Tentative", confirmed: "Recorded confirmation", refuted: "Refuted", open: "Open", done: "Done", blocked: "Blocked", deferred: "Deferred"};
+    ? {...findingCopy.labels, open: "未完成", done: "已完成", blocked: "受阻", deferred: "已延后"}
+    : {...findingCopy.labels, open: "Open", done: "Done", blocked: "Blocked", deferred: "Deferred"};
   const outcomes: Record<string, string> = zh
     ? {replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定"}
     : {replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human"};
@@ -81,6 +83,7 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
     <header><div className="explore-reader-heading"><h3>{zh ? "已保存的结论" : "Saved findings"}</h3>
       <ContextHelp label={zh ? "结论与关联说明" : "About findings and links"}>
         <p>{zh ? "来源记录的观察与结论，保存不代表已经验证或被后续决策采用。关联任务是原记录的显式关联。" : "Source-recorded observations and conclusions. Saving does not establish validation or adoption. Linked tasks are explicit source relationships."}</p>
+        <p>{findingCopy.meaning}</p>
       </ContextHelp></div>
       <button type="button" disabled={busy} aria-label={zh ? "刷新证据" : "Refresh evidence"} onClick={refresh}><RefreshCw size={16} aria-hidden/></button></header>
     {busy ? <p role="status">{zh ? "正在读取证据…" : "Reading evidence…"}</p> : null}

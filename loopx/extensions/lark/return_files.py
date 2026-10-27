@@ -19,6 +19,13 @@ from ...control_plane.collaboration.result_files import read_result_file
 from ...file_lock import exclusive_file_lock
 
 
+# An upload acknowledgement is the resource prefix plus 1-240 token characters.
+# The prefix is a property of the resource kind, not of the caller, so both
+# shapes are stated once here instead of being rebuilt at each use site.
+RESULT_FILE_KEY_PATTERN = re.compile(r"file_[A-Za-z0-9_-]{1,240}")
+CHAT_IMAGE_KEY_PATTERN = re.compile(r"img_[A-Za-z0-9_-]{1,240}")
+
+
 def _call(args, cwd, *, runner, private_transport):
     try:
         if private_transport is not None:
@@ -36,7 +43,8 @@ def uploaded_result_files(*, root, profile, provider_ref, attachments, runner=No
     never uploads replacement resources to reconstruct a sent-message intent.
     """
     return _uploaded_resources(root=root, profile=profile, provider_ref=provider_ref, attachments=attachments,
-        cache_dir="lark-result-files", resource="files", key_field="file_key", key_prefix="file_",
+        cache_dir="lark-result-files", resource="files", key_field="file_key",
+        key_pattern=RESULT_FILE_KEY_PATTERN,
         read_bytes=lambda attachment: read_result_file(root, attachment),
         upload_data=lambda attachment: {"file_type": "stream", "file_name": attachment["name"]},
         runner=runner, private_transport=private_transport, before_upload=before_upload, verify_only=verify_only)
@@ -55,14 +63,15 @@ def uploaded_chat_images(*, root, profile, provider_ref, attachments, private_tr
     """Reuse resource IO; never regenerate an unknown upload or sent intent."""
     return _uploaded_resources(root=root, profile=profile, provider_ref=provider_ref,
         attachments=_chat_images(attachments), cache_dir="lark-chat-images", resource="images",
-        key_field="image_key", key_prefix="img_", read_bytes=lambda image: image["raw"],
+        key_field="image_key", key_pattern=CHAT_IMAGE_KEY_PATTERN,
+        read_bytes=lambda image: image["raw"],
         upload_data=lambda _image: {"image_type": "message"}, runner=None,
         private_transport=private_transport, before_upload=before_upload, verify_only=verify_only,
         fence_upload=True)
 
 
 def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, resource,
-                        key_field, key_prefix, read_bytes, upload_data, runner, private_transport,
+                        key_field, key_pattern, read_bytes, upload_data, runner, private_transport,
                         before_upload, verify_only, fence_upload=False):
     keys = []
     for attachment in attachments:
@@ -72,7 +81,7 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
         with exclusive_file_lock(cache):
             saved = _read(cache) if cache.exists() else None
             if saved is not None:
-                if saved.get("identity") != identity or not re.fullmatch(key_prefix + r"[A-Za-z0-9_-]{1,240}", str(saved.get(key_field, ""))):
+                if saved.get("identity") != identity or not key_pattern.fullmatch(str(saved.get(key_field, ""))):
                     raise ValueError("resource upload identity conflict or acknowledgement unavailable")
                 keys.append(saved[key_field])
                 continue
@@ -97,7 +106,7 @@ def _uploaded_resources(*, root, profile, provider_ref, attachments, cache_dir, 
                 uploaded = _call(args, cwd, runner=runner, private_transport=private_transport)
                 payload = _json_object(uploaded.get("stdout"))
                 key = (payload.get("data") or {}).get(key_field)
-                if uploaded.get("returncode") != 0 or payload.get("ok") is False or not re.fullmatch(key_prefix + r"[A-Za-z0-9_-]{1,240}", str(key or "")):
+                if uploaded.get("returncode") != 0 or payload.get("ok") is False or not key_pattern.fullmatch(str(key or "")):
                     raise ValueError("result file upload unavailable")
             _write(cache, {"identity": identity, key_field: key})
             keys.append(key)

@@ -133,11 +133,92 @@ def test_ninth_link_readback_pagination_scope_failure_and_recovery(tmp_path, mon
         assert read(base + "evidence-goal")["total"] == 41
         state.unlink()
         assert len(read(base + "evidence-goal")["items"][0]["linked_todos"]) == 2
-        # Missing canonical authority is not an empty, unlinked result.
-        from loopx.presentation.explore_results_api import _result_rows
-        from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
-        with pytest.raises(CanonicalAuthorityRequired):
-            _result_rows(tmp_path / "missing-runtime", "evidence-goal", registry)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()
+
+
+@pytest.mark.parametrize("unavailable_scope", [None, "active", "completed_history"])
+def test_saved_findings_survive_unavailable_task_associations(tmp_path, monkeypatch, unavailable_scope):
+    from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.presentation import explore_results_api
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    state = tmp_path / "active.md"
+    state.write_text("# Synthetic saved evidence\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [
+        {"id": "saved-evidence", "repo": str(tmp_path), "state_file": state.name},
+    ]}))
+    log = explore_result_log_path(runtime, "saved-evidence")
+    append_explore_result_event(log, build_explore_node_event(
+        goal_id="saved-evidence", node_id="question", title="Which bound survives?",
+    ))
+    append_explore_result_event(log, build_explore_finding_event(
+        goal_id="saved-evidence", node_id="question", finding_id="counterexample",
+        title="The proposed bound fails", status="refuted", summary="Retain the complete counterexample.",
+        evidence_refs=["artifact:counterexample"],
+    ))
+
+    def migrate():
+        initialize_canonical_authority(runtime, "saved-evidence", build_todo_runtime_shadow_projection(
+            goal_id="saved-evidence", todos=[{
+                "schema_version": "todo_item_v0", "todo_id": "todo_recheck", "role": "agent",
+                "text": "Recheck the bound", "status": "open", "claimed_by": "worker",
+                "done": False, "archive_state": "active", "source_section": "Agent Todo",
+                "explore_result_node_refs": ["question"],
+            }], handoff_mode="soft_claim"), state_path=state, provider="sqlite")
+
+    original_read = explore_results_api.list_goal_todos
+    if unavailable_scope is not None:
+        migrate()
+
+        def interrupted_read(**kwargs):
+            if kwargs.get("read_scope", "active") == unavailable_scope:
+                raise LocalCoordinationAuthorityUnavailable(
+                    "Synthetic authority outage", code="local_authority_unavailable", payload={},
+                )
+            return original_read(**kwargs)
+
+        monkeypatch.setattr(explore_results_api, "list_goal_todos", interrupted_read)
+    before = {path: path.read_bytes() for path in (registry, state, log)}
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.runtime_root_override = registry, runtime, None
+    server.verbose = False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    url = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id=saved-evidence"
+
+    def read():
+        with urlopen(url, timeout=10) as response:
+            return json.load(response)
+
+    try:
+        page = read()
+        assert page["total"] == 1
+        item = page["items"][0]
+        assert item["summary"] == "Retain the complete counterexample."
+        assert item["status"] == "refuted"
+        assert item["evidence_refs"] == ["artifact:counterexample"]
+        assert item["linked_todos_available"] is False
+        assert item["linked_todos"] == []  # An incomplete association read is never an empty verified set.
+        assert all(path.read_bytes() == content for path, content in before.items())
+        log.write_bytes(before[log] + b"{broken\n")
+        with pytest.raises(HTTPError) as corrupt:
+            read()
+        assert corrupt.value.code == 409  # Task availability cannot relax evidence validation.
+        log.write_bytes(before[log])
+        monkeypatch.setattr(explore_results_api, "list_goal_todos", original_read)
+        if unavailable_scope is None:
+            migrate()
+        recovered = read()["items"][0]
+        assert recovered.get("linked_todos_available", True) is True
+        assert [todo["todo_id"] for todo in recovered["linked_todos"]] == ["todo_recheck"]
+        assert all(path.read_bytes() == content for path, content in before.items())
     finally:
         server.shutdown()
         server.server_close()

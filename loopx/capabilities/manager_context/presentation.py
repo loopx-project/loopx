@@ -13,20 +13,32 @@ from ...control_plane.collaboration.goal_instance_scope import (
 from ...control_plane.collaboration.inbox import controlled_request_readback
 
 
-def project_collaboration(store, root, session_id, messages, *, registry):
+def project_collaboration(store, root, session_id, messages, *, registry, context_messages=None):
     session = store.load_session(session_id)
     if not session or not conversation_scope(session)["private_conversation"]:
         return messages
     # Prefer the saved answer; when it was lost, keep the commitment on the
     # original user message. Never append a synthetic answer or mutate Chat.
     carriers, turns = {}, {}
-    for message in messages:
+    for message in messages if context_messages is None else context_messages:
         tid = message.get("turn_id")
         if not tid or message.get("origin") == "manager_followup":
             continue
         if message.get("role") in {"agent", "assistant"} or tid not in carriers:
             carriers[tid] = message.get("message_id")
-        if tid not in turns:
+    visible_ids = {message.get("message_id") for message in messages}
+    if context_messages is not None:
+        # A returned result may be on a later page than its commitment. Read
+        # that original carrier for revision labels, without rendering it twice.
+        returned_turns = {message.get("turn_id") for message in messages
+                          if isinstance(message.get("return_delivery"), dict)}
+        messages = [message for message in context_messages
+                    if message.get("turn_id") in returned_turns
+                    and carriers.get(message.get("turn_id")) == message.get("message_id")
+                    and message.get("message_id") not in visible_ids] + messages
+    for message in messages:
+        tid = message.get("turn_id")
+        if tid and carriers.get(tid) == message.get("message_id") and tid not in turns:
             turns[tid] = store.load_turn(session_id, tid) or {}
     missing_clients = {
         turn.get("client_turn_id") for turn in turns.values()
@@ -147,4 +159,4 @@ def project_collaboration(store, root, session_id, messages, *, registry):
     return [{**message, "return_delivery": {**message["return_delivery"],
              "request_revision": revision_labels[message["message_id"]]}}
             if message.get("message_id") in revision_labels and isinstance(message.get("return_delivery"), dict)
-            else message for message in result]
+            else message for message in result if message.get("message_id") in visible_ids]

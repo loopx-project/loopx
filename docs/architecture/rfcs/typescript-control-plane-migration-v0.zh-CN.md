@@ -15,6 +15,36 @@
 ---
 
 
+### Goal agent-context 委派投影收敛至 TypeScript（2026-10-25）
+
+`capability_hook.agent_context.project`
+（`loopx/control_plane/goal_agent_context.ts` +
+`loopx/control_plane/subagent_context.ts` 中的
+`projectDelegationContext`）现由 Python 原始事实组合
+`loopx_delegation_context_v0`：包括 `configuration_state`、逐路由
+`readiness`／`runtime_readiness`、六路由上限及截断、操作回执摘要和阻塞
+回退 `delegation_context_unavailable`。
+`loopx/control_plane/collaboration/delegation_context.py` 从 182 行规则
+owner 缩为 84 行事实读取器：配置 JSON（符号链接／逃逸防护）、已注册
+Agent id、每组不同 `host_args` 仅一次 executor 探测，且仅在
+`after_delegate_result` 读取操作清单。
+`loopx/control_plane/agent_context.py` 删除重复 enabled 门禁和延迟 Python
+组合；TS `boundedDelegationContext` 重校验并入唯一 owner。
+N 个请求者绑定下，`loopx agent-context` 跨运行时调用降为：`before_plan`
+2N+1 → 1；`after_delegate_result` 2N+3 → 3（清单保留既有两次跨运行时
+调用的 TS 事务）。
+`loopx quota should-run` 内的 `live_decision` 规划上下文获得相同降幅。
+两个阶段的 3／8 绑定固定夹具
+（`tests/control_plane_ts/fixtures/goal_agent_context_delegation.json`）包均
+逐字节一致，含 `context_id`；CLI JSON 大小不变。
+生产代码行数：Python −99，TypeScript +98。紧凑编排策略及 executor 环境
+探测（`managed_executor_binding_from_host_args`）仍由 Python 提供事实；
+`not_configured` 仍仅能经重放观察解码器到达。
+当 TS 在进程内读取 Goal registry、本地委派配置及 Turn host executor
+投影后，删除 `loopx/control_plane/collaboration/delegation_context.py` 和
+请求字段 `delegation_facts`，使 Python 入口（`agent-context`、
+`quota should-run`、Goal 检查）仅传入阶段／范围／观察。
+
 ### Scheduler hint 投影
 
 完整 scheduler hint 由 `scheduler/hint.ts` 通过一次

@@ -97,6 +97,33 @@ proxy when the pinned source installer needs to build frontend assets. It is
 passed only to setup subprocesses and cleared before solver execution and native
 network isolation. It is never placed in the container's persistent environment.
 
+### Retry transient API rate limits
+
+For API-key trials, an explicit `--provider-rate-limit-retry-seconds 900`
+lets the SForge host credential gateway retry HTTP 429 before forwarding any
+response bytes. Both `native-goal` and `official` workers use this transport.
+This requires a SForge revision with `agent_rate_limit_retry_seconds`; an older
+source or an OAuth-only route fails before launch when the option is requested.
+The default is zero, preserving historical pass-through behavior.
+
+The gateway honors `Retry-After` seconds and HTTP dates. Without a usable header,
+it backs off from about 5 seconds to at most 60 seconds, with jitter, within the
+configured window. A provider delay beyond the remaining window returns the
+original 429 instead of retrying early. Cancellation or trial cleanup stops
+further retries. Other status codes and already-started streams are passed
+through without gateway replay. Upstream requests already in flight retain the
+existing request timeout.
+
+This is distinct from Codex `stream_max_retries`: a directly returned HTTP 429
+can terminate a native Goal without entering the stream retry loop. Increasing
+that count alone does not qualify HTTP 429 recovery. The gateway preserves the
+request, Codex session, Goal, workspace and original trial deadline; retry wait
+consumes that deadline. It does not continue a completed Goal or grant more time.
+The run receipt records the configured retry window and source revision; proxy
+logs record retry counts and delays without prompts or credentials. Apply the
+same option to comparison arms and keep older attempts under their original
+settings. Sustained limits beyond the window can still fail the trial.
+
 ### Continue after native account exhaustion
 
 Keep a quota interruption distinct from a task result. Codex's message-only

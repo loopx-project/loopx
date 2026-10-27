@@ -1205,6 +1205,12 @@ feature-off behavior; live long-horizon trajectories must still establish actual
 model adoption and continuation. The mode vocabulary is local to Explore configuration,
 not a new kernel lifecycle or scheduler contract.
 
+Finding readers distinguish tentative source judgments from queued verification.
+Writeback templates require an explicit finding status and retain optional question
+closure independently of finding status. This improves authoring and readback;
+correct interpretation, actual closure and model adoption still require evidence.
+Historical records, CLI defaults and execution authority remain unchanged.
+
 ## 20. Acceptance Criteria for the RFC
 
 Merge accepts this design basis. Implementation qualification still requires evidence that:

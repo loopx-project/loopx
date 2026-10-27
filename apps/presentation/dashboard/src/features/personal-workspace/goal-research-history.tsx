@@ -1,3 +1,4 @@
+import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
@@ -106,7 +107,8 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   };
   // Labels reuse Explore's existing vocabulary; they confer no verification state.
   const kindLabels: Record<string, string> = zh ? {question: "问题", hypothesis: "假设", experiment: "尝试", artifact: "产物", area: "路线"} : {question: "Question", hypothesis: "Hypothesis", experiment: "Attempt", artifact: "Artifact", area: "Route"};
-  const stateLabels: Record<string, string> = zh ? {open: "待探索", exploring: "探索中", blocked: "受阻", resolved: "已收束", dead_end: "已排除", tentative: "待检查", confirmed: "来源记为确认", refuted: "已反驳"} : {open: "Open", exploring: "Exploring", blocked: "Blocked", resolved: "Resolved", dead_end: "Ruled out", tentative: "Tentative", confirmed: "Recorded confirmation", refuted: "Refuted"};
+  const findingCopy = exploreFindingCopy(zh);
+  const stateLabels: Record<string, string> = zh ? {open: "待探索", exploring: "探索中", blocked: "受阻", resolved: "已收束", dead_end: "已排除", ...findingCopy.labels} : {open: "Open", exploring: "Exploring", blocked: "Blocked", resolved: "Resolved", dead_end: "Ruled out", ...findingCopy.labels};
   const relationLabels: Record<string, string> = zh ? {subtopic_of: "属于", depends_on: "依赖", answers: "回答", supports: "支持", refutes: "反驳", leads_to: "引向"} : {subtopic_of: "Part of", depends_on: "Depends on", answers: "Answers", supports: "Supports", refutes: "Refutes", leads_to: "Leads to"};
   const kindLabel = (kind: string) => kindLabels[kind] ?? kind;
   const stateLabel = (state: string) => stateLabels[state] ?? state;
@@ -464,7 +466,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         <div className="research-reader-content">
         <div className="research-reader-location"><button type="button" className="research-reader-back" onClick={closeReader}><ArrowLeft size={14} aria-hidden/>{readerParent.current ? (zh ? "返回问题列表" : "Back to questions") : copy.all}</button>
         <div className="research-reader-states">
-          <p className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)}</p>
+          <div className="research-detail-kind"><GitBranch size={14} aria-hidden/>{kindLabel(selected.latest.node_kind)} · {stateLabel(selected.latest.status)} <ContextHelp label={findingCopy.help}><p>{findingCopy.meaning}</p></ContextHelp></div>
           {selected.findings.length > 1 && findingExceptions ? <p className="research-finding-exceptions">{findingExceptions}</p> : null}
         </div></div>
         {selected.findings.length ? selectedFinding?.title !== selected.latest.title ? <details className="research-reader-question" key={selected.id} open={questionExpanded} onToggle={event => setQuestionExpanded(event.currentTarget.open)}>

@@ -66,10 +66,15 @@ def _root_character_atoms(
         options = tuple((variant, True) for variant in variants) + tuple(
             (variant, True) for variant in encoded_variants
         )
+        # IGNORECASE already covers the one-character case variants. Keeping
+        # both as alternatives multiplies backtracking at each near-miss letter.
+        # Multi-character Unicode mappings still need their explicit spelling;
+        # encoded UTF-8 variants remain distinct byte sequences.
+        literal_variants = {char} | {variant for variant in variants if len(variant) > 1}
         pattern = (
             "(?i:"
             + "|".join(
-                re.escape(variant) for variant in sorted(variants | encoded_variants)
+                re.escape(variant) for variant in sorted(literal_variants | encoded_variants)
             )
             + ")"
         )
@@ -768,9 +773,23 @@ def normalize_agent_response(
         protected_paths=protected,
     ).strip()
     goal_draft = _normalize_goal_draft(payload, protected_paths=protected)
+    # A worker's bounded progress report, never a grant or a retry decision.
+    # Legacy prose and incomplete/ambiguous objects cannot request continuation.
+    unfinished = payload.get("unfinished_work")
+    if (not isinstance(unfinished, dict) or set(unfinished) != {"remaining", "dependency", "effects_settled"}
+            or unfinished.get("effects_settled") is not True
+            or any(not isinstance(unfinished.get(key), str) or not 1 <= len(unfinished[key].strip()) <= 1000
+                   for key in ("remaining", "dependency"))
+            or any(payload.get(key) for key in ("gate", "protected_action", "goal_draft", "context_handoff", "proposals"))):
+        unfinished = None
+    else:
+        unfinished = {"remaining": redact_response_markdown(unfinished["remaining"].strip(), protected_paths=protected),
+                      "dependency": redact_response_markdown(unfinished["dependency"].strip(), protected_paths=protected),
+                      "effects_settled": True}
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": message,
+        **({"unfinished_work": unfinished} if unfinished else {}),
         **({"goal_draft": goal_draft} if goal_draft else {}),
         **({"context_handoff": handoff} if handoff else {}),
         "proposals": _normalize_proposals(

@@ -45,11 +45,11 @@ export function exploreResultWritebackAffordance(): JsonObject {
     path_delta_attachment_schema: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
     path_delta_attachment_template: {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      question: "", applicability: "", input_revision: "", status: "tentative",
+      question: "", applicability: "", input_revision: "", status: "",
     },
     linked_question_attachment_template: {
       schema_version: EXPLORE_PATH_DELTA_ATTACHMENT_SCHEMA,
-      node_id: "<linked-question-id>", input_revision: "", status: "tentative",
+      node_id: "<linked-question-id>", input_revision: "", status: "",
     },
     optional_question_evolution_example: {
       question_update: {status: "resolved"},
@@ -77,6 +77,8 @@ export function exploreResultWritebackAffordance(): JsonObject {
       "The hook reuses the complete observation and route decision.",
       "For an existing question linked to this Todo, use linked_question_attachment_template: omit both question and applicability to reuse its canonical scope.",
       "New or unlinked questions still require explicit scope; input_revision and status are never inferred.",
+      "Choose status explicitly: tentative for unresolved interpretation, insufficient evidence or failed prerequisites; confirmed when evidence supports the stated conclusion within its applicability; refuted when evidence contradicts that conclusion within its applicability. Evidence references, a successful check, a score or a route decision alone do not choose the status.",
+      "Separate established observations from unresolved broader claims in interpretation; state what remains unknown and the next discriminating check when useful. Revisit the linked question at a meaningful conclusion using question_update; do not keep it open solely because the overall Goal is unfinished, or close it merely because a finding is confirmed.",
       "If path_delta also references local files, explicitly select its opaque identifiers with optional evidence_refs; selected refs must occur in this same path_delta.",
       "Without a selection, all refs must be opaque identifiers.",
       "Otherwise fill attachment_template, inline or via --explore-result-json.",
@@ -98,7 +100,7 @@ export function exploreResultWritebackAffordance(): JsonObject {
     attachment_template: {
       schema_version: EXPLORE_RESULT_ATTACHMENT_SCHEMA,
       question: "", applicability: "", input_revision: "",
-      observation: "", interpretation: "", status: "tentative", evidence_refs: [],
+      observation: "", interpretation: "", status: "", evidence_refs: [],
     },
   };
 }

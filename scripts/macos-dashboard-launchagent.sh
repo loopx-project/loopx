@@ -196,10 +196,11 @@ PY
 }
 
 resolve_chat_scan_paths() {
-  "$1" - "$chat_plist" <<'PY'
+  "$1" - "$chat_plist" "$repo_root/loopx" <<'PY'
 import json
 import os
 import plistlib
+import shlex
 import sys
 from pathlib import Path
 
@@ -209,11 +210,23 @@ if selected is None and target.exists():
     with target.open("rb") as stream:
         plist = plistlib.load(stream)
     selected = plist.get("EnvironmentVariables", {}).get("LOOPX_CHAT_SCAN_PATHS_JSON")
+    if selected is None:
+        args = plist.get("ProgramArguments", [])
+        words = shlex.split(args[2]) if len(args) == 3 and args[1] == "-c" else args
+        paths = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "--scan-path"]
+        roots = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "--scan-root"]
+        if paths or roots:
+            selected = json.dumps(paths or roots[-1:])
 if selected is not None and (not isinstance(selected, str) or len(selected) > 16000):
     raise SystemExit("LoopX Chat workspace selection is too large")
 paths = json.loads(selected) if selected is not None else []
 if not isinstance(paths, list) or len(paths) > 32:
     raise SystemExit("LoopX Chat workspace selection must be an array of at most 32 directories")
+# The CLI's implicit package workspace changes with every release directory.
+# Pin that bounded default once, just like an explicitly selected workspace,
+# so reinstall does not silently replace existing conversation contexts.
+if not paths:
+    paths = [sys.argv[2]]
 resolved = []
 for item in paths:
     if not isinstance(item, str) or not item or any(ord(c) < 32 for c in item):
@@ -318,7 +331,9 @@ PY
 }
 
 resolve_chat_options() {
-  "$1" - "$chat_plist" <<'PY'
+  (
+  cd /
+  "$1" - "$chat_plist" "$registry" <<'PY'
 import json
 import math
 import os
@@ -356,8 +371,17 @@ for variable, flag in (
                 if not value:
                     raise SystemExit(f"{variable} has an empty installed argument")
     if value is None or value == "":
-        options[variable] = ""
-        continue  # Retain the CLI's existing default, without pinning a new root.
+        if flag != "--runtime-root":
+            options[variable] = ""
+            continue
+        # Pin the same route Chat would select at installation. The updater
+        # can then fence that exact store without reinterpreting a later
+        # registry edit or inheriting the upgrader's default runtime.
+        from loopx.control_plane.projects.registry_codec import load_project_registry
+        from loopx.paths import resolve_runtime_root
+        registry_path = Path(sys.argv[2])
+        configured = load_project_registry(registry_path) if registry_path.exists() else {}
+        value = str(resolve_runtime_root(configured, registry_path=registry_path))
     if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 32 for c in value):
         raise SystemExit(f"{variable} must be a bounded string without control characters")
     if flag == "--runtime-root":
@@ -381,6 +405,7 @@ if not isinstance(value, str) or len(value) > 256 or any(ord(c) < 32 for c in va
 options[variable] = value.strip()
 print(json.dumps(options))
 PY
+  )
 }
 
 write_plists() {

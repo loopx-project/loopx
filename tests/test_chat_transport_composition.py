@@ -219,6 +219,10 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
             assert json.load(response)["ok"] is True
         assert server.runtime_controller.startup_timeout_sec == 30.0
         assert server.runtime_controller.acp_startup_timeout_sec is None
+        if server.codex_account_service.provider is not None:
+            assert server.codex_account_service.provider.root == (
+                server.runtime_root / "extensions" / "codex-native-accounts"
+            )
         assert server.manager_return_service.args[2] is server.chat_store
         if installed:
             assert server.manager_return_service.args[3] is server.conversation_transports
@@ -236,3 +240,97 @@ def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(t
         worker.join(8)
     assert not worker.is_alive()
     assert external.calls == [("start", server), "close"] if installed else external.calls == []
+
+
+def test_account_settings_control_registry_owner_with_separate_conversation_storage(tmp_path, monkeypatch):
+    """The settings toggle must control the same policy the native CLI reads."""
+    import importlib
+    from pathlib import Path
+    from urllib.error import HTTPError
+    from urllib.request import Request
+
+    import loopx.chat_server as chat
+    from loopx.extensions.lark.cli_resolution import LarkCliResolution
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] /
+                                  "packages/loopx-codex-provider-routing/src"))
+    native = importlib.import_module("loopx_codex_provider_routing.native")
+    monkeypatch.setattr(native, "discover", lambda: {"synthetic": True})
+    effects = []
+
+    def transport(adapter, operation, **parameters):
+        effects.append(operation)
+        if operation == "status":
+            return {"slots": ["a", "b"], "active_slot": "a", "selection_revision": "fixture",
+                    "current_login_matches": True, "recovery_required": False}
+        if operation == "observe":
+            import time
+            return {"observations": [{"slot": slot, "status": "ok", "observed_at": time.time(),
+                    "usage": {"rate_limit": {"primary_window": {"used_percent": 0,
+                              "reset_at": time.time() + 3600}}, "credits": {"has_credits": False}}}
+                    for slot in parameters["slots"]]}
+        raise AssertionError("No account effect is authorized in this fixture: " + operation)
+
+    provider_type = native.NativeAccounts
+    monkeypatch.setattr(native, "NativeAccounts", lambda root: provider_type(root, transport=transport))
+    owner_root, conversation_root = tmp_path / "owner", tmp_path / "conversations"
+    owner = provider_type(owner_root, transport=transport)
+    owner.configure(expected_revision=0, enabled=True, slots=["a", "b"], restart_clients=True)
+    separate = provider_type(conversation_root, transport=transport)
+    separate.configure(expected_revision=0, enabled=False, slots=[])
+    separate_before = separate.path.read_bytes()
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"goals": [], "common_runtime_root": str(owner_root)}))
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "index.html").write_text("fixture")
+    monkeypatch.setattr(chat, "build_lark_goal_topic_runtime_snapshot", lambda **kwargs: {})
+    monkeypatch.setattr(chat, "resolve_lark_cli_for_runtime", lambda **kwargs:
+                        LarkCliResolution(None, False, "missing", None, "lark_cli_not_installed"))
+    servers, ready, failures = [], threading.Event(), []
+
+    class Server(chat.ChatHTTPServer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            servers.append(self)
+            ready.set()
+
+    monkeypatch.setattr(chat, "ChatHTTPServer", Server)
+
+    def serve():
+        try:
+            chat.serve_chat(registry_path=registry, runtime_root_override=conversation_root,
+                            port=0, assets_dir=assets, codex_bin="unavailable-fixture")
+        except BaseException as error:
+            failures.append(error)
+
+    worker = threading.Thread(target=serve, daemon=True)
+    worker.start()
+    try:
+        assert ready.wait(8)
+        server = servers[0]
+        url = f"http://127.0.0.1:{server.server_port}/api/chat/codex-accounts"
+        with urlopen(url, timeout=8) as response:
+            before = json.load(response)
+        assert before["policy"]["enabled"] is True
+        assert before["policy"]["slots"] == ["a", "b"]
+        assert server.chat_store.root == conversation_root / "chat"
+        request = {"operation": "configure", "parameters": {
+            "expected_revision": before["revision"], "enabled": False, "slots": ["a", "b"]}}
+        headers = {"Content-Type": "application/json"}
+        with urlopen(Request(url, data=json.dumps(request).encode(), headers=headers), timeout=8) as response:
+            disabled = json.load(response)
+        assert disabled["policy"]["enabled"] is False
+        assert owner.status()["policy"]["enabled"] is False
+        assert owner.status()["policy"]["restart_clients"] is True
+        with pytest.raises(HTTPError) as conflict:
+            urlopen(Request(url, data=json.dumps(request).encode(), headers=headers), timeout=8)
+        assert conflict.value.code == 409
+        assert json.load(conflict.value)["code"] == "configuration_changed"
+        assert separate.path.read_bytes() == separate_before
+        assert "switch" not in effects
+    finally:
+        if servers:
+            servers[0].shutdown()
+        worker.join(8)
+    assert not worker.is_alive() and not failures

@@ -1,7 +1,6 @@
 .research-synthesis { margin-block: 24px; max-width: 82ch; color: var(--pw-text); font-size: var(--text-lead); line-height: var(--leading-prose); overflow-wrap: anywhere; }
-.research-synthesis > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
+.research-synthesis > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .research-synthesis :is(h3,h4,h5,h6) { margin: 0; color: var(--pw-text); font-size: inherit; font-weight: 600; line-height: var(--leading-body); }
-.research-synthesis > header > span { color: var(--pw-muted); font-size: var(--text-body); }
 .research-synthesis .research-synthesis-summary { margin-block: 12px 8px; }
 .research-synthesis p, .research-progress .research-synthesis p, .research-analysis .research-synthesis p { margin-block: 8px 12px; font-size: var(--text-lead); color: var(--pw-text); }
 .research-synthesis summary { cursor: pointer; min-height: 44px; padding-block: 10px; }
@@ -21,11 +20,12 @@
 .research-synthesis button:hover { text-decoration: underline; text-underline-offset: 3px; }
 .research-synthesis .research-review-episodes { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 4px 0; border: 0; background: none; color: var(--pw-text); font: inherit; font-size: var(--text-body); cursor: pointer; }
 .research-synthesis button:focus-visible, .research-synthesis summary:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
-.research-synthesis-detail { max-width: none; }
+.research-synthesis-detail { max-width: none; margin-block-start: 16px; }
 .research-report-tabs { display: flex; gap: 24px; border-block-end: 1px solid var(--pw-line); margin-block: 16px; }
-.research-report-tabs > button { min-height: 44px; border: 0; border-block-end: 2px solid transparent; padding: 10px 0; background: none; color: var(--pw-muted); font: inherit; cursor: pointer; }
-.research-report-tabs > button[aria-selected="true"] { border-block-end-color: var(--pw-text); color: var(--pw-text); }
-.research-report-tabs > button > span { margin-inline-start: 8px; color: var(--pw-muted); font-size: var(--text-body); }
+.research-synthesis-detail .research-report-tabs { margin-block-start: 0; }
+.research-synthesis .research-report-tabs > button { min-height: 44px; border: 0; border-block-end: 2px solid transparent; border-radius: 0; padding: 10px 0; background: none; color: var(--pw-muted); font: inherit; cursor: pointer; }
+.research-synthesis .research-report-tabs > button[aria-selected="true"] { border-block-end-color: var(--pw-text); color: var(--pw-text); }
+.research-synthesis .research-report-tabs > button > span { margin-inline-start: 8px; color: var(--pw-muted); font-size: var(--text-body); }
 .research-report-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .research-report-finding, .research-report-experiment { border-block-start: 1px solid var(--pw-line); padding-block: 16px; }
 .research-report-finding > h5, .research-report-experiment h5 { margin-block-end: 8px; }
@@ -39,12 +39,12 @@
 @media (max-width: 640px) {
   .research-analysis.has-synthesis > header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   .research-analysis.has-synthesis > header > div:first-child { display: contents; }
-  .research-analysis.has-synthesis > header h3 { grid-column: 1; grid-row: 1; align-self: center; }
-  .research-analysis.has-synthesis > header p { grid-column: 1 / -1; grid-row: 2; }
+  .research-analysis.has-synthesis > header .analysis-report-title { grid-column: 1; grid-row: 1; }
+  .research-analysis.has-synthesis > header .analysis-report-meta { grid-column: 1 / -1; grid-row: 2; }
   .research-analysis.has-synthesis > header .analysis-header-actions { grid-column: 2; grid-row: 1; }
   .research-report-comparison { grid-template-columns: 1fr; gap: 12px; }
   .research-synthesis dl { grid-template-columns: 1fr; gap: 4px; }
   .research-synthesis dd { margin-block-end: 12px; }
-  .research-synthesis > header { gap: 4px 12px; }
+  .research-synthesis > header { gap: 4px; }
 }
 .research-synthesis-detail { container-type: inline-size; }

@@ -629,3 +629,13 @@ python3 -m pytest -q \
 smoke 证明投影契约（折叠、blocked reasons、树、Mermaid）、记录时路径拒绝、dry-run 默认、分页发现、零写幂等 resync、单行漂移修复、嵌套 create-receipt 处理、shared 可见性脱敏、免传输卡片内容、opt-in todo branch-plan packet、adaptive resilient worker harness 配置档，以及针对临时 registry 的 CLI 表面，无需 live Lark credentials。它还证明 worker-lane router 契约：请求宽度不再被静默压到 worker 上限以下、独立 lane 准入下空闲 lanes 是队列耗尽（不是上限）、routing bias 在不动 value bookkeeping 的情况下重排 lanes、confident-prefix bundles 在校准阈值截断并对 reject-heavy families 坍缩、router-state novelty ledger 跨 epochs 去重而 coverage debt 累积 bias、观测负载配置档通过 CLI flags 校准准入。
 
 runtime smoke 与聚焦 pytest 模块还覆盖：可恢复 prefix 复用、prefix/suffix novelty 与双复用记账、按 suffix 数加权的 router acceptance、显式 legacy fallback、重启兼容、recorded 与 fatal 失败下的清理、无可变状态别名的并发组、fatal 结构预检、record-mode 畸形 item 隔离与 resume 连续性、聚合指标投影，以及无 legacy `execute` 方法的 episode-only adapters。
+
+### 结论状态与问题收束
+
+写回模板的 `status` 留空，由调用方明确选择 `tentative`、`confirmed` 或
+`refuted`。`tentative` 在研究界面显示为“暂定结论”，表示尚未确认或反驳，
+不表示有检查任务排队。确认与反驳仅适用于记录中声明的结论和范围；证据引用、
+检查通过或某个分数不能自动证明更广泛的收益。
+在解读中区分已建立的观察、仍未知的结论和下一步有用的验证。问题已回答时，
+使用已有可选 `question_update` 收束，不因整体 Goal 未完成而一直保持开放，
+也不因结论被确认就自动关闭问题。历史状态与 CLI finding 默认值保持兼容。

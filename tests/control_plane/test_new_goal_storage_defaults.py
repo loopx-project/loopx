@@ -243,6 +243,63 @@ def test_cli_creation_recovery_cannot_recreate_or_adopt_authority(environment, p
     assert not wrong_source.exists()
 
 
+def test_interrupted_cli_creation_resumes_the_registered_operation(environment, monkeypatch):
+    """An interrupted create must resume, not become an unretryable registration."""
+    from loopx import bootstrap as bootstrap_owner
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+
+    configure, _, _, project, runtime = environment
+    configure("sqlite")
+    registry = project / ".loopx/registry.json"
+    options = dict(
+        project=project,
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id="first",
+        objective="Validate a new project",
+        domain="project-goal-control-plane",
+        role="controller",
+        parent_goal_id=None,
+        state_file=None,
+        goal_doc=None,
+        adapter_kind="generic_project_goal_v0",
+        adapter_status="connected",
+        next_probe=None,
+        spawn_allowed=False,
+        max_children=3,
+        allowed_domains=None,
+        write_scope=None,
+        force=False,
+        dry_run=False,
+        sync_global=False,
+    )
+    real_initialize = bootstrap_owner.initialize_goal_storage_target
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("simulated interruption after registry publication")
+
+    monkeypatch.setattr(bootstrap_owner, "initialize_goal_storage_target", interrupted)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        bootstrap_owner.bootstrap_project(**options)
+    registered = json.loads(registry.read_text(encoding="utf-8"))["goals"][0]
+    assert registered["coordination"]["storage_target"]["provider"] == "sqlite"
+    operation = registered["creation_operation_id"]
+
+    monkeypatch.setattr(bootstrap_owner, "initialize_goal_storage_target", real_initialize)
+    resumed = bootstrap_owner.bootstrap_project(**options)
+
+    assert resumed["ok"] is True
+    assert resumed["state_action"] == "kept-existing"
+    assert resumed["storage_selection"]["authority_initialized"] is True
+    assert resumed["storage_selection"]["creation_operation_id"] == operation
+    source = read_canonical_todos_if_promoted(
+        runtime_root=runtime, goal_id="first", include_leases=True,
+    )
+    assert source is not None
+    assert source["source_authority"] == "sqlite_v0"
+    assert source["todos"] == []
+
+
 def test_completed_canonical_creation_ignores_stale_v0_target(environment):
     from loopx.control_plane.coordination.local_authority import (
         read_canonical_todos_if_promoted,

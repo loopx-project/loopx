@@ -1,6 +1,7 @@
 import {useId, useState, type ReactNode} from "react";
-import {ArrowDownRight, ArrowUpRight} from "lucide-react";
+import {ArrowDownRight, ArrowUpRight, Sparkles} from "lucide-react";
 import type {AssessmentCitation, TrajectoryResearchSynthesis} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
+import {ContextHelp} from "./context-help";
 import "./goal-research-synthesis.css";
 
 type Props = {synthesis: TrajectoryResearchSynthesis; zh: boolean; detail?: boolean;
@@ -78,9 +79,12 @@ export function ResearchSynthesis({synthesis: s, zh, detail = false, onExpand, o
     </>;
   }
   return <section className={`research-synthesis${detail ? " research-synthesis-detail" : ""}`} aria-label={zh ? "研究汇报" : "Research report"}>
-    <header>{!detail ? <h3>{zh ? "研究汇报" : "Research report"}</h3> : null}<span>{zh ? "Agent 分析" : "Agent analysis"}</span>
-      {!detail && onExpand ? <button type="button" className="research-report-expand" onClick={event => onExpand(event.currentTarget)}>{zh ? "深入解读" : "Read deeper"}<ArrowUpRight size={14} aria-hidden/></button> : null}
-    </header>
+    {!detail ? <header><h3>{zh ? "研究汇报" : "Research report"}</h3>
+      <ContextHelp label={zh ? "Agent 分析 · 未校准" : "Agent analysis · uncalibrated"} icon={Sparkles}>
+        <p>{zh ? "此汇报是 Agent 对选定证据的分析；引用可读不等于解释已被独立核验。" : "This report is the Agent’s analysis of selected evidence; readable citations do not independently verify its interpretation."}</p>
+      </ContextHelp>
+      {onExpand ? <button type="button" className="research-report-expand" onClick={event => onExpand(event.currentTarget)}>{zh ? "深入解读" : "Read deeper"}<ArrowUpRight size={14} aria-hidden/></button> : null}
+    </header> : null}
     {!detail ? overview : null}
     {body}
   </section>;

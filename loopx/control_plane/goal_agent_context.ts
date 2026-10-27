@@ -8,8 +8,10 @@ import { improvementContextProvider } from "./capabilities/goal_capability_organ
 export function evaluateGoalAgentContext(value: unknown): JsonObject | null {
   const input = requireJsonObject(value, "Goal agent context");
   const policy = jsonObject(input.capability_improvement);
+  const observations: JsonObject = { ...(jsonObject(input.observations) ?? {}) };
+  if (input.delegation_facts != null) observations.delegation_facts = input.delegation_facts;
   return projectAgentContext({
-    phase: input.phase, scope: input.scope, observations: input.observations ?? {},
+    phase: input.phase, scope: input.scope, observations,
     capabilities: {
       multi_subagent: subagentContextConfiguration(input.orchestration),
       goal_capability_organization: { enabled: policy?.mode === "bounded", policy },

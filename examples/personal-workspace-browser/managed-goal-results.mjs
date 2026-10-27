@@ -37,11 +37,14 @@ export const managedGoalResultsScenario = {
     try {
       assert.equal(reads, 0, "The directory must not read a Goal's report body");
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
-      await page.getByTestId("goal-declared-objective").waitFor();
+      const goalNav = page.getByRole("navigation", {name: "Goal 视图"});
+      await goalNav.getByRole("button", {name: "概览", exact: true}).click();
+      await page.locator(".goal-overview").waitFor();
+      assert.equal(await goalNav.getByRole("button", {name: "概览", exact: true}).getAttribute("aria-current"), "page");
       assert.equal(await page.getByRole("region", {name: "已验收的团队报告"}).count(), 0,
         "Full reports belong in Files, not a second copy in Overview");
       assert.equal(reads, 0, "Overview must not read a report body");
-      await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
+      await goalNav.getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "已验收的团队报告"});
       await results.getByRole("table").waitFor();
       assert.equal(reads, 1, "Files must revalidate the selected body once");

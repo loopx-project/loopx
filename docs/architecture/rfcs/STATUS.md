@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (45)
+## Accepted (46)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -49,6 +49,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Human Attention Wishlist v0](human-attention-wishlist-v0.md) | Accepted | none | — |
 | [RFC: Human-confirmed domain operations (v0)](human-confirmed-domain-operations-v0.md) | Accepted | none | — |
 | [RFC: Intelligent Review and Dynamic Presentation Surfaces v0](intelligent-review-presentation-surfaces-v0.md) | Accepted | none | — |
+| [RFC: LoopX × LayerFS — Engineering Exploration and Evaluation (v0)](layerfs-engineering-exploration-evaluation-v0.md) | Accepted | none | — |
 | [RFC: Live Team Workspace v0](live-team-workspace-v0.md) | Accepted | none | — |
 | [RFC: Long-Horizon Harness Benchmark and Research Program v0](long-horizon-harness-benchmark-research-program-v0.md) | Accepted | none | — |
 | [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |

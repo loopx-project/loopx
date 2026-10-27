@@ -923,13 +923,26 @@ class ChatRequestHandler(
 
     def _session_snapshot(self, session_id: str) -> None:
         try:
+            query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            if (set(query) - {"message_limit", "message_cursor"}
+                    or any(len(values) != 1 or not values[0] for values in query.values())
+                    or ("message_cursor" in query and "message_limit" not in query)):
+                raise ValueError("invalid history page arguments")
+            message_limit = int(query["message_limit"][0]) if "message_limit" in query else None
+            if message_limit is not None and not 1 <= message_limit <= 200:
+                raise ValueError("message_limit must be between 1 and 200")
             self.server.runtime_controller.recover_exited_turn(session_id)
             snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
             self._send_json(snapshot(
                 self.server.runtime_root, self.server.chat_store, session_id,
-                registry=self.server.registry_path))
+                registry=self.server.registry_path, message_limit=message_limit,
+                message_cursor=query.get("message_cursor", [None])[0]))
         except KeyError:
             self._send_error("chat session was not found", status=404)
+        except ValueError as exc:
+            self._send_error(str(exc), status=400)
+        except OSError:
+            self._send_error("Chat history is temporarily unavailable", status=503)
 
     def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
         from .capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
@@ -1830,7 +1843,13 @@ def serve_chat(
     server = ChatHTTPServer((host, port), ChatRequestHandler)
     server.registry_path = resolved_registry_path
     server.runtime_root = runtime_root
-    server.codex_account_service = CodexAccountService(runtime_root)
+    # Account policy follows the registry's native owner. A separate Chat
+    # history directory must not silently create another account policy.
+    account_runtime_root = (
+        resolve_runtime_root(registry, registry_path=resolved_registry_path)
+        if registry.get("common_runtime_root") else runtime_root
+    )
+    server.codex_account_service = CodexAccountService(account_runtime_root)
     server.runtime_root_override = resolved_runtime_root_override
     server.scan_roots = resolved_scan_roots
     server.limit = limit

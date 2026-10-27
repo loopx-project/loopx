@@ -3,9 +3,64 @@ import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
+async function pagedHistoryRecovery(browser, url) {
+  const id = "session-manager-loopx-manager-codex";
+  const secondStarted = Promise.withResolvers(), releaseSecond = Promise.withResolvers();
+  let failSecond = true, held = false;
+  const pages = [];
+  const rows = Array.from({length: 451}, (_, index) => ({message_id: `paged-${index}`, turn_id: null,
+    role: index % 2 ? "agent" : "user", text: index === 201 ? "原始长文。".repeat(2400) : `原始历史第 ${index} 条。`,
+    created_at: "2026-08-13T01:00:00Z"}));
+  const context = await openWorkspacePage(browser, url, {
+    async beforeGoto(_api, page) {
+      const runtime = page.__loopxRuntime;
+      runtime.sessions.clear();
+      const session = {session_id: id, goal_id: "loopx-manager", agent_id: "codex", adapter_kind: "codex_app_server",
+        channel_id: "manager", status: "ready", active_turn_id: null, resumable: true,
+        created_at: "2026-08-13T01:00:00Z", updated_at: "2026-08-13T01:00:00Z", last_activity_at: "2026-08-13T01:00:00Z", last_error_code: null};
+      runtime.sessions.set(id, session); runtime.messages.set(id, rows);
+      await page.route("**/api/chat/sessions/*", async route => {
+        const parsed = new URL(route.request().url());
+        if (route.request().method() !== "GET" || parsed.pathname !== `/api/chat/sessions/${id}` || !parsed.searchParams.has("message_limit")) return route.fallback();
+        const cursor = parsed.searchParams.get("message_cursor"), offset = cursor === "page-200" ? 200 : cursor === "page-400" ? 400 : 0;
+        pages.push(offset);
+        if (offset === 200 && failSecond) {
+          if (!held) { held = true; secondStarted.resolve(); await releaseSecond.promise; }
+          return route.fulfill({status: 503, json: {error: "Synthetic interrupted second page"}});
+        }
+        await route.fulfill({json: {ok: true, schema_version: "loopx_chat_store_v1", session, active_turn: null,
+          messages: rows.slice(offset, offset + 200), message_page: {schema_version: "loopx_chat_message_page_v1",
+            offset, total: rows.length, snapshot_sha256: "a".repeat(64), next_cursor: offset === 0 ? "page-200" : offset === 200 ? "page-400" : null}}});
+      });
+    },
+  });
+  const {page, api} = context;
+  try {
+    await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: /^(Chat|对话)$/}).click();
+    await Promise.race([secondStarted.promise, new Promise((_, reject) => setTimeout(() => reject(new Error("The second original history page was not read")), 5000))]);
+    const composer = page.getByLabel("向 LoopX 发送消息");
+    await composer.fill("分页恢复期间保留这条草稿。");
+    assert.equal(await page.getByRole("button", {name: "发送", exact: true}).isEnabled(), false);
+    releaseSecond.resolve();
+    await page.getByText("正在恢复当前会话，恢复后可以继续发送。", {exact: true}).waitFor({state: "visible"});
+    assert.equal(await page.getByText(rows[0].text, {exact: true}).count(), 0, "A partial first page cannot masquerade as complete history");
+    failSecond = false;
+    await page.getByRole("button", {name: "重试读取", exact: true}).click();
+    await page.getByText(rows[450].text, {exact: true}).waitFor({state: "visible"});
+    assert.equal(await page.getByText(rows[0].text, {exact: true}).count(), 1);
+    assert.equal(await page.getByText(rows[201].text, {exact: true}).count(), 1, "Keep the entire original long body across pages");
+    assert.equal(await composer.inputValue(), "分页恢复期间保留这条草稿。");
+    await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
+    assert.deepEqual(pages.slice(-3), [0, 200, 400]);
+    assert.equal(api.turnRequests.length, 0, "History paging and retry cannot replay or dispatch business");
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await page.locator("body").evaluate(body => body.scrollWidth <= innerWidth + 1));
+  } finally { releaseSecond.resolve(); await context.close(); }
+}
+
 async function overlappingHistoryRefresh(browser, url) {
   const currentId = "session-manager-loopx-manager-codex", oldId = "older-overlap-session", turnId = "overlap-recovered-turn";
-  const staleRead = Promise.withResolvers(), staleStarted = Promise.withResolvers(), stream = Promise.withResolvers();
+  const staleRead = Promise.withResolvers(), staleStarted = Promise.withResolvers(), staleSettled = Promise.withResolvers(), stream = Promise.withResolvers();
   let oldReads = 0, freshReads = false;
   const context = await openWorkspacePage(browser, url, {
     gotoWaitUntil: "domcontentloaded",
@@ -27,7 +82,10 @@ async function overlappingHistoryRefresh(browser, url) {
         if (oldReads === 1) return route.fulfill({ status: 503, json: { error: "Synthetic missing history" } });
         if (!freshReads) {
           staleStarted.resolve(); await staleRead.promise;
-          return route.fulfill({ status: 503, json: { error: "Older request failed after recovery" } }).catch(() => {});
+          try {
+            await route.fulfill({ status: 503, json: { error: "Older request failed after recovery" } }).catch(() => {});
+          } finally { staleSettled.resolve(); }
+          return;
         }
         return route.fallback();
       });
@@ -46,8 +104,9 @@ async function overlappingHistoryRefresh(browser, url) {
     await notice.waitFor({ state: "hidden" });
     const composer = page.getByLabel("向 LoopX 发送消息");
     await composer.fill("保留这条草稿，稍后继续。");
-    const lateResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/chat/sessions/${oldId}` && response.status() === 503);
-    staleRead.resolve(); await (await lateResponse).finished();
+    // The request may already have timed out: no browser response exists then.
+    // Observe settlement of the held reader, then check the visible owner.
+    staleRead.resolve(); await staleSettled.promise;
     await page.evaluate(() => new Promise(resolveFrame => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))));
     await page.screenshot({ path: resolve(outputDir, "conversation-history-read-order-desktop.png"), animations: "disabled" });
     assert.equal(await notice.isVisible(), false, "An older read failure cannot reopen a recovered history warning");
@@ -211,6 +270,7 @@ async function recoveryObserverHandover(browser, url) {
 export const conversationHistoryRecoveryScenario = {
   id: "conversation-history-recovery",
   async run({ browser, collectCoverage, url }) {
+    await pagedHistoryRecovery(browser, url);
     await overlappingHistoryRefresh(browser, url);
     const currentId = "session-manager-loopx-manager-codex";
     const oldId = "previous-worker-session";
@@ -234,6 +294,10 @@ export const conversationHistoryRecoveryScenario = {
             message_id: "answer", turn_id: `turn-${id}`, role: "agent", text, created_at: date,
           }]);
         }
+        page.__loopxRuntime.messages.get(currentId).push(
+          { message_id: "z-source-question", turn_id: "same-second", role: "user", text: "同一秒的原问题：请先核对公开资料。", created_at: "2026-08-13T01:00:01Z" },
+          { message_id: "a-source-answer", turn_id: "same-second", role: "agent", text: "同一秒的原回答：核验后再返回结论。", created_at: "2026-08-13T01:00:01Z" },
+        );
         return page.route("**/api/chat/sessions/*", async (route) => {
           if (route.request().method() === "GET" && new URL(route.request().url()).pathname === `/api/chat/sessions/${unavailable}`) {
             failedReads += 1;
@@ -247,6 +311,16 @@ export const conversationHistoryRecoveryScenario = {
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
       await page.getByText("目前正在核对微软现金流。", { exact: true }).waitFor({ state: "visible", timeout: 5000 });
       const notice = page.getByRole("status").filter({ hasText: "部分历史暂时无法读取" });
+      const sourceQuestion = page.getByText("同一秒的原问题：请先核对公开资料。", { exact: true });
+      await sourceQuestion.waitFor({ state: "visible" });
+      await page.screenshot({ path: resolve(outputDir, "conversation-history-source-order-desktop.png"), animations: "disabled" });
+      const historyText = await page.locator(".personal-channel-timeline").innerText();
+      assert.ok(historyText.indexOf("同一秒的原问题") < historyText.indexOf("同一秒的原回答"), "The original request stays before its same-second reply");
+      await page.setViewportSize({ width: 390, height: 844 });
+      await sourceQuestion.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: resolve(outputDir, "conversation-history-source-order-mobile.png"), animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
+
       await notice.waitFor({ state: "visible" });
       await page.screenshot({ path: resolve(outputDir, "conversation-history-partial-desktop.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
@@ -299,11 +373,12 @@ export const conversationHistoryRecoveryScenario = {
       await page.locator(".personal-goal-link").first().click();
       await page.locator(".personal-manager-link").click();
       await page.getByRole("navigation", { name: "管家视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();
+      await page.getByText("只看当前状态。", { exact: true }).waitFor({ state: "visible" });
       assert.equal(await page.getByText("只看当前状态。", { exact: true }).count(), 1, "Projection-only messages retain their exact stored identities");
       assert.equal(api.turnRequests.length, 1, "Projection history does not run an Agent");
       await recoveryObserverHandover(browser, url);
       await retiredHistoryRead(browser, url);
-      return { coverageEntries: context.coverageEntries, note: "History read recovery retains the draft and exact session. Navigation retires its observer and history-read ownership; delayed projection cannot block the current conversation or erase a replacement Turn's interrupt target." };
+      return { coverageEntries: context.coverageEntries, note: "History retains source order for timestamp ties, projection identity, the draft and exact session. Navigation retires its observer and history-read ownership; delayed projection cannot block the current conversation or erase a replacement Turn's interrupt target." };
     } finally {
       await context.close();
     }

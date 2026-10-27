@@ -8,9 +8,12 @@ from typing import Any
 
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
-    handle_native_context_command, handle_replan_view, prepare_quota_capture,
+    handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
 )
-from ..control_plane.turn_driver.decision_capture import project_captured_context
+from ..control_plane.turn_driver.decision_capture import (
+    context_capture_read_command,
+    project_captured_context,
+)
 from ..usage_goal import observe_quota_result
 
 from ..capabilities.explore.composition_frontier import (
@@ -538,7 +541,17 @@ def _emit_quota_result(
             payload = project_codex_context(payload, directory=directory,
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
                 surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
-                capture_id=capture_id)
+                capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
+            recovery = payload.get("recovery")
+            if recovery is None:
+                original = capture_directory / "decision.json"
+                recovery = {
+                    "path": str(original),
+                    "sha256": capture_id,
+                    "command": context_capture_read_command(original, capture_id),
+                }
+            payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
+                metadata={"capture_sha256": capture_id, "recovery": recovery})
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(

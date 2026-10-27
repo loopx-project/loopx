@@ -115,7 +115,7 @@ class NativeAccounts:
                 "observations": [], "last_switch_at": None, "action": "disabled"}
 
     @contextmanager
-    def _lock(self, *, wait_seconds: float = 0):
+    def _lock(self, *, wait_seconds: float = 0, name: str = "lock"):
         if os.name != "posix":
             raise HostError("platform_unavailable")
         import fcntl
@@ -125,7 +125,7 @@ class NativeAccounts:
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.root.stat().st_uid != os.getuid() or self.root.stat().st_mode & 0o077:
             raise HostError("state_untrusted")
-        path = self.root / "lock"
+        path = self.root / name
         if path.is_symlink():
             raise HostError("state_untrusted")
         with open(path, "a", opener=lambda p, flags: os.open(p, flags, 0o600)) as stream:
@@ -386,7 +386,7 @@ class NativeAccounts:
 
 
 class Watcher:
-    """Owned by the serving App (or explicit CLI watch), never an import effect."""
+    """One observer per policy owner; App/CLI contenders stay passive."""
     def __init__(self, provider: NativeAccounts):
         self.provider = provider
         self.stop = threading.Event()
@@ -400,6 +400,20 @@ class Watcher:
         return self
 
     def run(self):
+        while not self.stop.is_set():
+            try:
+                # Keep ownership across sleeps, not just one transaction. An
+                # App restart and an existing CLI watch can share policy without
+                # duplicating native observations. The kernel releases this
+                # lock on exit; a waiting owner can then take over safely.
+                with self.provider._lock(name="observer.lock"):
+                    self._observe()
+            except BlockingIOError:
+                self.stop.wait(5)
+            except (HostError, OSError, ValueError):
+                self.stop.wait(60)
+
+    def _observe(self):
         while not self.stop.is_set():
             delay = 60.0
             try:

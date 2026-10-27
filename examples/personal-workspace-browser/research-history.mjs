@@ -150,6 +150,17 @@ export const researchHistoryScenario = {
       await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-desktop.png'), animations: 'disabled'});
       await nativePage.setViewportSize({width: 390, height: 844});
       assert(await nativePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const sourceBadge = nativePage.locator('.personal-channel-header .personal-read-only-source');
+      assert(await sourceBadge.locator('small').evaluate(e => {
+        const range = document.createRange(); range.selectNodeContents(e);
+        const text = range.getBoundingClientRect(), badge = e.parentElement.getBoundingClientRect();
+        return text.left >= badge.left && text.right <= badge.right;
+      }), 'The source name must not clip the visible read-only restriction');
+      const sourceHelp = sourceBadge.getByRole('button', {name: 'Research preview · 只读', exact: true});
+      await sourceHelp.focus();
+      assert.match(await nativePage.getByRole('tooltip').innerText(), /执行控制在原运行环境/);
+      await nativePage.keyboard.press('Escape');
+      assert(await sourceHelp.evaluate(e => e === document.activeElement));
       await nativePage.screenshot({path: resolve(outputDir, 'research-readonly-home-mobile.png'), animations: 'disabled'});
       await nativePage.setViewportSize({width: 1280, height: 900});
       await nativePage.getByRole('button', {name: '对话', exact: true}).click();
@@ -161,6 +172,9 @@ export const researchHistoryScenario = {
       await nativePage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
       await nativePage.reload({waitUntil: 'domcontentloaded'});
       await nativePage.getByText('No conversation records', {exact: true}).waitFor();
+      await sourceBadge.getByRole('button', {name: 'Research preview · Read only', exact: true}).focus();
+      assert.match(await nativePage.getByRole('tooltip').innerText(), /execution remains on its source/);
+      await nativePage.keyboard.press('Escape');
       assert.equal(await emptyConversation.locator('p, button, a').count(), 0);
       await nativePage.evaluate(() => localStorage.setItem('loopx-pw-locale', 'zh-CN'));
       const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});
@@ -211,7 +225,7 @@ export const researchHistoryScenario = {
     // Its fixture is synthetic: these checks qualify reading and provenance,
     // not the scientific usefulness of a real model's interpretation.
     const synthesisOwner = await startHistoryOwner(resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/research-synthesis-readback.json"));
-    const synthesisPage = await browser.newPage({viewport: {width: 1280, height: 900}});
+    const synthesisPage = await browser.newPage({viewport: {width: 1280, height: 900}, hasTouch: true});
     try {
       await synthesisPage.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
       const query = new URLSearchParams({goalId: 'synthetic-research-readback', view: 'research', statusUrl: '/status.json?goal_id=synthetic-research-readback'});
@@ -222,7 +236,23 @@ export const researchHistoryScenario = {
       assert.equal(await synthesis.locator('.research-synthesis-finding').count(), 2);
       assert(await synthesis.locator('.research-synthesis-summary').evaluate(e => parseFloat(getComputedStyle(e).fontSize) >= 16), 'Main research account must be readable body text');
       assert.equal(await synthesis.locator('details[open]').count(), 0, 'Ordinary reading starts with observations; reasoning is optional detail');
+      const authorship = synthesis.getByRole('button', {name: 'Agent 分析 · 未校准', exact: true});
+      await authorship.focus();
+      await synthesisPage.getByRole('tooltip').getByText(/引用可读不等于解释已被独立核验/).waitFor();
+      await synthesisPage.keyboard.press('Escape');
+      assert(await authorship.evaluate(e => e === document.activeElement), 'Dismissing provenance keeps the ordinary report in focus');
+      await authorship.evaluate(e => e.blur());
+      await synthesisPage.mouse.move(1, 1);
       assert.equal(await synthesisPage.locator('.research-effect-metrics:visible').count(), 0, 'Metric counts do not replace the research account');
+      const processJudgments = synthesisPage.locator('.research-progress > details').filter({hasText: '六项过程判读'});
+      assert.equal(await processJudgments.count(), 1, 'Ordinary reading retains process judgments when the report has its own reading layer');
+      assert.equal(await processJudgments.evaluate(e => e.open), false, 'Process judgments remain optional detail');
+      await processJudgments.locator(':scope > summary').click();
+      assert.equal(await processJudgments.locator('[data-metric]').count(), 6);
+      assert.match(await processJudgments.locator('[data-metric="evidence_adoption"]').getAttribute('aria-label'), /0 \/ 1.*未知 1/);
+      assert.match(await processJudgments.locator('[data-metric="goal_alignment"]').getAttribute('aria-label'), /不适用/);
+      await processJudgments.locator(':scope > summary').click();
+      assert.equal(await synthesisPage.locator('.research-effect-metrics:visible').count(), 0);
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-desktop.png'), animations: 'disabled'});
       assert(await synthesisPage.evaluate(() => {
         const results = document.querySelector('.research-progress');
@@ -266,6 +296,8 @@ export const researchHistoryScenario = {
       assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-mobile.png'), animations: 'disabled'});
       await reading.getByRole('button', {name: '汇报', exact: true}).click();
+      await synthesisPage.mouse.move(1, 1);
+      if (await synthesisPage.locator('.context-help-popover:popover-open').count()) await synthesisPage.keyboard.press('Escape');
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-report-mobile.png'), animations: 'disabled'});
       await synthesisPage.getByRole('button', {name: '深入解读', exact: true}).click();
       const analysis = synthesisPage.getByRole('region', {name: '轨迹深度分析', exact: true});
@@ -283,6 +315,31 @@ export const researchHistoryScenario = {
         await synthesisPage.setViewportSize(viewport);
         await synthesisPage.reload({waitUntil: 'domcontentloaded'});
         await analysis.locator('.research-synthesis-summary').waitFor();
+        assert.match(await analysis.locator('.analysis-report-meta').innerText(), /固定窗口.*3 个研究片段.*定向抽样/s,
+          'The selected report identity, episode count and partial sampling remain visible');
+        const scopeHelp = analysis.getByRole('button', {name: '分析范围', exact: true});
+        await scopeHelp.hover();
+        await synthesisPage.getByRole('tooltip').waitFor({state: 'visible'});
+        await synthesisPage.getByRole('tooltip').hover();
+        await synthesisPage.keyboard.press('Escape');
+        await scopeHelp.focus();
+        const scopeInfo = synthesisPage.getByRole('tooltip');
+        await scopeInfo.getByText('Agent 分析 · 未校准', {exact: true}).waitFor();
+        assert.match(await scopeInfo.innerText(), /不代表全程.*引用存在不代表模型解释已被独立核验/s);
+        await synthesisPage.keyboard.press('Escape');
+        assert(await scopeHelp.evaluate(e => e === document.activeElement));
+        assert(await analysis.isVisible(), 'Closing scope help does not close the report');
+        if (viewport.width === 390) {
+          await scopeHelp.tap();
+          await scopeInfo.waitFor({state: 'visible'});
+          assert(await scopeInfo.evaluate(e => e.scrollWidth <= e.clientWidth + 1), 'The same full scope explanation is readable by touch');
+          await synthesisPage.keyboard.press('Escape');
+        }
+        await analysis.evaluate(e => e.scrollIntoView({block: 'start'}));
+        assert(await analysis.locator('.research-report-account').first().locator(':scope > div').nth(1).locator('p').evaluate(e => {
+          const body = e.closest('.personal-channel-scroll').getBoundingClientRect(), paragraph = e.getBoundingClientRect();
+          return paragraph.top >= body.top && paragraph.bottom <= body.bottom;
+        }), 'The first short finding exposes both its observation and interpretation without scrolling past repeated metadata');
         await synthesisPage.screenshot({path: resolve(outputDir, `research-deep-link-${viewport.width}.png`), animations: 'disabled'});
         assert(await analysis.locator('.research-synthesis-summary').evaluate(e => {
           const box = e.getBoundingClientRect();
@@ -392,6 +449,11 @@ export const researchHistoryScenario = {
       await synthesisPage.setViewportSize({width: 390, height: 844});
       await synthesisPage.getByRole('button', {name: 'Read deeper', exact: true}).click();
       const english = synthesisPage.locator('.research-analysis');
+      assert.match(await english.locator('.analysis-report-meta').innerText(), /3 research episodes.*Purposive sample/);
+      await english.getByRole('button', {name: 'Analysis scope', exact: true}).focus();
+      await synthesisPage.getByRole('tooltip').getByText('Agent analysis · uncalibrated', {exact: true}).waitFor();
+      await synthesisPage.keyboard.press('Escape');
+      assert(await english.getByRole('button', {name: 'Goal research history', exact: true}).isVisible());
       const englishAccount = english.locator('.research-report-account').first();
       assert(await englishAccount.getByRole('heading', {name: 'Observation and evidence', exact: true}).isVisible());
       assert(await englishAccount.getByRole('heading', {name: 'Interpretation', exact: true}).isVisible());
@@ -1157,7 +1219,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await analysisClosed();
       await page.setViewportSize({width: 1280, height: 900});
       await progress.locator('.research-progress-basis > summary').click();
-      assert.equal(await progress.locator(".research-progress-values dd").filter({hasText: /^100 tokens$/}).count(), 1, "Uncached input is shown without charging cache twice");
+      const inputReading = progress.locator('.research-input-reading');
+      assert.match(await inputReading.innerText(), /1,?100.*1,?000.*100/s,
+        'Session input includes cache, with cached and uncached subsets kept distinct');
       // Actual observations precede provenance; details and help remain operable.
       assert.equal(await progress.locator('.research-usage-detail').evaluate(e => e.open), false);
       assert.doesNotMatch(await progress.innerText(), /codex_complete_session_counters_v1/);
@@ -1351,8 +1415,10 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator(`.research-progress-scope[data-pack-id="${"c".repeat(64)}"]`).waitFor();
       assert.equal(await progress.locator('.research-progress-basis > summary').getByRole('button',{name:/完整成本未知/}).isVisible(),true,'The cost boundary remains discoverable with the details closed');
       await progress.locator('.research-progress-basis > summary').click();
-      assert.match(await progress.innerText(), /尚无用量捕获|No usage capture/);
-      await progress.getByRole('button', {name: '用量范围与成本', exact: true}).focus();
+      assert.match(await progress.locator('.research-usage-heading').first().innerText(), /未采集|Not captured/);
+      assert.doesNotMatch(await progress.innerText(), /未测，不记零|unmeasured, not zero/i, 'Missing counters remain a concise state, not a default explanation');
+      await progress.getByRole('button', {name: '求解用量未采集', exact: true}).focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /未测，不记零|unmeasured, not zero/i);
       assert.doesNotMatch(await progress.getByRole('tooltip').innerText(), /本次完整捕获|This complete capture/);
       await page.keyboard.press('Escape');
       await progress.locator('.research-progress-basis > summary').click();
@@ -1375,6 +1441,14 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       await progress.locator('.research-progress-basis > summary').click();
       assert.match(await progress.innerText(), /末轮未完成|final Turn incomplete/);
       assert.match(await progress.innerText(), /400.*8.*tokens/s, "Persisted unfinished usage is visible without declaring total cost");
+      assert.match(await progress.locator('.research-analysis-cost').innerText(), /未采集|Not captured/);
+      assert.equal(await progress.locator('.research-analysis-values').count(), 0, 'An uncaptured analysis attempt does not add invented readings');
+      assert.doesNotMatch(await progress.innerText(), /仅含已持久化用量|Persisted usage only/, 'The same unfinished-state explanation does not compete with its counters');
+      const unfinishedHelp = progress.getByRole('button', {name: '末轮用量说明', exact: true});
+      await unfinishedHelp.focus();
+      assert.match(await progress.getByRole('tooltip').innerText(), /不能据此判定运行已结束/);
+      await page.keyboard.press('Escape');
+      assert(await unfinishedHelp.evaluate(element => element === document.activeElement));
       await progress.locator('.research-progress-basis > summary').click();
       assert.equal(await progress.getByRole('button',{name:'所选范围尚未分析',exact:true}).isVisible(),true);
       assert.equal(await nativeResults.isVisible(), true, 'An unanalysed pack still exposes its recorded outcomes with cost details closed');

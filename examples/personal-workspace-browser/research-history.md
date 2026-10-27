@@ -121,6 +121,16 @@ historical revisions. Search covers the loaded snapshot before display paginatio
 incomplete reads and failed refreshes stay visible. Clear filters to browse again.
 Queries are local to this open reader and reset when it closes or the Goal changes.
 
+For a result with more than one loaded version, expand **Compare recorded versions**.
+Choose another version of that same result to read changed original text, recorded
+status, evidence references and measurements together. **Include unchanged fields**
+restores shared context. Alternatives come from the loaded history, even when the
+search or status filter hides them. Missing values remain unrecorded; zero remains
+zero. The comparison preserves original record IDs and source order, and does not
+claim matched evaluations, improved quality or acceptance. Partial/stale history
+retains the reader's coverage warning; refresh to retry. Closing and reopening the
+comparison does not change either source record.
+
 Choose **Download matches (JSON)** to keep all matching original records, including
 those not yet expanded on screen. The file includes the Goal, export time, literal
 filters and loaded/exported counts. `history_complete` and `refresh_failed` preserve
@@ -135,11 +145,12 @@ failure or refresh the history after a read failure.
 
 The synthetic packaged regression exercises native paged history, an old negative
 revision after 75 other findings, status filtering, full/filtered JSON downloads,
-partial/stale coverage, interrupted reads/downloads and retry, Goal isolation and
+original-version comparison (including unmeasured versus zero), partial/stale
+coverage, interrupted reads/downloads and retry, Goal isolation and
 desktop/narrow layouts without dispatching an Agent:
 
 ```sh
-node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs
+node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-versions.test.mjs
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-export.test.mjs
 LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
 ```

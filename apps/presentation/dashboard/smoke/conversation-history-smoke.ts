@@ -41,7 +41,8 @@ try {
   assert.equal((await next()).recovered, true);
   requests.length = 0;
   const restored = await fetchChatHistory(options, partial);
-  assert.deepEqual(requests, ["/api/chat/sessions/old"], "Recovery reads only the missing session");
+  assert.deepEqual(requests.map(request => new URL(request, origin).pathname),
+    ["/api/chat/sessions/old"], "Recovery reads only the missing session");
   assert.deepEqual(restored.unavailableSessionIds, []);
   assert.deepEqual(restored.messages.map(row => row.text), ["Earlier public report", "Current public report"]);
   assert.deepEqual(restored.messages.map(row => row.session_id), ["old", "current"], "Colliding IDs preserve both sessions");

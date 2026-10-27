@@ -216,6 +216,10 @@ class SForgeWorker(CodexAgent):
         # workers already run a scheduler: restarting it after terminal/quiescent
         # exit duplicates that owner and can exhaust the native resume limit.
         self.resume_cmd = CodexAgent.resume_cmd if profile == "official" else None
+        # SForge signs this declaration into the runtime protocol.  The setup
+        # callback below is shared by every profile, but only the official
+        # profile installs the Codex stop hook inside that callback.
+        self.stop_hook = CodexAgent.stop_hook if profile == "official" else None
 
     def install_stop_hook(self, backend, handle, log_dir, logger):
         self.environment = SForgeEnvironment(

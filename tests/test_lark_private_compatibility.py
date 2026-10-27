@@ -17,6 +17,53 @@ from loopx.extensions.lark.conversation_identity import identity_ref
 from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
 
 
+def test_app_id_selector_discovers_private_route_on_shared_group_listener(ordinary):  # noqa: F811
+    from test_lark_private_conversations import connect
+    from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
+
+    _, runtime, provider, transport = connect(ordinary)
+    selector = "cli_notes_app"
+    binding = transport._binding("notes-app")
+    transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    # The CLI accepts the App ID, while its inventory reports the named profile.
+    provider.profile_apps[selector] = selector
+    def runner(args, cwd=None, timeout=None):
+        result = provider(args, cwd, timeout)
+        if args[1:] == ["profile", "list"]:
+            result["stdout"] = json.dumps([row for row in json.loads(result["stdout"])
+                                          if row["name"] != selector])
+        return result
+    transport.runner = runner
+    try:
+        transport.bindings.configure(transport_ref=selector,
+            project_ref=runtime.project_contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
+        legacy = {"target_payload": {"targets": {"group": {"enabled": True,
+            "channel": {"chat_id": "oc_community"}, "identity": {"sender_profile": selector,
+                "cli_bin": "lark-cli", "bot_app_id": selector}}}},
+            "binding_payloads": {"goal": {"bindings": {"goal": {"goal_id": "goal", "enabled": True,
+                "provider": "lark", "target_ref": "group", "topic": {"root_message_id": "om_root"}}}}}}
+        profiles = transport.profiles()
+        assert profiles[selector]["consumer_ref"] == hashlib.sha256(selector.encode()).hexdigest()[:32]
+        event = provider.event(selector, "private_status", "/status")
+        result = poll_lark_goal_topic_profile_once(profile=selector,
+            snapshot={**legacy, "private_profiles": profiles}, runtime_root=transport.runtime_root,
+            answer=lambda **_: pytest.fail("private input must not reach group execution"),
+            consume_runner=lambda _: {"returncode": 0, "stdout": json.dumps(event)},
+            private_admitter=transport.admit)
+        assert result["event_statuses"] == ["command_recorded"]
+        # A removed App must not remain discoverable through its ID selector.
+        provider.profile_apps.pop("notes-app")
+        assert selector not in transport.profiles()
+        # An explicit profile with the same spelling must not be redirected
+        # to a different App merely because that App exists elsewhere.
+        provider.profile_apps["notes-app"] = selector
+        provider.profile_apps[selector] = "cli_replacement"
+        transport.runner = provider
+        assert selector not in transport.profiles()
+    finally:
+        runtime.close()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX cross-process flock contract")
 @pytest.mark.parametrize("shared_private", [False, True])
 def test_legacy_consumer_stays_standby_until_original_profile_owner_exits(tmp_path, monkeypatch, shared_private):
@@ -183,15 +230,33 @@ def test_shared_consumer_dispatch_preserves_audience_and_survives_one_route_remo
 
 
 @pytest.mark.parametrize("stored_app,retarget", [(None, False), ("cli_notes_app", False),
-    ("cli_other_fixture", False), (None, True)])
-def test_private_http_setup_shares_existing_group_profile_without_changing_its_grants(ordinary, monkeypatch, stored_app, retarget):  # noqa: F811
+    ("cli_other_fixture", False), (None, True), (None, "owner")])
+@pytest.mark.parametrize("app_id_selector", [False, True])
+def test_private_http_setup_shares_existing_group_profile_without_changing_its_grants(ordinary, monkeypatch, stored_app, retarget, app_id_selector):  # noqa: F811
     from test_lark_private_conversations import connect
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
     from loopx.extensions.lark.goal_topic_runtime import _active_profile_configs
 
     store, runtime, provider, transport = connect(ordinary)
+    selector = "cli_notes_app" if app_id_selector else "notes-app"
+    if app_id_selector:
+        binding = transport._binding("notes-app")
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        provider.profile_apps[selector] = "cli_notes_app"
+        observe = transport.bindings.observe
+        def same_cli_identity(profile, **kwargs):
+            return {**observe("notes-app" if profile == selector else profile, **kwargs),
+                    "transport_ref": profile}
+        transport.bindings.observe = same_cli_identity
+        def named_inventory(args, cwd=None, timeout=None):
+            result = provider(args, cwd, timeout)
+            if args[1:] == ["profile", "list"]:
+                result["stdout"] = json.dumps([row for row in json.loads(result["stdout"])
+                                              if row["name"] != selector])
+            return result
+        transport.runner = named_inventory
     legacy = {"target_payload": {"targets": {"group": {"enabled": True,
-        "channel": {"chat_id": "oc_community"}, "identity": {"sender_profile": "notes-app",
+        "channel": {"chat_id": "oc_community"}, "identity": {"sender_profile": selector,
             "cli_bin": "lark-cli", "bot_app_id": "cli_notes_app"}}}},
         "binding_payloads": {"goal": {"bindings": {"goal": {"goal_id": "goal", "enabled": True,
             "provider": "lark", "target_ref": "group", "topic": {"root_message_id": "om_root"}}}}}}
@@ -229,7 +294,12 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
     if retarget:
         capabilities = runtime.capabilities
         def retargeted_capabilities():
-            provider.profile_apps["notes-app"] = "cli_replacement"
+            if retarget == "owner":
+                previous = transport.bindings.observe
+                transport.bindings.observe = lambda profile, **kwargs: {
+                    **previous(profile, **kwargs), "operator_ref": "f" * 24}
+            else:
+                provider.profile_apps["notes-app"] = "cli_replacement"
             return capabilities()
         monkeypatch.setattr(runtime, "capabilities", retargeted_capabilities)
     body = {"app_ref": "notes-app", "project_ref": runtime.project_contexts.available()[0]["project_ref"],
@@ -246,9 +316,9 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
             assert transport.bindings.read() == before
             return
         assert status == 200, result
-        saved = next(row for row in result["connections"] if row["app_ref"] == "notes-app")
+        saved = next(row for row in result["connections"] if row["app_ref"] == selector)
         assert saved["audience"] == "owner" and saved["context_kind"] == "steward"
-        assert "notes-app" in _active_profile_configs(snapshot())
+        assert selector in _active_profile_configs(snapshot())
         service.close()
         # Reload the committed Core binding and compose the production listener
         # again. A successful settings response must survive cold discovery.
@@ -256,7 +326,7 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
             runtime_controller=runtime, profile_poller=lambda _profile, stop: stop.wait())
         server.lark_goal_topic_runtime = service
         service.refresh()
-        assert set(service.health_snapshot()) == {"notes-app", "steward-app"}
+        assert set(service.health_snapshot()) == {selector, "steward-app"}
         assert post({**body, "audience": "group", "group_ids": ["oc_community"]})[0] == 400
         assert json.dumps(legacy, sort_keys=True) == frozen
         assert not provider.writes and not store.list_sessions()

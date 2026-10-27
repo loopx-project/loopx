@@ -10,7 +10,8 @@ import pytest
 from loopx.cli import main
 from loopx.control_plane import operator_provider as provider
 from loopx import paths
-from loopx.control_plane.collaboration.delegation_context import project_delegation_context
+from loopx.control_plane.agent_context import project_goal_agent_context
+from loopx.control_plane.collaboration.delegation_context import read_delegation_facts
 from loopx.control_plane.turn_driver import host_binding
 from loopx.dsh_goal_mode import turn_host_adapter
 from tests.control_plane.test_delegation_context import _fixture as delegation_fixture
@@ -107,12 +108,21 @@ def test_delegation_uses_machine_readiness_without_expanding_requesters(tmp_path
     data = json.loads(config.read_text())
     data["bindings"][0]["host_args"] = ["--host", "dsh"]
     config.write_text(json.dumps(data))
+    goal = json.loads(registry.read_text())["goals"][0]
+    goal["spawn_policy"] = {"mode": "multi_subagent", "allowed": True, "max_children": 2,
+                            "execution_config": ".loopx/config/delegations.json"}
     for requester, count in (("coordinator", 1), ("worker", 0)):
-        packet = project_delegation_context(
+        facts = read_delegation_facts(
             runtime_root=runtime, registry_path=registry, goal_id="goal-a",
             agent_id=requester, project=project,
             execution_config=".loopx/config/delegations.json",
         )
+        assert KEY not in json.dumps(facts)
+        context = project_goal_agent_context(
+            phase="before_plan", scope={"goal_id": "goal-a", "agent_id": requester, "todo_id": None},
+            goal=goal, registry_path=registry, runtime_root=runtime,
+        )
+        packet = context["contributions"][0]["facts"]["delegation_context"]
         assert packet["authorized_count"] == count
         if count:
             route = packet["routes"][0]

@@ -45,8 +45,11 @@ existing group listeners. Replies recheck the original source under that App;
 they do not require group-member scopes for private messages.
 
 An existing group listener can also admit owner-private Chat through the same
-verified App profile. Settings → Lark → owner private Chat reuses that profile;
-aliases of the same App cannot start a competing listener. One consumer dispatches
+verified App. Settings → Lark → owner private Chat resolves a verified profile
+alias to the unique existing listener selector, including a legacy App ID,
+instead of starting a competing listener. Inventory discovery supports both
+profile names and App IDs; removal, retargeting and identity changes still reject.
+One consumer dispatches
 explicit group events to the existing group admission and private events to
 Core owner admission. Rejection never falls through to the other audience.
 Group grants and review callbacks remain separate, and disconnecting either
@@ -1285,6 +1288,49 @@ unreadable current Session blocks ordinary send until its exact record recovers;
 never infer an empty conversation or create a replacement driver from a read
 failure. A recovered read does not prove receiver adoption or native GQ02/GQ09.
 
+Equal-timestamp messages retain the original Session's append order: opaque
+message IDs are identity, not chronology. The shared history merge preserves
+complete bodies and repeated text, deduplicates only the same Session/message
+identity, and uses a deterministic Session tie across independent snapshots.
+Browser recovery waits for asynchronous hydration and for the held stale reader
+to settle, including an aborted request; it does not require a response from an
+already timed-out fetch. [Synthetic source-order captures](../../assets/personal-workspace/conversation-history/README.md)
+qualify this read/display boundary, not full history pagination, reply threading
+or installed App/Lark bidirectional delivery.
+
+The same Session snapshot endpoint now supports opt-in `message_limit` (1–200)
+and `message_cursor`. Its additive `loopx_chat_message_page_v1` read metadata
+binds an offset to the original Session, frozen row count and raw-prefix digest.
+Appending during a read cannot move that boundary; rewriting/truncating it or
+an unreadable journal refuses the page. Complete bodies and attachments are not
+trimmed. Collaboration projections choose the carrier from the whole frozen
+context, then project the selected page and its related return labels; crossing
+a page does not create another carrier or reload every off-page Turn. The TS
+history owner drains and validates every page before publishing a complete
+snapshot, then rechecks an exact connection/Goal source. Interrupted, repeated,
+mis-scoped or inconsistent cursors remain unreadable and retry through the
+existing recovery path, without model replay. Unpaged v1 callers remain
+compatible. This is a stateless read hint, not a new store, consumer, execution
+state or grant. Response row count is bounded; server-side journal reads and
+prefix hashing still scale with full history and no latency improvement is
+claimed. HTTP/store and source/packaged browser checks qualify this bounded
+history path; installed native input, reply threading and live App/Lark media
+remain separate acceptance. Earlier baseline and `--pagination-only` runs did
+not qualify the default return scenario's background wait. That historical
+timeout is retained; the default return journey now reads background revisions
+across steward/Goal navigation. The App entry keeps one workspace and its
+readers mounted, sharing its source readback. Pending or failed discovery still
+gates the ordinary queue. Disposable HTTP/store checks qualify this continuation
+path, not installed native or live-provider acceptance.
+
+Following the newest reply also survives a resized viewport or timeline, including
+image layout and expanded replies, without waiting for another message. Scrolling
+up keeps the reader in history across layout changes; the existing latest-message
+button resumes following. This stays in the shared conversation view, without a
+new session or execution owner. The [synthetic desktop and narrow captures](../../assets/personal-workspace/conversation-layout-follow/README.md)
+qualify this layout boundary; they do not establish installed native input,
+complete history pagination, provider delivery or bidirectional Lark media.
+
 App 历史恢复由管家与 Goal 对话共用的 TS 读取边界负责。旧 Session 读取失败不应
 隐藏可用消息、丢失原结果位置或重启当前流；应明确展示历史不完整，退避重读缺失
 快照，并保留实时文本与草稿。当前 Session 无法读取时，普通发送等待原记录恢复，
@@ -1660,6 +1706,37 @@ Qualification covers the actual background scanner, source/grant counterexamples
 native inventory reads and crashes before admission, after enqueue and before
 transport synchronization. Synthetic model/provider journeys and read-only native
 observations do not certify live model completion or the wider conversation SLA.
+
+### Explicit unfinished work after a completed Turn
+
+A terminal model Turn is distinct from completed business work. A private
+project worker can include `unfinished_work={remaining,dependency,effects_settled:true}`
+in its response envelope after verifying its settled results. This bounded
+report supplies no permission, task, scheduler or retry authority. Gates,
+protected actions, handoffs, ambiguous effects and legacy prose cannot supply it.
+This path covers source-bound ordinary private project Codex conversations;
+steward, group, attached-host and attachment-bearing requests remain outside it.
+
+The existing original-source reply worker may reserve one continuation after
+60 seconds. Core revalidates the original owner/App/source, unchanged message,
+workspace grant and stop/correction state. Native readback must independently
+show that the exact latest Turn completed, its full item inventory is stable,
+every effect item completed, no background work remains, and the same final
+answer explicitly contains that report. A later native Turn, unknown item,
+failed/declined/live effect, edited source or revoked grant remains a hold.
+
+The original Session queue and deterministic `work-1` reservation own execution;
+restart adopts an already committed Turn instead of dispatching it again. The
+native inventory is checked again immediately before dispatch, and waiting new
+input takes precedence. The worker reads prior history and artifacts and completes
+only remaining authorized work. Its new result uses a separate original-source
+delivery phase; the earlier
+Turn and partial reply remain unchanged. A failed or still-incomplete continuation
+cannot fall through to another business, routing or quota retry. There is no
+second consumer. Old untyped partial replies are retained without inferring an
+intent or rewriting their status; their remaining business is not certified by
+this capability. Disposable native/provider journeys qualify the bounded path,
+not completion of historical user requests or live model behavior.
 
 ### Lark progress-edit budget and final-result recovery
 

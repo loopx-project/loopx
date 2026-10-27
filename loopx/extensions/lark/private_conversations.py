@@ -87,6 +87,12 @@ class LarkPrivateConversations:
             raise OSError("Lark profile configuration could not be read")
         apps = {str(row.get("name") or ""): str(row.get("appId") or "")
                 for row in configured if isinstance(row, Mapping)}
+        # lark-cli also accepts an App ID as --profile. Legacy shared group
+        # listeners retain that selector; discover the same App without
+        # renaming its binding or opening a competing consumer. Explicit
+        # profile names take precedence over the App-ID fallback.
+        for app_id in list(apps.values()):
+            apps.setdefault(app_id, app_id)
         profiles = {}
         for row in bindings:
             app_id = apps.get(row["transport_ref"], "")

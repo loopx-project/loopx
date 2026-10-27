@@ -115,6 +115,19 @@ def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -
     return value
 
 
+def _configure_provider_retries(config, seconds):
+    if type(seconds) is not int or seconds < 0:
+        raise ValueError("--provider-rate-limit-retry-seconds must be nonnegative")
+    if seconds and (not config.agent_api_base_url or not config.agent_api_key):
+        raise ValueError("--provider-rate-limit-retry-seconds requires an API key and base URL")
+    if not hasattr(config, "agent_rate_limit_retry_seconds"):
+        if seconds:
+            raise ValueError("the selected SForge source does not support HTTP 429 retry configuration")
+        return config
+    # Explicit runner settings override ambient SForge defaults, including zero.
+    return replace(config, agent_rate_limit_retry_seconds=seconds)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", required=True)
@@ -133,6 +146,9 @@ def main(argv=None):
                              "continuation Goals until the budget edge (native-goal worker only)")
     parser.add_argument("--model", required=True)
     parser.add_argument("--effort", choices=REASONING_EFFORTS, required=True)
+    parser.add_argument("--provider-rate-limit-retry-seconds", type=int, default=0,
+                        help="Host API gateway HTTP 429 retry window for new trials; "
+                             "0 keeps pass-through behavior, e.g. 900 tolerates transient limits")
     parser.add_argument("--timeout", type=int,
                         help="Total trial seconds; task-defaults.json overrides the 18h fallback")
     parser.add_argument("--task-entry", choices=TASK_ENTRIES,
@@ -301,6 +317,10 @@ def main(argv=None):
         judge_cpu_limit=None if args.restore_checkpoint else 4,
         judge_mem_limit=None if args.restore_checkpoint else "8g",
     )
+    try:
+        config = _configure_provider_retries(config, args.provider_rate_limit_retry_seconds)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.api_proxy_url:
         config.agent_extra_env = {
             "HTTPS_PROXY": args.api_proxy_url, "HTTP_PROXY": args.api_proxy_url,
@@ -400,6 +420,7 @@ def main(argv=None):
         **({"planning_timeout_seconds": None}
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
+        "provider_rate_limit_retry_seconds": args.provider_rate_limit_retry_seconds,
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),

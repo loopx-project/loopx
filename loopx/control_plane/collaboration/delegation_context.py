@@ -1,28 +1,23 @@
-"""Public-safe planning observations for authorized local delegation routes.
+"""Host facts behind the typed delegation planning observation.
 
-The local delegation configuration remains the execution-grant owner.  This
-module only turns its requester-scoped directory and existing operation journal
-into a bounded context observation; it never launches, resumes or accepts work.
+``subagent_context_ts.projectDelegationContext`` owns classification; this
+module only reads host state and never launches or accepts work.
 """
 
 from __future__ import annotations
 
-from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ...agent_registry import registered_agent_ids_for_goal
 from ..effect_runtime import EffectRuntimeRemoteError
 from ..operator_provider import operator_provider_environ
+from ..projects.registry_codec import load_registry
 from ..turn_driver.host_binding import managed_executor_binding_from_host_args
+from .inbox import _read
 
-
-MAX_PROJECTED_ROUTES = 6
+MAX_PROBED_ROUTES = 6
 MAX_OPERATION_RECEIPTS = 10
-
-
-def _observed_at() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _configuration_path(project: Path, config_ref: str) -> Path:
@@ -41,142 +36,53 @@ def _configuration_path(project: Path, config_ref: str) -> Path:
     return path
 
 
-def _route(binding: dict[str, Any]) -> dict[str, Any]:
-    executor = managed_executor_binding_from_host_args(
-        binding["host_args"],
-        environ=operator_provider_environ(),
-    )
-    available = executor.get("available")
-    readiness = (
-        "ready" if available is True else "blocked" if available is False else "unknown"
-    )
-    row: dict[str, Any] = {
-        "binding_id": binding["id"],
-        "agent_id": binding["agent_id"],
-        "todo_id": binding["todo_id"],
-        "runtime_id": executor.get("executor") or "unknown",
-        "executor_kind": executor.get("executor_kind") or "generic",
-        "runtime_readiness": readiness,
-        "readiness": "blocked" if available is False else "unknown",
-    }
-    profile = str(executor.get("execution_profile") or "").strip()
-    if profile:
-        row["execution_profile"] = profile
-    reason = str(executor.get("unavailable_reason") or "").strip()
-    if reason:
-        row["reason_code"] = reason
-    # Transport the existing host owner's public observations unchanged. The
-    # Python adapter neither reprobes nor derives another admission decision.
-    for key in ("runtime_probe", "unavailable_remediation", "operation_transport"):
-        if key in executor:
-            row[key] = executor[key]
-    return row
-
-
-def project_delegation_context(
+def read_delegation_facts(
     *,
     runtime_root: Path,
     registry_path: Path,
     goal_id: str,
     agent_id: str,
     project: Path,
-    execution_config: str | None,
-    include_operation_receipts: bool = False,
+    execution_config: str,
+    include_operation_inventory: bool = False,
 ) -> dict[str, Any]:
-    """Return one bounded requester-scoped delegation observation.
+    """Return raw requester-scoped facts; ``config_error`` marks an unreadable host."""
 
-    Route discovery is safe on planning hot paths. Operation inventory is
-    deliberately opt-in because accepted-row readback reruns owner-pinned
-    validation commands.
-    """
-
-    observed_at = _observed_at()
-    if not execution_config:
-        result: dict[str, Any] = {
-            "schema_version": "loopx_delegation_context_v0",
-            "configuration_state": "not_configured",
-            "observed_at": observed_at,
-            "authorized_count": 0,
-            "projected_count": 0,
-            "routes": [],
-        }
-        if include_operation_receipts:
-            result["operation_receipts"] = {"observed": 0}
-        return result
-
+    facts: dict[str, Any] = {"config": None, "config_error": None, "registered_agent_ids": None,
+                             "executors": [], "operation_inventory": None}
     try:
-        from ...collaboration_mcp import Delegations
+        path = _configuration_path(project, execution_config)
+        config = _read(path)
+        try:
+            # stat() raises ENOTDIR/ELOOP, which load_registry's Path.exists() hides.
+            registry_path.expanduser().stat()
+            goals = load_registry(registry_path).get("goals", [])
+        except FileNotFoundError:
+            goals = []  # No registry yet; zero requester rows stay observable.
+        goal = next((row for row in goals if isinstance(row, dict) and row.get("id") == goal_id), None)
+        facts["registered_agent_ids"] = None if goal is None else registered_agent_ids_for_goal(goal)
+        # I/O budget only: TS projectDelegationContext owns requester/grant rules.
+        rows = [row for row in (config.get("bindings") or [])
+                if isinstance(row, dict) and isinstance(row.get("requesters"), list) and agent_id in row["requesters"]]
+        executors: dict[tuple[str, ...], Any] = {}
+        environ = operator_provider_environ()
+        for host_args in (row.get("host_args") for row in rows[:MAX_PROBED_ROUTES]):
+            if (isinstance(host_args, list) and all(isinstance(arg, str) for arg in host_args)
+                    and tuple(host_args) not in executors):
+                executors[tuple(host_args)] = managed_executor_binding_from_host_args(host_args, environ=environ)
+        facts["executors"] = [{"host_args": list(key), "executor": value} for key, value in executors.items()]
+        facts["config"] = config
+        if include_operation_inventory:
+            from ...collaboration_mcp import Delegations
 
-        config_path = _configuration_path(project, execution_config)
-        service = Delegations(
-            runtime_root, registry_path, goal_id, agent_id, config_path
-        )
-        directory = service.directory()
-        bindings = directory.get("bindings")
-        if not isinstance(bindings, list):
-            raise ValueError("delegation directory is unavailable")
-        routes = [
-            _route(service.binding(str(row["id"])))
-            for row in bindings[:MAX_PROJECTED_ROUTES]
-        ]
-        result = {
-            "schema_version": "loopx_delegation_context_v0",
-            "configuration_state": "ready",
-            "execution_scope": "bound_delegation",
-            "preflight": "required",
-            "observed_at": observed_at,
-            "authorized_count": len(bindings),
-            "projected_count": len(routes),
-            "routes": routes,
-        }
-        if include_operation_receipts:
-            inventory = service.operations(limit=MAX_OPERATION_RECEIPTS)
-            items = inventory.get("items") if isinstance(inventory, dict) else []
-            statuses = Counter(
-                str(item.get("status") or "unavailable")
-                for item in items
-                if isinstance(item, dict)
-            )
-            recovery_required = sum(
-                1
-                for item in items
-                if isinstance(item, dict) and item.get("recovery_required") is True
-            )
-            receipt_summary: dict[str, Any] = {
-                "observed": len(items),
-                **{
-                    key: statuses[key]
-                    for key in (
-                        "prepared",
-                        "running",
-                        "turn_returned",
-                        "accepted",
-                        "rejected",
-                        "stopped",
-                        "unavailable",
-                    )
-                    if statuses[key]
-                },
-            }
-            if recovery_required:
-                receipt_summary["recovery_required"] = recovery_required
-            if inventory.get("has_more") is True:
-                receipt_summary["has_more"] = True
-            result["operation_receipts"] = receipt_summary
-        return result
+            inventory = Delegations(runtime_root, registry_path, goal_id, agent_id, path).operations(
+                limit=MAX_OPERATION_RECEIPTS)
+            facts["operation_inventory"] = (
+                {"items": inventory.get("items"), "has_more": inventory.get("has_more")}
+                if isinstance(inventory, dict) else None)
     except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRemoteError):
-        result = {
-            "schema_version": "loopx_delegation_context_v0",
-            "configuration_state": "blocked",
-            "reason_code": "delegation_context_unavailable",
-            "observed_at": observed_at,
-            "authorized_count": 0,
-            "projected_count": 0,
-            "routes": [],
-        }
-        if include_operation_receipts:
-            result["operation_receipts"] = {"observed": 0}
-        return result
+        facts["config_error"] = "unavailable"
+    return facts
 
 
-__all__ = ["project_delegation_context"]
+__all__ = ["read_delegation_facts"]

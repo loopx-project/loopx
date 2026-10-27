@@ -20,13 +20,20 @@ for index in range(20):
     status='refuted' if index%7==0 else 'tentative' if index%4==0 else 'confirmed'
     observation=f'观测 {index+1}：质量下降而延迟改善，仍不能据此断言完整收益。'
     observation+=' 保留失败候选与完整成本未知；下一步需要在相同条件下核对。'*3
-    summary=f'Input revision: input:{"a"*64} Applicability: 固定合成样本；不是生产评测。 Observation: {observation} Interpretation: Outcome: continue changed: - 继续核对完整成本 stopped: - 不把局部改善当整体收益 retained: - 保留负结果与原始版本'
+    outcome='replan' if index%3==0 else 'wait' if index%3==2 else 'continue'
+    change=f'第 {index+1} 轮：'+['核对相同输入下的成本，补齐缺失观测后再判断收益。', '保留已确认的质量回退，转向检查输入差异。', '等待独立测量；当前证据仍不足以确定下一步。'][index%3]
+    summary=f'Input revision: input:{"a"*64} Applicability: 固定合成样本；不是生产评测。 Observation: {observation} Interpretation: Outcome: {outcome} changed: - {change} stopped: - 不把局部改善当整体收益 retained: - 保留负结果与原始版本'
     events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
         title=f'比较 {index+1}：质量、延迟与采用版本的核对 · quality, latency and retained candidate',
         status=status,summary=summary,evidence_refs=['result:synthetic-'+str(index)],recorded_at=f'2026-01-01T{index+1:02}:00:00Z'))
 events.append(build_explore_node_event(goal_id=goal,node_id='blocked',title='来源暂不可用的研究问题',status='blocked',blocked_reason='无法读取评测来源，当前结果未知。',recorded_at='2026-01-02T00:00:00Z'))
 events.append(build_explore_node_event(goal_id=goal,node_id='single',title='仅有一条结论的问题',recorded_at='2026-01-02T01:00:00Z'))
 events.append(build_explore_finding_event(goal_id=goal,node_id='single',finding_id='single-finding',title='原始观测',summary='一条完整的原始结论。',status='tentative',recorded_at='2026-01-02T01:00:00Z'))
+for index in range(4):
+    node=f'independent-{index}'
+    events.append(build_explore_node_event(goal_id=goal,node_id=node,title='合成研究：质量、延迟和未知成本应如何一起判断？',recorded_at='2026-01-01T00:00:00Z'))
+    events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'other-{index}',title='同名独立问题的记录',status='refuted',
+        summary='Input revision: synthetic Applicability: independent sample Observation: no valid comparison Interpretation: Outcome: stop stopped: - 当前样本无法支持比较结论',recorded_at=f'2026-01-01T00:{index+1:02}:00Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 结论阅读','events':events},ensure_ascii=False))
 `, path], {cwd: repoRoot});
 }
@@ -106,9 +113,15 @@ export const researchFindingReaderScenario = {
       // belong to one question. Opening it must not substitute the latest one.
       for (const width of [1440, 390]) {
         await page.setViewportSize({width, height: 900});
-        const decisions = history.locator(".research-trail-list button");
+        const group = history.locator(".research-trail-question").first();
+        assert.equal(await group.locator("h4").innerText(), "合成研究：质量、延迟和未知成本应如何一起判断？");
+        assert.match(await group.locator("header").innerText(), /20 条决策记录.*已反驳 3.*待检查 4/s);
+        const decisions = group.locator(".research-trail-list button");
+        if (width === 1440) assert.equal(await decisions.count(), 3, "A question starts with three records, not repeated title cards");
+        await group.scrollIntoViewIfNeeded();
+        await page.screenshot({path: resolve(outputDir, `research-decision-groups-${width}.png`), animations: "disabled"});
         const older = decisions.nth(1);
-        assert.match(await older.innerText(), /比较 19：/);
+        assert.match(await older.getAttribute("aria-label"), /比较 19：/);
         await older.focus();
         await page.keyboard.press("Enter");
         await picker.waitFor();
@@ -124,10 +137,12 @@ export const researchFindingReaderScenario = {
         assert.equal(await picker.inputValue(), "finding-18", "Reload retains the decision's exact finding");
         await reader.press("Escape");
 
-        await history.getByRole("button", {name: /显示更多决策/}).click();
+        await group.getByRole("button", {name: /显示更早记录/}).click();
         const expandedCount = await decisions.count();
         const earlier = decisions.nth(7);
-        assert.match(await earlier.innerText(), /比较 13：/);
+        assert.match(await earlier.getAttribute("aria-label"), /比较 13：/);
+        assert((await group.evaluate(element => element.scrollWidth - element.clientWidth)) <= 1, "Grouped records fit narrow screens");
+        await page.screenshot({path: resolve(outputDir, `research-decision-expanded-${width}.png`), animations: "disabled"});
         await earlier.tap();
         await picker.waitFor();
         assert.equal(await picker.inputValue(), "finding-12");
@@ -141,6 +156,18 @@ export const researchFindingReaderScenario = {
         assert.equal(await picker.inputValue(), "finding-12", "Back restores the chosen historical decision");
         await reader.press("Escape");
       }
+
+      const questionGroups = history.locator(".research-trail-question");
+      assert.equal(await questionGroups.count(), 3, "Default paging counts questions, not raw decisions");
+      assert.equal(await questionGroups.nth(0).locator("h4").innerText(), await questionGroups.nth(1).locator("h4").innerText(),
+        "Identical titles from different question IDs remain separate groups");
+      await history.getByRole("button", {name: /显示更多问题/}).click();
+      assert.equal(await questionGroups.count(), 5, "Every independent question remains reachable");
+      assert.match(await questionGroups.last().innerText(), /1 条决策记录.*已反驳 1.*停止/s);
+      await history.getByRole("button", {name: /^中段 ·/}).click();
+      assert.equal(await questionGroups.count(), 1, "Time filtering applies before grouping");
+      assert.match(await questionGroups.first().locator("header").innerText(), /8 条决策记录/);
+      await history.getByRole("button", {name: "全部时段", exact: true}).click();
 
       await page.goto(url.replace("research_node=question", "research_node=blocked"));
       await reader.waitFor();

@@ -96,7 +96,7 @@ class PrivateConversationRequestMixin:
             body = self._read_json()
             if set(body) - {"context_kind", "project_grant", "goal_scope", "audience", "group_ids"} != {"app_ref", "project_ref", "executor_endpoint_id"}:
                 raise ValueError("select an App, authorized workspace and executor")
-            profile = str(body["app_ref"])
+            profile = requested_profile = str(body["app_ref"])
             snapshot = build_lark_goal_topic_runtime_snapshot(
                 registry_path=self.server.registry_path, runtime_root_override=self.server.runtime_root_override)
             existing = _active_profile_configs(snapshot)
@@ -118,9 +118,9 @@ class PrivateConversationRequestMixin:
             elif "group_ids" in body or "audience" in body:
                 raise ValueError("unsupported conversation audience")
             from ...chat_lark_api import _app_identity_for_private_guard
-            group_apps = [str(config.get("bot_app_id") or _app_identity_for_private_guard(
-                other_profile, self._lark_runner(), self._require_lark_cli()))
-                for other_profile, config in existing.items()]
+            group_apps = {other_profile: _app_identity_for_private_guard(
+                other_profile, self._lark_runner(), self._require_lark_cli())
+                for other_profile in existing}
             shared_group = existing.get(profile)
             if shared_group is not None:
                 if body.get("audience", "owner") != "owner" or identity_ref(
@@ -128,8 +128,15 @@ class PrivateConversationRequestMixin:
                         profile, self._lark_runner(), self._require_lark_cli()))
                 ) != observed["provider_ref"]:
                     raise ValueError("shared listener requires the same verified App and a private owner audience")
-            elif any(identity_ref(app) == observed["provider_ref"] for app in group_apps):
-                raise ValueError("this App already has a group listener; select its existing profile to add private Chat")
+            else:
+                shared_profiles = [name for name, app in group_apps.items()
+                                   if identity_ref(app) == observed["provider_ref"]]
+                if shared_profiles:
+                    if len(shared_profiles) != 1 or body.get("audience", "owner") != "owner":
+                        raise ValueError("select one existing listener for the verified App and a private owner audience")
+                    # Settings lists profile names; older group connections may
+                    # retain an App-ID selector. Reuse that consumer identity.
+                    profile = shared_profiles[0]
             # Compose the same transport configuration used by refresh before
             # publishing a binding. Failure must leave the Core grant untouched.
             _active_profile_configs({**snapshot, "private_profiles": {
@@ -137,13 +144,18 @@ class PrivateConversationRequestMixin:
             endpoint = str(body["executor_endpoint_id"])
             if not any(row["agent_id"] == endpoint and row["available"] for row in self.server.runtime_controller.capabilities()):
                 raise ValueError("the selected executor is unavailable")
+            if profile != requested_profile:
+                current = self.server.runtime_controller.project_contexts.conversation_bindings.observe(requested_profile)
+                if any(current[key] != observed[key] for key in ("provider_ref", "operator_ref")):
+                    raise ValueError("the selected App or owner changed before binding publication; verify it again")
             self.server.runtime_controller.project_contexts.conversation_bindings.configure(
                 transport_ref=profile, project_ref=str(body["project_ref"]), executor_endpoint_id=endpoint,
                 context_kind=str(body.get("context_kind", "project")),
                 project_grant=str(body["project_grant"]) if "project_grant" in body else None,
                 goal_scope=str(body["goal_scope"]) if "goal_scope" in body else None,
                 audience=body.get("audience"), group_refs=group_refs, available_group_refs=available_group_refs,
-                expected_provider_ref=observed["provider_ref"])
+                expected_provider_ref=observed["provider_ref"],
+                expected_operator_ref=observed.get("operator_ref"))
             self.server.lark_goal_topic_runtime.refresh()
         except (ValueError, OSError, KeyError) as exc:
             self._send_error(str(exc), status=400)

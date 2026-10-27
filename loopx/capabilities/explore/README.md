@@ -411,6 +411,16 @@ or block valid writeback. Successful replay needs no second graph event or Todo
 mutation. This changes enabled evidence capture and explicit Todo-link edits;
 ordinary work and feature-off hooks retain their existing behavior.
 
+Writeback templates leave `status` blank so the caller explicitly selects
+`tentative`, `confirmed`, or `refuted`. `tentative` means the interpretation is
+unresolved, not that a verification job is queued. Choose `confirmed` or
+`refuted` only for the stated conclusion within its recorded applicability;
+evidence references or a successful check alone do not settle broader claims.
+Keep established observations, remaining uncertainty and the next useful check
+in the interpretation. Use the existing optional `question_update` to close an
+answered question independently of finding status or overall Goal completion.
+Existing recorded statuses and the CLI finding default are unchanged.
+
 Use `tentative` for inconclusive observations or prerequisite failures. Neither
 compilation failure nor a score alone supplies a scientific interpretation.
 Routine work without reusable evidence needs no attachment. Omitting the option

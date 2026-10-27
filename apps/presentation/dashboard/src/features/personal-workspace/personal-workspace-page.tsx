@@ -1079,6 +1079,7 @@ export function PersonalWorkspacePage({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const channelScrollRef = useRef<HTMLDivElement>(null);
   const followConversationRef = useRef(true);
+  const conversationScrollTopRef = useRef(0);
   const [showLatestMessage, setShowLatestMessage] = useState(false);
   const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
   const settingsFromModelMenuRef = useRef(false);
@@ -1403,16 +1404,36 @@ export function PersonalWorkspacePage({
     followConversationRef.current = true;
     setShowLatestMessage(false);
     const scroller = channelScrollRef.current;
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (scroller) {
+      scroller.scrollTop = scroller.scrollHeight;
+      conversationScrollTopRef.current = scroller.scrollTop;
+    }
   }
   useEffect(() => {
     followConversationRef.current = true;
+    conversationScrollTopRef.current = channelScrollRef.current?.scrollTop ?? 0;
     setShowLatestMessage(false);
   }, [conversationKey, selectedAgentId, conversationOpen]);
   useEffect(() => {
-    if (!conversationOpen || !followConversationRef.current) return;
-    const frame = window.requestAnimationFrame(scrollToLatestMessage);
-    return () => window.cancelAnimationFrame(frame);
+    if (!conversationOpen) return;
+    let frame = 0;
+    const follow = () => {
+      if (!followConversationRef.current) return;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        if (followConversationRef.current) scrollToLatestMessage();
+      });
+    };
+    follow();
+    // Images, expanded replies and a resized window can change the viewport
+    // without a new message. Keep following only while the reader is at the end.
+    const observer = new ResizeObserver(follow);
+    const scroller = channelScrollRef.current;
+    if (scroller) {
+      observer.observe(scroller);
+      scroller.querySelectorAll(".personal-channel-timeline").forEach(element => observer.observe(element));
+    }
+    return () => {observer.disconnect(); window.cancelAnimationFrame(frame);};
   }, [conversationOpen, conversationKey, selectedAgentId, conversationMessages.length,
     latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length, latestMessage?.steps]);
   useEffect(() => {
@@ -2855,7 +2876,10 @@ export function PersonalWorkspacePage({
               if (!conversationOpen) return;
               const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
               const nearBottom = scrollHeight - scrollTop - clientHeight < 64;
-              followConversationRef.current = nearBottom;
+              // Growing content or a shorter viewport is not a reader moving up.
+              if (nearBottom) followConversationRef.current = true;
+              else if (scrollTop < conversationScrollTopRef.current) followConversationRef.current = false;
+              conversationScrollTopRef.current = scrollTop;
               setShowLatestMessage(!nearBottom);
             }}>
             {!rootUnavailable && !runtimeSourceUnavailable ? <>
@@ -2976,7 +3000,7 @@ export function PersonalWorkspacePage({
               <span>{t("workspace.unavailable")}</span>
             </div> : null}
             {conversationHistoryState && conversationHistoryState.phase !== "ready" ? (
-              <div className="personal-history-notice" role="status">
+              <div className={conversationHistoryState.phase === "loading" ? "sr-only" : "personal-history-notice"} role="status">
                 <div><span>{t(`history.${conversationHistoryState.phase}`)}</span>
                   {conversationHistoryState.sendBlocked && conversationHistoryState.phase !== "loading"
                     ? <span>{t("history.currentSessionRecovering")}</span> : null}</div>

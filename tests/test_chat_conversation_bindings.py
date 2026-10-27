@@ -6,8 +6,109 @@ import pytest
 
 from test_chat_ordinary_project import ordinary  # noqa: F401, F811
 from test_native_steward_private import steward  # noqa: F401
+from test_manager_context_roundtrip import flow  # noqa: F401
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.extensions.lark.conversation_identity import identity_ref
+
+
+def _history_page_brief():
+    return {"schema_version": "collaboration_brief_v0", "purpose": "Inspect original history",
+        "context": "Keep the original conversation", "constraints": ["Do not publish"],
+        "inputs": [], "acceptance": ["Return the original conclusion"], "return_requirement": "Return here"}
+
+
+def test_history_page_keeps_one_original_collaboration_carrier(flow, monkeypatch):  # noqa: F811
+    from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
+
+    root, registry, store, create = flow
+    session, turn, _ = create(brief=_history_page_brief())
+    sid, tid = session["session_id"], turn["turn_id"]
+    for i in range(200 - len(store.messages(sid))):
+        store.append_message(sid, role="user", text=f"Independent history row {i}")
+    answer = store.append_message(sid, role="agent", text="Original answer", turn_id=tid)
+    load_turn, reads = store.load_turn, []
+    def observed(*args):
+        reads.append(args)
+        return load_turn(*args)
+    monkeypatch.setattr(store, "load_turn", observed)
+    first = project_chat_session_snapshot(root, store, sid, registry=registry, message_limit=200)
+    assert reads == [], "A page without the original carrier must not project off-page Turns"
+    assert not any(row.get("collaboration") for row in first["messages"])
+    store.append_message(sid, role="agent", text="Later answer outside frozen prefix", turn_id=tid)
+    second = project_chat_session_snapshot(root, store, sid, registry=registry,
+        message_limit=200, message_cursor=first["message_page"]["next_cursor"])
+    assert len(second["messages"]) == 1 and second["message_page"]["next_cursor"] is None
+    assert second["messages"][0]["message_id"] == answer["message_id"]
+    assert second["messages"][0]["collaboration"]["agent_id"] == "worker"
+    assert reads == [(sid, tid)]
+
+
+def test_return_delivery_readback_survives_a_separate_history_page(flow):  # noqa: F811
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, project_chat_session_snapshot
+
+    root, registry, store, create = flow
+    session, turn, receipt = create(brief=_history_page_brief())
+    sid = session["session_id"]
+    store.append_message(sid, role="agent", text="Original commitment", turn_id=turn["turn_id"])
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Keep original audience")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Original conclusion")
+    drain(root, registry, store, lambda *_: pytest.fail("A private App return must not send to a provider"))
+    expected = project_chat_session_snapshot(root, store, sid, registry=registry)["messages"]
+    assert len(expected) == 4 and expected[-1].get("return_delivery")
+    cursor, rows = None, []
+    while True:
+        page = project_chat_session_snapshot(root, store, sid, registry=registry,
+            message_limit=1, message_cursor=cursor)
+        rows.extend(page["messages"])
+        cursor = page["message_page"]["next_cursor"]
+        if cursor is None:
+            break
+    assert rows == expected
+    assert sum(bool(row.get("collaboration")) for row in rows) == 1
+
+
+def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordinary, monkeypatch):  # noqa: F811
+    from urllib.parse import urlencode
+    from loopx.chat_server import ChatHTTPServer
+
+    store, runtime, contexts, request, capture, _, _ = ordinary
+    monkeypatch.setattr(ChatHTTPServer, "runtime_root", store.root.parent, raising=False)
+    monkeypatch.setattr(ChatHTTPServer, "registry_path", runtime.registry_path, raising=False)
+    status, opened = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"],
+    })
+    assert status == 201
+    sid = opened["session_id"]
+    rows = [store.append_message(sid, role="user" if i % 2 == 0 else "agent",
+        text="完整正文" * 3000 if i == 201 else f"Original message {i}",
+        turn_id=None, attachments=[{"name": "original.png", "data_url": "data:image/png;base64,AA=="}] if i == 201 else None)
+        for i in range(451)]
+    native_before = capture.read_bytes()
+    path = f"/api/chat/sessions/{sid}"
+    code, first = request(path + "?message_limit=200")
+    assert code == 200 and len(first["messages"]) == 200
+    assert first["message_page"]["total"] == 451
+    cursor = first["message_page"]["next_cursor"]
+    store.append_message(sid, role="agent", text="Appended during history read")
+    code, second = request(path + "?" + urlencode({"message_limit": 200, "message_cursor": cursor}))
+    assert code == 200 and len(second["messages"]) == 200
+    code, last = request(path + "?" + urlencode({"message_limit": 200,
+        "message_cursor": second["message_page"]["next_cursor"]}))
+    assert code == 200 and last["message_page"]["next_cursor"] is None
+    assert first["messages"] + second["messages"] + last["messages"] == rows
+    assert request(path)[1]["messages"][-1]["text"] == "Appended during history read"
+    assert request(path + "?message_limit=200")[1]["message_page"]["total"] == 452
+    assert capture.read_bytes() == native_before, "History reads must not execute or replay a Turn"
+    for query in ["message_limit=0", "message_limit=201", "message_limit=2&message_limit=3",
+                  "message_cursor=invalid", "message_limit=2&message_cursor=invalid"]:
+        assert request(path + "?" + query)[0] == 400
+    def unreadable(*_, **__):
+        raise PermissionError("private journal path")
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "messages", unreadable)
+        code, unavailable = request(path + "?message_limit=200")
+    assert code == 503 and "private journal path" not in json.dumps(unavailable)
 
 
 def test_app_steward_corrupt_legacy_configuration_never_falls_back(tmp_path):

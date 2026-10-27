@@ -64,6 +64,14 @@ class SyntheticManagedSource:
                 elif command == "append":
                     store.append_message(sessions[0]["session_id"], role="agent", text="Late original result for Session 1")
                     result = {"appended": True}
+                elif command == "observer-session":
+                    session, _ = runtime.open_session(goal_id="product-release", managed_agent_id="worker",
+                        agent_id="codex", objective="Verify the release handoff", work_dir=self.root / "project",
+                        mode="new", agent_model_id="gpt-6.1-sol", agent_reasoning_effort="xhigh")
+                    sessions.append(session)
+                    store.append_message(session["session_id"], role="user", text="Review the release checklist before the next handoff.")
+                    store.append_message(session["session_id"], role="agent", text="The checklist is ready for verification. I will keep the result and remaining questions in this conversation.")
+                    result = {"session_id": session["session_id"]}
                 elif command == "stop":
                     server.shutdown(); return
                 else:

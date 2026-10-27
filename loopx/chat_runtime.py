@@ -812,6 +812,11 @@ class ChatRuntimeController:
         if self.project_contexts.conversation_bindings is not None:
             from .capabilities.native_chat.external_conversations import ChatExternalConversations
             recovery = ChatExternalConversations(self).queued_recovery_context(session, active, accepted_turn_id)
+        native_quota_refresh = bool(active and active_id == accepted_turn_id
+            and active.get("status") == "queued" and active.get("origin") == "native_loopx"
+            and active.get("loopx_execution") is True
+            and (active.get("loopx_request") or {}).get("work_kind") == "report"
+            and isinstance((active.get("loopx_request") or {}).get("report_quota_recovery"), dict))
         with self.lock:
             current = self.adapters.get(session_id)
             manager_profile_changed = bool(
@@ -830,6 +835,7 @@ class ChatRuntimeController:
                 and current.healthcheck()
                 and not manager_profile_changed
                 and not recovery.get("quota_attempt")
+                and not native_quota_refresh
                 and (isinstance(current, CodexAppServerAdapter) and current.session.read_only_review) == bool(recovery.get("read_only_review"))
                 and model_allocation is None
                 and not settings_changed
@@ -1815,6 +1821,11 @@ class ChatRuntimeController:
                             error_code="host_gate", gate=None,
                         )
                     retry_binding["sha256"] = binding
+                    if (session.get("project_context") is not None
+                            and self.project_contexts.conversation_bindings is not None):
+                        from .capabilities.native_chat.external_conversations import ChatExternalConversations
+                        message = ChatExternalConversations(self).prepare_continuation_input(
+                            session, current_turn, adapter.session, message)
                 # Manager/native/external conversations have different execution
                 # and waiting boundaries. Do not invent Goal timing for them.
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""

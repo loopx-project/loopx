@@ -112,7 +112,12 @@ export function collaborationResultObservations(request: JsonObject, observation
 export function planCollaborationResult(params: JsonObject): JsonObject {
   const request = requireJsonObject(params.request, "result request");
   const phase = requireStringLiteral(params.phase, ["decision", "conclusion"], "result phase");
-  const controlled = request.request_control !== undefined || params.request_revision != null;
+  const legacyOriginal = request.schema_version === "loopx_manager_context_entry_v1"
+    && request.request_control === undefined;
+  if (legacyOriginal && params.request_revision != null && params.request_revision !== 1) {
+    throw new EffectRuntimeRequestError("legacy requests only support original result revision 1");
+  }
+  const controlled = !legacyOriginal && (request.request_control !== undefined || params.request_revision != null);
   // Old commands always name original revision 1. They never inherit the new
   // head merely because a correction arrived while their result was in flight.
   const context = controlled ? requestRevisionReceiptContext(request, params.request_revision, params.legacy_assessment ?? null) : null;

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import base64
 from hashlib import sha256
 import json
 import subprocess
@@ -49,6 +50,69 @@ def section(role, heading, text):
     # Explicit public writer grammar, not implementation-derived expectations.
     return (f"## {heading}\n<!-- loopx:todo-region-v0 role={role} begin -->\n"
         f"- [x] {text}\n<!-- loopx:todo-region-v0 role={role} end -->\n")
+
+
+def monitor_receipt(*, operation="monitor:previous", goal="context-goal"):
+    receipt = {"schema_version": "loopx_monitor_batch_receipt_v0", "goal_id": goal,
+        "operation_id": operation, "request_sha256": "a" * 64,
+        "writeback": {"schema_version": "monitor_poll_todo_writeback_v0", "goal_id": goal,
+            "monitor_effect_id": operation, "next_todos": [], "successor_receipts": [],
+            "todo_update": {"note": "Previous observation. " * 30_000}}}
+    encoded = base64.b64encode(json.dumps(receipt).encode()).decode()
+    return receipt, f"<!-- loopx:monitor-batch:{sha256(operation.encode()).hexdigest()} {encoded} -->\n"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_historical_monitor_receipts_keep_recovery_without_repeating_encoded_bodies(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.scheduler.monitor_batch_receipts import _read_receipt
+
+    runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, provider)
+    receipt, marker = monitor_receipt()
+    before = "# Goal\nKeep every requirement.\n"
+    after = "<!-- Keep this authored comment. -->\nFinal stop: do not publish.\n"
+    document = before + marker + section("archive", "Completed Work Archive", "Old observation.") + after
+    state.write_bytes(document.encode())
+    packet = guard(runtime, registry)
+    channel = packet["interaction_contract"]["agent_channel"]
+    context = next(r["content"] for r in channel["work_context"]["sources"] if r.get("source") == "goal_state")
+    assert context["text"] == before + after
+    assert context["revision"] == "sha256:" + sha256(document.encode()).hexdigest()
+    assert context["excluded_monitor_receipts"] == {"count": 1, "line_ranges": [[3, 3]]}
+    assert len(json.dumps(context).encode()) < 1500 < len(document.encode())
+    assert channel["work_context"]["complete"] and channel["delivery_allowed"]
+    assert not any(r.get("source") == "goal_state" for r in channel["required_reads"])
+    assert state.read_bytes() == document.encode()
+    assert _read_receipt(state.read_text(), receipt["operation_id"]) == receipt
+
+
+@pytest.mark.parametrize("change", ["foreign_goal", "wrong_identity", "unknown_schema", "invalid_body",
+    "extra_field", "duplicate_field", "trailing_prose", "fenced", "nested_comment"])
+def test_unowned_monitor_like_text_remains_verbatim(tmp_path, monkeypatch, change):
+    runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, "sqlite")
+    receipt, marker = monitor_receipt(goal="different-goal" if change == "foreign_goal" else "context-goal")
+    if change == "wrong_identity":
+        marker = marker.replace(sha256(receipt["operation_id"].encode()).hexdigest(), "0" * 64)
+    elif change in {"unknown_schema", "extra_field", "duplicate_field"}:
+        if change == "unknown_schema":
+            receipt["schema_version"] = "future_receipt_v9"
+        if change == "extra_field":
+            receipt["authored_requirement"] = "Preserve this requirement."
+        body = json.dumps(receipt)
+        if change == "duplicate_field":
+            body = body[:-1] + ', "goal_id": "context-goal"}'
+        marker = marker[:marker.index(" ", 5) + 1] + base64.b64encode(body.encode()).decode() + " -->\n"
+    elif change == "invalid_body":
+        marker = f"<!-- loopx:monitor-batch:{'0' * 64} e30= -->\n"
+    elif change == "trailing_prose":
+        marker = marker.rstrip("\n") + " Keep the final requirement.\n"
+    elif change == "fenced":
+        marker = "```md\n" + marker + "```\n"
+    elif change == "nested_comment":
+        marker = "<!-- Authored example:\n" + marker + "-->\n"
+    state.write_text("# Goal\n" + marker + section("agent", "Agent Todo", "Old task.") + "Final requirement.\n")
+    content = source(runtime, registry)
+    assert content["text"] == "# Goal\n" + marker + "Final requirement.\n"
+    assert "excluded_monitor_receipts" not in content
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -159,3 +223,25 @@ def test_non_generated_text_is_never_shortened(tmp_path, monkeypatch):
     state.write_bytes((narrative + section("archive", "Completed Work Archive", "History.") + "TAIL\r\n").encode())
     content = source(runtime, registry)
     assert content["text"] == narrative + "TAIL\r\n"
+
+
+def test_receipt_intervals_are_bound_to_the_complete_source_revision(tmp_path, monkeypatch):
+    runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, "sqlite")
+    _receipt, marker = monitor_receipt()
+    lines = ["# Goal\n", marker, marker, "Preserve this authored constraint.\n", marker]
+    document = "".join(lines) + section("archive", "Completed Work Archive", "Old work.")
+    state.write_bytes(document.encode())
+    content = source(runtime, registry)
+    assert content["text"] == lines[0] + lines[3]
+    assert content["excluded_monitor_receipts"] == {"count": 3, "line_ranges": [[2, 3], [5, 5]]}
+    assert content["revision"] == "sha256:" + sha256(document.encode()).hexdigest()
+    # The full source digest and inclusive one-based ranges recover every
+    # excluded receipt exactly, without per-line hashes or a second authority.
+    ranges = content["excluded_monitor_receipts"]["line_ranges"]
+    assert "".join("".join(lines[start - 1:end]) for start, end in ranges) == marker * 3
+    _new_receipt, changed_marker = monitor_receipt(operation="monitor:changed")
+    state.write_text(document.replace(marker, changed_marker, 1))
+    changed = source(runtime, registry)
+    assert changed["text"] == content["text"]
+    assert changed["revision"] != content["revision"]
+    assert changed["excluded_monitor_receipts"] == content["excluded_monitor_receipts"]

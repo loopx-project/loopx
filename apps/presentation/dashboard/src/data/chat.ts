@@ -940,10 +940,67 @@ export type ChatSessionSnapshot = {
   session: ChatSessionSummary;
   messages: ChatVisibleMessage[];
   active_turn: Record<string, unknown> | null;
+  message_page?: {
+    schema_version: "loopx_chat_message_page_v1";
+    offset: number; total: number; snapshot_sha256: string; next_cursor: string | null;
+  };
 };
 
 export async function fetchChatSession(sessionId: string, signal?: AbortSignal) {
   return requestJson<ChatSessionSnapshot>(`/api/chat/sessions/${encodeURIComponent(sessionId)}`, { signal });
+}
+
+const chatMessagePageSchema = z.object({
+  schema_version: z.literal("loopx_chat_message_page_v1"),
+  offset: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+  snapshot_sha256: z.string().regex(/^[a-f0-9]{64}$/), next_cursor: z.string().min(1).max(1024).nullable(),
+});
+
+/** Hydrate one complete original prefix; partial pages never become a snapshot. */
+async function fetchChatSessionHistory(session: ChatSessionSummary): Promise<ChatSessionSnapshot> {
+  let first: ChatSessionSnapshot | undefined, cursor: string | null = null;
+  let total: number | undefined, digest: string | undefined;
+  const messages: ChatVisibleMessage[] = [], cursors = new Set<string>(), ids = new Set<string>();
+  do {
+    const query = new URLSearchParams({message_limit: "200"});
+    if (cursor !== null) query.set("message_cursor", cursor);
+    const snapshot = await requestJson<ChatSessionSnapshot>(
+      `/api/chat/sessions/${encodeURIComponent(session.session_id)}?${query}`, {signal: AbortSignal.timeout(5000)});
+    const sameSource = snapshot.session?.session_id === session.session_id &&
+      (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
+        .every(key => (snapshot.session[key] ?? null) === (session[key] ?? null)) &&
+      (snapshot.session.session_mode ?? "managed_runtime") === (session.session_mode ?? "managed_runtime");
+    if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || !sameSource || !Array.isArray(snapshot.messages)) {
+      throw new Error("The original Session scope changed during history read.");
+    }
+    // Older services return their complete v1 snapshot for this read. A later
+    // page cannot silently lose the cursor contract and masquerade as complete.
+    if (!Object.hasOwn(snapshot, "message_page")) {
+      if (cursor !== null) throw new Error("The history page contract changed during read.");
+      return snapshot;
+    }
+    const parsed = chatMessagePageSchema.safeParse(snapshot.message_page);
+    if (!parsed.success) throw new Error("The original history page could not be verified.");
+    const page = parsed.data, end = messages.length + snapshot.messages.length;
+    if (page.offset !== messages.length || snapshot.messages.length > 200 || end > page.total
+      || (total !== undefined && total !== page.total) || (digest !== undefined && digest !== page.snapshot_sha256)
+      || (page.next_cursor !== null) !== (end < page.total)
+      || (page.next_cursor !== null && (!snapshot.messages.length || cursors.has(page.next_cursor)))) {
+      throw new Error("The original history cursor did not advance consistently.");
+    }
+    for (const message of snapshot.messages) {
+      if (typeof message.message_id !== "string" || !message.message_id || ids.has(message.message_id)) {
+        throw new Error("The original history contains conflicting message identities.");
+      }
+      ids.add(message.message_id); messages.push(message);
+    }
+    first ??= snapshot;
+    total = page.total; digest = page.snapshot_sha256; cursor = page.next_cursor;
+    if (cursor !== null) cursors.add(cursor);
+  } while (cursor !== null);
+  // Keep the first read's execution/revision hint. An append between pages is
+  // intentionally outside this prefix and will trigger the normal next refresh.
+  return {...first!, messages, message_page: undefined};
 }
 
 /** Read-only discovery through the existing Core Goal/Agent/Session identity. */
@@ -1025,9 +1082,12 @@ export function mergeChatSessionMessages(snapshots: ChatSessionSnapshot[]) {
       messages.set(`${snapshot.session.session_id}:${message.message_id}`, { ...message, session_id: snapshot.session.session_id });
     }
   }
+  // Store rows are append-ordered; opaque IDs cannot break timestamp ties.
+  // Stable sort retains that order within a Session, with a deterministic tie
+  // across Sessions even when their snapshots finish in a different order.
   return [...messages.values()].sort((left, right) =>
     left.created_at.localeCompare(right.created_at)
-      || left.message_id.localeCompare(right.message_id)
+      || (left.session_id ?? "").localeCompare(right.session_id ?? "")
   );
 }
 
@@ -1064,7 +1124,7 @@ export async function fetchChatHistory(options: {
   });
   if (exact) for (const session of missing) known.delete(session.session_id);
   const results = await Promise.allSettled(missing.map(async (session) => {
-    const snapshot = await fetchChatSession(session.session_id, AbortSignal.timeout(5000));
+    const snapshot = await fetchChatSessionHistory(session);
     if (snapshot.session.session_id !== session.session_id || snapshot.session.agent_id !== session.agent_id) {
       throw new Error("The original Session identity changed during history read.");
     }
@@ -1073,6 +1133,12 @@ export async function fetchChatHistory(options: {
       || snapshot.session.session_mode !== "managed_runtime")) throw new Error("The original managed Session scope changed during history read.");
     return snapshot;
   }));
+  // A long page sequence must not publish against a connection/Goal removed
+  // while it was in flight. Reuse the original source owner, never a fallback.
+  if (missing.length && results.some(result => result.status === "fulfilled")) {
+    if (options.bound) await resolveBoundChatSession(options.bound, AbortSignal.timeout(5000));
+    if (options.managed) await resolveManagedChatSession(options.managed, AbortSignal.timeout(5000));
+  }
   for (const result of results) {
     if (result.status === "fulfilled") known.set(result.value.session.session_id, result.value);
   }

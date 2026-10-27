@@ -527,10 +527,18 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
+  // One completed-work continuation is terminal for this request, including
+  // when it later fails. It cannot fall through to routing/quota retries.
+  if ((previous?.work_attempt != null && previous.failed_turn_id !== row.turn_id)
+      || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
+        requireJsonObject(value, "prior recovery").work_attempt != null))) return no;
   // A failed review cannot fall through to routing/quota business retries.
   if ((previous?.read_only_review === true && previous.failed_turn_id !== row.turn_id)
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior recovery").read_only_review === true))) return no;
+  if (failed.status === "completed" && !steward) {
+    return planUnfinishedWork(recovery, row, current, failed, previous, version);
+  }
   if (!steward && failed.error_code === "server_restarted") {
     return planResultReview(recovery, row, current, failed, previous, version);
   }
@@ -595,6 +603,61 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     }
   }
   return {...candidate, recovery_eligible: transient};
+}
+
+/** A completed model Turn can explicitly report unfinished business. The
+ * proposal alone grants nothing: only the original worker may reserve one
+ * continuation after stable latest-native/source/grant/stop checks.
+ */
+function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  completed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const response = completed.response;
+  if (!response || typeof response !== "object" || Array.isArray(response)) return no;
+  const result = response as JsonObject;
+  const raw = result.unfinished_work;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return no;
+  const work = raw as JsonObject;
+  const matchesWork = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === "dependency,effects_settled,remaining"
+    && ["remaining", "dependency", "effects_settled"].every(key => (value as JsonObject)[key] === work[key]);
+  if (Object.keys(work).sort().join(",") !== "dependency,effects_settled,remaining"
+      || work.effects_settled !== true
+      || [work.remaining, work.dependency].some(value => typeof value !== "string"
+        || !value.trim() || value.length > 1000)
+      || [result.gate, result.protected_action, result.context_handoff, result.goal_draft].some(value => value != null)
+      || !Array.isArray(result.proposals) || result.proposals.length
+      || completed.session_id !== current.session_id || completed.turn_id !== row.turn_id
+      || recovery.steering_observed !== false || recovery.stop_observed !== false
+      || recovery.attachments_present !== false
+      || typeof completed.upstream_turn_id !== "string" || !completed.upstream_turn_id) return no;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-work-1`;
+  if (previous?.work_attempt != null && (previous.work_attempt !== 1
+      || previous.failed_turn_id !== completed.turn_id || previous.version !== version
+      || previous.client_turn_id !== client || !matchesWork(previous.unfinished_work))) return no;
+  const candidate = {...no, recovery_candidate: true, work_attempt: 1, unfinished_work: work,
+    client_turn_id: client, session_id: current.session_id, failed_turn_id: completed.turn_id};
+  if (previous?.work_attempt === 1 && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted unfinished work");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === completed.turn_id || admitted.message !== row.message
+        || admitted.origin !== row.origin || !Array.isArray(admitted.attachments ?? [])
+        || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...candidate, recovery_eligible: recovery.source_verified === true,
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted unfinished work"), native_thread_ids: [],
+      not_before: previous.not_before};
+  }
+  if (current.active_turn_id != null || current.status !== "ready") return no;
+  const now = Date.parse(String(recovery.observed_at)), ended = Date.parse(String(completed.completed_at));
+  if (!Number.isFinite(now) || !Number.isFinite(ended) || now < ended + 60_000) return no;
+  const native = sessionIdentity(current.upstream_thread_id, "original native thread");
+  const planned = {...candidate, native_thread_ids: [native], not_before: new Date(ended + 60_000).toISOString()};
+  if (recovery.native_observation == null) return planned;
+  const observed = requireJsonObject(recovery.native_observation, "completed unfinished-work inventory");
+  return {...planned, recovery_eligible: recovery.source_verified === true
+    && observed.thread_id === native && observed.turn_id === completed.upstream_turn_id
+    && observed.completed_work === true && observed.all_effects_settled === true
+    && matchesWork(observed.unfinished_work)};
 }
 
 /** Interrupted work may have effects. Never retry it. The original worker may

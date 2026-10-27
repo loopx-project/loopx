@@ -7,6 +7,83 @@ import {repoRoot, outputDir} from "./fixture.mjs";
 import {openWorkspacePage} from "./scenario-context.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 
+async function verifyManagedTurnObservers({page, origin, sessions, panel, chooser, composer, control}) {
+  const {session_id: sessionId} = await control("observer-session");
+  const before = (await control("inspect")).calls_after_setup.filter(row => row.method === "turn/start").length;
+  const requests = [], live = new Set();
+  const onRequest = request => {
+    if (new URL(request.url()).pathname.startsWith(`/api/chat/sessions/${sessionId}/turns/`)
+      && new URL(request.url()).pathname.endsWith("/events")) {requests.push(request); live.add(request);}
+  };
+  const onSettled = request => live.delete(request);
+  page.on("request", onRequest);
+  page.on("requestfinished", onSettled);
+  page.on("requestfailed", onSettled);
+  const pending = panel.locator(".personal-message-pending");
+  const turnPath = turnId => `/api/chat/sessions/${sessionId}/turns/${turnId}/events`;
+  async function afterHistoryPoll(turnId) {
+    // Observe a real history refresh while the synthetic native Turn remains
+    // active, then cross another five-second poll. No model timing decides it.
+    await page.waitForResponse(async response => response.url() === `${origin}/api/chat/sessions/${sessionId}`
+      && (await response.json()).session?.active_turn_id === turnId, {timeout: 12_000});
+    await page.waitForTimeout(5500);
+  }
+  async function assertSingleObserver(turnId, expectedStarts) {
+    assert.equal(await pending.count(), 1, "One native Turn has one pending reply across history polling");
+    assert.equal(requests.filter(request => new URL(request.url()).pathname === turnPath(turnId)).length, 1,
+      "History polling reuses the original event observer");
+    assert.equal([...live].filter(request => new URL(request.url()).pathname === turnPath(turnId)).length, 1,
+      "Exactly one live event stream owns the active Turn");
+    assert.equal((await control("inspect")).calls_after_setup.filter(row => row.method === "turn/start").length,
+      before + expectedStarts, "Observing a Turn never starts another native execution");
+  }
+  async function interrupt(turnId) {
+    const receipt = page.waitForResponse(response => response.request().method() === "POST"
+      && response.url() === `${origin}/api/chat/sessions/${sessionId}/turns/${turnId}/interrupt`);
+    await panel.getByRole("button", {name: "中断本轮", exact: true}).click();
+    assert.equal((await (await receipt).json()).status, "interrupted");
+    await pending.waitFor({state: "hidden"});
+  }
+  try {
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.reload({waitUntil: "domcontentloaded"});
+    await chooser.selectOption(`managed:${sessionId}`);
+    await panel.getByText("Review the release checklist before the next handoff.", {exact: true}).waitFor();
+    const accepted = page.waitForResponse(response => response.request().method() === "POST"
+      && response.url() === `${origin}/api/chat/sessions/${sessionId}/turns`);
+    await composer.fill("Review the remaining release steps; wait for interrupt.");
+    await page.waitForFunction(() => !document.querySelector('button[aria-label="发送"]')?.disabled);
+    await composer.press("Enter");
+    const ownTurn = (await (await accepted).json()).turn_id;
+    await afterHistoryPoll(ownTurn);
+    await page.screenshot({path: resolve(outputDir, "managed-observer-desktop.png")});
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.screenshot({path: resolve(outputDir, "managed-observer-narrow.png")});
+    await assertSingleObserver(ownTurn, 1);
+    await interrupt(ownTurn);
+
+    // Start through the same real ingress while another Session is selected.
+    // Entering the original must recover it without a composer-owned observer.
+    await chooser.selectOption(`managed:${sessions[0]}`);
+    await panel.getByText("Original managed question 1", {exact: true}).waitFor();
+    const submitted = await page.request.post(`${origin}/api/chat/sessions/${sessionId}/turns`, {
+      data: {message: "Continue the release verification; wait for interrupt.", client_turn_id: "managed-observer-external"},
+    });
+    assert.equal(submitted.ok(), true);
+    const externalTurn = (await submitted.json()).turn_id;
+    const recovered = afterHistoryPoll(externalTurn);
+    await chooser.selectOption(`managed:${sessionId}`);
+    await recovered;
+    await assertSingleObserver(externalTurn, 2);
+    await interrupt(externalTurn);
+  } finally {
+    page.off("request", onRequest);
+    page.off("requestfinished", onSettled);
+    page.off("requestfailed", onSettled);
+  }
+}
+
 export const managedAgentSessionsScenario = {
   id: "managed-agent-sessions",
   async run({browser}) {
@@ -128,7 +205,10 @@ export const managedAgentSessionsScenario = {
         assert.equal((await control("inspect")).calls_after_setup.filter(row => row.method === "turn/start").length, 1);
         await page.unroute("**/api/chat/sessions?*managed_agent_id=*", ignoredSelector);
       }
-      return {coverageEntries: await context.close(), note: "Real SQLite/Core/Chat and synthetic native provider: exact managed Session discovery, original-thread continuation once, scope-specific drafts and refresh, no-model browsing and revocation; ordinary history stays separate."};
+      const errorsBeforeObservation = context.errors.length;
+      await verifyManagedTurnObservers({page, origin, sessions, panel, chooser, composer, control});
+      assert.deepEqual(context.errors.slice(errorsBeforeObservation), [], "Turn observation adds no browser errors after source recovery");
+      return {coverageEntries: await context.close(), note: "Real SQLite/Core/Chat and synthetic native provider: exact managed Session discovery, original-thread continuation, scope-specific drafts and refresh, no-model browsing and revocation; one live observer and pending reply across real history polling, external-Turn recovery and exact interruption."};
     } finally {
       await context?.close().catch(() => {});
       child.stdin.end("stop\n");

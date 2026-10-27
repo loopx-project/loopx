@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AGENT_CONTEXT_PHASES, projectAgentContext, type AgentContextProvider } from "../../loopx/control_plane/agent_context.ts";
-import { evaluateSubagentContext } from "../../loopx/control_plane/subagent_context.ts";
+import { readFileSync } from "node:fs";
+import { evaluateGoalAgentContext } from "../../loopx/control_plane/goal_agent_context.ts";
+import { evaluateSubagentContext, projectDelegationContext } from "../../loopx/control_plane/subagent_context.ts";
 
 const scope = { goal_id: "goal-a", agent_id: "parent", todo_id: "todo-a" };
 const policy = { mode: "multi_subagent", spawn_allowed: true, max_children: 2,
@@ -326,4 +328,264 @@ test("host receipt provenance survives projection without raw child content", ()
     assert.equal(facts.native_child_activity.parent_accepted_count, 1);
     assert.ok(!JSON.stringify(packet).includes("private child result"));
   }
+});
+
+// --- Delegation facts projection (the TypeScript owner of loopx_delegation_context_v0) ---
+
+const fixture = JSON.parse(readFileSync(new URL("./fixtures/goal_agent_context_delegation.json", import.meta.url), "utf8"));
+const observedAt = "2026-09-19T04:20:00+00:00";
+const genericExecutor = { schema_version: "managed_executor_binding_v0", executor: "generic-cli", executor_kind: "generic",
+  credential_env: null, endpoint_env: null, execution_profile: null, operator_credential_bound: false,
+  available: null, unavailable_reason: null, unavailable_remediation: [], runtime_probe: null };
+const binding = (index: number, extra: Record<string, unknown> = {}) => ({
+  id: `binding-${index}`, agent_id: `worker-${index}`, todo_id: `todo_review000${index}`, requesters: ["coordinator"],
+  workspace: `/workspace/worker-${index}`, host_args: ["--host", "generic-cli"], timeout_seconds: 60,
+  output_refs: ["result.json"], ...extra,
+});
+const delegationFacts = (bindings: Record<string, unknown>[], extra: Record<string, unknown> = {}) => ({
+  config: { schema_version: "loopx_local_delegation_v0", bindings }, config_error: null,
+  registered_agent_ids: ["coordinator", ...bindings.map(row => row.agent_id)],
+  executors: [{ host_args: ["--host", "generic-cli"], executor: genericExecutor }],
+  operation_inventory: null, ...extra,
+});
+const project = (facts: unknown, phase = "before_plan", agentId = "coordinator") =>
+  projectDelegationContext(facts, agentId, phase, observedAt);
+const blocked = (phase = "before_plan") => ({
+  schema_version: "loopx_delegation_context_v0", configuration_state: "blocked", observed_at: observedAt,
+  authorized_count: 0, projected_count: 0, entrypoint: "loopx delegation", execution_scope: "bound_delegation",
+  preflight: "required", routes: [],
+  ...(phase === "after_delegate_result" ? { operation_receipts: { observed: 0 } } : {}),
+  reason_code: "delegation_context_unavailable",
+});
+
+test("delegation facts reproduce the pinned Python projection byte for byte, context_id included", (t) => {
+  for (const [name, scenario] of Object.entries<any>(fixture.scenarios)) {
+    t.mock.timers.enable({ apis: ["Date"], now: Date.parse(scenario.observed_at) });
+    const packet = evaluateGoalAgentContext({ phase: scenario.phase, scope: fixture.scope,
+      orchestration: scenario.orchestration, observations: {}, delegation_facts: scenario.delegation_facts });
+    assert.equal(JSON.stringify(packet), JSON.stringify(scenario.expected_context), name);
+    t.mock.timers.reset();
+  }
+});
+
+test("ready routes derive readiness once from the executor fact and join one probe per host argv", () => {
+  const managed = { ...genericExecutor, executor: "dsh", executor_kind: "managed", execution_profile: "model-a@high",
+    available: false, unavailable_reason: "dsh_runtime_unavailable",
+    unavailable_remediation: ["configure_dsh_runtime"], credential_env: "PRIVATE_CREDENTIAL",
+    runtime_probe: { schema_version: "managed_runtime_probe_v0", scope: "probing_interpreter", module: "dsh", available: false } };
+  const facts = delegationFacts([binding(0), binding(2, { host_args: ["--host", "dsh"] })], {
+    executors: [{ host_args: ["--host", "generic-cli"], executor: genericExecutor },
+      { host_args: ["--host", "dsh"], executor: managed },
+      { host_args: ["--host", "generic-cli"], executor: { ...genericExecutor, available: true } }],
+  });
+  const context = project(facts);
+  assert.equal(context.configuration_state, "ready");
+  assert.equal(context.authorized_count, 2);
+  assert.deepEqual(context.routes, [
+    { binding_id: "binding-0", agent_id: "worker-0", todo_id: "todo_review0000", runtime_id: "generic-cli",
+      readiness: "unknown", runtime_readiness: "unknown", executor_kind: "generic" },
+    { binding_id: "binding-2", agent_id: "worker-2", todo_id: "todo_review0002", runtime_id: "dsh",
+      readiness: "blocked", runtime_readiness: "blocked", executor_kind: "managed",
+      execution_profile: "model-a@high", reason_code: "dsh_runtime_unavailable", probe_scope: "probing_interpreter" },
+  ]);
+  assert.equal(context.operation_receipts, undefined);
+  assert.equal(context.routes_truncated, undefined);
+  assert.ok(!JSON.stringify(context).includes("PRIVATE_"));
+  assert.ok(!JSON.stringify(context).includes("/workspace/"));
+  const ready = project(delegationFacts([binding(0)], {
+    executors: [{ host_args: ["--host", "generic-cli"], executor: { ...genericExecutor, available: true } }] }));
+  assert.deepEqual([ready.routes[0].runtime_readiness, ready.routes[0].readiness], ["ready", "unknown"]);
+});
+
+test("runtime availability does not admit uninspected delegation or expose host configuration", () => {
+  const projectPath = "/fixture/project";
+  const hostArgs = ["--host", "dsh", "--project", projectPath];
+  const facts = delegationFacts([binding(0, { workspace: `${projectPath}/worker`, host_args: hostArgs,
+    output_refs: ["result.json"] })], {
+    executors: [{ host_args: hostArgs, executor: { ...genericExecutor, executor: "managed-runtime",
+      executor_kind: "managed", execution_profile: "model-a@high", available: true,
+      credential_env: "PRIVATE_CREDENTIAL", endpoint_env: "PRIVATE_ENDPOINT" } }],
+  });
+  const context = project(facts);
+  assert.equal(context.configuration_state, "ready");
+  assert.equal(context.preflight, "required");
+  assert.equal(context.execution_scope, "bound_delegation");
+  assert.equal(context.authorized_count, 1);
+  assert.equal(context.projected_count, 1);
+  assert.equal(context.operation_receipts, undefined);
+  assert.deepEqual(context.routes, [{ binding_id: "binding-0", agent_id: "worker-0", todo_id: "todo_review0000",
+    runtime_id: "managed-runtime", readiness: "unknown", runtime_readiness: "ready",
+    executor_kind: "managed", execution_profile: "model-a@high" }]);
+  const packet = evaluateGoalAgentContext({ phase: "before_plan", scope: { ...scope, agent_id: "coordinator" },
+    orchestration: policy, delegation_facts: facts })!;
+  assert.deepEqual(packet.failures, []);
+  assert.equal((packet.contributions as any[])[0].facts.delegation_context.projected_count, 1);
+  const encoded = JSON.stringify(packet);
+  for (const privateValue of ["host_args", "output_refs", projectPath, "/workspace/", "PRIVATE_"]) {
+    assert.ok(!encoded.includes(privateValue), privateValue);
+  }
+});
+
+for (const runnerConfigured of [false, true]) {
+  test(`planning retains original probe scope without admission (runner_configured=${runnerConfigured})`, () => {
+    // managed_executor_binding("dsh", environ={}, module_probe=False) with each runner state.
+    const executor = {
+      schema_version: "managed_executor_binding_v0", executor: "dsh", executor_kind: "managed",
+      credential_env: "PRIVATE_CREDENTIAL", endpoint_env: "PRIVATE_ENDPOINT",
+      execution_profile: "deepseek-flash@high",
+      output_token_budget: { schema_version: "dsh_output_token_budget_v0", scope: "per_model_request",
+        max_tokens: 16384, valid: true, source: "product_default",
+        final_response_reserve_supported: false, hard_tool_budget_supported: false },
+      operator_credential_bound: runnerConfigured, available: runnerConfigured,
+      unavailable_reason: runnerConfigured ? null : "dsh_runtime_unavailable",
+      unavailable_remediation: runnerConfigured ? [] : ["configure_dsh_runtime", "select_individual_host"],
+      runtime_probe: { schema_version: "managed_runtime_probe_v0",
+        scope: runnerConfigured ? "configured_runner" : "probing_interpreter",
+        module: runnerConfigured ? null : "deepseek_harness", available: runnerConfigured },
+    };
+    const facts = delegationFacts([binding(0, { host_args: ["--host", "dsh"] })], {
+      executors: [{ host_args: ["--host", "dsh"], executor }],
+    });
+    const context = project(facts);
+    const route = context.routes[0];
+    assert.equal(route.probe_scope, executor.runtime_probe.scope);
+    assert.equal(route.runtime_readiness, runnerConfigured ? "ready" : "blocked");
+    assert.equal(route.readiness, runnerConfigured ? "unknown" : "blocked");
+    assert.equal(route.reason_code, executor.unavailable_reason ?? undefined);
+    assert.equal(context.preflight, "required");
+    assert.equal(context.operation_receipts, undefined);
+    // Detailed probes and remediation stay in host facts; planning retains their scope and verdict.
+    assert.equal(route.runtime_probe, undefined);
+    assert.equal(route.unavailable_remediation, undefined);
+    const packet = evaluateGoalAgentContext({ phase: "before_plan", scope: { ...scope, agent_id: "coordinator" },
+      orchestration: policy, delegation_facts: facts })!;
+    assert.deepEqual(packet.failures, []);
+    const projected = (packet.contributions as any[])[0].facts.delegation_context;
+    assert.equal(projected.routes[0].probe_scope, executor.runtime_probe.scope);
+    assert.equal(projected.routes[0].readiness, runnerConfigured ? "unknown" : "blocked");
+    assert.equal(projected.preflight, "required");
+    assert.ok(!JSON.stringify(packet).includes("PRIVATE_"));
+  });
+}
+
+test("requester-scoped directory ignores other requesters and blocks on unregistered or ungranted bindings", () => {
+  const foreign = binding(9, { id: "foreign", requesters: ["someone-else"] });
+  const scoped = project(delegationFacts([binding(0), foreign]));
+  assert.equal(scoped.authorized_count, 1);
+  assert.deepEqual(scoped.routes.map((route: any) => route.binding_id), ["binding-0"]);
+  for (const facts of [
+    delegationFacts([binding(0)], { registered_agent_ids: ["coordinator"] }),
+    delegationFacts([binding(0)], { registered_agent_ids: ["worker-0"] }),
+    delegationFacts([binding(0)], { registered_agent_ids: null }),
+    delegationFacts([binding(0, { agent_id: "coordinator" })]),
+    delegationFacts([binding(0, { workspace: "relative/worker" })]),
+    delegationFacts([binding(0, { host_args: [] })]),
+    delegationFacts([binding(0), binding(0)]),
+  ]) assert.deepEqual(project(facts), blocked());
+  assert.equal(project(delegationFacts([binding(0)]), "before_plan", "worker-0").authorized_count, 0);
+});
+
+test("malformed or unreadable facts degrade to a blocked observation instead of a handler failure", () => {
+  for (const facts of [
+    null, "facts", [], {}, { config: null, config_error: "unavailable" },
+    delegationFacts([binding(0)], { config_error: "unavailable" }),
+    { ...delegationFacts([binding(0)]), config: { schema_version: "loopx_local_delegation_v0" } },
+    { ...delegationFacts([binding(0)]), config: ["binding"] },
+    delegationFacts([binding(0)], { executors: [] }),
+    delegationFacts([binding(0)], { executors: [{ host_args: ["--host", "other"], executor: genericExecutor }] }),
+    delegationFacts([binding(0)], { executors: [{ host_args: ["--host", "generic-cli"],
+      executor: { ...genericExecutor, runtime_probe: { schema_version: "other" } } }] }),
+    delegationFacts(["binding"]),
+  ]) assert.deepEqual(project(facts), blocked());
+  assert.deepEqual(project(delegationFacts([binding(0)], { config_error: "unavailable" }), "after_delegate_result"),
+    blocked("after_delegate_result"));
+  const packet = evaluateGoalAgentContext({ phase: "before_plan", scope, orchestration: policy,
+    delegation_facts: "garbage" })!;
+  assert.deepEqual(packet.failures, []);
+  assert.equal((packet.contributions as any[])[0].facts.delegation_context.configuration_state, "blocked");
+});
+
+test("operation receipts are summarized only in the result phase with the Python key order", () => {
+  const inventory = { items: [
+    { status: "running" }, { status: "rejected", recovery_required: true }, { status: "accepted" },
+    { status: "accepted", recovery_required: false }, { status: "" }, { status: "exotic" }, "not a record",
+  ], has_more: true };
+  const after = project(delegationFacts([binding(0)], { operation_inventory: inventory }), "after_delegate_result");
+  assert.deepEqual(after.operation_receipts, { observed: 7, running: 1, accepted: 2, rejected: 1, unavailable: 1,
+    recovery_required: 1, has_more: true });
+  assert.deepEqual(Object.keys(after), ["schema_version", "configuration_state", "observed_at", "authorized_count",
+    "projected_count", "entrypoint", "execution_scope", "preflight", "routes", "operation_receipts"]);
+  const before = project(delegationFacts([binding(0)], { operation_inventory: inventory }));
+  assert.equal(before.operation_receipts, undefined);
+  assert.deepEqual(project(delegationFacts([binding(0)]), "after_delegate_result"), blocked("after_delegate_result"));
+  assert.deepEqual(project(delegationFacts([binding(0)], { operation_inventory: { items: [], has_more: false } }),
+    "after_delegate_result").operation_receipts, { observed: 0 });
+  const packet = evaluateGoalAgentContext({ phase: "after_delegate_result",
+    scope: { ...scope, agent_id: "coordinator" }, orchestration: policy,
+    delegation_facts: delegationFacts([binding(0)], { operation_inventory: inventory }) })!;
+  const facts = (packet.contributions as any[])[0].facts;
+  assert.equal(facts.delegation_context, undefined);
+  assert.deepEqual(facts.delegation_receipts, { configuration_state: "ready", observed_at: facts.delegation_receipts.observed_at,
+    operation_receipts: after.operation_receipts });
+});
+
+test("routes stay within the six-route and 900-byte budgets with truncation marked", () => {
+  const bindings = Array.from({ length: 8 }, (_, index) => binding(index));
+  const context = project(delegationFacts(bindings));
+  assert.equal(context.authorized_count, 8);
+  assert.ok(Number(context.projected_count) >= 1 && Number(context.projected_count) <= 6);
+  assert.equal((context.routes as any[]).length, context.projected_count);
+  assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 900);
+  assert.equal(context.routes_truncated, true);
+  assert.equal(Buffer.byteLength(JSON.stringify(project(delegationFacts(bindings.slice(0, 2))))) <= 900, true);
+  assert.equal(project(delegationFacts(bindings.slice(0, 2))).routes_truncated, undefined);
+  const dropped = project(delegationFacts([binding(0, { id: "bad route with spaces" }), binding(1)]));
+  assert.deepEqual([dropped.authorized_count, dropped.projected_count, dropped.routes_truncated], [2, 1, true]);
+});
+
+test("a signed planning observation replayed by the host wins over fresh facts", () => {
+  const signed = { schema_version: "loopx_delegation_context_v0", configuration_state: "ready", observed_at: observedAt,
+    authorized_count: 1, projected_count: 1, routes: [{ binding_id: "signed", agent_id: "reviewer", todo_id: "todo-review",
+      runtime_id: "generic-cli", readiness: "unknown" }] };
+  const packet = evaluateGoalAgentContext({ phase: "before_delegate", scope, orchestration: policy,
+    observations: { delegation_context: signed }, delegation_facts: delegationFacts([binding(0)]) })!;
+  const context = (packet.contributions as any[])[0].facts.delegation_context;
+  assert.deepEqual(context.routes, [{ binding_id: "signed", agent_id: "reviewer", todo_id: "todo-review",
+    runtime_id: "generic-cli", readiness: "unknown", runtime_readiness: "unknown" }]);
+  const none = evaluateGoalAgentContext({ phase: "before_plan", scope, orchestration: policy, delegation_facts: null })!;
+  assert.equal((none.contributions as any[])[0].facts.delegation_context, undefined);
+});
+
+test("replayed routes keep the exact legacy field semantics of the signed observation", () => {
+  const replay = (route: Record<string, unknown>) => {
+    const packet = evaluateGoalAgentContext({ phase: "before_delegate", scope, orchestration: policy,
+      observations: { delegation_context: { schema_version: "loopx_delegation_context_v0", configuration_state: "ready",
+        observed_at: observedAt, authorized_count: 1, projected_count: 1, routes: [route] } } })!;
+    return (packet.contributions as any[])[0].facts.delegation_context;
+  };
+  const base = { binding_id: "signed", agent_id: "reviewer", todo_id: "todo-review" };
+  // No executor_kind: the key stays absent; it is never defaulted on replay.
+  assert.deepEqual(replay({ ...base, runtime_id: "generic-cli", readiness: "unknown" }).routes[0],
+    { ...base, runtime_id: "generic-cli", readiness: "unknown", runtime_readiness: "unknown" });
+  // A missing runtime_id drops the route and marks truncation, as before.
+  const dropped = replay({ ...base, readiness: "unknown" });
+  assert.deepEqual([dropped.authorized_count, dropped.projected_count, dropped.routes, dropped.routes_truncated],
+    [1, 0, [], true]);
+  // readiness is authoritative on replay; runtime_readiness never rewrites it.
+  for (const [readiness, runtimeReadiness] of [["blocked", "ready"], ["unknown", "blocked"]] as const) {
+    assert.deepEqual(replay({ ...base, runtime_id: "dsh", executor_kind: "managed",
+      readiness, runtime_readiness: runtimeReadiness }).routes[0],
+      { ...base, runtime_id: "dsh", readiness, runtime_readiness: runtimeReadiness, executor_kind: "managed" });
+  }
+});
+
+test("registration is checked even when the requester has zero binding rows", () => {
+  // Unregistered requester, zero rows: blocked (the old service init raised).
+  assert.deepEqual(project(delegationFacts([], { registered_agent_ids: ["worker-0"] })), blocked());
+  // Missing registry (null list), zero rows: ready/0; any row: blocked.
+  const empty = project(delegationFacts([], { registered_agent_ids: null }));
+  assert.equal(empty.configuration_state, "ready");
+  assert.deepEqual([empty.authorized_count, empty.projected_count, empty.routes, empty.routes_truncated],
+    [0, 0, [], undefined]);
+  assert.deepEqual(project(delegationFacts([binding(0)], { registered_agent_ids: null })), blocked());
 });

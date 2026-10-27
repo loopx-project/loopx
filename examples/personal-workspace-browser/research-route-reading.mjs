@@ -100,6 +100,16 @@ export const researchRouteReadingScenario = {
         await page.reload({waitUntil: "domcontentloaded"});
         await caption.first().waitFor();
         assert.equal(await caption.count(), 3, "Every recorded route remains in the whole history");
+        const legend = history.locator(".research-phase-legend");
+        assert((await legend.innerText()).includes(language === "zh-CN" ? "暂定结论" : "Tentative"));
+        const findingHelp = legend.getByRole("button", {name: language === "zh-CN" ? "结论状态说明" : "About finding states", exact: true});
+        await findingHelp.focus();
+        const explanation = page.locator(".context-help-popover:popover-open");
+        await explanation.waitFor();
+        assert((await explanation.innerText()).includes(language === "zh-CN" ? "不表示有检查任务排队" : "does not mean a check is queued"));
+        await page.keyboard.press("Escape");
+        assert.equal(await explanation.count(), 0);
+        assert(await findingHelp.evaluate(element => element === document.activeElement), "Closing state help retains keyboard context");
         const titleLayout = await caption.first().locator("strong").first().evaluate(element => ({height: element.clientHeight, lineHeight: parseFloat(getComputedStyle(element).lineHeight), fontSize: parseFloat(getComputedStyle(element).fontSize)}));
         assert(titleLayout.height >= titleLayout.lineHeight * 1.9 && titleLayout.fontSize >= 16, "Long captions wrap into readable list entries");
         if (language === "zh-CN" && width !== 768) {
