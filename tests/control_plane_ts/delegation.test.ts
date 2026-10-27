@@ -221,6 +221,32 @@ test("message receipt and model return do not imply accepted work", () => {
   assert.equal(accepted.status, "accepted");
 });
 
+test("only an unstarted native lane refusal keeps delegation queued", () => {
+  const effects = {host_invoked: false, state_written: false, quota_spent: false,
+    scheduler_acknowledged: false};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    dry_run: false, replayed: false, status: "unavailable", reason: "turn_lane_in_flight",
+    result_kind: null, quota_slot_spend_count: 0, host: {executable: "not_invoked"}, effects};
+  const input = {from: "running", to: "turn_returned", unstarted_turn: true, turn_execution: result};
+  assert.deepEqual(transitionDelegationObservation(input), {status: "prepared"});
+  // Existing callers and already journaled operations keep their old lifecycle.
+  for (const unstarted_turn of [undefined, false, null, "true"])
+    assert.deepEqual(transitionDelegationObservation({...input, unstarted_turn}), {status: "turn_returned"});
+  assert.deepEqual(transitionDelegationObservation({from: "running", to: "turn_returned"}),
+    {status: "turn_returned"});
+  for (const patch of [
+    {schema_version: "other"}, {mode: "preview"}, {ok: true}, {dry_run: true}, {replayed: true},
+    {status: "committed"}, {reason: "runtime_unavailable"}, {result_kind: "host_failure"},
+    {quota_slot_spend_count: 1}, {host: {executable: "started"}}, {effects: null},
+    ...Object.keys(effects).flatMap(key => [true, null, undefined, "false"]
+      .map(value => ({effects: {...effects, [key]: value}}))),
+    {effects: {...effects, unknown_effect: true}},
+  ]) assert.deepEqual(transitionDelegationObservation({...input, turn_execution: {...result, ...patch}}),
+    {status: "turn_returned"});
+  assert.throws(() => transitionDelegationObservation({...input, from: "rejected"}), /transition/);
+  assert.throws(() => transitionDelegationObservation({...input, to: "prepared"}), /transition/);
+});
+
 test("only a conversation-origin accepted result leaves a wake intent for the exact requester", () => {
   // An ordinary CLI/MCP delegation has no conversation. It must keep the
   // transition it always had: no intent, no wake state, no widened readback.

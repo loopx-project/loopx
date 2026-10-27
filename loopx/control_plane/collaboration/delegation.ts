@@ -521,6 +521,23 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   const from = params.from as Observation, to = params.to as Observation;
   requireThat(Object.hasOwn(transitions, from) && Object.hasOwn(transitions, to), "invalid delegation observation");
   requireThat(from === to || transitions[from].includes(to), "invalid delegation observation transition");
+  // Losing the native lane race before this operation has a Turn is queued
+  // work, not a failed execution. Only the native effect-free refusal permits
+  // returning to prepared; a partial/resumed/unknown Turn keeps normal recovery.
+  if (from === "running" && to === "turn_returned" && params.unstarted_turn === true
+      && params.turn_execution !== undefined) {
+    const result = requireJsonObject(params.turn_execution, "native Turn execution");
+    const effects = result.effects as JsonObject | undefined;
+    const host = result.host as JsonObject | undefined;
+    if (result.schema_version === "loopx_turn_execution_v0" && result.mode === "run_once"
+        && result.ok === false && result.dry_run === false && result.replayed === false
+        && result.status === "unavailable" && result.reason === "turn_lane_in_flight"
+        && result.result_kind === null && result.quota_slot_spend_count === 0
+        && host?.executable === "not_invoked" && effects !== undefined && effects !== null
+        && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"]
+          .every(key => effects[key] === false)
+        && Object.values(effects).every(value => value === false)) return {status: "prepared"};
+  }
   if (to === "accepted") requireThat(params.canonical_done === true
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");

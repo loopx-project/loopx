@@ -173,7 +173,14 @@ worker. Once those observations recover, replay can rejoin that same operation
 under fresh source authority and the existing prepared-source startup fence.
 An operation that has already advanced is read back without probing its Todo
 for a new launch. The preflight remains a point-in-time observation; the native
-start fence still owns a later race. This adds no automatic retry or wake pump.
+start fence still owns a later race. For task-bound CLI, MCP and Chat workers,
+if that fence refuses an operation with no prior Turn journal, the typed
+observation owner keeps it `prepared` only for the
+native `turn_lane_in_flight` result proving no Host invocation, state write,
+quota spend or scheduler ACK. Readback retains that reason; a later authorized
+retry uses the same request, operation and lease identity. A journaled,
+effectful or uncertain result follows existing recovery and cannot be rewound.
+This adds no automatic retry or wake pump.
 
 中文：Chat 发起的执行保留原 Inbox 请求、固定的对话来源和原 operation。worker 在
 入口、Host 启动前和完成结算前重新核对当前发送者、接收者及精确
@@ -197,7 +204,12 @@ prepared operation 可在恢复的当前 grant 下续接原 owner，终态 opera
 任务准入拒绝、运行时不可用或当前验收依据缺失时，原 operation 保持 `prepared`，
 返回其身份和预检原因，不提交 worker。观察恢复后，在新鲜来源授权和既有
 prepared-source 启动条件下续接同一 operation；已推进的 operation 直接读回，
-不按新启动重查其 Todo。预检仍只是当时观察，之后的竞争由原生启动 fence 拒绝；
+不按新启动重查其 Todo。预检仍只是当时观察，之后的竞争由原生启动 fence 拒绝。
+对精确任务绑定的 CLI、MCP 和 Chat worker，原 operation 尚无 Turn journal，
+且原生 `turn_lane_in_flight` 结果明确证明未调用
+Host、未写 Turn 状态、未扣额度、未 ACK scheduler 时，类型化观察 owner 将其保留为
+`prepared` 并读回原原因；之后获授权的重试沿用原请求、operation 和租约身份。
+已有 journal、已有副作用或结果未知均沿原恢复流程，不回退执行状态。
 本改动不新增自动重试或唤醒循环。
 
 Member completion uses the ordinary active-Goal continuation, including legacy

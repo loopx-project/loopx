@@ -7,6 +7,7 @@ identify a newly selected binding, substitute a brief or redirect the return.
 import copy
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -15,8 +16,9 @@ from loopx.control_plane.collaboration.inbox import _read
 from loopx.control_plane.collaboration.peers import request as peer_request
 from loopx.control_plane.collaboration.source_grant_observation import read_delegation_source_execution
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_singleflight
+from test_independent_delegation_validation import independent_binding
 from test_delegation_source_authority import saved_handoff  # noqa: F401
-from test_local_delegation import demo, service as delegation_service  # noqa: F401
+from test_local_delegation import brief, demo, service as delegation_service  # noqa: F401
 
 
 def durable_bytes(root):
@@ -102,6 +104,150 @@ def test_chat_handoff_replay_reports_an_original_return_mismatch(saved_handoff):
     assert "status" not in response["context_execution"]
     assert response["message"].startswith(answer + "\n\n")
     assert worker.path(operation).read_bytes() == before
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
+
+
+@pytest.mark.parametrize("hard_lease", [False, True])
+def test_busy_lane_after_dispatch_keeps_the_original_operation_retryable(saved_handoff, monkeypatch, hard_lease):  # noqa: F811
+    root, worker, binding, (store, session, turn, request, receipt, _), operation = saved_handoff
+    if hard_lease:
+        # Configure only this newly created disposable authority. The active
+        # Goal's policy migration/fence and execution grants are never changed.
+        program = '''
+import {openLocalAuthorityStore} from "./loopx/control_plane/coordination/local_authority_provider.ts";
+const [root,goal] = process.argv.slice(1);
+const store = await openLocalAuthorityStore(root,goal);
+const state = await store.loadAuthority();
+const result = await store.commitAuthority({expected_provider_revision:state.provider_revision,
+ operation_id:"fixture-lane-race",events:[],receipts:[],
+ next_projection:{...state.head,handoff_mode:"hard_lease"}});
+if(result.status!=="applied") throw new Error(JSON.stringify(result));
+'''
+        subprocess.run(["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types",
+            "--input-type=module", "-e", program, str(worker.root), worker.goal_id],
+            capture_output=True, text=True, timeout=30, check=True)
+    original = _read(worker.path(operation))
+    tasks = demo.canonical_tasks(root)
+    # Dispatch already observed an idle lane and persisted the operation. The
+    # actual native Turn now loses its single-flight race, before any Host work.
+    with turn_lane_singleflight(runtime_root=worker.root, goal_id=worker.goal_id,
+            plan={"turn_envelope": {"agent_id": binding["agent_id"]}}) as holder:
+        assert holder is not None
+        held = holder.read_bytes()
+        queued_leases = []
+        for _ in range(2):
+            worker.execute(operation, prepared_source_request_id=receipt["request_id"])
+            observed = _read(worker.path(operation))
+            assert observed["status"] == "prepared"
+            if hard_lease:
+                queued_leases.append(observed["task_lease"]["lease"])
+        queued = _read(worker.path(operation))
+        assert queued["status"] == "prepared", queued
+        assert queued["turn_result"]["reason"] == "turn_lane_in_flight"
+        assert queued["identity"] == original["identity"]
+        assert queued["conversation"] == original["conversation"]
+        assert "turn_key" not in queued
+        assert holder.read_bytes() == held
+        if hard_lease:
+            lease = queued["task_lease"]["lease"]
+            assert queued_leases[0] == queued_leases[1]
+            assert lease["status"] == "active"
+            assert lease["owner"] == binding["agent_id"]
+            assert lease["idempotency_key"] == worker._turn_instance_id(queued)
+        else:
+            assert demo.canonical_tasks(root) == tasks
+        assert not list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+        assert not (Path(binding["workspace"]) / "host-invocations").exists()
+        assert not (Path(binding["workspace"]) / "DELEGATION.json").exists()
+    submitted = []
+    monkeypatch.setattr(execution.Delegations, "_spawn",
+        lambda _self, operation_id, **kwargs: submitted.append((operation_id, kwargs)))
+    resumed = execution.dispatch(worker.root, worker.registry, session=session, turn=turn,
+        request=request, receipt=receipt, execution_allowed=lambda: True)
+    assert resumed["submitted"] and resumed["operation_id"] == operation
+    assert submitted == [(operation, {"prepared_source_request_id": receipt["request_id"]})]
+    host = root / "fixture-host.py"
+    host.write_text(host.read_text().replace("print(json.dumps(build_result", """
+from loopx.capabilities.manager_context.roundtrip import report
+source_id = delegation['source_request_id']
+acknowledge(root / 'runtime', envelope['goal_id'], actor, source_id, 'adopt', 'Read original request')
+report(root / 'runtime', envelope['goal_id'], actor, source_id, 'conclusion', 'Original request handled')
+print(json.dumps(build_result"""))
+    worker.execute(operation, prepared_source_request_id=receipt["request_id"])
+    assert worker.read(operation)["status"] == "accepted"
+    completed = _read(worker.path(operation))
+    journals = list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+    assert len(journals) == 1
+    journal = json.loads(journals[0].read_text())
+    assert journal["completed_phases"].count("quota_spend") == 1
+    if hard_lease:
+        proof = worker._cli(binding, "task-lease", "inspect", "--goal-id", worker.goal_id,
+            "--todo-id", binding["todo_id"])["lease"]
+        assert proof["status"] == "released"
+        assert proof["idempotency_key"] == lease["idempotency_key"]
+        assert proof["lease_epoch"] == lease["lease_epoch"]
+    worker.execute(operation, prepared_source_request_id=receipt["request_id"])
+    assert _read(worker.path(operation)) == completed
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+        response={"context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    from loopx.capabilities.manager_context.roundtrip import drain
+    sends = []
+
+    def transport(route, *_args, **_kwargs):
+        sends.append(route["session_id"])
+        return {"message_id": "fixture-return", "reply_verified": True}
+
+    drain(worker.root, worker.registry, store, transport)
+    drain(worker.root, worker.registry, store, transport)
+    assert sends == [session["session_id"]]
+
+
+def test_native_cli_worker_keeps_a_late_busy_request_without_chat_source(delegation_service, monkeypatch):  # noqa: F811
+    root, worker = delegation_service
+    independent_binding(delegation_service)
+    monkeypatch.setattr(worker, "_spawn", lambda _: None)
+    operation = "cli-lane-race"
+    worker.start("analysis", operation, brief())
+    original = _read(worker.path(operation))
+    binding = worker.binding("analysis")
+    assert "source_request_id" not in original["identity"]
+    with turn_lane_singleflight(runtime_root=worker.root, goal_id=worker.goal_id,
+            plan={"turn_envelope": {"agent_id": binding["agent_id"]}}):
+        worker.execute(operation)
+        queued = worker.read(operation)
+        assert queued["status"] == "prepared"
+        assert queued["error"] == "turn_lane_in_flight"
+        assert not (Path(binding["workspace"]) / "host-invocations").exists()
+    assert worker.resume(operation)["operation_id"] == operation
+    worker.execute(operation)
+    assert worker.read(operation)["status"] == "accepted"
+    worker.execute(operation)
+    assert _read(worker.path(operation))["identity"] == original["identity"]
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+
+
+def test_unrelated_large_native_result_does_not_expand_the_observation(saved_handoff, monkeypatch):  # noqa: F811
+    _, worker, binding, (_, _, _, _, receipt, _), operation = saved_handoff
+    native = worker._cli
+
+    def result_with_auxiliary_details(*args, **kwargs):
+        result = native(*args, **kwargs)
+        if args[1:3] == ("turn", "run-once"):
+            # A later native result may carry large evidence/settlement detail;
+            # it is not input to delegation's status rule or another RPC grant.
+            result["auxiliary_detail"] = "x" * (3 * 1024 * 1024)
+            result["host"]["auxiliary_detail"] = "y" * (3 * 1024 * 1024)
+        return result
+
+    monkeypatch.setattr(worker, "_cli", result_with_auxiliary_details)
+    with turn_lane_singleflight(runtime_root=worker.root, goal_id=worker.goal_id,
+            plan={"turn_envelope": {"agent_id": binding["agent_id"]}}):
+        worker.execute(operation, prepared_source_request_id=receipt["request_id"])
+    queued = worker.read(operation)
+    assert queued["status"] == "prepared", queued
+    assert queued["error"] == "turn_lane_in_flight"
     assert not (Path(binding["workspace"]) / "host-invocations").exists()
 
 
