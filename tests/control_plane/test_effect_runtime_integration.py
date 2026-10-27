@@ -33,8 +33,9 @@ _TODO_ID = "todo_fixture0001"
 
 
 @pytest.mark.parametrize("replacement", [False, True])
+@pytest.mark.parametrize("owns_group", [True, False] if os.name == "posix" else [False])
 def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
-    tmp_path, monkeypatch, replacement,
+    tmp_path, monkeypatch, replacement, owns_group,
 ):
     locator = tmp_path / "runtime.json"
     if replacement:
@@ -42,7 +43,7 @@ def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
     monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *a, **kw: {})
     with subprocess.Popen(
         [sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(60)"],
-        stdout=subprocess.PIPE, text=True, start_new_session=os.name == "posix",
+        stdout=subprocess.PIPE, text=True, start_new_session=owns_group,
     ) as process:
         try:
             assert process.stdout.readline().strip() == "ready"
@@ -67,6 +68,50 @@ def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
             if process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux thread-group leader exit")
+def test_fixture_shutdown_waits_for_writer_after_thread_group_leader_exits(tmp_path, monkeypatch):
+    witness = tmp_path / "written-after-stop"
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *a, **kw: {})
+    source = """
+import ctypes, os, pathlib, sys, threading
+def write_after_release():
+    print('ready', flush=True)
+    sys.stdin.readline()
+    pathlib.Path(sys.argv[1]).write_text('worker can still write')
+    os._exit(0)
+threading.Thread(target=write_after_release).start()
+ctypes.CDLL(None).pthread_exit(None)
+"""
+    with subprocess.Popen(
+        [sys.executable, "-c", source, str(witness)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True,
+    ) as process:
+        try:
+            assert process.stdout.readline().strip() == "ready"
+            state = Path(f"/proc/{process.pid}/stat")
+            deadline = time.monotonic() + 5
+            while state.read_text().rsplit(")", 1)[1].split()[0] != "Z":
+                assert time.monotonic() < deadline, "thread-group leader did not exit"
+                time.sleep(.01)
+            info = {"pid": process.pid, "token": "original"}
+            stopped = effect_runtime._stop_effect_runtime(
+                tmp_path / "retired-locator", info, timeout=.1, wait_for_process_exit=True,
+            )
+            assert stopped["status"] == "shutdown_pending"
+            assert effect_runtime._pid_is_alive(process.pid)
+            process.stdin.write("release\n")
+            process.stdin.flush()
+            process.wait(timeout=5)
+            assert witness.read_text() == "worker can still write"
+            assert effect_runtime._stop_effect_runtime(
+                tmp_path / "retired-locator", info, timeout=.1, wait_for_process_exit=True,
+            )["status"] == "stopped"
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
 
 
 def _effect_id(label: str) -> str:

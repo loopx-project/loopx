@@ -431,6 +431,18 @@ it differs from the live server before dispatching expensive work. Stop only
 that isolated runtime after its requests settle, retaining the same temporary
 environment for shutdown; never restart a live server as test cleanup.
 
+For namespace disposal, call `restart_effect_runtime(wait_for_exit=True)` and
+require `stopped` before removing files. A closed listener or a zombie process
+group leader does not prove that all runtime threads have exited. A PID that is
+still present returns `shutdown_pending`; retain the namespace and retry after
+the process exits and its parent reaps it. The ordinary restart action still
+uses serving-locator retirement.
+
+删除隔离目录前，调用 `restart_effect_runtime(wait_for_exit=True)` 并确认返回
+`stopped`。端口关闭或进程组长成为僵尸进程，都不能证明其他线程已经退出。
+PID 仍存在时返回 `shutdown_pending`；保留目录，等进程退出并由父进程回收后再试。
+普通重启操作仍按服务 locator 的退役状态判断。
+
 Automatic test cleanup must verify namespace ownership as well as PID/token
 identity. An ordinary copy of a valid locator inside a test directory is not
 permission to stop its original server. The private authenticated `runtime.ping`
