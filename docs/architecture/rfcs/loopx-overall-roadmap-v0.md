@@ -1459,6 +1459,11 @@ revalidation. Ordinary direction preserves independent Agent lanes; original
 no-followup still requires the whole Goal. Supplementary direction includes
 registered primary Goal documents under the same registry fence. Chat treats
 unavailable observations as read failures with read-only recovery, not pending settlement.
+The source candidate retains classified direction stops and permits explicit
+original-Turn reentry under current launch gates; unknown historical stop
+records stay held. Receipt-bound replanning keeps its semantic ACK behind the
+fresh direction, and settled selected planning obligations are excluded from later work
+inference while ordinary progress retains original-Turn recovery. These are recovery mechanics, not evidence of new model utility.
 Ordinary terminal completion uses the existing same-Turn upgrade after checkpoint
 and spend. Historical result-only, explicit first-delivery and supplement Turns
 retain their persisted contract. Complete changed-frontier recovery, packaged

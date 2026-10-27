@@ -2353,3 +2353,39 @@ need no new setting or editor. Read back with `loopx status --goal-id <id>` and
 机器执行的 replan 条件。尚未到期且在到期时仍有效的关联监控继续抑制提前重规划。
 这不替代其他 frontier 的语义验收、版本检查或权限。前端与 Lark 继续使用原有
 返回结构；可用上面的 status/quota 命令核对。
+
+### Direction stops and explicit original-Turn recovery
+
+A direction Host's `wait`, `user_action_required` or `iteration_failed` retains
+the result and records its existing result kind and attempt in `direction_stops`.
+Read-only `checkpoint-context` preserves this history and the stopped marker.
+Explicit `--resume-turn-key` together with `--retry-failed-turn` may retry the
+unfinished direction; it cannot replace the original result, validator, Host
+session or settlement identity. Current activation, permission and quota are
+checked again at Host launch. Retry counters and Host failure budgets are never
+reset. A recorded Host `stop_reason`, malformed/unknown stop history, and an
+uncertain commit remain held. An older boolean-only stopped receipt supplies no
+stop-classification evidence and is not silently rearmed.
+
+For a receipt-bound semantic replan, the default post-result checkpoint may
+retain the result before the current Agent has authored its direction. Its
+pending checkpoint is neither an accepted semantic delta nor permission to
+spend. The original obligation is qualified on the fresh supplement; completion
+validation still belongs to the later Todo completion. A settled Turn for a selected
+planning obligation cannot compete with its later work admission. Ordinary
+progress and completed Todos retain their original-Turn recovery paths.
+
+### 中文：方向停止与原 Turn 显式恢复
+
+方向 Host 返回 `wait`、`user_action_required` 或 `iteration_failed` 后，保留成果，
+在 `direction_stops` 中记录既有结果种类与尝试次数。只读重读会保留停止标记和历史。
+`--resume-turn-key` 与 `--retry-failed-turn` 同时使用时，只能重试尚未完成的方向；
+原成果、validator、Host session 和结算身份保持原绑定。实际派发时重新检查当前
+激活状态、权限和额度，不能重置尝试次数或 Host 失败预算。真实 `stop_reason`、
+格式未知的停止历史与提交结果不确定继续阻断。旧版仅含停止布尔值的回执没有
+停止分类证据，不能被静默重新激活。
+
+回执已绑定的语义重规划可以先暂存结果，再由当前 Agent 读取结果后判断方向。
+待补的 checkpoint 不等于语义 delta 已接受，也不允许提前扣额；新补充判断仍须
+验收原义务。新 Todo 的完成验证仍在其原有完成门执行。已结算且已验收所选规划义务的 Turn
+不再与后续实际工作竞争；普通进度和已完成 Todo 仍保留原 Turn 恢复路径。

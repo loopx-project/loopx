@@ -2409,3 +2409,35 @@ ids, reason codes, digests, and public-safe semantic projections.
 
 禁止提交凭证、私有状态、原始 benchmark 材料、模型响应、本地绝对路径或生成日志。
 优先保留紧凑 fixture id、reason code、digest 和公开安全语义投影。
+
+### Recovery transport budget decision / 恢复运输层预算决策
+
+The recovery revision compares the same source-line and AST workload against
+target main `d52f2e153a0a5abb2f9c469ad78f0beccfe3aae8`:
+
+| Existing module | Target lines | Recovery candidate ceiling |
+| --- | ---: | ---: |
+| `chat_agent.py` | 2005 | 2032 |
+| `chat_runtime.py` | 2319 | 2322 |
+| `chat_store.py` | 2003 | 2006 |
+| `collaboration_mcp.py` | 2058 | 2083 |
+
+These exact ceilings retain 58 lines of active caller/receipt transport across
+four existing surfaces; none is unused scaffolding or duplicated policy.
+Splitting a 3-line binding into a new module would increase navigation without
+localizing a separate owner. The larger Turn executor instead moves preview,
+terminal recovery and work-input IO to their existing owners: its candidate is
+1882 lines, below the unchanged 2000-line ceiling. Function statement/decision
+limits remain unchanged. The cadence dependency exception covers only the
+existing configuration owner's read, not a second policy or authority owner;
+its retirement is explicit injection from the CLI/source composition boundary.
+Source ratios and a passing ratchet do not establish behavior parity: cold
+recovery, validation, Stop, quota, real providers and packaged entrypoints still
+need their independent checks.
+
+这次预算比较使用相同源码行数/AST 口径。四个既有调用界面共增加 58 行有效绑定运输，
+精确提高其已有 ceiling；没有删除有用指令，也没有因 3 行绑定另建无独立职责的模块。
+较大的执行器则实际拆回现有 owner，候选 1882 行，仍低于未放宽的 2000 行上限；
+函数语句数与决策数限制保持原值。cadence 例外只覆盖读取既有配置 owner，退休方向
+是从 CLI/source 组合根注入已解析配置，不允许新增政策或执行权。预算通过与代码量
+变化不证明行为保持，仍须独立执行冷恢复、验证、停止、额度、真实 provider 与打包入口。

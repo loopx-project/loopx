@@ -944,6 +944,8 @@ lifecycle。
 
 新的受支持准入还保存当前 Agent 的默认 checkpoint 续跑契约。需要检查点时读取结果提交后的完整相关任务前沿；MCP 返回给当前工具调用者，托管执行恢复原 Host/session。非完成结果保留原回执并使用现有补充 owner。相关方向变化只重做方向判断，保留成功结果和单次扣费。确定被拒的进度写回保留候选，在原 Turn 重验；普通方向保持独立 Agent lane 隔离，原 no-followup 仍要求全 Goal。补充方向在相同 registry fence 下包含注册的主 Goal 文档；Chat 将观察不可用显示为读取失败并提供只读恢复，不称为待结算。普通终态完成在 checkpoint 与扣费后使用同一 Turn 的升级路径。历史 result-only、显式 first-delivery 及 supplement Turn 沿用保存的契约。完整的前沿变化恢复、打包前端/Lark 旅程、混合版本回滚与真实模型效用仍是未完成的一阶段验收。Source-session 仍只支持生命周期；普通 Python PostgreSQL 执行仍缺少 service-owned factory。独立 reviewer 需要单独注册的可选契约。这些默认值不关闭 R1、不认证 Goal 完成，也不证明分布式原子性或模型收益。
 
+源码候选保留已分类的方向停止，并在当前派发门约束下支持原 Turn 显式重入；未知历史停止仍被阻断。回执绑定的重规划在新方向返回后才验收语义 ACK，已结算且验收所选规划义务的 Turn 不再与后续工作竞争，普通进度仍保留原 Turn 恢复。这些是恢复机制，不是新增模型效用证据。
+
 恢复资格还覆盖原结果提交后工作读取回执丢失或损坏、已有进度写回证明的历史 result-only 终态重验，以及 Turn 结算后尚未完成的委派 Todo。native index 在方向补充之后仍证明原工作记录。sealed 生命周期恢复按 canonical store 的时间精度比较关闭时刻，保留同秒准入/关闭，不采纳旧终态工作。未知提交和身份不匹配继续拒绝。打包 Chat 恢复烟测复用现有同源 relay 和隔离 Host profile；确定性重放证据不认证 installed Lark、混版本回滚或真实模型效用。
 
 **R1 事务检查点。** 团队计划准入与整批规划现在归 `work_items/team_plan.ts`。确认后，全部已准入 lane 与持久操作回执一次提交；身份由 proposal + lane 决定，不再由 Todo 文本决定。File/SQLite 权威复用现有 CAS 与回执 owner；legacy Markdown 在原有 fence 和锁内同时写入任务和不可变回执。同一操作重试只读历史结果，接收者后来修改、完成或删除任务也不会触发重建。提交前失败不会留下部分 lane；canonical 展示投递仍 pending 时，Chat 必须恢复后才能报告验证成功。卡片列出部分分配及缺口；quota/stop 是参考，显式强制声明会被拒绝。Agent 发起的结算在 journal 首次写入时绑定同一状态基线并在结算时重读；基线缺失或已变动、或全部 lane 均为缺口的计划，记录为类型化的失败回执，不创建 Todo，重放结果不变。
