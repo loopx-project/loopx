@@ -394,8 +394,8 @@ print(json.dumps({'type': 'thread.started', 'thread_id': 'fixture-memory-session
         runner = tmp_path / "fixture_dsh_runner.py"
         runner.write_text('''import json, os, pathlib
 def run_dsh_turn(*, prompt, **kwargs):
-    authority = json.loads(prompt.split('Turn authority JSON:\\n', 1)[1].split('\\n\\nWhen finished', 1)[0])
-    pathlib.Path(os.environ['FIXTURE_HOST_CAPTURE']).write_text(json.dumps({'prompt': prompt, 'authority': authority}))
+    request, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\\n', 1)[1])
+    pathlib.Path(os.environ['FIXTURE_HOST_CAPTURE']).write_text(json.dumps({'prompt': prompt, 'request': request}))
     return json.dumps({'result_kind': 'validated_progress', 'classification': 'fixture_progress',
         'next_action': 'Run the next bounded fixture', 'path_delta_mode': 'unchanged',
         'vision_unchanged_reason': 'The original fixture remains open.',
@@ -435,17 +435,23 @@ json.dump({'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_k
         assert ("Set reward_memory_reflection_json" in observed["prompt"]) is ingest
         assert ("When reward_memory_recall contains guidance" in observed["prompt"]) is (mode == "recall_context")
     if mode in {"recall_context", "oversized_recall"}:
-        memory = observed["authority" if host_kind == "dsh" else "request"]["reward_memory_recall"]
+        memory = observed["request"]["reward_memory_recall"]
         assert memory["status"] == "applied"
         if mode == "recall_context":
             assert "integration branch" in memory["context"]["guidance"][0]["content_summary"]
         else:
             assert memory["context"] is None
     if mode in {"unconfigured", "disabled", "stale", "both_off"}:
-        if host_kind == "generic-cli":
-            assert "reward_memory_recall" not in observed["request"]
-        else:
+        request = observed["request"]
+        assert "reward_memory_recall" not in request
+        assert "reward_memory_reflection_json" not in request.get("capability_result_fields", {})
+        assert not any("reward_memory" in instruction
+                       for instruction in request.get("capability_instructions", []))
+        if host_kind != "generic-cli" and "work_contract" not in request:
             assert "reward_memory" not in observed["prompt"]
+        # A complete captured source retains inactive configuration/diagnostics.
+        # Those facts must not activate recall instructions or reflection output;
+        # deleting them merely to pass a substring check would lose source facts.
     assert result["effects"]["quota_spent"] is True
     assert result.get("post_settlement", {}).get("external_writes_performed", False) is False
     if ingest:

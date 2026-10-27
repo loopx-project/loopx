@@ -220,7 +220,23 @@ def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
     assert not any(replay["effects"].values())
     assert len(results) == 1
     assert _turn_journal(runtime) == recovered
+    _assert_recovered_completion(runtime, registry, journal)
     assert _todo(prefix)["todo"]["status"] == "done"
+
+
+def _assert_recovered_completion(runtime: Path, registry: Path, original_journal: dict) -> None:
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+
+    turn_id = original_journal["turn_key"]  # This CLI fixture supplies no explicit Turn id.
+    readback = read_heartbeat_settlement(runtime, registry_path=registry,
+        goal_id="loopx-turn-fixture", agent_id="codex-fixture",
+        todo_id="todo_fixture0001", turn_instance_id=turn_id)
+    assert readback is not None
+    assert readback.completion_event is not None and readback.spend_event is not None
+    recovered = _turn_journal(runtime)
+    assert recovered["turn_key"] == original_journal["turn_key"]
+    assert recovered["host_attempt_count"] == 1
+    assert recovered["writeback"]["completion"]["todo_id"] == "todo_fixture0001"
 
 
 def _cli(prefix: list[str], *args: str) -> tuple[int, dict]:
@@ -515,4 +531,5 @@ def test_native_turn_recovers_accepted_completion_before_checking_new_text(
     assert not any(replay["effects"].values())
     assert len(completions) == 1
     assert _turn_journal(runtime) == recovered
+    _assert_recovered_completion(runtime, registry, journal)
     assert _todo(prefix)["todo"]["text"] == "[P0] A later requirement after acceptance."

@@ -155,6 +155,39 @@ def deliver(root, event, pages):
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
 
 
+def test_scope_projection_interruption_keeps_current_original_recovery(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    event = setup(tmp_path, monkeypatch)
+    _, old = project(tmp_path, "old")
+    deliver(tmp_path, event, read_pages(tmp_path, old))
+    assert "candidate" in context._state(tmp_path) and "pending" not in context._state(tmp_path)
+    operation = turn_envelope._turn_envelope_result
+    observed = []
+
+    class ScopeInterrupted(BaseException):
+        pass
+
+    def interrupt(name, **request):
+        if name == "outcome_context":
+            observed.append(context._state(tmp_path))
+            raise ScopeInterrupted()
+        return operation(name, **request)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", interrupt)
+    current = {"ok": True, "goal_id": "fixture", "requirements": "New current requirements after the prior delivery."}
+    with pytest.raises(ScopeInterrupted):
+        project(tmp_path, "current", payload=current)
+    expected = tmp_path / "current" / "projection.json"
+    assert observed[0]["recovery"]["path"] == str(expected)
+    assert observed[0]["pending"]["path"] == str(expected)
+    stored = context._state(tmp_path)
+    assert stored["recovery"]["path"] == str(expected)
+    assert stored["pending"]["path"] == str(expected)
+    assert json.loads(expected.read_bytes()) == current
+    assert stored["recovery"]["sha256"] != old["recovery"]["sha256"]
+
+
 def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}

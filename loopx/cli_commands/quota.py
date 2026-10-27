@@ -34,7 +34,6 @@ from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..control_plane.quota.cli_projection import (
     compact_quota_monitor_poll_cli_payload,
     compact_quota_plan_cli_payload,
-    compact_quota_should_run_cli_payload,
 )
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
@@ -59,7 +58,7 @@ from ..control_plane.quota.settlement_cli import (
     reconcile_existing_heartbeat_receipt_for_turn,
     render_existing_heartbeat_receipt_payload,
 )
-from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
 from ..presentation.renderers.quota_event_markdown import (
     render_quota_monitor_poll_markdown,
     render_quota_slot_preview_markdown,
@@ -304,30 +303,28 @@ def _project_quota_cli_payload(
     *,
     captured_decision_path: str | None = None,
 ) -> dict[str, object]:
-    """Project already-decided facts; preserve typed failures on envelope rejection.
+    """Carry complete decisions and predecision diagnostics without a second view.
 
-    The envelope is an additive hot-path view over a decided payload. A typed
-    validation/failure payload has no interaction contract to project, so a
-    renderer rejection keeps the typed diagnostic itself (with the skip reason)
-    instead of masking it with a crash (issue #3687).
+    A collection/validation failure has no executable interaction to compose.
+    Preserve that original diagnostic and recovery instead of attempting the
+    historical envelope renderer or manufacturing a work contract.
     """
     from ..control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if args.quota_command == "should-run":
+        if (payload.get("schema_version") == "loopx_turn_envelope_v1"
+                and isinstance(payload.get("interaction_contract"), Mapping)) or (
+            payload.get("ok") is False and not isinstance(payload.get("interaction_contract"), Mapping)
+        ):
+            return payload
+        raise EffectRuntimeRejected(
+            "should-run emission requires a composed complete decision; "
+            "historical captures require their explicit recovery reader"
+        )
     if not bool(getattr(args, "turn_envelope", False)):
         if args.quota_command in {"status", "plan"}:
             return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
-        if args.quota_command == "should-run":
-            if captured_decision_path and "vision" not in detail_sections:
-                from ..control_plane.quota.turn_envelope import _turn_envelope_result
-                payload = _turn_envelope_result("replan_cli_view", payload=payload)
-            return compact_quota_should_run_cli_payload(
-                payload,
-                include_todo_summary_detail="agent-todos" in detail_sections,
-                include_user_todo_summary_detail="user-todos" in detail_sections,
-                include_goal_boundary_detail="goal-boundary" in detail_sections,
-                include_vision_detail="vision" in detail_sections,
-            )
         if args.quota_command == "monitor-poll":
             return compact_quota_monitor_poll_cli_payload(
                 payload, include_decision_detail="decisions" in detail_sections,
@@ -385,6 +382,22 @@ def _emit_quota_result(
 
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": current_loopx_cli_argv()}
+    if args.quota_command == "should-run" and context is not None:
+        attach_host_poll_receipt(
+            context.status_payload,
+            args,
+            payload,
+            registry_path=registry_path,
+        )
+    # A decided refusal has the same complete contract as an admission. `ok`
+    # still controls exit status and host handoff; composition grants no work.
+    if args.quota_command == "should-run" and isinstance(payload.get("interaction_contract"), Mapping):
+        payload = compose_turn_decision(payload, scheduler_execution_context=context.scheduler_context if context is not None else None)
+    if args.quota_command == "should-run":
+        # Validate new decisions before durable capture or host handoff. This
+        # projection is identity for complete decisions and early diagnostics.
+        payload = _project_quota_cli_payload(payload, args, detail_sections,
+            context.scheduler_context if context is not None else None)
     try:
         capture_decision(capture_directory, payload)
         if payload.get("ok") is True:
@@ -404,19 +417,13 @@ def _emit_quota_result(
         decision_identity = (str(payload.get("goal_id") or ""),
             str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
     captured_payload = payload
-    payload = _project_quota_cli_payload(
-        payload, args, detail_sections,
-        context.scheduler_context if context is not None else None,
-        captured_decision_path=(
-            str(capture_directory / "decision.json") if capture_directory is not None else None
-        ),
-    )
-    if args.quota_command == "should-run" and context is not None:
-        attach_host_poll_receipt(
-            context.status_payload,
-            args,
-            payload,
-            registry_path=registry_path,
+    if args.quota_command != "should-run":
+        payload = _project_quota_cli_payload(
+            payload, args, detail_sections,
+            context.scheduler_context if context is not None else None,
+            captured_decision_path=(
+                str(capture_directory / "decision.json") if capture_directory is not None else None
+            ),
         )
     succeeded = bool(payload.get("ok"))
     # Handoff releases the immutable original before any presentation. Native
@@ -428,7 +435,7 @@ def _emit_quota_result(
         payload = project_captured_context(payload, directory=capture_directory,
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
-            surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
+            surface="complete_turn" if captured_payload.get("schema_version") == "loopx_turn_envelope_v1" else ("turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"))
     if (args.format == "json" and succeeded and capture_directory
             and native_context):
         import hashlib
@@ -440,7 +447,7 @@ def _emit_quota_result(
                 root=getattr(args, "codex_context_root", None), create=True)
             payload = project_codex_context(payload, directory=directory,
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
-                surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+                surface="complete_turn" if captured_payload.get("schema_version") == "loopx_turn_envelope_v1" else ("turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"),
                 capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
             recovery = payload.get("recovery")
             if recovery is None:

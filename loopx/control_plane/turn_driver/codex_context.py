@@ -493,17 +493,39 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 recovery = capture_context_projection(payload, directory=capture_directory,
                     read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 page_bytes, output_bytes = native_context_page_budget()
-                recovery["command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                    page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                state["recovery"] = {**{key: recovery[key] for key in ("path", "sha256", "command")},
-                    "goal_id": goal_id, "agent_id": agent_id,
-                    "total_bytes": Path(recovery["path"]).stat().st_size}
-                # Block reuse before optional wire IO, not after a first page
-                # or EOF. A codec/read interruption keeps this incomplete.
-                state["pending"] = {"path": recovery["path"], "sha256": recovery["sha256"],
-                    "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
-                _save(root, state)
+
+                def publish_recovery(reference: dict[str, Any]) -> None:
+                    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                    state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
+                        "goal_id": goal_id, "agent_id": agent_id,
+                        "total_bytes": Path(reference["path"]).stat().st_size}
+                    state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
+                        "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
+                    _save(root, state)
+
+                # Retire old reuse before *any* optional scope/codec call. A
+                # process interruption must recover this original, never its
+                # predecessor. Scoped publication can then replace this route.
+                publish_recovery(recovery)
                 recovery_committed = True
+                # The canonical capture stays complete. A scoped model context
+                # owns a distinct immutable recovery/baseline artifact containing
+                # exactly what the model reads, never hidden optional bodies.
+                from ..quota.turn_envelope import _turn_envelope_result
+                from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+
+                try:
+                    projected = _turn_envelope_result("outcome_context", payload=payload,
+                        source_capture={key: recovery[key] for key in ("path", "sha256")})
+                except (ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
+                    projected = payload  # optional presentation failure retains the complete source
+                if projected.get("schema_version") == "outcome_context_projection_v0":
+                    payload = projected
+                    recovery = capture_context_projection(payload, directory=capture_directory,
+                        filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                    recovery["presentation_schema"] = payload["schema_version"]
+                    publish_recovery(recovery)
 
                 result = project_captured_context(payload, directory=capture_directory,
                     request=request, captured_recovery=recovery,

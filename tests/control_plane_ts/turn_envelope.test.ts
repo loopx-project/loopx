@@ -1,7 +1,11 @@
+import { EFFECTIVE_ACTIONS } from "../../loopx/control_plane/quota/effective_action.generated.ts";
+import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../../loopx/control_plane/agents/agent_scope_frontier.generated.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  TURN_ACTION_ROUTES,
+  turnEnvelopeRoute,
   ACTION_SIGNATURE_COVERAGE_V0,
   ACTION_SIGNATURE_COVERAGE_V3,
   buildTurnEnvelope,
@@ -15,6 +19,59 @@ import { EffectRuntimeRequestError } from "../../loopx/control_plane/effect_runt
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { TURN_ENVELOPE_SECTION_TARGETS } from "../../loopx/control_plane/quota/turn_envelope_budget.ts";
 import { projectPeerOrchestration } from "../../loopx/control_plane/quota/peer_orchestration.ts";
+
+test("captured outcome lookup shares exact content across registered carriers and retains revisions", () => {
+  const one = {id: "shared", owner_agent_id: "peer", objective: "Original", revision: 1,
+    requirements: [{id: "a", planning_satisfied: false, status: "unverified", description: "Full a"},
+      {id: "b", planning_satisfied: false, status: "unverified", description: "Full b"},
+      {id: "c", planning_satisfied: true, status: "unverified", description: "Full c",
+        agent_review: {conclusion: "met", basis_current: true, independently_verified: false}}],
+    work: [{todo_id: "dependency", status: "blocked"}], future: {negative: false, unknown: null}};
+  const two = {...one, revision: 2, objective: "Changed"};
+  const typedDifference = {...one, future: {negative: 0, unknown: null}};
+  const contract = (outcome: unknown) => ({outcome_requirements: {outcomes: [outcome]}});
+  const source = {ok: true, goal_id: "goal", agent_identity: {agent_id: "controller"},
+    interaction_contract: {agent_channel: {work_context: {sources: [
+      {source: "goal_acceptance", content: {status: "loaded", goal_acceptance_contract: contract(one)}},
+      {source: "goal_acceptance", content: {status: "loaded", goal_acceptance_contract: contract(two)}},
+      {source: "unregistered", content: {goal_acceptance_contract: contract({...one, id: "not-a-source"})}},
+    ]}}}, planning_horizon: {core_goal: {acceptance_contract_ref:
+      "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"}},
+    agent_todo_summary: {goal_acceptance_contract: contract(typedDifference)}};
+  const original = structuredClone(source);
+  const index = evaluateTurnEnvelope({operation: "captured_outcome", payload: source, outcome_ref: ""});
+  const rows = index.outcomes as JsonObject[];
+  assert.equal(rows.length, 3);
+  assert.notEqual(rows[0].outcome_ref, rows[1].outcome_ref);
+  assert.deepEqual(rows[0].requirement_states, [
+    {requirement_ids: ["a", "b"], planning_satisfied: false, status: "unverified"},
+    {requirement_ids: ["c"], planning_satisfied: true, status: "unverified",
+      agent_review: {conclusion: "met", basis_current: true, independently_verified: false}},
+  ]);
+  // The preferred work carrier appears first, followed by the registered
+  // summary carrier and the second loaded work source.
+  for (const [i, outcome] of [one, typedDifference, two].entries()) {
+    const detail = evaluateTurnEnvelope({operation: "captured_outcome", payload: source, outcome_ref: rows[i].outcome_ref});
+    assert.deepEqual(detail.outcome, outcome);
+  }
+  assert.deepEqual(source, original);
+});
+
+test("captured outcome index refuses unknown sources and keeps missing facts unknown", () => {
+  const read = (payload: JsonObject) => evaluateTurnEnvelope({operation: "captured_outcome", payload, outcome_ref: ""});
+  for (const payload of [{ok: false}, {ok: true}, {ok: true, schema_version: "unknown"},
+    {ok: true, agent_todo_summary: {goal_acceptance_contract: {outcome_requirements: {outcomes: null}}}}]) {
+    assert.throws(() => read(payload));
+  }
+  const source = {ok: true, agent_todo_summary: {goal_acceptance_contract: {outcome_requirements: {
+    outcomes: [{id: "unknown", requirements: [{id: "r"}, {id: "null", agent_review: null}]}]}}}};
+  const row = (read(source).outcomes as JsonObject[])[0];
+  assert.deepEqual(row.requirement_states, [{requirement_ids: ["r"]},
+    {requirement_ids: ["null"], agent_review: null}]);
+  assert.equal(row.work, undefined);
+  assert.throws(() => evaluateTurnEnvelope({operation: "captured_outcome", payload: source,
+    outcome_ref: "sha256:" + "0".repeat(64)}), /exact captured outcome reference/);
+});
 
 test("task text commitment has one selected-Todo carrier without changing legacy context elision", () => {
   for (const retainDetail of [false, true]) {
@@ -86,6 +143,31 @@ function payload(): Record<string, unknown> {
     goal_boundary: { rule: "stay_in_scope_or_stop", write_scope: ["loopx/**"] },
   };
 }
+
+test("managed controller builds its unchanged envelope and typed route in one projection", () => {
+  for (const [action, delivery, shouldRun, quiet, expected] of [
+    ["normal_run", true, true, false, "ready_for_host"],
+    ["control_plane_repair", true, true, false, "repair_required"],
+    ["autonomous_replan_required", false, true, false, "replan_required"],
+    ["normal_run", false, true, false, "blocked"],
+    ["normal_run", false, false, true, "wait"],
+    ["future_repair", true, true, false, "ready_for_host"],
+  ] as const) {
+    const source = payload();
+    source.effective_action = action;
+    source.should_run = shouldRun;
+    const channel = (source.interaction_contract as JsonObject).agent_channel as JsonObject;
+    channel.delivery_allowed = delivery;
+    channel.must_attempt = shouldRun;
+    channel.quiet_noop_allowed = quiet;
+    const request = {payload: source, scheduler_execution_args: ""};
+    const before = structuredClone(source);
+    const result = evaluateTurnEnvelope({operation: "build_controller_input", ...request});
+    assert.deepEqual(result.envelope, buildTurnEnvelope(request));
+    assert.equal(result.route, expected);
+    assert.deepEqual(source, before);
+  }
+});
 
 test("execution contracts retain complete clauses, nested data and empty values", () => {
   const source = payload();
@@ -1224,4 +1306,35 @@ test("consumer version gate rejects explicit future/null declarations without re
   delete (legacy.action_signature as JsonObject).coverage;
   assertTurnEnvelopeConsumerVersion(legacy);
   assert.deepEqual(envelope, before);
+});
+
+
+test("registered route coverage and historical actions share the runtime classifier", () => {
+  const historical = ["autonomous_replan", "successor_replan_required"];
+  assert.deepEqual(new Set(Object.keys(TURN_ACTION_ROUTES)),
+    new Set([...EFFECTIVE_ACTIONS, ...AGENT_SCOPE_FRONTIER_ACTIONS, ...historical]));
+  for (const [name, route] of Object.entries(TURN_ACTION_ROUTES)) {
+    const envelope = {schema_version: "loopx_turn_envelope_v0", should_run: true,
+      effective_action: name, goal_id: "g", agent_id: "a",
+      action_signature: {matches: true, source_hash: "same", envelope_hash: "same"},
+      action: {must_attempt: true, delivery_allowed: true, selected_todo: {todo_id: "t"},
+        capability_intent: {schema_version: "pending_capability_intent_projection_v0",
+          goal_id: "g", agent_id: "a", command: "work"}}};
+    assert.equal(turnEnvelopeRoute(envelope), route, name);
+  }
+  for (const name of ["future_repair", "constructor", "toString", "__proto__"]) {
+    assert.equal(turnEnvelopeRoute({should_run: true, effective_action: name,
+      action_signature: {matches: true, source_hash: "same", envelope_hash: "same"},
+      action: {must_attempt: true, delivery_allowed: true}}), "ready_for_host");
+  }
+});
+
+test("complete driver projection ignores historical scalar decoding hints", () => {
+  const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: payload(), scheduler_execution_args: ""});
+  const envelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
+  const normal = evaluateTurnEnvelope({operation: "driver_lineage", payload: contract, envelope});
+  const forged = evaluateTurnEnvelope({operation: "driver_lineage", payload: contract, envelope,
+    historical_route_text: {source_hash: "", envelope_hash: "different", effective_action: "autonomous_replan"}});
+  assert.equal(normal.route, "ready_for_host");
+  assert.deepEqual(forged, normal);
 });

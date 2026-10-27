@@ -126,7 +126,7 @@ def test_goal_prompt_projects_goal_only_host_contract() -> None:
                 "quota_should_run.interaction_contract.cli_channel."
                 "runtime_capability_reentry"
             ),
-            "cli_projection_ref": "quota_should_run.runtime_capability_reentry",
+            "cli_projection_ref": "quota_should_run.interaction_contract.cli_channel.runtime_capability_reentry",
             "packet_schema_version": "runtime_capability_reentry_v0",
             "delivery_channel": "quota_tool_result",
             "goal_prompt_mutated": False,

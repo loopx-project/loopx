@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
-from ..control_plane.effect_runtime import EffectRuntimeRejected
+from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
@@ -37,7 +37,9 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   output_limit: int | None, instruction: bool,
                   presentation: dict[str, Any] | None = None,
                   next_page_bytes: int | None = None,
-                  next_page_output_bytes: int | None = None) -> dict[str, Any]:
+                  next_page_output_bytes: int | None = None,
+                  outcome_ref: str | None = None,
+                  selection_sha256: str | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -48,11 +50,18 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
         result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
             "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
             "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
+        if outcome_ref is not None:
+            result["outcome_ref"] = outcome_ref or None
+            result["selection_sha256"] = selection_sha256
+            result["read_instruction"] = (
+                "Offsets and total_bytes address only this selected outcome/index JSON; sha256 binds the entire original capture. "
+                "This read does not establish full-capture retention or replace the capture's required-read obligations.")
         if instruction:
-            result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
+            result["read_instruction"] = str(result.get("read_instruction", "")) + CONTEXT_CAPTURE_PAGE_GUIDANCE
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
-                max_page_output_bytes=next_page_output_bytes or output_limit)
+                max_page_output_bytes=next_page_output_bytes or output_limit, outcome_ref=outcome_ref,
+                selection_sha256=selection_sha256)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -88,6 +97,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     in that exact capture, so a replacement cannot silently mix two decisions.
     EOF describes this page, never a model's complete-consumption receipt.
     """
+    recovery_command = None
     try:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
@@ -124,18 +134,50 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
             raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
                 "larger pages require a sufficient max-page-output-bytes within the capture limit")
-        path, raw, _ = _read_capture(value, digest)
+        path, raw, captured = _read_capture(value, digest)
+        outcome_ref = getattr(args, "outcome_ref", None)
+        selection_digest = None
+        expected_selection = getattr(args, "selection_sha256", None)
+        if expected_selection is not None and outcome_ref is None:
+            raise ValueError("selection-sha256 requires outcome-ref on the original context-read")
+        if outcome_ref is not None:
+            recovery_command = context_capture_read_command(path, digest)
+            # The typed owner shares exact lookup/index semantics with replan.
+            # IO and pagination remain here; no Goal/provider or guard is read.
+            from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+            source_payload = None
+            if captured.get("schema_version") == "outcome_context_projection_v0":
+                source = captured.get("source_capture")
+                if not isinstance(source, dict):
+                    raise ValueError("scoped context has no original source reference")
+                _, _, source_payload = _read_capture(source.get("path"), source.get("sha256"))
+            selected = _turn_envelope_result("captured_outcome", payload=captured, outcome_ref=outcome_ref,
+                **({"source_payload": source_payload} if source_payload is not None else {}))
+            raw = (json.dumps(selected, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            selection_digest = hashlib.sha256(raw).hexdigest()
+            # File integrity alone cannot bind cursors in a derived rendering:
+            # the same file may be read by an upgraded projection owner. Never
+            # mix selected JSON layouts under an unchanged original-file SHA.
+            if expected_selection is not None and expected_selection != selection_digest:
+                raise ValueError("selected JSON digest mismatch; recover the original complete capture")
+            if offset > 0 and expected_selection is None:
+                raise ValueError("outcome continuation requires the returned selection-sha256; follow next_command")
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
-            next_page_output_bytes=next_page_output_bytes)
-    except (OSError, ValueError, RecursionError) as exc:
+            next_page_output_bytes=next_page_output_bytes, outcome_ref=outcome_ref,
+            selection_sha256=selection_digest)
+    except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
         return {"ok": False, "schema_version": "context_capture_page_v1",
-            "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
+            "reason": str(exc) if isinstance(exc, ValueError) else (
+                "captured outcome reader is unavailable; use the original full-capture reader"
+                if recovery_command else "original capture could not be read"),
+            **({"recovery_command": recovery_command} if recovery_command else {}),
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
@@ -158,6 +200,10 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     mode, target = "full", None
     if projected.get("schema_version") == "context_delivery_v1":
         mode, target = projected["mode"], projected["target"]
+        # Only the explicitly scoped artifact replaces the caller's original
+        # recovery route. Ordinary captures keep their exact historical bytes.
+        if projected["recovery"].get("presentation_schema") == "outcome_context_projection_v0":
+            metadata = {**(metadata or {}), "recovery": projected["recovery"]}
         if mode == "full":
             reference = {key: projected["recovery"][key] for key in ("path", "sha256")}
     page_bytes, output_bytes = native_context_page_budget()
@@ -259,7 +305,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("saved projection needs a private physical capture root owned by this user")
         cache = Path(tempfile.mkdtemp(prefix="context-", dir=root))
         projected = project_codex_context(payload, directory=directory, capture_directory=cache,
-            goal_id=args.goal_id, agent_id=args.agent_id, surface="quota_packet",
+            goal_id=args.goal_id, agent_id=args.agent_id,
+            surface="complete_turn" if payload.get("schema_version") == "loopx_turn_envelope_v1" else "quota_packet",
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None))
         native_prepared = True
@@ -467,6 +514,15 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    if getattr(args, "selection_sha256", None) is not None and (args.quota_command != "context-read"
+            or getattr(args, "outcome_ref", None) is None):
+        print_payload({"ok": False, "reason": "selection-sha256 requires context-read with outcome-ref"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
+    if getattr(args, "outcome_ref", None) is not None and args.quota_command not in {"context-read", "replan-view"}:
+        print_payload({"ok": False, "reason": "outcome-ref is only supported by context-read and replan-view"},
+            args.format, lambda value: str(value["reason"]))
+        return 1
     has_output_limit = getattr(args, "max_page_output_bytes", None) is not None
     budget_scope_error = ("max-page-output-bytes is only supported by JSON context-read "
         "or enabled native should-run/context-project")
@@ -583,6 +639,8 @@ def read_replan_view(args: argparse.Namespace) -> dict[str, Any]:
 
     if not args.decision_file or not args.source_hash:
         raise ValueError("replan-view requires --decision-file and --source-hash")
+    if args.outcome_ref == "":
+        raise ValueError("replan-view outcome-ref requires an exact reference; use context-read for the captured index")
     path = Path(args.decision_file).expanduser()
     with path.open(encoding="utf-8") as stream:
         payload = json.load(stream)

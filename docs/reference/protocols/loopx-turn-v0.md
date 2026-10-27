@@ -1006,6 +1006,48 @@ writeback ordering.
 
 ## Cross-Iteration Context Policy
 
+Captured supporting outcomes have one ordinary/replan read owner. With an
+original decision file and its exact byte digest, use
+`loopx --format json quota context-read --capture-file CAPTURE --capture-sha256 SHA256 --outcome-ref`
+to page the current outcome index. Add the exact returned outcome reference
+after `--outcome-ref` to page its full original detail. Follow the returned byte
+cursor/command through EOF; every page revalidates that original file. The page
+`sha256` binds the whole capture, while offsets and `total_bytes` address only
+the selected index/detail JSON. Follow the returned `--selection-sha256` as well:
+it binds the derived JSON layout and rejects mixed renderings after a reader
+upgrade even when the original file is unchanged. Index rows retain owner/work and requirement
+identities grouped by exact existing status, planning and Agent-review facts;
+missing facts remain unknown, and an Agent review is not an independent check.
+Same-id revisions have distinct references. A failed/unsupported detail read
+requires the original full-capture recovery, never another guard.
+
+The canonical selected-work read can attach `outcome_context_read_plan_v0`
+from the same complete authority snapshot. The index's `required_in_scope`
+labels reflect that plan's typed work, shared acceptance/source/evidence and
+current failure closure only when its identity, provider revision and whole
+acceptance-source digest match. Missing, changed or unsupported coverage keeps all
+outcomes required in the candidate plan; broad replan reads also keep all.
+`scope_applied=false`: the plan is advisory until delivery, required reads and
+Host recovery migrate together. It does not prove arbitrary semantic independence.
+These optional reads do not replace existing full-read obligations.
+Native retention observation rejects scoped pages
+even when their digest matches the capture. Reading a new authority revision
+later cannot replace the original observation; no Goal/provider read, admission,
+Host invocation, writeback or quota spend occurs in this reader.
+
+给定原 decision 文件及其精确字节 digest，`context-read --outcome-ref` 分页读取成果
+索引，附返回的精确引用则读取成果全文。普通与 replan 复用同一 typed owner；按
+返回游标读到 EOF，每页重验原文件。`sha256` 绑定整个 capture，offset/total_bytes
+只定位所选索引/正文。接续命令的 `--selection-sha256` 还绑定派生 JSON 字节，
+防止 reader 升级后在原文件 hash 未变时混合渲染。索引按精确当前状态分组要求标识，保留 owner、工作关联和
+未知，Agent review 不充当独立检查；同 id 的不同版本分别引用。选定工作读取可从
+同一完整 authority 快照附 `outcome_context_read_plan_v0`。身份、provider revision
+及完整验收来源 digest 一致时，`required_in_scope` 反映 typed 工作、共同验收/来源/
+证据与当前失败闭包。覆盖缺失、变化或不支持以及广域 replan 均保留全部成果。
+显式 `scope_applied=false`：交付、必读和 Host 恢复共同迁移前，计划仅供参考，不能
+证明任意语义独立性。可选详情不替代现有完整必读义务，不能建立 Host 完整保留证明。
+读取失败恢复原 capture，不重新准入；不读取新 Goal 状态或执行/写回/扣额。
+
 Each `turn plan` or `turn run-once` invocation declares an iteration context
 policy independently from the Todo and Goal lifecycle:
 

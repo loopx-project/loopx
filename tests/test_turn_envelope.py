@@ -1007,7 +1007,7 @@ def test_modern_envelope_does_not_bypass_host_signature_check(corruption: str) -
 
 
 @pytest.mark.parametrize("has_packet", [False, True])
-def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_packet: bool) -> None:
+def test_predecision_diagnostic_preserved_without_historical_envelope(has_packet: bool) -> None:
     from loopx.cli_commands.quota import _project_quota_cli_payload
     from argparse import Namespace
 
@@ -1023,11 +1023,11 @@ def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_pa
     if has_packet:
         from loopx.control_plane.effect_runtime import EffectRuntimeRejected
         with pytest.raises(EffectRuntimeRejected, match="unsupported format: protocol_action_packet"):
-            _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
+            _project_quota_cli_payload(failure, Namespace(turn_envelope=True, quota_command="should-run"), frozenset(), None)
         assert failure == before
         return
-    rendered = _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
-    assert "interaction_contract must be an object" in rendered.pop("turn_envelope_skipped")
+    rendered = _project_quota_cli_payload(failure, Namespace(turn_envelope=True, quota_command="should-run"), frozenset(), None)
+    assert "turn_envelope_skipped" not in rendered
     assert rendered == before
     assert failure == before
 

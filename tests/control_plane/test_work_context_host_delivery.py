@@ -9,6 +9,8 @@ from urllib.parse import quote
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
@@ -48,12 +50,16 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
             '--todo-id', TODO_ID, '--turn-instance-id', TURN_ID, '--codex-app',
             '--available-capability', 'shell', '--available-capability', 'filesystem_read']
     capture = tmp_path / 'original-context'
-    code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
+    code, emitted = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
-    assert code == 0, envelope
+    assert code == 0, emitted
     saved = capture / 'decision.json'
     original_bytes = saved.read_bytes()
     full = json.loads(original_bytes)
+    # New CLI emission is the complete contract. Exercise the retained internal
+    # adapter explicitly; it is no longer a competing CLI output format.
+    envelope = build_turn_envelope(full, captured_decision_path=str(saved),
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile('codex_app_heartbeat'))
     source_context = full['interaction_contract']['agent_channel']['work_context']
     assert source_context['complete'] is True
     assert source_context['instruction']  # Non-vacuous instruction transport.

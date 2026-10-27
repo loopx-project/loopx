@@ -12,7 +12,7 @@ from ..control_plane.goals.first_party_host_admission import (
 )
 from ..control_plane.operator_provider import operator_provider_environ
 from ..control_plane.quota.effective_action import EffectiveAction
-from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
 from ..control_plane.runtime.status_projection_cache import (
     resolve_status_projection_cache_runtime_root,
 )
@@ -231,7 +231,7 @@ def handle_turn_command(
             )
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
-            decision = decision_owner.resolve()
+            decision = compose_turn_decision(decision_owner.resolve(), scheduler_execution_context=scheduler_context)
             resume_requested, session_binding = resolve_turn_resume_session_binding(args)
             turn_envelope = build_turn_envelope(
                 decision,
@@ -253,19 +253,14 @@ def handle_turn_command(
             ):
                 from ..control_plane.turn_driver.codex_cli import codex_cli_session_binding
 
-                session_binding = (
-                    codex_cli_session_binding(
-                        runtime_root,
-                        turn_envelope,
-                        goal_admission=strict_goal_admission,
-                        session_scope=session_scope,
-                        host=args.host,
-                    )
-                    if strict_goal_admission is not None
-                    else codex_cli_session_binding(runtime_root, turn_envelope, session_scope=session_scope, host=args.host)
+                session_binding = codex_cli_session_binding(
+                    runtime_root, turn_envelope, work_contract=decision,
+                    goal_admission=strict_goal_admission,
+                    session_scope=session_scope, host=args.host,
                 )
             payload = build_loopx_turn_plan(
                 turn_envelope,
+                work_contract=decision,
                 host=args.host,
                 execution_mode=args.execution_mode,
                 scheduler_owner=args.scheduler_owner,

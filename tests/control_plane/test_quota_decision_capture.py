@@ -103,8 +103,9 @@ def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, mo
     fallback = full['blocked_priority_fallback']
     assert full['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert ordinary['blocked_priority_fallback'] == fallback
-    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback_ref'] == '$.blocked_priority_fallback'
-    assert 'blocked_priority_fallback' not in ordinary['heartbeat_recommendation']
+    assert ordinary == full
+    assert ordinary['schema_version'] == 'loopx_turn_envelope_v1'
+    assert ordinary['heartbeat_recommendation']['blocked_priority_fallback'] == fallback
     assert ordinary['heartbeat_receipt'] == full['heartbeat_receipt']
     assert ordinary['interaction_contract']['cli_channel']['settlement_plan'] == full[
         'interaction_contract']['cli_channel']['settlement_plan']
@@ -156,20 +157,23 @@ def test_real_cli_boundary_clauses_reach_shared_host_without_loss(tmp_path, monk
     full = json.loads(original_bytes)
     assert full['goal_boundary']['write_scope'] == scopes
     assert full['goal_boundary']['guards'] == guards
+    assert envelope == full
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    envelope = build_turn_envelope(full)
     for field in ('write_scope', 'guards', 'requires_parent_approval'):
         assert envelope['boundary'][field] == full['goal_boundary'][field], field
-    authority = extract_turn_authority({'turn_envelope': envelope})
+    authority = extract_turn_authority({'work_contract': full, 'turn_envelope': envelope})
     assert authority['write_scope'] == scopes
     assert authority['boundary']['guards'] == guards
     assert authority['boundary']['requires_parent_approval'] == ['publish', 'production-action']
     assert 'write_scope' not in authority['boundary']  # Existing aliases carry these facts once.
     prompt = render_prompt(authority)
-    transported, _ = json.JSONDecoder().raw_decode(prompt.split('Turn authority JSON:\n', 1)[1])
-    assert transported == authority
+    transported, _ = json.JSONDecoder().raw_decode(prompt.split('Turn request:\n', 1)[1])
+    assert transported == {'work_contract': full}
     altered = json.loads(json.dumps(envelope))
     altered['boundary']['guards'][-1] = 'Continue without the final restriction.'
     with pytest.raises(ValueError, match='action signature'):
-        extract_turn_authority({'turn_envelope': altered})
+        extract_turn_authority({'work_contract': full, 'turn_envelope': altered})
     before = _heartbeat_receipt_count(runtime, TURN_ID)
     code, replay = _run_cli(registry, runtime, *args)
     assert code == 0, replay
@@ -209,9 +213,14 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     code, envelope = _run_cli(registry, runtime, *args, '--turn-envelope',
                               '--decision-output-dir', str(capture))
     assert code == 0, envelope
-    assert envelope['schema_version'] == 'loopx_turn_envelope_v0'
+    assert envelope['schema_version'] == 'loopx_turn_envelope_v1'
     saved = capture / 'decision.json'
     full = json.loads(saved.read_text())
+    assert envelope == full
+    # Retain historical long-route capture recovery coverage explicitly;
+    # the current producer no longer selects this view with --turn-envelope.
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    envelope = build_turn_envelope(full, captured_decision_path=str(saved))
     app = envelope['scheduler']['app_automation']
     assert 'ack_cli_args' not in app
     ref = app['ack_cli_args_detail_ref']
@@ -262,6 +271,8 @@ def test_real_guard_saved_before_envelope_and_read_without_reexecution(tmp_path,
     assert json.loads((second / 'decision.json').read_text())['heartbeat_receipt']['status'] == 'replayed'
     assert json.loads(saved.read_text()) == full
 
+    assert fresh == json.loads((second / 'decision.json').read_text())
+    fresh = build_turn_envelope(fresh, captured_decision_path=str(second / 'decision.json'))
     assert shlex.split(fresh['detail_ref']['full_decision']) == ['cat', '--', str(second / 'decision.json')]
     # Missing old evidence fails locally; it never substitutes a new guard observation.
     saved.unlink()
@@ -278,7 +289,8 @@ def test_full_display_is_unchanged_by_capture_location():
     from loopx.cli_commands.quota import _project_quota_cli_payload
     from tests.test_turn_envelope import _full_decision
     args = argparse.Namespace(turn_envelope=False, quota_command='should-run')
-    source = _full_decision()
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    source = compose_turn_decision(_full_decision())
     baseline = _project_quota_cli_payload(source, args, frozenset(), None)
     captured = _project_quota_cli_payload(source, args, frozenset(), None,
                                          captured_decision_path='/tmp/observation/decision.json')
@@ -552,7 +564,8 @@ def test_selection_hop_on_committed_replan_turn_returns_committed_result(tmp_pat
         'execution_authority_granted': False,
     }
     assert code == 0 and selected['ok'] is True, selected
-    assert selected['schema_version'] == 'loopx_turn_envelope_v0'
+    assert selected['schema_version'] == 'loopx_turn_envelope_v1'
+    assert selected == observed['decision']
     assert len(saved) == 1 and json.loads(saved[0].read_text()) == observed['decision']
 
 
@@ -595,9 +608,9 @@ def test_native_recovery_failure_keeps_original_receipt_and_capture(
     def refuse_recovery(payload, **kwargs):
         saved = kwargs['capture_directory'] / 'decision.json'
         attempts.append(saved.read_bytes())
-        if turn_envelope:
-            assert payload['schema_version'] == 'loopx_turn_envelope_v0'
-            assert 'heartbeat_receipt' not in payload
+        assert payload['schema_version'] == 'loopx_turn_envelope_v1'
+        assert payload == json.loads(attempts[-1])
+        assert payload['heartbeat_receipt']['turn_instance_id'] == TURN_ID
         raise QuotaDecisionTransportError(
             'Current context recovery could not be published or safely invalidated. '
             'Read the saved original decision/receipt; do not rerun admission.'

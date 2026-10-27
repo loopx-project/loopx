@@ -159,6 +159,8 @@ def test_context_sharing_uses_one_boundary_and_keeps_explicit_detail(monkeypatch
     result = compact_quota_should_run_cli_payload(source,
         include_todo_summary_detail=task_detail, include_vision_detail=vision_detail)
     assert len(calls) == (0 if detail == "both" else 1)
+    assert calls.count("reference_context") == (0 if detail == "both" else 1)
+    assert "reference_current_task_title" not in calls and "reference_explore_guidance" not in calls
     if task_detail:
         assert result["agent_lane_next_action"]["title"] == title
     else:

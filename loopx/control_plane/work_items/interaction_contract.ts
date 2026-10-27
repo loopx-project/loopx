@@ -769,6 +769,38 @@ export function selectedWorkTodoId(packet: JsonObject): string | null {
   return typeof selected.todo_id === "string" && selected.todo_id.trim() ? selected.todo_id : null;
 }
 
+const OBJECTIVE_READ_GUIDANCE = "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.";
+function outcomeReadGuidance(scoped = false): string {
+  return (scoped
+    ? "Read the full global acceptance basis and every outcome required by this capture's read_scope, including cumulative requirements, work links and sources. Other outcomes retain current index facts and exact original-capture references; read their complete bodies before reliance. Unknown relevance or Goal-wide acceptance requires the complete original source. "
+    : "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. ") +
+    "Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+}
+
+/** The caller has already verified the captured reading plan. Adapt only this
+ * owner's exact fulfilled acceptance instruction in the derived presentation;
+ * unknown guidance or an outstanding acceptance read keeps full delivery.
+ * This changes no canonical source, adoption rule or execution authority. */
+export function scopeInteractionOutcomeReadGuidance(channel: JsonObject): boolean {
+  const pending = Array.isArray(channel.required_reads) ? channel.required_reads : [];
+  if (pending.some(value => jsonObject(value)?.source === "goal_acceptance")) return false;
+  const context = jsonObject(channel.work_context);
+  const sources = Array.isArray(context?.sources) ? context.sources : [];
+  const changes: {source: JsonObject; reason: string}[] = [];
+  for (const value of sources) {
+    const source = jsonObject(value), content = jsonObject(source?.content);
+    if (source?.source !== "goal_acceptance") continue;
+    const acceptance = jsonObject(content?.goal_acceptance_contract);
+    if (content?.status !== "loaded" || content.read_complete === false || !acceptance?.outcome_requirements) return false;
+    const prefix = acceptance.goal_objective ? `${OBJECTIVE_READ_GUIDANCE} ` : "";
+    if (source.reason !== prefix + outcomeReadGuidance()) return false;
+    changes.push({source, reason: prefix + outcomeReadGuidance(true)});
+  }
+  if (!changes.length) return false;
+  for (const {source, reason} of changes) source.reason = reason;
+  return true;
+}
+
 /** Generate the shared pre-work reads after final admission. Hosts consume this
  * list; transport projections must not independently infer requirements.
  * Python supplies registered source routing, never a second admission rule.
@@ -813,9 +845,9 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   if (stateFile) add(`cat -- ${shellQuote(stateFile)}`, "goal_state",
     "Read full Goal intent, acceptance, stops. No summaries; failed/changed sources need a fresh guard.");
   if (request.goal_objective_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
-    "goal_acceptance", "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.");
+    "goal_acceptance", OBJECTIVE_READ_GUIDANCE);
   if (checksPresent || request.goal_outcomes_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
-    "goal_acceptance", request.goal_outcomes_present === true ? "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard." : "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.");
+    "goal_acceptance", request.goal_outcomes_present === true ? outcomeReadGuidance() : "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.");
   const todoId = hasReplan ? null : selectedWorkTodoId(request);
   if (todoId) add(`${prefix} --format json todo list --goal-id ${goalArg} --todo-id ${shellQuote(todoId)}`,
     "selected_todo", "Read full current requirements and status/claim. Require one matching active Todo; missing, ambiguous or changed work requires a fresh guard. A summary cannot replace this read.");
@@ -892,6 +924,36 @@ function completeGoalNarrative(content: JsonObject): boolean {
     count += range[1] - range[0] + 1;
     return true;
   }) && Number.isSafeInteger(count) && count === expectedCount;
+}
+
+/** Completion binds to the admitted body, including whitespace, never a live
+ * reread or display prefix. Both complete contracts and historical journals
+ * use this resolver; absence of the old witness retains receipt recovery. */
+export function capturedTodoTextSha256(
+  selected: JsonObject, contextValue: unknown, recommendedAction: unknown, todoId: unknown,
+): string | null {
+  if (!Object.hasOwn(selected, "text_source_verified")) return null;
+  if (selected.text_source_verified !== true || selected.todo_id !== todoId) {
+    throw new EffectRuntimeRequestError("Turn task source does not match its selected Todo");
+  }
+  const context = contextValue == null ? {} : jsonObject(contextValue);
+  if (context === null || (context.sources !== undefined && !Array.isArray(context.sources))) {
+    throw new EffectRuntimeRequestError("Turn completion requires its admitted full task source");
+  }
+  const records = (Array.isArray(context.sources) ? context.sources : [])
+    .map(value => jsonObject(value)).filter(source => source?.source === "selected_todo")
+    .map(source => jsonObject(jsonObject(source!.content)?.todo))
+    .filter(record => record?.todo_id === todoId && typeof record?.text === "string");
+  if (records.length > 1) throw new EffectRuntimeRequestError("Turn task source is ambiguous");
+  let text = records.length ? records[0]!.text : undefined;
+  if (text === undefined && (!Object.keys(context).length || context.selected_todo_ref === "selected_todo")) {
+    text = selected.text;
+    if (text == null && selected.text_ref === "action.recommended_action") text = recommendedAction;
+  }
+  if (typeof text !== "string" || !text) {
+    throw new EffectRuntimeRequestError("Turn completion requires its admitted full task source");
+  }
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 /** Deliver full registered sources once. Unowned mixed Goal documents remain

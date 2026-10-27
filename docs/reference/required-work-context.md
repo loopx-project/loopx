@@ -113,6 +113,30 @@ retains its complete body and declaration. Todo-less reads and the explicit
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
 
+Within the opt-in native context transport, a verified same-capture reading plan
+now produces `outcome_context_projection_v0`: an explicit model presentation,
+with the current Agent's and related outcomes expanded and other independent
+outcomes indexed with current states and exact original-source references.
+Global intent, checks, permissions, stops and pending reads stay intact. The
+interaction owner adjusts its own fulfilled outcome-reading instruction; read
+complete optional detail before relying on it, and recover the complete original
+source for unknown relevance or Goal-wide acceptance. Unknown optional fields,
+unsupported guidance or a pending acceptance read keep full delivery. The
+canonical decision and ordinary inspection still retain all requirements.
+
+Native full/delta baselines and compaction recovery bind the exact required
+presentation, including its original-source digest. A newly required outcome
+must deliver its body before reuse; machine storage of optional text is not
+model reading. Publish current full-source recovery before optional scope
+composition, then the exact required artifact before encoding, so interruption
+cannot recover the preceding input. `quota context-read --outcome-ref` on the
+presentation rechecks
+its original full source through the same registry and exact-page reader.
+Those detail pages cannot establish full-presentation retention. Old full
+captures keep their original full-read obligation; transport off is unchanged.
+These are source-path guarantees, not installed App adoption, actual model
+retention or accepted-outcome/full-cost benefit.
+
 For an exact Todo, the existing command now returns one complete record:
 
 ```sh
@@ -452,6 +476,21 @@ Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修�
 全部保留，包括其他 owner 的要求。选定 Todo 的完整正文与声明仍由独立来源携带。
 没有选定工作的读取及显式 `goal-acceptance inspect` 保留完整列表；正文减少不等于
 验收、执行权限或已经测得模型收益。
+
+可选 native context transport 在同 capture 读取计划完整匹配时生成显式模型展示
+`outcome_context_projection_v0`：展开当前 Agent 及相关成果，其他独立成果保留当前
+状态索引和精确原来源引用。全局意图、检查、权限、停止和未完成读取保持完整；既有
+interaction owner 仅调整自己的已履行成果读取指导。依赖可选成果前先读完整正文，
+相关性未知或 Goal 整体验收时读原完整来源。未知可选字段、不支持的指导或尚未完成的
+acceptance read 均保留全量交付；canonical decision 和普通 inspect 不删减要求。
+
+native 全量/差分 baseline 与压缩恢复绑定真正交付的必读展示及其原来源 digest。
+新增必读成果须先交付正文，机器保存可选文字不代表模型已读。
+可选 scope 组合前先发布当前完整来源的恢复引用，编码前再发布精确必读产物，避免
+中断后恢复前次输入。对该展示运行
+`quota context-read --outcome-ref` 会通过同一 registry 和精确分页 reader 重验原完整
+来源；详情分页不确认完整展示已保留。旧 full capture 仍按原完整义务读取，transport
+关闭不变。这些是源码路径保证，不证明正式 App 采用、模型保留或验收成果/完整成本收益。
 
 `todo list --todo-id …` 默认只返回一份完整 `todo.text`，保留来源、修订、身份、
 状态和关系。精确响应移除列表及角色视图，不保留兼容开关；`--thin` 只用于概览。

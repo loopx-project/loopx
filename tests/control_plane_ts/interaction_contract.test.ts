@@ -13,6 +13,7 @@ import {
   INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
+  scopeInteractionOutcomeReadGuidance,
   projectBlockedSuccessorWaitObservation,
   type AgentInteractionChannel,
 } from "../../loopx/control_plane/work_items/interaction_contract.ts";
@@ -639,6 +640,31 @@ test("declared outcomes remain required reads without enabled checks after a wor
   assert.match(String(acceptance.reason), /cumulative requirements/);
   const off = projectInteractionRequiredReads({...facts, goal_outcomes_present: false}).required_reads as JsonObject[];
   assert.ok(!off.some(read => read.source === "goal_acceptance"));
+});
+
+test("scoped presentation keeps the original objective, refinement and stop obligations", () => {
+  for (const objective of [false, true]) {
+    const reads = (projectInteractionRequiredReads({...readFacts(), required_reads: [],
+      goal_objective_present: objective, goal_outcomes_present: true}).required_reads as JsonObject[])
+      .filter(read => read.source === "goal_acceptance");
+    const source: JsonObject = {...reads[0], content: {status: "loaded", goal_acceptance_contract: {
+      outcome_requirements: {outcomes: []}, ...(objective ? {goal_objective: {revision: 1}} : {})}}};
+    const channel = {required_reads: [], work_context: {sources: [source]}};
+    const original = String(source.reason);
+    assert.equal(scopeInteractionOutcomeReadGuidance(channel), true);
+    const reason = String(source.reason);
+    for (const clause of ["read_scope", "complete bodies before reliance", "Unknown relevance",
+      "original Goal and earlier requirements", "Before switching work or declaring completion",
+      "refresh-state --goal-outcome-update-json", "unchanged work needs no extra inspect/write",
+      "Agent review is distinct from independent checks", "Scoped acceptance never replaces Goal intent",
+      "Changed requirements need a fresh guard"])
+      assert.ok(reason.includes(clause), clause);
+    if (objective) assert.ok(reason.startsWith(original.slice(0, original.indexOf(" Read the full acceptance basis"))),
+      "objective adoption, settlement/release, peer independence and stops retain their exact instruction");
+    const unknown = {required_reads: [], work_context: {sources: [{...source, reason: "Unknown future obligations"}]}};
+    assert.equal(scopeInteractionOutcomeReadGuidance(unknown), false);
+    assert.equal(unknown.work_context.sources[0].reason, "Unknown future obligations");
+  }
 });
 
 

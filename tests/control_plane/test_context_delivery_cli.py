@@ -283,8 +283,12 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     assert warm["mode"] == "delta"
     projection = json.loads((second / "projection.json").read_bytes())
     current = prepare_context_delivery(projection, scope=scope,
-        capture_id=warm["target"]["capture_id"], surface=surface)
-    assert restore_context_delivery(warm, baseline=cold, current=current)["context"] == projection
+        capture_id=warm["target"]["capture_id"], surface="complete_turn")
+    assert projection == json.loads((second / "decision.json").read_bytes())
+    assert projection["schema_version"] == "loopx_turn_envelope_v1"
+    assert current["target"] == warm["target"]
+    restored = restore_context_delivery(warm, baseline=cold, current=current)
+    assert restored["mode"] == "delta" and restored["context"] == projection
     assert len(json.dumps(warm)) < len(json.dumps(current))
     assert warm["recovery"]["path"] == str(second / "projection.json")
     assert warm["target"]["capture_id"] == hashlib.sha256((second / "decision.json").read_bytes()).hexdigest()

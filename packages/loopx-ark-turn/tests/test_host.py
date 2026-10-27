@@ -12,6 +12,8 @@ import httpx
 import pytest
 from arkruntime import AsyncArk
 
+from tests.control_plane.test_turn_host_decision_capture import complete_host_request as complete_host_request
+
 from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
 from loopx_ark_turn.config import AdapterError, Config
 from loopx_ark_turn.host import run
@@ -336,3 +338,60 @@ def test_cancel_and_competing_start_do_not_launch_another_session(tmp_path):
 def test_unsafe_configuration_is_rejected(tmp_path, override):
     with pytest.raises(AdapterError):
         replace(config(tmp_path, tools=False), **override)
+
+
+@pytest.mark.parametrize("checkpoint", ["completed", "running"])
+def test_complete_cli_input_reaches_sdk_and_replays_original_receipt(tmp_path, monkeypatch, complete_host_request, checkpoint):
+    req, contract = complete_host_request
+    cfg = config(tmp_path, tools=False)
+    provider = Provider([])
+    checkpoints = []
+    save = Receipt.save
+
+    def capture(receipt):
+        save(receipt)
+        if receipt.data["stage"] == "running":
+            checkpoints.append(copy.deepcopy(receipt.data))
+
+    monkeypatch.setattr(Receipt, "save", capture)
+    result = asyncio.run(execute(provider, cfg, req))
+    sent = [body["events"][0] for method, path, body in provider.calls
+            if method == "POST" and path.endswith("/events")]
+    assert len(sent) == 1 and sent[0]["type"] == "user.message"
+    prompt = sent[0]["content"][0]["text"]
+    model_input, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
+    assert model_input["work_contract"] == contract
+    assert "turn_envelope" not in model_input and "turn_authority" not in model_input
+    assert result["turn_key"] == req["turn_key"]
+    if checkpoint == "running":
+        # Replay a real persisted checkpoint; the provider retains the original
+        # input and result. Recovery must observe it instead of submitting again.
+        assert checkpoints
+        Receipt(cfg.state_dir, req["turn_key"]).path.write_text(json.dumps(checkpoints[0]))
+        provider.deleted.clear()
+    calls = len(provider.calls)
+    assert asyncio.run(execute(provider, cfg, req)) == result
+    if checkpoint == "completed":
+        assert len(provider.calls) == calls
+    else:
+        assert not [row for row in provider.calls[calls:] if row[0] == "POST"]
+
+
+@pytest.mark.parametrize("mutation", ["source", "version", "binding", "missing"])
+def test_complete_cli_input_rejects_corruption_before_provider(tmp_path, complete_host_request, mutation):
+    original, _ = complete_host_request
+    req = copy.deepcopy(original)
+    if mutation == "source":
+        req["work_contract"]["goal_id"] = "different-goal"
+    elif mutation == "version":
+        req["work_contract"]["schema_version"] = "unsupported-contract"
+    elif mutation == "binding":
+        req["work_contract"]["contract_binding"]["scheduler_execution_args"] = "different-host"
+    else:
+        req["work_contract"] = None
+    cfg = config(tmp_path, tools=False)
+    provider = Provider([])
+    with pytest.raises(ValueError, match="complete Turn contract rejected"):
+        asyncio.run(execute(provider, cfg, req))
+    assert provider.calls == []
+    assert not cfg.state_dir.exists()

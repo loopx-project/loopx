@@ -257,6 +257,115 @@ session、role、epoch、schema、source capture 下证明已完整送达并保�
 已取消工作。Executor 任务对话独立消费语义材料，不是 controller Core packet 换名后的
 delta。
 
+冷态交付默认展开当前 Agent 的成果。其他 Agent 的独立成果保留可发现索引，包含
+身份、owner、目标、revision、工作关联、未满足要求标识、当前 review/check 状态及
+精确 capture 正文引用。全局 Goal 意图、共同要求、权限与停止条件始终进入必读输入。
+跨 Agent 依赖、共同验收，以及影响当前决策的阻塞或矛盾证据，须在相关决策前自动
+展开，不受 owner 限制。Goal 级重规划和整体验收扩大到所有受影响成果；局部交付
+无需重读无关历史证据。Owner 只是默认范围，不是权限边界或充分的相关性判断。
+工作未绑定、关联未知或来源形状不受支持时，保持完整交付，直至既有 typed owner
+能够证明较窄的必读范围。
+
+Canonical 契约仍保留完整要求和证据。以现有同 capture 成果索引及 replan 分阶段
+reader 为起点，合并普通/replan/detail 管线；索引须补足当前决策事实，不能只有成果
+数量。必读范围保留要求全文，支持性来源和 review 细节通过绑定完整性、顺序明确的
+reader 按需交付；依赖该材料的决策须先读完它。当前结论、新鲜度与未满足要求仍
+内联，Agent review 不能变成独立检查。界面折叠本身不会减少模型输入；交付投影、
+required-read owner 与 host 恢复契约须一起迁移，已有 capture 保留原完整读取义务。
+正文缺失或保留情况不确定时，执行原 capture 支持的恢复，不能重新准入或假定已读。
+不能为字节目标缩短保留要求、裁剪声明来源或靠正文关键词推断相关性。
+
+C2 须在相同冷态、已保留温态及上下文丢失来源上验证：默认自己工作、跨 Agent
+依赖/约束、未绑定工作、同伴证据变化、广域 replan 和 Goal 验收。计入实际模型输入、
+分页及正文读取往返、恢复、延迟和完整成果成本；首屏变小不能抵消必要补读或漏掉
+约束的成本。这是拟议交付行为，替换与回滚完成资格验证前，仍以当前完整来源 reader
+为准。
+
+第一项 reader 前置现已有实际普通 CLI 调用方：给定原 capture 文件和文件字节
+SHA-256，`quota context-read --outcome-ref` 分页读取成果索引，附上返回的精确引用
+则分页读取该成果全文。普通与 staged replan 复用同一 TypeScript registry/index
+owner；索引保留 owner/工作关联，并将当前 check/planning/review 事实完全相同的
+要求标识分组，缺失事实保持未知。相同正文共享引用，同 id 的变化版本仍分别保留。
+详情保留原描述、声明来源、review 证据与未知字段。每页重新核验原文件，返回的
+接续命令还绑定所选 JSON 字节 digest，拒绝在原文件 hash 未变时混合变化的渲染。
+游标仅定位所选 JSON，不能证明完整 capture 已保留。这是读取前置，尚未切换默认自己
+Agent：原完整读取义务、Host 连续性和 Goal 权限保持不变。
+
+既有 canonical acceptance 读取还从同一份完整工作快照提供版本化的候选读取计划，
+不增加 authority 读取或 RPC。计划包含自己的成果、选定工作、传递的 typed 依赖/
+lineage、共同工作/check scope、精确声明来源或 review 证据，以及失败/过期观察及其
+相关工作。工作未绑定、关系/生命周期不可用或 Goal 全局检查均保留全部成果。
+捕获索引仅在计划与 Goal/Agent/Todo、provider revision 和完整验收来源 digest
+一致时标记 `required_in_scope`；oracle 事实变化、额外载体版本或不支持的计划均
+扩大为完整读取。原完整 capture reader 仍返回 `scope_applied=false`：索引不改变
+该 capture 的完整读取义务；普通 acceptance inspect 保持原完整格式。
+
+可选 native transport 现在将计划同时接入 required-read、交付与恢复。
+`outcome_context_projection_v0` 只标识派生的模型展示，不是部分 canonical decision
+或新的决策 owner。原完整 capture 保持不可变和 digest 绑定；展示展开全部必读成果，
+保留所有全局字段、完整当前成果索引及精确原来源引用。未知可选字段、未解决的
+acceptance read 或不认识的来源指导均保持完整交付。既有 interaction owner 仅替换
+自己精确生成、已履行的成果读取指导；目标采用、原始和累计要求、工作核对、独立检查
+区别、新鲜度、权限及停止义务保留，不引入自然语言相关性分类器。注册关系闭包仍
+不能证明任意语义独立性：依赖可选成果前先读完整正文，相关性未知或需要 Goal 全局
+决定时扩大为原完整来源。
+
+native candidate 与压缩恢复指向真正交付的必读模型产物，而不是机器保存的完整
+canonical 来源。既有 delta codec 因而会交付新增必读正文，不能从隐藏 baseline 借用
+模型未读过的可选正文。当前完整来源的恢复引用先于可选 scope 组合发布，再在编码前
+替换为精确必读产物；组合期间中断不能让恢复仍选中前一次 capture。完整分页覆盖仍只是
+显式 native-hook 连续性假设，不证明模型
+保留。可选详情复用同一原来源 registry，重验文件和派生展示，不确认完整 capture
+保留。transport 关闭和旧 capture 保持原行为；其他 Host adapter、正式 App 采用、
+实际模型决定及匹配验收成果/完整成本仍未资格。
+
+同一 24 成果/253 要求合成快照，以 61 组交替温态真实 provider owner 调用对照
+旧实现：File 中位数 5.890→6.317 ms，SQLite 为 2.239→2.521 ms；p95 分别为
+15.267→17.580 和 6.504→9.412 ms。原响应字段全等，计划元数据增加 405/415 个
+序列化字节。此对照仅隔离同一 TypeScript 进程的 acceptance owner，不含 bridge、
+CLI、冷启动或模型成本；此基础在 native 范围切换之前增加成本，不是效率提升。
+native 展示还增加精确必读产物及既有 codec 之前的一次 typed owner 调用，必须与
+分页、补读和恢复成本一起计入；首包缩小不证明净收益。
+
+native 切片通过 406 项真实入口 Python（五项显式 native/SDK 案例未资格）、169 项
+TypeScript 和四项真实 Codex `0.163.0-alpha.11.1` 静态 loopback 检查。后者核实际
+模型请求中的冷态全文、保留差分与同 capture 恢复字节，不证明自由生成模型行为。
+四个新增 File/SQLite 范围断言在 `1ac29089f` 失败。集成中发现的恢复引用回归已修复：
+只为显式 scoped 产物替换 metadata，普通恢复保留原文件字节身份。
+中断回归最初因仍选中前次 capture 而失败；将当前恢复发布前移到可选 scope 调用之前
+后通过。标准 premerge 仍有两项在 `8b37000b3` 同样复现的失败：既有
+`run_loopx_turn_once` 决策函数过大，以及前序 owner 收敛后 `turn_route` 的 producer
+覆盖过期。本 native 增量未修改这些文件；它们仍是 C1 资格缺口，不是通过或例外。
+
+最终运行源码 `e1c69289a` 的成本含上述恢复发布顺序修复；对照不可变 `8b37000b3`（前序 C1 与相同 target-main 大页配置），24 成果/253 要求
+来源上，每侧三组温态 cohort、每 provider/阶段 21 样本。温态新增真实 typed 依赖并核
+先前未读正文的交付。File 冷态/温态/恢复的完整分页序列化输出为
+105,380/40,473/103,372→37,908/33,495/38,594 字节。延迟中位数：
+
+| 阶段 | File，原→新 ms | SQLite，原→新 ms |
+| --- | ---: | ---: |
+| 冷态全文输入 | 72.856→48.749 | 67.237→46.477 |
+| 温态范围扩大 | 38.744→51.944 | 35.953→52.165 |
+| 上下文丢失后全文恢复 | 109.126→61.425 | 109.725→56.777 |
+| 索引加一项可选全文 | 96.918→108.557 | 92.460→109.251 |
+
+新增 scope RPC 仍在，温态 bridge 调用由二增三；File 温态产物文件共
+131,020→160,192 个序列化字节。索引/详情仍为两调用，但增加派生展示重验；冷态和恢复由两页
+变一页。测量含温态 runtime 下 Python native 投影、分页与生命周期，未控制机器负载；
+不含首次验收收集、进程启动、子进程 CPU、模型/缓存 tokens、账单、人工/实施及验收
+成果。冷态/恢复传输改善，温态及详情中位数退化；这不是原 quota 对照或完整成本正向结论。
+
+小来源给出体积节省的反例：四个真实入口 File/SQLite 夹具各含两成果、四要求，
+由 36,293–40,548 增至 37,948–42,203 字节，每项恰好增加 1,655 字节，索引和范围
+元数据超过短可选正文。提案不从大夹具推导语义省略规则或生产体积阈值。
+
+同一 24 成果/253 要求的合成来源，按旧的仅数量索引形状渲染分配 8,190 字节，
+staged 状态分组分配 18,979 字节，原 12 KiB 索引预算失败。保留这些当前决策事实，
+据此将独立索引上限调整为 20 KiB；history、horizon、完整 envelope 与生产性能
+限额均不变。完全相同状态分组避免逐要求重复状态字段。这里只测序列化字节，
+不是 token/延迟/成果收益或不可变 base/head 对照。上述源码范围检查和传输成本不证明
+一般语义独立性或匹配验收成果/完整成本收益。
+
 ## 6. 备选方案与取舍
 
 | 备选方案 | 结论 |
@@ -396,11 +505,193 @@ reader 覆盖仍保留。八项聚焦用例通过，使用注入的记录 runner
 File/SQLite 原生输入检查确认不支持的内层版本在 Codex prompt 执行或 DSH runner
 加载前拒绝，且不扣额。完整契约/context/DSH/stdio 集合 352 项通过，TypeScript
 检查及聚焦 lint 通过。这只证明上述交互语义，不代表所有必需字段或打包宿主已验收。
-剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
+在该历史检查点，剩余 cache 一致性调查、其他旧 reader 断言、分阶段指令等价和实际 optional/external
 消费者、版本准入及打包宿主连续性仍未完成。缺少显式原生 runtime 的 operation SDK
 检查属于未测，不能算资格。默认 writer 变更尚未交付；PR 因作者实现未完而保持
 Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effect 解码只是临时迁移，
 不得成为第二份永久可执行视图。
+
+External scheduler 候选在读取节奏或唤醒许可前，通过
+`assert_complete_turn_decision` 复用现有 TypeScript 完整 reader owner 验证带版本输入。
+这是纯读取：不重组已捕获的 host binding，也不生成旧 executor 视图。缺失 binding、
+不支持的版本／必需语义、内容篡改和无效同 capture 引用均在 wake command 前拒绝。
+无版本普通 quota packet 暂保留原兼容路径，退役须核对受支持的已部署 worker。
+File／SQLite 源码 CLI 到 worker 验证使用本地子进程标记，不执行模型；这里只取得
+该输入边界资格，不代表 attached host 任务交付、结算或验收成果／完整成本收益。
+
+可选 Ark adapter 复用同一宿主输入 owner 的 `extract_turn_authority`／
+`render_prompt`，无需在可选包里新增契约 builder。File／SQLite 的真实
+`turn plan --host generic-cli --iteration-context fresh` 已将完整请求送入
+真实 Ark SDK，并使用合成 HTTP transport 验证。检查对照实际 user-message
+中的契约与原 CLI 来源，恢复持久化 running receipt 时不重新提交输入，重放完成
+结果时不再调用 provider；来源／版本／binding 被篡改或完整输入显式为 null 时，在调用
+provider 或创建 receipt 之前拒绝。Core 状态与记账保持不变，历史 Ark 请求和恢复
+测试继续保留。这验证了 SDK wire 边界，尚未验证实际云端 session、模型成果或
+Core 结算。Ark 与 MemT 现共用真实 File／SQLite CLI 请求夹具。MemT 在 provider IO
+之前拒绝该完整输入，因为可执行的 legacy registry 不提供精确 `goal_ref`。
+现有 `source_session_v1` 虽有精确生命周期，但属于 lifecycle-only；真实通用 Turn
+规划入口会在 capture 或执行前拒绝它。规划后补造引用会掩盖这一生产者／消费者缺口。
+完整输入损坏也会在 provider 或 receipt 创建前拒绝；历史 MemT SDK／snapshot 测试
+继续保留，但不能证明端到端完整输入送达。MemT 路径的所属边界修复须将可执行 registry
+准入的精确生命周期沿共享 Turn 请求与恢复 owner 传递，并保留重建及旧实例拒绝。
+不能通过放松 MemT 隔离或启用 lifecycle-only profile 来绕过。这是已证实的采用缺口，
+尚未取得原生记忆路径资格。operation-SDK 原生 runtime 与打包 App 采用也仍待验。
+内部 effect envelope 与历史请求 decoder
+仍服务结算／结果／会话 caller；只有这些 caller 和未结 receipt 已采用替代契约后
+才能移除，不能仅因模型输入不再包含旧 envelope 就删除。
+
+新请求的 Codex／DSH 共享 session lineage 已从完整契约读取，复用 TS 的
+完整输入校验与自适应主任务选择 owner。模型输入校验使用同一 owner，并拒绝完整
+输入与内部 effect adapter 的 Goal／Agent／Todo 不一致，即使两份摘要各自有效。
+完整路径不再重复调用 Python 的版本与签名校验；历史请求继续使用原 decoder，
+持久化 session schema、路径与 scope 不变。File／SQLite 真实 CLI capture、失败恢复
+和一次结算重放通过；普通／自适应任务在 todo／agent scope 均能读回 Codex／DSH
+原 session。相同夹具在迁移前基线保留合法路径通过，但新增身份冲突用例失败，
+在候选通过。原生 operation SDK 环境仍有跳过，不能宣称其 runtime 已验证。
+会话身份迁移未移除全部结果资格与结算的内部 envelope caller，尚未达到完整退役
+或净成本收益结论。MemT 生命周期缺口仅阻塞
+其依赖路径，不阻塞这些独立迁移。
+
+规划与失败重试的 session 查找现在传递原始完整契约，journal inspection 也复用
+同一身份 owner。缺省契约仍解码历史记录；显式 null 契约会拒绝。实时与缓存 vision
+结果的归一化也复用该身份读取，不再从 effect adapter 重建 Goal／Agent。
+会话 scope／生命周期门与原生 app-server callback 仍由既有 owner 负责。
+本片移除这些仅用于读取身份的旧调用，尚未删除内部 adapter：执行路由、结果证据／
+profile 判定与结算仍须迁移。
+自适应恢复夹具在签名前构造：历史未验证选择仍按 primary Todo 写回；冲突的已验证
+任务来源在 host 执行和额度支出前拒绝。既有来源校验门保持有效。
+完成恢复验证读取原始持久完成及支出回执，不重新提交完成。四项过时的重复调用断言
+在前一基线同样失败；修正后的验收保留真实 File／SQLite 中后续任务文本变化和历史
+未带来源凭据但已经接受完成的恢复场景。
+
+完成任务正文的解析现由既有 TypeScript interaction 来源 owner 统一负责。
+新 `run-once` 请求先校验完整 capture 与内部 adapter 的绑定，再解析并计算完整
+契约中已准入正文的摘要，不再从 adapter 重建该来源。历史 journal 经 Python
+薄 transport 使用同一解析规则，保留 Unicode／空白原始字节、缺失／重复来源拒绝
+及已接受完成回执的恢复。此次删除一套 Python 语义算法，没有新增第二种 packet
+视图。迁移前 `599cf1f72` 的 48 项 File／SQLite 捕获及完成检查通过；候选完整来源
+检查也拒绝被修改的 binding 和显式 null 输入。历史解析原为本地 Python，现在
+增加一次 TypeScript 边界调用；完整路径净成本尚未测量。结果 profile、证据解释
+和其余结算消费者仍须继续迁移。
+
+Codex 结果 schema 与共享 candidate adapter 现通过同一经过校验的完整契约
+profile 读取判断证据要求是否适用；新请求不再从内部 capsule 决定该要求。
+该读取与模型输入校验复用既有 TypeScript 完整性／来源／身份校验器，没有新增
+packet 视图、wire 字段或按证据字段分别调用。缺省契约仍解码历史 capsule；
+显式 null 或被修改的契约会拒绝。空／非对象 profile 保持原来的不适用行为，
+停止结果仍不要求证据，已提供证据原样交给既有结果验证器。此次迁移的是适用性
+判断，未改写证据内容校验，也尚未迁移全部执行路由和结算消费者。
+schema／material candidate 每次读取各新增一次校验边界调用；这是语义收敛，
+尚不能据此宣称性能改善。
+使用同一真实 SQLite CLI host 请求（JSON 45,405 字节、合成 provider）进行
+31 组交替热边界测量，schema 构造加 material 结果转换的中位耗时从
+`68223e337` 的 0.013 ms 增至候选的 19.6 ms（p95 为 0.019／22.8 ms），
+合法输出一致。保留这一局部新增成本的负向证据；测量不包括冷启动、模型工作或
+完整 Turn，总体成果／成本资格仍开放。检查覆盖真实 File／SQLite 捕获恢复与
+Codex／共享 host 消费者，不能证明打包 App 已采用或模型成果改善。
+
+执行入口现在在 dispatch 或 journal 恢复前校验一次完整契约身份。结算计划缺失时
+用该身份补建，恢复检查在同一次调用内复用它，不再读取 adapter 的 Agent。
+已有结算计划与回执不重建；缺省完整契约的历史记录保留原解码与字符串处理。
+该值不会跨 host 尝试、来源替换或后续调用缓存。此举同时关闭一个恢复绕过点：
+此前已有结算计划会跳过来源校验，null／被修改的完整请求仍可返回已有 journal
+结果。真实 File／SQLite CLI journal 的新拒绝保留 journal 字节与扣额数，
+不调用 host 或结算 callback。十个定向用例在 `ce996ea0f` 的新增拒绝断言处失败；
+候选 32 项捕获／恢复检查和扩大后的 605 项回归通过（相互重叠）。入口新增一次
+校验边界调用，由两个消费者共用。同一份 45,405 字节真实 SQLite CLI 请求，
+31 组交替热测已有结算计划读取与恢复身份，合法输出一致：中位数从 0.016 增至
+12.382 ms，p95 从 0.024 增至 14.883 ms。这是新增局部校验成本，不是效率收益；
+不含冷启动、完整 Turn 与模型成本。完整路径性能及其余路由／结算退役仍开放。
+
+Codex CLI 构建提示词时，有效完整请求现在直接调用既有完整校验 owner，删除重复的
+单独 envelope 版本调用。历史请求保留版本检查；完整校验失败时仍检查版本，以保留
+两处同时损坏时的诊断优先级。未引入校验缓存、新 wire 字段或第二 owner，提示词正文
+不变。这是调用边界合并，不代表剩余 driver 路由或结算 adapter 已退役。
+
+对照 `e1dcd95dd`，完整与历史提示词字节一致，六类无效输入保留相同拒绝诊断。
+同一份 45,429 字节真实 SQLite CLI 请求生成 34,043 字节提示词；61 组交替热测中，
+提示词构建中位数从 24.229 降至 14.819 ms，p95 从 30.189 降至 17.854 ms；
+桥接追踪确认两次调用变为一次。局部降幅约 39%，不含冷启动、模型执行和完整 Turn
+成本，不抵销单独测得的 profile／结算开销，也不证明相对原 quota 的成果收益。
+诊断补充前的较早样本为中位 21.279／12.994 ms、p95 29.729／17.321 ms；保留其
+早期证据身份，不作为第二份独立的最终资格。
+
+规划现在在构建路由、会话和事务之前接收完整契约，不再在计划完成后附加它。
+规划与失败会话恢复通过一个粗粒度身份操作复用既有 TypeScript 完整来源校验；
+同一次边界调用选择 Goal/Agent/工作身份并返回动作签名前像，替代原先仅取签名的
+调用，不增加逐字段 RPC 或缓存。显式空值、不支持版本、被修改的完整契约均拒绝，
+已处于 resume 的请求也一样；缺省完整契约的历史输入保留原 decoder。
+Todo-less replan 身份仍由回执 owner 提供；下文路由与启动增量记录后续消费者迁移。
+
+Python JSON/hash 传输编码特意保持不变。直接采用 JavaScript 哈希的试验未通过
+小数／指数前像一致性检查，会改变已持久化的 Turn key；File/SQLite 特征化现在
+覆盖这些数值、Unicode、自适应工作选择和重复恢复。一个真实 SQLite CLI 请求
+（45,380 JSON bytes）相对 `088867421` 的 31 组交替热态采样，完整／历史计划及
+失败恢复输出保持一致。规划 median/p95 从 39.632/47.964 变为 42.608/53.270 ms；
+恢复从 12.330/20.858 变为 18.136/23.242 ms。这是局部增加的校验成本，不是完整
+Turn 或原 quota 成果对照，也不代表模型、已安装 App 或 PostgreSQL authority
+资格。剩余路由／材料 adapter 退役及端到端成本资格继续使 C1 保持开放。
+
+Host 启动前实时复查现在将回执绑定的实时观察交给初始规划所用的同一完整契约
+composition owner，再把完整契约传入共享 planner，替换原先 raw quota 直接进入历史
+规划的捷径。Stop 和动作变化仍先于 composition 拒绝；实时观察不替换原始 capture
+中的模型输入，也不生成另一份回执。剩余 effect／材料 adapter 仍需退役。
+
+路由分类现在归既有 TypeScript envelope owner 所有。显式注册 action／frontier 表在
+编译期检查穷尽性，历史未知 action 仍进入 Host；签名拒绝、attempt、先 replan 后
+普通 delivery 门、能力 intent 身份、repair、用户行动和安静等待保留原顺序。
+Python 仅保留 controller 薄传输与历史 scalar-text 编码，不再拥有第二份分类表。
+完整契约校验忽略历史解码提示；已持久化动作 hash 的 Python 编码及历史工作选择
+reader 均保持不变。
+
+规划在既有粗粒度身份／签名调用中同时取得 route；完整与历史普通计划仍各需两次
+桥接调用。相对旧 Python 分类器，1,152 组 action／gate 组合一致；固定真实 SQLite
+CLI fixture 的完整与历史计划输出也一致。计划对照共用当前 TypeScript endpoint，
+因此不是精确旧版／新版端到端延迟实验。controller 单独读取 route 现在新增一次
+桥接：44,891 字节请求的 61 组交替热测，median/p95 从 0.004792/0.010125 升至
+13.252792/15.855042 ms。这是该 caller 的实测回归，不是效率收益；作为 controller
+调用边界合并的明确成本缺口保留，不引入缓存或重复分类器掩盖它。File/SQLite
+入口、恢复、一次结算资格，剩余 adapter 退役、打包采用和原 quota 成果／完整成本
+资格仍分别验收。
+
+生产 `turn managed-step` caller 现在将 envelope 构造与同一路由求值合并在一次
+TypeScript 请求中。Python adapter 返回绑定 route 的本地不可变 envelope 快照；它
+不是新的 Agent wire 版式，也不拥有第二份决策规则。读取或修改返回的字典不会
+改变快照，也不能把它的资格附到另一份 wire 字典。controller 保留既有用户行动
+优先级、回执／前驱校验和 journal 所有的重试预算；普通历史或外部 envelope 仍走
+原 route reader 与签名拒绝。构造 adapter 和普通 envelope builder 共用宿主绑定及
+capture 参数准备，删除 managed caller 原本多余的中间 builder。上段独立 reader
+回归保留为历史实测；只有生产中新生成与消费的调用对能够省去这次额外请求。
+剩余工作选择／effect／材料解码、大型冷上下文恢复、打包与成果资格继续开放。
+caller 直接消费统一 typed controller 结果后，本地快照随之退役；它不新增持久化
+schema 或兼容 wire。
+
+固定 31,088 字节合成来源的 61 组交替热测，将 `ddf96b79c` 的原 Python producer／
+controller 函数与合并调用比较；共用当前 TypeScript 服务和未变的 build／route 规则。
+最终源码的组件 median/p95 为 22.477/25.417 对 13.739/17.479 ms。另以真实隔离 File/SQLite
+store 经公开 `managed-step` CLI，各 provider／arm 取 21 组交替热测：File median
+为 135.989 对 137.316 ms，SQLite 为 149.310 对 146.081 ms；p95 分别为
+209.730 对 192.544 ms、222.299 对 240.848 ms。另行传输计数探测发现每个 provider
+的桥接总请求数从 70 降为 69：省去一次 route 请求，其余 live-decision 调用仍在。
+完整输出一致，失败 journal 逐字节不变，两臂均不扣额。请求数改善，但整条 CLI 的
+median 和尾部结果混合，尚不能证明加速；本地小
+样本及共享机器资源限制尾部推断。这是具名源码边界的观察，不是整个不可变旧树
+对照、冷启动、已安装 App、模型成果或原 quota 完整成本资格。
+
+完整 reader 现在还将 adapter 的已签名动作文档，与原完整来源经过既有 producer
+投影的结果比较。原先来源和 adapter 各自的 hash 只能证明各自完整：重新计算 hash
+后的 adapter 可以保留 Goal/Agent/Todo，却改变执行或写回条件。共享校验复用既有
+签名维度，不新增第二份字段清单、RPC 或 wire 视图。仅含历史输入时保留旧 reader。
+完整请求的 profile adapter 与来源不一致时，现在明确拒绝，替代此前忽略冲突、直接
+采用来源 profile 的行为；这是有意的拒绝语义变化，历史 profile 行为另行保留。
+
+相对 `b9e2c5120`，File/SQLite 的规划拒绝断言在修复前失败。六类独立重算 hash 的
+反例覆盖运行资格、有效动作、交付许可、用户介入、执行策略和扣额许可；候选在
+host／写回／扣额回调前拒绝，不产生 Turn journal 或结算回执。既有 lane 锁仍可能
+先分配。一个 44,891-byte 真实 SQLite CLI fixture 的 101 组交替热态进程内
+TypeScript 采样保持合法身份输出一致；校验 median 从 4.864 增至 5.163 ms，p95 从
+5.570 增至 6.010 ms。这是局部新增成本，不含桥接、实时 composition、冷启动、模型
+或完整 Turn 成本，不证明相对原 quota 的成果收益或 C1 切换资格。
 
 ### C1 消费链替换与切换单元
 
@@ -427,6 +718,16 @@ Draft，不是仅等待评审。尚无模型或成本收益证据。历史 effec
 不能因此创建第二个活跃 writer。已准入工作继续使用记录的版本和原回执；在这些工作及
 受支持恢复窗口核清前保留历史 decoder。回退同样区分未结工作与新准入。版本迁移不能
 把保存的 prompt、journal 或源 hash 改写成仿佛一直使用新契约。
+
+代码收敛属于每个迁移切片，不只留给最终 C9 清理。两个入口须共用 composition、引用
+校验、上下文重建与结算的语义实现。真实的宿主 launch/observation 差异留在薄 adapter；
+不为强行统一不同生命周期而另造通用 runner。各项决策仍由既有 typed owner 负责。
+
+每个切片记录迁移前后调用点、共享 owner、已删除的重复算法，以及剩余兼容 caller 和
+退出条件。两条路径共用独立编写的语义用例，并分别验证真实传输与恢复。仅委托调用的
+wrapper 可以过渡保留；给公共模块起新名字却继续保留两套规则实现，不算收敛。下一次
+修改共同规则，应只改、只测一个 owner 并传递到两条路径。代码行数下降不是验收指标，
+也不能为此删除宿主独有的验证覆盖。
 
 C1 首个 PR 必须覆盖上述两个生产组合调用点，并交付至少一条从生产端到最终输入的
 完整旅程，同时明确剩余 reader。这个有界切片通过资格，不代表可向未验收 host 开启
@@ -508,9 +809,143 @@ projection 为 20,543，完整候选为 21,738：**相对 CLI 增加 5.82%**，�
 及成果差异均未测。切换 legacy receipt 得到相同数据，不增加独立 workload。这些数字
 不支持净收益结论。
 
-下一实施切片应先在 composition、reader 和 recovery 中验证同契约精确共享，再用上述
-可比负载评估延后详情的取舍。冷启动与分阶段总量分别保留，保留负结果，不能靠删除独有
-指令达到字节目标。
+#7430 的验收共享增量把原 Python 展示算法移入既有 TypeScript composition owner，
+在 hash/capture 前执行；旧展示 helper 只委托同一实现。完整契约 reader 与历史分阶段
+读取共用一个引用解析器。相同契约保留一份完整 owner；不同 revision、JSON 类型、来源
+和负面证据分别保留。已有引用随 owner 的迁移同步调整；即使完整性 hash 正确，悬空、
+循环或不可用引用也会拒绝。引用比原对象更大时仍保留短对象原文。
+
+隔离 File/SQLite 的 quota 和 native host fixture 覆盖真实合成 Codex 子进程输入中的
+完整验收、失败后恢复和原身份一次性结算，也验证共享后的 full/delta/丢失基线重建。
+这些证明传输语义，不证明模型遵从。旧展示 adapter 增加一次传输调用；完整契约在原有
+composition 调用内部完成共享。未声称延迟改善。
+
+固定 source 的四份相同验收 fixture 中，融合契约为 23,432 个紧凑 UTF-8 JSON 字节，
+原未分阶段 CLI 为 22,237（+5.37%）。启用 capture 分阶段时，融合契约为 23,515，
+原 entry/review/writeback 合计为 24,509，未计追加材料读取。对照冻结 `895f38fc5`
+的原展示共享 helper；上述不含验收副本的 workload 数字不变。这把 quota 已有的效率
+吸收到共同路径，不能证明优于 quota 或完整成本获益。下述 guidance 增量进一步缩小缺口；下一步先在既有 owner 验证剩余
+vision 共享；标题由下述增量处理，然后再评估延后详情。冷启动与分阶段总量分别保留，
+保留负结果，不能靠删除独有指令达到字节目标。
+
+#7430 后续增量通过同一个 TypeScript composition 边界共享 replan 的 vision-authoring
+指令，保留的 owner 是既有 durable-writeback 结算步骤。旧 Python 展示 helper 委托
+共享判断，仅添加历史展示元数据。完整 reader 和历史未分阶段／分阶段 adapter 解析同一个
+精确引用，不另建 authoring 策略。JSON 类型、版本或指令不同则保留原文，引用必须更小。
+即使 hash 匹配，冲突的原文／引用、错误步骤类型、缺失目标和引用链也会拒绝。
+结算计划、全部原指令和示例保留在 capture 中；历史 writeback 阶段维持原有的示例省略。
+
+两个旧 CLI 参数写法现在暴露同一份共享完整契约；材料回读、产生效果前拒绝和 native
+输入分别验证。已验证的 Native 外层 controller 输入没有内联结算 authoring owner，authoring 仍保留原文；
+共享不会虚构该 owner 或转移结算权。authoring 检查点的四项旧 projection 测试期待
+完整候选尚未采用的多行标题或 Explore 指导共享，在此前及 authoring head 都失败。
+下述 guidance 增量解决其中两项，标题增量解决另外两项。历史失败继续保留，不豁免或改写。
+这些切片不证明已安装 App 的采用。
+
+固定的合成 authoring fixture 中，原未分阶段 CLI 为 22,062 个紧凑 UTF-8 JSON 字节，
+融合契约为 23,266（+5.46%）。启用 capture 分阶段时，原 entry/review/writeback 合计
+24,311，融合为 23,349。原 CLI projection 模块冻结在 `895f38fc5`，输入及投影读取阶段
+保持一致。追加读取、请求包装、tokens/cache、延迟和模型成果尚未测量。共享消除了
+候选中的重复实现和重复指令，但不能证明优于 quota 已有共享或完整成本 diff 正向。
+
+
+Explore guidance 增量删除 Python 的精确匹配循环，完整契约与旧展示调用者复用同一个
+TypeScript composition 边界。仅当指令完全一致、已有 durable-writeback Explore
+附件 owner 且引用更小时，才共享同一 capture 的 owner。独有／短文本及缺失 owner
+保留原文。非法、冲突或成链引用拒绝；不缩短指令，也不给可选附件新增义务。
+历史分阶段及未分阶段 reader 在移动上下文前解析引用，再复用 Explore 既有领域投影。
+独立 Explore 读取仍返回完整指导。兼容 helper 随旧展示调用者退役，不拥有独立决策或共享算法。
+
+真实隔离 File／SQLite CLI capture 现在通过此前失败的两项 Explore 共享用例，
+包括独立材料对照、历史回读及非法 capture 在状态／额度不变时拒绝。
+既有分阶段 CLI 测试仍执行 registry 不可用时读取、篡改拒绝及实际写回／结算。
+差分重建保留变化后的指令并支持 baseline 丢失恢复；不完整上下文回退完整交付。
+这些证明传输及本地集成，不证明已安装 App 或模型成果。
+
+
+扩大调用者验证也将旧测试假设迁移到准入后的完整契约：native 子进程 capture／重试
+比较整份原始契约，生成的结算命令仍仅结算原 Turn。历史 capability reader 维持
+显式初始化隔离 canonical fixture、拒绝事实及 scheduler 信息，不因此授予执行权。
+capability 准入被拒时仍交付 typed diagnostic／历史投影，准入成功才交付完整契约。
+这个失败路径迁移仍属于 C1 切换前缺口，不是永久第二套契约。
+合成 native／stdio provider 不证明模型收益。
+
+同样冻结 `895f38fc5` 原投影，合成 guidance fixture 的原未分阶段路径为 22,848 个
+紧凑 UTF-8 JSON 字节，融合为 24,320（+6.44%）。启用 capture 后，原
+entry/review/writeback 合计 26,081，融合为 24,403。不含 guidance 的 fixture
+未分阶段仍为 20,543 对 21,738 字节。必需追加读取、请求包装、tokens/cache、延迟及
+模型验收成果尚未测量。代码共享及恢复 quota 已有的信息效率不能证明完整成本 diff 正向；
+C1 继续保持未完成。
+
+当前 Task 标题增量删除 Python 的精确来源匹配算法，完整 composition 和旧展示委托
+共用 TypeScript owner。只有与唯一、已核验、完整的当前选中 Task 的 `text` 或 `title`
+精确重复时，才转换为同一 capture 的 `title_ref`；完整原始声明及来源继续内联。
+来源缺失、不同、不完整、歧义、失败、已完成或已归档均不符合共享条件。历史字符阈值
+（包括 Unicode 码点计数）保持不变。旧展示按 label 前缀省略标题的逻辑留在展示层，
+不应用于完整契约；委托 helper 随旧展示调用者退役。
+
+完整 reader 再次验证身份及引用归属，即使 hash 有效，也拒绝冲突原文、引用链、
+非法路径及不可用目标。历史 envelope 保留完整 Task 来源，不携带移动后悬空的 lane
+引用。真实 File／SQLite CLI 在差分关闭时已通过此前两项多行标题用例；capture 变体
+还验证精确回读及状态／额度变化前拒绝。差分及 baseline 丢失／全量恢复保留变化后的要求；
+独立 Todo detail 仍返回完整声明。这证明本地传输语义，不证明已安装 App 或模型行为。
+
+固定合成当前 Task fixture 中，冻结 `895f38fc5` 的原未分阶段 CLI 为 28,585 个紧凑
+UTF-8 JSON 字节，融合契约为 29,780（+4.18%）。启用 capture 后，原
+entry/review/writeback 合计 29,906，融合为 29,863。不含当前 Task 的控制样例
+未分阶段仍为 20,543 对 21,738 字节。这些总量未含请求包装、追加材料读取、tokens/cache、
+延迟及验收成果；它们将 quota 已有共享恢复到共同路径，不能证明完整成本收益正向。
+
+vision audit 增量现已将 Python 嵌套精确匹配算法迁入同一 TypeScript owner。完整契约
+和历史展示只在引用更小时共享完全相同的 audit，包括未知事实、负面证据及有序义务。
+不同 JSON 类型不相等：旧 Python 的 `True == 1` 比较可能抹掉 channel 差异，现保留
+该差异原文；短 audit 也保持内联。根保留完整 audit 和 judge，旧展示 metadata 留在 adapter。
+
+完整恢复即使面对重新计算的有效 hash，也拒绝缺失、非法、链式或冲突的 audit／judge
+引用。历史 envelope 仍从内联根取得 judge，不产生移动后的悬空引用；其已有投影限制
+不变。真实隔离 File／SQLite CLI 在含活动历史 vision、差分关闭时，验证完整 judge、
+精确 capture 回读及状态／额度变化前拒绝。差分／全量及 baseline 丢失恢复保留变化的
+要求。没有活动 vision 的 fixture 正确地不产生 audit，不能用来验收这条路径。
+
+冻结原 CLI projection 于 `895f38fc5`，固定合成 audit 样例的未分阶段紧凑 UTF-8 JSON
+为原 22,337 字节对融合 23,333（+4.46%）；capture 原 entry/review/writeback 合计
+23,658 对融合 23,416。不含 audit 的控制样例仍为 20,543 对 21,738。它们不计
+tokens/cache、延迟、追加读取、请求包装及验收成果。恢复共享、减少规则 owner 仍不
+证明完整成本正向。旧 audit 委托随展示调用者退役；剩余 consumer 退役及打包／成果
+资格继续使 C1 保持开放。
+
+拒绝准入现在只要已有 interaction contract，就在不可变 capture 前使用同一完整
+composer，包括 health 为 false 的暂停来源。`ok=false` 仍阻止 host handoff 和原生
+context baseline 发布，保留失败退出码；组合不授予交付或结算权限。非法完整来源在
+capture 前验证失败。工作契约形成前的错误则在两种 CLI flag 写法下保留原 typed
+诊断及恢复事实，不补造工作契约，也不再经过历史 envelope renderer。
+
+真实隔离 File／SQLite CLI 覆盖 App heartbeat 和 generic 两种 profile 下的工作
+缺失、能力不可用及 selection-required reentry。重入保留原 receipt，不产生额度
+记账、baseline 或越权状态修改。Capture consumer 正迁向完整原件精确回读，同时
+显式保留历史长路径恢复覆盖。这验收本地传输和拒绝语义，不代表已安装 App 采用或
+全部 provider／入口交付。剩余 consumer 退役及打包后的单会话成果／完整成本资格
+继续使 C1 保持开放。
+
+后续观察验证区分了两个问题。#7464 修复测试对两次独立实时观察时钟的误比，同时
+保留其他全部事实。#7468 让 `quota status/plan` 保留既有权威 owner 的 typed 拒绝
+及备份／迁移指引，修复提前返回错误时丢失这些信息的问题。按照已接受的 #7032
+截止规则，未迁移 Goal 的普通读取继续拒绝；File／SQLite 保留范围隔离断言。
+新的恢复断言在旧实现上失败，修复后的范围／诊断／权威集合 156 项通过。这些可独立
+评审的修复已由集成候选吸收，不代表安装采用或成果／成本改善。早期失败运行仍作为
+历史证据保留；这几项已归因失败不再列为未完成调查。
+
+固定 unhealthy-paused 合成来源在原 CLI projection `895f38fc5` 下为 6,325 个
+紧凑 UTF-8 JSON 字节，完整契约为 6,639（+4.96%）。新增 binding 保留统一验证，
+这不是效率收益；该样例的 tokens/cache、延迟、追加读取、请求包装及验收成果仍未
+测量。这些检查不代表启动过真实模型实验。
+
+共享 owner 前置通过 #7457 独立评审。Task 标题与 Explore 操作在旧投影中合用
+一次粗粒度调用；完整 composition 在既有调用内部复用相同函数。集成分支吸收
+前置提交，不复制一份 owner。新的 `should-run` emission 只接受已组合契约或
+原始 predecision 诊断，不再回退旧 packet／envelope 投影；历史 capture 恢复
+仍为显式路径。组件测量显示桥接成本比两次调用更低，但高于原 Python 投影，
+不能作为完整 quota 路径净收益的证据。
 
 同时报告字段/条款 diff 及其决策后果、实际模型输入、cached/uncached tokens、追加
 读取/往返、重建、延迟、失败/重试、验证与人工介入。首包更小但总补读更多，可能是负向。
@@ -545,7 +980,7 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 | 任务 / 依赖 | Owner 与实际替换内容 | 决定性退出 / 回退 |
 | --- | --- | --- |
 | **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段与指令条款，捕获同一 schema，迁移真实普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节相对 quota 基线的效果/完整成本对照；cutover 合格前保留绑定版本的 reader |
-| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约，删除 packet 格式分支和重复上下文副本 | 正常/replan/resume 中同 capture 恢复及精确 role/session 连续性；full 回退不重新准入；编码可回退 full |
+| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约；默认自己的成果、全局约束及相关跨 Agent 材料，提供精确正文索引；删除 packet 格式分支和重复上下文副本 | 在计量完整成本下，冷/温态、上下文丢失及正常/replan/resume 保留必读全文、跨 Agent 采用和精确 role/session 连续性；不支持的范围回退 full 且不重新准入；编码可回退 full |
 | **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
 | **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
 | **C5 — Replan 与结果编写边界；C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |

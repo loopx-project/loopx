@@ -63,31 +63,82 @@ def _canonical_hash(value: Any) -> str:
     return "sha256:" + sha256(encoded).hexdigest()
 
 
-def _execution_profile_present(request: Mapping[str, Any]) -> bool:
-    envelope = _mapping(request.get("turn_envelope"))
-    capsule = _mapping(envelope.get("contract_capsule"))
-    profile = capsule.get("execution_profile")
+def _complete_host_decision(request: Mapping[str, Any]) -> dict[str, Any] | None:
+    if "work_contract" not in request:
+        return None
+    from ..quota.turn_envelope import _turn_envelope_result
+
+    return _turn_envelope_result("validate_complete", payload=request["work_contract"],
+                                 envelope=_mapping(request.get("turn_envelope")))
+
+
+def execution_profile_present(request: Mapping[str, Any]) -> bool:
+    """Read result evidence applicability from the checked admitted source.
+
+    An omitted complete contract retains historical capsule decoding; an invalid
+    supplied contract never falls back. Schema and candidate adapters share this
+    read, while evidence content validation stays with the result executor.
+    """
+    decision = _complete_host_decision(request)
+    if decision is None:
+        envelope = _mapping(request.get("turn_envelope"))
+        decision = _mapping(envelope.get("contract_capsule"))
+    profile = decision.get("execution_profile")
     return isinstance(profile, Mapping) and bool(profile)
+
+
+def complete_host_input(request: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Transport the complete contract plus original material-reader metadata.
+
+    The TypeScript owner validates identity and integrity. This adapter never
+    compacts decision facts or derives a second model-facing authority view.
+    Historical requests without a complete contract retain their old decoder.
+    """
+    if _complete_host_decision(request) is None:
+        return None
+    envelope = _mapping(request.get("turn_envelope"))
+    model_input = {key: value for key, value in request.items() if key != "turn_envelope"}
+    detail = _mapping(envelope.get("detail_ref"))
+    captured = _mapping(detail.get("captured_decision"))
+    if captured:
+        model_input["source_decision_hash"] = _mapping(envelope.get("action_signature"))["source_decision_hash"]
+        model_input["detail_ref"] = {
+            "full_decision": detail["full_decision"],
+            "captured_decision": {**captured, "source_hash_ref": "$.source_decision_hash"},
+        }
+        readers = _mapping(detail.get("replan_action_packet"))
+        if readers.get("review"):
+            model_input["detail_ref"]["replan_action_packet"] = {
+                key: value for key, value in readers.items() if key in {"review", "writeback"}
+            }
+    return model_input
 
 
 def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     """Return the signed action and safety boundary exactly as projected."""
 
     envelope = _mapping(request.get("turn_envelope"))
-    assert_turn_envelope_consumer_version(envelope)
+    try:
+        model_input = complete_host_input(request)
+    except RuntimeError as exc:
+        raise ValueError("complete Turn contract rejected") from exc
     signature = _mapping(envelope.get("action_signature"))
-    source_hash = str(signature.get("source_hash") or "")
-    envelope_hash = str(signature.get("envelope_hash") or "")
-    computed_envelope_hash = _canonical_hash(
-        turn_envelope_action_signature_document(envelope)
-    )
-    if (
-        signature.get("matches") is not True
-        or not source_hash
-        or source_hash != envelope_hash
-        or envelope_hash != computed_envelope_hash
-    ):
-        raise ValueError("TurnEnvelope action signature is missing or does not match")
+    if model_input is None:
+        # The complete owner checks version, signature and source binding in
+        # one call. Only historical requests need this compatibility decoder.
+        assert_turn_envelope_consumer_version(envelope)
+        source_hash = str(signature.get("source_hash") or "")
+        envelope_hash = str(signature.get("envelope_hash") or "")
+        computed_envelope_hash = _canonical_hash(
+            turn_envelope_action_signature_document(envelope)
+        )
+        if (
+            signature.get("matches") is not True
+            or not source_hash
+            or source_hash != envelope_hash
+            or envelope_hash != computed_envelope_hash
+        ):
+            raise ValueError("TurnEnvelope action signature is missing or does not match")
 
     action = _mapping(envelope.get("action"))
     detail = _mapping(envelope.get("detail_ref"))
@@ -161,9 +212,9 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     # priorities. Keep the signed envelope intact for the executor; do not send
     # a second copy ahead of the mandatory immutable review read.
     for field in (() if staged else ("core_goal", "planning_horizon", "acceptance_index")):
-        value = detail.get(field, action.get(field))
-        if value is not None:
-            authority[field] = value
+        detail_value = detail.get(field, action.get(field))
+        if detail_value is not None:
+            authority[field] = detail_value
     horizon = _mapping(authority.get("planning_horizon"))
     if horizon:
         # Relocate only the envelope's registered aliases after flattening its
@@ -186,6 +237,10 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
             if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature
     authority.update(host_context_projection(request))
+    if model_input is not None:
+        # Adapter-local transport only. Result qualification still uses the
+        # verified internal effect fields; rendering sends the complete input.
+        authority["_model_input"] = model_input
     return authority
 
 
@@ -195,15 +250,17 @@ def extract_action_text(request: Mapping[str, Any]) -> str:
     return str(extract_turn_authority(request)["primary_action"])
 
 
-def replan_prompt_instruction(authority: Mapping[str, Any]) -> str:
+def replan_prompt_instruction(
+    authority: Mapping[str, Any], *, packet_path: str = "replan_action_packet",
+) -> str:
     """Reader routing shared by native Codex and structured Host transports."""
     packet = _mapping(authority.get("replan_action_packet"))
     if not packet:
         return ""
     source = (
-        "Read replan_action_packet.review and the applicable acceptance/evidence reads. "
+        f"Read {packet_path}.review and the applicable acceptance/evidence reads. "
         "Decide the next work and route from those facts before reading "
-        "replan_action_packet.writeback for the semantic result format. "
+        f"{packet_path}.writeback for the semantic result format. "
         "The readers verify the original source hash; check their Goal/Agent and "
         "obligation/context identity against this Turn. "
         if packet.get("review") else
@@ -229,8 +286,9 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
     adapter reads back as a typed candidate; it stays public-safe and bounded.
     """
 
+    model_input = authority.get("_model_input")
     authority_json = json.dumps(
-        dict(authority),
+        model_input if model_input is not None else dict(authority),
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -272,7 +330,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         "Turn executor. The profile grants no new permissions.\n"
         if authority.get("execution_profile") else ""
     )
-    return (
+    legacy_input = (
         "You are executing one bounded LoopX-governed work segment.\n"
         "The JSON below is the complete host authority for this Turn. Execute "
         "primary_action only after reading work_context and any remaining required_reads. "
@@ -293,7 +351,40 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         f"{acceptance_instruction}"
         f"{work_instruction}"
         f"Turn authority JSON:\n{authority_json}\n\n"
-        "When finished, return only one JSON object (no Markdown fence) with "
+    )
+    if model_input is not None:
+        detail = _mapping(model_input.get("detail_ref"))
+        input_prompt = (
+            "You are executing one bounded LoopX-governed work segment.\n"
+            "Use work_contract as the complete source of truth. Read its "
+            "interaction_contract.agent_channel.work_context and remaining required_reads "
+            "before primary_action; do not repeat fulfilled reads. Perform work only "
+            "when its contract allows it. Obey every supplied write scope, workspace "
+            "restriction, approval boundary and stop condition. Checkpointed approval "
+            "covers only active_write_scope; other approval gates remain.\n"
+            "Read agent_context before planning; unavailable_context is a failed read, "
+            "not empty context: discard affected cached context and hold dependent work "
+            "until recovery. Independent work retains its existing authority.\n"
+            "Before Goal closeout, preserve vision_continuation_audit's ordered "
+            "required_before_closeout, evidence requirements and vision_gap_judge. "
+            "The selected Todo summary is not its full requirements, and Todo "
+            "completion cannot close the Goal. Use execution_profile to size and "
+            "qualify work, including artifact, validation, outcome and degradation rules.\n"
+            "For required additional detail, use detail_ref.full_decision from the "
+            "saved original observation identified by detail_ref.captured_decision; "
+            "verify Goal/Agent/Turn and source_decision_hash. Never re-enter admission "
+            "for detail reads. Missing or invalid evidence holds dependent planning "
+            "and closure; independent work retains existing authority. Guidance, "
+            "evidence and reads grant no permissions. Do not write LoopX state, spend "
+            "quota or apply scheduler changes; the outer Turn executor owns those effects.\n"
+            + replan_prompt_instruction(detail, packet_path="detail_ref.replan_action_packet")
+            + "Turn request:\n" + authority_json + "\n\n"
+        )
+    else:
+        input_prompt = legacy_input
+    return (
+        input_prompt
+        + "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"
         "- result_kind: one of validated_progress | "
         + ("validated_completion | " if allow_completion else "")
@@ -451,7 +542,7 @@ def build_result(
                 limit=TEXT_LIMITS["vision_unchanged_reason"],
             ),
         }
-    if kind in material_kinds and _execution_profile_present(request):
+    if kind in material_kinds and execution_profile_present(request):
         missing_evidence = [
             field for field in HOST_RESULT_EVIDENCE_LIMITS
             if field not in candidate

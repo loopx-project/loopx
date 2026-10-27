@@ -5,6 +5,7 @@ from copy import deepcopy
 import contextlib
 import io
 import json
+from pathlib import Path
 import shlex
 import subprocess
 import sys
@@ -57,6 +58,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     def cli(*arguments):
         code, result = run_json_cli_result(*arguments, registry_path=registry, runtime_root=runtime)
         assert code == 0, result
+        result.pop("_returncode", None)  # harness metadata is not captured source content
         return result
 
     # Two owners' cumulative outcomes remain Goal requirements. Selection must
@@ -122,8 +124,156 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     }
     observed = next(row["content"] for row in channel["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    assert observed == exact
+    scoped = _source_content(read, registry_path=registry, runtime_root=runtime,
+        goal_id=goal, todo_id=selected, agent_id="agent-a")
+    assert observed == scoped
+    assert scoped["goal_acceptance_contract"] == exact["goal_acceptance_contract"], "reading plans never filter canonical requirements"
+    assert scoped["outcome_context"]["required_outcome_ids"] == ["export-agent-a"]
+    assert scoped["outcome_context"]["complete"] is True
+    assert scoped["outcome_context"]["provider_revision"] == scoped["provider_revision"]
+    unknown = _source_content(read, registry_path=registry, runtime_root=runtime,
+        goal_id=goal, todo_id=selected, agent_id="not-registered")
+    assert unknown["status"] == "loaded" and unknown["goal_acceptance_contract"] == exact["goal_acceptance_contract"]
+    assert unknown["outcome_context"]["complete"] is False
+    assert unknown["outcome_context"]["required_outcome_ids"] == ["export-agent-a", "export-agent-b"]
+    with pytest.raises(ValueError, match="registered Agent"):
+        inspect_goal_acceptance(registry_path=registry, runtime_root=str(runtime),
+            goal_id=goal, agent_id="not-registered", todo_id=selected, include_work_details=False)
+    # The actual original-capture reader uses that plan without another guard
+    # or provider read. Default delivery still retains both complete outcomes.
+    from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
+    import hashlib
+
+    capture = tmp_path / "original-decision.json"
+    write_decision_capture(capture, packet)
+    captured = capture.read_bytes()
+    index = cli("quota", "context-read", "--capture-file", str(capture),
+        "--capture-sha256", hashlib.sha256(captured).hexdigest(), "--outcome-ref",
+        "--page-bytes", "8192")
+    assert index["eof"] is True
+    indexed = json.loads(index["content"])
+    assert indexed["read_plan"]["complete"] is True
+    assert indexed["read_plan"]["scope_applied"] is False
+    assert {row["id"]: row["required_in_scope"] for row in indexed["outcomes"]} == {
+        "export-agent-a": True, "export-agent-b": False,
+    }
+    assert capture.read_bytes() == captured
     assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
+
+    # The native presentation, its retained baseline and same-capture recovery
+    # all use the actual required input. The canonical capture stays complete.
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook, project_codex_context
+
+    with monkeypatch.context() as native:
+        native.setenv("CODEX_THREAD_ID", "outcome-scope-session")
+        native.chdir(tmp_path)
+        native_root = tmp_path / "native-context"
+        native_root.mkdir(mode=0o700)
+        event = {"session_id": "outcome-scope-session", "cwd": str(tmp_path)}
+        codex_context_hook(str(native_root), {**event, "hook_event_name": "SessionStart", "source": "startup"})
+
+        def consume(page):
+            observed = bytearray()
+            while True:
+                assert page["offset"] == len(observed)
+                observed.extend(page["content"].encode())
+                codex_context_hook(str(native_root), {**event, "hook_event_name": "PostToolUse",
+                    "tool_response": page})
+                if page["eof"]:
+                    break
+                page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
+                assert page["ok"]
+            return json.loads(observed)
+
+        source_before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
+        assert project_codex_context(packet, directory=None, capture_directory=tmp_path / "disabled",
+            goal_id=goal, agent_id="agent-a", surface="complete_turn", capture_id="disabled") is packet
+        assert not (tmp_path / "disabled").exists()
+        first = tmp_path / "native-first"
+        first.mkdir(mode=0o700)
+        projected = project_codex_context(packet, directory=str(native_root), capture_directory=first,
+            goal_id=goal, agent_id="agent-a", surface="complete_turn", capture_id=hashlib.sha256(captured).hexdigest())
+        assert projected["mode"] == "full"
+        view = native_context_capture_view(projected, first, context_directory=str(native_root),
+            metadata={"recovery": {"path": str(capture), "sha256": hashlib.sha256(captured).hexdigest()}})
+        assert view["recovery"]["path"] == projected["recovery"]["path"]
+        assert view["recovery"]["presentation_schema"] == "outcome_context_projection_v0"
+        delivered = consume(view)
+        assert delivered["schema_version"] == "outcome_context_projection_v0"
+        assert delivered["read_scope"]["scope_applied"] is True
+        assert {row["id"]: row["required_in_scope"] for row in delivered["outcome_index"]} == {
+            "export-agent-a": True, "export-agent-b": False,
+        }
+        basis = next(row["content"] for row in delivered["context"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+            if row.get("source") == "goal_acceptance")
+        reason = next(row["reason"] for row in delivered["context"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+            if row.get("source") == "goal_acceptance")
+        assert "every outcome required by this capture's read_scope" in reason
+        assert "complete bodies before reliance" in reason
+        assert "Preserve the original Goal and earlier requirements" in reason
+        assert [row["id"] for row in basis["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]] == ["export-agent-a"]
+        assert json.loads(Path(delivered["source_capture"]["path"]).read_bytes()) == packet
+        candidate = json.loads((native_root / "session.json").read_text())["candidate"]
+        assert candidate["capture_file"] == projected["recovery"]["path"]
+        assert json.loads(Path(candidate["capture_file"]).read_bytes()) == delivered
+
+        optional_index = cli("quota", "context-read", "--capture-file", view["path"],
+            "--capture-sha256", view["sha256"], "--outcome-ref", "--page-bytes", "8192")
+        indexed = json.loads(optional_index["content"])
+        assert indexed["read_plan"]["scope_applied"] is True
+        peer = next(row for row in indexed["outcomes"] if row["id"] == "export-agent-b")
+        detail = cli("quota", "context-read", "--capture-file", view["path"],
+            "--capture-sha256", view["sha256"], "--outcome-ref", peer["outcome_ref"], "--page-bytes", "8192")
+        assert json.loads(detail["content"])["outcome"]["id"] == "export-agent-b"
+        # A wrapper's own hash cannot substitute a missing/corrupt original.
+        broken = deepcopy(delivered)
+        broken["source_capture"]["sha256"] = "0" * 64
+        invalid = tmp_path / "invalid-required-context.json"
+        write_decision_capture(invalid, broken)
+        rejected = read_context_capture(build_parser().parse_args(["--format", "json", "quota", "context-read",
+            "--capture-file", str(invalid), "--capture-sha256", hashlib.sha256(invalid.read_bytes()).hexdigest(),
+            "--outcome-ref", peer["outcome_ref"]]))
+        assert rejected["ok"] is False and "digest mismatch" in rejected["reason"]
+
+        second = tmp_path / "native-second"
+        second.mkdir(mode=0o700)
+        warm = project_codex_context(packet, directory=str(native_root), capture_directory=second,
+            goal_id=goal, agent_id="agent-a", surface="complete_turn", capture_id=hashlib.sha256(captured).hexdigest())
+        assert warm["mode"] in {"full", "delta"}
+        warm_view = native_context_capture_view(warm, second, context_directory=str(native_root))
+        consume(warm_view)
+        codex_context_hook(str(native_root), {**event, "hook_event_name": "PreCompact"})
+        assert "candidate" not in json.loads((native_root / "session.json").read_text())
+        recovery = read_context_capture(build_parser().parse_args(shlex.split(warm["recovery"]["command"])[1:]))
+        restored = consume(recovery)
+        assert restored["read_scope"]["required_outcome_refs"] == delivered["read_scope"]["required_outcome_refs"]
+        assert restored["context"] == delivered["context"]
+        assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == source_before
+        assert capture.read_bytes() == captured
+        # Optional scope/codec failure recovers the complete original source,
+        # without weakening admission or inventing another user gate.
+        from loopx.control_plane.quota import turn_envelope
+
+        original_operation = turn_envelope._turn_envelope_result
+
+        def unavailable(operation, **request):
+            if operation == "outcome_context":
+                raise ValueError("synthetic optional scope projection failure")
+            return original_operation(operation, **request)
+
+        with native.context() as failed:
+            failed.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+            codex_context_hook(str(native_root), {**event, "hook_event_name": "PreCompact"})
+            fallback_dir = tmp_path / "native-fallback"
+            fallback_dir.mkdir(mode=0o700)
+            fallback = project_codex_context(packet, directory=str(native_root), capture_directory=fallback_dir,
+                goal_id=goal, agent_id="agent-a", surface="complete_turn", capture_id="fallback")
+            assert fallback["mode"] == "full"
+            assert consume(native_context_capture_view(fallback, fallback_dir, context_directory=str(native_root))) == packet
+        assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == source_before
+        assert capture.read_bytes() == captured
     # The normal guard's complete captured basis is the envelope input; no
     # second guard may substitute a different observation for the host.
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
@@ -210,6 +360,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     def cli(*arguments):
         code, result = run(*arguments)
         assert code == 0, result
+        result.pop("_returncode", None)
         return result
 
     def configure(*arguments):
@@ -232,23 +383,28 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     original = configure("inspect")["goal_acceptance_contract"]["outcome_requirements"]
     capture = tmp_path / "decision"
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
-    first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
+    cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
         "--turn-envelope", "--decision-output-dir", str(capture))
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
+
+    first = build_turn_envelope(full, captured_decision_path=str(capture / "decision.json"),
+        scheduler_execution_context=scheduler_execution_context_for_runtime_profile("codex_app_heartbeat"))
     basis = next(row["content"] for row in first["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
     assert first["action"]["delivery_allowed"] is True
     assert basis["tasks"][0]["state"] == "ready"
     assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
     request = build_loopx_turn_host_request(build_loopx_turn_plan(first,
-        host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
+        host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery", work_contract=full))
     result = subprocess.run(_recording_host(project), input=json.dumps(request),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (project / "received.txt").read_text()
-    authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["work_context"] == first["work_context"]
+    authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    assert authority["work_contract"] == full
 
     # Finish the original synthetic work before attempting another managed
     # Turn. An unsettled receipt is its own legitimate recovery boundary.

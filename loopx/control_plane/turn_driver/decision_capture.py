@@ -74,7 +74,14 @@ def prepare_turn_decision_capture(
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_decision_capture(path, observation)
-    return {**plan, "turn_envelope": bound}
+    restored = {**plan, "turn_envelope": bound}
+    if observation.get("schema_version") == "loopx_turn_envelope_v1":
+        restored["work_contract"] = observation
+    else:
+        # Historical observations retain their original input contract. Never
+        # pair an old capture with a freshly observed complete decision.
+        restored.pop("work_contract", None)
+    return restored
 
 
 def validate_handoff_socket(value: str) -> Path:
@@ -150,7 +157,9 @@ def native_context_page_budget() -> tuple[int, int]:
 
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  page_bytes: int | None = None,
-                                 max_page_output_bytes: int | None = None) -> str:
+                                 max_page_output_bytes: int | None = None,
+                                 outcome_ref: str | None = None,
+                                 selection_sha256: str | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -160,7 +169,9 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes),
-        *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])
+        *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else []),
+        *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
+        *(["--outcome-ref", *([outcome_ref] if outcome_ref else [])] if outcome_ref is not None else [])])
 
 
 def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
@@ -193,7 +204,8 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
 
 def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
     """Verify reported page bytes, independently of a host's retention claim."""
-    if page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
+    if ("outcome_ref" in page or "selection_sha256" in page or page.get("schema_version") != "context_capture_page_v1"
+            or page.get("sha256") != digest):
         return None
     start, content = page.get("offset"), page.get("content")
     if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
@@ -210,9 +222,10 @@ def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tupl
 
 
 def capture_context_projection(payload: dict[str, Any], *, directory: Path,
-                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE) -> dict[str, Any]:
+                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
+                               filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
-    projection = directory / "projection.json"
+    projection = directory / filename
     write_decision_capture(projection, payload)
     digest = hashlib.sha256(projection.read_bytes()).hexdigest()
     return {

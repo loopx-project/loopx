@@ -8,6 +8,7 @@ import {reusableTurnContextPaths} from "../capability_hooks.ts";
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
 
 const VERSION = "context_delivery_v1";
+export const OUTCOME_CONTEXT_PROJECTION_SCHEMA = "outcome_context_projection_v0";
 const MAX_ANCESTRY = 32;
 type Path = (string | number)[];
 type Split = {fresh: JsonObject; valid: boolean};
@@ -164,7 +165,7 @@ function splitContext(context: JsonObject): Split {
 
 /** The projection surface is a transport binding, never a new admission mode.
  * Keep one exact codec for quota and Turn; source-only callers use the same codec. */
-const SURFACES = ["work_context", "quota_packet", "turn_envelope"] as const;
+const SURFACES = ["work_context", "quota_packet", "turn_envelope", "complete_turn"] as const;
 type Surface = typeof SURFACES[number];
 type Delta = {value: unknown} | {from: Path} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
   | {items: Record<string, Delta>; values?: Record<string, unknown>; length?: number};
@@ -190,6 +191,15 @@ const REUSABLE_PACKET_FIELDS = new Set([
  * duplicating them in both a fresh frame and a patch. Static authoring guidance
  * remains binding via exact reuse; commands, conditions and identity stay fresh. */
 function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[]): {paths: Path[]; valid: boolean} {
+  if (context.schema_version === OUTCOME_CONTEXT_PROJECTION_SCHEMA) {
+    const inner = jsonObject(context.context);
+    if (!inner) return {paths: [[]], valid: false};
+    const projected = freshPaths(inner, surface, legacyQuotaFields);
+    return {valid: projected.valid, paths: [
+      ...Object.keys(context).filter(key => key !== "context").map(key => [key]),
+      ...projected.paths.map(path => ["context", ...path]),
+    ]};
+  }
   const paths: Path[] = [];
   let valid = true;
   const leaves = (value: unknown, path: Path) => {

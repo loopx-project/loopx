@@ -19,10 +19,12 @@ from loopx.presentation.renderers.quota_markdown import (
 
 @pytest.mark.parametrize("variant", ["text", "title", "different", "short", "incomplete", "unverified",
     "unmatched", "ambiguous", "partial", "failed", "wrong-id", "wrong-selection", "duplicate", "existing-ref",
-    "archived", "done", "boolean-id"])
+    "archived", "done", "boolean-id", "short-unicode"])
 def test_lane_title_reuses_only_exact_complete_current_task_in_same_packet(variant):
     body = "Preserve every requirement and source. 完整要求🙂\n" * 100 + "Stop before publication."
     title = body if variant != "short" else "Short label"
+    if variant == "short-unicode":
+        title = body = "完整🙂" * 20
     todo = {"todo_id": "todo_current", "text": body, "status": "open"}
     if variant == "title":
         todo.update(text="[P1] " + body, title=body)
@@ -78,9 +80,23 @@ def test_lane_title_reuses_only_exact_complete_current_task_in_same_packet(varia
     else:
         assert result == lane
 
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from test_replan_host_context_projection import _quota_payload
+    complete_source = _quota_payload()
+    complete_source.update(selected_todo=payload["selected_todo"], agent_lane_next_action=lane)
+    complete_source["interaction_contract"]["agent_channel"]["work_context"] = context
+    if variant == "existing-ref":
+        with pytest.raises(RuntimeError, match="Current Task title reference"):
+            compose_turn_decision(complete_source)
+    else:
+        complete = compose_turn_decision(complete_source)
+        assert complete["agent_lane_next_action"] == result
+        assert complete["interaction_contract"] == complete_source["interaction_contract"]
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("captured", [False, True])
+def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_path, monkeypatch, provider, captured):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _write_fixture
@@ -96,8 +112,11 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider=provider)
     original_state = state.read_bytes()
+    capture = tmp_path / "captured"
+    capture_args = ("--codex-app", "--turn-instance-id", "task-title-read",
+        "--decision-output-dir", str(capture)) if captured else ()
     code, full = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, cwd=project)
+        "--agent-id", AGENT_ID, *capture_args, cwd=project)
     assert code == 0 and full["should_run"], full
     context = full["interaction_contract"]["agent_channel"]["work_context"]
     assert context["complete"] and context["selected_todo_text_verified"]
@@ -114,6 +133,27 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
     code, detail = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", TODO_ID, cwd=project)
     assert code == 0 and detail["todo"]["text"] == body and detail["todo"]["title"] == body
+
+    if captured:
+        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+        from test_complete_turn_decision import _canonical_digest, _resign_contract
+        from test_quota_settlement_cli import _spend_run_count
+        saved = json.loads((capture / "decision.json").read_text())
+        assert saved == full
+        historical = build_turn_envelope(saved)
+        restored_task = next(source["content"]["todo"] for source in historical["work_context"]["sources"]
+                             if source.get("source") == "selected_todo")
+        assert restored_task["text"] == body
+        invalid = deepcopy(saved)
+        invalid["agent_lane_next_action"]["title_ref"] = lane["title_ref"].replace(f"[{index}]", "[999]")
+        invalid, _ = _resign_contract(invalid)
+        invalid_path = tmp_path / "invalid.json"
+        invalid_path.write_text(json.dumps(invalid))
+        rc, refused = _run_cli(registry, runtime, "quota", "replan-view",
+            "--decision-file", str(invalid_path), "--source-hash", _canonical_digest(invalid),
+            "--replan-stage", "review", cwd=project)
+        assert rc != 0 and "Current Task title reference" in json.dumps(refused)
+        assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("mirror", ["shared", "identical", "different", "boolean-number", "missing-root"])
@@ -234,8 +274,10 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     registry.write_text(json.dumps(config))
     fixture._initialize_fixture_authority(project, runtime, provider=provider)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
+    capture = tmp_path / "captured"
     rc, guard = fixture._run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        *binding, "--todo-id", fixture.TODO_ID, "--turn-instance-id", "guidance-read", cwd=project)
+        *binding, "--todo-id", fixture.TODO_ID, "--turn-instance-id", "guidance-read",
+        "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0, guard
     sources = guard["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     graph = next(source["content"]["graph"] for source in sources if source.get("kind") == "explore_turn_context")
@@ -246,6 +288,31 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     rc, standalone = fixture._run_cli(registry, runtime, "explore", "turn-context", *binding, cwd=project)
     assert rc == 0, standalone
     assert owner == standalone["graph"]["result_writeback_guidance"]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from test_complete_turn_decision import _canonical_digest, _resign_contract
+    saved = json.loads((capture / "decision.json").read_text())
+    assert saved == guard
+    envelope = build_turn_envelope(saved)
+    recovered = next(source["content"]["graph"] for source in envelope["work_context"]["sources"]
+                     if source.get("kind") == "explore_turn_context")
+    assert recovered["result_writeback_guidance"] == owner
+    assert "result_writeback_guidance_ref" not in recovered
+    invalid = deepcopy(saved)
+    invalid_graph = next(source["content"]["graph"] for source in invalid["interaction_contract"][
+        "agent_channel"]["work_context"]["sources"] if source.get("kind") == "explore_turn_context")
+    invalid_graph["result_writeback_guidance_ref"] = (
+        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[999].optional_attachments[0].guidance")
+    invalid, _ = _resign_contract(invalid)
+    invalid_path = tmp_path / "invalid.json"
+    invalid_path.write_text(json.dumps(invalid))
+    state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    before = state.read_bytes()
+    rc, refused = fixture._run_cli(registry, runtime, "quota", "replan-view",
+        "--decision-file", str(invalid_path), "--source-hash", _canonical_digest(invalid),
+        "--replan-stage", "writeback", cwd=project)
+    assert rc != 0
+    assert "Explore guidance reference" in json.dumps(refused)
+    assert state.read_bytes() == before
     assert fixture._spend_run_count(runtime) == 0
 
 
