@@ -46,7 +46,9 @@ def _snapshot(event: dict[str, Any]) -> Iterator[tuple[dict[str, Any], BinaryIO]
     path = Path(event.get("transcript_path") or "")
     if not path.is_absolute() or path.resolve(strict=True) != path:
         raise ValueError("native replay source must be physical and absolute")
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # Inspect the opened descriptor before reading. A FIFO must not wait for a
+    # writer while the hook holds its context journal lock.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()

@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
 from loopx.control_plane.turn_driver import codex_context as context
@@ -198,6 +203,62 @@ def test_incomplete_native_read_cannot_gain_resume_continuity(tmp_path, monkeypa
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == "full" and wire["context"] == payload
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="Named pipes require POSIX")
+@pytest.mark.parametrize("phase", ["resume", "post_tool"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_real_hook_rejects_fifo_history_without_waiting_for_a_writer(tmp_path, monkeypatch, phase, enabled):
+    event, history, payload = observed_read(tmp_path, monkeypatch)
+    assert "native_resume" in context._state(tmp_path)["candidate"]
+    fields = {"hook_event_name": "SessionStart", "source": "resume"}
+    if phase == "post_tool":
+        current = {**payload, "heartbeat_receipt": {"turn_instance_id": "second"}}
+        _, wire = project(tmp_path, "second", payload=current)
+        assert wire["mode"] == "delta"
+        pages = read_pages(tmp_path, wire, size=8192)
+        assert len(pages) == 1 and pages[0]["eof"]
+        fields = {"hook_event_name": "PostToolUse", "tool_use_id": "second-reader",
+                  "tool_response": json.dumps(pages[0])}
+
+    history.unlink()
+    os.mkfifo(history, 0o600)  # No writer: opening this source must not block before validation.
+    journal = tmp_path / "session.json"
+    original = journal.read_bytes()
+    before = context._state(tmp_path)
+    reference = before["recovery"]
+    captured = Path(reference["path"]).read_bytes()
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    cli = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+           "--runtime-root", str(runtime), "quota", "context-hook", "--context-delivery",
+           "on" if enabled else "off", "--codex-app", "--codex-context-dir", str(tmp_path)]
+
+    def hook(values):
+        result = subprocess.run(cli, input=json.dumps({**event, **values}), capture_output=True,
+            text=True, timeout=5, cwd=Path(__file__).resolve().parents[2])
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    result = hook(fields)
+    if not enabled:
+        assert result == {} and journal.read_bytes() == original
+    else:
+        if phase == "post_tool":
+            assert result == {}
+            # Complete page delivery can still support this process, but the
+            # unreadable history cannot certify a cross-process replay.
+            candidate = context._state(tmp_path)["candidate"]
+            assert candidate["capture_bytes_verified"] is True and "native_resume" not in candidate
+            result = hook({"hook_event_name": "SessionStart", "source": "resume"})
+        after = context._state(tmp_path)
+        assert "candidate" not in after and "pending" not in after
+        assert after["context_epoch"] != before["context_epoch"]
+        assert after["recovery"] == reference
+        assert reference["command"] in result["hookSpecificOutput"]["additionalContext"]
+        _, fallback = project(tmp_path, "after-fifo", payload=payload)
+        assert fallback["mode"] == "full" and fallback["context"] == payload
+    assert Path(reference["path"]).read_bytes() == captured
+    assert not registry.exists() and not runtime.exists()
 
 
 def test_complete_eof_cannot_hide_a_prior_page_missing_from_native_replay(tmp_path, monkeypatch):
