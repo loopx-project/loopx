@@ -370,9 +370,13 @@ TypeScript 和四项真实 Codex `0.163.0-alpha.11.1` 静态 loopback 检查。�
 四个新增 File/SQLite 范围断言在 `1ac29089f` 失败。集成中发现的恢复引用回归已修复：
 只为显式 scoped 产物替换 metadata，普通恢复保留原文件字节身份。
 中断回归最初因仍选中前次 capture 而失败；将当前恢复发布前移到可选 scope 调用之前
-后通过。标准 premerge 仍有两项在 `8b37000b3` 同样复现的失败：既有
+后通过。在运行源码 `e1c69289a`，标准 premerge 有两项在 `8b37000b3` 同样复现的失败：既有
 `run_loopx_turn_once` 决策函数过大，以及前序 owner 收敛后 `turn_route` 的 producer
-覆盖过期。本 native 增量未修改这些文件；它们仍是 C1 资格缺口，不是通过或例外。
+覆盖过期。本 native 增量未修改这些文件；历史结果不是通过或例外。当前集成已 rebase
+到 `b69021498`，采用 [#7520](https://github.com/loopx-project/loopx/pull/7520)
+对真实 TypeScript producer/scanner 的修复，并在 `fec9cd3af` 将原 capture 恢复从
+run-once 编排中分离，保留既有 capture owner 与 session 恢复。大小阈值不变。当前
+完整组合的资格归精确集成 head 的 PR 证据，不能沿用旧 native 切片的测试计数。
 
 最终运行源码 `e1c69289a` 的成本含上述恢复发布顺序修复；对照不可变 `8b37000b3`（前序 C1 与相同 target-main 大页配置），24 成果/253 要求
 来源上，每侧三组温态 cohort、每 provider/阶段 21 样本。温态新增真实 typed 依赖并核
@@ -1046,6 +1050,17 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 共享 owner 前置、producer/capture 切换、reader 恢复与退役、采用及完整成本验收，
 可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
 也不豁免第 9 节相对原 quota 基线的验证。
+
+当前作者拆分把 [#7517](https://github.com/loopx-project/loopx/pull/7517) 作为独立
+双语设计细化，把 [#7520](https://github.com/loopx-project/loopx/pull/7520) 作为可在
+main 独立使用的 route owner／caller 重构。已有独立提案
+[#7457](https://github.com/loopx-project/loopx/pull/7457) 与
+[#7468](https://github.com/loopx-project/loopx/pull/7468) 分别保留上下文引用和观察诊断
+归属；cache 时钟修复 [#7464](https://github.com/loopx-project/loopx/pull/7464) 已进入
+上述目标 main。这些边界可以局部回退，设计改动没有 runtime 依赖。
+[#7430](https://github.com/loopx-project/loopx/pull/7430) 仍是未完成的集成候选，为组合
+测试保留前置内容；前置进入 main 后须再次 rebase，移除重叠 diff，再交付切换评审。
+不能合入两套实现，也不能把这种分阶段安排说成 C1 整体完成。
 
 首个**切换**片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
 从共享 quota emission 边界开始，同时追踪 attached heartbeat 交付与 Turn adapter，

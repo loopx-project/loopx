@@ -498,11 +498,16 @@ repaired by replacing metadata only for explicitly scoped artifacts, preserving
 ordinary original-file byte identity.
 An interruption regression first failed with the preceding capture still
 selected; publishing current recovery before the optional scope call fixes it.
-Standard premerge still fails two checks also reproduced on `8b37000b3`:
+At runtime `e1c69289a`, standard premerge failed two checks also reproduced on `8b37000b3`:
 the existing oversized `run_loopx_turn_once` decision function and stale
 `turn_route` producer coverage after the earlier owner convergence. The native
-increment does not change those files; they remain C1 qualification gaps,
-not passing checks or exceptions.
+increment did not change those files; that historical result is not a pass or
+an exception. The current integration, rebased onto `b69021498`, incorporates
+the actual TypeScript producer/scanner repair from [#7520](https://github.com/loopx-project/loopx/pull/7520).
+It also isolates original-capture restoration from run-once orchestration at
+`fec9cd3af`, preserving the existing capture owner and session recovery. The
+size thresholds remain unchanged. Current combined qualification belongs to
+the exact integration head's PR evidence, not the old native-slice test counts.
 
 Final measurements include the recovery-publication fix at runtime commit
 `e1c69289a`. Against immutable `8b37000b3` (the preceding C1 plus the same target-main large
@@ -1431,6 +1436,21 @@ Separate shared-owner prerequisites, producer/capture cutover, reader recovery
 and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+The current author split keeps [#7517](https://github.com/loopx-project/loopx/pull/7517)
+as an independent bilingual design refinement and
+[#7520](https://github.com/loopx-project/loopx/pull/7520) as an independently
+usable route-owner/caller refactor on main. Existing independent proposals
+[#7457](https://github.com/loopx-project/loopx/pull/7457) and
+[#7468](https://github.com/loopx-project/loopx/pull/7468) retain context-reference
+and observation-diagnostic ownership; the cache-clock fix
+[#7464](https://github.com/loopx-project/loopx/pull/7464) is already in the
+named target main. These boundaries have local rollback; the design change
+has no runtime dependency. [#7430](https://github.com/loopx-project/loopx/pull/7430)
+remains an unfinished integration candidate and includes prerequisite content
+for combination testing. After prerequisites enter main, rebase it again to
+remove overlapping diff before cutover handoff. Do not merge two implementations
+or present this staging arrangement as complete C1 delivery.
 
 The first **cutover** slice pairs the complete field/clause migration with a
 real single-session producer and consumer replacement. Start at the
