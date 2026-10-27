@@ -266,7 +266,7 @@ def test_large_goal_context_keeps_complete_basis_and_checkpoint_only_recovery(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_context_reads_real_canonical_todo_and_owner_acceptance(tmp_path, monkeypatch, provider):
-    from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
     from loopx.control_plane.goals.checkpoint_context_io import read_checkpoint_context

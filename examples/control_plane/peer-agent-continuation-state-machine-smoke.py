@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import tempfile
 from pathlib import Path
 
@@ -141,6 +142,36 @@ def assert_same_peer_continuation() -> None:
         assert completed["completion_policy"]["self_merged"] is True, completed
         successor = completed["next_todos"][0]
         assert successor["claimed_by"] == PEER_ALPHA, successor
+        # Native completion preserves the result but does not settle the
+        # admitted Turn. Finish its real writeback before selecting a successor.
+        turn = first['heartbeat_receipt']['turn_instance_id']
+        from loopx.control_plane.goals.checkpoint_context_io import read_checkpoint_context
+        context = read_checkpoint_context(registry_path=registry_path,
+            runtime_root_override=str(runtime), goal_id=GOAL_ID, agent_id=PEER_ALPHA,
+            todo_id=START_TODO_ID, turn_instance_id=turn, purpose='first_delivery')
+        assert context['basis']['todo']['status'] == 'done'
+        vision = project / 'peer-direction.json'
+        vision.write_text(json.dumps({
+            'schema_version': 'goal_vision_replan_contract_v0', 'state': 'vision_closed',
+            'vision_patch': {'vision_summary': 'Continue the peer lane after the verified first slice.',
+                'acceptance_summary': 'The first slice is verified; the same peer owns the explicit successor.'},
+            'path_delta': {'outcome': 'continue',
+                'prior_assumption': 'The first slice must precede its successor.',
+                'observed_reality': 'Native completion retained the verified slice and created its same-peer successor.',
+                'retained': ['The original peer ownership and the independently verified first slice.'],
+                'evidence_refs': [f'todo:{START_TODO_ID}', f'todo:{successor["todo_id"]}']}}), encoding='utf-8')
+        binding = ('--goal-id', GOAL_ID, '--agent-id', PEER_ALPHA,
+            '--todo-id', START_TODO_ID, '--turn-instance-id', turn)
+        refreshed = run_cli('refresh-state', *binding, '--classification', 'peer_slice_verified',
+            '--delivery-batch-scale', 'implementation', '--delivery-outcome', 'outcome_progress',
+            '--agent-vision-json', str(vision), '--no-global-sync', '--suppress-external-sinks',
+            '--first-delivery', '--checkpoint-read-context', context['read_context_id'],
+            registry_path=registry_path, runtime=runtime, cwd=project)
+        assert refreshed['ok'] is True, refreshed
+        for replay in (False, True):
+            spent = run_cli('quota', 'spend-slot', *binding, '--slots', '1', '--source', 'heartbeat', '--execute',
+                registry_path=registry_path, runtime=runtime, cwd=project)
+            assert spent['appended'] is (not replay), spent
         second = should_run(project, runtime, registry_path, PEER_ALPHA)
         assert second["agent_lane_next_action"]["todo_id"] == successor["todo_id"], second
 

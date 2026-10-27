@@ -59,6 +59,64 @@ def business_snapshot(project, runtime):
     return {'counts': _work_counts(project), 'effects': dict(_business_rows(runtime)),
             'candidate': (project / 'candidate.txt').read_bytes()}
 
+
+def settle_frontier_replan(caller, guard, registry, project, runtime, new_todo):
+    """A new dependency after terminal intent owes an actual route decision."""
+    turn = guard['heartbeat_receipt']['turn_instance_id']
+    identity = guard['heartbeat_receipt']['settlement_identity']
+    assert identity['todo_id'] == new_todo
+    assert (project / 'new-dependency.txt').read_text() == 'delivered-v2'
+    assert not (project / 'new-proof.txt').exists(), 'Planning cannot claim the future validator result'
+    from tests.control_plane.test_quota_settlement_cli import _projected_cli_args
+    actions = guard['interaction_contract']['cli_channel']['next_cli_actions']
+    packet = project / 'frontier-replan.json'
+    refresh = next(c for c in actions if 'refresh-state' in c).replace(
+        '<path-to-evidence-linked-goal-vision-replan-contract-v0.json>', str(packet))
+    for key, value in {'<advanced|blocked|exploration_exhausted|no_followup>': 'advanced',
+        '<surface-id>': 'delivered-dependency', '<hypothesis-id>': 'dependency-acceptance',
+        '<probe-kind>': 'source-read', '<evidence-id>': 'file:new-dependency.txt'}.items():
+        refresh = refresh.replace(key, value)
+    refresh_args = list(_projected_cli_args(refresh, turn_instance_id=turn))
+    initial = refresh_args.copy()
+    index = initial.index('--agent-vision-json')
+    del initial[index:index + 2]
+    pending = json.loads(caller.run_cli([*initial, '--no-global-sync', '--suppress-external-sinks']))
+    assert pending['ok'] is True, {key: pending.get(key) for key in ('error', 'reason')}
+    retained = json.loads(Path(pending['json_path']).read_text())
+    assert retained['vision_checkpoint']['satisfied'] is False
+    assert not retained.get('autonomous_replan_ack', {}).get('recorded')
+    spend = _projected_cli_args(next(c for c in actions if 'spend-slot' in c), turn_instance_id=turn)
+    denied_spend = json.loads(caller.run_cli(list(spend)))
+    assert denied_spend['ok'] is False, denied_spend
+    assert _business_rows(runtime)['quota_slot_spent'] == 1
+    from loopx.control_plane.goals.checkpoint_context_io import read_checkpoint_context
+    context = read_checkpoint_context(registry_path=registry,
+        runtime_root_override=str(runtime), goal_id=GOAL_ID, agent_id=AGENT_ID,
+        todo_id=identity['todo_id'], turn_instance_id=turn, purpose='supplement_checkpoint')
+    assert context['basis']['todo']['status'] == 'open'
+    prior = context['basis']['agent_vision']
+    assert prior
+    vision = {key: prior[key] for key in ('schema_version', 'state', 'vision_patch', 'todo_delta') if key in prior}
+    vision['vision_patch'] = {**vision['vision_patch'],
+        'acceptance_summary': 'Retain the accepted candidate; independently verify the newly delivered dependency.'}
+    vision['path_delta'] = {'outcome': 'replan',
+        'prior_assumption': 'The original terminal route had no further dependency.',
+        'observed_reality': 'A delivered dependency and an open validator-backed Todo now require verification.',
+        'retained': ['The original accepted result and its one settlement.'],
+        'changed': ['Verify the delivered dependency before another terminal decision.'],
+        'evidence_refs': [f'todo:{new_todo}', 'file:new-dependency.txt']}
+    packet.write_text(json.dumps(vision), encoding='utf-8')
+    refreshed = json.loads(caller.run_cli([*refresh_args,
+        '--checkpoint-read-context', context['read_context_id'],
+        '--no-global-sync', '--suppress-external-sinks']))
+    assert refreshed['ok'] is True, {key: refreshed.get(key) for key in (
+        'error', 'error_code', 'reason', 'vision_checkpoint', 'autonomous_replan_ack')}
+    spent = json.loads(caller.run_cli(list(spend)))
+    assert spent['appended'] is True, spent
+    assert json.loads(caller.run_cli(list(spend)))['appended'] is False
+    assert _business_rows(runtime)['quota_slot_spent'] == 2
+    return json.loads(caller.should_run())
+
 def test_negative_oracle_sentinels(tmp_path):
     # The actual counter oracle must reject duplicated persisted work, not just a missing file.
     candidate = tmp_path / 'candidate.txt'
@@ -160,6 +218,11 @@ def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
     if new_todo:
         assert next(r for r in rows(runtime, state) if r['todo_id'] == new_todo)['status'] == 'open'
     if new_todo:
+        from loopx.configure_goal import configure_goal
+        # Freeze the required-review premise: the old and new completion each
+        # owe their own current outcome judgment, even after a lawful replan.
+        assert configure_goal(registry_path=registry, goal_id=GOAL_ID,
+            execution_replan_after_todos=1, execute=True)['written']
         caller = _control(registry)
         guard = json.loads(caller.should_run())
         assert guard['should_run'] is True and guard['selected_todo']['todo_id'] == new_todo, guard
@@ -172,6 +235,16 @@ def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
             suffix = ['--todo-id', new_todo, '--turn-instance-id', selection_turn]
             guard = json.loads(caller.run_cli([*current_args, *suffix], legacy_args=[*legacy_args, *suffix]))
             assert guard['heartbeat_receipt']['turn_instance_id'] == selection_turn
+        if guard['effective_action'] == 'autonomous_replan_required':
+            guard = settle_frontier_replan(caller, guard, registry, project, runtime, new_todo)
+            # A paid replan is distinct from both the old result and new work.
+            after = business_snapshot(project, runtime)
+            counts = _work_counts(project)
+            assert counts['implementation.txt'] == counts['validation.txt'] == 1
+            if guard['interaction_contract']['agent_channel'].get('selection_required') is True:
+                current_args, legacy_args = caller.should_run_args(GOAL_ID, AGENT_ID)
+                suffix = ['--todo-id', new_todo, '--turn-instance-id', guard['heartbeat_receipt']['turn_instance_id']]
+                guard = json.loads(caller.run_cli([*current_args, *suffix], legacy_args=[*legacy_args, *suffix]))
         assert guard['interaction_contract']['agent_channel']['delivery_allowed'] is True, guard
         assert guard['selected_todo']['todo_id'] == new_todo
         assert business_snapshot(project, runtime) == after, 'New work admission must not resettle old work'
@@ -195,7 +268,7 @@ def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
             assert denied['ok'] is False and denied['completed'] is True, denied
             assert denied['settlement']['failed_stage'] == 'durable_writeback'
             assert 'typed semantic delta' in denied['settlement']['reason']
-            assert _business_rows(runtime)['quota_slot_spent'] == 1, 'Rejected direction cannot spend the new Turn'
+            assert _business_rows(runtime)['quota_slot_spent'] == after['effects']['quota_slot_spent'], 'Rejected direction cannot spend the new Turn'
             import hashlib
             proof_refs = [f'todo:{new_todo}'] + [
                 f'file:{name}#sha256:{hashlib.sha256((project/name).read_bytes()).hexdigest()}'
@@ -204,7 +277,7 @@ def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
                 'state': 'vision_patch_proposed', 'vision_patch': {
                     'vision_summary': 'Verify the delivered dependency while preserving prior accepted results.',
                     'acceptance_summary': 'The new dependency was read and its independent validator passed; retain the original result and settlement identities.'},
-                'path_delta': {'outcome': 'continue',
+                'path_delta': {'outcome': 'replan',
                     'prior_assumption': 'The original terminal route had no delivered follow-up dependency.',
                     'observed_reality': 'A new dependency and proof were read, and its native completion validator passed.',
                     'retained': ['Prior accepted results and all original settlement identities.'],
@@ -220,7 +293,7 @@ def test_default_terminal_frontier(provider, scenario, tmp_path, monkeypatch):
         assert (project / 'new-validation.txt').read_text().splitlines() == ['1']
         assert _work_counts(project) == after['counts'] and (project / 'candidate.txt').read_bytes() == after['candidate']
         effects = _business_rows(runtime)
-        assert effects['candidate_verified'] == 1 and effects['quota_slot_spent'] == 2
+        assert effects['candidate_verified'] == 1 and effects['quota_slot_spent'] == after['effects']['quota_slot_spent'] + 1
         final_rows = rows(runtime, state)
         assert result_facts(next(r for r in final_rows if r['todo_id'] == original_todo)) == original_result_facts
         assert next(r for r in final_rows if r['todo_id'] == new_todo)['status'] == 'done'

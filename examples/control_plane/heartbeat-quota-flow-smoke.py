@@ -7,14 +7,13 @@ import json
 import shlex
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority, temporary_canary_directory  # noqa: E402
 
 GOAL_ID = "heartbeat-flow-main-control"
 LONG_NEXT_ACTION_TAIL = "without truncating the final private-safe boundary sentence."
@@ -642,7 +641,7 @@ def fake_codex_executor_decision(guard: dict) -> dict:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="loopx-heartbeat-quota-flow-") as tmp:
+    with temporary_canary_directory(prefix="loopx-heartbeat-quota-flow-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_fixture(root)
         registry_before = registry_path.read_text(encoding="utf-8")
@@ -749,7 +748,7 @@ def main() -> int:
         assert "protocol_action_packet" not in follow_up, follow_up
         assert registry_path.read_text(encoding="utf-8") == registry_before
 
-    with tempfile.TemporaryDirectory(prefix="loopx-heartbeat-operator-gate-") as tmp:
+    with temporary_canary_directory(prefix="loopx-heartbeat-operator-gate-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_operator_gate_fixture(root)
         gate_guard = run_cli(
@@ -774,7 +773,7 @@ def main() -> int:
         assert interaction["cli_channel"]["spend_after_validation"] is False, interaction
         assert interaction["fallback_policy"]["do_not_cancel_on_block"] is True, interaction
 
-    with tempfile.TemporaryDirectory(prefix="loopx-heartbeat-monitor-poll-") as tmp:
+    with temporary_canary_directory(prefix="loopx-heartbeat-monitor-poll-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_monitor_fixture(root)
         first_guard = run_cli(
@@ -974,7 +973,7 @@ def main() -> int:
             heartbeat_turn_two
         )
 
-    with tempfile.TemporaryDirectory(prefix="loopx-heartbeat-monitor-replan-surface-only-") as tmp:
+    with temporary_canary_directory(prefix="loopx-heartbeat-monitor-replan-surface-only-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_monitor_fixture(root)
         first_guard = run_cli(
@@ -1031,7 +1030,7 @@ def main() -> int:
         assert spend["ok"] is False, spend
         assert count_spend_events(runtime) == 0, spend
 
-    with tempfile.TemporaryDirectory(prefix="loopx-external-evidence-observation-") as tmp:
+    with temporary_canary_directory(prefix="loopx-external-evidence-observation-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_external_evidence_fixture(root)
         guard = run_cli(
@@ -1109,7 +1108,7 @@ def main() -> int:
         assert count_spend_events(runtime) == 0, poll
         assert count_events(runtime, "quota_monitor_poll") == 1, poll
 
-    with tempfile.TemporaryDirectory(prefix="loopx-external-monitor-advancement-") as tmp:
+    with temporary_canary_directory(prefix="loopx-external-monitor-advancement-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_external_monitor_advancement_fixture(root)
         guard = run_cli(
@@ -1156,7 +1155,7 @@ def main() -> int:
         assert count_spend_events(runtime) == 0, poll
         assert count_events(runtime, "quota_monitor_poll") == 1, poll
 
-    with tempfile.TemporaryDirectory(prefix="loopx-scoped-future-external-monitor-") as tmp:
+    with temporary_canary_directory(prefix="loopx-scoped-future-external-monitor-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_scoped_future_external_monitor_fixture(root)
         guard = run_cli(
@@ -1187,7 +1186,7 @@ def main() -> int:
         assert guard.get("replan_action_packet") is None, guard
         assert guard.get("autonomous_replan_obligation") is None, guard
 
-    with tempfile.TemporaryDirectory(prefix="loopx-external-evidence-projection-") as tmp:
+    with temporary_canary_directory(prefix="loopx-external-evidence-projection-") as tmp:
         root = Path(tmp)
         project, runtime, registry_path = write_external_evidence_fixture(
             root,

@@ -246,7 +246,8 @@ permissions = []
 
 [runtime]
 protocol = "budget_presentation_extension_v0"
-entrypoint = {json.dumps(str(provider))}
+entrypoint = {json.dumps(sys.executable)}
+args = [{json.dumps(str(provider))}]
 doctor_args = ["--doctor"]
 required_permissions = []
 timeout_seconds = 5

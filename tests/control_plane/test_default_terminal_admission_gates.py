@@ -114,7 +114,9 @@ def test_real_direction_permission_signal_retains_result_and_blocks_retry(provid
     assert 'current_agent_decision' not in receipt
     assert receipt['decision_basis']['todo']['status'] == 'done'
     assert (project/'permission_requests.txt').read_text() == '1\n'
-    second = _resume(resume)
+    # Ordinary replay must not reprompt. Explicit retry is a separate owner
+    # decision, exercised after resolution in test_direction_stop_reentry.
+    second = _resume([arg for arg in resume if arg != '--retry-failed-turn'])
     assert second.returncode != 0, second.stdout+second.stderr
     _assert_preserved(before, _snapshot(project, runtime))
     assert (project/'permission_requests.txt').read_text() == '1\n'

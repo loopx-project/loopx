@@ -17,6 +17,7 @@ import {
   SHADOW_EXACT_DRAIN_SCHEMA,
 } from "../../loopx/control_plane/coordination/shadow_drain.ts";
 import * as schemas from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
+import {TODO_DOMAIN_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import { fixture, pendingEntry, settleFiles, todo, sha } from "./shadow_file_fixture.ts";
 import { resolveTestPython } from "../../scripts/test-python.mjs";
 
@@ -33,17 +34,22 @@ const GOAL_B = {
 
 test("released Todo manifests replay without rewriting history and allow the next capture", async (t) => {
   for (const absent of [
-    ["completion_receipt_id"],
-    ["completion_receipt_id", "completion_result"],
+    [], ["completion_receipt_id"], ["completion_receipt_id", "completion_result"],
     ["completion_receipt_id", "completion_result", "completion_validation_revision", "completion_validation_revision_history"],
   ]) {
     const f = await fixture(t);
     const commit = f.store.commitAuthority.bind(f.store);
-    // Write a real File transaction using a released writer's field manifest.
+    // Freeze the actual released manifest, then replay its earlier revisions.
+    // Subtracting fields from today's contract constructs a mixed release.
+    const released = JSON.parse(await readFile(new URL(
+      "../control_plane/fixtures/todo_read_fields_a3266402.json", import.meta.url), "utf8"));
+    assert.equal(released.source_commit, "a326640280507e7e6dcd5adba8ce706bd03b219f");
     f.store.commitAuthority = async (input) => {
       const next = structuredClone(input.next_projection);
       const model = next.todo_read_model as JsonObject;
-      model.contract_fields = (model.contract_fields as string[]).filter((field) => !absent.includes(field));
+      const fields = model.schema_version === TODO_DOMAIN_READ_RECORD_SCHEMA
+        ? released.domain_fields : released.canonical_fields;
+      model.contract_fields = fields.filter((field: string) => !absent.includes(field));
       return commit({...input, next_projection: next});
     };
     const request = await pendingEntry(f, 1, {handoff_mode: "hard_lease", todos: [todo()]});
@@ -64,7 +70,7 @@ test("released Todo manifests replay without rewriting history and allow the nex
     if (history.status !== "page") continue;
     assert.equal(history.transactions.length, 3);
     assert.equal(((history.transactions[1]!.projection.todo_read_model as JsonObject).contract_fields as string[])
-      .includes("completion_receipt_id"), false);
+      .includes("completion_receipt_id"), !absent.includes("completion_receipt_id"));
     assert.equal(((history.transactions[2]!.projection.todo_read_model as JsonObject).contract_fields as string[])
       .includes("completion_receipt_id"), true);
   }
