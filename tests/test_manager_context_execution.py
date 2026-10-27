@@ -262,6 +262,69 @@ def test_preflight_never_becomes_a_launch_permit(flow, monkeypatch, state):
     assert not flow[3]
 
 
+@pytest.mark.parametrize("state", ["turn_blocked", "acceptance_unavailable", "runtime_unavailable"])
+def test_prepared_recovery_uses_the_same_refusal_without_submitting_a_worker(flow, monkeypatch, state):
+    root, registry, (_, session, turn, request, receipt, _), started = flow
+    first = dispatch(flow)
+    monkeypatch.setattr(execution.Delegations, "read", lambda *_: {"status": "prepared"})
+    monkeypatch.setattr(execution.Delegations, "inspect", lambda *_: {"state": state})
+    monkeypatch.setattr(execution.Delegations, "resume",
+        lambda *_args, **_kwargs: pytest.fail("a refused preflight must retain prepared work"), raising=False)
+    result = execution.dispatch(root, registry, session=session, turn=turn,
+        request=request, receipt=receipt, execution_allowed=lambda: True)
+    assert result["submitted"] is False and result["preflight"]["state"] == state
+    assert result["operation_id"] == first["operation_id"]
+    assert result["status"] == "prepared" and result["replayed"]
+    assert len(started) == 1
+
+
+@pytest.mark.parametrize("change", ["source_stop", "source_revocation"])
+def test_source_change_during_prepared_recovery_preview_does_not_resume(flow, monkeypatch, change):
+    root, registry, (_, session, turn, request, receipt, policy), started = flow
+    dispatch(flow)
+    monkeypatch.setattr(execution.Delegations, "read", lambda *_: {"status": "prepared"})
+    active = [True]
+
+    def preview(*_):
+        if change == "source_stop":
+            active[0] = False
+        else:
+            policy["sources"][session["channel_id"]]["execution_bindings"] = []
+            _write(_root(root) / "policy.json", policy)
+        return {"state": "launchable", "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
+
+    monkeypatch.setattr(execution.Delegations, "inspect", preview)
+    monkeypatch.setattr(execution.Delegations, "resume",
+        lambda *_args, **_kwargs: pytest.fail("source stop must prevent prepared recovery"), raising=False)
+    result = execution.dispatch(root, registry, session=session, turn=turn,
+        request=request, receipt=receipt, execution_allowed=lambda: active[0])
+    assert result == {"submitted": False, "reason": "execution_binding_or_admission_unavailable"}
+    assert len(started) == 1
+
+
+@pytest.mark.parametrize("missing", ["turn_eligible", "acceptance_ready", "authority_ready"])
+def test_prepared_recovery_requires_every_original_preflight_fact(flow, monkeypatch, missing):
+    dispatch(flow)
+    monkeypatch.setattr(execution.Delegations, "read", lambda *_: {"status": "prepared"})
+    facts = {"state": "launchable", "turn_eligible": True, "acceptance_ready": True, "authority_ready": True}
+    facts.pop(missing)
+    monkeypatch.setattr(execution.Delegations, "inspect", lambda *_: facts)
+    monkeypatch.setattr(execution.Delegations, "resume",
+        lambda *_args, **_kwargs: pytest.fail("an unavailable fact cannot permit recovery"), raising=False)
+    assert dispatch(flow)["submitted"] is False
+
+
+@pytest.mark.parametrize("status", ["running", "turn_returned", "accepted", "rejected", "stopped"])
+def test_advanced_source_replay_observes_without_new_admission(flow, monkeypatch, status):
+    original = dispatch(flow)
+    monkeypatch.setattr(execution.Delegations, "read", lambda *_: {"status": status})
+    monkeypatch.setattr(execution.Delegations, "inspect",
+        lambda *_: pytest.fail("advanced work is observed, not submitted again"))
+    result = dispatch(flow)
+    assert result == {"submitted": True, "operation_id": original["operation_id"],
+        "todo_id": "todo_current", "status": status, "replayed": True}
+
+
 def test_stop_during_preview_and_context_only_selection_do_not_launch(flow, monkeypatch):
     root, registry, (_, session, turn, request, receipt, _), started = flow
     active = [True]

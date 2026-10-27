@@ -86,21 +86,22 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
             raise ValueError("execution binding not granted to this source")
         service, binding = _service(root, registry, grant)
         operation = "context-" + receipt["request_id"]
-        # Recover an existing operation instead of probing a now-completed Todo
-        # and misreporting an accepted result as a refused new launch.
-        if service.path(operation).exists():
+        replayed = service.path(operation).exists()
+        saved = {}
+        if replayed:
             row = read_delegation_source_execution(service, selected, operation,
                 source_request_id=receipt["request_id"], brief=request["brief"],
                 conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]})
-            if row["status"] == "prepared":
-                # The requester may have died after persisting the operation
-                # but before starting its worker. Rejoin that same owner under
-                # fresh source authority; never retry an uncertain running Host.
-                if not execution_allowed() or grant not in _grants(root, registry, session, turn):
-                    raise ValueError("source execution grant changed before recovery")
-                row = service.resume(operation, prepared_source_request_id=receipt["request_id"])
-            return {"submitted": True, "operation_id": operation, "todo_id": binding["todo_id"],
-                    "status": row["status"], "replayed": True}
+            saved = {"operation_id": operation, "todo_id": binding["todo_id"],
+                     "status": row["status"], "replayed": True}
+            # Only a still-prepared operation can submit a worker. Other
+            # states remain observations, including an accepted operation
+            # whose now-completed Todo would refuse a new admission.
+            if row["status"] != "prepared":
+                return {"submitted": True, **saved}
+        # A crash before spawn leaves the original prepared operation pending.
+        # Its recovery needs the same fresh native preflight as first dispatch;
+        # otherwise a busy/unknown lane can strand it in a premature rejection.
         preflight = service.inspect(selected)
         # Match the existing start owner: an unprobed configured runtime may
         # attempt bounded execution, but is never presented as ready/running.
@@ -110,16 +111,22 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
         if (preflight["state"] not in {"launchable", "runtime_unverified"}
                 or not all(preflight.get(key) is True for key in
                            ("turn_eligible", "acceptance_ready", "authority_ready"))):
-            return {"submitted": False, "preflight": preflight, "reason": "execution_not_launchable"}
+            return {"submitted": False, **saved, "preflight": preflight, "reason": "execution_not_launchable"}
         # Re-read the source and operator selection after the potentially slow
         # preview. Delegations.start itself rechecks the exact binding and Turn.
         if not execution_allowed() or grant not in _grants(root, registry, session, turn):
             raise ValueError("source execution grant changed before launch")
-        result = service.start(selected, operation, request["brief"],
-                               conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]},
-                               source_request_id=receipt["request_id"])
+        if replayed:
+            # Keep the prepared-source CAS through worker startup. A delayed
+            # child must not retry an operation that has already advanced.
+            result = service.resume(operation, prepared_source_request_id=receipt["request_id"])
+        else:
+            result = service.start(selected, operation, request["brief"],
+                                   conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]},
+                                   source_request_id=receipt["request_id"])
         return {"submitted": True, "operation_id": operation, "todo_id": binding["todo_id"],
-                "status": result["status"], "runtime_readiness": preflight["state"], "replayed": False}
+                "status": result["status"], "replayed": replayed,
+                **({} if replayed else {"runtime_readiness": preflight["state"]})}
     except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected):
         return {"submitted": False, "reason": "execution_binding_or_admission_unavailable"}
 

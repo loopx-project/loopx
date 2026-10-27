@@ -165,6 +165,16 @@ original Inbox request, binding, conversation and governed Turn; it creates no
 replacement task, grant or scheduler. This remains the explicit task-bound
 route described here, not general automatic activation of an idle Inbox owner.
 
+A still-prepared replay also performs the same current native preflight as a
+first submission. A busy or unknown Turn lane, refused task admission,
+unavailable runtime or missing current acceptance leaves the original operation
+prepared and returns its identity and preflight diagnosis without submitting a
+worker. Once those observations recover, replay can rejoin that same operation
+under fresh source authority and the existing prepared-source startup fence.
+An operation that has already advanced is read back without probing its Todo
+for a new launch. The preflight remains a point-in-time observation; the native
+start fence still owns a later race. This adds no automatic retry or wake pump.
+
 中文：Chat 发起的执行保留原 Inbox 请求、固定的对话来源和原 operation。worker 在
 入口、Host 启动前和完成结算前重新核对当前发送者、接收者及精确
 Goal/Agent/requester/binding grant；撤权、来源不可读或身份变化会拒绝在原
@@ -182,6 +192,13 @@ prepared operation 可在恢复的当前 grant 下续接原 owner，终态 opera
 不确定时仍须显式对账原执行。原 Inbox 请求、binding、对话与受治理 Turn 均保留，
 不创建替代任务、授权或调度器。这仍是本文的精确任务绑定路径，不代表普通 Inbox
 空闲接收者的自动激活已完成。
+
+仍为 `prepared` 的重放也执行首次提交所用的当前原生预检。Turn lane 忙碌或未知、
+任务准入拒绝、运行时不可用或当前验收依据缺失时，原 operation 保持 `prepared`，
+返回其身份和预检原因，不提交 worker。观察恢复后，在新鲜来源授权和既有
+prepared-source 启动条件下续接同一 operation；已推进的 operation 直接读回，
+不按新启动重查其 Todo。预检仍只是当时观察，之后的竞争由原生启动 fence 拒绝；
+本改动不新增自动重试或唤醒循环。
 
 Member completion uses the ordinary active-Goal continuation, including legacy
 non-hard-lease routes. It does not declare terminal `no_followup` for a
