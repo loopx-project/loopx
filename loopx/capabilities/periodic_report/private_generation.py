@@ -255,6 +255,10 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
         # exact prior presentation; never rewrite or regenerate it.
         # Both candidates still require full bundle, source and body equality.
         checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
+            render_periodic_report_markdown(bundle["document"]),
+            render_periodic_report_html(bundle["document"], _legacy_masthead=True)])
+    if checked != bundle:
+        checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
             render_periodic_report_markdown(bundle["document"], _legacy_layout=True),
             render_periodic_report_html(bundle["document"], _legacy_layout=True)])
     if checked != bundle:

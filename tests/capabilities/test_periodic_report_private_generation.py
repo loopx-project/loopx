@@ -191,7 +191,7 @@ def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
 
 
 @pytest.mark.parametrize("tamper", [None, "report", "html", "source", "response"])
-@pytest.mark.parametrize("legacy_links", [False, True])
+@pytest.mark.parametrize("legacy_links", [False, True, None])
 def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_path, monkeypatch, tamper, legacy_links):
     from loopx.presentation.renderers import periodic_report_html as html
     from loopx.presentation.renderers import periodic_report_markdown as markdown
@@ -206,14 +206,20 @@ def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_pat
 
     prior_markdown = markdown.render_periodic_report_markdown
     prior_html = html.render_periodic_report_html
-    # Seed through the real freezer, retaining both shipped inline layouts.
+    # Seed through the real freezer, retaining all three shipped layouts.
     # The old source rules remain independently specified, not inferred from
     # the new link-eligibility helper or the validator's selected fallback.
     with monkeypatch.context() as previous:
-        previous.setattr(markdown, "render_periodic_report_markdown", lambda document, **kwargs:
-            prior_markdown(document, **{**kwargs, "_legacy_layout": True}))
-        previous.setattr(html, "render_periodic_report_html", lambda document, **kwargs:
-            prior_html(document, **{**kwargs, "_legacy_layout": True}))
+        # Independently reproduce the shipped CSS. Its automatic side column
+        # predates bounded prose highlights in all three presentations.
+        previous.setattr(html, "_CSS", html._CSS.replace(
+            "grid-template-columns: minmax(0, 1fr) minmax(240px, 360px)",
+            "grid-template-columns: minmax(0, 1fr) auto", 1))
+        if legacy_links is not None:
+            previous.setattr(markdown, "render_periodic_report_markdown", lambda document, **kwargs:
+                prior_markdown(document, **{**kwargs, "_legacy_layout": True}))
+            previous.setattr(html, "render_periodic_report_html", lambda document, **kwargs:
+                prior_html(document, **{**kwargs, "_legacy_layout": True}))
         if legacy_links:
             previous.setattr(markdown, "_markdown_source", lambda value, labels, **_:
                 f"[{labels['source']}]({markdown._safe(value, maximum=500)})")
@@ -221,14 +227,17 @@ def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_pat
         receipt = freeze_private_report(root=root, window=window, response=response)
     original = {path.name: path.read_bytes() for path in folder.iterdir() if path.is_file()}
     # Independent historical renderer oracles: parent of #7413 for old links,
-    # e20e4b684 for safe inline references. The input/window above is fixed.
+    # e20e4b684 for safe inline references, be1dc37a0 for indexed sources.
+    # The input/window above is fixed.
     expected_text_digest = (
         "509ff2e53bbce2f703049f1684e1a9f2048826ebb8c386891650b52841a1ed23"
         if legacy_links else
         "8d97d55e80f759e7eaadb73c5df93afea4d5cfbc071301a9726cb47ff37f9755"
+        if legacy_links is False else
+        "0041149af93d653431f5a70e0b98ad388462b1b93b81bc7a718a39f0b54dec8d"
     )
     assert hashlib.sha256(original["report.md"]).hexdigest() == expected_text_digest
-    assert ("[来源](sha256:" in original["report.md"].decode("utf-8")) is legacy_links
+    assert ("[来源](sha256:" in original["report.md"].decode("utf-8")) is bool(legacy_links)
     assert "[来源](sha256:" not in markdown.render_periodic_report_markdown(
         json.loads(original["generation-bundle.json"])["document"])["content"]
 

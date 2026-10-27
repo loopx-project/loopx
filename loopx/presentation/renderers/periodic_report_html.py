@@ -458,7 +458,7 @@ button, input { font: inherit; }
 .shell { width: min(1220px, calc(100% - 40px)); margin: 0 auto; padding: 40px 0 80px; }
 .masthead { border-top: 8px solid var(--ink); border-bottom: 1.5px solid var(--ink);
   padding: 27px 0 26px; }
-.mast-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 28px;
+.mast-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 360px); gap: 28px;
   align-items: end; }
 .eyebrow { margin: 0 0 8px; color: var(--muted); font: 650 10px/1.4 var(--mono);
   letter-spacing: .1em; text-transform: uppercase; }
@@ -663,13 +663,20 @@ _SCRIPT = """
 
 
 def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_links: bool = False,
-                                _legacy_layout: bool = False) -> dict[str, Any]:
+                                _legacy_layout: bool = False,
+                                _legacy_masthead: bool = False) -> dict[str, Any]:
     """Render one dense, self-contained report without changing its semantics."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
     validate_periodic_report_editorial(document)
     _legacy_layout = _legacy_layout or _legacy_source_links
+    css = _CSS
+    if _legacy_masthead or _legacy_layout:
+        # Exact read-only reconstruction of already frozen presentations.
+        css = css.replace(
+            "grid-template-columns: minmax(0, 1fr) minmax(240px, 360px)",
+            "grid-template-columns: minmax(0, 1fr) auto", 1)
     references = {} if _legacy_layout else _source_references(document)
     sections = _items(document.get("sections"))
     primary_sections = [
@@ -757,7 +764,7 @@ def render_periodic_report_html(document: Mapping[str, Any], *, _legacy_source_l
         '<meta http-equiv="Content-Security-Policy" '
         "content=\"default-src 'none'; style-src 'unsafe-inline'; "
         "script-src 'unsafe-inline'; img-src data:\">"
-        f"<title>{title}</title><style>{_CSS}{_SOURCE_CSS if references else ''}</style></head><body>"
+        f"<title>{title}</title><style>{css}{_SOURCE_CSS if references else ''}</style></head><body>"
         '<div class="shell" id="report-top" data-renderer="html_artifact_v0" '
         'data-presentation="editorial_dense_v2">'
         '<header class="masthead"><div class="mast-grid"><div>'
