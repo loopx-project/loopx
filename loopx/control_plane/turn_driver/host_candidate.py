@@ -63,12 +63,14 @@ def _canonical_hash(value: Any) -> str:
     return "sha256:" + sha256(encoded).hexdigest()
 
 
-def _complete_host_decision(request: Mapping[str, Any]) -> dict[str, Any] | None:
+def _complete_host_source(
+    request: Mapping[str, Any], *, operation: str = "validate_complete",
+) -> dict[str, Any] | None:
     if "work_contract" not in request:
         return None
     from ..quota.turn_envelope import _turn_envelope_result
 
-    return _turn_envelope_result("validate_complete", payload=request["work_contract"],
+    return _turn_envelope_result(operation, payload=request["work_contract"],
                                  envelope=_mapping(request.get("turn_envelope")))
 
 
@@ -79,7 +81,7 @@ def execution_profile_present(request: Mapping[str, Any]) -> bool:
     supplied contract never falls back. Schema and candidate adapters share this
     read, while evidence content validation stays with the result executor.
     """
-    decision = _complete_host_decision(request)
+    decision = _complete_host_source(request)
     if decision is None:
         envelope = _mapping(request.get("turn_envelope"))
         decision = _mapping(envelope.get("contract_capsule"))
@@ -94,8 +96,13 @@ def complete_host_input(request: Mapping[str, Any]) -> dict[str, Any] | None:
     compacts decision facts or derives a second model-facing authority view.
     Historical requests without a complete contract retain their old decoder.
     """
-    if _complete_host_decision(request) is None:
+    if _complete_host_source(request) is None:
         return None
+    return _captured_model_input(request)
+
+
+def _captured_model_input(request: Mapping[str, Any]) -> dict[str, Any]:
+    """Transport original-reader metadata after complete-source validation."""
     envelope = _mapping(request.get("turn_envelope"))
     model_input = {key: value for key, value in request.items() if key != "turn_envelope"}
     detail = _mapping(envelope.get("detail_ref"))
@@ -115,30 +122,37 @@ def complete_host_input(request: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the signed action and safety boundary exactly as projected."""
+    """Use the complete source; decode the old layout for historical input only."""
 
-    envelope = _mapping(request.get("turn_envelope"))
     try:
-        model_input = complete_host_input(request)
+        checked = _complete_host_source(request, operation="host_context")
     except RuntimeError as exc:
         raise ValueError("complete Turn contract rejected") from exc
+    if checked is not None:
+        primary_action = checked["primary_action"]
+        if not isinstance(primary_action, str) or not primary_action.strip():
+            raise ValueError("signed TurnEnvelope has no primary_action")
+        decision = checked["decision"]
+        return {**decision, "primary_action": primary_action,
+            "execution_profile": _mapping(decision.get("execution_profile")),
+            "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
+            "_model_input": _captured_model_input(request)}
+
+    envelope = _mapping(request.get("turn_envelope"))
     signature = _mapping(envelope.get("action_signature"))
-    if model_input is None:
-        # The complete owner checks version, signature and source binding in
-        # one call. Only historical requests need this compatibility decoder.
-        assert_turn_envelope_consumer_version(envelope)
-        source_hash = str(signature.get("source_hash") or "")
-        envelope_hash = str(signature.get("envelope_hash") or "")
-        computed_envelope_hash = _canonical_hash(
-            turn_envelope_action_signature_document(envelope)
-        )
-        if (
-            signature.get("matches") is not True
-            or not source_hash
-            or source_hash != envelope_hash
-            or envelope_hash != computed_envelope_hash
-        ):
-            raise ValueError("TurnEnvelope action signature is missing or does not match")
+    assert_turn_envelope_consumer_version(envelope)
+    source_hash = str(signature.get("source_hash") or "")
+    envelope_hash = str(signature.get("envelope_hash") or "")
+    computed_envelope_hash = _canonical_hash(
+        turn_envelope_action_signature_document(envelope)
+    )
+    if (
+        signature.get("matches") is not True
+        or not source_hash
+        or source_hash != envelope_hash
+        or envelope_hash != computed_envelope_hash
+    ):
+        raise ValueError("TurnEnvelope action signature is missing or does not match")
 
     action = _mapping(envelope.get("action"))
     detail = _mapping(envelope.get("detail_ref"))
@@ -237,10 +251,6 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
             if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature
     authority.update(host_context_projection(request))
-    if model_input is not None:
-        # Adapter-local transport only. Result qualification still uses the
-        # verified internal effect fields; rendering sends the complete input.
-        authority["_model_input"] = model_input
     return authority
 
 
@@ -293,65 +303,6 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         sort_keys=True,
         separators=(",", ":"),
     )
-    context_instruction = (
-        "For unavailable_context, discard cached context from the affected hooks; "
-        "do not interpret failure as empty context. Hold actions that require that "
-        "missing context until it is read successfully. Independent work may "
-        "continue under its existing authority; this grants no new permissions.\n"
-        if authority.get("unavailable_context") else ""
-    )
-    planning_context_instruction = (
-        "Read agent_context before planning; its guidance and facts grant no permissions. "
-        "Only an agent_context.detail_ref requires capability detail: use detail_ref.full_decision "
-        "only for the saved original observation identified by detail_ref.captured_decision, "
-        "checking its Goal/Agent/Turn and source hash. Never re-enter quota admission for a detail read. "
-        "Missing or invalid original evidence holds dependent planning until recovery; "
-        "independent work retains its existing authority.\n"
-        if authority.get("agent_context") else ""
-    )
-    replan_instruction = replan_prompt_instruction(authority)
-    acceptance_instruction = (
-        "Read vision_continuation_audit before judging Goal acceptance or proposing "
-        "closeout; preserve its ordered required_before_closeout, evidence requirements "
-        "and current vision_gap_judge. Selected Todo completion alone cannot close the Goal. "
-        "For additional acceptance or coverage evidence, use detail_ref.full_decision "
-        "only for the saved original observation identified by detail_ref.captured_decision; "
-        "check its Goal/Agent/Turn and action_signature.source_decision_hash. "
-        "Never re-enter quota admission for a detail read. Missing or invalid evidence "
-        "holds dependent closure; independent work retains its existing authority. "
-        "Do not execute its state or scheduler commands; report the semantic result "
-        "for the outer Turn executor. The audit grants no new authority.\n"
-        if authority.get("vision_continuation_audit") else ""
-    )
-    work_instruction = (
-        "Use execution_profile to size and qualify the work, including its required "
-        "artifact, validation, outcome and degradation rules. Return the work and "
-        "validation evidence; state writeback and quota effects belong to the outer "
-        "Turn executor. The profile grants no new permissions.\n"
-        if authority.get("execution_profile") else ""
-    )
-    legacy_input = (
-        "You are executing one bounded LoopX-governed work segment.\n"
-        "The JSON below is the complete host authority for this Turn. Execute "
-        "primary_action only after reading work_context and any remaining required_reads. "
-        "Do not repeat reads already fulfilled in work_context. Write only inside write_scope, "
-        "and obey workspace_guard and all supplied boundary restrictions and stop conditions. "
-        "Checkpointed approval covers only its active_write_scope; other approval gates remain. "
-        "Do not infer authority from other prose. "
-        "User notification policy does not grant or cancel execution authority. "
-        "Respect action.must_attempt, action.delivery_allowed and action.quiet_noop_allowed "
-        "when present; alternatives and capability intents do not override admission or scope. "
-        "Obey execution_policy and task_orchestration_contract when supplied. "
-        "Scheduler and response plans describe the surrounding Turn: do not execute "
-        "state writeback, quota or scheduler commands from this work segment. "
-        "Return the semantic result; the outer Turn executor owns those effects.\n\n"
-        f"{context_instruction}"
-        f"{planning_context_instruction}"
-        f"{replan_instruction}"
-        f"{acceptance_instruction}"
-        f"{work_instruction}"
-        f"Turn authority JSON:\n{authority_json}\n\n"
-    )
     if model_input is not None:
         detail = _mapping(model_input.get("detail_ref"))
         input_prompt = (
@@ -381,7 +332,65 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             + "Turn request:\n" + authority_json + "\n\n"
         )
     else:
-        input_prompt = legacy_input
+        context_instruction = (
+            "For unavailable_context, discard cached context from the affected hooks; "
+            "do not interpret failure as empty context. Hold actions that require that "
+            "missing context until it is read successfully. Independent work may "
+            "continue under its existing authority; this grants no new permissions.\n"
+            if authority.get("unavailable_context") else ""
+        )
+        planning_context_instruction = (
+            "Read agent_context before planning; its guidance and facts grant no permissions. "
+            "Only an agent_context.detail_ref requires capability detail: use detail_ref.full_decision "
+            "only for the saved original observation identified by detail_ref.captured_decision, "
+            "checking its Goal/Agent/Turn and source hash. Never re-enter quota admission for a detail read. "
+            "Missing or invalid original evidence holds dependent planning until recovery; "
+            "independent work retains its existing authority.\n"
+            if authority.get("agent_context") else ""
+        )
+        replan_instruction = replan_prompt_instruction(authority)
+        acceptance_instruction = (
+            "Read vision_continuation_audit before judging Goal acceptance or proposing "
+            "closeout; preserve its ordered required_before_closeout, evidence requirements "
+            "and current vision_gap_judge. Selected Todo completion alone cannot close the Goal. "
+            "For additional acceptance or coverage evidence, use detail_ref.full_decision "
+            "only for the saved original observation identified by detail_ref.captured_decision; "
+            "check its Goal/Agent/Turn and action_signature.source_decision_hash. "
+            "Never re-enter quota admission for a detail read. Missing or invalid evidence "
+            "holds dependent closure; independent work retains its existing authority. "
+            "Do not execute its state or scheduler commands; report the semantic result "
+            "for the outer Turn executor. The audit grants no new authority.\n"
+            if authority.get("vision_continuation_audit") else ""
+        )
+        work_instruction = (
+            "Use execution_profile to size and qualify the work, including its required "
+            "artifact, validation, outcome and degradation rules. Return the work and "
+            "validation evidence; state writeback and quota effects belong to the outer "
+            "Turn executor. The profile grants no new permissions.\n"
+            if authority.get("execution_profile") else ""
+        )
+        input_prompt = (
+            "You are executing one bounded LoopX-governed work segment.\n"
+            "The JSON below is the complete host authority for this Turn. Execute "
+            "primary_action only after reading work_context and any remaining required_reads. "
+            "Do not repeat reads already fulfilled in work_context. Write only inside write_scope, "
+            "and obey workspace_guard and all supplied boundary restrictions and stop conditions. "
+            "Checkpointed approval covers only its active_write_scope; other approval gates remain. "
+            "Do not infer authority from other prose. "
+            "User notification policy does not grant or cancel execution authority. "
+            "Respect action.must_attempt, action.delivery_allowed and action.quiet_noop_allowed "
+            "when present; alternatives and capability intents do not override admission or scope. "
+            "Obey execution_policy and task_orchestration_contract when supplied. "
+            "Scheduler and response plans describe the surrounding Turn: do not execute "
+            "state writeback, quota or scheduler commands from this work segment. "
+            "Return the semantic result; the outer Turn executor owns those effects.\n\n"
+            f"{context_instruction}"
+            f"{planning_context_instruction}"
+            f"{replan_instruction}"
+            f"{acceptance_instruction}"
+            f"{work_instruction}"
+            f"Turn authority JSON:\n{authority_json}\n\n"
+        )
     return (
         input_prompt
         + "When finished, return only one JSON object (no Markdown fence) with "

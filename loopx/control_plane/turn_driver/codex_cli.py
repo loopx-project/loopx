@@ -308,13 +308,13 @@ def _prompt(request: Mapping[str, Any]) -> str:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
 
     envelope = _mapping(request.get("turn_envelope"))
-    staged = _mapping(_mapping(envelope.get("detail_ref")).get("replan_action_packet")).get("review")
-    from .host_candidate import complete_host_input
+    from .host_candidate import _captured_model_input, _complete_host_source
 
     # The complete owner checks the adapter version, source and lineage in one
     # call. Keep the standalone version gate only for historical requests.
     try:
-        complete_input = complete_host_input(request)
+        checked = _complete_host_source(request, operation="host_context")
+        complete_input = _captured_model_input(request) if checked is not None else None
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.
@@ -324,6 +324,8 @@ def _prompt(request: Mapping[str, Any]) -> str:
     if not complete:
         assert_turn_envelope_consumer_version(envelope)
     model_request: Mapping[str, Any] = complete_input if complete_input is not None else request
+    detail = _mapping((complete_input if complete else envelope).get("detail_ref"))
+    staged = _mapping(detail.get("replan_action_packet")).get("review")
     if staged and not complete:
         from .host_candidate import extract_turn_authority, replan_prompt_instruction
 
@@ -356,8 +358,9 @@ def _prompt(request: Mapping[str, Any]) -> str:
         instructions.append(replan_prompt_instruction(
             _mapping(model_request.get("detail_ref")), packet_path="detail_ref.replan_action_packet"))
     instructions.extend(request.get("capability_instructions") or ())
-    boundary = _mapping(_mapping(request.get("turn_envelope")).get("boundary"))
-    if boundary.get("checkpointed_boundary_authority"):
+    checkpointed_approval = (checked["checkpointed_write_approval"] if checked is not None
+        else _mapping(envelope.get("boundary")).get("checkpointed_boundary_authority"))
+    if checkpointed_approval:
         instructions.append(
             "The boundary's checkpointed_boundary_authority records existing write approval "
             "only within its active_write_scope. It satisfies the write approval requirement "

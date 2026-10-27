@@ -31,6 +31,11 @@ adapter remains for integrity checks and unmigrated consumers, with its executio
 decoder used only for requests that omit the complete contract. Invalid supplied
 contracts never fall back. This does not qualify full adapter retirement or
 outcome/full-cost benefit over original quota.
+New structured Host preparation also consumes that complete source instead of
+flattening the legacy authority layout. Executable-action and admitted-replan
+facts retain their typed owner; Codex boundary guidance uses the complete source.
+The original capture metadata and historical-only decoder remain supported.
+This changes no complete model input, effect owner or cross-attempt freshness rule.
 
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
@@ -49,6 +54,10 @@ C1 的 native 候选在既有 typed owner 的一次调用中组合成果读取�
 已准入动作及 replan／写回条件，复用正文来源的边界调用与既有效果投影。旧 adapter
 仍供完整性校验和未迁移消费者使用；只有缺省完整契约的请求使用旧执行 decoder，
 显式无效契约不回退。完整 adapter 退役及优于原 quota 的成果／完整成本收益仍未资格。
+新结构化 Host 准备也直接消费完整来源，不再展开旧 authority 布局；可执行行动与
+已准入 replan 事实仍由既有 typed owner 提供，Codex 边界指导读取完整来源。
+原 capture 元数据和仅用于历史请求的 decoder 保留；完整模型输入、effect 归属及
+跨 attempt 新鲜度规则不变。
 
 Preview it explicitly:
 

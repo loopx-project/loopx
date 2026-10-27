@@ -632,6 +632,18 @@ test("pending capability action outranks stale replan commands and remains signe
   assert.equal((envelope.required_reads as JsonObject[]).some(read => read.source === "selected_todo"), false);
   const signed = JSON.parse(JSON.stringify(turnEnvelopeActionSignatureDocument(envelope)));
   assert.deepEqual((signed.action as JsonObject).capability_intent, source.pending_capability_intent);
+  const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const completeEnvelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
+  const host = evaluateTurnEnvelope({operation: "host_context", payload: contract, envelope: completeEnvelope});
+  assert.deepEqual(host.decision, contract); // Preserve the stale observation as data, not admitted work.
+  assert.equal(host.primary_action, "advance one bounded segment");
+  assert.equal(host.replan_admitted, false);
+  const replanContract = evaluateTurnEnvelope({operation: "compose_complete",
+    payload: {...source, effective_action: "autonomous_replan_required"}, scheduler_execution_args: ""});
+  const replanHost = evaluateTurnEnvelope({operation: "host_context", payload: replanContract,
+    envelope: buildTurnEnvelope({payload: replanContract, scheduler_execution_args: ""})});
+  assert.equal(replanHost.primary_action, "produce one required semantic outcome");
+  assert.equal(replanHost.replan_admitted, true);
   (source.pending_capability_intent as JsonObject).command = "untrusted replacement";
   assert.throws(() => buildTurnEnvelope({payload: source,
     scheduler_execution_args: ""}), /action is unsupported/);

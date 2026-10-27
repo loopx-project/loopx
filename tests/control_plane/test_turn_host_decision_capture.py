@@ -530,6 +530,68 @@ def test_codex_prompt_preserves_complete_source_and_historical_version_gate(comp
         _prompt(broken)
 
 
+@pytest.mark.parametrize("host", ["codex", "structured"])
+def test_complete_host_prompt_uses_source_without_decoding_effect_layout(complete_host_request, host, monkeypatch):
+    from loopx.control_plane.turn_driver import codex_cli, host_candidate
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+    request, contract = complete_host_request
+
+    class OpaqueEffectEnvelope(dict):
+        def get(self, key, default=None):
+            # The real typed owner still receives the entire envelope for its
+            # signature/source fence. Only original-capture transport metadata
+            # may be read here; Host policy must use the complete source.
+            if key not in {"detail_ref", "action_signature"}:
+                raise AssertionError("Host decoded the historical effect layout: " + key)
+            return super().get(key, default)
+
+    original = json.dumps(request, ensure_ascii=False, sort_keys=True)
+    guarded = {**request, "turn_envelope": OpaqueEffectEnvelope(request["turn_envelope"])}
+    for adapter in (codex_cli, host_candidate):
+        original_mapping = adapter._mapping
+
+        def observed_mapping(value, *, convert=original_mapping):
+            return value if isinstance(value, OpaqueEffectEnvelope) else convert(value)
+
+        # Keep the observation wrapper across the adapters' shallow defensive
+        # copies; otherwise the assertion would never see their policy reads.
+        monkeypatch.setattr(adapter, "_mapping", observed_mapping)
+    if host == "codex":
+        prompt = _prompt(guarded)
+    else:
+        authority = extract_turn_authority(guarded)
+        assert authority["primary_action"] == request["turn_envelope"]["action"]["primary_action"]
+        prompt = render_prompt(authority)
+    model_input, _ = json.JSONDecoder().raw_decode(prompt.split("Turn request:\n", 1)[1])
+    assert model_input["work_contract"] == contract
+    assert "turn_envelope" not in model_input and "turn_authority" not in model_input
+    assert json.dumps(request, ensure_ascii=False, sort_keys=True) == original
+
+
+def test_complete_codex_approval_guidance_uses_resolved_boundary(complete_host_request):
+    from copy import deepcopy
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+
+    request, original = complete_host_request
+    active = {"schema_version": "checkpointed_boundary_authority_v0", "active_count": 1,
+              "active_write_scope": ["artifacts/**"]}
+    for approval, expected in (
+        (None, False), ({}, False), ({**active, "schema_version": "future"}, False),
+        ({**active, "active_count": 0}, False), ({**active, "active_write_scope": []}, False),
+        ({**active, "active_write_scope": [None, ""]}, False), (active, True),
+    ):
+        source = deepcopy({key: value for key, value in original.items()
+                           if key not in {"schema_version", "contract_binding"}})
+        source.setdefault("goal_boundary", {})["checkpointed_boundary_authority"] = approval
+        contract = compose_turn_decision(source)
+        envelope = build_turn_envelope(contract)
+        prompt = _prompt({**request, "work_contract": contract, "turn_envelope": envelope})
+        assert ("It satisfies the write approval requirement" in prompt) is expected
+
+
 def test_complete_planning_and_failed_recovery_share_lineage(complete_host_request):
     from copy import deepcopy
     from hashlib import sha256

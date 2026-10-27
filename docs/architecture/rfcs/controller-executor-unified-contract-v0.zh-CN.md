@@ -636,6 +636,15 @@ adapter 读取这组执行事实，仍传递该 adapter 供来源／签名校验
 一次 TypeScript 边界调用；本次扩展读取复用该边界，不抵销原新增成本。
 完整 adapter 退役、其余 effect／material 消费者及原 quota 成果／完整成本资格仍开放。
 
+结构化 Host 准备现在直接消费经过校验的完整来源，不再为新请求展开旧 action、
+boundary、capsule 与 planning 载体。同一次 typed 来源校验提供可执行行动别名和
+已准入 replan 事实，保留能力动作优先于 replan 的顺序，不在 Python 重写判断。
+Codex prompt 的边界指导也读取完整来源，分阶段 reader 读取原始模型输入。
+原 capture 元数据仍沿既有 transport 传递，来源及 adapter 完整性校验保持。
+只有历史请求继续使用旧 decoder 与 renderer。这是内部消费者替换，不是另一份
+面向模型的视图或跨 attempt 缓存；完整最终模型输入及其全部指令义务须保持一致。
+其他 effect／session 消费者、打包采用及完整成本资格仍开放。
+
 Codex 结果 schema 与共享 candidate adapter 现通过同一经过校验的完整契约
 profile 读取判断证据要求是否适用；新请求不再从内部 capsule 决定该要求。
 该读取与模型输入校验复用既有 TypeScript 完整性／来源／身份校验器，没有新增
@@ -766,7 +775,7 @@ TypeScript 采样保持合法身份输出一致；校验 median 从 4.864 增至
 | `quota.py::_emit_quota_result` / `_project_quota_cli_payload` | 在 capture 前组合完整契约，替换 ordinary/envelope 执行格式分支。准入、capability hook、capture IO 与 host poll 回执保留原 owner。诊断 status 视图不是可执行契约。 |
 | `turn.py` 的 `build_fresh_turn_decision_owner().resolve()` 之后 | 携带实际 scheduler execution context 调用同一组合 owner。此入口直接调用 `build_turn_envelope`；仅修改 quota CLI emission 不会迁移 Turn。保留 Turn plan、journal 和回执执行器。 |
 | `heartbeat/task_body.py::render_thin_heartbeat_task_body` | 用统一契约读取指令替换 `captured_envelope` 指令分支，保留精确 selection/reentry transport、通知独立性、必读与原结算身份。保存的 bootstrap 仍在唤醒时解析当前指令。 |
-| `turn_driver/codex_cli.py::_prompt` 与 `host_candidate.py::extract_turn_authority` / `render_prompt` | 在实际 prompt 边界替换格式特定输入。当前普通 Codex 接收 envelope，分阶段 replan 使用提取的 authority，结构化 host 也使用提取的 authority。共享源字节或签名不能证明这些最终输入保留相同义务。保留 provider 结果编码与外层 effect 归属。 |
+| `turn_driver/codex_cli.py::_prompt` 与 `host_candidate.py::extract_turn_authority` / `render_prompt` | C1 候选在两个最终 prompt 边界发送完整来源，新 Host 元数据由其已校验 owner 提供；旧 authority 布局仅为历史输入解码。验收完整最终输入与义务、原 capture reader 恢复及结果适用性，不能仅凭共享源字节证明。保留 provider 结果编码与外层 effect 归属。 |
 | `turn_driver/decision_capture.py` 与 `cli_commands/quota_capture.py` | 复用不可变 capture、校验读取器和 full/delta 交付。首次交付和保存后恢复必须重建同一契约；不能仅因 Turn 身份相同，就把某投影的 continuity baseline 用于另一投影。 |
 | `benchmark/runtime/worker.py`、`benchmark/runtime/sessions.py` 与 `scripts/external_scheduler_worker.py` | 迁移它们实际调用的产品入口。保留评估配置与外层唤醒归属，不新增 benchmark 专用转换，也不把 managed-host 测试算作 attached-host 验收。 |
 

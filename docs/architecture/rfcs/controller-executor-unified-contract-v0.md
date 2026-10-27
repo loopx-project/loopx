@@ -868,6 +868,19 @@ boundary rather than canceling its cost. Full adapter retirement, remaining
 effect/material consumers and original-quota outcome/full-cost qualification
 remain open.
 
+Structured Host preparation now consumes the checked complete source directly;
+it no longer flattens the old action, boundary, capsule and planning carriers for
+new requests. The same typed source check supplies the executable-action alias
+and admitted-replan fact, preserving capability-before-replan ordering without
+reimplementing it in Python. Codex prompt construction also uses the complete
+source for boundary guidance and the original model input's staged readers.
+Original capture metadata still travels through the existing transport; its
+source and adapter integrity checks remain. Historical-only requests retain the
+old decoder and renderer. This is an internal consumer replacement, not another
+model-facing view or a cache across attempts; the final complete model input and
+its instruction obligations must remain unchanged. Other effect/session
+consumers, packaged adoption and full-cost qualification remain open.
+
 The Codex result schema and shared candidate adapter now use one checked
 complete-contract profile read for evidence applicability. They no longer decide
 that requirement from the internal capsule on new requests. The existing
@@ -1046,7 +1059,7 @@ design, not a claim that these paths have changed.
 | `quota.py::_emit_quota_result` / `_project_quota_cli_payload` | Compose the complete contract before capture; replace the ordinary/envelope execution-format branch. Retain admission, capability hooks, capture IO and host poll receipts with their current owners. A diagnostic status view is not an executable contract. |
 | `turn.py` after `build_fresh_turn_decision_owner().resolve()` | Call the same composition owner with the actual scheduler execution context. This entry calls `build_turn_envelope` directly; changing quota CLI emission alone does not migrate Turn. Retain the Turn plan, journal and receipt executor. |
 | `heartbeat/task_body.py::render_thin_heartbeat_task_body` | Replace the `captured_envelope` instruction split with one contract-reading instruction. Preserve exact selection/reentry transport, notification independence, required reads and original settlement. The saved bootstrap still resolves current instructions on wake. |
-| `turn_driver/codex_cli.py::_prompt` and `host_candidate.py::extract_turn_authority` / `render_prompt` | Replace format-specific model inputs at the actual prompt boundary. Today ordinary Codex receives the envelope, staged replan uses extracted authority, and structured hosts use extracted authority. Shared source bytes or signatures do not prove these final inputs preserve the same obligations. Keep provider result encoding and outer effect ownership. |
+| `turn_driver/codex_cli.py::_prompt` and `host_candidate.py::extract_turn_authority` / `render_prompt` | The C1 candidate sends the complete source at both final prompt boundaries and reads new Host metadata from its checked owner. The old authority layout is decoded only for historical input. Qualify complete final inputs and their obligations, captured-reader recovery and result applicability; shared source bytes alone do not prove them. Keep provider result encoding and outer effect ownership. |
 | `turn_driver/decision_capture.py` and `cli_commands/quota_capture.py` | Reuse immutable capture, validated readers and full/delta delivery. Fresh delivery and saved-capture recovery must reconstruct the same contract; do not reuse a continuity baseline for a different projection merely because its Turn identity matches. |
 | `benchmark/runtime/worker.py`, `benchmark/runtime/sessions.py` and `scripts/external_scheduler_worker.py` | Migrate the product entry they actually invoke. Keep evaluation setup and outer wake ownership; do not add benchmark-only conversion or count a managed-host test as attached-host acceptance. |
 
