@@ -526,6 +526,9 @@ def _append_due_monitors(
 
 
 def _append_blocking_user_gate(project: Path) -> None:
+    from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+    from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
+
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_text = state_path.read_text(encoding="utf-8")
     gate = (
@@ -535,10 +538,16 @@ def _append_blocking_user_gate(project: Path) -> None:
         + f"blocks_agent={AGENT_ID} "
         + "decision_scope=direction:action:fixture priority=P0-USER -->\n"
     )
-    marker = "\n## User Todo\n"
-    updated = (state_text.replace(marker, marker + "\n" + gate, 1)
-               if marker in state_text else state_text.rstrip() + "\n\n## User Todo\n\n" + gate)
-    state_path.write_text(updated, encoding="utf-8")
+    additions = parse_active_state_todos(
+        "## User Todo\n\n" + gate, state_path=state_path, item_limit=None,
+    )["user_todos"]["items"]
+    # Reuse the section owner for both authored and already materialized input.
+    # This edits fixture source only; callers still initialize or advance CAS.
+    rendered = render_canonical_todo_sections(
+        state_text, [*read_fixture_todos(state_path), *additions],
+        provider_revision="fixture-user-gate",
+    )
+    state_path.write_text(rendered.markdown, encoding="utf-8")
 
 
 def _heartbeat_receipt_events(
