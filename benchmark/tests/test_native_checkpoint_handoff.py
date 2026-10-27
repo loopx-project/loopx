@@ -380,8 +380,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     from pathlib import Path
     from benchmark.runtime.worker import run_once
     from tests.control_plane import test_quota_settlement_cli as cli
-    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
     project, runtime, registry = cli._write_fixture(tmp_path / "authority")
     document = json.loads(registry.read_text())
@@ -408,11 +407,10 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         assert code == 0, json.dumps(result, indent=2)
         return result
 
-    listed = run("todo", "list", "--goal-id", cli.GOAL_ID)
-    initialize_canonical_authority(runtime, cli.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=listed["todos"],
-                                            handoff_mode="hard_lease", leases=[]),
-        state_path=state_path, provider="sqlite")
+    initialize_canonical_source_fixture(
+        runtime, cli.GOAL_ID, state_path=state_path,
+        provider="sqlite", handoff_mode="hard_lease",
+    )
     run("task-lease", "acquire", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--owner", cli.AGENT_ID, "--idempotency-key", "source-work")
     configured = run("configure-goal", "--goal-id", cli.GOAL_ID,
