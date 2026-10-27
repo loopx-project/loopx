@@ -406,7 +406,8 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = cli._write_fixture(tmp_path, provider="sqlite")
-    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID)
+    source_turn_id = "wake-100-prior"
+    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", source_turn_id)
 
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args)
@@ -446,9 +447,9 @@ def test_real_pre_replan_capture_is_before_decision_and_same_node_is_not_recaptu
     index.write_bytes(original_settlement + index.read_bytes())
     logs = tmp_path / "logs"
     wakes = logs / "wakes"
-    prior = wakes / cli.TURN_ID
+    prior = wakes / source_turn_id
     prior.mkdir(parents=True)
-    prior_receipt = {"turn_id": cli.TURN_ID, "mode": "heartbeat", "stage": "execute", "ok": True}
+    prior_receipt = {"turn_id": source_turn_id, "mode": "heartbeat", "stage": "execute", "ok": True}
     (prior / "receipt.json").write_text(json.dumps(prior_receipt))
     solution = project / "solution.py"
     solution.write_text("retained_candidate = 7\n")

@@ -372,7 +372,7 @@ def test_cli_canonical_work_change_requires_rebase_and_preserves_original_receip
         "--todo-id", "todo_stage2_b", "--agent-id", "agent-b",
         "--claimed-by", "agent-b", "--format", "json",
     )
-    assert code == 0 and claimed["claimed"] is True, claimed
+    assert code == 0 and claimed["ok"] is True, claimed
     journal = paths["runtime"] / "goals" / GOAL_ID / "amendment-proposals" / "journal.jsonl"
     original_bytes = journal.read_bytes()
     assert submit(proposal) == first
