@@ -161,6 +161,18 @@ container admissions and two numeric-route refusals at the original proposal
 head, and pass after repair. This corrects compatibility; it does not qualify
 numeric hashes as canonical producer output or close the remaining C4 work.
 
+A subsequent review reproduced a transport regression with a complete 2,420,000-
+character Goal: both Mapping and producer-qualified controller inputs failed
+before dispatch, although the existing envelope/plan accepted them. The pure
+`turn.controller` operation now reuses the envelope's bounded local snapshot
+fallback after a pre-send size rejection, with explicit client/server allowlist
+entries. Full facts and the original 2 MiB wire / 64 MiB snapshot bounds remain;
+signature rejection, private-file/hash/length checks and ambiguous-response
+non-retry behavior are retained. Real transport tests cover both input forms,
+small controls, escaped Unicode and the actual snapshot limit. This repairs the
+source proposal's large-input path; independent review, installed adoption and
+long-horizon cost/benefit remain separate qualification.
+
 ## C4.2 — Thin outer-worker semantic adoption
 
 **Candidate for bounded policy convergence.**

@@ -123,6 +123,14 @@ Python 标量文本，包括 `1.0` 和 `1e-07`，签名不一致仍拒绝。同�
 原提案 head 复现六个空容器误准入和两个数字路由误拒绝，修复后通过。这是兼容修复，
 不表示 canonical producer 会生成数字 hash，也不关闭其余 C4 工作。
 
+后续评审用包含 2,420,000 字符完整 Goal 的输入复现传输回归：既有 envelope/plan
+可以接受，Mapping 与 producer-qualified 两种 controller 输入却都在派发前失败。
+纯 `turn.controller` 操作现于预发送大小拒绝后复用 envelope 的有界本地 snapshot
+回退，并显式加入客户端/服务端白名单。完整事实及原 2 MiB wire / 64 MiB snapshot
+限制保持；签名拒绝、私有文件/hash/长度校验和响应不确定时不重试的行为保持。
+真实传输测试覆盖两种输入、小输入控制、转义 Unicode 和实际 snapshot 上限。
+这修复源码提案的大输入路径；独立复审、安装采用和长程完整成本/收益仍分别验收。
+
 ## C4.2 — 外层 worker 的薄语义采用
 
 **有界策略收敛候选。** `scripts/external_scheduler_worker.py` 的 `_host_attempt`、
