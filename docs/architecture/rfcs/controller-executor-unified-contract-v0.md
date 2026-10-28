@@ -449,6 +449,28 @@ counter folding in [#7587](https://github.com/loopx-project/loopx/pull/7587) is 
 separate compatible slice, not this replacement. Each slice can have its own PR
 and rollback; no generic retrieval framework or two-session rollout is required.
 
+The native quota caller now implements a bounded acceptance-material slice:
+known cumulative objectives, complete requirement descriptions and current review
+states remain in its required view; source history and review notes/evidence are
+addressable in the original immutable capture. Its read obligation, full/delta
+baseline and recovery move together. Selected detail reads never fulfill hidden
+required content or establish a full baseline. Unknown semantics and signed
+envelopes remain whole; the disabled path is unchanged. The original capture's
+values survive the typed path plan without a JavaScript numeric round trip.
+If the required view plus its detail index is not smaller in serialized UTF-8
+bytes, retain full delivery and its original obligations. Default detail examples
+select source, note or evidence fields rather than replaying the whole outcome.
+
+Native exec and code-mode fixtures also qualify two compactions within one work
+Turn: a sufficient working brief continues with the original work/settlement
+identity without replaying its packet or re-entering admission. The baseline is
+still invalidated; unfinished initial reads and missing necessary facts require
+same-capture recovery, while a new work Turn obtains its fresh guard. This is
+native protocol qualification with deterministic inference, not evidence of
+model compliance or live outcome/cost benefit. C1/C2 remains incomplete:
+candidate, preference and Explore staging, signed-envelope migration and matched
+accepted outcomes with complete costs still need their own qualification.
+
 ## 6. Alternatives and design choices
 
 | Alternative | Disposition |

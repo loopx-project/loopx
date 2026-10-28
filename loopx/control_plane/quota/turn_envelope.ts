@@ -1,4 +1,5 @@
 import {capturedContextSelection} from "./context_selection.ts";
+import {progressiveContextPlan} from "./progressive_context.ts";
 import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -1407,6 +1408,7 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "progressive_context_plan") return progressiveContextPlan(request);
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedContextSelection(request);
   if (operation === "replan_cli_view") {

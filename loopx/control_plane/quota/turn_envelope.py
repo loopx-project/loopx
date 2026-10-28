@@ -177,6 +177,11 @@ def bind_turn_decision_capture(
     )
 
 
+def plan_progressive_context(payload: Mapping[str, Any], *, surface: str) -> dict[str, Any]:
+    """Typed presentation edits; the source JSON and all work authority stay intact."""
+    return _turn_envelope_result("progressive_context_plan", payload=dict(payload), surface=surface)
+
+
 def prepare_context_delivery(
     context: Mapping[str, Any], *, scope: Mapping[str, str], capture_id: str,
     baseline: Mapping[str, Any] | None = None,

@@ -520,10 +520,13 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
       + (assumed ? "After reading this delta completely, use it with the retained model context. "
         + "Do not also fetch the full projection just to materialize JSON or replace missing Code Mode variables; "
         + "tool-process memory is separate from retained model context. If required baseline content is unavailable "
-        + "or continuity is uncertain, recover this capture in full before dependent work. " : "")
+        + "or continuity is uncertain, do not reconstruct from that baseline. Recover the necessary current facts "
+        + "from this capture before dependent work; completing an unfinished required read still needs its missing content. " : "")
       + "A value replaces its subtree; from copies the exact string, array or object at that path in the base capture, never in current changes. "
       + (hasOverlay(changes) ? "An optional edit then applies to that copied value, with all nested from paths still rooted in the immutable base. " : "")
-      + "Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+      + "Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. "
+      + "Within the same work Turn, compaction alone requires neither another guard nor replay of already-read context. "
+      + "Continue from the working brief and original work/settlement identity; missing facts use same-capture recovery."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   // Native consumers page the wire before they can use its baseline. Deliver

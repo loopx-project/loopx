@@ -1535,6 +1535,26 @@ failure; the installed-profile smoke and semantic assertions qualify the repair.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+Native progressive-context qualification found an existing default-output
+budget failure: immutable base `fb331f45c` and candidate `edbd56b14` both emit
+25,836 JSON characters for `quota_should_run/multi_agent` with the unchanged
+18-Todo, 3-Agent, 12-run fixture. Recursive comparison differs only in observation
+timestamps and the rollout event id. This is neither an incremental native-off
+regression nor evidence of a saving. Preserve the previous 25,500-ceiling failure;
+calibrate this one regression allowance to 26,500 (664 characters of headroom)
+without dropping fields. Markdown, line, semantic, bootstrap duplication,
+per-Todo/fixed growth and all other surface ceilings remain unchanged. This
+changes no host hard limit, authorized execution quota or frozen experiment
+criterion. Native-on material and recovery savings need separate qualification.
+
+原生渐进上下文资格检查发现已有默认输出超限：不可变 base `fb331f45c` 与 candidate
+`edbd56b14` 在相同 18 个 Todo、3 个 Agent、12 条运行记录夹具上，
+`quota_should_run/multi_agent` 都为 25,836 JSON 字符；递归对比只有观察时间和
+rollout event id 不同。这不是 native-off 新增回归，也不是节省证据。保留旧 25,500
+阈值失败，只将这一回归预算校准为 26,500，留 664 字符余量，不删除字段。Markdown、
+行数、语义、bootstrap 重复、每 Todo/固定增长及其他 surface 阈值不变；宿主硬限制、
+授权执行配额和冻结实验标准均不变。Native-on 材料和恢复收益须单独验证。
+
 The initial-delivery guidance change measured the same 96-row fixture at
 `f6cf9583794eb8c4cca41fa832a1c2f150059583` and
 `da01f996c820aad3bae85268963e64c6bbb19d7c`. The complete instruction adds

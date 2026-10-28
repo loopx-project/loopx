@@ -250,15 +250,18 @@ def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tupl
 
 
 def capture_context_projection(payload: dict[str, Any], *, directory: Path,
-                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE) -> dict[str, Any]:
+                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
+                               filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
-    projection = directory / "projection.json"
+    if filename not in ("projection.json", "required-context.json"):
+        raise ValueError("unsupported captured context filename")
+    projection = directory / filename
     write_decision_capture(projection, payload)
     digest = hashlib.sha256(projection.read_bytes()).hexdigest()
     return {
         "path": str(projection), "sha256": digest,
-        "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
-            "truncated or uncertain, use this full projection before dependent work. "
+        "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
+            "compaction alone does not require replay within an existing work Turn. "
             + read_guidance,
         "command": context_capture_read_command(projection, digest),
     }

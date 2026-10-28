@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from collections.abc import Iterator
 from typing import Any
+import copy
 import json
 import os
 from pathlib import Path
@@ -206,16 +207,21 @@ def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_i
 
 
 def _context_continuation_instructions(command: str) -> str:
-    """Distinguish fresh full delivery from recovery of a dependent decision."""
+    """Separate transport continuity from the lifetime of the admitted work.
+
+    Losing a delta baseline says nothing about which facts the working brief
+    preserved. Do not turn every compaction into another full-input loop.
+    """
     return (
-        "For a new independent decision, run its normal guarded context command first. "
-        "Without a usable baseline it returns the current full capture; read it completely before dependent work. "
-        "Do not read an older capture merely to seed a delta. "
-        "If continuing a captured LoopX decision after context loss (including compaction or a failed hook), "
-        "first recover that exact original capture with: " + command + ". "
-        "A fresh guard cannot replace recovery of that decision. "
-        "If recovery fails, restore the original capture/reference; do not guess or ask the owner. "
-        "Recovery never renews authority/freshness or proves retention. Independent authorized work can continue. "
+        "A new work Turn needs its current guard and required reads; never prefetch an old packet to seed a delta. "
+        "Compaction or a failed hook invalidates delta reuse, not the existing Turn. "
+        "Continue from its working brief, preserving Goal, requirements/stops and original task/capture/settlement identity. "
+        "Do not replay read context or rerun admission solely because the baseline was invalidated. "
+        "Before dependent action, recover missing or uncertain necessary facts from the same capture with: " + command + ". "
+        "An unfinished required read still needs its missing content; a summary cannot declare it read. "
+        "Never repeat completed effects or settlement. If the original reference is lost, repair it first; "
+        "independently authorized work can continue. A brief or recovery grants no new authority/freshness, "
+        "delta baseline or retention proof. "
     )
 
 
@@ -231,7 +237,7 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "--max-page-output-bytes", str(page_output_bytes)])
     return (
         _context_continuation_instructions(command) +
-        "Follow the returned next_command through eof; verify complete bytes and digest. " +
+        "When recovering a required full read, follow next_command through eof and verify complete bytes/digest. " +
         ("The generated native configuration supports 64000-byte context-read outputs and a 20000-token history limit. "
          "Read one continuation per tool call with max_output_tokens=22000. In code-mode, also set the exec "
          "pragma max_output_tokens to 24000 and forward successful stdout directly with text(result.output). "
@@ -336,7 +342,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX context baseline invalidated. "
             + _context_continuation_instructions(recovery["command"])
-            + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
+            + "When completing a required full-capture read: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
     return {}
 
 
@@ -456,6 +462,62 @@ def register_native_context_view(directory: str | None, view: dict[str, Any]) ->
         _save(root, state)
 
 
+def _capture_required_context(payload: dict[str, Any], *, directory: Path,
+                              surface: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Publish the archive first, then the model view selected by the typed owner.
+
+    Only the required view may become a full/delta baseline. Detail pointers
+    always address the immutable archive, never a later canonical-state read.
+    """
+    from ..quota.turn_envelope import plan_progressive_context
+    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+
+    archive = capture_context_projection(payload, directory=directory,
+        read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+    try:
+        plan = plan_progressive_context(payload, surface=surface)
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        return payload, archive
+    if not plan["deferred"]:
+        return payload, archive
+    projected = copy.deepcopy(payload)
+
+    def at(path):
+        row = projected
+        for key in path:
+            row = row[key]
+        return row
+
+    for edit in plan["deferred"]:
+        path, parent = edit["path"], edit["parent"]
+        del at(path[:-1])[path[-1]]
+        at(parent)[edit["index_key"]] = "/" + "/".join(
+            str(key).replace("~", "~0").replace("/", "~1") for key in parent)
+    for edit in plan["instructions"]:
+        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
+    page_bytes, output_bytes = native_context_page_budget()
+    projected["context_details"] = {
+        "path": archive["path"], "sha256": archive["sha256"],
+        "command_template": context_capture_read_command(Path(archive["path"]), archive["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes) + " --select '<supporting_material_pointer>/sources'",
+        "instruction": "This view retains complete requirements and current review/check states. "
+            "Source history, review reasoning and evidence references are supporting material. "
+            "Read them from this same immutable capture when a decision, verification or review depends on them. "
+            "For source history use supporting_material_pointer plus /sources. For review detail append "
+            "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. "
+            "Repeat --select to batch needed fields without replaying the outcome's requirements. "
+            "Detail reads never establish a full baseline. "
+            "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance.",
+    }
+    # These are transport bytes, not a semantic relevance heuristic or a model
+    # token estimate. Small material is cheaper inline than an index plus IO.
+    required_bytes = len((json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))
+    if required_bytes >= Path(archive["path"]).stat().st_size:
+        return payload, archive
+    return projected, capture_context_projection(projected, directory=directory,
+        filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+
+
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
                           continuity_generation: str | None = None) -> dict[str, Any]:
@@ -490,8 +552,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
                 request = _native_context_request(state, scope)
-                recovery = capture_context_projection(payload, directory=capture_directory,
-                    read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+                required, recovery = _capture_required_context(payload, directory=capture_directory, surface=surface)
                 page_bytes, output_bytes = native_context_page_budget()
                 recovery["command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
                     page_bytes=page_bytes, max_page_output_bytes=output_bytes)
@@ -505,7 +566,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 _save(root, state)
                 recovery_committed = True
 
-                result = project_captured_context(payload, directory=capture_directory,
+                result = project_captured_context(required, directory=capture_directory,
                     request=request, captured_recovery=recovery,
                     goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
                 if result.get("schema_version") == "context_delivery_v1":

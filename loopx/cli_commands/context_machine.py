@@ -13,6 +13,19 @@ import stat
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 
 
+def has_explicit_context_read_source(args: argparse.Namespace) -> bool:
+    """Captured pages and explicit native locations need no Goal/default route.
+
+    Partial capture arguments also belong to the reader's existing validation;
+    unrelated machine discovery must not replace their recovery errors.
+    """
+    return getattr(args, "quota_command", None) == "context-read" and any(
+        getattr(args, key, None) for key in (
+            "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
+        )
+    )
+
+
 def _private_transport_root(runtime_root: Path) -> str:
     """Create only our leaf; never repair permissions or follow a replaced leaf."""
     if os.name != "posix":
@@ -49,9 +62,7 @@ def apply_context_machine_options(
     command = getattr(args, "quota_command", None)
     if not heartbeat and command not in {"should-run", "context-config", "context-project", "context-hook", "context-read"}:
         return
-    if command == "context-read" and any(getattr(args, key, None) for key in (
-        "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
-    )):
+    if has_explicit_context_read_source(args):
         return
     from ..paths import effective_runtime_root
     runtime_root = effective_runtime_root(registry_path, runtime_root_arg)

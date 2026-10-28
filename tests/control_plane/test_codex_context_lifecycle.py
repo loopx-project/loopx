@@ -117,7 +117,9 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
     if event_name == "SessionStart":
         body = result["hookSpecificOutput"]["additionalContext"]
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
-        assert payload["requirements"] not in body and len(body) < 2000
+        # The additional work-Turn/read-obligation distinction is intentional;
+        # this synthetic allowance is not a host output or context limit.
+        assert payload["requirements"] not in body and len(body) < 2300
     else:
         assert result == {}
     _, second = project(tmp_path, "two")
@@ -389,8 +391,9 @@ def test_fresh_capture_after_resume_does_not_require_reading_old_original(tmp_pa
     before = Path(original["path"]).read_bytes()
     resumed = context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     guidance = resumed["hookSpecificOutput"]["additionalContext"]
-    assert guidance.index("new independent decision") < guidance.index(original["command"])
-    assert "A fresh guard cannot replace recovery" in guidance
+    assert guidance.index("new work Turn") < guidance.index(original["command"])
+    assert "Do not replay read context or rerun admission solely" in guidance
+    assert "An unfinished required read still needs its missing content" in guidance
     assert "candidate" not in context._state(tmp_path)
 
     # A fresh authoritative input must be full. No old reader pages are

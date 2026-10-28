@@ -229,16 +229,17 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
         "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(root)])
     result = project_saved_context_capture(args)
     assert result["ok"] and result["mode"] == "full"
+    recovered_path, recovered_digest = codex_context.read_codex_context_reference(str(context),
+        goal_id="saved-goal", agent_id="saved-agent")
+    assert result["capture_sha256"] == digest
     if failure == "wire":
-        assert result["path"] == str(path) and result["sha256"] == digest
+        assert result["path"] == recovered_path and result["sha256"] == recovered_digest
     else:
-        assert "content" not in result and result["recovery"]["sha256"] == digest
+        assert "content" not in result and result["recovery"]["sha256"] == recovered_digest
         argv = shlex.split(result["command"])
         code, page = _run_cli(tmp_path / "absent.json", tmp_path / "absent-runtime",
             *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == 0 and json.loads(page["content"]) == original
-    recovered_path, recovered_digest = codex_context.read_codex_context_reference(str(context),
-        goal_id="saved-goal", agent_id="saved-agent")
     recovered = Path(recovered_path).read_bytes()
     assert hashlib.sha256(recovered).hexdigest() == recovered_digest
     assert json.loads(recovered) == original and path.read_bytes() == raw

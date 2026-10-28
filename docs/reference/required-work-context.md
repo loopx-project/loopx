@@ -77,9 +77,56 @@ Marked sources retain their generated-region lineage and canonical Todo authorit
 Native delta delivery and source fulfillment share the same integrity predicate.
 Only exact verified Goal text can be inherited from the retained baseline;
 current source witnesses and unknown fields remain literal. Cold delivery and
-context-loss recovery retain the complete original text, including arbitrary
-sections, comments and final stops. This does not establish model retention,
-execution authority, token savings or accepted outcome gains.
+full-capture recovery retain the complete original text, including arbitrary
+sections, comments and final stops.
+
+Enabled native quota delivery separates known acceptance requirements from their
+supporting material before full/delta presentation. The TypeScript acceptance
+projection keeps every scoped outcome objective, requirement description,
+review conclusion, current-basis flag, independent-verification flag, work link
+and source revision inline. Outcome source history and Agent review notes/evidence
+references remain in the immutable original capture. Each projected outcome has
+a `supporting_material_pointer`; `context_details` supplies the original path,
+SHA-256 and `quota context-read --select` command. Read needed evidence before a
+decision, verification or review that depends on it; repeated selectors batch
+related source, note and evidence fields without replaying the outcome's inline
+requirements. An unmet or stale review stays visible before its explanation
+is opened. Agent review still does not establish independent acceptance.
+
+The archive remains `projection.json`; the required model view is
+`required-context.json`. Required reads, full/delta preparation and recovery use
+that same model view. A selected detail page cannot acknowledge the required
+view, establish a full baseline or prove that other hidden details were read.
+The adapter edits paths selected by the typed owner without round-tripping the
+original JSON values through JavaScript. Unknown outcome fields, unknown source
+read obligations, unsupported schemas, signed envelopes and unavailable planning
+retain their original full content. Context delivery off remains unchanged.
+If the required view and its index are not smaller in serialized UTF-8 bytes,
+delivery retains the original full view and read obligations; small material
+does not need a more expensive detail round trip. This is a transport-size
+comparison, not a relevance heuristic or a model-token estimate.
+Historical captures retain their original obligations. This acceptance-material
+slice does not yet stage candidate selection, preferences or Explore history,
+and a smaller body alone does not establish lower total model cost.
+
+A context epoch is not a work Turn. Compaction or a failed native hook invalidates
+delta reuse; it does not require another admission or unconditional replay of the
+old quota packet. Within the existing Turn, continue from the working brief with
+the Goal, applicable requirements/stops, task and original capture/settlement
+identity. Before an action that depends on missing or uncertain facts, recover
+those facts from the same immutable capture. An unfinished initial required read
+still requires its missing content; summarizing it does not fulfill that read.
+Do not repeat completed work or settle the original Turn twice. If the original
+reference is lost, repair it before dependent work; independently authorized work
+can continue. A later work Turn obtains its own current guard and required
+context, without prefetching an older packet to manufacture a delta baseline.
+
+The native lifecycle still invalidates the previous baseline. A working brief
+is sufficient only for the work whose necessary facts it preserves; it is not
+input-byte coverage, a new baseline, renewed authority or proof of freshness or
+model retention. These separate boundaries prevent transport loss from becoming
+either a repeated full-input loop or permission to act on missing requirements.
+No token savings or accepted outcome gains follow from instruction delivery alone.
 
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
@@ -694,6 +741,12 @@ selects the root. Missing pointers or invalid array indices reject the whole
 batch; a present JSON `null` is a valid value. Duplicate pointers are removed
 and the remaining pointers are sorted.
 
+Explicit `context-read` capture/hash or native-location arguments are independent
+of Goal registry discovery and machine configuration. Conflicting default runtime
+roots cannot block that read; capture integrity and native-session scope still
+apply. A read without an explicit source keeps its existing machine lookup.
+Admission and accounting retain their registry/runtime route checks.
+
 The existing page envelope keeps the original `sha256` and adds
 `selected_pointers` and `selection_sha256`. Concatenated `content` is a
 `context_capture_selection_v1` object with `selections: [{pointer, value}]`.
@@ -716,6 +769,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 `--capture-sha256`，或从已有会话查询入口开始；省略 `--select` 保持原有全量读取。
 选择模式仅支持 JSON：`~1` 表示 `/`，`~0` 表示 `~`，空 pointer 选择根对象。
 任一路径不存在或数组索引无效时整批失败；已存在的 `null` 合法。路径去重并排序。
+
+显式提供 capture/hash 或原生会话位置的 `context-read` 不依赖 Goal registry 发现或
+机器配置。默认 runtime root 冲突不阻断该读取，原 capture 完整性与原生会话作用域
+检查仍生效。未显式指定来源时仍沿原机器配置查找；准入与记账保留原路由检查。
 
 分页保留原始 `sha256`，新增 `selected_pointers` 与 `selection_sha256`。
 拼接 `content` 后得到带 `selections: [{pointer, value}]` 的
