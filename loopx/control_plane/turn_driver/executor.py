@@ -1615,12 +1615,10 @@ def run_loopx_turn_once(
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
-        capture = None
-        if require_decision_capture and needs_host:
-            capture = stage_turn_decision_capture(
-                journal["plan"] if journal is not None else plan, journal_path=journal_path,
-                decision=decision_capture_payload, existing_journal=journal is not None,
-            )
+        capture = stage_turn_decision_capture(
+            journal["plan"] if journal is not None else plan, journal_path=journal_path,
+            decision=decision_capture_payload, existing_journal=journal is not None,
+        ) if require_decision_capture and needs_host else None
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(

@@ -14,7 +14,8 @@ from loopx.chat_action_store import ChatActionStore
 from loopx.cli import build_parser
 from loopx.control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
 from loopx.control_plane.turn_driver.codex_cli import load_codex_cli_session
-from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler, run_codex_operation_host
+from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host
+from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_singleflight
 from loopx.file_lock import lock_holder_path
 from test_codex_operation_host import FAKE_SERVER
