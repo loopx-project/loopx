@@ -402,6 +402,9 @@ as the workers and judge. A new qualification cohort resolves the canonical
 integration branch and applies the reviewed native compatibility patch under
 that protocol; its `.edgebench-source/receipt.json` records the effective provider
 commit, upstream revision and patch digest. Existing cohorts remain frozen.
+Patch representation changes receive a new digest and effective commit even
+when the provider tree is unchanged; the original frozen bytes and provenance
+remain independently verifiable for an older cohort.
 An explicit source selection uses unmodified provider code and may not include
 the fix; follow the linked protocol when qualifying or replaying a known source.
 

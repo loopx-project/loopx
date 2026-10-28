@@ -23,8 +23,11 @@ RECEIPT_ENV = "LOOPX_EDGEBENCH_SOURCE_RECEIPT"
 FROZEN_PATCH = "compatibility.patch"
 _DIFF_ARGS = ("--no-ext-diff", "--no-textconv", "--binary", "--full-index",
               "--no-color", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/",
-              "--unified=3", "--inter-hunk-context=0", "-O/dev/null",
+              "--inter-hunk-context=0", "-O/dev/null",
               "--diff-algorithm=myers", "--indent-heuristic")
+# Keep the original v2 cohort representation verifiable without its current asset.
+# New assets use Git's compact context format; neither form relaxes byte equality.
+_DIFF_FORMATS = (("true", "--unified=1"), ("false", "--unified=3"))
 
 
 def _git_bytes(checkout: Path, *args: str, input: bytes | None = None) -> bytes:
@@ -136,8 +139,9 @@ def _validate_patched(state: Path, receipt: dict) -> None:
         raise ValueError("Frozen EdgeBench compatibility patch digest differs")
     checkout, upstream, commit = state / "checkout", receipt["upstream_commit"], receipt["commit"]
     _check_preimages(checkout, upstream, patch)
-    if _git_bytes(checkout, "-c", "diff.suppressBlankEmpty=false", "diff",
-                  *_DIFF_ARGS, upstream, commit, "--") != patch:
+    if not any(_git_bytes(checkout, "-c", f"diff.suppressBlankEmpty={blank}", "diff",
+                          *_DIFF_ARGS, context, upstream, commit, "--") == patch
+               for blank, context in _DIFF_FORMATS):
         raise ValueError("Frozen EdgeBench source differs from its compatibility patch")
     tree = _git(checkout, "rev-parse", f"{commit}^{{tree}}")
     payload = _commit_payload(checkout, upstream, tree, identity)

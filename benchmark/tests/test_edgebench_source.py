@@ -181,19 +181,21 @@ def test_prepare_help_does_not_need_provider_or_create_source(tmp_path):
     assert not (tmp_path / "logs").exists()
 
 
-def install_test_patch(repository, other_changes=None):
+def install_test_patch(repository, other_changes=None, *, compact=True):
     """A real full-index Git patch against the fixture provider, without a remote service."""
     target = repository / "sforge/__init__.py"
     target.write_text("MARKER = 'patched-source'\n")
     for path, contents in (other_changes or {}).items():
         (repository / path).write_text(contents)
     patch = subprocess.check_output([
-        "git", "-C", str(repository), "diff", "--binary", "--full-index",
+        "git", "-C", str(repository), "-c",
+        f"diff.suppressBlankEmpty={'true' if compact else 'false'}",
+        "diff", "--binary", "--full-index", f"--unified={1 if compact else 3}",
         "--no-color", "--no-ext-diff", "--no-textconv", "HEAD", "--",
     ])
     git(repository, "checkout", "--", "sforge/__init__.py", *(other_changes or {}))
     asset = source.DEFAULT_FILE.parent / "compatibility/fixture-v1.patch"
-    asset.parent.mkdir()
+    asset.parent.mkdir(exist_ok=True)
     asset.write_bytes(patch)
     defaults = json.loads(source.DEFAULT_FILE.read_text())
     defaults["compatibility_patch"] = {
@@ -202,6 +204,19 @@ def install_test_patch(repository, other_changes=None):
     }
     source.DEFAULT_FILE.write_text(json.dumps(defaults))
     return asset
+
+
+def test_bundled_patch_passes_required_public_checks(tmp_path):
+    from loopx.contract import scan_public_boundary
+
+    defaults = json.loads(source.DEFAULT_FILE.read_text())
+    _, patch = source._bundled_patch(defaults["compatibility_patch"])
+    asset = tmp_path / "compatibility.patch"
+    asset.write_bytes(patch)
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "add", "--", asset.name)
+    assert git(tmp_path, "diff", "--cached", "--check") == ""
+    assert scan_public_boundary([asset], registry={})["ok"]
 
 
 def test_default_patch_creates_reproducible_clean_source(repository, tmp_path, monkeypatch):
@@ -254,14 +269,15 @@ def test_patch_accepts_only_untouched_preimages_as_default_branch_advances(repos
     assert not list((tmp_path / "incompatible").glob(".edgebench-source-*"))
 
 
-def test_canonical_patch_verification_ignores_operator_diff_presentation(repository, tmp_path, monkeypatch):
+@pytest.mark.parametrize("compact", [False, True])
+def test_canonical_patch_verification_ignores_operator_diff_presentation(repository, tmp_path, monkeypatch, compact):
     lines = [f"# line {index}\n" for index in range(40)]
     lines[1] = "\n"
     (repository / "sforge/long.py").write_text("".join(lines))
     git(repository, "add", "sforge/long.py")
     git(repository, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "separate patch hunks")
     lines[2], lines[30] = "# first change\n", "# distant change\n"
-    install_test_patch(repository, {"sforge/long.py": "".join(lines)})
+    install_test_patch(repository, {"sforge/long.py": "".join(lines)}, compact=compact)
     expected = source.prepare_source(tmp_path / "one")[1]
     order = tmp_path / "operator-diff-order"
     order.write_text("sforge/long.py\nsforge/__init__.py\n")
@@ -273,6 +289,42 @@ def test_canonical_patch_verification_ignores_operator_diff_presentation(reposit
         monkeypatch.setenv(f"GIT_CONFIG_VALUE_{index}", value)
     assert source.prepare_source(tmp_path / "one")[1] == expected
     assert source.prepare_source(tmp_path / "two")[1] == expected
+
+
+def test_represented_patch_preserves_tree_and_existing_offline_cohort(repository, tmp_path, monkeypatch):
+    original = "# first\n\n# before\n# old\n# after\n\n# last\n"
+    target = repository / "sforge/representation.py"
+    target.write_text(original)
+    git(repository, "add", "sforge/representation.py")
+    git(repository, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "context fixture")
+    changes = {"sforge/representation.py": original.replace("# old\n", "# new\n")}
+    asset = install_test_patch(repository, changes, compact=False)
+    legacy_patch = asset.read_bytes()
+    legacy_checkout, legacy = source.prepare_source(tmp_path / "legacy")
+    legacy_receipt = (legacy_checkout.parent / "receipt.json").read_bytes()
+
+    install_test_patch(repository, changes)
+    assert asset.read_bytes() != legacy_patch
+    assert b"\n \n" in legacy_patch and b"\n \n" not in asset.read_bytes()
+    checkout, current = source.prepare_source(tmp_path / "current")
+    assert current["upstream_commit"] == legacy["upstream_commit"]
+    assert current["commit"] != legacy["commit"]
+    assert current["compatibility_patch"]["sha256"] != legacy["compatibility_patch"]["sha256"]
+    assert git(checkout, "rev-parse", "HEAD^{tree}") == git(legacy_checkout, "rev-parse", "HEAD^{tree}")
+
+    original_git = source._git_bytes
+
+    def offline(checkout, *args, **kwargs):
+        assert args[0] not in {"fetch", "clone", "ls-remote"}
+        return original_git(checkout, *args, **kwargs)
+
+    monkeypatch.setattr(source, "_git_bytes", offline)
+    asset.unlink()
+    source.DEFAULT_FILE.unlink()
+    for log, expected in (("legacy", legacy), ("current", current)):
+        assert source.prepare_source(tmp_path / log)[1] == expected
+    assert (legacy_checkout.parent / "receipt.json").read_bytes() == legacy_receipt
+    assert (legacy_checkout.parent / "compatibility.patch").read_bytes() == legacy_patch
 
 
 @pytest.mark.parametrize("change", ["digest", "format", "noncanonical", "path", "symlink"])

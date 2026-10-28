@@ -48,6 +48,16 @@ cohort. Preserve the complete `.edgebench-source` directory for offline reuse or
 exact patched-source replay. Older `edgebench_source_v1` cohorts retain their
 original unmodified source and receipt; preparation never upgrades them.
 
+The bundled patch uses one-line unified context and Git's
+`diff.suppressBlankEmpty=true` representation. This keeps its full-index file
+identities and changed content readable while avoiding unrelated example text
+and trailing-space context markers in the containing repository. Validation
+accepts that exact canonical form or the original three-line, space-prefixed
+context form retained by earlier v2 cohorts; it does not ignore arbitrary
+whitespace. Changing the representation changes its digest and derived commit,
+even when the provider tree is identical. Existing cohorts keep their original
+patch bytes, receipt and commit and remain verifiable offline.
+
 Prepare dependencies in an isolated environment before starting a study:
 
 ```sh

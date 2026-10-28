@@ -2,10 +2,8 @@ diff --git a/docs/en/reference/judge-api.md b/docs/en/reference/judge-api.md
 index 3b2b23fcf6b29770905be3cf24669cc83f0b144a..4209f8c6ac20c1de5c79495e56ad096649eb3499 100644
 --- a/docs/en/reference/judge-api.md
 +++ b/docs/en/reference/judge-api.md
-@@ -81,6 +81,23 @@ Content-Type: application/json
- 
- `capture_id` is an optional caller-generated 32-character hexadecimal operation ID. A retry for the same registration returns the original point, even after later submissions; it neither captures the later state nor writes another capsule. Another registration cannot reuse the ID. Omit it for a new manual capture. The response contains `checkpoint_id`, `manifest_sha256`, the task/source run, preserved opportunity counters and remaining cooldown, and the native-selected incumbent's round/size/digest. The private capsule contains all released agent history and full result reports plus the selected archive; it contains no session or admin token. Archive bytes remain opaque and are never extracted during capture/restore.
- 
+@@ -83,2 +83,19 @@ Content-Type: application/json
+
 +Capsule manifests remain strict JSON. Finite history and reports keep the
 +`sforge_judge_checkpoint_v1` representation. A report can legitimately retain a
 +nonfinite score or metric; capsules containing those values use
@@ -24,12 +22,8 @@ index 3b2b23fcf6b29770905be3cf24669cc83f0b144a..4209f8c6ac20c1de5c79495e56ad0966
 +native-source/evaluator binding still applies to both versions.
 +
  ```http
- POST /api/v1/checkpoint/restore
- Content-Type: application/json
-@@ -90,6 +107,12 @@ Content-Type: application/json
- 
- The response issues a fresh submission token and feedback relay for `fresh-branch`. Read back from the controller with `/api/v1/history?token=...` and `/api/v1/result/{submission_id}?token=...`. Retained results have fresh lookup IDs and unchanged original reports; `logs/runs/fresh-branch/checkpoint-origin.json` records their source mapping. The selected archive is retained under its original round. Restore performs **no evaluation**. The next `/submit` uses the existing native counter, budget, cooldown and selection rules. Cooldown resumes from the captured remaining **duration** when the fresh registration is published; offline waiting and capsule materialization do not refill evaluation opportunities or spend that duration. A later source improvement is absent from an earlier capsule.
- 
+@@ -92,2 +109,8 @@ The response issues a fresh submission token and feedback relay for `fresh-branc
+
 +Restored `report.json` files retain the ordinary native report format used by
 +evaluation, including Python JSON's `Infinity`, `-Infinity`, and `NaN` spellings
 +when present. They do not contain the capsule's path encoding. Live reports,
@@ -37,16 +31,12 @@ index 3b2b23fcf6b29770905be3cf24669cc83f0b144a..4209f8c6ac20c1de5c79495e56ad0966
 +capture nor restore converts a nonfinite score to zero or missing feedback.
 +
  If the restore response is lost, call `POST /api/v1/checkpoint/restore-result` with the **same** JSON body (`checkpoint_id`, `manifest_sha256`, `run_id`, and current `admin_secret`). It returns the original response shape and the already published submission token. It does not allocate another registration, replay grading, or restart cooldown. Readback also remains valid after subsequent submissions and preserves their consumed opportunities. The existing origin marker must match and the registration must still be live; a missing, mismatched, partial or lost registration returns 409. Wrong admin authority returns 403, and malformed bodies return 422. A persisted origin marker alone cannot recreate credentials after a judge process restart. This recovery does not recover a runner's phase deadline: its controller must retain the original activation-time deadline and must not initialize a new duration on retry. A new `run_id` represents a different branch, not recovery of this response.
- 
- This version supports settled non-game registrations on the configured Docker backend, with no automatic evaluations. The native Python source, full task specification, actual Docker judge image ID, selection policy/direction and effective CPU/memory limits are bound. Missing/moved bytes, mismatched evaluator facts, queued/running results, consumed rounds without released history, conflicting result/history records and unsupported profiles return 409. Wrong admin authority returns 403; malformed request bodies return 422. Existing run identities, replayed restores and interrupted destination reservations are rejected rather than reset. An ordinary retry can recover an exception rolled back before completion; a process crash leaving a reservation fails closed and needs controller inspection. An accepted restore reserves the entire destination run ID, including against later cold registration while this feature is enabled.
 diff --git a/docs/zh/reference/judge-api.md b/docs/zh/reference/judge-api.md
 index 19f9be961ddcf385b0639986c5434601318e2fad..6cb4d4bf36748ec212211f57b234ab4a8e2887e4 100644
 --- a/docs/zh/reference/judge-api.md
 +++ b/docs/zh/reference/judge-api.md
-@@ -75,6 +75,24 @@ Token 是一个 32 字符的十六进制字符串，内部维护任务 ID、运
- - `POST /api/v1/checkpoint/capture`：正文包含 `token`、`admin_secret`，可选 `capture_id`（调用者生成的 32 位十六进制操作 ID）。同一注册重试同一 ID 返回首次捕获的点，不采用后来的提交，也不重复保存；其他注册不能复用。省略该字段表示新的手动捕获。响应包含 `checkpoint_id`、`manifest_sha256`、题目/来源 run、已用轮次/剩余冷却，以及原生选优的 incumbent 轮次、大小和摘要。私有 capsule 保留已公开的 agent 历史、完整结果及被选中的归档，不包含提交或管理 token。归档按原始字节保留，不解包。
- - `POST /api/v1/checkpoint/restore`：正文包含 `checkpoint_id`、捕获响应中的 `manifest_sha256`、全新的 `run_id` 和当前 `admin_secret`。响应返回新的提交 token 和反馈 relay。控制器通过 `/api/v1/history?token=...` 和 `/api/v1/result/{submission_id}?token=...` 读回。历史结果使用新的查询 ID，原报告保持不变；`logs/runs/新run/checkpoint-origin.json` 保存来源映射，incumbent 保留原轮次。
- 
+@@ -77,2 +77,20 @@ Token 是一个 32 字符的十六进制字符串，内部维护任务 ID、运
+
 +Capsule 的 manifest 始终使用严格 JSON。有限分数和指标继续使用
 +`sforge_judge_checkpoint_v1`。历史或报告中存在非有限数值时，使用
 +`sforge_judge_checkpoint_v2`：只将 `history`、`results` 中对应数值存为 `null`，
@@ -66,26 +56,18 @@ index 19f9be961ddcf385b0639986c5434601318e2fad..6cb4d4bf36748ec212211f57b234ab4a
 +改成零或缺失反馈。
 +
  恢复不会评测或多消费一轮。后续提交仍由原生 `consume_round`、预算、冷却及选优规则决定。冷却在新注册发布时，从捕获时剩余的**时长**重新计时；离线等待和 capsule 物化既不会补发机会，也不会消耗这段时长；旧 capsule 不包含来源后来取得的提升。
- 
- 若恢复响应丢失，用**相同**的正文（`checkpoint_id`、`manifest_sha256`、`run_id` 及当前 `admin_secret`）调用 `POST /api/v1/checkpoint/restore-result`。响应结构与首次恢复相同，返回已发布的原提交 token；不创建注册、不重放评测、不重置冷却。后续提交发生后仍可读回，已用机会保持不变。来源标记必须匹配且原注册仍存活；缺失、错配、部分激活或已丢失的注册返回 409，管理授权错误返回 403，非法正文返回 422。评测进程重启后，仅凭磁盘来源标记不能重新生成凭证。此操作不恢复 runner 的阶段截止时间：控制器必须保存首次激活时的原截止时间，重试不能重新计一段预算。更换 `run_id` 是另一个分支，不是恢复原响应。
 diff --git a/sforge/harness/checkpoint.py b/sforge/harness/checkpoint.py
 index 31d62ed85f68bea5bd2565f72b3b630d260e8a7a..42e46cd23ea329b099a99d2a32abb3dd9e7020b8 100644
 --- a/sforge/harness/checkpoint.py
 +++ b/sforge/harness/checkpoint.py
-@@ -43,7 +43,9 @@ if TYPE_CHECKING:
-     from sforge.harness.judge_server import JudgeState
- 
+@@ -45,3 +45,5 @@ if TYPE_CHECKING:
  SCHEMA = "sforge_judge_checkpoint_v1"
 +NONFINITE_SCHEMA = "sforge_judge_checkpoint_v2"
  RESTORE_MARKER = "checkpoint-origin.json"
 +_NONFINITE_KINDS = {"positive_infinity": "inf", "negative_infinity": "-inf", "nan": "nan"}
- 
- 
- class CaptureRequest(BaseModel):
-@@ -79,6 +81,120 @@ def _encode(value: object) -> bytes:
-     ).encode()
- 
- 
+
+@@ -81,2 +83,116 @@ def _encode(value: object) -> bytes:
+
 +def _encode_manifest(packet: dict) -> bytes:
 +    """Keep nonfinite result numbers lossless without non-JSON constants."""
 +    values = []
@@ -201,47 +183,28 @@ index 31d62ed85f68bea5bd2565f72b3b630d260e8a7a..42e46cd23ea329b099a99d2a32abb3dd
 +
 +
  def _sha(raw: bytes) -> str:
-     return hashlib.sha256(raw).hexdigest()
- 
-@@ -171,7 +287,7 @@ class JudgeCheckpoints:
-             expected_sha256 is not None and witnessed != expected_sha256
-         ):
+@@ -173,3 +289,3 @@ class JudgeCheckpoints:
              raise CheckpointUnavailable("Checkpoint manifest digest differs")
 -        packet = json.loads(encoded)
 +        packet = _decode_manifest(encoded)
          self._validate(packet)
-         incumbent = packet["incumbent"]
-         if incumbent is not None:
-@@ -251,15 +367,14 @@ class JudgeCheckpoints:
-                         or not isinstance(result["error"], str)
-                     )
+@@ -253,4 +369,3 @@ class JudgeCheckpoints:
                  )
 -                or entry
 -                != submission_history_entry(
 +                or not _same_released_value(entry, submission_history_entry(
                      entry["submission_id"],
-                     task_id,
-                     entry["round"],
-                     result["report"],
-                     result["error"],
+@@ -261,3 +376,3 @@ class JudgeCheckpoints:
                      status,
 -                )
 +                ))
              ):
-                 raise CheckpointUnavailable(
-                     "Released native history and result details differ"
-@@ -411,7 +526,7 @@ class JudgeCheckpoints:
-                 "incumbent": incumbent,
-             }
+@@ -413,3 +528,3 @@ class JudgeCheckpoints:
              self._validate(packet)
 -            encoded = _encode(
 +            encoded = _encode_manifest(
                  packet
-             )  # Freeze all references before leaving native locks.
-             self.bank.mkdir(mode=0o700, parents=True, exist_ok=True)
-@@ -528,7 +643,12 @@ class JudgeCheckpoints:
-                     if report is not None:
-                         folder = destination / task_id / "submissions" / entry["round"]
+@@ -530,3 +645,8 @@ class JudgeCheckpoints:
                          folder.mkdir(parents=True)
 -                        _write(folder / "report.json", _encode(report))
 +                        # Native report.json uses json.dumps' Inf/NaN spelling
@@ -251,34 +214,22 @@ index 31d62ed85f68bea5bd2565f72b3b630d260e8a7a..42e46cd23ea329b099a99d2a32abb3dd
 +                            report, indent=2, ensure_ascii=False
 +                        ).encode())
                  incumbent = packet["incumbent"]
-                 if incumbent is not None:
-                     archive = _read(
 diff --git a/tests/test_judge_checkpoint.py b/tests/test_judge_checkpoint.py
 index be90734f9ec7939a8b7a89fafb6532e2a6e1e677..f991fd8c80501e50ab59738f156ced950373ce80 100644
 --- a/tests/test_judge_checkpoint.py
 +++ b/tests/test_judge_checkpoint.py
-@@ -18,6 +18,7 @@ from __future__ import annotations
- 
- import copy
+@@ -20,2 +20,3 @@ import copy
  import json
 +import math
  import time
- from concurrent.futures import ThreadPoolExecutor
- from types import SimpleNamespace
-@@ -26,7 +27,9 @@ from unittest.mock import Mock
- import pytest
- from fastapi.testclient import TestClient
+@@ -28,3 +29,5 @@ from fastapi.testclient import TestClient
  from sforge.harness import judge_server as native
 -from sforge.harness.checkpoint import _encode, _sha
 +from sforge.harness.checkpoint import (
 +    CheckpointUnavailable, _decode_manifest, _encode, _encode_manifest, _sha,
 +)
  from sforge.harness.config import SForgeConfig
- 
- 
-@@ -775,3 +778,246 @@ def test_restore_materialization_does_not_spend_remaining_cooldown(
-     now[0] += 1
-     assert submit(client, fresh, 11).json()["round_id"] == "agent-2"
+@@ -777 +780,244 @@ def test_restore_materialization_does_not_spend_remaining_cooldown(
      assert submit(client, fresh, 12).status_code == 429
 +
 +
