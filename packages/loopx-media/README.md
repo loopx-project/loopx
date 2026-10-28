@@ -165,6 +165,11 @@ producing a subtitle file that silently loses or reinterprets accepted text.
 
 ## Bounds and review
 
+For source selection, information density, narration and complete-film judgment,
+use the capability's [whole-film refinement workflow](../../loopx/capabilities/content_ops/README.md#source-led-selection-and-whole-film-refinement--全景选材与整片精修).
+The technical checks below qualify encoding and source integrity; they do not
+replace that creative review or prove audience understanding.
+
 Plans are limited to 90 seconds, 30 shots, 20 local assets and 80 ordered
 caption cues, with at most 1920×1080 at 30 fps. Each source is at most 64 MiB;
 all source snapshots together are at most 128 MiB. The render has a 120-second
