@@ -83,7 +83,7 @@ export const goalShowcaseScenario = {
       assert.match(await costCell.innerText(), /24/);
       state.usageWindow = "unknown";
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
-      await costCell.locator(".goal-vital-value").filter({hasText: "—"}).waitFor();
+      await costCell.locator(".goal-vital-value").filter({hasText: "未采集"}).waitFor();
       assert.doesNotMatch(await costCell.innerText(), /\$0|\$6|\$25/, "Unknown usage retains no measured cost");
       state.usageWindow = "7d";
       await page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
