@@ -754,6 +754,7 @@ class Delegations:
                           if conversation else None)
                 prepare_host_process_record(self._host_process_record(path))
                 _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
+                              "work_context_required": True,
                               **({"conversation": origin} if origin else {})})
                 if not _defer_worker:
                     self._spawn(operation_id)
@@ -1789,7 +1790,9 @@ class Delegations:
                         self._turn_instance_id(row),
                     ]
                 )
-                result = self._cli(binding, "turn", "run-once", *common, *selector, *execution,
+                from .control_plane.collaboration.delegation_context import delegated_turn_context_arguments
+                context = delegated_turn_context_arguments(self, row) if turn_key is None else []
+                result = self._cli(binding, "turn", "run-once", *common, *selector, *execution, *context,
                                    "--execute", timeout=binding["timeout_seconds"] + 60,
                                    delegated_lease=self._delegated_lease_context(row, binding),
                                    host_record=self._host_process_record(path))

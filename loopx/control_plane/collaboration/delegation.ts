@@ -193,6 +193,46 @@ export function verifyDelegationSourceReplay(params: JsonObject): JsonObject {
   return {matched: true};
 }
 
+/** Original work is a captured material, not an implicit workspace convention.
+ * The host has reobserved the operation/grant through the existing owners.
+ * No locator, Host configuration or new authority enters the model input. */
+export function delegationTurnWorkContext(params: JsonObject): JsonObject {
+  const binding = selectDelegationBinding(params);
+  const record = requireJsonObject(params.record, "delegation record");
+  const identity = requireJsonObject(record.identity, "delegation identity");
+  const call = requireJsonObject(params.turn, "delegated Turn");
+  const peer = requireJsonObject(params.peer_request, "original peer request");
+  const same = (a: unknown, b: unknown) => canonicalAuthoritySha256(a) === canonicalAuthoritySha256(b);
+  requireThat(record.work_context_required === true && params.stop === null
+    && (record.status === "prepared" || record.status === "running")
+    && same(identity.binding, binding) && identity.operation_id === params.operation_id
+    && peer.request_id === identity.request_id && peer.goal_id === call.goal_id
+    && peer.agent_id === binding.agent_id && peer.source_agent_id === params.agent_id
+    && peer.source_kind === "peer" && call.agent_id === binding.agent_id
+    && call.todo_id === binding.todo_id && call.workspace === binding.workspace
+    && text(call.turn_instance_id) && call.turn_instance_id === params.turn_instance_id,
+  "delegation material does not belong to this Turn");
+  planCollaborationRequestPublication({request: params.peer_operation, entry: peer, operation: params.peer_operation});
+  const brief = normalizeCollaborationBrief(peer.brief);
+  const source = params.source_request === null ? null : requireJsonObject(params.source_request, "original source request");
+  requireThat((identity.source_request_id === undefined) === (source === null), "delegation source material required");
+  if (source !== null) requireThat(source.request_id === identity.source_request_id
+    && source.goal_id === peer.goal_id && source.agent_id === peer.agent_id
+    && source.execution_binding_id === binding.id && same(source.goal_ref ?? null, peer.goal_ref ?? null)
+    && same(source.brief, brief) && typeof source.message === "string"
+    && source.message === params.original_message,
+  "original delegation message or identity changed");
+  return {
+    operation_id: identity.operation_id, request_id: peer.request_id,
+    goal_id: peer.goal_id, agent_id: peer.agent_id, todo_id: binding.todo_id,
+    turn_instance_id: call.turn_instance_id, brief, instruction: peer.instruction,
+    ...(source === null ? {} : {source_request: {
+      request_id: source.request_id, message: source.message, brief: source.brief,
+      instruction: source.instruction,
+    }}),
+  };
+}
+
 type Observation = "prepared" | "running" | "turn_returned" | "accepted" | "rejected" | "stopped";
 
 function boundedReason(value: unknown, fallback: string): string {

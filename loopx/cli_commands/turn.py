@@ -90,6 +90,17 @@ def handle_turn_command(
             registry_path=registry_path,
             runtime_root_override=runtime_root_arg,
         )
+        delegated_context = None
+        if getattr(args, "delegation_context_json", None) is not None:
+            if getattr(args, "resume_turn_key", None):
+                raise ValueError("--delegation-context-json supplies fresh input; resume uses its original captured context")
+            from ..control_plane.collaboration.delegation_context import delegated_turn_context
+
+            delegated_context = delegated_turn_context(
+                args.delegation_context_json, registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None),
+                turn_instance_id=args.turn_instance_id, workspace=Path(args.project),
+            )
         goal_ref = capture_first_party_host_goal_ref(
             registry_path=registry_path,
             goal_id=args.goal_id,
@@ -217,6 +228,12 @@ def handle_turn_command(
             turn_start_hook_dispatch = extend_explore(turn_start_hook_dispatch,
                 registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None))
+            if delegated_context is not None:
+                # Invocation material shares normal capture/delivery. It is not a
+                # capability observation, another decision or a new read command.
+                for key in ("required_reads", "contexts"):
+                    turn_start_hook_dispatch[key] = [*turn_start_hook_dispatch.get(key, []),
+                                                     *delegated_context[key]]
             # `run-once` and `managed-step` must resolve the same governing decision
             # from the same live status, scheduler context and capability hooks, so
             # this Turn takes all of them -- and its later settle-against inputs --

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationTurnWorkContext, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -8,6 +8,42 @@ const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", wor
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
 const params = {agent_id: "coordinator", binding_id: "review",
   config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]}};
+
+test("captured delegation work retains original material without Host configuration or surrogate authority", () => {
+  const brief = {schema_version: "collaboration_brief_v0", purpose: "Review", context: "Full original scope",
+    constraints: ["No external writes"], inputs: [], acceptance: ["Check evidence"], return_requirement: "Return here"};
+  const peer = {request_id: "b".repeat(64), goal_id: "goal", agent_id: binding.agent_id,
+    source_kind: "peer", source_agent_id: "coordinator", brief, instruction: "Read before work."};
+  const source = {request_id: "a".repeat(64), goal_id: "goal", agent_id: binding.agent_id,
+    execution_binding_id: binding.id, message: "原始内容\n完整约束 🧭", brief, instruction: "Context grants no additional authority."};
+  const turn = {goal_id: "goal", agent_id: binding.agent_id, todo_id: binding.todo_id,
+    workspace: binding.workspace, turn_instance_id: "original-turn"};
+  const identity = {binding, operation_id: "original-operation", request_id: peer.request_id,
+    source_request_id: source.request_id};
+  const input = {...params, operation_id: identity.operation_id, turn, turn_instance_id: turn.turn_instance_id,
+    record: {identity, status: "prepared", work_context_required: true}, stop: null, peer_request: peer, peer_operation: peer,
+    source_request: source, original_message: source.message};
+  const context = delegationTurnWorkContext(input);
+  assert.deepEqual(context.brief, brief);
+  assert.deepEqual(context.source_request, {request_id: source.request_id, message: source.message, brief,
+    instruction: source.instruction});
+  assert.equal(context.turn_instance_id, turn.turn_instance_id);
+  for (const field of ["config", "binding", "workspace", "host_args", "requesters"])
+    assert.equal(Object.hasOwn(context, field), false);
+  for (const change of [
+    {turn: {...turn, todo_id: "other"}}, {turn: {...turn, agent_id: "other"}},
+    {turn: {...turn, workspace: "/other"}}, {turn: {...turn, turn_instance_id: "other"}},
+    {operation_id: "other"}, {source_request: null}, {original_message: "substituted"},
+    {peer_request: {...peer, source_agent_id: "other"}},
+    {peer_operation: {...peer, brief: {...brief, context: "Changed"}}},
+    {record: {identity}}, {record: {...input.record, status: "stopped"}}, {stop: {}},
+  ]) assert.throws(() => delegationTurnWorkContext({...input, ...change}));
+  const {source_request_id: _source, ...peerIdentity} = identity;
+  const operator = delegationTurnWorkContext({...input, record: {...input.record, identity: peerIdentity},
+    source_request: null, original_message: null});
+  assert.deepEqual(operator.brief, brief);
+  assert.equal(Object.hasOwn(operator, "source_request"), false);
+});
 
 test("source replay requires the original binding, complete brief, peer and return identity", () => {
   const brief = {schema_version: "collaboration_brief_v0", purpose: "Review", context: "Original scope",

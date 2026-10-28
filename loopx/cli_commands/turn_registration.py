@@ -170,6 +170,10 @@ def register_turn_commands(
     )
     run_once.add_argument("--project", required=True)
     run_once.add_argument(
+        "--delegation-context-json",
+        help="Host locator for an existing delegation operation; original work is verified and captured, never an execution grant.",
+    )
+    run_once.add_argument(
         "--automation-id",
         help="Stable automation identity for an automation-scoped execution interval.",
     )

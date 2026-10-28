@@ -144,6 +144,26 @@ only that operation's settlement without repeating the Host. Completing the
 requester's Chat Turn does not cancel independently delegated work. Operator/MCP
 operations without a Chat source retain their existing binding authority.
 
+New operations deliver the complete peer brief and, for Chat-originated work,
+the authenticated original message through the normal before-work context and
+immutable Turn capture. The native input no longer depends on the member
+discovering `DELEGATION.json`. `--delegation-context-json` is an internal Host
+locator checked against the original operation, recipient, Todo, workspace and
+Turn; it grants no execution authority. Missing or substituted source material
+refuses fresh input before Host launch. Recovery consumes the original capture
+rather than replacing it with a fresh source read during settlement. Historical
+operations without this recorded input profile retain their original recovery;
+the bootstrap file remains for existing generic hosts that explicitly read it.
+This task-bound input repair does not close ordinary Todo-less activation or
+qualify installed App/model adoption.
+
+中文：新操作通过既有工作上下文和不可变 Turn 捕获交付完整 peer brief，以及 Chat
+委派经认证的原始消息，不再依赖成员自行发现 `DELEGATION.json`。内部 Host locator
+必须匹配原操作、接收者、Todo、工作区与 Turn，不授予权限；原材料缺失或被替换时，
+在 Host 启动前拒绝新输入。恢复沿用原捕获，不在结算时改读新材料。未登记此输入
+profile 的历史操作保留原恢复路径，仍由既有 generic host 使用的 bootstrap 文件
+继续支持。本切片仍绑定 Todo，不代表普通无 Todo 唤醒或正式 App/模型采用已完成。
+
 Chat retry also verifies the saved operation against the original Inbox request,
 complete brief, peer request, current binding and original return Session/Turn
 before reporting its status. The worker uses this same typed comparison before
