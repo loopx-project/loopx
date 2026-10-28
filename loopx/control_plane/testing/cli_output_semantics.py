@@ -5,8 +5,84 @@ import json
 import re
 import shlex
 from typing import Any
-
 from loopx.control_plane.content_digest import ENVELOPED_SHA256_PATTERN
+
+
+def native_admission_observation(payload: Any) -> dict[str, Any] | None:
+    """Measure reviewed admission carriers, without retaining their contents."""
+    queue = payload.get("attention_queue") if isinstance(payload, dict) else None
+    if isinstance(queue, dict) and isinstance(queue.get("items"), list):
+        progress = []
+        valid = True
+        for item in queue["items"]:
+            row = item.get("first_delivery_progress") if isinstance(item, dict) else None
+            if row is None:
+                continue
+            identity = row.get("settlement_identity") if isinstance(row, dict) else None
+            if (not isinstance(row, dict) or row.get("schema_version") != "first_delivery_progress_v0"
+                    or row.get("goal_completion_certified") is not False
+                    or not isinstance(identity, dict)
+                    or identity.get("schema_version") != "quota_settlement_identity_v0"
+                    or identity.get("goal_id") != item.get("goal_id")
+                    or not all(isinstance(identity.get(key), str) and identity[key]
+                               for key in ("agent_id", "todo_id", "turn_instance_id"))):
+                valid = False
+            progress.append(row)
+        text = "" if not progress else json.dumps(progress, ensure_ascii=False)
+        return {"kind": "progress" if progress and valid else None,
+                "costs": {"first_delivery_progress": {
+                    "chars": len(text), "utf8_bytes": len(text.encode("utf-8"))}}}
+    if not isinstance(payload, dict) or payload.get("mode") != "should-run":
+        return None
+    fields = ("heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
+              "planning_horizon", "action_portfolio", "first_delivery_progress")
+    costs = {}
+    for field in fields:
+        text = json.dumps(payload[field], ensure_ascii=False) if field in payload else ""
+        costs[field] = {"chars": len(text), "utf8_bytes": len(text.encode("utf-8"))}
+    receipt = payload.get("heartbeat_receipt") or {}
+    kind = None
+    if (isinstance(receipt, dict)
+            and receipt.get("schema_version") == "heartbeat_quota_receipt_v0"
+            and receipt.get("status") in {"committed", "replayed"}
+            and isinstance(receipt.get("turn_instance_id"), str)
+            and receipt["turn_instance_id"]):
+        context = payload.get("delivery_result_context") or {}
+        identity = receipt.get("settlement_identity") or {}
+        selected = payload.get("selected_todo") or {}
+        agent = payload.get("agent_identity") or {}
+        if (receipt.get("result_freshness") == "turn_result_freshness_required_v1"
+                and receipt.get("closeout_required") is True
+                and isinstance(identity, dict) and isinstance(context, dict)
+                and isinstance(selected, dict) and isinstance(agent, dict)
+                and identity.get("schema_version") == "quota_settlement_identity_v0"
+                and identity.get("goal_id") == payload.get("goal_id")
+                and identity.get("turn_instance_id") == receipt["turn_instance_id"]
+                and identity.get("todo_id") == selected.get("todo_id")
+                and identity.get("agent_id") == agent.get("agent_id")
+                and context.get("ok") is True and isinstance(context.get("read_context_id"), str)
+                and context["read_context_id"]
+                and isinstance(context.get("basis"), dict)
+                and context.get("settlement_identity") == identity):
+            progress = payload.get("first_delivery_progress")
+            if progress is None or (isinstance(progress, dict)
+                    and progress.get("schema_version") == "first_delivery_progress_v0"
+                    and progress.get("goal_completion_certified") is False
+                    and progress.get("settlement_identity") == identity):
+                kind = "delivery_result"
+        elif receipt.get("settlement_binding_owed") is True:
+            source = receipt.get("semantic_replan_source") or {}
+            obligation = payload.get("autonomous_replan_obligation") or {}
+            if (isinstance(source, dict)
+                    and source.get("schema_version") == "semantic_replan_source_v1"
+                    and isinstance(obligation, dict)
+                    and receipt.get("semantic_replan_obligation_id") == obligation.get("obligation_id")
+                    and obligation.get("obligation_id")):
+                kind = "replan"
+            elif not source and not receipt.get("semantic_replan_obligation_id"):
+                kind = "unbound"
+    return {"kind": kind, "costs": costs}
+
 
 
 def authoring_input_observations(text: str) -> dict[str, bool]:

@@ -15,7 +15,7 @@ import pytest
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from loopx.control_plane.testing.canary_harness import import_fixture_authority
+from loopx.control_plane.testing.canary_harness import import_fixture_authority, temporary_canary_directory
 from loopx.control_plane.testing.cli_output_budget import (
     CLI_OUTPUT_BUDGET_BY_ID,
     CLI_OUTPUT_BUDGET_SPECS,
@@ -1824,7 +1824,7 @@ def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:
     # tempfile contributes an eight-character random suffix. Hold input size
     # constant even when the selected parent is a drive or share root.
     prefix += "p" * (128 - len(str(parent / prefix)) - 8)
-    with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as directory:
+    with temporary_canary_directory(prefix=prefix, dir=parent) as directory:
         root = Path(directory).resolve()
         assert len(str(root)) == 128
         _assert_mode_variant_budgets(root, only="heartbeat_prompt_brief")

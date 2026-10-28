@@ -9,6 +9,8 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from loopx.control_plane.runtime.file_paths import windows_extended_path
+
 
 def budget_fixture_path(root: Path) -> Path:
     suffix = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
@@ -27,4 +29,4 @@ def stable_budget_fixture_root(root: Path):
     try:
         yield fixture
     finally:
-        shutil.rmtree(fixture)
+        shutil.rmtree(windows_extended_path(fixture))

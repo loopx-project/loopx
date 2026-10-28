@@ -16,9 +16,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @contextmanager
-def temporary_canary_directory(*, prefix: str):
+def temporary_canary_directory(*, prefix: str, dir: str | Path | None = None):
     """Keep fixture cleanup valid for canonical Windows authority paths."""
-    with tempfile.TemporaryDirectory(prefix=prefix) as name:
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=dir) as name:
         owned = Path(name).resolve()
         try:
             yield name

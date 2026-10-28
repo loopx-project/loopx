@@ -1401,6 +1401,51 @@ fixture 的 selected Todo 不在 runnable 集合，human gate 没有 selected To
 要求、有意义备选项及末尾约束验证选择与后续工作；计入全部批读/恢复成本。新必读契约
 合格前，当前完整上下文 preflight 保持生效，不能靠删候选或首屏变小宣称收益。
 
+#### Original-Turn admission qualification
+
+Keep the first admitted result basis and its replay/settlement identity in the
+caller output. A matched native Windows measurement of main `f5e9be367` and
+candidate `9394b2395` used the unchanged File fixture, Python 3.11 and Node 22.22.3:
+These measurements belong to those source revisions; they do not qualify a
+different integrated head. Retain the target branch ceilings until a matched
+current-source probe supports recalibration.
+
+上述结果只属于指定版本，不能直接作为另一集成 head 的资格；在当前源码的匹配探针
+支持重新校准前，保留目标分支既有上限。
+
+| quota JSON scenario | main | candidate | Previous ceiling | Candidate proposal ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| One Todo | 23,291 | 28,001 | 25,000 | 30,000 |
+| 36 Todos / 12 runs | 35,862 | 43,202 | 42,000 | 46,000 |
+| 18 Todos / three Agents | 25,852 | 27,984 | 25,500 | 29,500 |
+
+The failed Windows CI host emitted 28,334 characters for the one-Todo candidate;
+its main multi-Agent observation was already 25,975. Preserve both failures.
+The added information is the original read basis, causal admission/replan
+receipt, original-work progress readback and memory-call observation; the replan also carries the current planning
+choice. Do not remove these inputs to meet an older presentation ceiling.
+
+The differential permits only measured carrier growth on a matching first
+admission transition. It still rejects repeated growth, mismatched original
+identity, other surfaces, action changes and oversized carriers. Selector views
+must compare the same explicitly admitted Turn, rather than an unbound planning
+choice on one revision with a restored original Turn on the other. Status's
+original-work progress remains a readback, never Goal acceptance.
+
+The unchanged 96-row candidate completed its assertions in a diagnostic run;
+CLI calls alone took 250 seconds, exceeding the former 240-second child bound.
+A loaded Windows rerun exceeded 300 seconds; retain that timeout as a failure.
+The qualification child bound is 420 seconds, with 960 seconds for two children
+and checkout/cleanup. These are bounded test-batch limits, not a production
+latency qualification or a change to execution quota, product timeouts or the
+8,192-byte Turn Envelope diagnostic. Per-Todo growth, fixed replan growth,
+Markdown/line ceilings and complete action/semantic checks stay independent.
+
+原 Turn 验收保留首次读取依据、原身份、重规划来源和记忆调用状态。相同 Windows
+负载的新增成本及原失败如表所示；仅按实际内容核算一次迁移，不允许用新标记放宽
+重复增长或动作变化。展示 selector 必须比较同一已准入 Turn；测试批次时限不代表
+产品性能或 Goal 达成，也不改变执行配额、产品超时和生产 Envelope 诊断。
+
 Complete registry routes exposed an existing brief heartbeat regression on the
 unchanged 128-character-root fixture. Commit
 `fb20c153ba2c2a7376efe68091a76ca470effbde` added those routes: its immediate parent

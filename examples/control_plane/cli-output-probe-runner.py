@@ -66,6 +66,7 @@ def _receipt_row(
         "scenario": scenario,
         "format": output_format,
         "qualification_policy": qualification_policy,
+        "native_admission": semantics.native_admission_observation(payload),
         "output_contract_version": output_contract_version,
         "chars": measurement["chars"],
         "utf8_bytes": measurement["utf8_bytes"],
@@ -273,6 +274,18 @@ def _variant_rows(
         probe.SCENARIOS[0],
     )
     import_fixture_authority(registry_path, probe.GOAL_ID)
+    # These rows compare display selectors, not first admission with later
+    # original-Turn recovery. Keep that causal phase identical on both arms;
+    # _default_rows still measures the actual first automatic admission.
+    turn = ["--turn-instance-id", "cli-output-selector-turn", "--todo-id", "todo_fixture_000"]
+    guard = probe._surface_commands(project=project, runtime=runtime,
+        registry_path=registry_path, state_file=state_file, output_format="json")["quota_should_run"]
+    code, text = probe._invoke_cli([*guard, *turn])
+    admitted = json.loads(text)
+    if (code != 0 or admitted.get("ok") is not True
+            or (admitted.get("heartbeat_receipt") or {}).get("status") != "committed"
+            or admitted["heartbeat_receipt"].get("turn_instance_id") != "cli-output-selector-turn"):
+        raise AssertionError("selector comparison requires its original admitted Turn")
     rows: list[dict] = []
     for output_format in ("json", "markdown"):
         commands = probe._mode_variant_commands(
@@ -290,6 +303,8 @@ def _variant_rows(
                 continue
             if output_format not in variant.output_formats:
                 continue
+            if any(command[index:index + 2] == ["quota", "should-run"] for index in range(len(command) - 1)):
+                command = [*command, *turn]
             exit_code, text = probe._invoke_cli(command)
             if exit_code != 0:
                 raise AssertionError(f"{variant_id}/{output_format} failed")
