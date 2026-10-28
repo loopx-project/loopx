@@ -44,6 +44,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     span: "记录跨度", start: "起点", end: "末端", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
     ...findingCopy.labels, unlabeled: "无结论", phaseNote: "按记录时间三等分，仅为阅读分组，不是预声明的评估窗口。",
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
+    whole: "全程",
   } : {
     early: "Early", middle: "Middle", late: "Late", items: "Research items", findings: "Findings",
     decisions: "Explicit decisions", none: "No explicit decision recorded", changed: "Changed", stopped: "Stopped", retained: "Retained",
@@ -54,6 +55,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     span: "Recorded span", start: "Start", end: "End", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
     ...findingCopy.labels, unlabeled: "No finding", phaseNote: "Equal thirds of record time, for reading only; not a pre-declared evaluation window.",
     noTime: "No usable record time; the history cannot be placed on a time axis. All records remain readable below.",
+    whole: "Whole run",
   };
   const {start, end} = timeline;
   if (start === null || end === null) return <ContextHelp label={zh ? "记录时间未知" : "Record time unknown"} icon={CircleHelp}><p className="research-history-note">{copy.noTime}</p></ContextHelp>;
@@ -89,7 +91,10 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   const groupedIds = new Set(dayGroups.flatMap(group => group.nodes.map(node => node.id)));
   const swarm = timeline.singles.filter(id => !groupedIds.has(id)).map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
   const unknownTime = [...timeline.nodes.values()].filter(item => item.first === null).length;
-  const phaseName = (item: TimelinePhase) => [copy.early, copy.middle, copy.late][item.index];
+  const phaseNote = timeline.phases.length === 1
+    ? (zh ? "全部记录归入同一阅读分组，仅为阅读组织，不是预声明的评估窗口。" : "All records share one reading group, for reading only; not a pre-declared evaluation window.")
+    : copy.phaseNote;
+  const phaseName = (item: TimelinePhase) => timeline.phases.length === 1 ? copy.whole : [copy.early, copy.middle, copy.late][item.index];
   const phaseDescription = (item: TimelinePhase) => {
     const counts = Object.entries(item.decisions);
     return [
@@ -111,11 +116,11 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   };
   return <div className="research-timeline">
     <div className="research-timeline-summary">
-      <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
+      <div className={`research-phases${timeline.phases.length === 1 ? " is-single" : ""}`} role="group" aria-label={phaseNote}>{timeline.phases.map(phaseCard)}</div>
       <div className="research-timeline-key">
         <div className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}</div>
         <ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
-      <p>{copy.phaseNote}</p><p className="research-density-help"><i className="research-bar-key" aria-hidden/>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
+      <p>{phaseNote}</p><p className="research-density-help"><i className="research-bar-key" aria-hidden/>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
       <p>{findingCopy.meaning}</p>
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>

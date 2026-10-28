@@ -134,6 +134,7 @@
 .research-timeline-key { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .research-timeline-key > .research-link { margin-inline-start: auto; min-height: 44px; font-size: var(--text-body); }
 .research-phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.research-phases.is-single { grid-template-columns: minmax(0, 1fr); }
 .research-history .research-phase { display: flex; flex-direction: column; align-items: stretch; gap: 10px; min-width: 0; min-height: 44px; padding: 12px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-bg); color: var(--pw-text); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard); }
 .research-history .research-phase:hover { border-color: var(--pw-line-strong); background: var(--pw-hover); }
 .research-history .research-phase.is-active { outline: 2px solid var(--pw-text); outline-offset: -1px; }
@@ -277,8 +278,11 @@
 .research-reading-order { display: flex; align-items: center; gap: 12px; border-block-end: 1px solid var(--pw-line); padding-block: 0 8px; margin-block-end: 8px; }
 .research-reading-order button { min-height: 44px; padding: 6px 0; background: none; border: 0; color: var(--pw-text); font: inherit; font-size: var(--text-body); cursor: pointer; }
 .research-reading-order > span { color: var(--pw-muted); }
+.research-reading-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; gap: 24px 40px; margin-block: 16px 32px; }
+.research-reading-overview.is-expanded { grid-template-columns: minmax(0, 1fr); }
 .research-reading-layer { min-width: 0; scroll-margin-block-start: 16px; }
-.research-reading-layer .research-synthesis:not(.research-synthesis-detail) { margin-block: 24px 32px; }
+.research-reading-overview .research-synthesis:not(.research-synthesis-detail), .research-reading-overview .research-progress { margin-block: 0; }
+.research-reading-overview .research-progress { padding-block-start: 0; }
 .research-reading-layer:focus, .research-history-heading:focus { outline: none; }
 
 @media (max-width: 640px) {

@@ -87,6 +87,13 @@ def quota_failure_payload(
         if isinstance(error, EffectRuntimeHostPermissionError)
         else "fix quota/status collection before spending automatic compute"
     )
+    # Observation and execution callers consume the same authority rejection.
+    # Preserve its typed recovery instead of losing it at the early read return.
+    authority_failure = (
+        {"error_code": error.code, "reason": str(error), **error.payload}
+        if isinstance(error, (LegacyCoordinationWriterFenced, LocalCoordinationAuthorityUnavailable))
+        else {}
+    )
     if command not in QUOTA_EVENT_KINDS:
         return {
             "ok": False,
@@ -114,6 +121,7 @@ def quota_failure_payload(
             ],
             **verbose_debug,
             **lock_timeout_fields,
+            **authority_failure,
         }
 
     # A managed-runtime failure already carries a bounded, public-safe message
@@ -223,13 +231,7 @@ def quota_failure_payload(
         if error.agent_id is not None:
             payload["agent_id"] = error.agent_id
     elif isinstance(error, (LegacyCoordinationWriterFenced, LocalCoordinationAuthorityUnavailable)):
-        payload.update(
-            {
-                "error_code": error.code,
-                "reason": str(error),
-                **error.payload,
-            }
-        )
+        payload.update(authority_failure)
     if lock_timeout_fields:
         payload["recommended_action"] = "inspect the lock holder before retrying"
     if command == "monitor-poll":

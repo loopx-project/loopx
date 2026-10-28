@@ -92,6 +92,34 @@ reruns already in progress. These are report-local annotations, not scheduler
 commands or persisted run states. Keep secondary issues in the source ledger.
 Notes must name incomplete history coverage and unresolved attribution.
 
+## Terminal execution evidence
+
+An optional `execution_audit` separates execution outcomes from fault ownership
+and score availability. Each row has `arm_id`, `case_id`, `run_id`,
+`initial_attempt`, `outcome`, `attribution`, `goal_verdict`, and nonempty
+`evidence_refs`. One row describes the final reconciled state of one attempt;
+each arm/case has at most one initial attempt. The caller retains Session-level
+recovery history. An error recovered within that same attempt is not a final
+runtime failure; a replacement attempt never erases the original failure.
+
+- `outcome`: `normal_end`, `runtime_failure`, `budget_exhausted`,
+  `operator_cancelled`, `unknown`, or `running`.
+- `attribution`: `product`, `service`, `provider`, `benchmark`, `unknown`, or
+  `not_applicable`. Runtime failures require an explicit or unknown attribution;
+  other outcomes use `not_applicable`. Exception text alone is not ownership proof.
+- `goal_verdict`: `satisfied`, `failed`, `needs_revision`, `unavailable`, or
+  `not_applicable`. A normal Goal end needs `satisfied`; a workflow without a
+  Goal can use `not_applicable`. Idle, end-turn, process exit zero and a valid
+  artifact score do not establish Goal satisfaction.
+
+The first-attempt table reports unknown and unreviewed cases alongside confirmed
+normal endings, runtime failures, budgets and operator censoring. Missing audits
+render as unreviewed, not verified zeros. Historical incident counts are only
+observed records and never imply complete attribution coverage. No failure-rate
+comparison is computed: shared case/attempt denominators, censoring, exposure,
+deployment versions and observation coverage must be qualified independently.
+The audit does not change score selection, normalization or countability.
+
 ## Reading the outputs
 
 - Progress has a fixed case denominator for each arm. Score coverage is a

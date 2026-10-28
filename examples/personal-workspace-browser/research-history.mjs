@@ -425,15 +425,21 @@ export const researchHistoryScenario = {
       assert.match(await processJudgments.locator('[data-metric="goal_alignment"]').getAttribute('aria-label'), /不适用/);
       await processJudgments.locator(':scope > summary').click();
       assert.equal(await synthesisPage.locator('.research-effect-metrics:visible').count(), 0);
+      await synthesisPage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
+      assert(await synthesisPage.evaluate(() => {
+        const summary = document.querySelector('.research-synthesis-summary').getBoundingClientRect();
+        const viewport = document.querySelector('.personal-channel-scroll').getBoundingClientRect();
+        return summary.top >= viewport.top && summary.bottom <= viewport.bottom;
+      }), 'The first viewport answers what the study found, including its unknowns');
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-desktop.png'), animations: 'disabled'});
       assert(await synthesisPage.evaluate(() => {
         const results = document.querySelector('.research-progress');
         const report = document.querySelector('.research-synthesis');
         const history = document.querySelector('.research-history-heading');
         return Boolean(results && report && history
-          && (results.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING)
-          && (report.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING));
-      }), 'The complete overview reads results, report, then research history');
+          && (report.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING)
+          && (results.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING));
+      }), 'The report answers the research question before readers inspect measurements and history');
       const reading = synthesisPage.getByRole('navigation', {name: '研究阅读', exact: true});
       await reading.getByRole('button', {name: '汇报', exact: true}).click();
       assert(await synthesisPage.evaluate(() => document.activeElement?.contains(document.querySelector('.research-synthesis'))));
@@ -466,6 +472,11 @@ export const researchHistoryScenario = {
       await synthesis.locator('.research-synthesis-finding > summary').first().click();
       await synthesisPage.evaluate(() => {for (const e of document.querySelectorAll('*')) if (e.scrollTop) e.scrollTop = 0;});
       assert(await synthesisPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      assert(await synthesisPage.evaluate(() => {
+        const summary = document.querySelector('.research-synthesis-summary').getBoundingClientRect();
+        const viewport = document.querySelector('.personal-channel-scroll').getBoundingClientRect();
+        return summary.top >= viewport.top && summary.bottom <= viewport.bottom;
+      }), 'A narrow first viewport retains the substantive report instead of only metric labels');
       await synthesisPage.screenshot({path: resolve(outputDir, 'research-synthesis-ordinary-mobile.png'), animations: 'disabled'});
       await reading.getByRole('button', {name: '汇报', exact: true}).click();
       await synthesisPage.mouse.move(1, 1);

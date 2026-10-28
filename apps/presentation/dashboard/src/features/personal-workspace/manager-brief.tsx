@@ -89,7 +89,7 @@ export function ManagerBrief({ goals, onSelectGoal, operations = [], onSelectOpe
         title={t("brief.operationDeliveryPending")} /> : null}
       <BriefTile count={running.length} empty={runningEmpty} kind="running" live={running.some((goal) => presentGoalActivity(goal).live)} onSelectGoal={onSelectGoal}
         rows={running.map((goal) => ({ goal, key: goal.goalId, meta: <RunningMeta goal={goal} />, text: goal.title }))}
-        title={t("brief.running")} total={running.length && queued ? t("brief.alsoQueued", { count: queued }) : null} />
+        title={t("brief.running")} total={queued ? (running.length ? t("brief.alsoQueued", { count: queued }) : t("brief.queuedOnly", { count: queued })) : null} />
       {claimed.length ? <BriefTile count={claimed.length} empty={t("brief.claimedEmpty")} kind="claimed" onSelectGoal={onSelectGoal}
         rows={claimed.map((goal) => ({ goal, key: goal.goalId, meta: <RunningMeta goal={goal} />, text: goal.title }))}
         title={t("brief.claimed")} /> : null}

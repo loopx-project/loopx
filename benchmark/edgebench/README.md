@@ -13,13 +13,50 @@ iptables permissions; a macOS Docker socket alone does not provide that boundary
 ## Select and freeze the native provider
 
 The first CLI entry for a log directory fetches the selected branch into
-`.edgebench-source/checkout` and atomically records its exact commit in
+`.edgebench-source/checkout` and atomically freezes the effective source in
 `.edgebench-source/receipt.json`. Concurrent worker/judge startup shares that lock.
-Later entries reuse the frozen checkout without fetching, even if the branch or
-repository default changes. Dirty/moved source, conflicting explicit selection,
-and existing runs without a source receipt fail before model/container entry.
-Use a new log directory to adopt a newer integration revision; never repin an
-active or historical cohort.
+Later entries reuse the frozen checkout without fetching, even if the branch,
+repository default, or bundled compatibility patch changes. Dirty/moved source,
+conflicting explicit selection, and existing runs without a source receipt fail
+before model/container entry. Use a new log directory to adopt a newer source;
+never repin an active or historical cohort.
+
+For a **new cohort with no explicit source options**, `source-default.json`
+selects the shared branch and the versioned
+[`nonfinite-checkpoint-v1` compatibility patch](compatibility/nonfinite-checkpoint-v1.patch).
+This LoopX-owned patch fixes the native checkpoint representation of nonfinite
+released scores and metrics. Native scoring, report values and selection remain
+unchanged. Preparation verifies the asset digest and each touched file's exact
+upstream blob and mode, applies the patch before provider import/installation,
+and creates a clean, reproducible Git commit with the fetched commit as its
+parent. The snapshot uses an explicit LoopX compatibility identity and the
+upstream commit time; it does not attribute the patch to an upstream author.
+Unrelated upstream changes can advance normally. A changed patch preimage,
+including a later upstream implementation of the fix, stops preparation without
+publishing a source directory. Review and update the bundled patch, or explicitly
+select the original source, before starting that new cohort.
+
+Patched sources use `edgebench_source_v2` receipts. `upstream_commit` is the
+fetched remote revision; `compatibility_patch` records the patch ID and SHA-256;
+`commit` is the **effective local derived revision** actually imported and bound
+by native checkpoint provenance. This derived SHA is not an upstream revision
+that a fresh remote fetch can retrieve. The frozen `compatibility.patch` copy,
+Git parent/tree, complete upstream-to-effective diff, and deterministic commit
+contents are cross-checked on reuse. Verification uses the frozen copy rather
+than the current LoopX asset, so later asset changes do not invalidate an older
+cohort. Preserve the complete `.edgebench-source` directory for offline reuse or
+exact patched-source replay. Older `edgebench_source_v1` cohorts retain their
+original unmodified source and receipt; preparation never upgrades them.
+
+The bundled patch uses one-line unified context and Git's
+`diff.suppressBlankEmpty=true` representation. This keeps its full-index file
+identities and changed content readable while avoiding unrelated example text
+and trailing-space context markers in the containing repository. Validation
+accepts that exact canonical form or the original three-line, space-prefixed
+context form retained by earlier v2 cohorts; it does not ignore arbitrary
+whitespace. Changing the representation changes its digest and derived commit,
+even when the provider tree is identical. Existing cohorts keep their original
+patch bytes, receipt and commit and remain verifiable offline.
 
 Prepare dependencies in an isolated environment before starting a study:
 
@@ -51,8 +88,14 @@ or a full `--sforge-revision SHA` on the first entry (including preparation).
 For example, `--sforge-repository https://github.com/ByteDance-Seed/EdgeBench.git
 --sforge-ref refs/heads/main` selects upstream instead. These source options also
 apply to the online judge CLI; `SFORGE_LOG_DIR` is equivalent to `--log-dir` there.
-Use an explicit SHA to replay a known revision. A server in another log directory
-is a separate cohort: the launcher cannot attest a remote server's loaded code.
+**Any explicit repository, ref, or revision selects unmodified source for a new
+cohort**, even when it names the default repository/branch. These selections use
+the original v1 receipt contract and do not apply the bundled patch. Use an
+explicit upstream SHA to replay an unmodified known revision; retain its native
+checkpoint limitations. For an already frozen cohort, options only assert that
+its existing selection matches; they cannot apply/remove a patch or change its
+commit. A server in another log directory is a separate cohort: the launcher
+cannot attest a remote server's loaded code.
 
 These defaults apply to the LoopX EdgeBench CLI. Direct `sforge serve` and imported
 Python APIs remain caller-managed compatibility entrypoints; use them only with

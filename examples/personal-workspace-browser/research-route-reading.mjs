@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {execFileSync} from "node:child_process";
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {resolve} from "node:path";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
@@ -176,6 +176,42 @@ export const researchRouteReadingScenario = {
       assert.equal(analysisWrites, 0, "Reading, language changes and every action state never dispatch a model");
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
       assert(readback.source_unchanged && readback.mutation_attempts === 0, "No source or execution state changes");
+      // A short capture has one reading group. It must use the available row
+      // and describe that group consistently to sighted and nonvisual readers.
+      await owner.close();
+      const shortFixture = resolve(temporary, "short-capture.json");
+      const shortCapture = structuredClone(capture);
+      shortCapture.events = capture.events.filter(event =>
+        ["route-0-start", "finding-route-0-start"].includes(event.result_id));
+      await writeFile(shortFixture, JSON.stringify(shortCapture));
+      owner = await startHistoryOwner(shortFixture);
+      state = "deep";
+      for (const language of ["zh-CN", "en"]) for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await page.evaluate(locale => localStorage.setItem("loopx-pw-locale", locale), language);
+        await page.goto(new URL("/chat/?goalId=synthetic-route-reading&view=research&statusUrl=%2Fstatus.json", owner.base).href);
+        const group = history.locator(".research-phases");
+        const card = group.locator("button");
+        await card.waitFor();
+        assert.equal(await card.count(), 1, "Short history retains one complete reading group");
+        assert(Math.abs((await card.boundingBox()).width - (await group.boundingBox()).width) <= 1,
+          "One group uses the available row instead of leaving two empty columns");
+        assert.doesNotMatch(await group.getAttribute("aria-label"), /三等分|Equal thirds/);
+        const help = history.getByRole("button", {name: language === "zh-CN" ? "时间线读法" : "Reading the timeline", exact: true});
+        await help.tap();
+        const popover = page.locator(".context-help-popover:popover-open");
+        await popover.waitFor();
+        assert.match(await popover.innerText(), language === "zh-CN" ? /同一阅读分组/ : /one reading group/);
+        assert.match(await popover.innerText(), language === "zh-CN" ? /不表示有检查任务排队/ : /does not mean a check is queued/);
+        await page.keyboard.press("Escape");
+        assert(await help.evaluate(element => element === document.activeElement));
+        await card.tap();
+        await history.getByRole("button", {name: language === "zh-CN" ? "全部时段" : "Whole history", exact: true}).tap();
+        assert.equal(await card.getAttribute("aria-pressed"), "false");
+      }
+      const shortReadback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+      assert(shortReadback.source_unchanged && shortReadback.mutation_attempts === 0, "Short-history reading remains read-only");
+      assert.equal(analysisWrites, 0);
       return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "complete route endpoint reading, exact keyboard return, reload/Back, bilingual action states on desktop/narrow/390 with zero model effects"};
     } catch (error) {
       if (page && !page.isClosed()) await page.screenshot({path: resolve(outputDir, "research-route-reading-failed.png")});

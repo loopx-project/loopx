@@ -38,6 +38,8 @@ export const researchResultsScenario = {
         await page.route("**/extension-presentation-surfaces", route => {
           indexes++;
           if (nativeUrl && mode === "ready") return route.continue();
+          if (["404", "410", "500"].includes(mode)) return route.fulfill({status: Number(mode), json: {ok: false}});
+          if (mode === "html") return route.fulfill({contentType: "text/html", body: "<html>HTTP 404 is diagnostic text, not the response status</html>"});
           if (mode === "malformed") return route.fulfill({json: {ok: true}});
           const items = mode === "disabled" ? [] : [{...surface, visibility: mode === "owner-only" ? "owner-only" : "public-safe"}];
           return route.fulfill({json: {ok: true, presentation_surfaces: {
@@ -95,6 +97,28 @@ export const researchResultsScenario = {
       mode = "disabled";
       await refresh.click();
       await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
+      for (const status of ["404", "410"]) {
+        mode = status;
+        await refresh.click();
+        await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
+        assert.equal(await results.getByRole("alert").count(), 0, "A missing optional index keeps readable empty-state content");
+        await refresh.focus();
+        await page.keyboard.press("Enter");
+        await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
+        assert.equal(await results.getByText("123456789.1234567891 SYN", {exact: true}).count(), 0);
+      }
+      mode = "500";
+      await refresh.click();
+      await results.getByRole("alert").filter({hasText: "HTTP 500"}).waitFor();
+      assert.equal(await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).count(), 0);
+      mode = "html";
+      await refresh.click();
+      await results.getByRole("alert").waitFor();
+      assert.equal(await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).count(), 0,
+        "Diagnostic text mentioning HTTP 404 is not an absent index");
+      mode = "disabled";
+      await refresh.click();
+      await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
       const priorReads = reads;
       mode = "owner-only";
       await refresh.click();
@@ -112,16 +136,25 @@ export const researchResultsScenario = {
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
       assert.equal(await results.getByText("123456789.1234567891 SYN", {exact: true}).count(), 0);
+      mode = "404";
+      await refresh.click();
+      await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
+      await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
+      await page.getByRole("button", {name: "成果", exact: true}).click();
+      await results.getByText("本 Goal 暂无可读取的公开研究成果。", {exact: true}).waitFor();
       assert.equal(api.turnRequests.length, 0, "Reading research must not invoke a model");
+      mode = "ready";
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
       await page.reload({waitUntil: "networkidle"});
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
       await page.getByRole("button", {name: "Files", exact: true}).click();
       const english = page.getByRole("region", {name: "Research results", exact: true});
       await english.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
-      mode = "disabled";
-      await english.getByRole("button", {name: "Refresh", exact: true}).click();
-      await english.getByText("No readable public research results for this Goal yet.", {exact: true}).waitFor();
+      for (const status of ["disabled", "404", "410"]) {
+        mode = status;
+        await english.getByRole("button", {name: "Refresh", exact: true}).click();
+        await english.getByText("No readable public research results for this Goal yet.", {exact: true}).waitFor();
+      }
       assert.equal(await english.getByText("123456789.1234567891 SYN", {exact: true}).count(), 0);
       assert.equal(api.turnRequests.length, 0, "Localized research refresh must not invoke a model");
       return {note: `Packaged results consume Goal-scoped public research, preserve uncertainty, and clear stale/disabled/wrong-Goal contents; ${nativeUrl ? "real isolated Core publication/HTTP, scripted Goal directory and corruption cases" : "scripted API fixture"}`,

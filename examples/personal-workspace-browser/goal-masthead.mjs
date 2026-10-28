@@ -186,7 +186,7 @@ export const goalMastheadScenario = {
       await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
       assert.equal(await page.locator(".personal-channel-title h1").innerText(), title, "The stopped Goal stays selected across reload");
       assert.equal((await vital(page, "状态")).value, "已停止", "Without an observed turn the Goal reads stopped");
-      assert.equal((await vital(page, "等你决定")).value, "0", "A stopped Goal leaves active attention");
+      assert.equal((await vital(page, "等你决定")).value, "暂无等待", "A stopped Goal with complete empty attention names the empty state");
 
       await page.locator(".goal-lifecycle-trigger", { hasText: "恢复" }).click();
       assert.equal(await page.getByRole("dialog", { name: "恢复这个 Goal？" }).count(), 0, "Resume uses the owner's reviewed preview, not a second confirmation");
@@ -220,9 +220,11 @@ export const goalMastheadScenario = {
       await openGoal(quiet.page, title);
       const agentTime = await vital(quiet.page, "Agent 用时");
       const cost = await vital(quiet.page, "成本");
-      assert.deepEqual([agentTime.value, cost.value, cost.sub], ["—", "—", ""], "Absent usage is unknown, never $0.00");
+      assert.deepEqual([agentTime.value, cost.value, cost.sub], ["未采集", "未采集", ""], "Absent usage names the unmeasured state, never $0.00");
+      assert.deepEqual(await Promise.all([agentTime.cell, cost.cell].map(cell => cell.getAttribute("aria-disabled"))), ["true", "true"], "Unmeasured usage has no navigation affordance");
       const last = await vital(quiet.page, "最近活动");
-      assert.deepEqual([last.value, last.sub], ["—", ""], "A claim or Todo write is not activity");
+      assert.deepEqual([last.value, last.sub], ["暂无观测到的活动", ""], "A claim or Todo write is not activity");
+      assert.equal(await last.cell.getAttribute("aria-disabled"), "true", "Missing activity has no navigation affordance");
       assert.match(await readVitalHelp(quiet.page, cost.cell), /未采集/);
       assert.match(await readVitalHelp(quiet.page, last.cell), /暂无观测到的活动/);
       assert.notEqual((await vital(quiet.page, "状态")).value, "执行中");

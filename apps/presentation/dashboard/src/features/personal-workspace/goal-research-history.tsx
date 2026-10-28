@@ -413,14 +413,16 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   return <section className="research-history" aria-label={copy.title} aria-busy={busy}>
     {progressiveOverview ? <>
       <nav className="research-reading-order" aria-label={zh ? "研究阅读" : "Research reading"}>
-        <button type="button" onClick={() => jump(resultsAnchor.current)}>{zh ? "指标" : "Results"}</button><span aria-hidden>→</span>
         <button type="button" onClick={() => jump(reportAnchor.current)}>{zh ? "汇报" : "Report"}</button><span aria-hidden>→</span>
+        <button type="button" onClick={() => jump(resultsAnchor.current)}>{zh ? "指标" : "Results"}</button><span aria-hidden>→</span>
         <button type="button" onClick={showHistory}>{zh ? "研究历程" : "Research history"}</button>
       </nav>
       <ResearchAnalysisStatus analysis={analysis}/>
-      <div ref={resultsAnchor} tabIndex={-1} className="research-reading-layer"><ResearchProgressSummary analysis={analysis} includeReport={false}/></div>
-      <div ref={reportAnchor} tabIndex={-1} className="research-reading-layer"><ResearchReportSummary analysis={analysis}/><ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/></div>
-      <ResearchCitationPanel analysis={analysis}/>
+      <div className={`research-reading-overview${analysis.location.open ? " is-expanded" : ""}`}>
+        <div ref={reportAnchor} tabIndex={-1} className="research-reading-layer"><ResearchReportSummary analysis={analysis}/><ResearchAnalysisPanel analysis={analysis} onHistory={showHistory}/>{analysis.location.open ? <ResearchCitationPanel analysis={analysis}/> : null}</div>
+        <div ref={resultsAnchor} tabIndex={-1} className="research-reading-layer"><ResearchProgressSummary analysis={analysis} includeReport={false}/></div>
+      </div>
+      {!analysis.location.open ? <ResearchCitationPanel analysis={analysis}/> : null}
     </> : null}
     <header className="research-history-heading" ref={historyAnchor} tabIndex={-1}><div><div className="research-history-title"><h2>{copy.title}</h2><ContextHelp label={zh ? "历史范围与读图说明" : "History scope and reading guide"}>
       <p>{copy.scope} · {copy.time}{zh ? "。" : ". "}{copy.coverage}{zh ? "。" : "."}</p><p>{copy.interpretation}{zh ? "。" : "."}</p>

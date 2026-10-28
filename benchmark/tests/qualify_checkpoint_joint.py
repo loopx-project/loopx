@@ -53,6 +53,8 @@ def main():
     parser.add_argument("--guest-dependencies", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", default="python:3.12-slim")
+    parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
+                        help="Qualify the existing opt-in context transport through source and fresh receivers")
     parser.add_argument("--reuse-point", type=Path, help="Reuse an already sealed synthetic source; never count its source test as passed")
     parser.add_argument("--captured-config", type=Path, help="The reused point's matching native fixture configuration")
     args = parser.parse_args()
@@ -103,6 +105,7 @@ def main():
                    "LOOPX_NATIVE_CHECKPOINT_BIN": "/native/codex"}
     client = docker.from_env(timeout=30)
     image = client.images.get(args.image).id  # Caller-prepared image, no implicit pull.
+    context_results = {}
 
     def guest(command, volumes, env, log, *, capture_supervisor=None):
         container = client.containers.create(image, command, platform="linux/amd64",
@@ -117,6 +120,12 @@ def main():
             log.write_bytes(container.logs())
             assert status["StatusCode"] == 0, f"Qualification failed; inspect {log}"
             require_one_pass(log.parent / log.stem / "junit.xml")
+            if env.get("LOOPX_CONTEXT_DELIVERY") == "on":
+                reports = list((log.parent / log.stem).rglob("context-delivery-result.json"))
+                assert len(reports) == 1
+                context_results[log.stem] = json.loads(reports[0].read_bytes())
+                assert context_results[log.stem]["context_delivery"] == "on"
+                assert context_results[log.stem]["reads"][0]["mode"] == "full"
         finally:
             if capture_supervisor:
                 capture_supervisor.close()
@@ -153,11 +162,19 @@ def main():
             script = ("from pathlib import Path; import time,pytest; "
                       "p=Path('/opt/loopx-benchmark/control'); p.mkdir(parents=True); "
                       f"(p/'phase-deadline').write_text(str(int(time.time())+{SYNTHETIC_PHASE_SECONDS})); "
-                      "raise SystemExit(pytest.main(["
+                      "code=pytest.main(["
                       "'/source/benchmark/tests/test_native_checkpoint_handoff.py::"
-                      "test_actual_worker_captures_pending_replan_before_native_model[planning]',"
+                      f"test_actual_worker_captures_pending_replan_before_native_model[{args.context_delivery}-planning]',"
                       "'-q','-rs','-p','no:cacheprovider','--basetemp=/qualification/source-tmp',"
-                      "'--junitxml=/qualification/source.xml']))")
+                      "'--junitxml=/qualification/source.xml']); ")
+            if args.context_delivery == "on":
+                # Copy the declared report while the source writer is alive;
+                # its root-owned pytest directory stays private to that guest.
+                script += ("\nif code == 0:\n"
+                           " reports=list(Path('/qualification/source-tmp').rglob('controller-result.json'))\n"
+                           " assert len(reports) == 1\n"
+                           " Path('/qualification/context-delivery-source.json').write_bytes(reports[0].read_bytes())\n")
+            script += "\nraise SystemExit(code)"
             container = client.containers.create(image, ["python", "-c", script],
                 platform="linux/amd64", network_disabled=True,
                 volumes={**base, str(source_files): {"bind": "/qualification", "mode": "rw"}},
@@ -172,6 +189,18 @@ def main():
             supervisor.close()
             assert status["StatusCode"] == 0, f"Inspect {output / 'source.log'}"
             require_one_pass(source_files / "source.xml")
+            if args.context_delivery == "on":
+                # The real source writer may be root. Its private pytest
+                # directory is intentionally unreadable to this controller;
+                # stage only the declared result through the daemon seam.
+                from benchmark.edgebench.checkpoint_worker import _archive
+                report = _archive(container, "/qualification/context-delivery-source.json",
+                                  output / "source-context-result.json")
+                report.chmod(0o600)
+                context_results["source"] = json.loads(report.read_bytes())
+                assert context_results["source"]["context_delivery"] == "on"
+                reads = context_results["source"]["context_reads"]
+                assert reads[0]["mode"] == "full" and any(row["mode"] == "delta" for row in reads[1:])
             points = [p for p in (output / "points").iterdir() if p.is_dir() and not p.name.startswith(".")]
             assert len(points) == 1 and len(grades) == 1
             point = points[0]
@@ -222,6 +251,7 @@ def main():
                    str(results): {"bind": "/results", "mode": "rw"}, **extra_volumes},
                   {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                    "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
+                   "LOOPX_CONTEXT_DELIVERY": args.context_delivery,
                    **({"LOOPX_JOINT_RECEIVER_STRIDE": "1"} if stride else {}),
                    **extra_env},
                   output / f"{name}.log", capture_supervisor=capture_supervisor)
@@ -245,7 +275,8 @@ def main():
                      str(third): {"bind": "/results", "mode": "rw"}},
                     {"LOOPX_JOINT_RECEIVER_POINT": "/point", "LOOPX_JOINT_RECEIVER_CONFIG": "/captured-config.toml",
                      "LOOPX_JOINT_RECEIVER_GOAL": "joint-grandreceiver", "LOOPX_JOINT_RECEIVER_AGENT": "joint-grandresearcher",
-                     "LOOPX_RUNTIME_ROOT": "/results/transport-runtime"},
+                     "LOOPX_RUNTIME_ROOT": "/results/transport-runtime",
+                     "LOOPX_CONTEXT_DELIVERY": args.context_delivery},
                     output / "grandreceiver.log")
                 assert not grades if args.reuse_point else len(grades) == 1
         # The same native provider must also complete the public Core journey
@@ -262,6 +293,8 @@ def main():
         assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"
         receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": args.provider_revision,
                    "source_revision": source_revision, "source_tree_dirty": False,
+                   "context_delivery": args.context_delivery,
+                   "native_context_reads": context_results,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in
                        [Path(__file__), source / "benchmark/tests/test_native_checkpoint_handoff.py",
                         source / "benchmark/tests/test_checkpoint_joint_receiver.py",
