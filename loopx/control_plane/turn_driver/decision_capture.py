@@ -47,7 +47,11 @@ class StagedTurnDecisionCapture:
         if self.path.is_symlink():
             raise ValueError("Turn decision capture must not be a symlink")
         if self.path.exists():
-            if json.loads(self.path.read_text(encoding="utf-8")) != self.observation:
+            # Python considers True == 1; original JSON evidence must retain
+            # its value types as well as its content. Object key order is IO.
+            current = json.loads(self.path.read_text(encoding="utf-8"))
+            if (json.dumps(current, sort_keys=True, allow_nan=False)
+                    != json.dumps(self.observation, sort_keys=True, allow_nan=False)):
                 raise ValueError("Turn decision capture changed before publication")
         elif self.existed:
             raise ValueError("Original Turn decision capture is missing; restore the original observation")

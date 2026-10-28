@@ -150,6 +150,17 @@ def test_real_host_reads_original_capture_after_source_change(
     # replace or silently recreate an original capture changed in that window.
     staged = stage_turn_decision_capture(plan, journal_path=journal_path,
                                         decision=None, existing_journal=True)
+    # Numeric lookalikes compare equal to booleans in Python, but change the
+    # original JSON observation and its typed source hash.
+    for numeric in (1, 1.0):
+        path.write_text(json.dumps({**source_a, "ok": numeric}))
+        changed = path.read_bytes()
+        with pytest.raises(ValueError, match="changed before publication"):
+            staged.publish()
+        assert path.read_bytes() == changed
+    path.write_text(json.dumps(dict(reversed(source_a.items()))))
+    assert staged.publish()["turn_envelope"]["detail_ref"] == detail
+    path.write_bytes(original)
     path.write_text(json.dumps({**source_a, "reason": "changed during admission"}))
     changed = path.read_bytes()
     with pytest.raises(ValueError, match="changed before publication"):
