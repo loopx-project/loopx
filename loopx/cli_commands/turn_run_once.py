@@ -757,6 +757,9 @@ def execute_turn_run_once(
                 # absent; an ordinary result event is not a closeout receipt.
                 # Receipt classification remains with the TS settlement owner.
                 terminal_failure = readback.terminal_closeout.failure
+                if (terminal_failure is not None and
+                        terminal_failure.kind is not SettlementFailureKind.RECEIPT_MISSING):
+                    return {"kind": "unknown", "reason": terminal_failure.reason}
                 if (completion is None and terminal_failure is not None and
                         terminal_failure.kind is SettlementFailureKind.RECEIPT_MISSING):
                     return {"kind": "absent"}
@@ -770,7 +773,7 @@ def execute_turn_run_once(
                         "kind": "unknown",
                         "reason": "Todo state does not prove terminal no-followup",
                     }
-                if event is None:
+                if terminal_failure is not None:
                     append_settlement_event(
                         {"ok": True, "appended": True},
                         event_kind="todo_complete",

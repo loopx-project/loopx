@@ -241,8 +241,9 @@ def test_original_lease_and_failed_validator_remain_required_before_accounting(
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                "--turn-instance-id", cli.TURN_ID)
     code, guard = run("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
-                       *binding)
+                       *binding, "--available-capability", "shell", "--available-capability", "filesystem_write")
     assert code == 0, guard.get("error") or guard.get("reason")
+    assert guard["should_run"] is True and guard.get("delivery_result_context"), guard
     command = ("todo", "complete", "--goal-id", cli.GOAL_ID, *binding,
                "--evidence", "Only the original controller check can accept this deliverable.")
     code, invalid_lease = run(*command, *lease[:2], "--task-lease-expected-version", "999")
@@ -289,8 +290,9 @@ def test_lease_change_during_validator_still_blocks_completion(
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
                "--turn-instance-id", cli.TURN_ID)
     code, guard = run("quota", "should-run", "--codex-app", "--goal-id", cli.GOAL_ID,
-                      *binding)
+                      *binding, "--available-capability", "shell", "--available-capability", "filesystem_write")
     assert code == 0, guard
+    assert guard["should_run"] is True and guard.get("delivery_result_context"), guard
     code, rejected = run("todo", "complete", "--goal-id", cli.GOAL_ID, *binding, *lease,
                          "--evidence", "Validator renews the lease before final completion.")
     assert code == 1, rejected

@@ -536,10 +536,13 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
     assert json.loads(control.should_run())["delivery_result_context"]
     injected = False
     bound_identity = None
+    completion_args = None
 
     def lose_once(args, **kwargs):
-        nonlocal injected, bound_identity
+        nonlocal injected, bound_identity, completion_args
         output = original(args, **kwargs)
+        if completion_args is None and args[:2] == ["todo", "complete"] and json.loads(output).get("ok"):
+            completion_args = tuple(args)
         step = {"lifecycle": ["todo", "complete"], "writeback": ["refresh-state"],
                 "spend": ["quota", "spend-slot"]}[lost_after]
         if not injected and args[:len(step)] == step and json.loads(output).get("ok"):
@@ -552,7 +555,7 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
     first = json.loads(_complete_default_task(control,
         added["todo_id"], AGENT_ID, "recovery fixture check passed", no_follow_up=True,
     ))
-    assert injected and first["ok"] is False
+    assert injected and first["ok"] is False, first
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     readback = read_heartbeat_settlement(
         tmp_path / "runtime", goal_id=GOAL_ID, agent_id=AGENT_ID,
@@ -567,8 +570,14 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
             "--turn-instance-id", bound_identity["turn_instance_id"],
             "--no-follow-up", "--evidence", "synthetic terminal intent",
         )
-        # New default admissions retain the successful result while deferring
-        # closeout. Replaying it cannot close the Goal or change its evidence.
+        # Reusing the operation with different evidence is a changed request,
+        # not a replay. Recover the actual original request below.
+        assert rc == 1 and terminal["error_code"] == "coordination_operation_identity_mismatch", terminal
+        assert state_file.read_bytes() == before_terminal
+        assert completion_args is not None
+        rc, terminal = _run_cli(registry, *completion_args)
+        # The exact original replay retains the deferred terminal intent and
+        # cannot close the Goal or rewrite accepted evidence.
         assert rc == 0 and terminal["ok"] is True, terminal
         todo = next(row for row in parse_active_state_todos(
             state_file.read_text(encoding="utf-8"))["agent_todos"]["items"]
@@ -601,9 +610,18 @@ def test_real_mcp_links_existing_successor_without_creating_another_todo(
         claimed_by=AGENT_ID,
     )["todo_id"]) for text in ("First accepted step.", "Already planned follow-up.")]
     control = _control(registry)
+    initial = json.loads(control.should_run())
+    assert initial["interaction_contract"]["agent_channel"]["selection_required"] is True, initial
+    rc, admitted = _run_cli(registry, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--runtime-profile", "claude_code", "--todo-id", ids[0],
+        "--turn-instance-id", initial["heartbeat_receipt"]["turn_instance_id"])
+    assert rc == 0, admitted
+    assert admitted["selected_todo"]["todo_id"] == ids[0], admitted
+    assert admitted.get("delivery_result_context"), admitted
     before = state_file.read_bytes()
     work = json.loads(control.should_run(revalidate_todo_id=ids[0]))
     assert work.get("delivery_result_context"), work
+    assert work["delivery_result_context"]["settlement_identity"] == admitted["delivery_result_context"]["settlement_identity"]
     rejected = json.loads(_complete_default_task(control,
         ids[0], AGENT_ID, "synthetic check passed", successor_todo_ids=[ids[1]], no_follow_up=True,
     ))

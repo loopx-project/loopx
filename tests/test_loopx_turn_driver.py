@@ -17,6 +17,10 @@ from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdo
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
 )
+from tests.control_plane.host_checkpoint_fixture import (
+    checkpoint_codex_fixture_response,
+    checkpoint_fixture_script,
+)
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
@@ -1029,6 +1033,7 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
     from benchmark.runtime.codex import Execution
     from benchmark.runtime.sessions import BenchmarkSessionWake
     from tests.test_loopx_turn_codex_cli import _fake_codex
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
 
     project, runtime, registry = _write_live_fixture(tmp_path, extra_agent_todo_lines=(
         "- [ ] [P1] Complete the successor fixture.",
@@ -1049,8 +1054,20 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
     observed = tmp_path / "planning-stream.jsonl"
     observed.write_text('{"type":"thread.started","thread_id":"session-fixture-0001"}\n')
     wake.observe(observed)
-    binary.write_text(binary.read_text().replace('"validated_progress"', '"validated_completion"').replace(
-        'output_path = ', 'pathlib.Path("completed-todo.txt").write_text("complete")\noutput_path = ',
+    script = binary.with_suffix(".py") if os.name == "nt" else binary
+    direction = (
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from tests.control_plane.host_checkpoint_fixture import checkpoint_decision\n"
+        "from loopx.control_plane.turn_driver.host_candidate import parse_model_json\n"
+        "request = parse_model_json(prompt) or {}\n"
+        "if request.get('phase') == 'checkpoint_direction':\n"
+        "    output = pathlib.Path(args[args.index('--output-last-message') + 1])\n"
+        "    output.write_text(json.dumps(checkpoint_decision(request['checkpoint_context'])))\n"
+        "    raise SystemExit(0)\n"
+        'pathlib.Path("completed-todo.txt").write_text("complete")\n'
+    )
+    binary = write_python_host_fixture(tmp_path / "fake-codex", script.read_text().replace('"validated_progress"', '"validated_completion"').replace(
+        'output_path = ', direction + 'output_path = ',
     ))
     argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
@@ -1070,7 +1087,7 @@ def test_default_agent_session_reuses_planning_across_completed_todos(tmp_path, 
         assert result["status"] == "committed", result
         results.append(result)
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert len(calls) == 2 and all("resume" in call and "session-fixture-0001" in call for call in calls)
+    assert len(calls) == 4 and all("resume" in call and "session-fixture-0001" in call for call in calls)
     assert results[0]["resume_turn_key"] != results[1]["resume_turn_key"]
     journals = [json.loads(path.read_text()) for path in (runtime / "goals/loopx-turn-fixture/turns").glob("*.json")]
     assert {journal["writeback"]["completion"]["todo_id"] for journal in journals} == {
@@ -2071,11 +2088,14 @@ def test_turn_run_once_cli_commits_distinct_host_guidance_without_task_step_edit
     assert policy_code == 0, policy_output.getvalue()
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
-    host_script = """
+    host_script = checkpoint_fixture_script("""
 import json
 import pathlib
 import sys
+from tests.control_plane.host_checkpoint_fixture import reply_to_checkpoint
 request = json.load(sys.stdin)
+if reply_to_checkpoint(request):
+    raise SystemExit(0)
 pathlib.Path("fixture-artifact.txt").write_text("validated", encoding="utf-8")
 json.dump({
     "schema_version": "loopx_turn_result_v0",
@@ -2090,7 +2110,9 @@ json.dump({
     "vision_unchanged_reason": "The fixture objective remains unchanged.",
     "summary": "One public fixture advanced."
 }, sys.stdout)
-"""
+""")
+    host_path = host_project / "progress-host.py"
+    host_path.write_text(host_script, encoding="utf-8")
     validation_script = """
 import json
 import pathlib
@@ -2120,7 +2142,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "--project",
             str(host_project),
             "--host-adapter-command-json",
-            json.dumps([sys.executable, "-c", host_script]),
+            json.dumps([sys.executable, str(host_path)]),
             "--validation-command-json",
             json.dumps([sys.executable, "-c", validation_script]),
             "--no-global-sync",
@@ -2192,8 +2214,11 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()]
     assert [row["classification"] for row in rows] == [
         "fixture_progress",
+        "fixture_progress",
         "quota_slot_spent",
     ]
+    assert rows[0]["vision_checkpoint"]["decision"] == "missing_required"
+    assert rows[1]["vision_checkpoint"]["satisfied"] is True
     assert rows[0]["recommended_action"] == "Continue the public fixture"
     assert not rows[0]["recommended_action_resolution"].get("step_revision")
 
@@ -2218,7 +2243,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
                 "--project",
                 str(host_project),
                 "--host-command-json",
-                json.dumps([sys.executable, "-c", host_script]),
+                json.dumps([sys.executable, str(host_path)]),
                 "--validation-command-json",
                 json.dumps([sys.executable, "-c", validation_script]),
                 "--no-global-sync",
@@ -2241,10 +2266,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
         json.loads(line)
         for line in index_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert [row["classification"] for row in replayed_rows] == [
-        "fixture_progress",
-        "quota_slot_spent",
-    ]
+    assert replayed_rows == rows
 
     next_output = io.StringIO()
     with contextlib.redirect_stdout(next_output):
@@ -2253,7 +2275,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
             "turn", "run-once", "--host", "generic-cli", "--goal-id", "loopx-turn-fixture",
             "--agent-id", "codex-fixture", "--turn-instance-id", "next-cadence-fixture",
             "--project", str(host_project), "--host-command-json",
-            json.dumps([sys.executable, "-c", host_script]), "--validation-command-json",
+            json.dumps([sys.executable, str(host_path)]), "--validation-command-json",
             json.dumps([sys.executable, "-c", validation_script]),
             "--no-global-sync", "--execute",
         ])
@@ -2264,9 +2286,7 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "validated" else 7
     assert waiting["effects"]["host_invoked"] is False
     assert waiting["effects"]["quota_spent"] is False
     assert "- next_eligible_at: " in render_loopx_turn_execution_markdown(waiting)
-    assert [json.loads(line)["classification"] for line in index_path.read_text(encoding="utf-8").splitlines()] == [
-        "fixture_progress", "quota_slot_spent",
-    ]
+    assert [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()] == rows
 
 
 def test_turn_run_once_cli_dsh_fresh_sessions_and_iteration_failure(
@@ -2399,9 +2419,18 @@ def test_turn_run_once_cli_dsh_preserves_material_path_delta(
     }
     runner = tmp_path / "material_replan_dsh_runner.py"
     runner.write_text(
-        "import json\nfrom pathlib import Path\n"
+        "import json, sys\nfrom pathlib import Path\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+        "from tests.control_plane.host_checkpoint_fixture import checkpoint_decision\n"
+        "from loopx.control_plane.turn_driver.host_candidate import parse_model_json\n"
         f"candidate = {candidate!r}\n"
         "def run_dsh_turn(**kwargs):\n"
+        "    request = parse_model_json(kwargs['prompt']) or {}\n"
+        "    if request.get('phase') == 'checkpoint_direction':\n"
+        "        decision = checkpoint_decision(request['checkpoint_context'])\n"
+        "        decision.pop('agent_vision', None)\n"
+        "        decision.update(agent_vision_json=candidate['agent_vision_json'], vision_unchanged_reason='')\n"
+        "        return json.dumps(decision)\n"
         "    counter = Path(kwargs['workspace']) / 'host-count.txt'\n"
         "    counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
         "    Path(kwargs['workspace'], 'validated-artifact.txt').write_text('validated')\n"
@@ -2441,8 +2470,11 @@ def test_turn_run_once_cli_dsh_preserves_material_path_delta(
         assert payload["effects"]["quota_spent"] is True
         rows_path = runtime / "goals/loopx-turn-fixture/runs/index.jsonl"
         rows = [json.loads(line) for line in rows_path.read_text(encoding="utf-8").splitlines()]
-        durable = next(row for row in rows if row.get("classification") == "fixture_replan_successor")
-        recorded = json.loads(Path(durable["json_path"]).read_text(encoding="utf-8"))
+        durable = [row for row in rows if row.get("classification") == "fixture_replan_successor"]
+        assert len(durable) == 2
+        assert durable[0]["vision_checkpoint"]["decision"] == "missing_required"
+        assert durable[1]["vision_checkpoint"]["satisfied"] is True
+        recorded = json.loads(Path(durable[1]["json_path"]).read_text(encoding="utf-8"))
         assert recorded["agent_vision"]["path_delta"]["outcome"] == "replan"
 
 
@@ -2457,62 +2489,14 @@ def test_turn_run_once_cli_completes_selected_todo_after_validation(
     project, runtime, registry = _write_live_fixture(tmp_path)
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
-    host_script = """
-import json
-import pathlib
-import sys
-request = json.load(sys.stdin)
-pathlib.Path("completion-artifact.txt").write_text("completed", encoding="utf-8")
-json.dump({
-    "schema_version": "loopx_turn_result_v0",
-    "turn_key": request["turn_key"],
-    "result_kind": "validated_completion",
-    "completed_phases": ["host_execute", "typed_result"],
-    "classification": "fixture_completion",
-    "recommended_action": "Refresh the active goal after completion.",
-    "next_action": "Select the next Todo from a fresh decision.",
-    "delivery_batch_scale": "implementation",
-    "delivery_outcome": "outcome_progress",
-    "vision_unchanged_reason": "The active goal may have further work.",
-    "summary": "One public fixture completed."
-}, sys.stdout)
-"""
+    host_script, validation_script = _completion_host_and_validation_scripts()
     host_script = host_script.replace(
         "Select the next Todo from a fresh decision.", next_action,
     )
-    validation_script = """
-import json
-import pathlib
-import sys
-json.load(sys.stdin)
-artifact = pathlib.Path("completion-artifact.txt")
-raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7)
-"""
     output = io.StringIO()
-    argv = [
-        "--registry",
-        str(registry),
-        "--runtime-root",
-        str(runtime),
-        "--format",
-        "json",
-        "turn",
-        "run-once",
-        "--host",
-        "generic-cli",
-        "--goal-id",
-        "loopx-turn-fixture",
-        "--agent-id",
-        "codex-fixture",
-        "--project",
-        str(host_project),
-        "--host-adapter-command-json",
-        json.dumps([sys.executable, "-c", host_script]),
-        "--validation-command-json",
-        json.dumps([sys.executable, "-c", validation_script]),
-        "--no-global-sync",
-        "--execute",
-    ]
+    argv = _turn_run_once_completion_argv(
+        host_project, runtime, registry, host_script, validation_script,
+    )
     with contextlib.redirect_stdout(output):
         exit_code = cli_main(argv)
 
@@ -2613,6 +2597,19 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
     assert replayed_exit_code == 0, replayed
     assert replayed["replayed"] is True
     assert not any(replayed["effects"].values())
+    calls = [json.loads(line) for line in (host_project / "host-calls.jsonl").read_text().splitlines()]
+    assert len(calls) == 2
+    assert calls[0]["phase"] != "checkpoint_direction"
+    assert calls[1]["phase"] == "checkpoint_direction"
+    assert calls[1]["turn_key"] == calls[0]["turn_key"] == payload["resume_turn_key"]
+    assert calls[1]["session_action"] == "resume"
+    assert calls[1]["read_context_id"]
+    assert (host_project / "validation-calls.txt").read_text().splitlines() == ["validated"]
+    quota_events = [json.loads(line) for line in (
+        runtime / "goals" / "loopx-turn-fixture" / "rollout-event-log.jsonl"
+    ).read_text().splitlines()]
+    assert sum(event.get("event_kind") == "quota_spend"
+               and event.get("run_id") == payload["resume_turn_key"] for event in quota_events) == 1
 
 
 def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
@@ -2706,11 +2703,18 @@ def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
 
 
 def _completion_host_and_validation_scripts() -> tuple[str, str]:
-    host_script = """
+    host_script = checkpoint_fixture_script("""
 import json
 import pathlib
 import sys
+from tests.control_plane.host_checkpoint_fixture import reply_to_checkpoint
 request = json.load(sys.stdin)
+with pathlib.Path("host-calls.jsonl").open("a", encoding="utf-8") as calls:
+    calls.write(json.dumps({"phase": request.get("phase"), "turn_key": request["turn_key"],
+        "session_action": request["session"]["action"],
+        "read_context_id": request.get("checkpoint_context", {}).get("read_context_id")}) + "\\n")
+if reply_to_checkpoint(request):
+    raise SystemExit(0)
 pathlib.Path("completion-artifact.txt").write_text("completed", encoding="utf-8")
 json.dump({
     "schema_version": "loopx_turn_result_v0",
@@ -2725,12 +2729,14 @@ json.dump({
     "vision_unchanged_reason": "The active goal may have further work.",
     "summary": "One public fixture completed."
 }, sys.stdout)
-"""
+""")
     validation_script = """
 import json
 import pathlib
 import sys
 json.load(sys.stdin)
+with pathlib.Path("validation-calls.txt").open("a", encoding="utf-8") as calls:
+    calls.write("validated\\n")
 artifact = pathlib.Path("completion-artifact.txt")
 raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7)
 """
@@ -2744,6 +2750,10 @@ def _turn_run_once_completion_argv(
     host_script: str,
     validation_script: str,
 ) -> list[str]:
+    # Keep the real command's per-argument budget; fixture source is a file,
+    # rather than an ever-growing inline Python argument.
+    host_path = project / "completion-host.py"
+    host_path.write_text(host_script, encoding="utf-8")
     return [
         "--registry",
         str(registry),
@@ -2762,7 +2772,7 @@ def _turn_run_once_completion_argv(
         "--project",
         str(project),
         "--host-adapter-command-json",
-        json.dumps([sys.executable, "-c", host_script]),
+        json.dumps([sys.executable, str(host_path)]),
         "--validation-command-json",
         json.dumps([sys.executable, "-c", validation_script]),
         "--no-global-sync",
@@ -2950,13 +2960,18 @@ def test_turn_run_once_cli_projects_durable_no_followup_continuation(
     [None, "sha256:different-turn"],
     ids=["missing-turn-key", "different-turn-key"],
 )
+@pytest.mark.parametrize("terminal_event_fault", ["missing", "contradictory"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
     tmp_path: Path,
     display_completion_turn_key: str | None,
+    terminal_event_fault: str,
+    provider: str,
 ) -> None:
     project, runtime, registry = _write_live_fixture(
         tmp_path,
         todo_metadata_extra="no_followup=true",
+        provider=provider,
     )
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
@@ -3008,9 +3023,19 @@ def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
         if not (
             event.get("event_kind") == "todo_complete"
             and event.get("run_id") == turn_key
+            and event.get("status") == "terminal_no_followup"
         )
     ]
     assert len(events_without_terminal) == len(events) - 1
+    # Keep the result's deferred completion receipt; only the terminal event
+    # is lost at this crash boundary.
+    deferred = [event for event in events_without_terminal
+                if event.get("event_kind") == "todo_complete" and event.get("run_id") == turn_key]
+    assert len(deferred) == 1 and deferred[0]["status"] == "completed"
+    if terminal_event_fault == "contradictory":
+        terminal_event = next(event for event in events if event not in events_without_terminal)
+        terminal_event["details"]["no_followup"] = False
+        events_without_terminal.append(terminal_event)
     event_path.write_text(
         "".join(json.dumps(event) + "\n" for event in events_without_terminal),
         encoding="utf-8",
@@ -3044,6 +3069,9 @@ def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
     ):
         journal.pop(key, None)
     journal_path.write_text(json.dumps(journal), encoding="utf-8")
+    event_bytes = event_path.read_bytes()
+    host_calls = (host_project / "host-calls.jsonl").read_bytes()
+    validation_calls = (host_project / "validation-calls.txt").read_bytes()
 
     resumed_output = io.StringIO()
     with contextlib.redirect_stdout(resumed_output):
@@ -3056,6 +3084,14 @@ def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
             ]
         )
     resumed = json.loads(resumed_output.getvalue())
+    assert (host_project / "host-calls.jsonl").read_bytes() == host_calls
+    assert (host_project / "validation-calls.txt").read_bytes() == validation_calls
+    if terminal_event_fault == "contradictory":
+        assert resumed_exit_code == 1, resumed
+        assert not any(resumed["effects"].values())
+        assert event_path.read_bytes() == event_bytes
+        assert "effect_outcome_unknown" in json.dumps(resumed), resumed
+        return
 
     assert resumed_exit_code == 0, resumed
     assert resumed["status"] == "committed"
@@ -3075,11 +3111,13 @@ def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
         if (
             event.get("event_kind") == "todo_complete"
             and event.get("run_id") == turn_key
+            and event.get("status") == "terminal_no_followup"
         )
     ]
     assert len(terminal_events) == 1
     assert terminal_events[0]["status"] == "terminal_no_followup"
     assert terminal_events[0]["details"]["command"] == "turn recovery probe"
+    assert deferred[0] in recovered_events
     assert not any(
         event.get("event_kind") == "todo_complete"
         and event.get("run_id") != turn_key
@@ -3437,7 +3475,9 @@ raise SystemExit(0 if pathlib.Path("claimed-artifact.txt").is_file() else 9)
     assert payload["effects"]["state_written"] is False
     assert payload["effects"]["quota_spent"] is False
     assert state_path.read_text(encoding="utf-8") == before_state
-    assert not (runtime / "goals" / "loopx-turn-fixture" / "runs").exists()
+    # Admission may persist its captured work basis; failed validation must
+    # produce neither a business result nor a debit.
+    assert not (runtime / "goals" / "loopx-turn-fixture" / "runs" / "index.jsonl").exists()
 
 
 @pytest.mark.parametrize(
@@ -3517,6 +3557,9 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         return real_spend_quota_slot(*args, **kwargs)
 
     def fake_codex_host(request: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        direction = checkpoint_codex_fixture_response(request, runtime)
+        if direction is not None:
+            return direction
         return {
             "schema_version": "loopx_turn_result_v0",
             "turn_key": request["turn_key"],
@@ -3585,9 +3628,9 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     assert payload["host"] == {"executable": "built-in", "kind": "codex-cli"}
     assert payload["effects"]["state_written"] is True
     assert payload["effects"]["quota_spent"] is True
-    assert refresh_workspace_paths == [project]
+    assert refresh_workspace_paths == [project, project]
     assert spend_workspace_paths == [project]
-    assert refresh_todo_ids == ["todo_fixture0001"]
+    assert refresh_todo_ids == ["todo_fixture0001", "todo_fixture0001"]
     state = (
         project
         / ".codex"
@@ -3673,6 +3716,10 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
         request: Mapping[str, Any],
         **_kwargs: object,
     ) -> dict[str, object]:
+        if host_kind == "codex-cli":
+            direction = checkpoint_codex_fixture_response(request, runtime)
+            if direction is not None:
+                return direction
         return {
             "schema_version": "loopx_turn_result_v0",
             "turn_key": request["turn_key"],
@@ -3729,8 +3776,14 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
         runner = tmp_path / "reflection_runner.py"
         candidate = fake_codex_host({"turn_key": "unused"})
         runner.write_text(
-            "import json\n"
+            "import json, sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})\n"
+            "from tests.control_plane.host_checkpoint_fixture import checkpoint_decision\n"
+            "from loopx.control_plane.turn_driver.host_candidate import parse_model_json\n"
             "def run_dsh_turn(**kwargs):\n"
+            "    request = parse_model_json(kwargs['prompt']) or {}\n"
+            "    if request.get('phase') == 'checkpoint_direction':\n"
+            "        return json.dumps(checkpoint_decision(request['checkpoint_context']))\n"
             f"    return {json.dumps(candidate)!r}\n",
             encoding="utf-8",
         )
@@ -3738,12 +3791,14 @@ def test_turn_run_once_host_wires_validated_reflection_post_settlement(
     elif host_kind == "generic-cli":
         runner = tmp_path / "generic_reflection_runner.py"
         candidate = fake_codex_host({"turn_key": "unused"})
-        runner.write_text(
+        runner.write_text(checkpoint_fixture_script(
             "import json, sys\n"
+            "from tests.control_plane.host_checkpoint_fixture import reply_to_checkpoint\n"
             "request = json.load(sys.stdin)\n"
+            "if reply_to_checkpoint(request): raise SystemExit(0)\n"
             f"result = json.loads({json.dumps(candidate)!r})\n"
             "result['turn_key'] = request['turn_key']\n"
-            "json.dump(result, sys.stdout)\n",
+            "json.dump(result, sys.stdout)\n"),
             encoding="utf-8",
         )
         host_args += ["--host-adapter-command-json", json.dumps([sys.executable, str(runner)])]
