@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ..effect_program import SettlementIdentity
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..quota.turn_envelope import TurnControllerInput
 from .driver import _historical_route_text
@@ -104,6 +105,7 @@ class ValidatedTurnReceipt:
             "goal_id": str(lineage.get("goal_id") or ""),
             "agent_id": str(lineage.get("agent_id") or ""),
             "todo_id": str(lineage.get("todo_id") or ""),
+            **({"request_binding_id": lineage["request_binding_id"]} if lineage.get("request_binding_id") else {}),
         }
         self.turn_key = turn_key
         self.host_failure = dict(host_failure or {}) or None
@@ -112,10 +114,12 @@ class ValidatedTurnReceipt:
         self.todo_completion = dict(todo_completion or {}) or None
 
     @classmethod
-    def from_execution(cls, execution_payload: Mapping[str, Any]) -> ValidatedTurnReceipt:
+    def from_execution(
+        cls, execution_payload: Mapping[str, Any], *, request_identity: SettlementIdentity | None = None,
+    ) -> ValidatedTurnReceipt:
         value = _controller_result("receipt", execution=(
             dict(execution_payload) if isinstance(execution_payload, Mapping) else {}
-        ))
+        ), **({"request_identity": request_identity.as_dict()} if request_identity is not None else {}))
         return cls(
             result_kind=LoopXTurnResultKind(value["result_kind"]),
             status=value["status"], lineage=value["lineage"], turn_key=value["turn_key"],

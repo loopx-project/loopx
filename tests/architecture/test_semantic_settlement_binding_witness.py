@@ -2,8 +2,8 @@
 
 Enumerating an owner proves that a value is spelled somewhere. It does not
 prove a legal input can make the runtime emit it. This vocabulary's evidence
-is the shipped TypeScript builder run against the four inputs that make up
-its whole binding domain, re-checked through the Python bridge that reaches
+is the shipped TypeScript builder run against valid and conflicting inputs,
+re-checked through the Python bridge that reaches
 the same code.
 
 These tests fail when the witness stops executing the real builder, when the
@@ -33,6 +33,8 @@ PROBE = ROOT / "scripts" / "settlement_binding_witness.mts"
 CASES = (
     ({"todo_id": "t1"}, "todo"),
     ({"replan_obligation_id": "r1"}, "autonomous_replan"),
+    ({"request_subject": {"request_id": "a" * 64, "request_revision": 1,
+                          "request_digest": "b" * 64, "execution_scope_sha256": "c" * 64}}, "request"),
     ({}, "unbound"),
 )
 
@@ -75,6 +77,7 @@ def test_the_python_bridge_reaches_the_same_builder(probe: dict, expected: str) 
         turn_instance_id="t",
         todo_id=probe.get("todo_id"),
         replan_obligation_id=probe.get("replan_obligation_id"),
+        request_subject=probe.get("request_subject"),
     )
     assert identity.binding_kind is SettlementBindingKind(expected)
 
@@ -120,10 +123,12 @@ def test_the_witness_refuses_a_value_set_it_does_not_cover() -> None:
 
 def test_the_wire_payload_shape_is_recorded_rather_than_assumed() -> None:
     """``binding_kind`` is not on every payload; changing that must be visible."""
-    todo, replan, unbound = _run_probe([probe for probe, _ in CASES])
+    todo, replan, request, unbound = _run_probe([probe for probe, _ in CASES])
     assert todo["payload_schema_version"] == "quota_settlement_identity_v0"
     assert todo["payload_has_binding_kind"] is False
     assert unbound["payload_schema_version"] == "quota_settlement_identity_v0"
     assert unbound["payload_has_binding_kind"] is False
     assert replan["payload_schema_version"] == "quota_settlement_identity_v1"
     assert replan["payload_has_binding_kind"] is True
+    assert request["payload_schema_version"] == "quota_settlement_identity_v1"
+    assert request["payload_has_binding_kind"] is True

@@ -1445,3 +1445,41 @@ def test_committed_replay_requires_original_complete_settlement_receipts():
             invalid["quota_slot_spend_count"] = 0
         with pytest.raises((ValueError, TypeError)):
             ValidatedTurnReceipt.from_execution(invalid)
+
+
+def test_request_receipt_keeps_its_exact_subject_without_granting_todo_lineage():
+    import copy
+
+    from loopx.control_plane.effect_program import SettlementIdentity
+
+    identity = SettlementIdentity(goal_id="request-goal", agent_id="request-agent", todo_id=None,
+        turn_instance_id="request-turn", request_subject={"request_id": "a" * 64,
+            "request_revision": 1, "request_digest": "b" * 64, "execution_scope_sha256": "c" * 64})
+    execution = _execution()
+    expected = {"goal_id": "request-goal", "agent_id": "request-agent", "todo_id": "",
+                "request_binding_id": identity.binding_id}
+    execution["receipt"]["lineage"] = expected
+    execution["receipt"]["settlement_effect_id"] = identity.effect_id
+    for receipt in execution["settlement_result"]["receipts"]:
+        receipt["effect_id"] = identity.effect_id
+
+    with pytest.raises(ValueError, match="goal/agent/todo lineage"):
+        ValidatedTurnReceipt.from_execution(execution)
+    assert ValidatedTurnReceipt.from_execution(execution, request_identity=identity).to_mapping()["lineage"] == expected
+    for field in ["goal_id", "agent_id", "todo_id", "request_binding_id", "extra"]:
+        invalid = copy.deepcopy(execution)
+        invalid["receipt"]["lineage"][field] = "foreign"
+        with pytest.raises(ValueError, match="original request identity"):
+            ValidatedTurnReceipt.from_execution(invalid, request_identity=identity)
+    invalid = copy.deepcopy(execution)
+    invalid["receipt"]["settlement_effect_id"] = "foreign"
+    with pytest.raises(ValueError, match="original request identity"):
+        ValidatedTurnReceipt.from_execution(invalid, request_identity=identity)
+    invalid = copy.deepcopy(execution)
+    invalid["settlement_result"]["receipts"].pop()
+    with pytest.raises((ValueError, TypeError), match="ordered validation/writeback/spend"):
+        ValidatedTurnReceipt.from_execution(invalid, request_identity=identity)
+    todo_identity = SettlementIdentity(goal_id="request-goal", agent_id="request-agent",
+        todo_id="todo-existing", turn_instance_id="request-turn")
+    with pytest.raises(ValueError, match="original request identity"):
+        ValidatedTurnReceipt.from_execution(execution, request_identity=todo_identity)

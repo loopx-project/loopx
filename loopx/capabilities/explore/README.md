@@ -667,6 +667,11 @@ untagged todos retain their previous unconstrained behavior, while a tagged lane
 must have a matching declared capacity. Usage without a matching capacity fails
 closed to catch misspelled lane keys.
 
+Lane keys normalize case, spaces, and hyphens (`LONG POOL` and `long-pool`
+both name `long_pool`). Repeated normalized keys are rejected in both CLI and
+mapping inputs instead of overwriting capacity or usage. Counts must be
+non-negative whole numbers; booleans and fractional values are rejected.
+
 This remains analysis-only evidence: `resource_portfolio.score_delta=0`, typed
 evidence keeps `score_delta=0`, and the planner is read-only. Capacity and usage
 do not claim todos, acquire leases, launch workers, write state, or grant quota

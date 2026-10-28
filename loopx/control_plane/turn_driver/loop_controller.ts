@@ -1,6 +1,7 @@
 /** Receipt qualification and ordered next-work decisions. Journal recovery is
  * composed, not replaced: neither decision dispatches a host or settles a Turn. */
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
+import { settlementIdentityFromPlan } from "../effect_program.ts";
 import { jsonObject, type JsonObject } from "../runtime_decode.ts";
 import { turnEnvelopeRoute as typedTurnRoute } from "../quota/turn_envelope.ts";
 import { EffectiveAction } from "../quota/effective_action.generated.ts";
@@ -88,7 +89,7 @@ function completionOutcome(value: unknown, expectedTodo: string): JsonObject {
   return outcome;
 }
 
-export function qualifyExecution(value: unknown, integers: JsonObject = {}): JsonObject {
+export function qualifyExecution(value: unknown, integers: JsonObject = {}, requestIdentity?: unknown): JsonObject {
   const execution = object(value);
   requireThat(execution.schema_version === "loopx_turn_execution_v0",
     "validated turn receipt requires schema_version=loopx_turn_execution_v0");
@@ -104,8 +105,18 @@ export function qualifyExecution(value: unknown, integers: JsonObject = {}): Jso
   requireThat(!material || receipt.status === "committed" && execution.status === "committed",
     `material result ${kind} requires a fully committed Turn execution and receipt`);
   const identity = object(receipt.lineage);
-  requireThat(text(identity.goal_id) && text(identity.agent_id) && text(identity.todo_id),
-    "validated turn receipt is missing goal/agent/todo lineage");
+  if (requestIdentity != null) {
+    const decoded = settlementIdentityFromPlan({settlement_plan: {identity: requestIdentity}});
+    const expected = decoded.value;
+    requireThat(expected?.binding_kind === "request" && Object.keys(identity).length === 4
+      && identity.goal_id === expected.goal_id && identity.agent_id === expected.agent_id
+      && identity.todo_id === "" && identity.request_binding_id === expected.binding_id
+      && receipt.settlement_effect_id === expected.effect_id,
+    "validated receipt does not match its original request identity");
+  } else {
+    requireThat(text(identity.goal_id) && text(identity.agent_id) && text(identity.todo_id),
+      "validated turn receipt is missing goal/agent/todo lineage");
+  }
   const turnKey = text(receipt.turn_key);
   requireThat(turnKey, "validated turn receipt is missing turn_key");
   let effect = text(receipt.settlement_effect_id) || null;
@@ -121,7 +132,8 @@ export function qualifyExecution(value: unknown, integers: JsonObject = {}): Jso
     ? taskValidationFailure({result_kind: kind, status: execution.status, receipt,
       validation: execution.validation, validation_stage: execution.validation_stage}).failure : null;
   return {schema_version: "loop_validated_turn_receipt_v0", result_kind: kind, status: text(receipt.status),
-    lineage: lineage(identity), turn_key: turnKey, settlement_effect_id: effect,
+    lineage: {...lineage(identity), ...(text(identity.request_binding_id)
+      ? {request_binding_id: identity.request_binding_id} : {})}, turn_key: turnKey, settlement_effect_id: effect,
     ...(failure ? {host_failure: failure} : {}), ...(taskFailure ? {task_failure: taskFailure} : {}),
     ...(Object.keys(completion).length ? {todo_completion: completion} : {})};
 }
@@ -351,7 +363,7 @@ export function decideManagedStep(params: JsonObject): JsonObject {
 export function controllerRequest(params: JsonObject): JsonObject {
   try {
     switch (params.operation) {
-      case "receipt": return {ok: true, value: qualifyExecution(params.execution, object(params.integer_facts))};
+      case "receipt": return {ok: true, value: qualifyExecution(params.execution, object(params.integer_facts), params.request_identity)};
       case "route": return {ok: true, value: {route: typedTurnRoute(object(params.decision),
         jsonObject(params.historical_route_text) ?? undefined)}};
       case "disposition": return {ok: true, value: decideLoopDisposition(params)};

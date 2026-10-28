@@ -683,6 +683,50 @@ journal，防止短暂 IO 故障恢复后复活旧基线。不可变 capture 与
 重新生成。此开关不重启停用 Goal、不改变额度或 lease；正常 Desktop、全部 Goal 的实际
 采用和真实 solver 完整成本及效果仍须分别验收。
 
+### Selected capture details / 按需读取捕获详情
+
+`quota context-read --select /path --select /another/path` reads an explicit
+batch of RFC 6901 JSON pointers from the original digest-bound capture. Supply
+the existing `--capture-file` and `--capture-sha256` reference, or start through
+the existing session lookup. Omit `--select` for unchanged full-capture reads.
+Selection is JSON-only; `~1` escapes `/`, `~0` escapes `~`, and the empty pointer
+selects the root. Missing pointers or invalid array indices reject the whole
+batch; a present JSON `null` is a valid value. Duplicate pointers are removed
+and the remaining pointers are sorted.
+
+The existing page envelope keeps the original `sha256` and adds
+`selected_pointers` and `selection_sha256`. Concatenated `content` is a
+`context_capture_selection_v1` object with `selections: [{pointer, value}]`.
+Its offsets, total bytes and EOF describe only that derived view. Follow
+`next_command`, which retains both hashes and the exact selection; a nonzero
+offset requires `--selection-sha256`. The reader verifies both hashes, preserves
+original JSON values (including large integers), and performs no admission,
+settlement or live Goal lookup. Selection requires the existing typed runtime;
+ordinary full reads retain their file-only path.
+
+Selected EOF, including a root selection, cannot establish a full-context
+baseline in the native hook. This shared reader enables exact detail expansion;
+it does not change which facts a caller must read, relax required reads, or
+switch existing native input to a necessary-only view. Those consumers must
+integrate their scope, instructions and recovery together before claiming a
+progressive-delivery or total-cost improvement.
+
+`quota context-read --select /path --select /another/path` 用 RFC 6901 JSON
+pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--capture-file` 与
+`--capture-sha256`，或从已有会话查询入口开始；省略 `--select` 保持原有全量读取。
+选择模式仅支持 JSON：`~1` 表示 `/`，`~0` 表示 `~`，空 pointer 选择根对象。
+任一路径不存在或数组索引无效时整批失败；已存在的 `null` 合法。路径去重并排序。
+
+分页保留原始 `sha256`，新增 `selected_pointers` 与 `selection_sha256`。
+拼接 `content` 后得到带 `selections: [{pointer, value}]` 的
+`context_capture_selection_v1`；偏移、总字节数与 EOF 仅描述此派生视图。
+沿 `next_command` 继续，它保留两个摘要及精确路径；非零偏移必须携带
+`--selection-sha256`。读取器校验两者，保留包括大整数在内的原 JSON 值，
+不准入、不结算、不查询实时 Goal。选择模式依赖已有 typed runtime；普通全量
+读取仍只走文件路径。包括根对象选择在内的详情 EOF 均不能被原生 hook 记为
+完整上下文基线。此共享读取器提供精确展开能力，不改变调用方必读事实或自动切换
+必要视图；调用方须共同接入范围、指引与恢复后，再验收渐进投递及完整成本收益。
+
 ### Saved context cache / 已保存上下文缓存
 
 For `quota context-project`, enabling context delivery no longer requires a

@@ -94,6 +94,7 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
 
 /** Every module that reads the owner, pinned so that dropping an import is loud. */
 const CANONICAL_CONSUMERS = [
+  "control_plane/effect_program.ts",
   "control_plane/agents/supervisor_event_append.ts",
   "control_plane/capabilities/change_quality_validation.ts",
   "control_plane/capabilities/content_media.ts",

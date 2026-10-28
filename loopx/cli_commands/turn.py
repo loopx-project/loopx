@@ -100,6 +100,7 @@ def handle_turn_command(
                 args.delegation_context_json, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None),
                 turn_instance_id=args.turn_instance_id, workspace=Path(args.project),
+                preview=not getattr(args, "execute", False),
             )
         goal_ref = capture_first_party_host_goal_ref(
             registry_path=registry_path,
@@ -245,6 +246,7 @@ def handle_turn_command(
                 runtime_root_arg=runtime_root_arg,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
                 goal_ref=goal_ref,
+                request_subject=delegated_context.get("request_subject") if delegated_context else None,
             )
             operator_inbox_urgency_projector = decision_owner.operator_inbox_urgency_projector
             scheduler_context = decision_owner.scheduler_execution_context
@@ -258,6 +260,8 @@ def handle_turn_command(
             # approval/handoff contract; this option controls exec conversation reuse.
             session_scope = (args.session_scope if args.host in {"codex-cli", "codex-app-server"}
                              and not getattr(args, "codex_operation_tools", False) else "todo")
+            if args.host in {"codex-cli", "codex-app-server"} and delegated_context and delegated_context.get("request_subject") is not None:
+                session_scope = "agent"
             if native_session_binding_resolver is not None:
                 session_binding = native_session_binding_resolver(turn_envelope)
             if (
@@ -292,6 +296,11 @@ def handle_turn_command(
                 session_scope=session_scope,
                 goal_ref=goal_ref,
             )
+            if delegated_context and delegated_context.get("request_subject") is not None:
+                import json
+                # Private operation metadata stays outside model input. A resumed
+                # Turn keeps this locator and its original captured request.
+                payload["delegation_operation_locator"] = json.loads(args.delegation_context_json)
             # Resolve machine authentication once for the readback and host launch.
             operator_environ = operator_provider_environ()
             payload["managed_executor"] = managed_executor_cli_binding(args, environ=operator_environ)

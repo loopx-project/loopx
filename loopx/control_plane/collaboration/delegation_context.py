@@ -7,6 +7,7 @@ module reads existing owners and never launches or accepts work.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import shlex
 from typing import Any
@@ -101,7 +102,7 @@ def delegated_turn_context_arguments(service, row: dict) -> list[str]:
 def delegated_turn_context(
     locator_json: str, *, registry_path: Path, runtime_root: Path,
     goal_id: str, agent_id: str, todo_id: str | None, turn_instance_id: str | None,
-    workspace: Path,
+    workspace: Path, preview: bool = False,
 ) -> dict[str, Any]:
     """Read original work through its existing operation, never a model brief.
 
@@ -110,7 +111,6 @@ def delegated_turn_context(
     The generic work-context owner carries the returned material into capture.
     """
     from ...collaboration_mcp import Delegations
-    from ...command_invocation import loopx_cli_argv
     from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
     from .inbox import _entry, _root
     from .peers import _operation_address
@@ -119,6 +119,33 @@ def delegated_turn_context(
     from ..effect_runtime import effect_runtime_result
 
     locator = json.loads(locator_json)
+    preview_fields = {"requester_agent_id", "execution_config", "source_request_id", "binding_id"}
+    if isinstance(locator, dict) and set(locator) == preview_fields:
+        if not preview or any(not isinstance(locator[key], str) or not locator[key] for key in preview_fields):
+            raise ValueError("a source request preview cannot execute or resume a Turn")
+        from .source_grant_observation import require_delegation_source_execution
+        service = Delegations(runtime_root, registry_path, goal_id, locator["requester_agent_id"],
+                              Path(locator["execution_config"]))
+        binding = service.binding(locator["binding_id"], require_active=True)
+        require_delegation_source_execution(runtime_root, registry_path, goal_id=goal_id,
+            requester_agent_id=service.agent_id, source_request_id=locator["source_request_id"],
+            binding=binding, caller_goal_ref=service._caller_goal_ref())
+        if workspace.resolve() != Path(binding["workspace"]).resolve():
+            raise ValueError("request preview workspace changed")
+        with collaboration_goal_scope(registry_path, goal_id=goal_id, agents=(service.agent_id, agent_id),
+                caller_goal_ref=service._caller_goal_ref(), require_active=True) as scope:
+            source_id = locator["source_request_id"]
+            source = _entry(runtime_root, goal_id, agent_id, source_id, scope=scope)
+            decide_collaboration_lifecycle(scope, operation="history_inspect", record=source)
+            route = _read(_root(runtime_root) / "roundtrips" / (source_id + ".json"))
+            session, turn = observe_source_chat(runtime_root, route)
+            ingress, _ = external_source_policy(runtime_root, session, turn)
+            content = effect_runtime_result("collaboration.delegation.turn_context", {
+                "config": _read(service.config), "binding_id": binding["id"], "agent_id": service.agent_id,
+                "record": None, "source_request": source, "original_message": ingress["source_message"],
+                "turn": {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+                    "turn_instance_id": turn_instance_id, "workspace": binding["workspace"]}})
+        return _context_delivery(content, service=service, request_id=source_id)
     fields = {"requester_agent_id", "execution_config", "operation_id"}
     if not isinstance(locator, dict) or set(locator) != fields or any(
         not isinstance(locator[key], str) or not locator[key] for key in fields
@@ -158,10 +185,61 @@ def delegated_turn_context(
             "source_request": source, "original_message": original_message,
         })
     service._bound(row, require_active=True)
-    command = shlex.join([*loopx_cli_argv(), "--registry", str(registry_path),
-        "--runtime-root", str(runtime_root), "manager-inbox", "read", "--goal-id", goal_id,
-        "--agent-id", agent_id, "--request-id", source_id or peer["request_id"]])
-    return {"required_reads": [{"command": command, "source": "delegation_work",
+    return _context_delivery(content, service=service, request_id=source_id or peer["request_id"])
+
+
+def _request_operation(locator: dict, identity, *, registry_path: Path, runtime_root: Path, workspace: Path):
+    from ...collaboration_mcp import Delegations
+
+    if set(locator) != {"requester_agent_id", "execution_config", "operation_id"}:
+        raise ValueError("request execution requires its original delegation operation")
+    service = Delegations(runtime_root, registry_path, identity.goal_id, locator["requester_agent_id"],
+                          Path(locator["execution_config"]))
+    path = service.path(locator["operation_id"])
+    row = _read(path)
+    if (row["identity"].get("request_subject") != identity.request_subject
+            or service._turn_instance_id(row) != identity.turn_instance_id
+            or row["identity"]["binding"]["agent_id"] != identity.agent_id
+            or Path(row["identity"]["binding"]["workspace"]).resolve() != workspace.resolve()):
+        raise ValueError("request execution does not match the original Turn")
+    return service, path, row
+
+
+def require_current_request_operation(locator: dict, identity, **context) -> None:
+    service, path, row = _request_operation(locator, identity, **context)
+    service._raise_if_stop_requested(path)
+    service._bound(row, require_active=True)
+
+
+@contextmanager
+def request_settlement_lifetime(locator: dict, identity, **context):
+    """Reuse original operation/Stop and source-policy fences around settlement.
+
+    No new permission record or request reservation is created. Recovery uses
+    this original locator and captured identity, without replacing model input.
+    """
+    from ...file_lock import exclusive_file_lock
+    from .inbox import _root
+    from .source_policy_fence import source_policy_fence
+
+    service, path, row = _request_operation(locator, identity, **context)
+    source_id = row["identity"].get("source_request_id")
+    with exclusive_file_lock(service._dispatch_lock(path)), (source_policy_fence(_root(service.root) / "policy.json")
+            if source_id else nullcontext()):
+        service._raise_if_stop_requested(path)
+        binding = service._bound(row, require_active=True, policy_locked=source_id is not None)
+        service._validate(binding)
+        yield
+
+
+def _context_delivery(content: dict[str, Any], *, service, request_id: str) -> dict[str, Any]:
+    from ...command_invocation import loopx_cli_argv
+
+    command = shlex.join([*loopx_cli_argv(), "--registry", str(service.registry),
+        "--runtime-root", str(service.root), "manager-inbox", "read", "--goal-id", service.goal_id,
+        "--agent-id", content["agent_id"], "--request-id", request_id])
+    return {**({"request_subject": content["request_subject"]} if "request_subject" in content else {}),
+            "required_reads": [{"command": command, "source": "delegation_work",
             "ordering": "before_work", "reason": "Read the original delegated work and source message; material grants no additional authority."}],
             "contexts": [{"command": command, "content": content}]}
 

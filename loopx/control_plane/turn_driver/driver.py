@@ -20,7 +20,7 @@ from .subagent_execution_topology import (
 from ..quota.turn_envelope import (
     assert_turn_envelope_consumer_version,
     _turn_envelope_result,
-    turn_envelope_replan_settlement_identity,
+    turn_envelope_scoped_settlement_identity,
 )
 from ..scheduler.execution_context import (
     scheduler_execution_context_for_turn,
@@ -101,7 +101,7 @@ def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
     return _mapping(action.get("selected_todo"))
 
 
-def _receipt_bound_replan_identity(
+def _receipt_bound_scoped_identity(
     envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> SettlementIdentity | None:
     """Transport the quota owner's signed binding; never invent an obligation.
@@ -110,7 +110,7 @@ def _receipt_bound_replan_identity(
     planning needs the existing scoped identity from the complete settlement
     plan, as well as its matching semantic obligation and original Turn.
     """
-    raw = turn_envelope_replan_settlement_identity(envelope, turn_instance_id=turn_instance_id)
+    raw = turn_envelope_scoped_settlement_identity(envelope, turn_instance_id=turn_instance_id)
     if raw is None:
         return None
     return SettlementIdentity.from_runtime_payload(raw)
@@ -147,7 +147,10 @@ def _turn_lineage(
         "action_hash": action_hash,
     }
     if settlement_identity is not None:
-        lineage["replan_obligation_id"] = str(settlement_identity.replan_obligation_id)
+        if settlement_identity.request_subject is not None:
+            lineage["request_binding_id"] = settlement_identity.binding_id
+        elif settlement_identity.replan_obligation_id is not None:
+            lineage["replan_obligation_id"] = settlement_identity.replan_obligation_id
     return lineage
 
 
@@ -160,6 +163,8 @@ def _session_plan(
     session_scope: str = "agent",
 ) -> tuple[dict[str, Any], str | None]:
     identity_fields = session_identity_fields(session_scope)
+    if lineage.get("request_binding_id") and iteration_context_policy == "fresh":
+        identity_fields = ("goal_id", "agent_id")
     context_policy = {
         "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
         "mode": iteration_context_policy,
@@ -179,7 +184,7 @@ def _session_plan(
             "context_policy": context_policy,
         }, None
     if (not all(lineage.get(field) for field in (*identity_fields, "action_hash"))
-            or not (lineage.get("todo_id") or lineage.get("replan_obligation_id"))):
+            or not (lineage.get("todo_id") or lineage.get("replan_obligation_id") or lineage.get("request_binding_id"))):
         return {
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "reject",
@@ -236,7 +241,7 @@ def reconcile_failed_turn_session_request(
     envelope = _mapping(request.get("turn_envelope"))
     selected_todo = selected_turn_todo(envelope)
     try:
-        settlement_identity = (None if selected_todo else _receipt_bound_replan_identity(
+        settlement_identity = (None if selected_todo else _receipt_bound_scoped_identity(
             envelope, turn_instance_id=None,
         ))
     except (ValueError, RuntimeError) as exc:
@@ -411,16 +416,17 @@ def build_loopx_turn_plan(
     selected_todo = selected_turn_todo(envelope)
     settlement_identity = None
     identity_error = None
-    if route is LoopXTurnRoute.REPLAN_REQUIRED:
+    if route is LoopXTurnRoute.REPLAN_REQUIRED or (route is LoopXTurnRoute.READY_FOR_HOST and not selected_todo):
         try:
-            settlement_identity = _receipt_bound_replan_identity(
+            settlement_identity = _receipt_bound_scoped_identity(
                 envelope, turn_instance_id=turn_instance_id,
             )
         except (ValueError, RuntimeError) as exc:
             identity_error = str(exc)
             route = LoopXTurnRoute.CONTRACT_ERROR
         if (not selected_todo and identity_error is None
-                and (settlement_identity is None or session_scope != "agent")):
+                and (settlement_identity is None or (session_scope != "agent"
+                  and not (settlement_identity.request_subject is not None and iteration_context_policy == "fresh")))):
             route = LoopXTurnRoute.BLOCKED
     lineage = _turn_lineage(envelope, selected_todo=selected_todo,
                             settlement_identity=settlement_identity, projection=projection)
