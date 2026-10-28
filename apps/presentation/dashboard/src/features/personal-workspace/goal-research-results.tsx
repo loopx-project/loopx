@@ -42,14 +42,10 @@ export function GoalResearchResults({goalId, api, zh, hideEmpty = false, catalog
     if (!catalogOnly) setResults([]);
     try {
       const response = await fetch(api.indexUrl, {cache: "no-store"});
-      // The research index is optional. Absence clears stale rows, while an
-      // already selected version must still report that it is unavailable.
+      // The optional index may be absent. Clear stale rows without turning
+      // that empty state into an error; other HTTP and decode failures surface.
       if (response.status === 404 || response.status === 410) {
-        if (current !== generation.current) return;
-        setListed(true); setResults([]);
-        if (chosen.current) setError(zh
-          ? "上次研究版本已不在当前公开成果中。请返回目录重新选择。"
-          : "The previous research version is no longer in current public results. Return to the catalog to choose again.");
+        if (current === generation.current) {setListed(true); setResults([]);}
         return;
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
