@@ -227,3 +227,74 @@ owners rather than adding another parallel policy collection.
 
 Design sources and the disposition of the earlier proposal are recorded in
 [the instruction/skill/prompt study](../research/2026-10-17-agent-instruction-skill-prompt-guidance.md).
+
+
+### Progressive Context For Development
+
+The default working context should answer the current decision: the accepted goal,
+applicable constraints and stop conditions, current work, acceptance criteria,
+relevant changes and unresolved gaps. Keep it sufficient to act correctly. Preserve
+complete source material durably without equating storage completeness with a
+requirement to load every historical record into every model input.
+
+Start discovery with the existing index, heading tree, bounded search or exact
+record selector. Then read the sections or records needed for the actual decision.
+A summary must not silently replace a requirement or conceal an exception. Retain
+source identity, revision and a reachable detail route; expose omissions and unknown
+coverage. Ownership alone does not establish irrelevance: shared constraints,
+cross-work dependencies and contrary or unresolved evidence require expansion
+before a dependent decision. Reuse an existing typed scope owner instead of adding
+keyword classifiers or another relevance engine.
+
+Separate **acceptance criteria** from **acceptance evidence**. Criteria and current
+unmet/unknown status guide execution; historical reviewer notes, full provenance,
+logs and detailed evidence support a specific verification, dispute, replan or
+closeout. Keep relevant failure/staleness signals visible so the agent knows when
+to inspect that material. Before claiming acceptance, inspect the evidence the
+claim actually needs; an index or prior agent declaration is not verification.
+
+Apply the same rule to repository instructions and skills: keep the durable core
+in the entry file and link detailed procedures with clear triggers. Discover the
+needed reference before opening it; do not eagerly import the whole catalog or
+all linked files. When guidance moves, preserve its actor, ordering, modality,
+scope, exceptions and stopping conditions at the point where it is required.
+Existing sessions may retain old instructions; source edits alone do not prove
+native startup adoption or agent compliance.
+
+For product context delivery, selection, continuation and replanning have different
+information needs. A suggested `selected_todo` is not proof of an actual work choice.
+A qualified continuation can retain the bound work in full and make other candidates
+discoverable with exact details; a new choice must inspect what that choice needs.
+Do not implement this by filtering a full-required response in the caller. Change
+the typed scope, required-read instructions, detail reader, actual input and recovery
+binding together. Undelivered details must not enter a retained-context baseline.
+Recover the original decision's reference after loss rather than rerunning admission
+to obtain a different decision. Until that joint change is delivered, the existing
+runtime contract still governs its captures.
+
+Measure a useful task segment, including discovery, detail expansion, history replay,
+compaction/recovery and subsequent validated work. A smaller first page can increase
+total cost; successful pagination can still prevent the task from advancing. Use
+[output-budget and semantic comparisons](testing-and-quality.md#progressive-context-qualification)
+with cold, warm, changed-requirement and context-loss cases. Preserve negative results
+and unknown model cost/adoption rather than inferring benefit from fewer bytes.
+
+渐进读取的默认上下文应足够支持当前决定：目标、适用约束和停止条件、当前工作、
+验收标准、相关变化及未解决缺口。完整材料持久保存，不等于每轮都必须全量输入模型。
+先用既有目录、标题树、检索或精确记录入口定位，再展开当前判断需要的正文；摘要
+不能替代要求或隐藏例外。保留来源、版本、详情入口及遗漏/未知标记；跨工作依赖、
+共享约束和反面证据不能仅因属于其他 Agent 而排除。
+
+区分验收标准和验收材料：标准与当前未满足/未知状态指导执行；历史评审、来源、
+日志和完整证据在核验、争议、重规划、收口等需要它们的环节展开。默认仍显示相关
+失败或过期信号；验收声明必须读取对应证据，索引和旧 Agent 结论不代替核验。
+入口指引保留核心义务，详细流程以明确触发条件链接，不急切加载全部文档/Skill。
+移动指导须保留主体、顺序、义务强度、范围、例外和停止条件；源文件更新不证明
+当前宿主已加载，也不证明模型实际遵从。
+
+产品侧按选择、继续执行、重规划区分需要的信息；`selected_todo` 不证明模型已选择。
+合格的已绑定任务接续可保留当前工作全文和其他候选的可发现入口，但不能在仍要求
+全读的接口外手动裁剪。范围 owner、必读指引、详情接口、实际输入及恢复绑定应一起
+替换；未交付正文不能进入保留基线，丢失上下文须恢复原决定而非重新准入。
+联合替换前，旧捕获仍遵守原合同。对比整段工作及补读、历史回放、压缩/恢复成本和
+后续验收成果，保留失败与未测，不把分页成功或首屏变短当成长程收益。

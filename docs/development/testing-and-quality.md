@@ -1265,6 +1265,40 @@ TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量
 - **区分缓解与闭环。** 写明消除了所属瓶颈，还是只减轻调用方影响；剩余真实缺口复用
   已有后续任务并指明验收。提示词缩短不算后端验证，修复 PR 数量不算默认切换就绪。
 
+### Progressive Context Qualification
+
+When moving context off the default input, compare the same source, task state and
+caller sequence against the existing path. Separate current goals/criteria/constraints
+from supporting evidence and historical diagnostics; declare which decision still
+needs each moved field and how the caller discovers and reads it. Do not infer that
+an unread field is unnecessary from a successful happy-path completion.
+
+Use meaningful alternatives and tail constraints, shared/cross-owner requirements,
+contrary evidence and missing/stale detail cases. Exercise selection, a continuation
+bound to actual admitted work, a changed requirement that forces reassessment, and
+context loss during detail delivery. Preserve the original capture and settlement
+identity, reject a mismatched detail revision, and prove unread optional detail is
+not acknowledged as retained input. Unknown relevance/coverage must remain visible
+and expand before the decision that depends on it; a narrow projection is not a new
+authorization boundary. Validate the owning real entrypoint, not only its serializer.
+
+Record default input bytes, detail bytes, tool/model round trips, retained/replayed
+history, recovery rereads, time to useful work and accepted outcomes over the same
+segment. Include adapter/producer costs when measured; keep unmeasured fees and
+adoption unknown. Smaller pages or a larger test ceiling cannot qualify an endless
+read/compact/recover loop. The paired task must reach its useful operation after
+recovery before claiming continuation benefit. Reuse existing tests and evidence
+fields; this does not introduce a new telemetry system or receipt gate.
+
+移动默认上下文前，固定来源、任务状态和调用序列，对照旧路径；逐项说明哪些内容
+属于当前目标/标准/约束，哪些是支持材料或历史诊断，以及何时发现和展开。
+以真实选择、已准入任务接续、要求变化及详情读取中断验证；包含尾部约束、跨 Agent
+依赖、反面证据、详情缺失/过期等负例。保持原 capture 和结算身份，不把未读详情记为
+已保留；未知相关性在依赖它的决定前展开。通过实际入口验证，而非仅测 serializer。
+统计整段默认输入、补读、工具/模型往返、历史重放、恢复重读、到首次有效工作的时间
+及验收成果。费用/采纳未测仍为未知；分页成功或预算扩容不能证明读取—压缩—恢复
+循环得到解决，恢复后实际继续完成有用操作才支持接续收益判断。
+
 ### Budget Failure Decisions
 
 The actual-default model portfolio retains the complete capability candidate

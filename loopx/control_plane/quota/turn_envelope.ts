@@ -1,3 +1,4 @@
+import {capturedContextSelection} from "./context_selection.ts";
 import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -1407,6 +1408,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
   if (operation === "replan_view") return replanView(request);
+  if (operation === "context_select") return capturedContextSelection(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
     const reads = replanReadCommands(payload);

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from loopx.capabilities.explore.resource_portfolio import parse_resource_counts
+from copy import deepcopy
+
+import pytest
+
+from loopx.capabilities.explore.resource_portfolio import (
+    normalize_resource_counts,
+    parse_resource_counts,
+)
 from loopx.capabilities.explore.todo_branch_plan import build_explore_todo_branch_plan
 from loopx.capabilities.explore.worker_branch_plan import build_explore_worker_branch_plan
 
@@ -214,3 +221,66 @@ def test_resource_count_cli_values_are_normalized_and_duplicates_fail() -> None:
         assert "repeats resource lane" in str(exc)
     else:
         raise AssertionError("duplicate resource lane should fail closed")
+
+
+@pytest.mark.parametrize(
+    "planner", [build_explore_todo_branch_plan, build_explore_worker_branch_plan]
+)
+@pytest.mark.parametrize("field", ["resource_capacities", "resource_usage"])
+@pytest.mark.parametrize("alias", ["long-pool", "LONG_POOL", "long pool"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_resource_aliases_cannot_overwrite_capacity_or_usage(
+    planner, field, alias, reverse
+) -> None:
+    entries = [("long_pool", 2), (alias, 0)]
+    if reverse:
+        entries.reverse()
+    arguments = {
+        "goal_id": "synthetic-resource-aliases",
+        "todos": TODOS,
+        "projection": PROJECTION,
+        "orchestration": ANALYSIS_ONLY,
+        "resource_capacities": CAPACITIES,
+        "resource_usage": USAGE,
+        field: dict(entries),
+    }
+    before = deepcopy(arguments)
+
+    with pytest.raises(ValueError, match=f"{field} repeats resource lane 'long_pool'"):
+        planner(**arguments)
+
+    assert arguments == before
+
+
+@pytest.mark.parametrize(
+    "planner", [build_explore_todo_branch_plan, build_explore_worker_branch_plan]
+)
+@pytest.mark.parametrize("field", ["resource_capacities", "resource_usage"])
+@pytest.mark.parametrize(
+    "value", [True, False, 0.5, -0.5, -1, float("nan"), float("inf"), "1.5", None]
+)
+def test_invalid_resource_counts_fail_before_planning(planner, field, value) -> None:
+    with pytest.raises(ValueError, match=rf"{field}\['long_pool'\].*non-negative integer"):
+        planner(
+            goal_id="synthetic-invalid-resource-counts",
+            todos=TODOS,
+            orchestration=ANALYSIS_ONLY,
+            **{
+                "resource_capacities": CAPACITIES,
+                "resource_usage": USAGE,
+                field: {"long_pool": value},
+            },
+        )
+
+
+def test_valid_resource_counts_preserve_normalized_cli_and_api_inputs() -> None:
+    normalized = normalize_resource_counts(
+        {"LONG POOL": "2", "short-pool": 3.0, "idle_pool": 0},
+        field_name="resource_capacities",
+    )
+
+    assert normalized == {"idle_pool": 0, "long_pool": 2, "short_pool": 3}
+    assert normalized == parse_resource_counts(
+        ["LONG POOL=2", "short-pool=3", "idle_pool=0"],
+        flag_name="--resource-capacity",
+    )
