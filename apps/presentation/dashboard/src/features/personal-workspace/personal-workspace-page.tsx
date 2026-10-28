@@ -4,7 +4,7 @@ import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route"
 import {hasConfiguredGoalChecks} from "../../data/goal-acceptance-observation";
 import {useDeliveryReview} from "./delivery-review-state";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
-import { goalCreateRequest, goalCreationAgentId } from "./goal-create-request";
+import { goalCreateRequest, goalCreationAgentId, goalDraftReady } from "./goal-create-request";
 import { todoCompletionPreviewFeedback, todoCompletionProofRequired } from "./todo-completion-feedback";
 import { readSteeringRequest, retainSteeringRequest, retireSteeringRequest, legacySteeringRequests, restoreLegacySteeringRequest } from "./steering-recovery";
 import { conversationInputKey, useConversationInputState } from "./use-conversation-input-state";
@@ -64,6 +64,7 @@ import { GoalResearchWorkbench } from "./goal-research-workbench";
 import { GoalOverview, goalOverviewAttentionId } from "./goal-overview";
 import { GoalVitals, GoalVitalsSkeleton, type GoalVitalRegion } from "./goal-masthead";
 import { GoalWorkspacePanels } from "./goal-workspace-panels";
+import {GoalWorkBrowseProvider, readGoalWorkBrowse, type GoalWorkBrowseState} from "./goal-work-browse";
 import { localizedGoalState, localizedSessionStatus, useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import { MarkdownText } from "./markdown";
 import { ReturnDeliveryStatus } from "./return-delivery-status";
@@ -171,6 +172,8 @@ function RuntimeReadinessNotice({ readiness, rechecking, onRecheck }: { readines
 
 function ManagerHomeBoard({
   goals,
+  attention,
+  onSelectAttention,
   onSelectGoal,
   onRetry,
   onRetrySource,
@@ -186,6 +189,8 @@ function ManagerHomeBoard({
   onViewAllOperations,
 }: {
   goals: WorkspaceGoal[];
+  attention: WorkspaceAttention[];
+  onSelectAttention: (item: WorkspaceAttention) => void;
   onSelectGoal: (goalId: string) => void;
   onRetry?: () => void;
   /** Re-read the whole source after its latest read failed. */
@@ -289,7 +294,8 @@ function ManagerHomeBoard({
           <button className="min-h-11 rounded-md border px-3 py-2 text-sm" onClick={onRetry} type="button">{t("startup.retryFailed")}</button></div> : null}
         {currentGoals.filter((goal) => goal.loadState).map(goalCard)}
       </section> : null}
-      {currentGoals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
+      {goals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
+        attention={attention} onSelectAttention={onSelectAttention}
         operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
       {onboarding?.kind === "no_goals" && goals.length === 0 ? null : <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>}
       <div className="personal-home-lanes">
@@ -379,14 +385,14 @@ function GoalOutputsView({
             ].filter(Boolean).join(" · ")}</small>
           </button>
         ))}
-        {localResults && !production ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} /> : null}
+        {localResults && !production ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} catalogOnly /> : null}
       </section> : null}
       {production}
-      {production && localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} hideEmpty /> : null}
-      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} /> : null}
+      {production && localResults ? <GoalManagedResults goalId={goalId} zh={locale === "zh-CN"} hideEmpty catalogOnly /> : null}
+      {active && researchApi ? <GoalResearchResults key={`${goalId}:${researchApi.indexUrl}:${researchApi.detailUrl}`} goalId={goalId} api={researchApi} zh={locale === "zh-CN"} catalogOnly /> : null}
       {active && teamSessionId && !teamSnapshot && !teamError ? <p className="personal-object-list-state" role="status">{t("files.checkingTeam")}</p> : null}
       {active && teamSessionId && teamError ? <p className="personal-object-list-state is-error" role="alert">{t("files.teamLoadFailed")} <button type="button" onClick={() => setTeamRefresh(value => value + 1)}>{t("startup.retry")}</button></p> : null}
-      {active && teamConfigured && teamSessionId ? <GoalTeamResults sessionId={teamSessionId} zh={locale === "zh-CN"} refreshKey={JSON.stringify(teamSnapshot?.deliveries ?? [])} /> : null}
+      {active && teamConfigured && teamSessionId ? <GoalTeamResults sessionId={teamSessionId} zh={locale === "zh-CN"} refreshKey={JSON.stringify(teamSnapshot?.deliveries ?? [])} catalogOnly /> : null}
     </>
   );
 }
@@ -923,6 +929,9 @@ export function PersonalWorkspacePage({
   conversationSupportsSteering = false,
   conversationSessionId,
   conversationHistoryState,
+  conversationMessageFocus,
+  workBrowseSearch,
+  onWorkBrowseChange,
   agents = [{ agentId: "codex", available: true, capability: "代码与项目执行", label: "Codex" }],
   callbacks = {},
   goalArchiveLoadState = { error: null, phase: "ready" },
@@ -956,6 +965,9 @@ export function PersonalWorkspacePage({
   conversationSupportsSteering?: boolean;
   conversationSessionId?: string;
   conversationHistoryState?: ConversationHistoryStatus;
+  conversationMessageFocus?: {sessionId: string; messageId: string};
+  workBrowseSearch?: Record<string, unknown>;
+  onWorkBrowseChange?: (patch: Partial<GoalWorkBrowseState>, source: string, replace?: boolean) => void;
   agents?: WorkspaceAgentOption[];
   callbacks?: PersonalWorkspaceCallbacks;
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
@@ -998,8 +1010,10 @@ export function PersonalWorkspacePage({
     currentSelectionScope.current = {scope: selectionScope, generation: currentSelectionScope.current.generation + 1};
   }
   const selectionGeneration = currentSelectionScope.current.generation;
+  const selectionRevision = useRef(0);
   function setSelection(value: WorkspaceDrawerSelection | null) {
     if (currentSelectionScope.current.generation !== selectionGeneration) return;
+    selectionRevision.current += 1;
     setSelectionState({scope: selectionScope, value});
     const todoId = value?.kind === "todo" ? value.item.todoId : null;
     if (todoId !== (routedTodoId ?? null)) callbacks.onSelectTodo?.(todoId);
@@ -1149,7 +1163,7 @@ export function PersonalWorkspacePage({
   }, [composer, selectedGoalId, managerChatOpen]);
   async function reviewGoalDraft(draft: GoalDraft, edit = false, draftId = "") {
     // Source message + reviewed contents survive retry without merging distinct requests.
-    if (!edit && !draft.question && draft.completion_criteria.trim()) {
+    if (!edit && goalDraftReady(draft)) {
       const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
         JSON.stringify([draftId, draft, goalAgentId, locale])));
       const operationId = Array.from(new Uint8Array(bytes), value => value.toString(16).padStart(2, "0")).join("");
@@ -1213,6 +1227,16 @@ export function PersonalWorkspacePage({
     [workspaceGoals],
   );
   const selectedGoal = workspaceGoals.find((goal) => goal.goalId === selectedGoalId) ?? null;
+  const workBrowseSource = researchReadSourceUrl ?? statusSourceControl?.activeSource.statusUrl ?? "/status.json";
+  const workBrowseKey = JSON.stringify([workBrowseSource, selectedGoalId]);
+  const routedWorkBrowse = readGoalWorkBrowse(workBrowseSearch ?? {}, selectedGoalId ?? "", workBrowseSource);
+  const [localWorkBrowse, setLocalWorkBrowse] = useState({scope: workBrowseKey, value: routedWorkBrowse});
+  const workBrowse = onWorkBrowseChange ? routedWorkBrowse
+    : localWorkBrowse.scope === workBrowseKey ? localWorkBrowse.value : routedWorkBrowse;
+  const changeWorkBrowse = (patch: Partial<GoalWorkBrowseState>, replace?: boolean) => {
+    if (onWorkBrowseChange) onWorkBrowseChange(patch, workBrowseSource, replace);
+    else setLocalWorkBrowse({scope: workBrowseKey, value: {...workBrowse, ...patch}});
+  };
   const rootUnavailable = Boolean(rootGoalId && !selectedGoal);
   function openSettings(target: Extract<WorkspaceDrawerSelection, { kind: "settings" }>, returnToModel = false) {
     settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -1224,6 +1248,7 @@ export function PersonalWorkspacePage({
   useEffect(() => {
     const restore = () => {
       const target = readSettingsRoute(new URL(window.location.href));
+      selectionRevision.current += 1;
       // Task history has its own route reader. Leaving settings may clear its
       // selection, but an unrelated history event must not clear a restored task.
       setSelectionState(current => target ? {scope: currentSelectionScope.current.scope, value: target}
@@ -1398,6 +1423,12 @@ export function PersonalWorkspacePage({
     [items, managerSessionProposalIds, managerChannelProposalIds],
   );
   const conversationOpen = (!agentWorkActive || managedWorkActive) && (selectedGoal ? selectedGoalTab === "chat" : managerChatOpen);
+  const timelineReading = {
+    messageFocus: conversationMessageFocus,
+    historyPhase: conversationHistoryState?.phase,
+    onRetryHistory: conversationHistoryState?.retry,
+    onReadMessage: () => { followConversationRef.current = false; },
+  };
   const conversationMessages = selectedGoal ? goalMessages : managerMessages;
   const latestMessage = conversationMessages.at(-1);
   const latestMessageTextLength = latestMessage?.text.length ?? 0;
@@ -1411,10 +1442,10 @@ export function PersonalWorkspacePage({
     }
   }
   useEffect(() => {
-    followConversationRef.current = true;
+    followConversationRef.current = !conversationMessageFocus;
     conversationScrollTopRef.current = channelScrollRef.current?.scrollTop ?? 0;
     setShowLatestMessage(false);
-  }, [conversationKey, selectedAgentId, conversationOpen]);
+  }, [conversationKey, selectedAgentId, conversationOpen, conversationMessageFocus?.sessionId, conversationMessageFocus?.messageId]);
   useEffect(() => {
     if (!conversationOpen) return;
     let frame = 0;
@@ -1449,6 +1480,7 @@ export function PersonalWorkspacePage({
     const route = `${selectionScope}:${routedTodoId ?? ""}`;
     if (restoredTodoRoute.current === route || !selectedGoal || selectedGoal.loadState) return;
     restoredTodoRoute.current = route;
+    selectionRevision.current += 1;
     if (!routedTodoId) {
       setSelectionState(current => current?.value?.kind === "todo" ? null : current);
       return;
@@ -1619,6 +1651,10 @@ export function PersonalWorkspacePage({
     );
     return currentRun ? { item: currentRun.run, kind: "run" } : selection;
   }, [items, selection, proposals, workspaceGoals, model.attentionHistory, model.userTodos, readOnly]);
+  // Home can inspect a linked Goal's request without selecting that Goal first.
+  // Preserve the request owner's source boundary in the shared drawer.
+  const drawerReadOnly = readOnly || workspaceGoals.some(goal => goal.goalId === drawerSelection?.item.goalId
+    && goal.sourceAccess?.readOnly === true);
 
   const creationProposalId = drawerSelection?.kind === "proposal"
     && drawerSelection.item.actionKind === "goal.create"
@@ -1744,7 +1780,9 @@ export function PersonalWorkspacePage({
     // The card belongs to the conversation on screen when the request started
     // (this render's selectedGoalId), even if its answer lands after the owner
     // moved elsewhere.
-    if (readOnly) throw new Error(t("source.readOnlyWriteError"));
+    if (readOnly || workspaceGoals.some(goal => goal.goalId === request.normalizedParameters.goal_id
+      && goal.sourceAccess?.readOnly === true)) throw new Error(t("source.readOnlyWriteError"));
+    const originatingSelection = selectionRevision.current;
     let local: WorkspaceActionPreview;
     try {
       local = callbacks.onPreviewAction
@@ -1808,7 +1846,9 @@ export function PersonalWorkspacePage({
     }
     rememberSessionProposal(local.previewId, selectedGoalId);
     setProposals((current) => ({ ...current, [local.previewId]: local }));
-    if (options.select !== false && isCurrentConversation()) setSelection({ item: local, kind: "proposal" });
+    if (options.select !== false && isCurrentConversation() && selectionRevision.current === originatingSelection) {
+      setSelection({ item: local, kind: "proposal" });
+    }
     return local;
   }
 
@@ -2017,6 +2057,14 @@ export function PersonalWorkspacePage({
     const applying = { ...proposal, reviewPlan: proposal.reviewPlan ? { ...proposal.reviewPlan, interaction: "pending" as const, reason: "apply_pending" as const, canApply: false as const } : undefined, status: "applying" as const };
     setProposals((current) => ({ ...current, [proposal.previewId]: applying }));
     if (showDrawer) setSelection({ item: applying, kind: "proposal" });
+    let applyingSelection = selectionRevision.current;
+    const stillSelected = () => selectionRevision.current === applyingSelection
+      && currentSelectionScope.current.generation === selectionGeneration;
+    const selectReceipt = (item: WorkspaceActionPreview) => {
+      if (!stillSelected()) return;
+      setSelection({item, kind: "proposal"});
+      applyingSelection = selectionRevision.current;
+    };
     if (lifecycleChange && !lifecycleChange.optimisticApplied) {
       callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.next);
     }
@@ -2025,11 +2073,11 @@ export function PersonalWorkspacePage({
         await callbacks.onApplyProposal(proposal);
         const applied = { ...proposal, status: "applied" as const };
         setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
-        if (showDrawer) setSelection({ item: applied, kind: "proposal" });
+        if (showDrawer) selectReceipt(applied);
         setActionFeedback(t("feedback.completed", { title: proposal.title }));
         if (proposal.actionKind === "goal.lifecycle") {
           if (proposal.lifecycleOperation === "delete" || (proposal.lifecycleOperation === "stop" && !options.keepGoalSelected)) {
-            selectGoal(null);
+            if (stillSelected()) selectGoal(null);
           }
           if (proposal.lifecycleOperation === "delete" && proposal.goalId) {
             callbacks.onGoalDeleted?.(proposal.goalId);
@@ -2054,12 +2102,12 @@ export function PersonalWorkspacePage({
       await actionReadback.acceptProposal(result.proposal);
       const applied = workspaceProposal(result.proposal, t);
       setProposals((current) => ({ ...current, [proposal.previewId]: applied }));
-      if (showDrawer) setSelection({ item: applied, kind: "proposal" });
+      if (showDrawer) selectReceipt(applied);
       if (applied.reviewPlan?.interaction !== "completed") {
         if (lifecycleChange) {
           callbacks.onGoalActivationStateChange?.(lifecycleChange.goalId, lifecycleChange.previous);
         }
-        if (options.presentation !== "inline") setSelection({ item: applied, kind: "proposal" });
+        if (options.presentation !== "inline") selectReceipt(applied);
         setActionFeedback(
           result.proposal.status === "stale"
             ? t("feedback.stale")
@@ -2076,7 +2124,7 @@ export function PersonalWorkspacePage({
         await callbacks.onRefresh?.();
       }
       if (applied.actionKind === "goal.lifecycle" && (applied.lifecycleOperation === "delete" || (applied.lifecycleOperation === "stop" && !options.keepGoalSelected))) {
-        selectGoal(null);
+        if (stillSelected()) selectGoal(null);
       }
       if (applied.actionKind === "goal.lifecycle" && applied.lifecycleOperation === "delete" && applied.goalId) {
         callbacks.onGoalDeleted?.(applied.goalId);
@@ -2109,13 +2157,13 @@ export function PersonalWorkspacePage({
           status: "gated" as const,
         };
         setProposals((current) => ({ ...current, [proposal.previewId]: gated }));
-        // A newly discovered authority gate always deserves review, including
-        // when the action started on the direct path.
-        if (options.presentation !== "inline") setSelection({ item: gated, kind: "proposal" });
+        // A newly discovered authority gate always deserves review. Preserve
+        // its receipt and feedback without replacing a newer selection.
+        if (options.presentation !== "inline") selectReceipt(gated);
         setActionFeedback(t("feedback.gateRequired", { summary: gated.gate.summary }));
         if (proposal.actionKind === "goal.create" && proposal.goalId) {
           callbacks.onRefresh?.();
-          selectGoal(proposal.goalId);
+          if (stillSelected()) selectGoal(proposal.goalId);
         }
         return gated;
       }
@@ -2139,7 +2187,7 @@ export function PersonalWorkspacePage({
         const reconciled = { ...observed, errorMessage: observed.status === "error"
           ? error instanceof Error ? error.message : String(error) : undefined };
         setProposals(current => ({ ...current, [proposal.previewId]: reconciled }));
-        if (options.presentation !== "inline") setSelection({ item: reconciled, kind: "proposal" });
+        if (options.presentation !== "inline") selectReceipt(reconciled);
         if (observed.reviewPlan?.creationProgress?.goalId) void callbacks.onRefresh?.();
         setActionFeedback(stored.status === "stale" ? t("feedback.stale")
           : observed.reviewPlan?.interaction === "completed" ? t("feedback.completed", { title: observed.title })
@@ -2155,7 +2203,7 @@ export function PersonalWorkspacePage({
         status: (stale ? "stale" : "error") as "stale" | "error",
       };
       setProposals((current) => ({ ...current, [proposal.previewId]: failed }));
-      if (options.presentation !== "inline") setSelection({ item: failed, kind: "proposal" });
+      if (options.presentation !== "inline") selectReceipt(failed);
       setActionFeedback(t("feedback.executionFailed", { error: failed.errorMessage }));
       return failed;
     }
@@ -2306,7 +2354,7 @@ export function PersonalWorkspacePage({
       });
     },
   };
-  const effectiveDrawerCallbacks: PersonalWorkspaceCallbacks = readOnly ? {
+  const effectiveDrawerCallbacks: PersonalWorkspaceCallbacks = drawerReadOnly ? {
     onOpenGoal: drawerCallbacks.onOpenGoal,
     onOpenGoalView: drawerCallbacks.onOpenGoalView,
     onOpenOutput: drawerCallbacks.onOpenOutput,
@@ -2773,7 +2821,7 @@ export function PersonalWorkspacePage({
           else setSelection(entry.destination.selection);
         }} />}
       notice={serviceNotice}
-      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={readOnly ? [] : larkConnections}
+      drawer={drawerSelection ? <ContextDrawer agents={agents} attentionHistory={model.attentionHistory ?? model.userTodos} onSelectAttention={(item) => setSelection({ kind: "attention", item })} callbacks={effectiveDrawerCallbacks} goalNotifications={model.goalNotifications ?? []} goals={workspaceGoals} inspectorExpanded={taskInspectorExpanded} larkConnections={drawerReadOnly ? [] : larkConnections}
         todoReadbackUnavailable={drawerSelection.kind === "todo" && !workspaceGoals.some((goal) =>
           goal.goalId === drawerSelection.item.goalId && !goal.loadState && (drawerSelection.item.detailMode !== undefined || drawerSelection.item.done
             || goal.agentTodos.some((todo) => todo.todoId === drawerSelection.item.todoId)))}
@@ -2794,7 +2842,7 @@ export function PersonalWorkspacePage({
         }
         setTaskInspectorExpanded(false);
         setSelection(null);
-      }} onToggleInspectorSize={() => setTaskInspectorExpanded((current) => !current)} readOnly={readOnly} runs={items.flatMap((item) => item.kind === "run" ? [item.run] : [])} selection={drawerSelection} /> : null}
+      }} onToggleInspectorSize={() => setTaskInspectorExpanded((current) => !current)} readOnly={drawerReadOnly} runs={items.flatMap((item) => item.kind === "run" ? [item.run] : [])} selection={drawerSelection} /> : null}
       drawerMode={drawerSelection?.kind === "todo" ? (taskInspectorExpanded ? "inspector-full" : "inspector") : "panel"}
       drawerOpen={drawerSelection !== null}
       mobileSidebarOpen={mobileSidebarOpen}
@@ -2929,7 +2977,8 @@ export function PersonalWorkspacePage({
                   : <button className="min-h-11 rounded-md border px-3 py-2 text-sm" type="button" onClick={() => void callbacks.onRefresh?.("missing")}>{t("startup.retry")}</button> : null}</div>
               </section>
             ) : selectedGoal ? (
-              <GoalWorkspacePanels key={`${researchReadSourceUrl ?? statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${selectedGoal.goalId}`}
+              <GoalWorkBrowseProvider key={workBrowseKey} value={workBrowse} onChange={changeWorkBrowse}>
+              <GoalWorkspacePanels
                 activeTab={selectedGoalTab} scrollRef={channelScrollRef} panels={{
                   overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
                     onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
@@ -2945,7 +2994,7 @@ export function PersonalWorkspacePage({
                     sessionId={selectedWorkSessionId} onSession={(id, replace) => callbacks.onSelectWorkSession?.(id, replace)}
                     onSelect={id => callbacks.onSelectWorkAgent?.(id)} onClose={() => callbacks.onSelectWorkAgent?.(null)}>
                     {workspaceConversations?.managed?.error ? <p role="alert">{workspaceConversations.managed.error} <button type="button" onClick={workspaceConversations.managed.retry}>{t("history.retry")}</button></p> : null}
-                    <ChannelTimeline readOnly={readOnly} items={visibleTimelineItems.filter(item => item.kind === "message")} onSelect={setSelection} selectedGoal={selectedGoal}
+                    <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} items={visibleTimelineItems.filter(item => item.kind === "message")} onSelect={setSelection} selectedGoal={selectedGoal}
                       onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                       onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation ? () => callbacks.onCancelConversationPreparation!(conversationKey) : undefined}
                       onInterruptTurn={!readOnly && callbacks.onInterruptConversationTurn ? turnId => callbacks.onInterruptConversationTurn!(conversationKey, turnId) : undefined}/>
@@ -2957,7 +3006,7 @@ export function PersonalWorkspacePage({
                         run={activeSessionRun}
                       />
                     ) : null}
-                    <ChannelTimeline readOnly={readOnly} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
+                    <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply} items={visibleTimelineItems} onSelect={setSelection} selectedGoal={selectedGoal}
                       onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
                       onCancelPreparation={!readOnly && callbacks.onCancelConversationPreparation
                         ? () => callbacks.onCancelConversationPreparation!(selectedGoal.goalId) : undefined}
@@ -2966,14 +3015,16 @@ export function PersonalWorkspacePage({
                         : undefined} />
                   </>),
                 }} />
+              </GoalWorkBrowseProvider>
             ) : !managerChatOpen ? (
-              <ManagerHomeBoard goals={workspaceGoals} onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
+              <ManagerHomeBoard goals={workspaceGoals} attention={model.userTodos} onSelectAttention={item => setSelection({kind: "attention", item})}
+                onRetry={() => void callbacks.onRefresh?.("missing")} onRetrySource={() => void refreshWorkspace()} onSelectGoal={selectGoal} systemHealth={model.systemHealth}
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
                 runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
                 onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (
-              <ChannelTimeline readOnly={readOnly} emptyState={workspaceTitle ? { title: workspaceTitle, description: t("workspace.empty") } : undefined} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
+              <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} emptyState={workspaceTitle ? { title: workspaceTitle, description: t("workspace.empty") } : undefined} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
                 items={selectedWorkspaceRef || originalConversation ? managerChatItems.filter((item) => item.kind === "message") : managerChatItems}
                 onSelect={setSelection} selectedGoal={null} showManagerTeamResults={!selectedWorkspaceRef && !originalConversation}
                 onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}

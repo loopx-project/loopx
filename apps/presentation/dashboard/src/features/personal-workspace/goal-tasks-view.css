@@ -1,0 +1,10 @@
+.personal-task-browse-controls { display: grid; gap: 8px; flex: none; min-width: 0; }
+.personal-task-search { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--pw-line); color: var(--pw-muted); }
+.personal-task-search input { width: 100%; min-width: 0; min-height: 44px; border: 0; padding: 8px 0; font: inherit; font-size: var(--text-body); color: var(--pw-text); background: transparent; }
+.personal-task-filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.personal-task-filters button { min-height: 36px; padding: 6px 8px; border: 1px solid transparent; border-radius: 6px; color: var(--pw-muted); background: transparent; font: inherit; font-size: var(--text-body); }
+.personal-task-filters button[aria-pressed="true"] { background: var(--pw-hover); border-color: var(--pw-line); color: var(--pw-text); }
+.personal-task-selection-note { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: var(--text-body); color: var(--pw-muted); }
+.personal-task-selection-note button { min-height: 36px; border: 0; background: transparent; color: var(--pw-text); font: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.personal-task-card > button > .personal-task-blocker { grid-column: 2; display: block; color: var(--pw-muted); font-size: var(--text-caption); overflow-wrap: anywhere; }
+.personal-task-search input:focus-visible, .personal-task-filters button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }

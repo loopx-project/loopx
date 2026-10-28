@@ -1,4 +1,4 @@
-import {useState, type ReactNode} from "react";
+import {useEffect, useRef, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {changedResearchFields, researchComparisonFields, researchRecordVersions, type ResearchComparisonField} from "./research-record-versions.ts";
 import {ExploreMeasurements} from "./explore-measurements";
@@ -26,6 +26,22 @@ export function ResearchRecordComparison({events, selected, displayed, renderSum
   const [chosen, setChosen] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState(false);
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  const returnFrame = useRef<number | null>(null);
+  useEffect(() => () => {if (returnFrame.current !== null) cancelAnimationFrame(returnFrame.current);}, []);
+  const returnToRecord = () => {
+    const node = disclosure.current;
+    const record = node?.closest(".research-record-entry");
+    const target = record?.querySelector<HTMLElement>(":scope > summary") ?? node?.querySelector<HTMLElement>(":scope > summary");
+    setOpen(false);
+    if (returnFrame.current !== null) cancelAnimationFrame(returnFrame.current);
+    returnFrame.current = requestAnimationFrame(() => {
+      returnFrame.current = null;
+      if (!node?.isConnected || node.open || !target?.isConnected) return;
+      target.focus({preventScroll: true});
+      target.scrollIntoView({block: "nearest"});
+    });
+  };
   const comparison = alternatives.find(event => event.event_id === chosen)
     ?? versions[index - 1] ?? alternatives[0];
   if (!comparison) return null;
@@ -45,7 +61,23 @@ export function ResearchRecordComparison({events, selected, displayed, renderSum
       {typeof raw === "object" ? <pre>{JSON.stringify(raw, null, 2)}</pre> : <p>{String(raw)}</p>}
     </details> : null}</>;
   };
-  return <details className="research-record-comparison" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+  return <details className="research-record-comparison" ref={disclosure} open={open} onToggle={event => setOpen(event.currentTarget.open)}
+    onKeyDown={event => {
+      if (event.key !== "Escape" || event.defaultPrevented || !open) return;
+      event.stopPropagation();
+      const target = event.target instanceof Element ? event.target : null;
+      // The native select owns its popup dismissal; optional inner originals
+      // close one layer at a time without leaving the current comparison.
+      if (target?.closest("select")) return;
+      event.preventDefault();
+      const nested = target?.closest("details");
+      if (nested && nested !== event.currentTarget && nested.open) {
+        nested.open = false;
+        nested.querySelector<HTMLElement>(":scope > summary")?.focus();
+        return;
+      }
+      returnToRecord();
+    }}>
     <summary>{zh ? "比较记录版本" : "Compare recorded versions"} · {versions.length}</summary>
     {open ? <>
       <label>{zh ? "比较对象" : "Compare with"}<select value={comparison.event_id} onChange={event => setChosen(event.target.value)}>
@@ -70,6 +102,7 @@ export function ResearchRecordComparison({events, selected, displayed, renderSum
           <div>{value(event, field)}</div>
         </div>)}</div>
       </section>)}
+      <button type="button" onClick={returnToRecord}>{zh ? "返回当前记录" : "Return to current record"}</button>
     </> : null}
   </details>;
 }

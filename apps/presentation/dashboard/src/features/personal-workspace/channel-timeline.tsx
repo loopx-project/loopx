@@ -1,14 +1,15 @@
 import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import {Fragment} from "react";
+import {Fragment, useLayoutEffect, useRef, useState} from "react";
 import { CollaborationCard } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
 
 import { AttentionRow } from "./cards/attention-row";
 import { MIN_SEPARATE_ANSWER_LENGTH } from "./answer-text";
-import { MarkdownText } from "./markdown";
+import {HistoricalMessageText} from "./message-reading";
+import type {ConversationHistoryStatus} from "../../data/use-conversation-history";
 import { OutputRow } from "./cards/output-row";
 import { RunRow } from "./cards/run-row";
 import { ScheduleRow } from "./cards/schedule-row";
@@ -42,8 +43,16 @@ export function ChannelTimeline({
   onInterruptTurn,
   onAdjustTurn,
   onCancelPreparation,
+  messageFocus,
+  historyPhase = "ready",
+  onReadMessage,
+  onRetryHistory,
 }: {
   emptyState?: { title: string; description: string };
+  messageFocus?: {sessionId: string; messageId: string};
+  historyPhase?: ConversationHistoryStatus["phase"];
+  onReadMessage?: () => void;
+  onRetryHistory?: () => void;
   readOnly?: boolean;
   items: WorkspaceTimelineItem[];
   onCancelPreparation?: () => void;
@@ -57,24 +66,62 @@ export function ChannelTimeline({
   onAdjustTurn?: (turnId: string) => void;
 }) {
   const { locale, t } = useWorkspaceI18n();
+  const orderedItems = conversationOrder(items);
+  const messageKey = (message: Extract<WorkspaceTimelineItem, {kind: "message"}>["message"]) =>
+    JSON.stringify([message.sourceSessionId, message.sourceMessageId]);
+  const [historical, setHistorical] = useState<Set<string> | null>(null);
+  // Freeze only the first settled historical batch. A live or newly completed
+  // response, or a message already being read, never folds on a later refresh.
+  if (historical === null && historyPhase !== "loading" && items.some(item => item.kind === "message")) {
+    const messages = orderedItems.filter((item): item is Extract<WorkspaceTimelineItem, {kind: "message"}> => item.kind === "message");
+    const latestAssistant = [...messages].reverse().find(item => item.message.role === "assistant");
+    setHistorical(new Set(messages.filter(item => item !== latestAssistant && item.message.role === "assistant"
+      && !item.message.pending && item.message.sourceSessionId && item.message.sourceMessageId).map(item => messageKey(item.message))));
+  }
+  const focusTarget = useRef<HTMLElement>(null);
+  const restoredFocus = useRef<string | null>(null);
+  const focusKey = messageFocus ? JSON.stringify([messageFocus.sessionId, messageFocus.messageId]) : null;
+  const focusPresent = Boolean(messageFocus && items.some(item => item.kind === "message"
+    && item.message.sourceSessionId === messageFocus.sessionId && item.message.sourceMessageId === messageFocus.messageId));
+  useLayoutEffect(() => {
+    if (!focusKey) {restoredFocus.current = null; return;}
+    if (!focusPresent || restoredFocus.current === focusKey || !focusTarget.current) return;
+    onReadMessage?.();
+    const frame = window.requestAnimationFrame(() => {
+      if (!focusTarget.current) return;
+      onReadMessage?.();
+      focusTarget.current.scrollIntoView({block: "start"});
+      focusTarget.current.focus({preventScroll: true});
+      restoredFocus.current = focusKey;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusKey, focusPresent, onReadMessage]);
+  const focusNotice = messageFocus && !focusPresent ? <div className="personal-message-focus-notice" role="status">
+    <span>{historyPhase === "loading" ? (locale === "zh-CN" ? "正在定位原消息…" : "Finding the original message…")
+      : historyPhase === "ready" ? (locale === "zh-CN" ? "原消息不在当前已读取的对话中。" : "The original message is not in the loaded conversation.")
+      : (locale === "zh-CN" ? "原消息尚未读到；对话记录读取不完整。" : "The original message has not been read; conversation history is incomplete.")}</span>
+    {historyPhase !== "loading" && onRetryHistory ? <button type="button" onClick={onRetryHistory}>{locale === "zh-CN" ? "重新读取对话" : "Retry conversation read"}</button> : null}
+  </div> : null;
   if (items.length === 0) {
     return (
-      <div className="personal-timeline-empty">
+      <>{focusNotice}<div className="personal-timeline-empty">
         <span><Sparkles size={20} /></span>
         <strong>{emptyState?.title ?? (readOnly ? t("timeline.emptyReadOnly") : selectedGoal ? t("timeline.emptyGoal") : t("timeline.emptyWorkspace"))}</strong>
         {!readOnly ? <p>{emptyState?.description ?? (selectedGoal ? t("timeline.emptyGoalDescription") : t("timeline.emptyWorkspaceDescription"))}</p> : null}
-      </div>
+      </div></>
     );
   }
 
-  const latestAnnounceable = conversationOrder(items).reverse().find((item) =>
+  const latestAnnounceable = [...orderedItems].reverse().find((item) =>
     (item.kind === "message" && item.message.role !== "user")
     || (item.kind === "proposal" && ["applied", "stale", "error", "gated"].includes(item.proposal.status))
     || (item.kind === "run" && item.run.status === "completed"));
   const liveAnnouncement = latestAnnounceable?.kind === "message"
-    ? `${latestAnnounceable.message.agentLabel ?? t("header.manager")}：${latestAnnounceable.message.pending ? latestAnnounceable.message.activity?.at(-1) || t("timeline.pending") : latestAnnounceable.message.text}`
+    ? `${latestAnnounceable.message.agentLabel ?? t("header.manager")}：${latestAnnounceable.message.pending ? t("timeline.pending")
+      : latestAnnounceable.message.role === "assistant" ? (locale === "zh-CN" ? "有新答复" : "New answer available")
+      : (locale === "zh-CN" ? "会话状态已更新" : "Conversation status updated")}`
     : latestAnnounceable?.kind === "proposal"
-      ? `${latestAnnounceable.proposal.title}：${latestAnnounceable.proposal.status}`
+      ? `${locale === "zh-CN" ? "请求已更新" : "Request updated"}：${t(`proposal.status.${latestAnnounceable.proposal.status}`)}`
       : latestAnnounceable?.kind === "run"
         ? t("timeline.runCompleted", { run: latestAnnounceable.run.title })
         : "";
@@ -142,12 +189,17 @@ export function ChannelTimeline({
       );
     }
     return (
-      <article className={`personal-message is-${item.message.role}`} key={item.id}>
+      <article className={`personal-message is-${item.message.role}`} key={item.id}
+        data-message-session={item.message.sourceSessionId} data-message-id={item.message.sourceMessageId}
+        ref={messageFocus && messageKey(item.message) === focusKey ? focusTarget : undefined}
+        tabIndex={messageFocus && messageKey(item.message) === focusKey ? -1 : undefined}>
         {item.message.role !== "user" ? <span className="personal-message-avatar"><Bot size={17} /></span> : null}
         <div>
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
-          {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <MarkdownText text={item.message.text} /> : null}
+          {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
+            initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}
+            focused={Boolean(messageFocus && messageKey(item.message) === focusKey)} zh={locale === "zh-CN"} onRead={onReadMessage}/> : null}
           <ConversationReplyContext context={item.message.replyContext} zh={locale === "zh-CN"}/>
           {item.message.role === "assistant" && !item.message.pending && item.message.text.length >= MIN_SEPARATE_ANSWER_LENGTH
             && item.message.sourceSessionId && item.message.sourceMessageId
@@ -166,7 +218,8 @@ export function ChannelTimeline({
 
   return (
     <>
-      <p aria-atomic="true" aria-live="polite" className="personal-live-region" role="status">{liveAnnouncement}</p>
+      <p aria-atomic="true" aria-live="polite" className="personal-live-region" role="status"><span key={latestAnnounceable?.id}>{liveAnnouncement}</span></p>
+      {focusNotice}
       <div className="personal-channel-timeline">
         {backgroundIds.size ? <details className="personal-activity-summary">
           <summary><Activity size={16} aria-hidden="true"/><strong>{t("timeline.background")}</strong><span>{activitySummary}</span></summary>

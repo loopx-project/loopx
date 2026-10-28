@@ -2,7 +2,7 @@ import {AlertTriangle, Check, CircleHelp, Code2, RefreshCw, RotateCcw, ShieldChe
 import {ContextHelp} from "./context-help";
 import { PerformanceDiagnosisPanel } from "./performance-diagnosis-panel";
 import { UsageStatisticsSettings } from "./usage-statistics-settings";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import {
   applyMachineConfiguration,
@@ -125,9 +125,11 @@ export function MachineConfigurationSettings({ section, onChanged }: {
   const [previewOperation, setPreviewOperation] = useState<"upsert" | "remove">("upsert");
   const [transaction, setTransaction] = useState<MachineConfigurationTransaction | null>(null);
   const [rollbackPlan, setRollbackPlan] = useState<MachineConfigurationRollbackPlan | null>(null);
-  const [busy, setBusy] = useState<"load" | "preview" | "apply" | "rollback-preview" | "rollback" | null>("load");
+  const [busy, setBusy] = useState<"load" | "readback" | "preview" | "apply" | "rollback-preview" | "rollback" | null>("load");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [readbackPending, setReadbackPending] = useState<string | null>(null);
+  const editorGeneration = useRef(0);
 
   const capabilities = useMemo(() => orderCapabilitiesForPresentation(
     (inspection?.capability_catalog.capabilities ?? []).filter((capability) =>
@@ -161,20 +163,37 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       : validGuidedDraft(selected, desiredConfiguration ?? {})),
   );
 
-  async function reload() {
-    setInspection(await fetchMachineConfiguration());
+  async function retryReadback() {
+    if (busy || !readbackPending) return;
+    const generation = editorGeneration.current;
+    setBusy("readback");
+    setError(null);
+    try {
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
+      setNotice(locale === "zh-CN" ? "已重新读取当前配置。" : "Current configuration reloaded.");
+      onChanged?.();
+    } catch (cause) {
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.loadError"));
+    } finally {
+      if (generation === editorGeneration.current) setBusy(null);
+    }
   }
 
   async function retryLoad() {
     if (busy) return;
+    const generation = editorGeneration.current;
     setBusy("load");
     setError(null);
     try {
-      await reload();
+      const next = await fetchMachineConfiguration();
+      if (generation === editorGeneration.current) setInspection(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.loadError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.loadError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
@@ -194,8 +213,9 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     return () => { active = false; };
   }, [t]);
 
-  useEffect(() => {
-    if (!selected) return;
+  useLayoutEffect(() => {
+    editorGeneration.current++;
+    if (!selected) return () => { editorGeneration.current++; };
     const current = currentConfiguration(inspection, selected);
     const editable = projectEditableCapabilityConfiguration(
       selected.configuration_editor,
@@ -210,9 +230,19 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     setPreview(null);
     setPreviewOperation("upsert");
     setRollbackPlan(null);
-  }, [inspection, selectedCapabilityId, locale]);
+    setBusy(null);
+    return () => { editorGeneration.current++; };
+  }, [inspection, selectedCapabilityId, locale, section]);
+
+  useLayoutEffect(() => {
+    // A transaction and its feedback belong to the capability that was edited.
+    setTransaction(null);
+    setError(null);
+    setNotice(null);
+  }, [selected?.capability_id]);
 
   function changeDraft(key: string, value: unknown) {
+    if (busy) return;
     setDraft((current) => selected?.capability_id === "periodic_report"
       ? withReportScheduleTimezone(current, key, value)
       : selected?.capability_id === "steward_executor"
@@ -224,7 +254,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
   }
 
   function changeMode(mode: EditorMode) {
-    if (!selected) return;
+    if (!selected || busy) return;
     if (mode === "json") {
       setJsonDraft(JSON.stringify(
         completeMachineConfiguration(selected, selectedCurrent, draft),
@@ -246,115 +276,144 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     setPreview(null);
     setPreviewOperation("upsert");
     setError(null);
+    setNotice(null);
   }
 
   async function setContextDelivery(mode: "off" | "on") {
     if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
     const namespace = selected.machine_namespace;
     const configuration = {...selected.default, mode};
+    const generation = editorGeneration.current;
     setBusy("apply"); setError(null); setNotice(null);
     try {
       const plan = await previewMachineConfiguration(namespace, configuration);
+      if (generation !== editorGeneration.current) return;
       await applyMachineConfiguration(namespace, configuration, plan.plan_revision);
+      if (generation !== editorGeneration.current) { onChanged?.(); return; }
+      setReadbackPending(selected.display_name);
       const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
       setInspection(next);
+      setReadbackPending(null);
       if (next.machine_configuration?.namespaces[namespace]?.mode !== mode) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
       setNotice(locale === "zh-CN" ? "Codex 偏好已保存。" : "Codex preference saved.");
       onChanged?.();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.applyError"));
-    } finally { setBusy(null); }
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.applyError"));
+    } finally { if (generation === editorGeneration.current) setBusy(null); }
   }
 
   async function createPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !desiredConfiguration || !editorValid || busy) return;
+    const generation = editorGeneration.current;
     setBusy("preview");
     setError(null);
     setNotice(null);
     try {
       setPreviewOperation("upsert");
-      setPreview(await previewMachineConfiguration(selected.machine_namespace, desiredConfiguration));
+      const next = await previewMachineConfiguration(selected.machine_namespace, desiredConfiguration);
+      if (generation === editorGeneration.current) setPreview(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.previewError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.previewError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function createRemovalPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !configured || busy) return;
+    const generation = editorGeneration.current;
     setBusy("preview");
     setError(null);
     setNotice(null);
     try {
       setPreviewOperation("remove");
-      setPreview(await previewMachineConfigurationRemoval(selected.machine_namespace));
+      const next = await previewMachineConfigurationRemoval(selected.machine_namespace);
+      if (generation === editorGeneration.current) setPreview(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.previewError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.previewError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function applyPreview() {
     if (!editorAvailable || !selected?.machine_namespace || !preview || busy || (previewOperation === "upsert" && !desiredConfiguration)) return;
+    const generation = editorGeneration.current;
     setBusy("apply");
     setError(null);
+    setNotice(null);
     const operation = previewOperation;
     try {
       const result = operation === "remove"
         ? await applyMachineConfigurationRemoval(selected.machine_namespace, preview.plan_revision)
         : await applyMachineConfiguration(selected.machine_namespace, desiredConfiguration!, preview.plan_revision);
+      if (generation !== editorGeneration.current) { onChanged?.(); return; }
       setTransaction(result);
       setPreview(null);
       setPreviewOperation("upsert");
       setRollbackPlan(null);
-      await reload();
+      setReadbackPending(selected.display_name);
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
       setNotice(result.status === "applied"
         ? t(operation === "remove" ? "machine.removed" : "machine.applied")
         : t("machine.unchanged"));
       onChanged?.();
     } catch (cause) {
+      if (generation !== editorGeneration.current) return;
       setPreview(null);
       setPreviewOperation("upsert");
       setError(cause instanceof Error ? cause.message : t("machine.applyError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function previewRollback() {
     if (!transaction?.transaction_id || busy) return;
+    const generation = editorGeneration.current;
     setBusy("rollback-preview");
     setError(null);
     try {
-      setRollbackPlan(await previewMachineConfigurationRollback(transaction.transaction_id));
+      const next = await previewMachineConfigurationRollback(transaction.transaction_id);
+      if (generation === editorGeneration.current) setRollbackPlan(next);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
+      if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
   async function applyRollback() {
     if (!transaction?.transaction_id || !rollbackPlan || busy) return;
+    const generation = editorGeneration.current;
     setBusy("rollback");
     setError(null);
+    setNotice(null);
     try {
       await applyMachineConfigurationRollback(transaction.transaction_id, rollbackPlan.plan_revision);
+      if (generation !== editorGeneration.current) { onChanged?.(); return; }
       setTransaction(null);
       setRollbackPlan(null);
       setPreview(null);
-      await reload();
+      setReadbackPending(selected?.display_name ?? t("settings.scope.machine"));
+      const next = await fetchMachineConfiguration();
+      if (generation !== editorGeneration.current) return;
+      setInspection(next);
+      setReadbackPending(null);
       setNotice(t("machine.rolledBack"));
       onChanged?.();
     } catch (cause) {
+      if (generation !== editorGeneration.current) return;
       setRollbackPlan(null);
       setError(cause instanceof Error ? cause.message : t("machine.rollbackError"));
     } finally {
-      setBusy(null);
+      if (generation === editorGeneration.current) setBusy(null);
     }
   }
 
@@ -388,6 +447,14 @@ export function MachineConfigurationSettings({ section, onChanged }: {
           lives in one body element so the surface keeps exactly two grid rows
           however many notices the editor needs. */}
       <div className="personal-capability-body">
+        {readbackPending ? <section className="personal-capability-recovery" role="status">
+          <AlertTriangle aria-hidden size={18} />
+          <div><strong>{locale === "zh-CN" ? "配置已写入，读回尚未确认" : "Configuration written; readback unverified"}</strong>
+            <p>{readbackPending}</p></div>
+          <button disabled={Boolean(busy)} onClick={() => void retryReadback()} type="button">
+            <RefreshCw aria-hidden size={15} />{busy === "readback" ? t("common.loading") : t("capabilities.refreshSource")}
+          </button>
+        </section> : null}
         {inspection?.status === "invalid" ? (
           <section className="personal-machine-error" data-testid="machine-invalid-repair" role="alert">
             <strong>{t("machine.invalidStoredConfiguration")}</strong>
@@ -473,7 +540,7 @@ export function MachineConfigurationSettings({ section, onChanged }: {
               : "Currently supports only Codex App and benchmark heartbeats; unknown or unsupported declarations return an error. Saving a preference does not establish use in the current session or change other applications or explicitly disabled runs. Delta requires a ready host and complete retained context; otherwise full context is preserved. Private storage and session isolation are automatic; each delivery reports its actual mode."}</p></ContextHelp>
           </section> : null}
           {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
-            <button onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
+            <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
               <Code2 aria-hidden size={14} />{t(editorMode === "guided" ? "machine.editJson" : "machine.backToForm")}
             </button>
           </div> : null}
@@ -484,13 +551,13 @@ export function MachineConfigurationSettings({ section, onChanged }: {
                 advancedKeys={selected.capability_id === "todo_replan_cadence" ? ["planning_horizon_goal"] : []}
                 omitKeys={selected.capability_id === "steward_executor" && draft.selection_policy !== "flexible" ? ["eligible_endpoints"] : []}
                 onChange={changeDraft} value={draft}
-                enabledAction={<button className="personal-capability-edit-json" onClick={() => changeMode("json")} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>} />
+                enabledAction={<button className="personal-capability-edit-json" disabled={Boolean(busy)} onClick={() => changeMode("json")} type="button"><Code2 aria-hidden size={14} />{t("machine.editJson")}</button>} />
               {!editorValid ? <p className="personal-machine-validation" role="alert">{t("machine.requiredFields")}</p> : null}
             </section>
           ) : (
             <label className="personal-capability-json-editor" htmlFor="machine-configuration-json">
               <span>{t("machine.jsonConfiguration")}</span>
-              <textarea aria-describedby="machine-configuration-json-help" disabled={Boolean(busy)} id="machine-configuration-json" onChange={(event) => { setJsonDraft(event.target.value); setPreview(null); setError(null); }} rows={12} spellCheck={false} value={jsonDraft} />
+              <textarea aria-describedby="machine-configuration-json-help" disabled={Boolean(busy)} id="machine-configuration-json" onChange={(event) => { setJsonDraft(event.target.value); setPreview(null); setError(null); setNotice(null); }} rows={12} spellCheck={false} value={jsonDraft} />
               <small id="machine-configuration-json-help">{t("machine.jsonConfigurationHelp")}</small>
               {!parsedJsonDraft ? <span className="personal-machine-validation" role="alert">{t("machine.jsonInvalid")}</span> : null}
             </label>

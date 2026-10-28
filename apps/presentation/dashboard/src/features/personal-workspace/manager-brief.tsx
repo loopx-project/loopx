@@ -1,62 +1,86 @@
 import {ContextHelp} from "./context-help";
-import {ArrowRight, Check, CircleHelp} from "lucide-react";
-import type { ReactNode } from "react";
+import {ArrowRight, Check, CircleHelp, Hand} from "lucide-react";
+import {useState, type ReactNode} from "react";
 import { useWorkspaceI18n } from "./i18n";
-import type { WorkspaceActionPreview, WorkspaceGoal } from "./personal-workspace-model";
+import type { WorkspaceActionPreview, WorkspaceAttention, WorkspaceGoal } from "./personal-workspace-model";
 import { workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { goalWorkKind, presentGoalActivity } from "./goal-activity";
 import { GoalIdentityMark, useExecutionDetail } from "./goal-activity-view";
+import { canReviewAttention } from "./attention-details";
 
 import { recentCompletions } from "./recent-completions";
 
 const briefRowLimit = 3;
 
-type BriefRow = { goal: WorkspaceGoal; key: string; meta?: ReactNode; text: string; proposal?: WorkspaceActionPreview };
+type BriefRow = { goal: WorkspaceGoal; key: string; meta?: ReactNode; text: string; proposal?: WorkspaceActionPreview; attention?: WorkspaceAttention };
 
 function RunningMeta({ goal }: { goal: WorkspaceGoal }) {
   return <>{useExecutionDetail(goal.execution).join(" · ") || goal.title}</>;
 }
 
-function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOperation, onViewAll, rows, title, total }: {
+function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOperation, onSelectAttention, rows, title, total }: {
   count: number;
   empty: string;
-  kind: "needs" | "operations" | "running" | "claimed" | "completed";
+  kind: "needs" | "needs-goals" | "confirmations" | "operations" | "running" | "claimed" | "completed";
   live?: boolean;
   onSelectGoal: (goalId: string) => void;
   onSelectOperation?: (proposal: WorkspaceActionPreview) => void;
-  onViewAll?: () => void;
+  onSelectAttention?: (item: WorkspaceAttention) => void;
   rows: BriefRow[];
   title: string;
   total?: string | null;
 }) {
   const { t } = useWorkspaceI18n();
+  const [expanded, setExpanded] = useState(false);
   return (
     <section className={`personal-brief-tile is-${kind}${live ? " is-live" : ""}`} data-empty={count === 0 || undefined} data-testid={`personal-brief-${kind}`}>
       <header><span>{title}{!rows.length ? <ContextHelp label={empty} icon={CircleHelp}><p>{empty}</p></ContextHelp> : null}</span><b>{count}</b></header>
       {rows.length ? <div className="personal-brief-rows">
-        {rows.slice(0, briefRowLimit).map((row) => (
+        {(expanded ? rows : rows.slice(0, briefRowLimit)).map((row) => (
           <button className="personal-brief-row" key={row.key} data-operation-id={row.proposal?.previewId}
-            onClick={() => row.proposal ? onSelectOperation?.(row.proposal) : onSelectGoal(row.goal.goalId)} type="button">
-            {kind === "completed" ? <span className="personal-brief-check"><Check size={12} /></span> : <GoalIdentityMark goal={row.goal} />}
+            data-attention-id={row.attention?.todoId} data-attention-source={row.attention?.sourceId}
+            onClick={() => row.proposal ? onSelectOperation?.(row.proposal)
+              : row.attention && onSelectAttention ? onSelectAttention(row.attention) : onSelectGoal(row.goal.goalId)} type="button">
+            {kind === "completed" ? <span className="personal-brief-check"><Check size={12} /></span>
+              : row.attention ? <Hand aria-hidden size={16}/> : <GoalIdentityMark goal={row.goal} />}
             <span><strong>{row.text}</strong><small>{row.meta ?? row.goal.title}</small></span>
             <ArrowRight aria-hidden size={14} />
           </button>
         ))}
       </div> : null}
-      {total ? <footer>{total}</footer> : null}
-      {onViewAll && rows.length > briefRowLimit ? <footer><button type="button" onClick={onViewAll}>{t("brief.viewAll", { count: rows.length })}</button></footer> : null}
+      {total || rows.length > briefRowLimit ? <footer>{total ? <span>{total}</span> : null}
+        {rows.length > briefRowLimit ? <button type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? t("brief.collapse") : t("brief.viewAll", { count: rows.length })}</button> : null}
+      </footer> : null}
     </section>
   );
 }
 
-export function ManagerBrief({ goals, onSelectGoal, operations = [], onSelectOperation, onViewAllOperations }: {
+export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAttention, operations = [], onSelectOperation }: {
   goals: WorkspaceGoal[]; onSelectGoal: (goalId: string) => void;
+  attention?: WorkspaceAttention[]; onSelectAttention?: (item: WorkspaceAttention) => void;
   operations?: WorkspaceActionPreview[]; onSelectOperation?: (proposal: WorkspaceActionPreview) => void;
   onViewAllOperations?: () => void;
 }) {
   const { t } = useWorkspaceI18n();
   const active = goals.filter((goal) => goal.activationState === "active" && !goal.loadState);
   const needs = active.filter((goal) => workspaceHomeLaneForGoal(goal) === "needs_you");
+  // Count only observed native items. A Goal digest is a different unit, and
+  // equal titles never prove that an attention item and an operation are one.
+  const seen = new Set<string>();
+  const attentionRows: BriefRow[] = attention.flatMap(item => {
+    const goal = goals.find(candidate => candidate.goalId === item.goalId && !candidate.loadState);
+    if (!goal || !canReviewAttention(item)) return [];
+    const key = JSON.stringify([item.sourceId ?? "", item.goalId, item.decisionSource ?? "todo", item.todoId]);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{goal, key, attention: item, text: item.text, meta: [goal.title,
+      item.decisionSource === "run_operator_gate" ? t("brief.runGate")
+        : item.details?.interaction === "decision" ? t("brief.decision")
+          : item.details?.interaction === "user_action" ? t("brief.userAction") : t("brief.attention"),
+    ].join(" · ")}];
+  });
+  const summarizedGoals = needs.filter(goal => !attentionRows.some(row => row.goal === goal));
+  const incomplete = goals.some(goal => goal.loadState);
   const operationRows: BriefRow[] = operations.flatMap(proposal => {
     const goal = goals.find(goal => goal.goalId === proposal.goalId && !goal.loadState);
     return goal ? [{goal, key: proposal.previewId, proposal, text: proposal.title,
@@ -79,13 +103,16 @@ export function ManagerBrief({ goals, onSelectGoal, operations = [], onSelectOpe
     : executionPending ? t("brief.runningReading") : t("activity.executionUnknown");
   return (
     <section aria-label={t("brief.title")} className="personal-brief">
-      <BriefTile count={needs.length + deliveredOperations.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
-        onSelectOperation={onSelectOperation}
-        onViewAll={deliveredOperations.length > briefRowLimit ? onViewAllOperations : undefined}
-        rows={[...deliveredOperations, ...needs.map((goal) => ({ goal, key: goal.goalId, meta: goal.title, text: goal.needsYou ?? goal.nextSentence }))]}
-        title={t("brief.needs")} />
+      <BriefTile count={attentionRows.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
+        onSelectAttention={onSelectAttention} rows={attentionRows} title={t("brief.needs")}
+        total={incomplete ? t("brief.partialGoals") : attentionRows.length ? t("brief.affectedGoals", {count: new Set(attentionRows.map(row => row.goal.goalId)).size}) : null} />
+      {summarizedGoals.length ? <BriefTile count={summarizedGoals.length} empty="" kind="needs-goals" onSelectGoal={onSelectGoal}
+        rows={summarizedGoals.map(goal => ({goal, key: goal.goalId, meta: goal.title, text: goal.needsYou ?? goal.nextSentence}))}
+        title={t("brief.needsGoals")} /> : null}
+      {deliveredOperations.length ? <BriefTile count={deliveredOperations.length} empty="" kind="confirmations" onSelectGoal={onSelectGoal}
+        onSelectOperation={onSelectOperation} rows={deliveredOperations} title={t("brief.confirmations")} /> : null}
       {awaitingDelivery.length ? <BriefTile count={awaitingDelivery.length} empty="" kind="operations" onSelectGoal={onSelectGoal}
-        onSelectOperation={onSelectOperation} onViewAll={onViewAllOperations} rows={awaitingDelivery}
+        onSelectOperation={onSelectOperation} rows={awaitingDelivery}
         title={t("brief.operationDeliveryPending")} /> : null}
       <BriefTile count={running.length} empty={runningEmpty} kind="running" live={running.some((goal) => presentGoalActivity(goal).live)} onSelectGoal={onSelectGoal}
         rows={running.map((goal) => ({ goal, key: goal.goalId, meta: <RunningMeta goal={goal} />, text: goal.title }))}

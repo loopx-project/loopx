@@ -1,0 +1,9 @@
+.personal-message-reading { min-width: 0; }
+.personal-message-reading-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 4px 8px; }
+.personal-message-reading-controls button { min-height: 44px; padding: 8px 0; color: var(--pw-blue-ink); background: transparent; border: 0; cursor: pointer; font: inherit; }
+.personal-message-reading-controls button:hover { text-decoration: underline; text-underline-offset: 3px; }
+.personal-message-reading-controls span { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
+.personal-message[tabindex="-1"] { scroll-margin-block: 24px; }
+.personal-message[tabindex="-1"]:focus-visible { outline: 2px solid var(--pw-blue-ink); outline-offset: 4px; }
+.personal-message-focus-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-block: 8px 16px; color: var(--pw-muted); }
+.personal-message-focus-notice button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; color: var(--pw-text); background: var(--pw-card); cursor: pointer; }

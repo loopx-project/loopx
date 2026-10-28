@@ -29,6 +29,7 @@ type CapabilityCatalogProps = Readonly<{
   catalog: CapabilityConfigurationCatalog;
   goalId: string;
   loading: boolean;
+  readbackLoading: boolean;
   onApplied: () => Promise<void>;
   notification?: WorkspaceGoalNotification;
   onNotificationChanged: () => void;
@@ -41,6 +42,7 @@ type CapabilityMutationState = Readonly<{
   horizonOverride: boolean;
   exploreModeOverride: boolean;
   partialWrite: GoalConfigurationPartialWrite | null;
+  readbackPending: boolean;
   preview: GoalConfigurationPreview | null;
 }>;
 
@@ -83,11 +85,13 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
     horizonOverride: false,
     exploreModeOverride: false,
     partialWrite: null,
+    readbackPending: false,
     preview: null,
   });
   const [error, setError] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"guided" | "json">("guided");
   const [jsonDraft, setJsonDraft] = useState("");
+  const editorGeneration = useRef(0);
   // Preserve the inspected Agent across fresh readbacks, never across Goals.
   // Config paths and mutation previews still reset from the native snapshot.
   const memoryScope = useRef({goalId, agentId: ""});
@@ -98,6 +102,7 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
   // Initialize the new capability's draft before it can receive input. A
   // post-paint reset can otherwise erase the first toggle after selection.
   useLayoutEffect(() => {
+    editorGeneration.current++;
     setEditorMode("guided");
     setJsonDraft("");
     const current = (selected?.capability_id === "pull_request_review" ? selected.effective_configuration?.configuration : selected?.current)
@@ -119,27 +124,31 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
       horizonOverride: Object.hasOwn(selected?.current ?? {}, "planning_horizon_goal"),
       exploreModeOverride: Object.hasOwn(selected?.current ?? {}, "mode"),
       partialWrite: null,
+      readbackPending: false,
       preview: null,
     });
     setError(null);
+    return () => { editorGeneration.current++; };
   }, [selected, goalId]);
 
   async function preview(configuration: Record<string, unknown> | null) {
     if (!selected || loading || mutation.busy || !jsonValid) return;
-    setMutation((current) => ({ ...current, busy: "preview", partialWrite: null }));
+    const generation = editorGeneration.current;
+    setMutation((current) => ({ ...current, busy: "preview", partialWrite: null, readbackPending: false }));
     setError(null);
     try {
       const nextPreview = await previewGoalConfiguration(goalId, selected.capability_id, configuration === null ? null : goalWriteDraft(selected, configuration, editorMode, mutation.cadenceOverride, mutation.horizonOverride, mutation.exploreModeOverride));
-      setMutation((current) => ({ ...current, preview: nextPreview }));
+      if (generation === editorGeneration.current) setMutation((current) => ({ ...current, preview: nextPreview }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
+      if (generation === editorGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.previewFailed"));
     } finally {
-      setMutation((current) => ({ ...current, busy: null }));
+      if (generation === editorGeneration.current) setMutation((current) => ({ ...current, busy: null }));
     }
   }
 
   async function apply() {
     if (!selected || loading || !mutation.preview || mutation.busy || !jsonValid) return;
+    const generation = editorGeneration.current;
     setMutation((current) => ({ ...current, busy: "apply" }));
     setError(null);
     try {
@@ -150,17 +159,20 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
         mutation.preview.action === "delete" ? null : writableDraft,
         mutation.preview.plan_revision,
       );
+      if (generation !== editorGeneration.current) return;
       setMutation((current) => ({
         ...current,
         partialWrite: result.status === "partial_write" ? result : null,
+        readbackPending: result.status !== "partial_write",
         preview: null,
       }));
       if (result.status !== "partial_write") await onApplied();
     } catch (reason) {
+      if (generation !== editorGeneration.current) return;
       setMutation((current) => ({ ...current, preview: null }));
       setError(reason instanceof Error ? reason.message : t("capabilities.applyFailed"));
     } finally {
-      setMutation((current) => ({ ...current, busy: null }));
+      if (generation === editorGeneration.current) setMutation((current) => ({ ...current, busy: null }));
     }
   }
 
@@ -229,30 +241,32 @@ function useCapabilityMutation({ goalId, loading, onApplied, selected, t }: Read
   return { apply, changeDraft, changeJson, changeMode, editorMode, jsonDraft, jsonValid, error, mutation, preview };
 }
 
-function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, preview }: Readonly<{
+function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, readbackPending: pendingReadback, preview, busy }: Readonly<{
   mutationError: string | null;
   onApplied: () => Promise<void>;
   partialWrite: GoalConfigurationPartialWrite | null;
+  readbackPending: boolean;
   preview: GoalConfigurationPreview | null;
+  busy: boolean;
 }>) {
   const { locale, t } = useWorkspaceI18n();
-  const readbackPending = partialWrite && !partialWrite.readback_verified && !partialWrite.shared_sync_pending && !partialWrite.host_capacity_pending;
+  const readbackPending = pendingReadback || Boolean(partialWrite && !partialWrite.readback_verified && !partialWrite.shared_sync_pending && !partialWrite.host_capacity_pending);
   return (
     <>
       {mutationError ? <p className="personal-machine-error" role="alert">{mutationError}</p> : null}
-      {partialWrite ? (
+      {partialWrite || readbackPending ? (
         <section aria-live="polite" className="personal-capability-recovery">
           <AlertTriangle aria-hidden size={18} />
           <div>
-            <strong>{readbackPending ? locale === "zh-CN" ? "配置已写入，读回尚未确认" : "Configuration written; readback unverified" : t(partialWrite.host_capacity_pending
+            <strong>{readbackPending ? locale === "zh-CN" ? "配置已写入，读回尚未确认" : "Configuration written; readback unverified" : t(partialWrite?.host_capacity_pending
               ? "capabilities.hostCapacityPartialWrite"
               : "capabilities.partialWrite")}</strong>
-            <p>{readbackPending ? locale === "zh-CN" ? "请先重新读取当前配置，再决定是否需要其它变更。" : "Reload the current configuration before deciding whether another change is needed." : t(partialWrite.host_capacity_pending
+            <p>{readbackPending ? locale === "zh-CN" ? "请先重新读取当前配置，再决定是否需要其它变更。" : "Reload the current configuration before deciding whether another change is needed." : t(partialWrite?.host_capacity_pending
               ? "capabilities.hostCapacityPartialWriteDescription"
               : "capabilities.partialWriteDescription")}</p>
-            <small>{partialWrite.recommended_action}</small>
+            {partialWrite ? <small>{partialWrite.recommended_action}</small> : null}
           </div>
-          <button onClick={() => void onApplied()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.refreshSource")}</button>
+          <button disabled={busy} onClick={() => void onApplied()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.refreshSource")}</button>
         </section>
       ) : null}
       {preview ? (
@@ -277,7 +291,7 @@ function CapabilityMutationFeedback({ mutationError, onApplied, partialWrite, pr
   );
 }
 
-function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
+function CapabilityCatalog({ callbacks, catalog, goalId, loading, readbackLoading, notification, onApplied, onNotificationChanged }: CapabilityCatalogProps) {
   const { locale, t } = useWorkspaceI18n();
   const orderedCapabilities = useMemo(
     () => orderCapabilitiesForPresentation(
@@ -300,7 +314,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
   );
   const capabilityMutation = useCapabilityMutation({ goalId, loading, onApplied, selected: localizedSelected, t });
   const { apply, changeDraft, changeJson, changeMode, editorMode, jsonDraft, jsonValid, error: mutationError, mutation, preview: requestPreview } = capabilityMutation;
-  const { busy, draft, partialWrite, preview } = mutation;
+  const { busy, draft, partialWrite, readbackPending, preview } = mutation;
   // A refreshed observation can replace `selected` and reset local mutation
   // state. The existing catalog read still owns admission until it settles.
   const editorBusy = loading || Boolean(busy);
@@ -355,7 +369,7 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
           role={memorySelected && selected.capability_id !== "decision_context" ? "tabpanel" : undefined}>
         <CapabilityEditorStatus available={editorAvailable} t={t} description={readOnlyReason} />
 
-        {selected.capability_id === "progress_review" && selected.observation ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
+        {selected.capability_id === "progress_review" && selected.observation && !loading ? <section className="personal-capability-observation" aria-label={locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}>
           <h3>{locale === "zh-CN" ? "审查证据读回" : "Review evidence readback"}</h3>
           <button type="button" onClick={() => void onApplied()}>{locale === "zh-CN" ? "重新读取审查证据" : "Recheck review evidence"}</button>
           <p>{selected.observation.read_state === "unavailable" ? (locale === "zh-CN" ? "审查存储不可读，当前判断未知。" : "Review storage unavailable; current judgment unknown.")
@@ -477,7 +491,8 @@ function CapabilityCatalog({ callbacks, catalog, goalId, loading, notification, 
           </p>)}
         </section> : null}
         {selected.capability_id === "reward_memory" ? <CapabilityConfigurationHelp capability={selected} locale={locale} /> : null}
-        <CapabilityMutationFeedback mutationError={mutationError} onApplied={onApplied} partialWrite={partialWrite} preview={preview} />
+        <CapabilityMutationFeedback mutationError={mutationError} onApplied={onApplied} partialWrite={partialWrite}
+          readbackPending={readbackPending} preview={preview} busy={readbackLoading || Boolean(busy)} />
         {editorAvailable ? (
           <footer className="personal-capability-actions">
             {localizedSelected.current && localizedSelected.available_scopes.includes("machine") ? (
@@ -520,9 +535,8 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
     const generation = ++readGeneration.current;
     setLoading(true);
     setError(null);
-    // Withdraw the previous observation during a recheck; preserve navigation.
-    setInspection(current => current ? {...current, capability_catalog: {...current.capability_catalog,
-      capabilities: current.capability_catalog.capabilities.map(item => item.observation ? {...item, observation: undefined} : item)}} : null);
+    // Keep the current editor and draft mounted during readback. Observation
+    // panels stay unavailable until the new read succeeds.
     await fetchGoalConfiguration(goalId)
       .then(value => {if (generation === readGeneration.current) setInspection(value);})
       .catch((reason: unknown) => {if (generation === readGeneration.current) setError(reason instanceof Error ? reason.message : t("capabilities.loadFailed"));})
@@ -537,24 +551,24 @@ export function GoalCapabilitySettings({ callbacks, goalId, notification, onChan
   if (loading && !inspection) {
     return <p aria-live="polite" className="personal-capability-empty"><LoaderCircle className="personal-spin" size={18} />{t("capabilities.loading")}</p>;
   }
-  if (error) {
-    return (
+  const loadError = error ? (
       <section className="personal-capability-error" role="alert">
         <AlertTriangle aria-hidden size={18} />
         <span><strong>{t("capabilities.loadFailed")}</strong><small>{error}</small></span>
         <button onClick={() => void load()} type="button"><RefreshCw aria-hidden size={15} />{t("capabilities.retry")}</button>
       </section>
-    );
-  }
-  if (!inspection) return null;
+    ) : null;
+  if (!inspection) return loadError;
 
   return (
     <section className="personal-capability-settings is-goal-scoped" data-revision={inspection.revision}>
+      {loadError}
       <CapabilityCatalog
         callbacks={callbacks}
         catalog={inspection.capability_catalog}
         goalId={goalId}
-        loading={loading}
+        loading={loading || Boolean(error)}
+        readbackLoading={loading}
         notification={notification}
         onApplied={load}
         onNotificationChanged={onChanged}

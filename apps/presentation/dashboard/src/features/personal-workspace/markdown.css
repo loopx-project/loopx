@@ -1,0 +1,9 @@
+.personal-md { min-width: 0; }
+.personal-md .personal-md-heading { margin: 0; scroll-margin-top: 24px; }
+.personal-md .personal-md-heading.is-h5,
+.personal-md .personal-md-heading.is-h6 { font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-md .personal-md-pre,
+.personal-md .personal-md-table-scroll { min-width: 0; max-width: 100%; overscroll-behavior-x: contain; }
+.personal-md .personal-md-pre:focus-visible,
+.personal-md .personal-md-table-scroll:focus-visible,
+.personal-md .personal-md-heading:focus-visible { outline: 2px solid var(--pw-blue-ink, currentColor); outline-offset: 3px; }

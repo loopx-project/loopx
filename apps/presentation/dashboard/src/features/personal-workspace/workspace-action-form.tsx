@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
 import type { ChatProject } from "../../data/chat-model";
 import type { WorkspaceActionPreviewRequest, WorkspaceGoal } from "./personal-workspace-model";
+import {compactPythonWhitespace, compactPythonTextLength as boundedLength} from "../../../../../../loopx/control_plane/coordination/python_whitespace.ts";
+export {compactPythonTextLength as boundedLength} from "../../../../../../loopx/control_plane/coordination/python_whitespace.ts";
 
 // Action identity comes from an explicit control, never from the text being edited.
 export type WorkspaceActionDraft = {
@@ -20,14 +22,10 @@ export type WorkspaceActionDraft = {
 // Mirrors the backend preview normalizer: whitespace is collapsed, then code points are counted.
 export const todoTextLimit = 400;
 const goalObjectiveLimit = 1000;
-export function boundedLength(value: string) {
-  return Array.from(value.split(/\s+/u).filter(Boolean).join(" ")).length;
-}
-
 export function todoCreateRequest(text: string, goalId: string, summary: string): WorkspaceActionPreviewRequest {
   return {actionKind: "todo.create", context: {kind: "goal", goal_id: goalId},
     idempotencyKey: `workspace-todo.create-${crypto.randomUUID()}`,
-    normalizedParameters: {goal_id: goalId, text: text.trim()}, summary};
+    normalizedParameters: {goal_id: goalId, text: compactPythonWhitespace(text)}, summary};
 }
 
 export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProjects = [], onClose, onPreview }: {
@@ -42,6 +40,7 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
   const zh = locale === "zh-CN";
   const dialog = useRef<HTMLDialogElement>(null);
   const headingId = useId();
+  const countId = useId();
   const submitting = useRef(false);
   const goalRequest = useRef<{ content: string; operationId: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,6 +59,9 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
   const scheduled = draft.kind === "heartbeat" || draft.kind === "monitor";
   const title = draft.kind === "goal" ? t("composer.createGoal") : draft.kind === "todo" ? (zh ? "创建任务" : "Create task") : draft.kind === "heartbeat" ? t("schedule.heartbeat") : t("composer.monitor");
   const { objective: goalObjective, initial_todos: [goalInitialTodo] } = goalCreateContent({ objective, completion, boundary }, t);
+  const hasRequiredContent = (scheduled || boundedLength(objective) > 0)
+    && (draft.kind !== "goal" || boundedLength(completion) > 0)
+    && (draft.kind !== "monitor" || boundedLength(target) > 0);
   const lengthIssue = draft.kind === "todo" && boundedLength(objective) > todoTextLimit
     ? (zh ? `任务内容 ${boundedLength(objective)}/${todoTextLimit} 字，请精简后再检查。` : `Task is ${boundedLength(objective)}/${todoTextLimit} characters. Shorten it before review.`)
     : draft.kind === "goal" && boundedLength(goalObjective) > goalObjectiveLimit
@@ -74,7 +76,7 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
   }, []);
 
   async function preview() {
-    if (submitting.current || lengthIssue) return;
+    if (submitting.current || lengthIssue || !hasRequiredContent) return;
     submitting.current = true;
     setBusy(true);
     setError("");
@@ -90,10 +92,10 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
       const goalId = draft.goalId;
       if (!goalId) throw new Error(zh ? "请先选择 Goal。" : "Select a Goal first.");
       const actionKind = draft.kind === "todo" ? "todo.create" : draft.kind === "heartbeat" ? "heartbeat.bind" : "monitor.create";
-      const parameters = draft.kind === "todo" ? { goal_id: goalId, text: objective.trim() } : {
+      const parameters = draft.kind === "todo" ? { goal_id: goalId, text: compactPythonWhitespace(objective) } : {
         goal_id: goalId, agent_id: draft.agentId, cadence: `${interval}${unit}`, stop_condition: stop,
         timezone: "Asia/Shanghai",
-        ...(draft.kind === "monitor" ? { target: target.trim(), target_key: `goal-${goalId}` } : {}),
+        ...(draft.kind === "monitor" ? { target: compactPythonWhitespace(target), target_key: `goal-${goalId}` } : {}),
       };
       await onPreview(draft.kind === "todo" ? todoCreateRequest(objective, goalId, title)
         : { actionKind, context: { kind: "goal", goal_id: draft.goalId },
@@ -117,7 +119,7 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
           <label>{zh ? "时间单位" : "Time unit"}<select aria-label={zh ? "时间单位" : "Time unit"} value={unit} onChange={(event) => setUnit(event.target.value)}><option value="m">{zh ? "分钟" : "Minutes"}</option><option value="h">{zh ? "小时" : "Hours"}</option><option value="d">{zh ? "天" : "Days"}</option></select></label>
           <label>{zh ? "停止条件" : "Stop when"}<select aria-label={zh ? "停止条件" : "Stop when"} value={stop} onChange={(event) => setStop(event.target.value)}><option value="goal_complete">{zh ? "Goal 完成" : "Goal completes"}</option><option value="pr_merged">{zh ? "PR 合并" : "PR merges"}</option><option value="release_complete">{zh ? "发布完成" : "Release completes"}</option></select></label>
         </> : <>
-          <label>{draft.kind === "goal" ? (zh ? "目标" : "Objective") : (zh ? "任务内容" : "Task")}<textarea aria-label={draft.kind === "goal" ? (zh ? "目标" : "Objective") : (zh ? "任务内容" : "Task")} required value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
+          <label>{draft.kind === "goal" ? (zh ? "目标" : "Objective") : (zh ? "任务内容" : "Task")}<textarea aria-label={draft.kind === "goal" ? (zh ? "目标" : "Objective") : (zh ? "任务内容" : "Task")} aria-describedby={countId} required value={objective} onChange={(event) => setObjective(event.target.value)} /></label>
           {draft.kind === "goal" ? <>
             <label>{zh ? "完成标准" : "Completion criteria"}<textarea aria-label={zh ? "完成标准" : "Completion criteria"} required value={completion} onChange={(event) => setCompletion(event.target.value)} /></label>
             <label>{zh ? "执行边界（可选）" : "Execution boundary (optional)"}<textarea aria-label={zh ? "执行边界（可选）" : "Execution boundary (optional)"} value={boundary} onChange={(event) => setBoundary(event.target.value)} /></label>
@@ -137,9 +139,12 @@ export function WorkspaceActionForm({ draft, workspaceGoals = [], workspaceProje
           </> : null}
         </>}
       </fieldset>
+      {!scheduled ? <output id={countId} aria-live="off" aria-label={zh ? "合计保存字数" : "Total characters to save"}>
+        {draft.kind === "goal" ? `${boundedLength(goalObjective)} / ${goalObjectiveLimit}` : `${boundedLength(objective)} / ${todoTextLimit}`}
+      </output> : null}
       {lengthIssue ? <p className="personal-action-form-limit" role="status">{lengthIssue}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
-      <footer><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="submit" disabled={busy || Boolean(lengthIssue) || (!scheduled && !objective.trim()) || (draft.kind === "goal" && !completion.trim()) || (draft.kind === "monitor" && !target.trim())}>{busy ? (zh ? "正在准备…" : "Preparing…") : (zh ? "检查配置" : "Review configuration")}</button></footer>
+      <footer><button type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button><button type="submit" disabled={busy || Boolean(lengthIssue) || !hasRequiredContent}>{busy ? (zh ? "正在准备…" : "Preparing…") : (zh ? "检查配置" : "Review configuration")}</button></footer>
     </form>
   </dialog>;
 }

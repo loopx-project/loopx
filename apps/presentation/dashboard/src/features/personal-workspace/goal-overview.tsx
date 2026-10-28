@@ -80,7 +80,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
       </p>
     ) : null}
     <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
-      readOnly={readOnly} active={active} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
+      readOnly={readOnly} active={active} prioritizeAttention={blocking !== null && blocking > 0} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
       brief={<section className="goal-overview-direction" aria-label={copy.direction}>
         {digest.objective ? <p className="goal-overview-objective" data-testid="goal-declared-objective">{digest.objective}</p> : <ContextHelp icon={CircleHelp} label={locale === "zh-CN" ? "目标声明未读到" : "Declared objective unavailable"}><p>{copy.objectiveUnavailable}</p></ContextHelp>}
         {currentWork && currentRow ? <details className="goal-overview-current">

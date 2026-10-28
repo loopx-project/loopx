@@ -1,4 +1,4 @@
-import {Bot, Check, ChevronDown, CircleHelp, ExternalLink, ListPlus, LoaderCircle, MessageSquareText, MoreHorizontal} from "lucide-react";
+import {Bot, Check, ChevronDown, CircleHelp, ExternalLink, ListPlus, LoaderCircle, MessageSquareText, MoreHorizontal, Search} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import type {GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import {useGoalWorkspaceDigest} from "./goal-masthead";
@@ -15,6 +15,8 @@ import { localizedAttentionAge, localizedSessionStatus, useWorkspaceI18n } from 
 import { CompletedTaskLane } from "./completed-task-lane";
 import { MarkdownText } from "./markdown";
 import { isGoalWorkTodo } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
+import {useGoalWorkBrowse, type GoalWorkBrowseState} from "./goal-work-browse";
+import "./goal-tasks-view.css";
 
 function TaskLane({
   children,
@@ -139,8 +141,23 @@ export function GoalTasksView({
   userTodos: WorkspaceModel["userTodos"];
 }) {
   const { t, locale } = useWorkspaceI18n();
-  const [listView, setListView] = useState(false);
-  const [laneSelection, setLaneSelection] = useState({ goalId: "", laneId: "all" });
+  const zh = locale === "zh-CN";
+  const [browse, changeBrowse] = useGoalWorkBrowse();
+  const listView = browse.view === "list";
+  const selectedLaneId = browse.owner;
+  const {query, filter} = browse;
+  const queryMatches = (text: string) => text.toLocaleLowerCase(locale).includes(query.trim().toLocaleLowerCase(locale));
+  const boardRef = useRef<HTMLElement>(null);
+  const [boardVisible, setBoardVisible] = useState(false);
+  useEffect(() => {
+    const node = boardRef.current;
+    if (!node) return;
+    const measure = () => setBoardVisible(node.getClientRects().length > 0);
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    measure();
+    return () => observer.disconnect();
+  }, []);
   const selectedTodoRef = useRef<HTMLElement | null>(null);
   function selectFromButton(button: HTMLButtonElement, next: WorkspaceDrawerSelection) {
     // macOS pointer activation need not focus buttons. The drawer uses the
@@ -152,9 +169,10 @@ export function GoalTasksView({
     if (!selectedTodoId) return;
     const frame = window.requestAnimationFrame(() => selectedTodoRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" }));
     return () => window.cancelAnimationFrame(frame);
-  }, [selectedTodoId]);
+  }, [selectedTodoId, listView, selectedLaneId, query, filter]);
   const attentionItems = userTodos
     .filter((todo) => todo.goalId === goal.goalId)
+    .filter(todo => (filter === "all" || filter === "needsYou") && queryMatches(todo.text))
     .map((todo) => ({ ...todo, goalTitle: goal.title }));
   const priorityRank = (todo: WorkspaceGoal["agentTodos"][number]) =>
     todo.priority === "P0" ? 0 : todo.priority === "P1" ? 1 : todo.priority === "P2" ? 2 : todo.priority === "P3" ? 3 : todo.priority === "P4" ? 4 : 50;
@@ -167,25 +185,27 @@ export function GoalTasksView({
     }
     return [...lanes.values()];
   }, [goal.agentLanes, goal.agentTodos]);
-  const selectedLaneId = laneSelection.goalId === goal.goalId
-    && agentLanes.some((lane) => lane.agentId === laneSelection.laneId)
-    ? laneSelection.laneId
-    : "all";
-  const laneMatches = (agentId?: string | null) => selectedLaneId === "all" || agentId === selectedLaneId;
+  const laneMatches = (agentId?: string | null) => selectedLaneId === "all" || (agentId ?? "") === selectedLaneId;
   const localDigest = useGoalWorkspaceDigest(goal, userTodos, items);
   const workDigest = sharedDigest ?? localDigest;
   const displayClasses = new Map(workDigest.work.rows.map(row => [row.todoId, row.displayClass]));
+  const filteredIds = filter === "all" ? null : new Set(workDigest.work.rail[filter]);
+  const taskMatches = (todo: WorkspaceGoal["agentTodos"][number]) => laneMatches(todo.claimedBy)
+    && queryMatches(todo.text) && (!filteredIds || filteredIds.has(todo.todoId));
+  const selectedTodo = goal.agentTodos.find(todo => todo.todoId === selectedTodoId);
+  const selectedHidden = selectedTodo && !taskMatches(selectedTodo);
   const openAgentTodos = goal.agentTodos
     .filter((todo) => isGoalWorkTodo(todo) && !todo.done)
-    .filter((todo) => laneMatches(todo.claimedBy))
+    .filter(taskMatches)
     .sort((left, right) => priorityRank(left) - priorityRank(right));
   const doneAgentTodos = goal.agentTodos
     .filter((todo) => isGoalWorkTodo(todo) && todo.done)
     .filter((todo) => laneMatches(todo.claimedBy));
   const scheduleItems = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "schedule" }> =>
-    item.kind === "schedule" && laneMatches(item.schedule.agentId));
+    item.kind === "schedule" && item.schedule.goalId === goal.goalId && filter === "all"
+    && laneMatches(item.schedule.agentId) && queryMatches(item.schedule.label));
   const executionRuns = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> =>
-    item.kind === "run" && Boolean(item.run.todoId) && laneMatches(item.run.agentId));
+    item.kind === "run" && item.run.goalId === goal.goalId && Boolean(item.run.todoId) && laneMatches(item.run.agentId));
   const isEmpty = !attentionItems.length && !openAgentTodos.length && !doneAgentTodos.length && !scheduleItems.length;
   const conversation = items.filter((item): item is Extract<WorkspaceTimelineItem, { kind: "message" }> =>
     item.kind === "message" && (item.message.role === "user" || item.message.role === "assistant"));
@@ -196,17 +216,31 @@ export function GoalTasksView({
     : null;
   const replyPending = latestUserIndex >= 0
     && conversation.slice(latestUserIndex + 1).some((item) => item.message.role === "assistant" && item.message.pending);
+  const filterLabels: Record<GoalWorkBrowseState["filter"], string> = zh
+    ? {all: "全部", needsYou: "等待决定", open: "未完成", blocked: "受阻与延后", done: "已完成"}
+    : {all: "All", needsYou: "Needs a decision", open: "Open", blocked: "Blocked and deferred", done: "Done"};
 
   return (
-    <section aria-label={t("header.tasks")} className={`personal-task-board${listView ? " is-list-view" : ""}`} tabIndex={-1}>
+    <section aria-label={t("header.tasks")} className={`personal-task-board${listView ? " is-list-view" : ""}`} tabIndex={-1} ref={boardRef}>
       <header className="personal-task-view-toolbar">
         <div><strong>{t("header.tasks")}</strong></div>
         <div className="personal-task-view-switch" role="group" aria-label={t("tasks.viewLabel")}>
-          <button type="button" aria-pressed={listView} onClick={() => setListView(true)}>{t("tasks.listView")}</button>
-          <button type="button" aria-pressed={!listView} onClick={() => setListView(false)}>{t("tasks.boardView")}</button>
+          <button type="button" aria-pressed={listView} onClick={() => changeBrowse({view: "list"})}>{t("tasks.listView")}</button>
+          <button type="button" aria-pressed={!listView} onClick={() => changeBrowse({view: "board"})}>{t("tasks.boardView")}</button>
         </div>
       </header>
-      {agentLanes.length > 1 ? (
+      <div className="personal-task-browse-controls">
+        <label className="personal-task-search"><Search size={16} aria-hidden/><input type="search" maxLength={256} value={query}
+          aria-label={zh ? "搜索当前已列出的任务" : "Search listed tasks"} placeholder={zh ? "搜索任务" : "Search tasks"}
+          onChange={event => changeBrowse({query: event.target.value}, true)}/></label>
+        <div className="personal-task-filters" role="group" aria-label={zh ? "任务状态筛选" : "Task state filters"}>
+          {(Object.keys(filterLabels) as GoalWorkBrowseState["filter"][]).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => changeBrowse({filter: value})}>{filterLabels[value]}</button>)}
+          {query || selectedLaneId !== "all" || filter !== "all" ? <button type="button" onClick={() => changeBrowse({query: "", owner: "all", filter: "all"})}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
+        </div>
+      </div>
+      {selectedHidden ? <p className="personal-task-selection-note" role="status">{zh ? "所选任务不在当前筛选范围中，详情仍保留。" : "The selected task is outside these filters. Its details are retained."}
+        <button type="button" onClick={() => changeBrowse({query: "", owner: "all", filter: "all"})}>{zh ? "显示所选任务" : "Show selected task"}</button></p> : null}
+      {agentLanes.length > 1 || selectedLaneId !== "all" || goal.agentTodos.some(todo => !todo.claimedBy) ? (
         <section aria-label={t("tasks.agentLaneFilter")} className="personal-task-lane-filter">
           <div>
             <Bot size={15} />
@@ -216,11 +250,13 @@ export function GoalTasksView({
             <span className="sr-only">{t("tasks.agentLaneFilter")}</span>
             <select
               aria-label={t("tasks.agentLaneFilter")}
-              onChange={(event) => setLaneSelection({ goalId: goal.goalId, laneId: event.target.value })}
+              onChange={(event) => changeBrowse({owner: event.target.value})}
               value={selectedLaneId}
             >
               <option value="all">{t("tasks.allAgentLanes", { count: agentLanes.length })}</option>
+              <option value="">{t("drawer.notAssigned")}</option>
               {agentLanes.map((lane) => <option key={lane.agentId} value={lane.agentId}>{lane.label}</option>)}
+              {selectedLaneId && selectedLaneId !== "all" && !agentLanes.some(lane => lane.agentId === selectedLaneId) ? <option value={selectedLaneId}>{selectedLaneId} · {zh ? "当前未列出" : "Not currently listed"}</option> : null}
             </select>
             <ChevronDown aria-hidden size={14} />
           </label>
@@ -240,7 +276,7 @@ export function GoalTasksView({
         </section>
       ) : null}
       <div className={listView ? "personal-task-grouped-list" : "personal-task-kanban"}>
-      <TaskLane listView={listView} count={attentionItems.length} label={t("timeline.waitingConfirmation")} tone="attention">
+      {filter === "all" || filter === "needsYou" ? <TaskLane listView={listView} count={attentionItems.length} label={t("timeline.waitingConfirmation")} tone="attention">
         {attentionItems.map((attention) => {
           const age = localizedAttentionAge(attention.updatedAt, t);
           return (
@@ -255,11 +291,13 @@ export function GoalTasksView({
           );
         })}
         {!attentionItems.length ? <ContextHelp label={locale === "zh-CN" ? "暂无待确认任务" : "No tasks awaiting confirmation"} icon={CircleHelp}><p className="personal-task-empty">{t("tasks.emptyConfirm")}</p></ContextHelp> : null}
-      </TaskLane>
-      <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
+      </TaskLane> : null}
+      {filter !== "done" ? <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
         {openAgentTodos.map((todo) => {
           const enriched = { ...todo, goalId: goal.goalId, goalTitle: goal.title, ownerLabel: todo.claimedBy ?? t("drawer.notAssigned") };
           const execution = executionRuns.find((item) => item.run.todoId === todo.todoId)?.run;
+          const state = displayClasses.get(todo.todoId);
+          const reason = state === "blocked" ? todo.blockedReason : state === "deferred" ? todo.resumeWhen : null;
           return (
             <div className={`personal-task-card${execution ? " has-session" : ""}${selectedTodoId === todo.todoId ? " is-selected" : ""}`} data-work-class={displayClasses.get(todo.todoId)} key={todo.todoId} ref={selectedTodoId === todo.todoId ? (element) => { selectedTodoRef.current = element; } : undefined}>
               <button aria-pressed={selectedTodoId === todo.todoId} onClick={(event) => selectFromButton(event.currentTarget, { item: enriched, kind: "todo" })} type="button">
@@ -270,6 +308,7 @@ export function GoalTasksView({
                   {execution && execution.status !== "running" ? <span className="personal-task-session-status">{localizedSessionStatus(execution.status, t)}</span> : null}
                   <span>{enriched.ownerLabel}</span>
                 </small>
+                {reason ? <span className="personal-task-blocker">{reason}</span> : null}
               </button>
               <div className="personal-task-card-actions">
                 {execution ? <button className="personal-task-session-link" aria-label={t("tasks.openExecution", { name: todo.text })} onClick={(event) => selectFromButton(event.currentTarget, { item: execution, kind: "run" })} title={execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")} type="button"><ExternalLink size={14} /><span>{execution.status === "completed" ? t("tasks.viewResult") : t("tasks.viewExecution")}</span></button> : null}
@@ -293,16 +332,16 @@ export function GoalTasksView({
           );
         })}
         {!openAgentTodos.length ? <ContextHelp label={locale === "zh-CN" ? "暂无运行记录" : "No run records"} icon={CircleHelp}><p className="personal-task-empty">{t("tasks.emptyRunning")}</p></ContextHelp> : null}
-      </TaskLane>
-      <TaskLane listView={listView} count={scheduleItems.length} label={t("tasks.scheduled")} tone="schedule">
+      </TaskLane> : null}
+      {filter === "all" ? <TaskLane listView={listView} count={scheduleItems.length} label={t("tasks.scheduled")} tone="schedule">
         {scheduleItems.map((item) => (
           <button key={item.id} onClick={(event) => selectFromButton(event.currentTarget, { item: item.schedule, kind: "schedule" })} type="button">
             <span>◷</span><strong>{item.schedule.label}</strong><small>{item.schedule.status === "paused" ? t("schedule.paused") : t("schedule.active")}</small>
           </button>
         ))}
         {!scheduleItems.length ? <ContextHelp label={locale === "zh-CN" ? "暂无定时任务" : "No schedules"} icon={CircleHelp}><p className="personal-task-empty">{t("tasks.emptySchedules")}</p></ContextHelp> : null}
-      </TaskLane>
-      <CompletedTaskLane searchable key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId} seed={doneAgentTodos} refreshRevision={historyRefreshRevision} enabled={historyEnabled && historyActive} listView={listView} onSelect={onSelect} selectedTodoId={selectedTodoId} />
+      </TaskLane> : null}
+      {filter === "all" || filter === "done" ? <CompletedTaskLane searchable key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId || "all"} unassignedOnly={selectedLaneId === ""} seed={doneAgentTodos} query={query} refreshRevision={historyRefreshRevision} enabled={historyEnabled && historyActive && boardVisible} listView={listView} onSelect={onSelect} selectedTodoId={selectedTodoId} /> : null}
       </div>
       {isEmpty ? (
         <ContextHelp label={locale === "zh-CN" ? "当前任务范围" : "Current task scope"} icon={CircleHelp}><p className="personal-task-empty">

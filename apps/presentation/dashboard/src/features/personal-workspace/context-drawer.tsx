@@ -174,7 +174,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
   const selectionIdentity = selection.kind === "run" ? `run:${selection.item.runId}`
     : selection.kind === "proposal" ? `proposal:${selection.item.previewId}`
       : selection.kind === "todo" ? `todo:${selection.item.goalId}:${selection.item.todoId}`
-        : selection.kind === "attention" ? `attention:${selection.item.goalId}:${selection.item.todoId}`
+        : selection.kind === "attention" ? JSON.stringify(["attention", selection.item.sourceId ?? "", selection.item.goalId, selection.item.todoId])
           : selection.kind === "output" ? `output:${selection.item.outputId}`
             : selection.kind === "schedule" ? `schedule:${selection.item.scheduleId}`
                 : `goal:${selection.item.goalId}`;
@@ -286,7 +286,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
         returnFocus.focus();
         if (document.activeElement === returnFocus) return;
       }
-      const fallback = document.querySelector<HTMLElement>('[data-active-goal-view="tasks"] .personal-task-board')
+      const fallback = document.querySelector<HTMLElement>('[data-goal-panel="tasks"]:not([hidden]) .personal-task-board')
         ?? document.querySelector<HTMLElement>('.personal-goal-tabs button[aria-current="page"]');
       fallback?.focus();
     });
@@ -661,6 +661,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
       </header>
 
       <div className="personal-drawer-body">
+        {selection.kind === "proposal" && onSelectAttention && proposalRequests.length === 1
+          && (selection.item.actionKind === "gate.resolve" || selection.item.actionKind === "todo.update") ? <button
+            className="personal-secondary-action" type="button" onClick={() => onSelectAttention(proposalRequests[0])}>
+            <ArrowLeft aria-hidden size={16}/>{locale === "zh-CN" ? "返回原待处理事项" : "Back to the original request"}
+          </button> : null}
         {previewFailure?.identity === selectionIdentity ? <p className="personal-proposal-explainer" role="alert">{previewFailure.message}</p> : null}
         {selection.kind === "attention" ? (
           <>

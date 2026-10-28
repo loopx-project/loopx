@@ -44,6 +44,8 @@
 .goal-all-work { min-width: 0; display: grid; gap: 12px; padding-top: 8px; }
 .goal-work-search { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--pw-line); color: var(--pw-muted); }
 .goal-work-search input { width: 100%; min-width: 0; border: 0; padding: 10px 0; background: transparent; color: var(--pw-text); font: inherit; font-size: var(--text-body); }
+.goal-work-owner { display: flex; align-items: center; gap: 8px; color: var(--pw-muted); font-size: var(--text-body); }
+.goal-work-owner select { min-width: 0; flex: 1; min-height: 44px; border: 1px solid var(--pw-line); border-radius: 6px; padding: 8px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
 .goal-rail-section { display: grid; gap: 4px; }
 .goal-rail-section h3 { padding-top: 8px; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); font-weight: 500; }
 .goal-overview .goal-work-row.is-compact { grid-template-columns: 14px minmax(0, 1fr); padding: 8px 0; gap: 6px; }
@@ -103,6 +105,7 @@
 
 /* Known empty regions yield space; loading, partial coverage and errors still mount. */
 .goal-workspace-results:has(> h2:only-child) { display: none; }
+.goal-workspace-composition.is-attention-first .goal-overview-attention { order: -1; }
 .goal-workspace-results .personal-files-list.is-empty > header { display: none; }
 .goal-workspace-results .personal-files-list.is-empty:has(> header:only-child) { display: none; }
 .goal-workspace-results:has(> .personal-files-list.is-empty > header:only-child):not(:has(> :not(h2):not(.personal-files-list.is-empty))) { display: none; }
