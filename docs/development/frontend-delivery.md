@@ -213,7 +213,12 @@ the new selection. Canonical receipts still read back through their existing own
 Linked-source requests remain read-only even when opened directly from home.
 
 Overview and Tasks share source/Goal-scoped filters and view choices in the URL.
-The selected Todo stays addressable when filtered out. Files opens with a native
+The selected Todo stays addressable when filtered out. Completed lists start
+folded; selecting a completed Todo opens its lane, and switching between board
+and list preserves that expansion. Search over already-listed tasks filters the
+complete owner-scoped snapshot without discarding rows. Changing or clearing a
+saved query restores the matching completions even on a read-only source, where
+local completed-history requests remain disabled. Files opens with a native
 result catalog; select a row to read only that result, retain its exact version on
 refresh, and return to the original row. These readers retain their existing paging
 and error contracts; a missing or changed version is not silently replaced.
@@ -235,6 +240,9 @@ discards that target's draft and preview.
 可回到原请求；切换或关闭后，迟到的预览/写入回执不会抢回当前选择，原生回读
 仍会保存真实结果。关联来源从首页打开也保持只读。概览与任务共用按来源/Goal
 隔离的路由筛选；成果先列目录，按需读取并固定准确版本，返回恢复原条目。
+完成列表默认收起；选中已完成任务后自动展开，切换看板与列表保留展开状态。
+已列出任务的搜索只筛选完整负责人快照，不删除缓存行；只读来源修改或清空
+已保存的查询也能恢复相应完成项，且不会请求本地完成历史。
 报告提供语义标题、稳定目录和手动复制降级，返回准确原消息；仅旧稳定消息
 默认节选，展开保持阅读位置。输入沿用规范化后的 400/1000/8000 码点限制，
 保留原始草稿。设置的“写入成功、回读未确认”只重试读取，切换目标仍丢弃旧草稿。
@@ -242,7 +250,9 @@ discards that target's draft and preview.
 After building Chat, the existing `attention-user-action`, `goal-activity`,
 `confirmed-operations`, `answer-presentation`, `managed-goal-results`,
 `research-results`, `team-evidence`, `goal-workspace-create`, `goal-draft`,
-`task-inspector-return`, `steward-model-settings` and `capability-scope` scenarios
+`task-inspector-return`, `steward-model-settings`, `capability-scope`,
+`completed-history-isolation`, `typed-actions`, `conversation-input` and
+`report-download` scenarios
 exercise these boundaries via `examples/personal-workspace-browser-smoke.mjs`.
 Set `LOOPX_PERSONAL_WORKSPACE_PACKAGED=1` and `LOOPX_PERSONAL_WORKSPACE_SCENARIO`
 to the chosen scenario. The existing task-inspector-route and workspace-craft

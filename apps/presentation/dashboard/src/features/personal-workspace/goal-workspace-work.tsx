@@ -134,7 +134,8 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   const attention = userTodos.filter(todo => todo.goalId === goal.goalId);
   const ownerName = (id: string | null) => id === null ? (zh ? "未分配" : "Unassigned") : goal.agentLanes?.find(lane => lane.agentId === id)?.label ?? id;
   const owners = [...new Set([...(goal.agentLanes ?? []).map(lane => lane.agentId), ...digest.work.rows.flatMap(row => row.ownerId ?? [])])];
-  const matches = (id: string) => (owner === "all" || (rows.get(id)?.ownerId ?? "") === owner)
+  const matchesOwner = (id: string) => owner === "all" || (rows.get(id)?.ownerId ?? "") === owner;
+  const matches = (id: string) => matchesOwner(id)
     && (todos.get(id)?.text ?? "").toLocaleLowerCase(locale).includes(query.trim().toLocaleLowerCase(locale));
   function task(id: string, compact = false) {
     const todo = todos.get(id), row = rows.get(id);
@@ -197,7 +198,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
             <h3>{sectionLabels[section]}</h3>{ids.map(id => task(id, true))}
           </section> : null;
         })}
-        {filter === "all" || filter === "done" ? <CompletedTaskLane key={`${goal.goalId}:${readOnly}:${placement}:${owner}`} goal={goal} agentId={owner || "all"} unassignedOnly={owner === ""} seed={digest.work.rail.done.flatMap(id => matches(id) ? todos.get(id) ?? [] : [])}
+        {filter === "all" || filter === "done" ? <CompletedTaskLane key={`${goal.goalId}:${readOnly}:${placement}:${owner}`} goal={goal} agentId={owner || "all"} unassignedOnly={owner === ""} seed={digest.work.rail.done.flatMap(id => matchesOwner(id) ? todos.get(id) ?? [] : [])}
           enabled={!readOnly && active && (placement === "inline" ? inventoryOpen && !railOpen : railOpen)} refreshRevision={historyRefreshRevision} listView onSelect={select} selectedTodoId={selectedTodoId} query={query}/> : null}
       </> : <div className="goal-material-activity">
         {activity.length ? activity.map(item => <button type="button" key={item.id} onClick={() => item.kind === "run" ? select({kind: "run", item: item.run}) : item.kind === "output" ? select({kind: "output", item: item.output}) : item.kind === "proposal" ? select({kind: "proposal", item: item.proposal}) : undefined}>

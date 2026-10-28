@@ -5,9 +5,10 @@ invented requests, Goals, reports and runtime observations. No live messages,
 credentials, private runtime paths or production configuration are included.
 
 The before screens use `main` at
-`1fe6134e0b0fd0df6dc671a9bce0ea29c9613891`. After screens use this PR's packaged
-Chat source; the PR description pins its submitted head. The package's source
-witness was verified against all 663 inputs. Screenshot additions do not change
+`1fe6134e0b0fd0df6dc671a9bce0ea29c9613891`. The initial home, report, catalog and
+settings after screens use the packaged Chat source at
+`96adcc9b001964472e3c2ca5250ed26eedab5e07`. That package's source witness was
+verified against all 663 inputs. Screenshot additions do not change
 the product bundle. Browser qualification used Chromium 153 and a temporary Noto
 Sans SC font because the pinned browser download was unavailable. This is
 packaged browser evidence, not installed native-WebView or live-team acceptance.
@@ -35,6 +36,21 @@ Report headings and outline preserve the complete answer and exact source return
 The Files catalog preserves native identities when titles match and reads only an
 explicitly selected body. Settings retain the original target and distinguish
 saved configuration from runtime adoption and failed readback.
+
+## Review regression: read-only completed search
+
+![Clearing a saved query restores both completions for the selected owner](completed-search-readonly.png)
+
+This 1512 × 982 capture uses the review-fix candidate after integrating `main`
+at `843be494266774b63b3de61d0adf5dd7f4f877a2`; the PR description pins the final
+submitted revision. Its packaged source witness was verified before the run.
+The public synthetic read-only source opens with owner `example-alpha` and query
+`first`. Changing the query to `second`, then clearing it, restores both loaded
+alpha completions in the same lane. Other owners remain excluded, and switching
+to the unassigned owner reveals only its own completion. The regression asserts
+zero local completed-history requests, Turn submissions and action applies.
+It extends `completed-history-isolation`, whose local half also exercises the
+real disposable SQLite/HTTP history owner, a failed read and recovery.
 
 ## Reproduce
 
