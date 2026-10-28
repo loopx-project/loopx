@@ -81,6 +81,11 @@ Review the full proposed edit, not only its opening or poster:
   edit joins, captions and source/candidate switching. A local decoder can accept
   a mixed-source export that the browser rejects. Repair the encoding and repeat
   that actual playback path before calling the artifact technically ready.
+  Check which audio tracks the player actually selects: separate narration tracks
+  may be treated as alternatives rather than mixed together. For one intended
+  soundtrack, render a mix containing every required layer and check narration
+  at the opening and inserted shots; a nonzero full-film peak can hide silent
+  passages. This does not replace listening to the complete result.
 
 工程宣发先按完整时间线铺开材料，再选能说明核心机制、技术价值和实际结果的
 案例；近期 PR、改动行数和醒目数字不能替代选材理由。选材改变时，同步修订
@@ -91,7 +96,10 @@ Review the full proposed edit, not only its opening or poster:
 提高信息密度不靠小字、加速语音或强行缩短停顿。条件、单位、反例和来源必须
 仍能读懂。完整听看声音衔接、字幕节奏和实际观看尺寸；未做听审或观众理解
 测试就保留未验证，不以成功导出代替创作质量。在实际审阅播放器中检查完整
-播放、跨剪辑点拖动、字幕和版本切换；本地解码通过不代表浏览器兼容。以上
+播放、跨剪辑点拖动、字幕和版本切换；本地解码通过不代表浏览器兼容。
+还应核对播放器实际选择的音轨：独立旁白轨可能被当作备选轨，而非同时
+混音。只有一套配音时，导出包含全部所需声音层的混音，并核对开场和新增镜头
+是否有旁白；整片峰值非零不能排除局部静音，也不能替代完整听审。以上
 复用现有作品修订和交付检查，不新增自动接受、发布权限、强制审批轮次或
 独立视频编辑器。
 
