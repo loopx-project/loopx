@@ -14,7 +14,7 @@ import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/a
 import {TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import {dirname, join} from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -720,11 +720,16 @@ if (database && installed) {
     await assert.rejects(missing.withCheckpointHead(() => {throw new Error("must not save");}), /head is missing/);
   });
 
-  test("PostgreSQL production checkpoint effects protect each Turn and preserve original work reads", async t => {
+  for (const address of ["direct", "alias"] as const) {
+  test(`PostgreSQL production checkpoint effects protect each Turn and preserve original work reads (${address})`, async t => {
     await installed;
-    const root = await mkdtemp(join(tmpdir(), "checkpoint-pg-turns-"));
+    const directory = await mkdtemp(join(tmpdir(), "checkpoint-pg-turns-"));
+    const physical = join(directory, "physical");
+    await mkdir(physical);
+    const root = address === "alias" ? join(directory, "alias") : physical;
+    if (address === "alias") await symlink(physical, root, process.platform === "win32" ? "junction" : "dir");
     const tenant = `checkpoint-${randomUUID()}`, goal = "checkpoint-turns", agent = "agent", todo = "todo_task";
-    t.after(async () => {await cleanScope(tenant, goal); await rm(root, {recursive: true, force: true});});
+    t.after(async () => {await cleanScope(tenant, goal); await rm(directory, {recursive: true, force: true});});
     const store = new PostgreSqlAuthorityStore(database, {tenant_id: tenant, goal_id: goal});
     const projection = (text: string) => authorityProjectionFixture(goal, [{todo_id: todo, role: "agent",
       status: "open", done: false, claimed_by: agent, archive_state: "active", text}]);
@@ -775,7 +780,7 @@ if (database && installed) {
         delivery_outcome: "outcome_progress", delivery_batch_scale: "implementation", refresh_recovery: recovery,
         vision_checkpoint: {required: false, satisfied: true, decision: "not_required", delivery_boundary: "in_flight_continuation"},
         json_path: join(runs, `${turn}.json`), markdown_path: join(runs, `${turn}.md`)};
-      const submit = async () => {
+      const submit = async (indexLockTarget = index) => {
         const targets = [index, registry, shadowMaintenanceLockPath(root, goal), legacyCoordinationTodoLockPath(root, goal), state];
         const locks = [];
         for (const target of targets) locks.push(await acquireFileMutationLock(target, process.pid));
@@ -784,9 +789,14 @@ if (database && installed) {
             registry_path: registry, registry_sha256: hash(registry), state_sha256: hash(state), index_sha256: hash(index),
             identity, purpose: "delivery_result", read_context_id: context.read_context_id, facts, refresh_retry: retry,
             record: {...row}, index_record: {...row}, markdown: "Validated progress",
-            locks: locks.map((lock, i) => ({target: targets[i], pid: process.pid, token: lock.token}))});
+            locks: locks.map((lock, i) => ({target: i === 0 ? indexLockTarget : targets[i], pid: process.pid, token: lock.token}))});
         } finally {for (const [i, lock] of locks.entries()) await releaseFileMutationLock(targets[i]!, lock.token);}
       };
+      if (turn === "one") {
+        const before = readFileSync(index, "utf8");
+        await assert.rejects(submit(join(root, "foreign-index.jsonl")), /checkpoint lock target mismatch/);
+        assert.equal(readFileSync(index, "utf8"), before);
+      }
       if (turn === "two") {
         // An owner-file change alone must invalidate the original result,
         // even though the canonical Todo head has not changed.
@@ -812,4 +822,5 @@ if (database && installed) {
     }
     assert.equal(readFileSync(index, "utf8").trim().split("\n").length, 2);
   });
+  }
 }

@@ -214,12 +214,14 @@ def test_replaced_artifact_directory_cannot_receive_the_checkpoint_append(tmp_pa
             # Identical bytes do not make a replacement the directory whose
             # identity was admitted before the provider head was acquired.
             shutil.copytree(retained, runs)
+            assert (runs.stat().st_dev, runs.stat().st_ino) != (
+                retained.stat().st_dev, retained.stat().st_ino)
             (barrier / "release").touch()
             stdout, stderr = child.communicate(timeout=20)
             assert child.returncode == 1, stdout + stderr
             rejected = json.loads(stdout)
             assert rejected["error_code"] == "checkpoint_commit_unknown", rejected
-            assert "directory changed" in rejected["error"], rejected
+            assert "read back the original Turn before retrying" in rejected["error"], rejected
             raise RuntimeError("replaced directory refused at the checkpoint owner")
         finally:
             (barrier / "release").touch()

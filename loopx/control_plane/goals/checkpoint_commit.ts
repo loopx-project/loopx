@@ -314,7 +314,9 @@ export async function commitCheckpoint(value: unknown,
   const registryBound = jsonObject(jsonObject(request.facts)?.source)?.registry_goal != null;
   const registryPath = firstDelivery || resultWork || registryBound
     ? resolve(requireNonEmptyString(request.registry_path, "registry_path")) : null;
-  const targets = [indexPath, ...(registryPath ? [registryPath] : []), shadowMaintenanceLockPath(root, identity.goal_id),
+  // The handoff names the caller's acquired lock; physical IO stays frozen
+  // separately, and directory identity is rechecked before the append.
+  const targets = [join(runsDir, "index.jsonl"), ...(registryPath ? [registryPath] : []), shadowMaintenanceLockPath(root, identity.goal_id),
     legacyCoordinationTodoLockPath(root, identity.goal_id), statePath].map(path => resolve(path));
   const owner = parseQuotaAccountingOwner({
     goalRefValue: request.goal_ref,
