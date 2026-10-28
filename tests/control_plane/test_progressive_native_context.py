@@ -305,7 +305,7 @@ def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path):
     row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Keep this constraint.", "claimed_by": "peer"}
     original = {"ok": True, "agent_todo_summary": {"schema_version": "todo_summary_v0",
         "first_open_items": [row], "backlog_items": [dict(row)]}}
-    required, recovery = context._capture_required_context(original, directory=tmp_path, surface="quota_packet")
+    required, recovery = required_view(original, tmp_path, surface="quota_packet")
     assert required is original
     assert Path(recovery["path"]).name == "projection.json"
 

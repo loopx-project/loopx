@@ -362,9 +362,8 @@ CLI 校验。历史 replan 命令在为 executor 展开诊断引用前，先绑�
 oracle 核对 canonical channel 中完整 Goal 字节和当前任务全文，同时单独保留历史
 reader 的原必读及验证断言；签名 CLI 输入只排除 harness 另加的 `_returncode`。
 第三项失败暴露普通任务缺少 Task／request 身份时被误判为等待；`281910a95` 恢复其
-contract error，并保留归 controller 的未绑定 replan 与有效 request 行为。四项直接
-File／SQLite 和缺失任务回归随后通过。同版本在准入前将既有宿主 transport 准备提取
-为局部 helper，维护性 ratchet 在原上限下通过。
+contract error。四项直接 File／SQLite 和缺失任务回归随后通过。同版本的局部宿主
+准备提取通过原维护性上限；这不能证明执行与并发等价。
 
 集成 `bca6350b2` 随后采用 main `ccf6aacc5`，包括 #7594 恢复输出指引、#7609 首次
 guard 选择及 #7610 精确 Todo 记录复用。相同 native 操作接收既有材料 planner 的
@@ -372,6 +371,16 @@ guard 选择及 #7610 精确 Todo 记录复用。相同 native 操作接收既�
 163 项 typed 和 control-plane typecheck 通过；后续限定 caller／recovery 验证在
 #7430 绑定各自实测版本记录。记录复用仍保留 main 的 required-view profile，不认证
 已签名完整输入的材料分阶段交付。源码及 oracle 修正不倒改上述中断／失败 cohort。
+
+后续 16 模块 cohort 同样在第三项失败处停止，843 项通过。一项新测试仍调用已替换的
+私有 helper 签名，改用既有相同 typed-plan fixture，保留原开销断言。两项真实
+File／SQLite busy-request 失败暴露作者提取时的错误：lane 装饰器留在准备 helper，
+而非完整执行入口。修正后，执行锁继续覆盖准入、host 和结算。既有公共入口拒绝
+oracle 在冻结 `fc4763098` 失败，修正后通过，同时核对 busy-request 重启／重放。
+现在 premerge 在 executor、lane owner 或 CLI 执行入口变化时自动选择既有七项公共
+入口测试，包含 quick 验证；九项限定 planner 用例核对选择及无关 context 编辑排除。
+复用真实 fence oracle，不新增重复实现检查。先前自动检查通过不能认证错误的中间
+执行入口；两组停止的 cohort 都不称为整套通过。
 
 这是集成验证，不是新安装或模型行为。先前中断的 cohort、随后三项真实 reader 失败
 仍保留原失败观察。既有成本表及 **25,862 > 13,000** 仍绑定原版本与状态；未提高上限，

@@ -481,11 +481,10 @@ Goal bytes and exact current work in the canonical channel, and separately
 retains the original pending-read and verification assertions for the historical
 reader. The fixture excludes only the harness-added `_returncode` from signed
 CLI input. The third failure exposes ordinary missing Task/request identity being
-classified as a wait: `281910a95` restores its contract error while retaining
-controller-owned unbound replan and valid request behavior. The four direct
-File/SQLite and missing-work regressions then pass. The same revision extracts
-existing host transport preparation into a local helper before admission; the
-maintainability ratchet passes at its unchanged limits.
+classified as a wait: `281910a95` restores its contract error. The four direct
+File/SQLite and missing-work regressions then pass. Its local host-preparation
+extraction passes the unchanged maintainability limits; that result does not
+establish execution or concurrency parity.
 
 Integration `bca6350b2` then adopts main `ccf6aacc5`, including #7594 recovery
 output guidance, #7609 first-guard choice and #7610 exact Todo-record reuse. The
@@ -496,6 +495,21 @@ typecheck pass; focused caller/recovery follow-through is reported on #7430 at
 its tested revision. Record reuse retains main's required-view profile; it does
 not qualify signed-complete material staging. The source and oracle corrections
 do not retroactively pass the wider interrupted/failed cohorts above.
+
+The later 16-module cohort also stops at three failures, with 843 passed. One
+new test still calls the superseded private helper signature; it is moved to the
+same existing typed-plan fixture without changing its overhead assertions. The
+two real File/SQLite busy-request failures expose an author refactoring mistake:
+the lane decorator was left on the preparation helper rather than the complete
+execution entry. The corrected entry retains the fence over admission, host and
+settlement. The existing public-entry refusal oracle fails on frozen `fc4763098`
+and passes after correction, along with busy-request restart/replay. Premerge
+now automatically selects that existing seven-case public-entry module when
+the executor, lane owner or CLI execution entry changes, including in quick
+validation; nine focused planner cases cover selection and unrelated-context
+exclusion. This reuses the real fence oracle instead of adding a duplicate
+implementation check. Earlier automatic passes do not qualify the broken
+intermediate entry, and neither stopped cohort is reported as a full pass.
 
 This is integration qualification, not new installed or model behavior. Earlier
 interrupted cohorts and the subsequent three real reader failures remain failed
