@@ -37,6 +37,7 @@ from .command_validation import (
     reward_memory_reflection_digest,
 )
 from .driver import selected_turn_todo
+from .decision_capture import stage_turn_decision_capture
 from .execution_readback import execution_payload
 from .host_process_transport import run_host_process
 from .host_binding import (
@@ -1614,18 +1615,12 @@ def run_loopx_turn_once(
         )
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
+        capture = None
         if require_decision_capture and needs_host:
-            from .decision_capture import prepare_turn_decision_capture
-
-            original_plan = journal["plan"] if journal is not None else plan
-            plan = prepare_turn_decision_capture(
-                original_plan, journal_path=journal_path,
+            capture = stage_turn_decision_capture(
+                journal["plan"] if journal is not None else plan, journal_path=journal_path,
                 decision=decision_capture_payload, existing_journal=journal is not None,
-                persist=admit_start is None,
             )
-            # Preserve any session recovery adjustment; only the original
-            # observation replaces the fresh request's context.
-            request = {**request, "turn_envelope": plan["turn_envelope"]}
         admission = None
         if needs_host and admit_start is not None:
             admission = admit_start(
@@ -1649,14 +1644,8 @@ def run_loopx_turn_once(
                 return execution_payload(
                     plan, waiting, execute=True, replayed=False, effects=empty_effects
                 )
-        if require_decision_capture and needs_host and admit_start is not None:
-            # Validate before reserving cadence/settlement identity, but publish
-            # only an admitted observation. Otherwise an interval refusal leaves
-            # a capture without a journal which poisons the same Turn's retry.
-            plan = prepare_turn_decision_capture(
-                original_plan, journal_path=journal_path,
-                decision=decision_capture_payload, existing_journal=journal is not None,
-            )
+        if capture is not None:
+            plan = capture.publish()
             request = {**request, "turn_envelope": plan["turn_envelope"]}
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(

@@ -9,6 +9,7 @@ import socket
 import stat
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,15 +34,34 @@ def write_decision_capture(
         Path(temporary).unlink(missing_ok=True)
 
 
-def prepare_turn_decision_capture(
-    plan: Mapping[str, Any], *, journal_path: Path,
-    decision: Mapping[str, Any] | None, existing_journal: bool, persist: bool = True,
-) -> dict[str, Any]:
-    """Called under the Turn journal lock before Host effects.
+@dataclass(frozen=True)
+class StagedTurnDecisionCapture:
+    """Validated private IO, published only after the native start is admitted."""
 
-    ``persist=False`` validates the exact source before cadence admission without
-    freezing a refused, unstarted observation. After admission the caller must
-    run the normal publication path before giving that plan to the Host.
+    plan: dict[str, Any]
+    path: Path
+    observation: dict[str, Any]
+    existed: bool
+
+    def publish(self) -> dict[str, Any]:
+        if self.path.is_symlink():
+            raise ValueError("Turn decision capture must not be a symlink")
+        if self.path.exists():
+            if json.loads(self.path.read_text(encoding="utf-8")) != self.observation:
+                raise ValueError("Turn decision capture changed before publication")
+        elif self.existed:
+            raise ValueError("Original Turn decision capture is missing; restore the original observation")
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            write_decision_capture(self.path, self.observation)
+        return self.plan
+
+
+def stage_turn_decision_capture(
+    plan: Mapping[str, Any], *, journal_path: Path,
+    decision: Mapping[str, Any] | None, existing_journal: bool,
+) -> StagedTurnDecisionCapture:
+    """Validate under the journal lock before admission, without publishing IO.
 
     Existing journals must retain their original reference. A missing legacy
     observation cannot be reconstructed from today's guard. Already committed
@@ -56,7 +76,8 @@ def prepare_turn_decision_capture(
                          "recover its pending effects before starting a fresh Turn")
     if path.is_symlink():
         raise ValueError("Turn decision capture must not be a symlink")
-    if path.exists():
+    existed = path.exists()
+    if existed:
         observation = json.loads(path.read_text(encoding="utf-8"))
     elif existing_journal or capture:
         raise ValueError("Original Turn decision capture is missing; restore the original "
@@ -75,10 +96,16 @@ def prepare_turn_decision_capture(
         # Legacy journals retain their recorded delivery/recovery route.
         reader_argv=current_loopx_cli_argv() if not existing_journal else None,
     )
-    if persist and not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        write_decision_capture(path, observation)
-    return {**plan, "turn_envelope": bound}
+    return StagedTurnDecisionCapture({**plan, "turn_envelope": bound}, path, observation, existed)
+
+
+def prepare_turn_decision_capture(
+    plan: Mapping[str, Any], *, journal_path: Path,
+    decision: Mapping[str, Any] | None, existing_journal: bool,
+) -> dict[str, Any]:
+    """Retain the existing immediate publication API for original-capture callers."""
+    return stage_turn_decision_capture(plan, journal_path=journal_path,
+        decision=decision, existing_journal=existing_journal).publish()
 
 
 def validate_handoff_socket(value: str) -> Path:
