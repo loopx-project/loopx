@@ -7,7 +7,7 @@ import os
 import shlex
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 from harbor.agents.installed.base import with_prompt_template
@@ -147,6 +147,10 @@ class BenchmarkCodex(CodexOffline):
                 raise ValueError("checkpoint_request requires its staged guest path")
             from .checkpoint import parse_checkpoint_request
             self._checkpoint_declaration = parse_checkpoint_request(checkpoint_request)
+            if self._checkpoint_declaration.get("trigger") == "fresh_replan":
+                expected = PurePosixPath(_WAKE_LOG_DIR).parent / "checkpoints"
+                if PurePosixPath(self._checkpoint_declaration["destination"]) != expected:
+                    raise ValueError(f"fresh_replan destination must be {expected} in the worker")
         if checkpoint_request_path is not None:
             if self.execution.mode not in {"heartbeat", "turn"}:
                 raise ValueError("checkpoint_request_path requires a settled-work worker")

@@ -632,6 +632,26 @@ def test_checkpoint_request_is_explicit_and_reaches_the_existing_worker_env(tmp_
             BenchmarkCodex(logs_dir=tmp_path / "invalid", model_name="openai/fixture", **settings)
 
 
+@pytest.mark.parametrize("destination", [
+    "/opt/loopx-benchmark/checkpoints", "/logs/checkpoints", "relative/checkpoints",
+])
+def test_fresh_replan_destination_rejected_before_native_setup(tmp_path, monkeypatch, destination):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
+
+    def unexpected_setup(*args, **kwargs):
+        pytest.fail("Invalid capture configuration reached native setup")
+
+    monkeypatch.setattr(CodexOffline, "__init__", unexpected_setup)
+    request = {"destination": destination,
+        "components": [{"id": "workspace", "source_path": "/task"}],
+        "point_metadata": {}, "trigger": "fresh_replan"}
+    with pytest.raises(ValueError, match="fresh_replan destination"):
+        BenchmarkCodex(logs_dir=tmp_path, model_name="fixture",
+            checkpoint_request_path="/control/request.json",
+            checkpoint_request=json.dumps(request).encode())
+
+
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("settings,field,value", [
     ({}, "replan_after_effective_turns", 6),
@@ -806,6 +826,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     from benchmark.runtime.checkpoint_wake import CheckpointWake
     wake_root = tmp_path / "wakes"
     wake_root.mkdir()
+    monkeypatch.setattr("benchmark.runtime.harbor._WAKE_LOG_DIR", str(wake_root))
     request = tmp_path / "request.json"
     checkpoint_args = {}
     if trigger is not None:
