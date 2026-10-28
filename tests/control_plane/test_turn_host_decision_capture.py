@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decision_capture, write_decision_capture
+from loopx.control_plane.turn_driver.decision_capture import (
+    prepare_turn_decision_capture, stage_turn_decision_capture, write_decision_capture,
+)
 from loopx.control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal, turn_journal_path
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
@@ -143,6 +145,33 @@ def test_real_host_reads_original_capture_after_source_change(
     assert code == 0, repeated
     assert not any(repeated["effects"].values())
     assert f._quota_spend_count(runtime) == 1
+    assert path.read_bytes() == original
+    # Admission can run between source validation and publication. It cannot
+    # replace or silently recreate an original capture changed in that window.
+    staged = stage_turn_decision_capture(plan, journal_path=journal_path,
+                                        decision=None, existing_journal=True)
+    # Numeric lookalikes compare equal to booleans in Python, but change the
+    # original JSON observation and its typed source hash.
+    for numeric in (1, 1.0):
+        path.write_text(json.dumps({**source_a, "ok": numeric}))
+        changed = path.read_bytes()
+        with pytest.raises(ValueError, match="changed before publication"):
+            staged.publish()
+        assert path.read_bytes() == changed
+    path.write_text(json.dumps(dict(reversed(source_a.items()))))
+    assert staged.publish()["turn_envelope"]["detail_ref"] == detail
+    path.write_bytes(original)
+    path.write_text(json.dumps({**source_a, "reason": "changed during admission"}))
+    changed = path.read_bytes()
+    with pytest.raises(ValueError, match="changed before publication"):
+        staged.publish()
+    assert path.read_bytes() == changed
+    path.unlink()
+    with pytest.raises(ValueError, match="missing"):
+        staged.publish()
+    assert not path.exists()
+    path.write_bytes(original)
+    assert staged.publish()["turn_envelope"]["detail_ref"] == detail
     assert path.read_bytes() == original
     # Corrupt/missing evidence cannot be replaced by the caller's new guard.
     path.write_text(json.dumps({**source_a, "reason": "wrong original"}))

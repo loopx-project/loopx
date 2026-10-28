@@ -1,6 +1,7 @@
 """Delegation previews must not mistake an occupied native Turn lane for idle."""
 
 import json
+import time
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_singleflight
 from loopx.file_lock import lock_holder_path
 from loopx.capabilities.manager_context import execution
-from loopx.capabilities.manager_context.roundtrip import drain
+from loopx.capabilities.manager_context.roundtrip import ReturnService, drain
 from test_delegation_cli import cli
 from test_independent_delegation_validation import independent_binding
 from test_local_delegation import demo, service, wait  # noqa: F401
@@ -92,7 +93,7 @@ def test_another_members_lane_does_not_block_this_binding(service):  # noqa: F81
         assert preview["turn_lane"] == {"scope": "native_turn_lane", "state": "absent"}
 
 
-def test_busy_handoff_keeps_original_context_then_returns_once_after_release(service):  # noqa: F811
+def test_busy_handoff_resumes_after_source_completion_without_another_dispatch(service):  # noqa: F811
     root, runner = service
     independent_binding(service)
     data = json.loads(runner.registry.read_text())
@@ -126,13 +127,12 @@ print(json.dumps(build_result"""))
         for _ in range(2):
             blocked = dispatch()
             assert not blocked["submitted"] and blocked["preflight"]["reason"] == "turn_lane_in_flight"
-        assert not runner.path(operation).exists()
+        assert runner.path(operation).is_file()
+        queued = json.loads(runner.path(operation).read_text())
+        assert queued["status"] == "prepared"
+        assert queued["identity"]["source_request_id"] == receipt["request_id"]
+        assert queued["conversation"] == {"session_id": session["session_id"], "turn_id": turn["turn_id"]}
         assert not (root / "analyst/initial/host-invocations").exists()
-    started = dispatch()
-    worker = execution._service(runner.root, runner.registry, {"goal_id": runner.goal_id,
-        "agent_id": "analyst", "requester_agent_id": "lead", "binding_id": "analysis"})[0]
-    assert started["submitted"] and wait(worker, operation)["status"] == "accepted"
-    assert dispatch()["operation_id"] == operation
     store.update_turn(session["session_id"], turn["turn_id"], status="completing",
         response={"context_handoff_receipt": receipt})
     store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
@@ -142,7 +142,25 @@ print(json.dumps(build_result"""))
         sends.append(route["session_id"])
         return {"message_id": "fixture-return", "reply_verified": True}
 
-    drain(runner.root, runner.registry, store, transport)
+    # The actual existing background service must recover the saved intent.
+    # No sender retry, fresh handoff, new Task or model selection supplies it.
+    background = ReturnService(runner.root, runner.registry, store, transport)
+    try:
+        background.start()
+        worker = execution._service(runner.root, runner.registry, {"goal_id": runner.goal_id,
+            "agent_id": "analyst", "requester_agent_id": "lead", "binding_id": "analysis"})[0]
+        assert wait(worker, operation)["status"] == "accepted"
+        deadline = time.monotonic() + 15
+        while not sends and time.monotonic() < deadline:
+            time.sleep(.1)
+    finally:
+        background.close()
     drain(runner.root, runner.registry, store, transport)
     assert sends == [session["session_id"]]
     assert (root / "analyst/initial/host-invocations").read_text() == "1"
+    completed = json.loads(worker.path(operation).read_text())
+    assert completed["identity"] == queued["identity"]
+    assert completed["conversation"] == queued["conversation"]
+    journals = list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+    assert len(journals) == 1
+    assert json.loads(journals[0].read_text())["completed_phases"].count("quota_spend") == 1

@@ -66,7 +66,7 @@ from .control_plane.collaboration.goal_instance_scope import (
 )
 from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
 from .control_plane.collaboration.source_grant_observation import (
-    read_delegation_source_execution, require_delegation_source_execution,
+    read_delegation_source_execution, verify_delegation_source_execution,
 )
 from .control_plane.collaboration.source_policy_fence import source_policy_fence
 from .control_plane.collaboration.peers import (
@@ -705,7 +705,7 @@ class Delegations:
     def start(self, binding_id: str, operation_id: str, brief: dict,
               parent_request_id: str | None = None, *, conversation: dict | None = None,
               confirmed_operation_id: str | None = None,
-              source_request_id: str | None = None) -> dict:
+              source_request_id: str | None = None, _defer_worker: bool = False) -> dict:
         """Start or replay one bound operation.
 
         ``conversation`` is supplied only by the trusted Chat host, never by
@@ -714,6 +714,8 @@ class Delegations:
         that conversation and no other. ``source_request_id`` is also host-only:
         the receiver's existing inbox request, separate from the user brief.
         """
+        if _defer_worker and source_request_id is None:
+            raise ValueError("deferred execution requires the original Chat source")
         binding = self.binding(binding_id, require_active=True)
         require_operation_id(operation_id)
         brief = normalize_request({"goal_id": self.goal_id, "agent_id": binding["agent_id"], "brief": brief})["brief"]
@@ -753,7 +755,8 @@ class Delegations:
                 prepare_host_process_record(self._host_process_record(path))
                 _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
                               **({"conversation": origin} if origin else {})})
-                self._spawn(operation_id)
+                if not _defer_worker:
+                    self._spawn(operation_id)
         return self.read(operation_id)
 
     def _spawn(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:
@@ -865,9 +868,13 @@ class Delegations:
         if row["identity"]["binding"] != binding:
             raise ValueError("delegation binding changed; reconcile original execution")
         if require_active and "source_request_id" in row["identity"]:
-            require_delegation_source_execution(self.root, self.registry, goal_id=self.goal_id,
-                requester_agent_id=self.agent_id, source_request_id=row["identity"]["source_request_id"], binding=binding,
-                caller_goal_ref=self._caller_goal_ref(), policy_locked=policy_locked)
+            try:
+                verify_delegation_source_execution(self, binding["id"], row["identity"]["operation_id"],
+                    source_request_id=row["identity"]["source_request_id"],
+                    brief=delegation_results.operation_brief(self, row), conversation=row.get("conversation", {}),
+                    policy_locked=policy_locked)
+            except OSError as exc:
+                raise ValueError("original source execution provenance unavailable") from exc
         return binding
 
     @staticmethod
@@ -1481,31 +1488,11 @@ class Delegations:
 
     def _record_turn_result(
         self, path: Path, row: dict, result: dict, *, publish: bool = True,
-        already_locked: bool = False,
+        already_locked: bool = False, unstarted_turn: bool = False,
     ) -> None:
-        turn_key = result.get("resume_turn_key")
-        if turn_key:
-            # Validate the public shape before persisting an address supplied
-            # by the CLI boundary.
-            turn_journal_path(self.root, goal_id=self.goal_id, turn_key=turn_key)
-            row["turn_key"] = turn_key
-        row["turn_result"] = {
-            key: result.get(key)
-            for key in (
-                "status",
-                "result_kind",
-                "resume_turn_key",
-                "reason",
-                "host_failure",
-                "error",
-            )
-        }
-        if publish:
-            self._observe(path, row, "turn_returned", already_locked=already_locked)
-        elif already_locked:
-            self._fenced_write_locked(path, row)
-        else:
-            self._fenced_write(path, row)
+        # Keep the bound service seam used by existing recovery/fault-injection callers.
+        delegation_validation.record_turn_result(self, path, row, result, publish=publish,
+            already_locked=already_locked, unstarted_turn=unstarted_turn)
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
         request_id = row["identity"]["request_id"]
@@ -1806,7 +1793,10 @@ class Delegations:
                                    "--execute", timeout=binding["timeout_seconds"] + 60,
                                    delegated_lease=self._delegated_lease_context(row, binding),
                                    host_record=self._host_process_record(path))
-                self._record_turn_result(path, row, result)
+                self._record_turn_result(path, row, result,
+                    unstarted_turn=turn_key is None and "turn_key" not in row)
+                if row["status"] == "prepared":
+                    return  # Native lane refused before this operation launched a Host.
         finally:
             # The compatibility bootstrap is private host input.  Keeping it
             # after the host returns (including an exception or timeout) makes

@@ -15,6 +15,88 @@ from test_quota_settlement_cli import (
 )
 
 
+def _repository_delivery(tmp_path, provider):
+    project, runtime, registry = _write_fixture(tmp_path)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state.write_text(state.read_text().replace(
+        "action_kind=validate", "action_kind=validate task_repository=git:github.com/example/delivery"))
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "remote", "add", "origin",
+                    "https://github.com/example/delivery.git"], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture"], check=True)
+    delivery = tmp_path / "producing workspace"
+    subprocess.run(["git", "-C", str(project), "worktree", "add", "--detach", str(delivery)],
+                   check=True, capture_output=True)
+    # The delivered project may itself contain a different LoopX implementation.
+    # Changing the accounting cwd must not execute that implementation.
+    trap = delivery / "loopx"
+    trap.mkdir()
+    (trap / "__init__.py").write_text("raise RuntimeError('wrong implementation selected')\n")
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    return project, runtime, registry, delivery
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_combined_settlement_uses_producing_worktree_and_originating_cli(
+    tmp_path, monkeypatch, provider,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, _delivery = _repository_delivery(tmp_path, provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    identity = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"]
+    refresh = ["refresh-state", *binding, "--classification", "verified_worktree",
+               "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+               "--delivery-workspace-path", "../producing workspace", "--settle-turn"]
+    for replay in (False, True):
+        rc, result = _run_cli(registry, runtime, *refresh, cwd=project)
+        assert rc == 0, result
+        assert result["settlement_progress"]["state"] == "settled"
+        assert result["settlement_identity"] == identity
+        assert result["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
+        assert _spend_run_count(runtime) == 1
+        assert result.get("idempotent_replay", False) is replay
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.cli_commands.refresh_settlement import settle_refreshed_turn
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, delivery = _repository_delivery(tmp_path, provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    refresh = ["refresh-state", *binding, "--classification", "verified_worktree",
+               "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+               "--delivery-workspace-path", str(delivery)]
+    rc, original = _run_cli(registry, runtime, *refresh, cwd=project)
+    assert rc == 0 and _spend_run_count(runtime) == 0, original
+    for workspace in (project, tmp_path / "missing"):
+        failed = copy.deepcopy(original)
+        settle_refreshed_turn(failed, registry_path=registry, runtime_root=runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            replan_obligation_id=None, turn_instance_id=TURN_ID, goal_ref=None,
+            delivery_workspace_path=workspace)
+        assert failed["ok"] is False, failed
+        assert failed["settlement_progress"]["state"] == "spend_required"
+        assert failed["settlement_owed"]["command"] == original["settlement_owed"]["command"]
+        assert _spend_run_count(runtime) == 0
+    rc, recovered = _run_cli(registry, runtime, *refresh, "--settle-turn", cwd=project)
+    assert rc == 0, recovered
+    assert recovered["settlement_progress"]["state"] == "settled"
+    assert recovered["settlement_identity"] == original["settlement_identity"]
+    assert _spend_run_count(runtime) == 1
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("finish_todo", [False, True])
 def test_same_turn_progress_or_completion_and_replay_without_extra_guard(
@@ -88,6 +170,9 @@ def test_failed_writeback_dry_run_and_missing_binding_cannot_spend(tmp_path, mon
             "--no-global-sync", "--suppress-external-sinks", "--settle-turn"]
     rc, rejected = _run_cli(registry, runtime, *base, "--delivery-outcome", "surface_only")
     assert rc != 0 and _spend_run_count(runtime) == 0, rejected
+    rc, bad_path = _run_cli(registry, runtime, *base,
+        "--delivery-workspace-path", "~loopx-missing-fixture-user")
+    assert rc != 0 and bad_path["ok"] is False and _spend_run_count(runtime) == 0, bad_path
     rc, preview = _run_cli(registry, runtime, *base, "--delivery-boundary", "in_flight_continuation", "--dry-run")
     assert rc == 0 and preview["dry_run"] and _spend_run_count(runtime) == 0, preview
     # Invalid vision fails before writeback; no direct-debit bypass is allowed.

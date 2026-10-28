@@ -166,6 +166,9 @@ test("scoped preferences reuse complete prose while every current lifecycle fact
 function inline(delivery: JsonObject, path: (string | number)[]): unknown {
   let node = delivery.changes as JsonObject;
   for (let i = 0; ; i++) {
+    // An overlay's inherited body is unavailable to this literal-only reader.
+    // Inspect only its current edit when checking fresh control delivery.
+    if (node?.from && node.edit) node = node.edit as JsonObject;
     if (!node) return undefined;
     if (Object.hasOwn(node, "value")) {
       let value = node.value;
@@ -350,6 +353,65 @@ test("relocated immutable records reuse complete subtrees without hiding fresh d
   assert.equal(inline(second, ["planning_horizon", "core_goal", "objective"]), long);
   assert.deepEqual(restoreContextDelivery({delivery: second, baseline: first,
     current: prepareContextDelivery(request)}).context, request.context);
+});
+
+test("relocated evidence overlays keep current controls literal without repeating reference paths", () => {
+  const requirements = Array.from({length: 24}, (_, i) => ({id: `r${i}`,
+    description: `Requirement ${i}: ${long}`, status: "unverified", planning_satisfied: false,
+    unknown_control: {may_publish: false},
+    agent_review: {conclusion: "uncertain", basis_current: false,
+      independently_verified: false, note: `Evidence ${i}: ${long}`, evidence_refs: [`artifact:${i}`]}}));
+  const acceptance = {outcome_requirements: {revision: 1,
+    outcomes: [{id: "outcome", objective: long, requirements}]}};
+  const work = {complete: true, sources: [{source: "goal_acceptance", content: {
+    provider_revision: "current", goal_acceptance_contract: acceptance}}]};
+  // Actual callers relocate acceptance from planning into the admitted source.
+  const original = {planning_horizon: {core_goal: {objective: long, acceptance_contract: acceptance}}};
+  const current = {interaction_contract: {agent_channel: {work_context: work}}};
+  const initial = prepareContextDelivery({context: original, scope, capture_id: "a", surface: "quota_packet"});
+  const args = {context: current, scope, capture_id: "b", surface: "quota_packet"};
+  const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
+  assert.equal(delta.mode, "delta");
+  const overlays: JsonObject[] = [];
+  const walk = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const item = value as JsonObject;
+    if (item.from && item.edit) overlays.push(item);
+    Object.values(item).forEach(walk);
+  };
+  walk(delta.changes);
+  assert.ok(overlays.length > 0, "relocated evidence should share a base with literal current overrides");
+  const path = ["interaction_contract", "agent_channel", "work_context", "sources", 0, "content",
+    "goal_acceptance_contract", "outcome_requirements"];
+  assert.equal(inline(delta, [...path, "revision"]), 1);
+  requirements.forEach((row, i) => {
+    const prefix = [...path, "outcomes", 0, "requirements", i];
+    assert.equal(inline(delta, [...prefix, "status"]), row.status);
+    assert.equal(inline(delta, [...prefix, "planning_satisfied"]), row.planning_satisfied);
+    assert.equal(inline(delta, [...prefix, "unknown_control", "may_publish"]), false);
+    for (const field of ["conclusion", "basis_current", "independently_verified"])
+      assert.equal(inline(delta, [...prefix, "agent_review", field]), (row.agent_review as JsonObject)[field]);
+  });
+  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline: initial,
+    current: prepareContextDelivery(args)}).context, current);
+  assert.deepEqual(initial.context, original);
+  // Losing a current override, redirecting the base, or adding a patch-local
+  // reference must recover the current original, never revive inherited control.
+  for (const mutate of [(item: JsonObject) => { delete item.edit; },
+    (item: JsonObject) => { item.from = ["constructor", "prototype"]; },
+    (item: JsonObject) => { item.edit = {from: ["changes"]}; }]) {
+    const damaged = structuredClone(delta), found: JsonObject[] = [];
+    const find = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      const item = value as JsonObject;
+      if (item.from && item.edit) found.push(item);
+      Object.values(item).forEach(find);
+    };
+    find(damaged.changes); mutate(found[0]);
+    const result = restoreContextDelivery({delivery: damaged, baseline: initial, current: prepareContextDelivery(args)});
+    assert.equal(result.mode, "full");
+    assert.deepEqual(result.context, current);
+  }
 });
 
 test("exact-base source and requirement reorders preserve current positions", () => {

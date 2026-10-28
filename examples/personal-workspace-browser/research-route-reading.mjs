@@ -33,6 +33,15 @@ for route in range(3):
                 events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'finding-{node}-{index}',
                     title='相同输入下的候选取舍与后续验证',summary='本地比较保留正结果和回退；独立收益及完整成本仍未知。',
                     status=status,recorded_at=f'2026-01-01T13:00:0{index+1}Z'))
+for index in range(24):
+    node=f'group-question-{index}'
+    title=f'{index+1}. 相同预算下的候选比较：保留负结果、失败和未知成本；哪些证据能支持下一步？'
+    events.append(build_explore_node_event(goal_id=goal,node_id=node,title=title,node_kind='question',
+        recorded_at=f'2026-01-04T00:00:{index:02}Z'))
+    for version,status in enumerate(('refuted','tentative')):
+        events.append(build_explore_finding_event(goal_id=goal,node_id=node,finding_id=f'group-finding-{index}-{version}',
+            title=f'候选 {index+1} · 记录 {version+1}',summary=f'原始观察 {index+1}/{version+1}：局部指标不同，完整收益和费用仍未知。',
+            status=status,recorded_at=f'2026-01-04T0{version+1}:00:{index:02}Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'合成研究 · 路线阅读','events':events},ensure_ascii=False))
 `, path], {cwd: repoRoot});
 }
@@ -124,7 +133,7 @@ export const researchRouteReadingScenario = {
           const fullTitle = capture.events.find(event => event.result_id === `route-0-${endpoint ? "end" : "start"}` && event.event_kind === "node").title;
           await page.keyboard.press("Enter");
           await reader.waitFor();
-          const question = reader.getByText(fullTitle, {exact: true});
+          const question = reader.locator(".research-reader-content > .research-reader-question > summary > span");
           assert.equal(await question.innerText(), fullTitle, "One route activation reveals the complete original question");
           assert(await question.evaluate(element => element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1), "Requested question text is not clipped");
           if (endpoint) {
@@ -136,7 +145,7 @@ export const researchRouteReadingScenario = {
             assert(box.y >= reading.top - 1 && box.y + Math.min(box.height, lineHeight * 2) <= reading.bottom + 1, "The selected finding begins with readable content inside the reading viewport");
             assert(await body.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), "Density retains readable finding text");
             assert.match(await reader.locator(".research-finding-exceptions").innerText(), /1/);
-            const context = reader.getByText(fullTitle, {exact: true});
+            const context = reader.locator(".research-reader-content > .research-reader-question > summary");
             await context.click();
             assert(await context.evaluate(element => element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1), "Full parent context remains one optional activation away");
             await context.click();
@@ -173,6 +182,81 @@ export const researchRouteReadingScenario = {
       await page.goBack();
       await reader.waitFor();
       assert.match(await reader.locator(".research-reader-question").innerText(), /末端研究/);
+      // A grouped reading context survives the document/URL boundary, rather
+      // than living only in an in-memory opener ref. Navigation is a read.
+      for (const locale of ["zh-CN", "en"]) for (const width of [1440, 390]) {
+        const zh = locale === "zh-CN";
+        await page.setViewportSize({width, height: 900});
+        await page.emulateMedia({reducedMotion: "reduce"});
+        await page.evaluate(value => localStorage.setItem("loopx-pw-locale", value), locale);
+        await page.goto(url);
+        await history.locator('[data-research-day="2026-01-04"]').click();
+        assert.equal(await reader.locator(".research-question-index li").count(), 24);
+        await reader.locator(".research-question-index button").nth(3).click();
+        const questions = reader.getByRole("combobox", {name: zh ? "选择同组研究问题" : "Choose a question in this group"});
+        const findings = reader.getByRole("combobox", {name: zh ? "选择问题结论" : "Choose a question finding"});
+        const next = reader.getByRole("button", {name: zh ? "下一个问题" : "Next question", exact: true});
+        await questions.selectOption("group-question-4");
+        await findings.selectOption("group-finding-4-0");
+        await reader.getByRole("button", {name: zh ? "完整研究问题" : "Full research question", exact: true}).focus();
+        const questionHelp = page.locator(".context-help-popover:popover-open");
+        await questionHelp.waitFor();
+        assert((await questionHelp.innerText()).includes(capture.events.find(event => event.result_id === "group-question-4").title));
+        assert(await questionHelp.locator("p").evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+        await page.keyboard.press("Escape");
+        assert.equal(await questions.inputValue(), "group-question-4", "Closing question help retains the reader");
+        assert.match(await reader.locator(".research-recorded-finding").innerText(), /原始观察 5\/1/);
+        await page.reload();
+        await questions.waitFor();
+        assert.equal(await questions.inputValue(), "group-question-4");
+        assert.equal(await findings.inputValue(), "group-finding-4-0", "Reload retains the precise finding, not just the question");
+        await next.click();
+        assert.equal(await questions.inputValue(), "group-question-5");
+        await page.goBack();
+        assert.equal(await questions.inputValue(), "group-question-4");
+        assert.equal(await findings.inputValue(), "group-finding-4-0");
+        await page.goForward();
+        assert.equal(await questions.inputValue(), "group-question-5");
+        await reader.locator(".research-reader-back").click();
+        await page.waitForFunction(() => document.activeElement?.closest("[data-research-node]")?.getAttribute("data-research-node") === "group-question-5");
+        await reader.locator(".research-question-index button").nth(3).click();
+        await questions.selectOption("group-question-0");
+        assert(await reader.getByRole("button", {name: zh ? "上一个问题" : "Previous question", exact: true}).isDisabled());
+        await questions.selectOption("group-question-23");
+        assert(await next.isDisabled());
+        await questions.selectOption("group-question-4");
+        await findings.selectOption("group-finding-4-0");
+        await page.reload(); await questions.waitFor();
+        assert.equal(await reader.locator(".research-reader-back").innerText(), zh ? "返回问题列表" : "Back to questions");
+        const content = reader.locator(".research-recorded-finding > p");
+        assert(await content.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16));
+        assert(await reader.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await reader.evaluate(element => element.scrollIntoView({block: "start"}));
+        await page.screenshot({path: resolve(outputDir, `research-question-reading-${locale}-${width}.png`), animations: "disabled"});
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.closest("[data-research-node]")?.getAttribute("data-research-node") === "group-question-4");
+        await page.reload(); await reader.locator(".research-question-index").waitFor();
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-research-day") === "2026-01-04");
+      }
+      // A saved multi-node selection retains the same local collection. A
+      // forged parent cannot borrow unrelated questions for its navigation.
+      const clustered = new URL(url);
+      clustered.searchParams.set("research_goal", "synthetic-route-reading");
+      clustered.searchParams.set("research_node", JSON.stringify(["route-0-start", "route-0-end"]));
+      await page.goto(clustered.href);
+      await reader.locator(".research-question-index button").first().click();
+      await page.reload();
+      await reader.locator(".research-question-navigation").waitFor();
+      assert.equal(await reader.locator(".research-question-navigation select option").count(), 2);
+      await page.keyboard.press("Escape");
+      await reader.locator(".research-question-index").waitFor();
+      assert.equal(await reader.locator(".research-question-index li").count(), 2);
+      const unrelated = new URL(clustered.href);
+      unrelated.searchParams.set("research_node", "route-1-start");
+      unrelated.searchParams.set("research_parent_node", JSON.stringify(["route-0-start", "route-0-end"]));
+      await page.goto(unrelated.href); await reader.locator(".research-recorded-finding").waitFor();
+      assert.equal(await reader.locator(".research-question-navigation").count(), 0);
       assert.equal(analysisWrites, 0, "Reading, language changes and every action state never dispatch a model");
       const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
       assert(readback.source_unchanged && readback.mutation_attempts === 0, "No source or execution state changes");

@@ -245,9 +245,15 @@
 .research-history-context.is-overview { border-top: 0; }
 .research-history-context > summary { min-height: 44px; padding: 12px 24px; font-size: var(--text-body); cursor: pointer; }
 .research-history-context > .research-progress { margin: 16px 24px; }
-.research-history .research-finding-navigation { display: flex; align-items: flex-end; gap: 16px; margin-top: 16px; min-width: 0; }
-.research-finding-navigation label { display: grid; flex: 1; min-width: 0; gap: 8px; font-size: var(--text-body); }
-.research-finding-navigation select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
+.research-history :is(.research-finding-navigation, .research-question-navigation) { display: flex; align-items: center; gap: 16px; margin-top: 16px; min-width: 0; }
+:is(.research-finding-navigation, .research-question-navigation) label { display: flex; align-items: center; flex: 1; min-width: 0; gap: 8px; font-size: var(--text-body); }
+:is(.research-finding-navigation, .research-question-navigation) label > span { flex-shrink: 0; color: var(--pw-muted); }
+:is(.research-finding-navigation, .research-question-navigation) select { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); font: inherit; }
+.research-question-navigation { margin-bottom: 16px; }
+.research-question-label { display: inline-flex; flex-shrink: 0; align-items: center; gap: 0; color: var(--pw-muted); }
+.research-question-navigation .research-question-label label { display: block; flex: none; }
+.research-question-navigation > select { flex: 1; }
+.research-question-text p { font-size: var(--text-lead); line-height: var(--leading-prose); white-space: pre-wrap; }
 .research-finding-steps { display: flex; flex-shrink: 0; align-items: center; gap: 8px; font-size: var(--text-body); }
 .research-history .research-finding-steps button { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-bg); color: var(--pw-text); cursor: pointer; }
 .research-finding-steps button:disabled { color: var(--pw-muted); cursor: not-allowed; }
@@ -263,7 +269,9 @@
 .research-reader-question[open] > summary { color: var(--pw-text); font-size: var(--text-heading); line-height: var(--leading-heading); font-weight: 600; }
 .research-reader-question > p { font-size: var(--text-lead); line-height: var(--leading-prose); }
 @media (max-width: 640px) {
-  .research-history .research-finding-navigation { gap: 8px; }
+  .research-history :is(.research-finding-navigation, .research-question-navigation) { gap: 8px; }
+  .research-history .research-question-navigation { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .research-question-navigation > select { grid-column: 1 / -1; grid-row: 2; }
   .research-finding-steps { gap: 4px; }
   .research-history-context > summary { padding-inline: 16px; }
 }

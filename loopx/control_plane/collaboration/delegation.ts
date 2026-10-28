@@ -188,7 +188,8 @@ export function verifyDelegationSourceReplay(params: JsonObject): JsonObject {
   const brief = normalizeCollaborationBrief(params.brief);
   requireThat(same(source.brief, brief) && same(peer.brief, brief), "delegation replay brief changed");
   requireThat(Object.keys(conversation).length === 2 && text(conversation.session_id) && text(conversation.turn_id)
-    && same(record.conversation, conversation), "delegation replay return conversation changed");
+    && same(record.conversation, conversation) && same(params.source_conversation, conversation),
+  "delegation replay return conversation changed");
   return {matched: true};
 }
 
@@ -272,6 +273,15 @@ function delegationAcceptanceFacts(todoId: unknown, acceptance: JsonObject | nul
     acceptance_next_action: "review_original_task_acceptance"};
 }
 
+/** Shared interpretation of the native lock owner's read-only liveness facts. */
+export function delegationLaneReadiness(params: JsonObject): JsonObject {
+  const lane = requireJsonObject(params.lane, "Turn lane observation");
+  requireThat(typeof lane.state === "string"
+    && ["live", "released", "dead", "absent", "foreign_host", "unreadable"].includes(lane.state),
+  "invalid Turn lane observation");
+  return {available: ["released", "dead", "absent"].includes(lane.state), state: lane.state};
+}
+
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
@@ -290,7 +300,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       return {
         schema_version: "loopx_delegation_preflight_v0",
         binding: {id: binding.id, agent_id: binding.agent_id, todo_id: binding.todo_id},
-        state: "workspace_unavailable", workspace_state: workspace.state,
+        state: "workspace_unavailable", workspace_state: workspace.state, dispatch_allowed: false,
         workspace_next_action: "review_operator_workspace_binding",
         turn_eligible: false, turn_route: null, acceptance_ready: false,
         acceptance_reason_code: null, acceptance_next_action: "none",
@@ -324,7 +334,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
       scheduler_acknowledged: false};
     return {
       schema_version: "loopx_delegation_preflight_v0", binding,
-      state: "authority_unavailable", turn_eligible: false, turn_route: null,
+      state: "authority_unavailable", dispatch_allowed: false, turn_eligible: false, turn_route: null,
       acceptance_ready: false, authority_ready: false,
       acceptance_reason_code: null, acceptance_next_action: "none",
       authority_reason: boundedReason(authority.reason, "canonical authority unavailable"),
@@ -350,7 +360,7 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     "delegation inspection requires a matching effect-free selection refusal");
     const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
     return {
-      schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked",
+      schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked", dispatch_allowed: false,
       turn_eligible: false, turn_route: null, turn_blocker: refusal,
       ...delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current),
       authority_ready: true, authority_reason: null, authority_state: "promoted",
@@ -369,11 +379,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   // Reuse the file-lock owner's liveness facts. These describe only the native
   // Turn lane, never the presence/availability of an App or CLI conversation.
   // Omission preserves earlier callers; an explicit unknown fails closed.
-  const lane = params.lane === undefined ? null : requireJsonObject(params.lane, "Turn lane observation");
-  if (lane !== null) requireThat(typeof lane.state === "string"
-    && ["live", "released", "dead", "absent", "foreign_host", "unreadable"].includes(lane.state),
-  "invalid Turn lane observation");
-  const laneBlocked = lane !== null && !["released", "dead", "absent"].includes(String(lane.state));
+  const lane = params.lane === undefined ? null : delegationLaneReadiness(params);
+  const laneBlocked = lane !== null && lane.available !== true;
   const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id && !laneBlocked;
   const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
   const acceptanceFacts = delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current);
@@ -383,7 +390,12 @@ export function delegationPreflight(params: JsonObject): JsonObject {
     : executor.available === null ? "runtime_unverified" : "launchable";
   return {
     schema_version: "loopx_delegation_preflight_v0", binding,
-    state, turn_eligible: eligible, turn_route: route.kind,
+    state, dispatch_allowed: state === "launchable" || state === "runtime_unverified",
+    // Only lane contention may defer an otherwise admissible source launch.
+    // This permits saving its original intent, never a Host invocation.
+    queueable: laneBlocked && route.would_invoke_host === true
+      && route.selected_todo_id === binding.todo_id && pinned && executor.available !== false,
+    turn_eligible: eligible, turn_route: route.kind,
     ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
     promotion_from_surface_allowed: false,
@@ -521,6 +533,34 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   const from = params.from as Observation, to = params.to as Observation;
   requireThat(Object.hasOwn(transitions, from) && Object.hasOwn(transitions, to), "invalid delegation observation");
   requireThat(from === to || transitions[from].includes(to), "invalid delegation observation transition");
+  // A native lane race or owner interval wait before this operation has a
+  // Turn retains its original intent. Partial/resumed/unknown Turns keep normal
+  // recovery; only an exact, effect-free native refusal can return to prepared.
+  if (from === "running" && to === "turn_returned" && params.unstarted_turn === true
+      && params.turn_execution !== undefined) {
+    const result = requireJsonObject(params.turn_execution, "native Turn execution");
+    const effects = result.effects as JsonObject | undefined;
+    const host = result.host as JsonObject | undefined;
+    const admission = result.admission as JsonObject | undefined;
+    const laneWait = result.status === "unavailable" && result.reason === "turn_lane_in_flight"
+      && host?.executable === "not_invoked";
+    const intervalWait = result.status === "interval_wait" && result.reason === "minimum_interval_wait"
+      && admission?.reason === "minimum_interval_wait" && admission.admitted === false
+      && admission.reserved === false && admission.resumed !== true
+      && admission.pre_model_admission === "managed_turn_only"
+      && typeof admission.min_interval_minutes === "number" && Number.isSafeInteger(admission.min_interval_minutes)
+      && admission.min_interval_minutes > 0
+      && typeof admission.next_eligible_at_ms === "number" && Number.isSafeInteger(admission.next_eligible_at_ms)
+      && admission.next_eligible_at_ms > 0;
+    if (result.schema_version === "loopx_turn_execution_v0" && result.mode === "run_once"
+        && result.ok === false && result.dry_run === false && result.replayed === false
+        && (laneWait || intervalWait)
+        && result.result_kind === null && result.quota_slot_spend_count === 0
+        && effects !== undefined && effects !== null
+        && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"]
+          .every(key => effects[key] === false)
+        && Object.values(effects).every(value => value === false)) return {status: "prepared"};
+  }
   if (to === "accepted") requireThat(params.canonical_done === true
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");

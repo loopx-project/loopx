@@ -3,7 +3,8 @@
 Pass a public synthetic status file for whole-workspace visual review. Runtime
 availability is display-only fixture metadata; POSTs cannot execute it. Requests,
 decisions and return delivery below use the production owners in a temp runtime.
-Commands on stdin: inspect, fault, recover, deliver, stop.
+Commands on stdin: inspect, fault, recover, deliver, source-unavailable,
+source-recover, stop.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 from loopx.capabilities.manager_context import acknowledge, deliver
 from loopx.capabilities.manager_context.roundtrip import drain, report
+from loopx.capabilities.native_chat.transports import install_conversation_transports
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_action_store import ChatActionStore
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
@@ -123,6 +125,10 @@ def main():
         server.runtime_controller = ChatRuntimeController(store=store, registry_path=registry, codex_bin="unused-fixture-codex")
         server.runtime_controller.capabilities = lambda: [{"agent_id": "codex", "display_name": "Codex",
             "adapter_kind": "codex_app_server", "available": True, "streaming": True, "resume": True, "interrupt": True}]
+        def reject_provider(_profile):
+            raise AssertionError("An unselected steward must not read an external provider")
+        install_conversation_transports(server, factories=(), observe_default=reject_provider)
+        bindings = server.runtime_controller.project_contexts.conversation_bindings
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         def source_hashes():
@@ -141,6 +147,10 @@ def main():
                     server.fault = False
                 elif command == "deliver":
                     drain(runtime, registry, store, lambda *_: None)
+                elif command == "source-unavailable":
+                    bindings.path.write_text("{", encoding="utf-8")
+                elif command == "source-recover":
+                    bindings.path.unlink()
                 elif command != "inspect":
                     raise ValueError("Unknown fixture command")
                 print(json.dumps({"event": command, "posts": server.posts, "inventory_reads": server.inventory_reads,

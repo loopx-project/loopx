@@ -131,6 +131,58 @@ def record_revalidation_result(service, path, row, binding, result):
     service._fenced_write(path, row)
 
 
+def record_turn_result(
+    service, path: Path, row: dict, result: dict, *, publish: bool = True,
+    already_locked: bool = False, unstarted_turn: bool = False,
+) -> None:
+    """Persist native result facts through the existing typed observation/fence."""
+    turn_key = result.get("resume_turn_key")
+    if turn_key:
+        # Validate the public shape before persisting an address supplied
+        # by the CLI boundary.
+        turn_journal_path(service.root, goal_id=service.goal_id, turn_key=turn_key)
+    if publish:
+        # Only native receipt facts needed by the typed status owner cross
+        # this boundary. Evidence, settlement details and Host configuration
+        # remain with their original result instead of entering another RPC.
+        observation = {key: result.get(key) for key in (
+            "schema_version", "mode", "ok", "dry_run", "replayed", "status",
+            "reason", "result_kind", "quota_slot_spend_count", "effects",
+        )}
+        host = result.get("host")
+        observation["host"] = {"executable": host.get("executable")} if isinstance(host, dict) else None
+        admission = result.get("admission")
+        if isinstance(admission, dict):
+            observation["admission"] = {key: admission.get(key) for key in (
+                "admitted", "reserved", "resumed", "reason", "next_eligible_at_ms",
+                "min_interval_minutes", "pre_model_admission",
+            )}
+        decision = effect_runtime_result("collaboration.delegation.observe", {
+            "from": row["status"], "to": "turn_returned",
+            "turn_execution": observation, "unstarted_turn": unstarted_turn,
+        })
+        row["status"] = decision["status"]
+        if row["status"] == "prepared":
+            row["error"] = result["reason"]
+    if turn_key and (not publish or row["status"] != "prepared"):
+        row["turn_key"] = turn_key
+    row["turn_result"] = {
+        key: result.get(key)
+        for key in (
+            "status",
+            "result_kind",
+            "resume_turn_key",
+            "reason",
+            "host_failure",
+            "error",
+        )
+    }
+    if already_locked:
+        service._fenced_write_locked(path, row)
+    else:
+        service._fenced_write(path, row)
+
+
 def matching_turn_key(service, row: dict, binding: dict) -> str | None:
     """Find only the journal bound to this operation's settlement identity."""
 

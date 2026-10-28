@@ -22,7 +22,7 @@ test("source replay requires the original binding, complete brief, peer and retu
     source_request_id: source.request_id};
   const input = {...params, goal_id: "goal", goal_ref: goalRef, operation_id: identity.operation_id,
     source_request_id: source.request_id, source_request: source, peer_request: peer, peer_operation: peer,
-    brief, conversation, record: {identity, conversation, status: "prepared"}};
+    brief, conversation, source_conversation: conversation, record: {identity, conversation, status: "prepared"}};
   assert.deepEqual(verifyDelegationSourceReplay(input), {matched: true});
   for (const record of [{...input.record, status: "accepted"}, {...input.record, status: "stopped"}])
     assert.deepEqual(verifyDelegationSourceReplay({...input, record}), {matched: true});
@@ -31,6 +31,10 @@ test("source replay requires the original binding, complete brief, peer and retu
     {source_request_id: "c".repeat(64)}, {operation_id: "other-operation"},
     {brief: {...brief, constraints: ["Different scope"]}},
     {conversation: {...conversation, turn_id: "other-turn"}},
+    {source_conversation: {...conversation, turn_id: "other-turn"}},
+    {source_conversation: null},
+    {conversation: {session_id: "other-session", turn_id: "other-turn"},
+      record: {...input.record, conversation: {session_id: "other-session", turn_id: "other-turn"}}},
     {source_request: {...source, execution_binding_id: "other"}},
     {peer_request: {...peer, source_agent_id: "another-requester"}},
     {peer_request: {...peer, brief: {...brief, acceptance: ["Different work"]}}},
@@ -69,6 +73,7 @@ test("preflight preserves a quota refusal, but rejects effectful or retargeted e
   const input = {binding,preview,acceptance:{todo_id:binding.todo_id,state:"ready"},validation_files_current:true};
   const observed = delegationPreflight(input);
   assert.equal(observed.state,"turn_blocked"); assert.equal(observed.turn_eligible,false);
+  assert.equal(observed.dispatch_allowed, false);
   assert.equal(observed.acceptance_ready,true); assert.equal(observed.executor,null);
   assert.deepEqual(observed.turn_blocker,projected.selection_rejection);
   assert.deepEqual(delegationPreflight({...input,preview:{...preview,selection_rejection:{
@@ -219,6 +224,57 @@ test("message receipt and model return do not imply accepted work", () => {
   assert.throws(() => transitionDelegationObservation({from: "rejected", to: "running"}), /transition/);
   const accepted = transitionDelegationObservation({from: "turn_returned", to: "accepted", ...acceptedFacts});
   assert.equal(accepted.status, "accepted");
+});
+
+test("only an unstarted native lane refusal keeps delegation queued", () => {
+  const effects = {host_invoked: false, state_written: false, quota_spent: false,
+    scheduler_acknowledged: false};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    dry_run: false, replayed: false, status: "unavailable", reason: "turn_lane_in_flight",
+    result_kind: null, quota_slot_spend_count: 0, host: {executable: "not_invoked"}, effects};
+  const input = {from: "running", to: "turn_returned", unstarted_turn: true, turn_execution: result};
+  assert.deepEqual(transitionDelegationObservation(input), {status: "prepared"});
+  // Existing callers and already journaled operations keep their old lifecycle.
+  for (const unstarted_turn of [undefined, false, null, "true"])
+    assert.deepEqual(transitionDelegationObservation({...input, unstarted_turn}), {status: "turn_returned"});
+  assert.deepEqual(transitionDelegationObservation({from: "running", to: "turn_returned"}),
+    {status: "turn_returned"});
+  for (const patch of [
+    {schema_version: "other"}, {mode: "preview"}, {ok: true}, {dry_run: true}, {replayed: true},
+    {status: "committed"}, {reason: "runtime_unavailable"}, {result_kind: "host_failure"},
+    {quota_slot_spend_count: 1}, {host: {executable: "started"}}, {effects: null},
+    ...Object.keys(effects).flatMap(key => [true, null, undefined, "false"]
+      .map(value => ({effects: {...effects, [key]: value}}))),
+    {effects: {...effects, unknown_effect: true}},
+  ]) assert.deepEqual(transitionDelegationObservation({...input, turn_execution: {...result, ...patch}}),
+    {status: "turn_returned"});
+  assert.throws(() => transitionDelegationObservation({...input, from: "rejected"}), /transition/);
+  assert.throws(() => transitionDelegationObservation({...input, to: "prepared"}), /transition/);
+});
+
+test("native interval waits retain only an unstarted effect-free operation", () => {
+  const effects = {host_invoked: false, state_written: false, quota_spent: false,
+    scheduler_acknowledged: false};
+  const admission = {admitted: false, reserved: false, resumed: null, reason: "minimum_interval_wait",
+    min_interval_minutes: 3, next_eligible_at_ms: 180_001, pre_model_admission: "managed_turn_only"};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    dry_run: false, replayed: false, status: "interval_wait", reason: "minimum_interval_wait",
+    result_kind: null, quota_slot_spend_count: 0, host: {executable: "configured-host"}, effects, admission};
+  const input = {from: "running", to: "turn_returned", unstarted_turn: true, turn_execution: result};
+  assert.deepEqual(transitionDelegationObservation(input), {status: "prepared"});
+  for (const unstarted_turn of [false, undefined])
+    assert.deepEqual(transitionDelegationObservation({...input, unstarted_turn}), {status: "turn_returned"});
+  for (const patch of [
+    {admitted: true}, {admitted: null}, {reserved: true}, {reserved: null}, {resumed: true},
+    {reason: "duplicate_or_stale_trigger"}, {pre_model_admission: "not_qualified"},
+    ...[null, 0, -1, "3", 1.5].map(min_interval_minutes => ({min_interval_minutes})),
+    ...[null, 0, -1, "180001", 1.5].map(next_eligible_at_ms => ({next_eligible_at_ms})),
+  ]) assert.deepEqual(transitionDelegationObservation({...input,
+    turn_execution: {...result, admission: {...admission, ...patch}}}), {status: "turn_returned"});
+  for (const patch of [{admission: null}, {reason: "duplicate_or_stale_trigger"},
+    {replayed: true}, {quota_slot_spend_count: 1}, {effects: {...effects, state_written: true}}])
+    assert.deepEqual(transitionDelegationObservation({...input, turn_execution: {...result, ...patch}}),
+      {status: "turn_returned"});
 });
 
 test("only a conversation-origin accepted result leaves a wake intent for the exact requester", () => {
@@ -432,12 +488,16 @@ test("preflight separates task admission, acceptance binding and runtime availab
     managed_executor: {executor: "dsh", available: true, unavailable_reason: null, execution_profile: "explicit-profile"}};
   const params = {binding, preview, validation_files_current: true, acceptance: {todo_id: "todo_review", state: "ready"}};
   assert.equal(delegationPreflight(params).state, "launchable");
+  assert.equal(delegationPreflight(params).dispatch_allowed, true);
   assert.equal(delegationPreflight(params).authority_state, "promoted");
   for (const [available, expected] of [[null, "runtime_unverified"], [false, "runtime_unavailable"]] as const) {
     assert.equal(delegationPreflight({...params, preview: {...preview,
       managed_executor: {...preview.managed_executor, available}}}).state, expected);
+    assert.equal(delegationPreflight({...params, preview: {...preview,
+      managed_executor: {...preview.managed_executor, available}}}).dispatch_allowed, available !== false);
   }
   assert.equal(delegationPreflight({...params, acceptance: null}).state, "acceptance_unavailable");
+  assert.equal(delegationPreflight({...params, acceptance: null}).dispatch_allowed, false);
   assert.equal(delegationPreflight({...params, acceptance: {...params.acceptance, state: "stale"}}).state, "acceptance_unavailable");
   assert.equal(delegationPreflight({...params, preview: {...preview, route: {...preview.route,
     selected_todo_id: "other"}}}).state, "turn_blocked");
@@ -454,6 +514,8 @@ test("preflight uses scoped native lane facts without inventing App presence", (
       managed_executor: {executor: "generic-cli", available: null, unavailable_reason: null, execution_profile: null}}};
   const original = delegationPreflight(params);
   assert.equal(original.state, "runtime_unverified");
+  assert.equal(original.dispatch_allowed, true);
+  assert.equal(original.queueable, false);
   assert.equal(original.turn_lane, undefined);
   for (const state of ["absent", "released", "dead"]) {
     const {turn_lane, ...observed} = delegationPreflight({...params, lane: {state, holder: "withheld"}});
@@ -464,6 +526,8 @@ test("preflight uses scoped native lane facts without inventing App presence", (
     const observed = delegationPreflight({...params, lane: {state}});
     assert.equal(observed.state, "turn_blocked");
     assert.equal(observed.turn_eligible, false);
+    assert.equal(observed.dispatch_allowed, false);
+    assert.equal(observed.queueable, true);
     assert.equal(observed.reason, state === "live" ? "turn_lane_in_flight" : "turn_lane_state_unknown");
     assert.equal(observed.acceptance_ready, true);
     assert.deepEqual(observed.effects, original.effects);
@@ -471,6 +535,12 @@ test("preflight uses scoped native lane facts without inventing App presence", (
   }
   for (const lane of [null, {}, {state: "idle"}, {state: ["live"]}, {state: true}])
     assert.throws(() => delegationPreflight({...params, lane}));
+  for (const change of [
+    {acceptance: null}, {validation_files_current: false},
+    {preview: {...params.preview, route: {...params.preview.route, selected_todo_id: "other"}}},
+    {preview: {...params.preview, route: {...params.preview.route, would_invoke_host: false}}},
+    {preview: {...params.preview, managed_executor: {...params.preview.managed_executor, available: false}}},
+  ]) assert.equal(delegationPreflight({...params, ...change, lane: {state: "live"}}).queueable, false);
 });
 
 const runtimePreflight = (executor: Record<string, unknown>) => delegationPreflight({
@@ -560,6 +630,7 @@ test("preflight reports unavailable current authority without granting execution
   acceptance: null, validation_files_current: false});
   assert.equal(result.state, "authority_unavailable");
   assert.equal(result.authority_ready, false);
+  assert.equal(result.dispatch_allowed, false);
   assert.equal(result.authority_state, "unavailable");
   assert.equal(result.authority_next_action, "repair_canonical_authority");
   assert.equal(result.promotion_from_surface_allowed, false);

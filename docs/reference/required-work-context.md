@@ -210,8 +210,17 @@ object keys or exact array indices in the immutable base capture. This avoids
 resending identical authoring and evidence records when task binding or source
 ordering moves them to another field. The reference copies the complete exact
 value, never a similar value or one from the current patch. A subtree containing
-any field required as current input cannot use a whole-subtree reference. The
-codec chooses a reference only when smaller than its literal or recursive edit.
+any field required as current input cannot use a bare whole-subtree reference.
+It may instead pair `from` with `edit`: copy the exact base value, then apply
+the edit to that copy. Every current and unknown control still appears literally
+in the edit. Nested `from` paths remain rooted in the original immutable base,
+never the edited copy. This avoids repeating a long reference path for each
+unchanged requirement when an admitted reader relocates a complete source.
+The codec chooses this overlay only when smaller than the ordinary recursive
+edit or complete current literal; its instructions appear only when used.
+Readers validate the exact current change tree and complete reconstructed digest;
+removing a required current override therefore recovers the current full capture.
+Older readers recover the same full capture for an unsupported overlay.
 Current and unknown controls remain inline. Older string-only readers recover
 the current full capture for an unsupported structured reference. Missing,
 malformed or incompatible references recover the same full current capture;

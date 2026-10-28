@@ -23,6 +23,7 @@ def settle_refreshed_turn(
     goal_id: str, agent_id: str, todo_id: str | None,
     replan_obligation_id: str | None, turn_instance_id: str,
     goal_ref: Mapping[str, str] | None,
+    delivery_workspace_path: Path | None = None,
 ) -> None:
     """Follow one owed step, then verify its exact receipts; never collect a guard.
 
@@ -45,6 +46,7 @@ def settle_refreshed_turn(
     error = None
     spent: dict[str, Any] = {}
     try:
+        workspace = delivery_workspace_path.expanduser().resolve() if delivery_workspace_path else None
         command = shlex.split(owed["command"])
         # Validate the owner-rendered argv through the actual CLI parser too:
         # a projector bug must not debit a different valid Turn before readback.
@@ -60,11 +62,19 @@ def settle_refreshed_turn(
                     ("goal_id", goal_id), ("agent_id", agent_id), ("todo_id", todo_id),
                     ("replan_obligation_id", replan_obligation_id), ("turn_instance_id", turn_instance_id)))):
             raise ValueError("owed quota command does not preserve the exact original binding")
-        # Execute this checkout's complete CLI, including native guards, hooks
-        # and rollout receipts. Do not resolve an ambient LoopX from PATH or
-        # call the lower-level debit without its receipt-producing adapter.
+        # Keep the validated producing cwd for accounting, but pin imports to
+        # this CLI's package: the delivered worktree may contain another LoopX.
+        # -P excludes the child cwd from Python's initial module search path.
+        # Retain the complete CLI guards, hooks and rollout receipts; neither
+        # ambient PATH nor a lower-level debit may replace that adapter.
+        entry = (
+            "import sys; sys.path.insert(0, sys.argv.pop(1)); "
+            "import runpy; runpy.run_module('loopx.cli', run_name='__main__')"
+        )
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.cli", "--format", "json", *command[1:]],
+            [sys.executable, "-P", "-c", entry, str(Path(__file__).resolve().parents[2]),
+             "--format", "json", *command[1:]],
+            cwd=workspace,
             capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
         )
         value = json.loads(result.stdout)
@@ -73,7 +83,7 @@ def settle_refreshed_turn(
         spent = value
         if result.returncode or spent.get("ok") is not True:
             error = str(spent.get("error") or spent.get("reason") or "quota settlement CLI failed")
-    except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired, SystemExit) as exc:
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired, SystemExit) as exc:
         error = str(exc)
     try:
         readback = read_heartbeat_settlement(

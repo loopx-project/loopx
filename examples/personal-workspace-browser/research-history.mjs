@@ -1213,7 +1213,9 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
         assert(await detail.getByText('0.2 / 30', {exact:true}).isVisible());
         await page.screenshot({path:resolve(outputDir, `research-execution-${viewport.width}.png`), animations:'disabled'});
         assert.deepEqual(selectedNodes(),['hit-6']);
-        await detail.getByText('Synthetic hit target 6',{exact:true}).waitFor();
+        await detail.getByRole('button',{name:'完整研究问题',exact:true}).focus();
+        await page.locator('.context-help-popover:popover-open').getByText('Synthetic hit target 6',{exact:true}).waitFor();
+        await page.keyboard.press('Escape');
         await detail.press('Escape');
         assert.deepEqual(selectedNodes(),ids,'Escape returns to the original group');
         assert(await detail.locator('[data-research-node="hit-6"] button').evaluate(e=>e===document.activeElement));

@@ -29,6 +29,9 @@ async function fixture(action) {child.stdin.write(action + '\n'); return next();
 let browser, page;
 try {
   const ready = await next(); assert.equal(ready.event, 'ready');
+  const source = await fetch(ready.origin + '/api/chat/app-steward');
+  assert.equal(source.status, 200, 'The fixture must install the real conversation source owner');
+  assert.deepEqual(await source.json(), {ok: true, binding_id: null, session_id: null});
   browser = await launchBrowser(loadPlaywright().chromium);
   page = await browser.newPage({viewport: {width: 1440, height: 1000}});
   await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
@@ -107,9 +110,16 @@ try {
     await page.evaluate(() => localStorage.setItem('loopx-pw-locale', 'en'));
     await page.reload(); await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).click();
     await page.getByRole('searchbox', {name: 'Search delegations'}).waitFor();
+    await fixture('source-unavailable'); await page.reload();
+    assert.equal((await fetch(ready.origin + '/api/chat/app-steward')).status, 409);
+    await page.getByRole('alert').filter({hasText: 'The original steward conversation is unavailable.'}).waitFor();
+    assert.equal(await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).count(), 0);
+    await fixture('source-recover'); await page.getByRole('button', {name: 'Retry history', exact: true}).click();
+    await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).click();
+    await page.getByRole('searchbox', {name: 'Search delegations'}).waitFor();
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English and read-only receipts.');
+    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}

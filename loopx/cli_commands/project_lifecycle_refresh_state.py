@@ -946,4 +946,8 @@ def _settle_requested_refresh(payload, args, registry_path, goal_ref):
         runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root),
         goal_id=args.goal_id, agent_id=args.agent_id, todo_id=args.todo_id,
         replan_obligation_id=args.replan_obligation_id,
-        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref)
+        turn_instance_id=args.turn_instance_id, goal_ref=goal_ref,
+        delivery_workspace_path=(
+            Path(args.delivery_workspace_path)
+            if args.delivery_workspace_path else None
+        ))

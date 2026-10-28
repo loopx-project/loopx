@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import tempfile
@@ -656,26 +657,37 @@ class BenchmarkCodex(CodexOffline):
 
     @staticmethod
     def _totals(trajectories: Iterable[Trajectory]) -> dict[str, int | float | None]:
-        prompt = completion = cached = 0
-        costs: list[float] = []
-        for trajectory in trajectories:
-            metrics = trajectory.final_metrics
-            if metrics is None:
-                continue
-            prompt += metrics.total_prompt_tokens or 0
-            completion += metrics.total_completion_tokens or 0
-            cached += metrics.total_cached_tokens or 0
-            if metrics.total_cost_usd is not None:
-                costs.append(metrics.total_cost_usd)
-        return {
-            "prompt": prompt,
-            "completion": completion,
-            "cached": cached,
-            "cost": sum(costs) if costs else None,
+        # These are Harbor's converted session metrics, not a proof of raw-log
+        # or billing coverage. A partial field must never become a run total.
+        metrics = [trajectory.final_metrics for trajectory in trajectories]
+        fields = {
+            "prompt": "total_prompt_tokens",
+            "completion": "total_completion_tokens",
+            "cached": "total_cached_tokens",
+            "cost": "total_cost_usd",
         }
+        totals: dict[str, int | float | None] = {}
+        for key, field in fields.items():
+            values = [getattr(metric, field, None) for metric in metrics]
+            if not values or any(
+                type(value) not in ((int, float) if key == "cost" else (int,))
+                or value < 0
+                or (isinstance(value, float) and not math.isfinite(value))
+                for value in values
+            ):
+                totals[key] = None
+                continue
+            total = sum(values)
+            totals[key] = (
+                None if isinstance(total, float) and not math.isfinite(total) else total
+            )
+        return totals
 
-    def _write_aggregate_trajectory(self) -> list[Trajectory]:
-        trajectories = self._session_trajectories([self.logs_dir])
+    def _write_aggregate_trajectory(
+        self, trajectories: list[Trajectory] | None = None
+    ) -> list[Trajectory]:
+        if trajectories is None:
+            trajectories = self._session_trajectories([self.logs_dir])
         if not trajectories:
             return []
         steps = []
@@ -691,9 +703,9 @@ class BenchmarkCodex(CodexOffline):
             agent=trajectories[0].agent,
             steps=steps,
             final_metrics=FinalMetrics(
-                total_prompt_tokens=totals["prompt"] or None,
-                total_completion_tokens=totals["completion"] or None,
-                total_cached_tokens=totals["cached"] or None,
+                total_prompt_tokens=totals["prompt"],
+                total_completion_tokens=totals["completion"],
+                total_cached_tokens=totals["cached"],
                 total_cost_usd=totals["cost"],
                 total_steps=len(steps),
                 extra={"native_sessions": len(trajectories)},
@@ -707,22 +719,26 @@ class BenchmarkCodex(CodexOffline):
     def _populate_context(
         self, context: AgentContext, before: dict | None = None
     ) -> None:
-        totals = self._totals(self._session_trajectories([self.logs_dir]))
-        before = before or {}
-        context.n_input_tokens = int(totals["prompt"] or 0) - int(
-            before.get("prompt") or 0
-        )
-        context.n_output_tokens = int(totals["completion"] or 0) - int(
-            before.get("completion") or 0
-        )
-        context.n_cache_tokens = int(totals["cached"] or 0) - int(
-            before.get("cached") or 0
-        )
-        context.cost_usd = (
-            totals["cost"] - (before.get("cost") or 0)
-            if totals["cost"] is not None
-            else None
-        )
+        trajectories = self._session_trajectories([self.logs_dir])
+        totals = self._totals(trajectories)
+
+        def delta(key: str) -> int | float | None:
+            current = totals[key]
+            # Only an absent pre-phase observation means cumulative reporting.
+            # A present but incomplete baseline cannot establish a phase delta.
+            previous = 0 if before is None else before.get(key)
+            if current is None or previous is None or current < previous:
+                return None
+            return current - previous
+
+        def token_delta(key: str) -> int | None:
+            value = delta(key)
+            return value if type(value) is int else None
+
+        context.n_input_tokens = token_delta("prompt")
+        context.n_output_tokens = token_delta("completion")
+        context.n_cache_tokens = token_delta("cached")
+        context.cost_usd = delta("cost")
         context.metadata = {
             "execution_mode": self.execution.mode,
             "iteration_context": self.execution.context,
@@ -733,7 +749,7 @@ class BenchmarkCodex(CodexOffline):
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
         }
-        self._write_aggregate_trajectory()
+        self._write_aggregate_trajectory(trajectories)
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         self._populate_context(context)
@@ -757,6 +773,10 @@ class BenchmarkCodex(CodexOffline):
             )
 
         before = self._totals(self._session_trajectories([self.logs_dir]))
+        # A genuinely empty pre-phase log set has no prior session usage. An
+        # existing rollout that Harbor cannot convert is not a zero baseline.
+        if not any(self.logs_dir.glob("sessions/**/*.jsonl")):
+            before = None
         try:
             if self.execution.uses_loopx:
                 await self._prepare_phase(environment, instruction, cwd=cwd)

@@ -258,6 +258,10 @@ guard, changes no binding and performs no Todo completion. Failed validation,
 unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
 An ambiguous response is reconciled through the original receipts; exact retry
 cannot debit twice. Ordinary refresh without the option retains its behavior.
+When `--delivery-workspace-path` names the producing worktree, the combined
+operation also runs the owed command there, using the originating CLI's
+implementation. The normal workspace and settlement guards still apply; a
+missing or incompatible workspace leaves the original owed command recoverable.
 
 An in-flight recommendation does not require keeping a completed Todo open.
 Validate its original declaration, use ordinary completion when satisfied, and
@@ -277,6 +281,9 @@ writeback 读取，避免重复交付；当前准入、选择与停止事实仍�
 Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
 完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
 按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
+继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
+原待结算命令以便恢复。
 
 执行中续跑建议不要求把已完成的 Todo 保持开放。原声明验收满足后可正常完成，并
 在原 Turn 上按语义收尾写入有证据的 vision；未完成的阶段进展仍可保留开放状态。

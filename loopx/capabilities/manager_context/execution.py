@@ -5,8 +5,10 @@ Context receipt, launch observation, receiver adoption and return stay separate.
 """
 
 from pathlib import Path
-from collections.abc import Callable
-from typing import Any, TYPE_CHECKING
+from time import monotonic
+from collections.abc import Callable, Iterator
+from typing import Any, TYPE_CHECKING, cast
+import logging
 
 if TYPE_CHECKING:
     from ...chat_store import ChatSessionStore
@@ -14,10 +16,12 @@ if TYPE_CHECKING:
 from ...agent_registry import load_goal_from_registry
 from ...collaboration_mcp import Delegations
 from ...control_plane.collaboration import conversation_scope
+from ...control_plane.collaboration.inbox import _root
+from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_grant_observation import (
     read_delegation_source_execution, source_execution_bindings,
 )
-from ...control_plane.effect_runtime import EffectRuntimeRejected
+from ...control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ...orchestration import compact_orchestration_policy, normalize_subagent_execution_config
 
 
@@ -86,42 +90,146 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
             raise ValueError("execution binding not granted to this source")
         service, binding = _service(root, registry, grant)
         operation = "context-" + receipt["request_id"]
-        # Recover an existing operation instead of probing a now-completed Todo
-        # and misreporting an accepted result as a refused new launch.
-        if service.path(operation).exists():
+        replayed = service.path(operation).exists()
+        saved = {}
+        if replayed:
             row = read_delegation_source_execution(service, selected, operation,
                 source_request_id=receipt["request_id"], brief=request["brief"],
                 conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]})
-            if row["status"] == "prepared":
-                # The requester may have died after persisting the operation
-                # but before starting its worker. Rejoin that same owner under
-                # fresh source authority; never retry an uncertain running Host.
-                if not execution_allowed() or grant not in _grants(root, registry, session, turn):
-                    raise ValueError("source execution grant changed before recovery")
-                row = service.resume(operation, prepared_source_request_id=receipt["request_id"])
-            return {"submitted": True, "operation_id": operation, "todo_id": binding["todo_id"],
-                    "status": row["status"], "replayed": True}
+            saved = {"operation_id": operation, "todo_id": binding["todo_id"],
+                     "status": row["status"], "replayed": True}
+            # Only a still-prepared operation can submit a worker. Other
+            # states remain observations, including an accepted operation
+            # whose now-completed Todo would refuse a new admission.
+            if row["status"] != "prepared":
+                return {"submitted": True, **saved}
+        # A crash before spawn leaves the original prepared operation pending.
+        # Its recovery needs the same fresh native preflight as first dispatch;
+        # otherwise a busy/unknown lane can strand it in a premature rejection.
         preflight = service.inspect(selected)
         # Match the existing start owner: an unprobed configured runtime may
         # attempt bounded execution, but is never presented as ready/running.
         # Known refusal, missing canonical acceptance or an unavailable runtime
         # must stop before dispatch. Actual launch and acceptance remain owned
         # by the governed Turn, not this point-in-time preview.
-        if (preflight["state"] not in {"launchable", "runtime_unverified"}
-                or not all(preflight.get(key) is True for key in
-                           ("turn_eligible", "acceptance_ready", "authority_ready"))):
-            return {"submitted": False, "preflight": preflight, "reason": "execution_not_launchable"}
+        if preflight.get("dispatch_allowed") is not True:
+            if not replayed and preflight.get("queueable") is True:
+                if not execution_allowed() or grant not in _grants(root, registry, session, turn):
+                    raise ValueError("source execution grant changed before queueing")
+                result = service.start(selected, operation, request["brief"],
+                    conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]},
+                    source_request_id=receipt["request_id"], _defer_worker=True)
+                saved = {"operation_id": operation, "todo_id": binding["todo_id"],
+                         "status": result["status"], "replayed": False}
+            return {"submitted": False, **saved, "preflight": preflight, "reason": "execution_not_launchable"}
         # Re-read the source and operator selection after the potentially slow
         # preview. Delegations.start itself rechecks the exact binding and Turn.
         if not execution_allowed() or grant not in _grants(root, registry, session, turn):
             raise ValueError("source execution grant changed before launch")
-        result = service.start(selected, operation, request["brief"],
-                               conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]},
-                               source_request_id=receipt["request_id"])
+        if replayed:
+            # Keep the prepared-source CAS through worker startup. A delayed
+            # child must not retry an operation that has already advanced.
+            result = service.resume(operation, prepared_source_request_id=receipt["request_id"])
+        else:
+            result = service.start(selected, operation, request["brief"],
+                                   conversation={"session_id": session["session_id"], "turn_id": turn["turn_id"]},
+                                   source_request_id=receipt["request_id"])
         return {"submitted": True, "operation_id": operation, "todo_id": binding["todo_id"],
-                "status": result["status"], "runtime_readiness": preflight["state"], "replayed": False}
+                "status": result["status"], "replayed": replayed,
+                **({} if replayed else {"runtime_readiness": preflight["state"]})}
     except (OSError, ValueError, KeyError, TypeError, EffectRuntimeRejected):
         return {"submitted": False, "reason": "execution_binding_or_admission_unavailable"}
+
+
+class QueuedSourcePump:
+    """Bounded recovery inside the existing Chat service, not a work scheduler.
+
+    Only already-persisted Chat execution intents are candidates. A context-only
+    Inbox row, operator/MCP operation or uncertain started Turn cannot enroll.
+    The iterator and retry delay are host IO state; admission/once-only effects
+    remain with the existing source, preflight and native Turn owners.
+    """
+
+    def __init__(self, root: Path, registry: Path, store: "ChatSessionStore") -> None:
+        self.root, self.registry, self.store = root, registry, store
+        self.paths: Iterator[Path] | None = None
+        self.next_probe = 0.0
+
+    def tick(self, *, cancelled: Callable[[], bool] = lambda: False) -> None:
+        if cancelled() or monotonic() < self.next_probe:
+            return
+        self.next_probe = monotonic() + 30
+        if self.paths is None:
+            self.paths = (_root(self.root) / "executions").glob("*/*.json")
+        # Advance the cursor past refused/unavailable rows so one request cannot
+        # starve another. At most 20 local records and one full native preflight.
+        for _ in range(20):
+            if cancelled():
+                break
+            path = next(self.paths, None)
+            if path is None:
+                self.paths = None
+                break
+            try:
+                if self._resume(path, cancelled):
+                    break
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                # Keep the original intent. Unknown/revoked sources neither
+                # become empty nor create another request or execution.
+                continue
+
+    def _resume(self, path: Path, cancelled: Callable[[], bool]) -> bool:
+        from ...control_plane.collaboration.inbox import _entry, _read
+        from ...control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+        from ...control_plane.collaboration.source_chat_observation import is_source_chat_host, observe_source_chat
+        from ...control_plane.turn_driver.lane_fence import turn_lane_liveness
+
+        row = _read(path)
+        identity = row.get("identity", {})
+        source_id = identity.get("source_request_id") if isinstance(identity, dict) else None
+        if (row.get("status") != "prepared" or not isinstance(source_id, str)
+                or not BARE_SHA256_PATTERN.fullmatch(source_id) or path.is_symlink()
+                or not BARE_SHA256_PATTERN.fullmatch(path.stem)):
+            return False
+        route = _read(_root(self.root) / "roundtrips" / (source_id + ".json"))
+        if not is_source_chat_host(self.root, route, self.store):
+            return False
+        session, turn = observe_source_chat(self.root, route)
+        target = {key: route[key] for key in ("goal_id", "agent_id")}
+        for grant in _grants(self.root, self.registry, session, turn):
+            if (any(grant[key] != value for key, value in target.items())
+                    or grant["binding_id"] != identity["binding"]["id"]):
+                continue
+            service, binding = _service(self.root, self.registry, grant)
+            operation = "context-" + source_id
+            if service.path(operation) != path or service.read(operation)["worker_active"]:
+                continue
+            with collaboration_goal_scope(self.registry, goal_id=target["goal_id"], agents=(),
+                    caller_goal_ref=route.get("goal_ref")) as scope:
+                original = _entry(self.root, target["goal_id"], target["agent_id"], source_id, scope=scope)
+            conversation = {"session_id": session["session_id"], "turn_id": turn["turn_id"]}
+            def observe() -> dict[str, Any]:
+                return cast(dict[str, Any], read_delegation_source_execution(service, binding["id"], operation,
+                    source_request_id=source_id, brief=original["brief"], conversation=conversation))
+            if observe()["status"] != "prepared":
+                return False
+            # A cheap scoped observation avoids native CLI/model polling while
+            # another Turn still owns this recipient's lane, or it is unknown.
+            lane = turn_lane_liveness(service._lane_target(binding))
+            if effect_runtime_result("collaboration.delegation.lane_readiness", {"lane": {"state": lane["state"]}})["available"] is not True:
+                return False
+            if cancelled():
+                return False
+            try:
+                preflight = service.inspect(binding["id"])
+                if preflight.get("dispatch_allowed") is True and not cancelled() and observe()["status"] == "prepared":
+                    service.resume(operation, prepared_source_request_id=source_id)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                # A failed full preview still consumes this probe's one
+                # attempt. Keep its intent and let the next cursor run proceed.
+                logging.getLogger(__name__).warning("Queued source preflight unavailable; retaining original intent")
+            return True
+        return False
 
 
 def handoff_message(
