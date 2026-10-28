@@ -88,6 +88,8 @@ def _envelope(
     (None, None), (False, None), (0, None), (" \t", None),
     (" todo_other ", "todo_other"), (True, "True"), (1e-7, "1e-07"),
     (["owner"], "['owner']"), ({"id": "owner"}, "{'id': 'owner'}"),
+    ("\x1c todo_other \x1f", "todo_other"), ("\u0085todo_other\u0085", "todo_other"),
+    ("\ufefftodo_other\ufeff", "\ufefftodo_other\ufeff"),
 ])
 def test_planning_and_recovery_retain_historical_selected_work_codec(primary, expected):
     """Old journal identity/hash encoding survives migration to the typed selector."""

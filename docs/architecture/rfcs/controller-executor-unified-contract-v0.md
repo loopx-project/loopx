@@ -1114,8 +1114,9 @@ The candidate's ordinary planner and failed-session reconciliation now also
 consume the selected work from the existing `driver_lineage` call. The shared
 `selectedWorkTodo` owner places ordinary or adaptive selection into that call's
 existing action-hash preimage; Python no longer selects it again or rewrites the
-preimage. Python retains the persisted JSON/number codec and supplies scalar-text
-compatibility hints only for historical non-string primary IDs. Complete inputs
+preimage. Python retains the persisted JSON/number and primary-ID scalar/whitespace codec.
+The shared owner consumes already-decoded historical text without applying JS
+trim again. Complete inputs
 ignore those hints and retain full source/projection integrity checks. There is
 no new bridge call, model-facing field, persisted schema or cross-attempt cache.
 The public action-signature operation still describes the original envelope.
@@ -1130,11 +1131,16 @@ adapter retirement, App/SDK/benchmark adoption or original-quota net benefit.
 Qualification against immutable `334c1a772` retains complete plan/recovery outputs
 on frozen File/SQLite CLI inputs. Planning still uses two bridge calls and
 reconciliation one, with equal request/response bytes on these ordinary inputs.
-The actual CLI/provider/Host, completion and settlement modules pass 251 cases;
-ten migration assertions fail on that predecessor while nine historical-codec
+The actual CLI/provider/Host, completion and settlement modules pass 254 cases;
+ten migration assertions fail on that predecessor while twelve historical-codec
 cases pass there. The latter cover omitted/false/zero, whitespace, numeric,
-boolean and collection-valued historical primary IDs, version/mode applicability,
+boolean and collection-valued historical primary IDs, Unicode whitespace/BOM, version/mode applicability,
 original Turn keys and resumed bindings. The candidate passes all of them.
+
+A temporary `ef479d2b5` trial changed three Unicode whitespace/BOM identities;
+those semantic counterexamples fail there and pass on the corrected owner,
+while the original predecessor preserves them. Its measurements below remain
+historical trial evidence, not qualification of the corrected source.
 
 There is no qualified latency improvement. Three balanced sequential cohorts
 give 93 warm samples per arm/case. The initial source-worktree versus archived
@@ -1158,6 +1164,23 @@ existing Unicode key ordering/hash work, without proving the latency cause.
 Python wait/IO stacks remain unprofiled because the optional profiler is absent.
 Shared ownership and byte parity do not cancel these cost gaps or earlier
 negative C1 measurements.
+
+The corrected three-file source has a separate clean-source comparison, again
+93 warm samples per arm/case with all eight complete outputs equal and unchanged
+RPC/ordinary-input traffic. It retains mixed results, including a worse SQLite
+planning tail. The same exclusions and uncontrolled-load limits apply:
+
+| Input / operation | Baseline median / p95, ms | Corrected source median / p95, ms |
+| --- | --- | --- |
+| File / complete plan | 38.529 / 48.381 | 38.504 / 47.134 |
+| File / complete recovery | 17.821 / 22.029 | 18.244 / 21.857 |
+| File / historical plan | 32.787 / 44.413 | 30.871 / 36.733 |
+| File / historical recovery | 10.635 / 14.620 | 10.292 / 12.201 |
+| SQLite / complete plan | 39.600 / 46.547 | 40.036 / 77.714 |
+| SQLite / complete recovery | 18.034 / 28.685 | 18.552 / 25.223 |
+| SQLite / historical plan | 32.061 / 42.789 | 32.447 / 38.962 |
+| SQLite / historical recovery | 10.444 / 14.258 | 10.270 / 12.891 |
+
 
 ### C1 caller replacement and cutover unit
 

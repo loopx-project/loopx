@@ -2091,14 +2091,13 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const decision = Object.hasOwn(request, "payload") ? completeHostDecision(request) : null;
     const historical = !decision && request.historical_route_text !== undefined
       ? requireJsonObject(request.historical_route_text, "historical route text") : undefined;
-    const orchestration = object(envelope.task_orchestration_contract);
-    // Old journals retain Python's scalar-text codec; selection itself belongs
+    // Old journals retain Python's scalar/whitespace codec; selection belongs
     // to the same owner as complete reads and settlement. A complete source
     // never accepts a caller-provided historical identity override.
     const selected = selectedWorkTodo({selected_todo: object(envelope.action).selected_todo,
-      task_orchestration_contract: historical && Object.hasOwn(historical, "primary_todo_id")
-        ? {...orchestration, primary_todo_id: scalarString(historical.primary_todo_id, "historical primary Todo")}
-        : orchestration});
+      task_orchestration_contract: envelope.task_orchestration_contract},
+      historical && Object.hasOwn(historical, "primary_todo_id")
+        ? scalarString(historical.primary_todo_id, "historical primary Todo") : undefined);
     // Bind selection into the existing hash preimage. Python hashes this exact
     // document with its historical number codec; no extra work view or copy is
     // returned across the bridge.

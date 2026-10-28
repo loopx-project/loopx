@@ -758,11 +758,14 @@ function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** The adaptive primary is the work identity for both reads and settlement. */
-export function selectedWorkTodo(packet: JsonObject): JsonObject {
+/** The adaptive primary is the work identity for both reads and settlement.
+ * Historical callers may supply their already-decoded text: reapplying JS
+ * trim would change Python whitespace/BOM identities in persisted journals.
+ */
+export function selectedWorkTodo(packet: JsonObject, historicalPrimaryText?: string): JsonObject {
   const orchestration = jsonObject(packet.task_orchestration_contract) ?? {};
-  const primaryTodoId = typeof orchestration.primary_todo_id === "string"
-    ? orchestration.primary_todo_id.trim() : "";
+  const primaryTodoId = historicalPrimaryText ?? (typeof orchestration.primary_todo_id === "string"
+    ? orchestration.primary_todo_id.trim() : "");
   if (orchestration.schema_version === "task_orchestration_contract_v2"
       && orchestration.mode === "adaptive" && primaryTodoId) {
     return {todo_id: primaryTodoId, source: "task_orchestration_contract.primary_todo_id"};

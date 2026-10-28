@@ -815,7 +815,8 @@ TypeScript 采样保持合法身份输出一致；校验 median 从 4.864 增至
 候选的普通 planner 与失败会话恢复现在也从既有 `driver_lineage` 调用消费选中工作。
 共享 `selectedWorkTodo` owner 将普通或自适应主任务选择写入该调用已有的动作 hash
 preimage；Python 不再重选或重写 preimage。Python 保留已持久化 JSON／数字编码，
-仅对历史非字符串 primary ID 提供 scalar-text 兼容提示；完整输入忽略该提示，并保留
+同时运输历史 primary-ID scalar／空白编码；共享 owner 消费已解码历史文本，不再重复
+执行 JS trim。完整输入忽略该提示，并保留
 完整来源／投影一致性校验。不新增 bridge 调用、模型侧字段、持久化 schema 或跨
 attempt 缓存；公开动作签名操作仍描述原 envelope。
 
@@ -826,10 +827,15 @@ caller 与未结 receipt 已迁移且通过等价恢复资格后才可退役。�
 
 对不可变 `334c1a772` 的资格保留了冻结 File／SQLite CLI 输入上的完整规划／恢复
 输出；规划仍为两次 bridge 调用，恢复为一次，普通输入的请求／响应字节量相同。
-实际 CLI／provider／Host、完成及结算模块 251 项通过；十个迁移断言在前序失败，
-九个历史编码用例在前序通过，候选全部通过。后者覆盖缺省／false／zero、空白、
-数字、布尔与 collection-valued 历史 primary ID、版本／mode 适用性、原 Turn key
+实际 CLI／provider／Host、完成及结算模块 254 项通过；十个迁移断言在前序失败，
+十二个历史编码用例在前序通过，候选全部通过。后者覆盖缺省／false／zero、空白、
+数字、布尔与 collection-valued 历史 primary ID、Unicode 空白／BOM、版本／mode
+适用性、原 Turn key
 及恢复绑定。
+
+临时 `ef479d2b5` 试验改变了三种 Unicode 空白／BOM 身份：语义反例在该版本失败，
+在修正 owner 后通过，而原始前序保留这些身份。下述该版本测量仍是历史试验，
+不作为修正源码的资格。
 
 尚无延迟改善资格。三组平衡顺序对照使每 arm／case 有 93 个温态样本。最初以
 实际 source worktree 对比归档基线，八个普通／历史规划和恢复行的候选 median
@@ -848,6 +854,22 @@ IO 的直接 helper 观察，不是完整原生 CLI／Turn、冷启动、模型�
 宿主负载未控。另对自有进程取得的 V8 capture 指向既有 Unicode key ordering／hash
 计算，但未证明延迟根因。可选 profiler 未安装，Python wait／IO stack 仍未观察。
 归属统一和字节相同不能抵销这些成本缺口或此前 C1 的负测量。
+
+修正后的三个源码文件另有干净来源对照，同样每 arm／case 93 个温态样本，八项
+完整输出相同，RPC 与普通输入传输量不变。结果仍混合，SQLite 规划尾延迟更差；
+同样保留上述未测范围和后台负载未控限制：
+
+| 输入／操作 | 基线 median / p95，ms | 修正源码 median / p95，ms |
+| --- | --- | --- |
+| File／完整规划 | 38.529 / 48.381 | 38.504 / 47.134 |
+| File／完整恢复 | 17.821 / 22.029 | 18.244 / 21.857 |
+| File／历史规划 | 32.787 / 44.413 | 30.871 / 36.733 |
+| File／历史恢复 | 10.635 / 14.620 | 10.292 / 12.201 |
+| SQLite／完整规划 | 39.600 / 46.547 | 40.036 / 77.714 |
+| SQLite／完整恢复 | 18.034 / 28.685 | 18.552 / 25.223 |
+| SQLite／历史规划 | 32.061 / 42.789 | 32.447 / 38.962 |
+| SQLite／历史恢复 | 10.444 / 14.258 | 10.270 / 12.891 |
+
 
 ### C1 消费链替换与切换单元
 

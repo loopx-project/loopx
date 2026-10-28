@@ -44,7 +44,7 @@ cache or new model-facing contract is introduced.
 Within the C1 candidate, planning and failed-session recovery consume ordinary
 and adaptive selection in the existing checked action-hash preimage. They reuse
 the typed work owner; Python preserves historical JSON/number encoding without
-selecting work again. Historical non-string primary-ID hints cannot override a
+selecting work again. Historical primary-ID scalar/whitespace hints are not trimmed again and cannot override a
 complete source. Other v0 readers remain until their own migration and recovery
 qualification; no extra model-facing field or bridge call is introduced.
 
@@ -74,7 +74,7 @@ Codex CLI 与启用 operation tools 的 app-server 在一次启动的输入准�
 独立消费者与执行后的结果转换仍各自校验，不引入跨 attempt 缓存或新的模型侧契约。
 在 C1 候选中，规划与失败会话恢复从已有、经校验的动作 hash preimage 消费普通及
 自适应主任务选择，复用 typed 工作 owner；Python 只保留历史 JSON／数字编码，
-不再重新选择。历史非字符串 primary-ID 提示不能覆盖完整来源；其他 v0 reader
+不再重新选择。历史 primary-ID scalar／空白提示不再重复 trim，也不能覆盖完整来源；其他 v0 reader
 须各自完成迁移及恢复资格后退役，不新增模型侧字段或 bridge 调用。
 
 Preview it explicitly:

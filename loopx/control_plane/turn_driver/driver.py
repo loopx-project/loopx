@@ -73,11 +73,12 @@ def _historical_route_text(envelope: Mapping[str, Any]) -> dict[str, str]:
     Complete contracts do not accept these historical decoding hints.
     """
     signature = _mapping(envelope.get("action_signature"))
-    primary = _mapping(envelope.get("task_orchestration_contract")).get("primary_todo_id")
+    orchestration = _mapping(envelope.get("task_orchestration_contract"))
     return {"source_hash": str(signature.get("source_hash") or ""),
             "envelope_hash": str(signature.get("envelope_hash") or ""),
             "effective_action": str(envelope.get("effective_action") or ""),
-            **({"primary_todo_id": str(primary).strip()} if primary and not isinstance(primary, str) else {})}
+            **({"primary_todo_id": str(orchestration.get("primary_todo_id") or "").strip()}
+               if "primary_todo_id" in orchestration else {})}
 
 
 def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
