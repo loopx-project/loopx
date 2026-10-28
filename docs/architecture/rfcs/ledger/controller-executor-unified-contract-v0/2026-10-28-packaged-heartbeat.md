@@ -468,11 +468,34 @@ receipt or debit. Tampered or differently scoped reads still reject.
 The independent no-material RPC-count oracle fails on the frozen initial
 integration and passes after repair. A new repeated replan-read oracle also
 fails there when the complete source shares a Todo-summary lane, then passes
-with the original binding. The repaired source passes 160 typed cases and 23
+with the original binding. The initial repaired source `5a770d183` passes 160 typed cases and 23
 real File/SQLite replan CLI cases, control-plane typecheck, configured mypy and
 scoped Ruff. Existing legacy resumed-task display assertions remain alongside
 the complete-input assertions; no candidate text, unknown fields or ceiling is
 removed to obtain a pass.
+
+A wider 37-module run at that revision stops at three failures, with 1,364
+passed and 53 environment skips; it is not a full-suite pass. Two assertions
+still read the old detached Host layout. The corrected oracle checks complete
+Goal bytes and exact current work in the canonical channel, and separately
+retains the original pending-read and verification assertions for the historical
+reader. The fixture excludes only the harness-added `_returncode` from signed
+CLI input. The third failure exposes ordinary missing Task/request identity being
+classified as a wait: `281910a95` restores its contract error while retaining
+controller-owned unbound replan and valid request behavior. The four direct
+File/SQLite and missing-work regressions then pass. The same revision extracts
+existing host transport preparation into a local helper before admission; the
+maintainability ratchet passes at its unchanged limits.
+
+Integration `bca6350b2` then adopts main `ccf6aacc5`, including #7594 recovery
+output guidance, #7609 first-guard choice and #7610 exact Todo-record reuse. The
+existing material planner returns reference-only edits through the same native
+operation, with original Python-value checks preserved. No duplicate heartbeat
+view or reference owner is restored. Its 163 typed cases and control-plane
+typecheck pass; focused caller/recovery follow-through is reported on #7430 at
+its tested revision. Record reuse retains main's required-view profile; it does
+not qualify signed-complete material staging. The source and oracle corrections
+do not retroactively pass the wider interrupted/failed cohorts above.
 
 This is integration qualification, not new installed or model behavior. Earlier
 interrupted cohorts and the subsequent three real reader failures remain failed

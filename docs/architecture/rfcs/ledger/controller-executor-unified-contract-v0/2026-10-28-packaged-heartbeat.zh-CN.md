@@ -353,9 +353,25 @@ CLI 校验。历史 replan 命令在为 executor 展开诊断引用前，先绑�
 
 独立的无材料 RPC 次数 oracle 在冻结的初次集成上失败，修复后通过。新增重复 replan
 读取 oracle 在完整来源复用 Todo 摘要列表时同样复现失败，保留原绑定后通过。修复后
-源码通过 160 项 typed、23 项真实 File／SQLite replan CLI、control-plane typecheck、
+初次修复源码 `5a770d183` 通过 160 项 typed、23 项真实 File／SQLite replan CLI、control-plane typecheck、
 配置内 mypy 和限定 Ruff。既有 resumed-task 展示断言与完整输入断言同时保留；未为
 通过测试而移除候选正文、未知字段或上限。
+
+该版本随后运行更广的 37 模块 cohort，在第三项失败处停止：1,364 项通过、53 项环境
+跳过，不能称为整套通过。其中两项断言仍读取旧的 detached Host 布局。修正后的
+oracle 核对 canonical channel 中完整 Goal 字节和当前任务全文，同时单独保留历史
+reader 的原必读及验证断言；签名 CLI 输入只排除 harness 另加的 `_returncode`。
+第三项失败暴露普通任务缺少 Task／request 身份时被误判为等待；`281910a95` 恢复其
+contract error，并保留归 controller 的未绑定 replan 与有效 request 行为。四项直接
+File／SQLite 和缺失任务回归随后通过。同版本在准入前将既有宿主 transport 准备提取
+为局部 helper，维护性 ratchet 在原上限下通过。
+
+集成 `bca6350b2` 随后采用 main `ccf6aacc5`，包括 #7594 恢复输出指引、#7609 首次
+guard 选择及 #7610 精确 Todo 记录复用。相同 native 操作接收既有材料 planner 的
+纯引用编辑，保留原始 Python 值核对；不恢复第二套 heartbeat 视图或引用 owner。
+163 项 typed 和 control-plane typecheck 通过；后续限定 caller／recovery 验证在
+#7430 绑定各自实测版本记录。记录复用仍保留 main 的 required-view profile，不认证
+已签名完整输入的材料分阶段交付。源码及 oracle 修正不倒改上述中断／失败 cohort。
 
 这是集成验证，不是新安装或模型行为。先前中断的 cohort、随后三项真实 reader 失败
 仍保留原失败观察。既有成本表及 **25,862 > 13,000** 仍绑定原版本与状态；未提高上限，
