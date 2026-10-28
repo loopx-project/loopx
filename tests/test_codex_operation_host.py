@@ -616,7 +616,7 @@ def test_checkpoint_direction_resumes_session_without_operation_or_child_adoptio
     actions.write_text('{}')
     def forbidden(*args, **kwargs):
         pytest.fail('Direction continuation must not adopt an operation or native child')
-    monkeypatch.setattr('loopx.control_plane.turn_driver.codex_operation_host.pending_operation_handoffs', forbidden)
+    monkeypatch.setattr('loopx.control_plane.turn_driver.managed_operation_host.pending_operation_handoffs', forbidden)
     monkeypatch.setattr('loopx.control_plane.turn_driver.codex_operation_host.native_child_observer', forbidden)
     request = _request(session_action='resume')
     request.update(phase='checkpoint_direction', checkpoint_context={'read_context_id': 'direction-read',

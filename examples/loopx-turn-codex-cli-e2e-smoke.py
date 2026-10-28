@@ -137,6 +137,16 @@ import sys
 
 args = sys.argv[1:]
 prompt = sys.stdin.read()
+if '\"phase\":\"checkpoint_direction\"' in prompt:
+    sys.path.insert(0, {str(REPO_ROOT)!r})
+    from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
+    decision = checkpoint_decision(json.loads(prompt.rsplit("\\n", 1)[-1])["checkpoint_context"])
+    if decision.get("agent_vision"):
+        decision["agent_vision_json"] = json.dumps(decision.pop("agent_vision"))
+    output_path = pathlib.Path(args[args.index("--output-last-message") + 1])
+    output_path.write_text(json.dumps(decision), encoding="utf-8")
+    print(json.dumps({{"type":"thread.started","thread_id":"session-fixture-0001"}}), flush=True)
+    raise SystemExit(0)
 turn_key = re.search(r'"turn_key":"([^"]+)"', prompt).group(1)
 marker = pathlib.Path({MARKER_NAME!r})
 turn_number = 1
