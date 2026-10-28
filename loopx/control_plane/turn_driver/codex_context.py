@@ -478,7 +478,7 @@ def _capture_required_context(payload: dict[str, Any], *, directory: Path,
         plan = plan_progressive_context(payload, surface=surface)
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
         return payload, archive
-    if not plan["deferred"]:
+    if not plan["deferred"] and not plan.get("references"):
         return payload, archive
     projected = copy.deepcopy(payload)
 
@@ -488,6 +488,13 @@ def _capture_required_context(payload: dict[str, Any], *, directory: Path,
             row = row[key]
         return row
 
+    for edit in plan.get("references", []):
+        # Compare original Python values as well: the typed bridge must never
+        # equate distinct integers or change the source record's numeric types.
+        value, target = at(edit["path"]), at(edit["from"])
+        if json.dumps(value, sort_keys=True) != json.dumps(target, sort_keys=True):
+            return payload, archive
+        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
     for edit in plan["deferred"]:
         path, parent = edit["path"], edit["parent"]
         del at(path[:-1])[path[-1]]
@@ -496,7 +503,7 @@ def _capture_required_context(payload: dict[str, Any], *, directory: Path,
     for edit in plan["instructions"]:
         at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
     page_bytes, output_bytes = native_context_page_budget()
-    projected["context_details"] = {
+    details = {
         "path": archive["path"], "sha256": archive["sha256"],
         "command_template": context_capture_read_command(Path(archive["path"]), archive["sha256"],
             page_bytes=page_bytes, max_page_output_bytes=output_bytes) + " --select '<supporting_material_pointer>/sources'",
@@ -509,6 +516,8 @@ def _capture_required_context(payload: dict[str, Any], *, directory: Path,
             "Detail reads never establish a full baseline. "
             "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance.",
     }
+    if plan["deferred"]:
+        projected["context_details"] = details
     # These are transport bytes, not a semantic relevance heuristic or a model
     # token estimate. Small material is cheaper inline than an index plus IO.
     required_bytes = len((json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))

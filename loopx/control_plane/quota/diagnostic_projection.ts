@@ -7,6 +7,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject} from "../runtime_decode.ts";
 import {TODO_CANONICAL_READ_RECORD_FIELDS} from "../coordination/coordination_state_contract.ts";
+import {canonicalAuthorityJson} from "../coordination/authority_store_codec.ts";
 
 type ProjectionPath = (string | number)[];
 type ProjectionChange = {path: ProjectionPath; value: unknown} |
@@ -74,6 +75,38 @@ const DIAGNOSTIC_LANES = new Set([
 // The read codec adds these display fields to canonical records. Retain them
 // on visible items; they do not make a known diagnostic list a future schema.
 const ITEM_FIELDS = new Set<string>([...TODO_CANONICAL_READ_RECORD_FIELDS, "index", "content_revision"]);
+
+/** Exact repeated records remain fully available in this model view. Unlike
+ * diagnostic omission, this preserves every lane's membership and ordering,
+ * including structured dependencies and handoffs. No relevance is inferred. */
+export function quotaSummaryReferences(payload: JsonObject): JsonObject[] {
+  const references: JsonObject[] = [];
+  const safeNumbers = (value: unknown): boolean => typeof value === "number"
+    ? Number.isSafeInteger(value)
+    : value === null || typeof value !== "object" || Object.values(value).every(safeNumbers);
+  for (const root of ["agent_todo_summary", "user_todo_summary"]) {
+    const summary = jsonObject(payload[root]);
+    if (summary?.schema_version !== "todo_summary_v0") continue;
+    const seen = new Map<string, ProjectionPath>();
+    for (const [lane, rows] of Object.entries(summary)) {
+      if (!DIAGNOSTIC_LANES.has(lane) || !Array.isArray(rows)) continue;
+      rows.forEach((value, index) => {
+        const row = jsonObject(value);
+        if (!row || row.schema_version !== "todo_item_v0" || typeof row.todo_id !== "string"
+            || !row.todo_id || !Object.keys(row).every(key => ITEM_FIELDS.has(key)) || !safeNumbers(row)) return;
+        const key = JSON.stringify(canonicalAuthorityJson(row)), path = [root, lane, index];
+        const from = seen.get(key);
+        if (!from) { seen.set(key, path); return; }
+        // Keep the original literal as the target; references never form chains.
+        const reference = {todo_id: row.todo_id, context_ref: "/" + from.join("/")};
+        if (Buffer.byteLength(JSON.stringify(reference)) < Buffer.byteLength(JSON.stringify(row)))
+          references.push({path, from, value: reference});
+      });
+    }
+  }
+  return references;
+}
+
 function knownItem(value: unknown): boolean {
   const scalar = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
   const item = jsonObject(value);

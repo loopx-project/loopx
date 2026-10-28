@@ -109,6 +109,21 @@ Historical captures retain their original obligations. This acceptance-material
 slice does not yet stage candidate selection, preferences or Explore history,
 and a smaller body alone does not establish lower total model cost.
 
+Native required views also replace exact repeated registered Todo rows in
+summary lanes with `{todo_id, context_ref}`. The JSON pointer addresses the
+complete first occurrence in this **same required view**, never an old baseline
+or an unexpanded detail. Every lane retains its membership and order; all unique
+fields, revisions, ownership, dependency state, contrary evidence and final
+constraints remain inline. Referenced rows carry exactly those same obligations.
+Unknown row fields/schemas, unknown lanes and unsafe numeric values stay literal.
+The reader must recover a missing target from this same capture before dependent
+work; it does not need a new detail read when the complete target is present.
+This is exact reuse, not candidate relevance or selection. It changes no
+canonical record or authority, and does not permit skipping other candidates.
+Signed envelopes, disabled native delivery and historical captures keep their
+existing behavior. The existing size comparison retains a full view when the
+reference guidance would cost more than the duplicate rows.
+
 A context epoch is not a work Turn. Compaction or a failed native hook invalidates
 delta reuse; it does not require another admission or unconditional replay of the
 old quota packet. Within the existing Turn, continue from the working brief with

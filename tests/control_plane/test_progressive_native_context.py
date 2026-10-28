@@ -194,6 +194,71 @@ def test_projection_preserves_numbers_and_original_values(tmp_path, monkeypatch)
     assert original == before and required["opaque_counter"] == before["opaque_counter"]
 
 
+def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_reads(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Identical title",
+        "note": "Complete work and verify evidence. " * 150 + "Stop before publication.",
+        "content_revision": "revision:one", "claimed_by": "peer",
+        "resume_condition": {"schema_version": "todo_resume_condition_v0", "satisfied": False}}
+    revised = {**row, "content_revision": "revision:two", "note": "New contrary evidence; reconsider."}
+    original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "agent"},
+        "heartbeat_receipt": {"turn_instance_id": "original-turn"},
+        "agent_todo_summary": {"schema_version": "todo_summary_v0", "first_open_items": [row, revised],
+            "backlog_items": [copy.deepcopy(row), copy.deepcopy(revised)],
+            "claimed_open_items": [copy.deepcopy(row)]}}
+    path = tmp_path / "original.json"
+    raw = json.dumps(original).encode()
+    path.write_bytes(raw)
+    assert context.project_codex_context(original, directory=None, capture_directory=tmp_path,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="off") is original
+    digest = hashlib.sha256(raw).hexdigest()
+    registry, runtime = tmp_path / "no-registry.json", tmp_path / "no-runtime"
+    command = ["quota", "context-project", "--capture-file", str(path), "--capture-sha256", digest,
+        "--goal-id", "fixture", "--agent-id", "agent", "--turn-instance-id", "original-turn",
+        "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path),
+        "--max-page-output-bytes", "4000"]
+    for cycle in range(3):
+        if cycle == 2:
+            context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
+        code, view = _run_cli(registry, runtime, *command, cwd=tmp_path)
+        assert code == 0 and view["ok"], view
+        assert view["mode"] == ("delta" if cycle == 1 else "full")
+        argv = shlex.split(view["recovery"]["command"])
+        pages, contents = [], b""
+        while True:
+            code, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
+            assert code == 0 and page["offset"] == len(contents), page
+            assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4000
+            contents += page["content"].encode()
+            pages.append(page)
+            if page["eof"]:
+                break
+            argv = shlex.split(page["next_command"])
+        required = json.loads(contents)
+        assert "context_details" not in required, "in-view reuse must not create extra evidence reads"
+        shown = required["agent_todo_summary"]
+        for lane in ("first_open_items", "backlog_items", "claimed_open_items"):
+            resolved = []
+            for item in shown[lane]:
+                if "context_ref" in item:
+                    value = required
+                    for part in item["context_ref"].split("/")[1:]:
+                        value = value[int(part)] if isinstance(value, list) else value[part]
+                    assert "context_ref" not in value
+                    resolved.append(value)
+                else:
+                    resolved.append(item)
+            assert resolved == original["agent_todo_summary"][lane]
+        assert shown["first_open_items"][0]["note"].endswith("Stop before publication.")
+        assert shown["first_open_items"][1]["note"] == revised["note"]
+        if cycle == 0:
+            assert len(pages) > 1
+            deliver(tmp_path, event, pages[:1])
+            assert "candidate" not in context._state(tmp_path)
+        deliver(tmp_path, event, pages)
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
 def test_unavailable_typed_plan_keeps_original_capture(tmp_path, monkeypatch):
     from loopx.control_plane.quota import turn_envelope
     from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
@@ -219,6 +284,15 @@ def test_small_material_keeps_full_capture_when_the_detail_index_costs_more(tmp_
     assert required is original
     assert Path(recovery["path"]).name == "projection.json"
     assert not (tmp_path / "required-context.json").exists()
+
+
+def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path):
+    row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Keep this constraint.", "claimed_by": "peer"}
+    original = {"ok": True, "agent_todo_summary": {"schema_version": "todo_summary_v0",
+        "first_open_items": [row], "backlog_items": [dict(row)]}}
+    required, recovery = context._capture_required_context(original, directory=tmp_path, surface="quota_packet")
+    assert required is original
+    assert Path(recovery["path"]).name == "projection.json"
 
 
 def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptance_goal, tmp_path, monkeypatch):
