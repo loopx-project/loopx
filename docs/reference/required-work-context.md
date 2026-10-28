@@ -76,9 +76,10 @@ establishes enforcement for other pending capability reads. Replan material-read
 invocations retain their existing staged reader and work restrictions.
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
-and hashes all bytes for its revision. For unmarked or mixed ownership, only its path and revision cross the
-internal context-projection bridge, preserving the complete progressive read
-without an unused body copy. Explicitly owned sources send the complete
+and hashes all bytes for its revision. In ordinary progressive delivery with
+context delivery off, unmarked or mixed sources send only their path and revision
+across the internal context-projection bridge, without an unused body copy.
+Explicitly owned sources send the complete
 non-generated narrative and region lineage to the typed consumer. Missing files
 and invalid UTF-8 still block dependent delivery. Byte reduction alone does not
 establish model-token, latency or outcome gains.

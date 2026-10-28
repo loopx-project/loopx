@@ -324,7 +324,7 @@ def _checked_prompt_context(request: Mapping[str, Any]) -> dict[str, Any] | None
     # The complete owner checks the adapter version, source and lineage in one
     # call. Keep the standalone version gate only for historical requests.
     try:
-        checked = _complete_host_source(request, operation="host_context")
+        checked = _complete_host_source(request, operation="host_dispatch_context")
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.

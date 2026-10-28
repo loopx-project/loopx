@@ -106,6 +106,7 @@ def test_complete_source_rejects_tampering_and_binding_substitution():
 
 def test_pending_goal_capture_remains_readable_but_cannot_dispatch_business_work():
     from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
+    from loopx.control_plane.turn_driver.codex_cli import prepare_codex_cli_input
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, execution_profile_present
     from tests.test_turn_envelope import _full_decision
@@ -119,6 +120,8 @@ def test_pending_goal_capture_remains_readable_but_cannot_dispatch_business_work
         host="dsh", execution_mode="isolated-headless", turn_instance_id="original-turn")
     request = build_loopx_turn_host_request(plan)
     assert isinstance(execution_profile_present(request), bool)
+    with pytest.raises(RuntimeError, match="Goal source"):
+        prepare_codex_cli_input(request)
     with pytest.raises(ValueError, match="complete Turn contract rejected") as rejected:
         extract_turn_authority(request)
     assert "Goal source" in str(rejected.value.__cause__)

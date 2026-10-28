@@ -156,6 +156,8 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.codex_cli import prepare_codex_cli_input
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
@@ -205,6 +207,9 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
     request = build_loopx_turn_host_request({**plan, "work_contract": source})
+    codex_prompt, _ = prepare_codex_cli_input(request)
+    assert "Read detail_ref.replan_action_packet.review" in codex_prompt
+    assert "before reading detail_ref.replan_action_packet.writeback" in codex_prompt
     before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
     result = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
