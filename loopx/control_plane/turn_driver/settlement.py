@@ -19,7 +19,7 @@ from ..goals.source_session_turn_effects import (
     SOURCE_TURN_EFFECT_HOLD_SCHEMA_VERSION,
 )
 from ..settlement_driver import decode_settlement_result
-from .driver import selected_turn_todo
+from .driver import read_turn_execution_context, selected_turn_todo
 from .transaction import (
     LoopXTurnResultKind,
     require_loopx_turn_completion_outcome,
@@ -396,7 +396,16 @@ def terminal_closeout_requirement(
         if not isinstance(observed_completion, Mapping):
             observed_completion = completion_intent(result)
         envelope = plan.get("turn_envelope")
-        selected = selected_turn_todo(envelope) if isinstance(envelope, Mapping) else {}
+        if "work_contract" in plan:
+            # This is a new execution boundary, including journal recovery.
+            # Recheck the captured source after execution/intent; a pre-launch
+            # check must not authorize a later replacement of the adapter.
+            selected = read_turn_execution_context(
+                plan, envelope if isinstance(envelope, Mapping) else {},
+            )["selected_todo"]
+        else:
+            # Outstanding journals retain their exact historical decoder.
+            selected = selected_turn_todo(envelope) if isinstance(envelope, Mapping) else {}
         outcome = require_loopx_turn_completion_outcome(
             observed_completion,
             expected_todo_id=str(selected.get("todo_id") or ""),

@@ -9,6 +9,7 @@ from typing import Any
 
 from ..agent_context import envelope_agent_context
 from ..effect_program import SettlementIdentity
+from ..effect_runtime import EffectRuntimeRejected
 from .subagent_host_adapter import (
     project_child_context_adapter,
     supported_child_context_modes,
@@ -104,6 +105,49 @@ def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
         }
     action = _mapping(envelope.get("action"))
     return _mapping(action.get("selected_todo"))
+
+
+def captured_todo_text_sha256(
+    envelope: Mapping[str, Any], *, todo_id: str,
+    work_contract: object = _ABSENT_WORK_CONTRACT,
+) -> str | None:
+    """Use the shared task-source owner; omitted contracts decode old journals."""
+    try:
+        result = _turn_envelope_result(
+            "captured_todo_text", envelope=dict(envelope), todo_id=todo_id,
+            **({"payload": work_contract} if work_contract is not _ABSENT_WORK_CONTRACT else {}),
+        )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    digest = result.get("sha256")
+    if digest is not None and not isinstance(digest, str):
+        raise RuntimeError("Turn captured task source hash must be a string or null")
+    return digest
+
+
+def read_turn_execution_context(
+    plan: Mapping[str, Any], envelope: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Read complete execution facts in one call; decode old journals as before."""
+    if "work_contract" in plan:
+        try:
+            result = _turn_envelope_result(
+                "execution_context", envelope=dict(envelope), payload=plan["work_contract"],
+            )
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if result.get("sha256") is not None and not isinstance(result["sha256"], str):
+            raise RuntimeError("Turn captured task source hash must be a string or null")
+        return result
+    selected = selected_turn_todo(envelope)
+    return {
+        "selected_todo": selected,
+        "sha256": captured_todo_text_sha256(envelope, todo_id=str(selected.get("todo_id") or "")),
+        "effective_action": envelope.get("effective_action"),
+        "writeback": envelope.get("writeback") if isinstance(envelope.get("writeback"), dict) else {},
+        "replan_guard_scoped": "replan_action_packet" in envelope,
+        "replan_action_packet": envelope.get("replan_action_packet"),
+    }
 
 
 def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:

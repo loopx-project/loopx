@@ -81,6 +81,10 @@ def test_real_host_reads_original_capture_after_source_change(
         return planned
 
     monkeypatch.setattr(turn_decision, "build_loopx_turn_plan", observe_launch_plan)
+    def legacy_launch_selection(*_args, **_kwargs):
+        raise AssertionError("native launch reinterpreted historical selection")
+
+    monkeypatch.setattr(turn_decision, "selected_turn_todo", legacy_launch_selection, raising=False)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     f = _fixture_module()
     project, runtime, workspace, registry = f._write_fixture(tmp_path, turn_count=2)
@@ -368,7 +372,7 @@ def test_complete_result_vision_uses_original_identity(complete_host_request, fr
 def test_complete_completion_source_uses_admitted_contract(complete_host_request, carrier):
     from copy import deepcopy
     from hashlib import sha256
-    from loopx.cli_commands.turn_todo_writeback import captured_todo_text_sha256
+    from loopx.control_plane.turn_driver.driver import captured_todo_text_sha256
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
 
     _, contract = complete_host_request
@@ -507,6 +511,43 @@ def test_complete_settlement_fallback_keeps_original_identity(complete_host_requ
             with pytest.raises(RuntimeError):
                 _ensure_turn_settlement_plan({**plan, "work_contract": bad_contract}, target)
             assert target == original
+
+
+def test_complete_terminal_intent_rechecks_original_source(complete_host_request, monkeypatch):
+    from copy import deepcopy
+    from loopx.control_plane.turn_driver import settlement
+
+    request, contract = complete_host_request
+    todo_id = contract["selected_todo"]["todo_id"]
+
+    def legacy_selection(*_args, **_kwargs):
+        raise AssertionError("complete terminal intent reinterpreted historical selection")
+
+    monkeypatch.setattr(settlement, "selected_turn_todo", legacy_selection)
+    before = deepcopy(request)
+    for continuation in ("active_goal", "successor", "no_followup"):
+        outcome = {"todo_id": todo_id, "continuation": continuation}
+        if continuation == "successor":
+            outcome["successor_todo_ids"] = ["todo_checked_successor"]
+        for phase in (None, "writeback", "terminal_closeout"):
+            journal = {phase: {"completion": outcome}} if phase else {}
+            def intent(_result):
+                assert phase is None, "stored completion must not repeat lifecycle intent"
+                return outcome
+
+            actual = settlement.terminal_closeout_requirement(plan=request,
+                result={"result_kind": "validated_completion"}, journal=journal,
+                completion_intent=intent)
+            assert actual == (continuation == "no_followup", None)
+            # Another attempt or journal recovery must recheck its source;
+            # prior successful consumption cannot become a retained proof.
+            for malformed in (None, {**contract, "reason": "replaced after execution"}):
+                rejected = settlement.terminal_closeout_requirement(
+                    plan={**request, "work_contract": malformed},
+                    result={"result_kind": "validated_completion"}, journal=journal,
+                    completion_intent=intent)
+                assert rejected[0] is False and rejected[1]
+    assert request == before
 
 
 def test_codex_prompt_preserves_complete_source_and_historical_version_gate(complete_host_request):

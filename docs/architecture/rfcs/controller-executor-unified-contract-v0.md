@@ -1182,6 +1182,73 @@ planning tail. The same exclusions and uncontrolled-load limits apply:
 | SQLite / historical recovery | 10.444 / 14.258 | 10.270 / 12.891 |
 
 
+#### Native execution and completion source
+
+The native launch guard now consumes the selected Todo already returned by the
+shared planner, rather than running the historical Python selector again.
+The existing execution-context/task-commitment reader lives with the Turn
+driver and serves both CLI preparation and completion-intent classification;
+its CLI copy is removed. The semantic owner remains the existing TypeScript
+`execution_context` operation, not a new view, schema or Python decision owner.
+
+After Host execution and independent task validation, a complete request checks
+that source again before choosing terminal versus ordinary completion. A saved
+writeback or terminal outcome does not bypass this check. Malformed complete
+input and adapter facts inconsistent with its source reject before writeback or spend;
+the original journal can then recover the already validated result without
+another Host invocation and settle once. Omitted historical inputs retain their
+exact decoder and receipt recovery. Completion-outcome validation and the
+typed settlement/effect owner are unchanged; this does not retire every
+historical completion or controller reader.
+
+The launch guard adds no bridge call. Complete validated-completion
+classification adds one coarse source check at this later boundary, including
+unfinished journal recovery; historical classification is unchanged. That is
+an explicit additional cost, not a speedup or permission to cache a pre-execution
+check across execution, attempts or recovery. Original-quota decisions,
+accepted outcomes, complete costs and remaining consumer adoption stay open.
+
+The four affected capture/driver/completion/settlement modules pass 264 cases
+with real isolated File/SQLite CLI consumers and synthetic Host/validator
+processes; the two typed-owner modules pass 79 cases. Twenty-two migration
+assertions fail on immutable `2a170247ba3` and pass on the candidate. Eight
+additional native replacement cases commit on that baseline but reject before
+writeback/spend on the candidate, then recover the original journal result
+without rerunning the Host and debit once. These cover ordinary and final
+completion on both backends; they do not establish live model or installed
+consumer adoption.
+
+Three balanced sequential cohorts use clean sibling source copies and the same
+fixtures. Each warm helper row has 93 samples per arm. Complete intent/recovery
+classification changes from about 0.002 ms with no bridge call to these
+median/p95 values: File 19.813/26.454 and 20.770/25.287 ms; SQLite
+20.243/23.964 and 19.005/22.458 ms. Each adds one logical request with
+43,200/43,253 request bytes respectively and 1,693 result bytes. Historical
+classification retains zero requests and equivalent outcomes. Logical JSON
+counts exclude framing and physical transport retries.
+
+The same cohorts also execute real CLI admission, capture, synthetic Host work,
+independent validation and settlement, followed by native Todo readback and
+committed replay. Each row has only three samples per arm; the table reports
+median and observed range, not a p95 or causal speedup:
+
+| CLI completion | Baseline median [range], ms | Candidate median [range], ms | Logical requests, base → candidate |
+| --- | --- | --- | --- |
+| File / ordinary | 2303.0 [2001.9–3646.5] | 2173.5 [2051.4–2196.6] | 282 → 283 |
+| File / final | 2306.0 [2283.4–2389.4] | 2818.4 [2338.2–2973.9] | 294 → 295 |
+| SQLite / ordinary | 1888.5 [1758.5–2061.7] | 2513.5 [2086.5–2955.7] | 278 → 279 |
+| SQLite / final | 2549.1 [2240.7–2681.2] | 2282.7 [2276.8–4064.8] | 294 → 295 |
+
+Native outcome observations agree, including the original settlement identity,
+done readback and one debit. Committed replay retains five logical requests and
+zero new effects in both arms. Readback/replay observations are retained
+separately from the timed execution. Background host load is uncontrolled;
+no other owned validation runs alongside these cohorts. The added source check
+is a demonstrated cost, while whole-CLI timing remains mixed and default SQLite
+performance is not qualified. Models/cache tokens, billing, evaluation,
+implementation/human costs, accepted real-work outcomes and original-quota net
+benefit remain unqualified; earlier negative observations remain valid.
+
 ### C1 caller replacement and cutover unit
 
 The cutover unit is a supported entrypoint **and its downstream consumers**,

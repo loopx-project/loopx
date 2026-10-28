@@ -42,7 +42,7 @@ from ..control_plane.quota.heartbeat_receipt import (
     heartbeat_receipt_settlement_todo_id,
 )
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
-from ..control_plane.turn_driver.driver import build_loopx_turn_plan, selected_turn_todo
+from ..control_plane.turn_driver.driver import build_loopx_turn_plan
 from ..control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     scheduler_execution_context_for_turn,
@@ -381,7 +381,7 @@ def current_turn_host_launch_decision(
     route = plan["route"]
     if route.get("would_invoke_host") is not True:
         raise FirstPartyHostRuntimeRejected("goal_launch_not_allowed")
-    if selected_turn_todo(current_envelope).get("todo_id") != identity.todo_id:
+    if (plan["route"].get("selected_todo") or {}).get("todo_id") != identity.todo_id:
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     if identity.replan_obligation_id and plan["transaction"]["settlement_plan"]["identity"] != identity.as_dict():
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")

@@ -48,6 +48,16 @@ selecting work again. Historical primary-ID scalar/whitespace hints are not trim
 complete source. Other v0 readers remain until their own migration and recovery
 qualification; no extra model-facing field or bridge call is introduced.
 
+The native launch check now reuses the planner's selected work. CLI preparation
+and post-validation completion classification share the existing execution-context
+reader in `turn_driver/driver.py`, backed by the typed source owner. Completion
+classification rechecks complete source/projection integrity even when its outcome
+is already saved in the journal; malformed supplied input cannot use historical
+fallback. Historical omission retains its decoder and accepted-receipt recovery.
+This adds one coarse request per complete completion classification, with no
+additional launch request. It preserves original Turn identity, effect order and
+once-only recovery; it does not establish a net efficiency improvement.
+
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
 历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
@@ -76,6 +86,13 @@ Codex CLI 与启用 operation tools 的 app-server 在一次启动的输入准�
 自适应主任务选择，复用 typed 工作 owner；Python 只保留历史 JSON／数字编码，
 不再重新选择。历史 primary-ID scalar／空白提示不再重复 trim，也不能覆盖完整来源；其他 v0 reader
 须各自完成迁移及恢复资格后退役，不新增模型侧字段或 bridge 调用。
+
+原生启动检查现在复用 planner 已返回的选中工作。CLI 准备与任务验证后的完成分类
+共用 `turn_driver/driver.py` 中的既有 execution-context reader，由 typed 来源
+owner 校验。即使 journal 已保存完成 outcome，仍重新检查完整来源／投影一致性；
+显式无效输入不能走历史回退。省略完整输入的历史请求保留 decoder 和已接受回执
+恢复。完整完成分类每次新增一次粗粒度请求，启动检查不新增请求；原 Turn 身份、
+effect 顺序和一次恢复语义保持，不据此认定净效率提升。
 
 Preview it explicitly:
 
