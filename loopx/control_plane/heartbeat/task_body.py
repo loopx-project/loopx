@@ -781,9 +781,22 @@ def render_heartbeat_generator_inputs_markdown(payload: dict[str, Any]) -> str:
             "- pr_review_pre_quota_command: "
             f"`{payload['pr_review_pre_quota_command']}`"
         )
+    guard_command = payload.get("quota_guard_command")
+    task_body = payload.get("task_body")
+    # The copyable body already owns this exact command. Keep one complete
+    # spelling in Markdown; failed/partial bodies still need the diagnostic.
+    guard_in_body = (
+        payload.get("ok") is not False
+        and isinstance(guard_command, str)
+        and bool(guard_command.strip())
+        and isinstance(task_body, str)
+        and guard_command in task_body.splitlines()
+    )
     lines.extend(
         [
-            f"- quota_guard_command: `{payload.get('quota_guard_command')}`",
+            "- quota_guard_command: shown verbatim in task body"
+            if guard_in_body
+            else f"- quota_guard_command: `{guard_command}`",
             f"- quota_spend_command: `{payload.get('quota_spend_command')}`",
             f"- cli_preflight: `{payload.get('cli_preflight')}`",
             "- interface_budget: "

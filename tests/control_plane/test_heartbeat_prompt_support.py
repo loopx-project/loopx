@@ -272,6 +272,27 @@ def test_thin_markdown_diagnostics_only_show_the_selected_prompt_command() -> No
     assert "- expanded_prompt_command:" not in rendered
     assert "- compact_prompt_command:" not in rendered
     assert "- brief_prompt_command:" not in rendered
+    assert payload["quota_guard_command"] in payload["task_body"].splitlines()
+    assert rendered.count(payload["quota_guard_command"]) == 1
+    assert "- quota_guard_command: shown verbatim in task body" in rendered
+
+
+@pytest.mark.parametrize("body_kind", ["missing", "prefix", "different", "error"])
+def test_markdown_keeps_guard_diagnostic_without_a_successful_exact_body_command(body_kind) -> None:
+    command = "loopx quota should-run --goal-id fixture"
+    body = {
+        "missing": "",
+        "prefix": command + " --todo-id another-todo",
+        "different": "loopx quota should-run --goal-id another-goal",
+        "error": command,
+    }[body_kind]
+    rendered = render_heartbeat_generator_inputs_markdown({
+        "ok": body_kind != "error",
+        "task_body": body,
+        "quota_guard_command": command,
+    })
+    assert f"- quota_guard_command: `{command}`" in rendered
+    assert "shown verbatim in task body" not in rendered
 
 
 @pytest.mark.parametrize("resolved", ["same", "different", None])
@@ -306,8 +327,10 @@ def test_markdown_diagnostics_keep_available_prequota_commands(review_enabled) -
     )
     rendered = render_heartbeat_prompt_markdown(payload)
     assert payload["task_body"] in rendered
-    for key in ("thin_prompt_command", "quota_guard_command", "quota_spend_command"):
+    for key in ("thin_prompt_command", "quota_spend_command"):
         assert f"- {key}: `{payload[key]}`" in rendered
+    assert payload["quota_guard_command"] in payload["task_body"].splitlines()
+    assert rendered.count(payload["quota_guard_command"]) == 1
     if review_enabled:
         assert "heartbeat-prequota" in payload["pr_review_pre_quota_command"]
         assert f"- pr_review_pre_quota_command: `{payload['pr_review_pre_quota_command']}`" in rendered
