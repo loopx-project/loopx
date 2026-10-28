@@ -1,11 +1,12 @@
 import {inspectCheckpointAttempt, inspectCheckpointReadHistory} from "../../loopx/control_plane/goals/checkpoint_commit.ts";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {mkdir, mkdtemp, rm} from "node:fs/promises";
+import {mkdir, mkdtemp, rm, symlink} from "node:fs/promises";
 import {writeFileSync, readFileSync} from "node:fs";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {join, resolve} from "node:path";
 import test from "node:test";
+import {inspectCheckpointReplay} from "../../loopx/control_plane/goals/checkpoint_commit.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
@@ -186,3 +187,75 @@ test("an indexed work result cannot discharge another Turn's unindexed direction
   writeFileSync(direction.json_path, JSON.stringify({...direction, settlement_identity: current}));
   assert.throws(inspect, (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
 });
+
+test("indexed replay accepts a runtime directory alias without rewriting historical paths", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "checkpoint-directory-alias-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  const root = join(directory, "physical"), alias = join(directory, "alias");
+  const runs = join(root, "goals", "goal", "runs");
+  await mkdir(runs, {recursive: true});
+  await symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+  const identity = {goal_id: "goal", agent_id: "agent", todo_id: "task", turn_instance_id: "turn", effect_id: "effect"};
+  const prior = {settlement_identity: identity, refresh_recovery: {},
+    vision_checkpoint: {satisfied: true, read_context: {read_context_id: "original"}},
+    json_path: join(alias, "goals", "goal", "runs", "saved.json"),
+    markdown_path: join(alias, "goals", "goal", "runs", "saved.md")};
+  const record = JSON.stringify(prior), index = record + "\n";
+  writeFileSync(prior.json_path, record);
+  writeFileSync(prior.markdown_path, "Saved direction\n");
+  writeFileSync(join(runs, "index.jsonl"), index);
+  for (const runtime_root of [root, alias]) {
+    assert.equal(inspectCheckpointReplay({runtime_root, goal_id: "goal", prior}).replayed, true);
+    assert.equal(inspectCheckpointAttempt({runtime_root, identity}).status, "committed");
+  }
+  assert.equal(readFileSync(join(runs, "saved.json"), "utf8"), record);
+  assert.equal(readFileSync(join(runs, "index.jsonl"), "utf8"), index);
+  await rm(alias);
+  const redirected = join(directory, "redirected");
+  await mkdir(join(redirected, "goals", "goal", "runs"), {recursive: true});
+  await symlink(redirected, alias, process.platform === "win32" ? "junction" : "dir");
+  assert.throws(() => inspectCheckpointReplay({runtime_root: root, goal_id: "goal", prior}),
+    (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
+  assert.equal(readFileSync(join(runs, "index.jsonl"), "utf8"), index);
+});
+
+for (const route of ["outside", "outside-directory-link", "wrong-goal", "leaf-directory-link", "leaf-link"] as const) {
+  test(`checkpoint artifact alias cannot authorize ${route}`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "checkpoint-path-refusal-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const runs = join(root, "goals", "goal", "runs");
+    const outside = join(root, "outside");
+    const otherRuns = join(root, "goals", "other-goal", "runs");
+    for (const path of [runs, outside, otherRuns]) await mkdir(path, {recursive: true});
+    let jsonPath = join(runs, "saved.json");
+    if (route === "outside") jsonPath = resolve(runs, "..", "..", "..", "outside", "saved.json");
+    if (route === "wrong-goal") jsonPath = join(otherRuns, "saved.json");
+    if (route === "outside-directory-link") {
+      await symlink(outside, join(runs, "external"), process.platform === "win32" ? "junction" : "dir");
+      jsonPath = join(runs, "external", "saved.json");
+    }
+    const prior = {settlement_identity: {goal_id: "goal", effect_id: "effect"}, refresh_recovery: {},
+      vision_checkpoint: {satisfied: true, read_context: {}}, json_path: jsonPath,
+      markdown_path: join(runs, "saved.md")};
+    const record = JSON.stringify(prior);
+    if (route === "leaf-directory-link") {
+      await symlink(outside, jsonPath, process.platform === "win32" ? "junction" : "dir");
+    } else if (route === "leaf-link") {
+      const target = join(runs, "target.json");
+      writeFileSync(target, record);
+      // A file link to an otherwise valid in-directory record is still forbidden.
+      try { await symlink(target, jsonPath, "file"); }
+      catch (error) {
+        if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+        t.skip("Windows file symlinks require a privilege unavailable on this host; directory junction negatives still execute");
+        return;
+      }
+    } else writeFileSync(jsonPath, record);
+    writeFileSync(prior.markdown_path, "Saved direction\n");
+    const index = record + "\n";
+    writeFileSync(join(runs, "index.jsonl"), index);
+    assert.throws(() => inspectCheckpointReplay({runtime_root: root, goal_id: "goal", prior}),
+      (error: unknown) => (error as {code: string}).code === "checkpoint_commit_unknown");
+    assert.equal(readFileSync(join(runs, "index.jsonl"), "utf8"), index);
+  });
+}

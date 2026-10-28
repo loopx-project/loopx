@@ -1488,7 +1488,10 @@ def refresh_state_run(
         compact_route["projection_marker_field"] = "shared_runtime_projection"
         record["runtime_projection_route"] = compact_route
 
-        runs_dir = runtime_root / "goals" / safe_goal_id / "runs"
+        # Produce physical artifact paths before record/index fingerprints are
+        # constructed. Historical aliases remain immutable and are verified by
+        # the checkpoint owner against this same directory identity.
+        runs_dir = runtime_root.resolve() / "goals" / safe_goal_id / "runs"
         json_path, markdown_path = unique_run_paths(runs_dir, generated_at)
         index_path = runs_dir / "index.jsonl"
         index_record, payload = _build_state_refresh_output_projections(

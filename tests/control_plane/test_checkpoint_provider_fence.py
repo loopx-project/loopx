@@ -163,6 +163,78 @@ def test_public_update_before_final_read_rejects_then_reread_succeeds(tmp_path, 
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_runtime_directory_alias_commits_and_cold_replays_the_original_turn(tmp_path, monkeypatch, provider):
+    _, runtime, registry, _, read, original = fixture(tmp_path, monkeypatch, provider)
+    token = read()["read_context_id"]
+    alias = tmp_path / "runtime-alias"
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(runtime), str(alias))
+    else:
+        alias.symlink_to(runtime, target_is_directory=True)
+    try:
+        saved = refresh(registry, alias, token)
+        assert saved["appended"] and saved["vision_checkpoint"]["satisfied"], saved
+        assert Path(saved["json_path"]).parent == runtime.resolve() / "goals" / GOAL_ID / "runs"
+        assert saved["settlement_identity"] == original["settlement_identity"]
+        index = runtime / "goals" / GOAL_ID / "runs/index.jsonl"
+        artifacts = {Path(saved[key]): Path(saved[key]).read_bytes() for key in ("json_path", "markdown_path")}
+        before = index.read_bytes()
+        for root in (runtime, alias):
+            replay = refresh(registry, root, token)
+            assert replay["idempotent_replay"] and replay["settlement_identity"] == saved["settlement_identity"], replay
+        assert index.read_bytes() == before
+        assert all(path.read_bytes() == contents for path, contents in artifacts.items())
+        assert _spend_run_count(runtime) == 0
+    finally:
+        alias.rmdir() if os.name == "nt" else alias.unlink()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.skipif(os.name == "nt", reason="Windows held index handles reject directory replacement before the native identity guard; exercise this injection on POSIX")
+def test_replaced_artifact_directory_cannot_receive_the_checkpoint_append(tmp_path, monkeypatch, provider):
+    import shutil
+    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider)
+    token = read()["read_context_id"]
+    runs = runtime / "goals" / GOAL_ID / "runs"
+    before = (runs / "index.jsonl").read_bytes()
+    barrier = tmp_path / "directory-race"
+    barrier.mkdir()
+    effect = context_io.effect_runtime_result
+
+    def native(method, params, **kwargs):
+        if method != "goal.checkpoint_read_context.commit":
+            return effect(method, params, **kwargs)
+        child = start_probe({"mode": "checkpoint", "provider": provider, "barrier": str(barrier), "params": params})
+        try:
+            wait_for(barrier / "head-read", child)
+            retained = runs.with_name("runs-retained")
+            runs.rename(retained)
+            # Identical bytes do not make a replacement the directory whose
+            # identity was admitted before the provider head was acquired.
+            shutil.copytree(retained, runs)
+            (barrier / "release").touch()
+            stdout, stderr = child.communicate(timeout=20)
+            assert child.returncode == 1, stdout + stderr
+            rejected = json.loads(stdout)
+            assert rejected["error_code"] == "checkpoint_commit_unknown", rejected
+            assert "directory changed" in rejected["error"], rejected
+            raise RuntimeError("replaced directory refused at the checkpoint owner")
+        finally:
+            (barrier / "release").touch()
+            if child.poll() is None:
+                child.kill()
+                child.communicate()
+
+    monkeypatch.setattr(context_io, "effect_runtime_result", native)
+    with pytest.raises(RuntimeError, match="replaced directory refused"):
+        refresh(registry, runtime, token)
+    assert (runs / "index.jsonl").read_bytes() == before
+    assert (runs.with_name("runs-retained") / "index.jsonl").read_bytes() == before
+    assert _spend_run_count(runtime) == 0
+
+
 def test_exact_source_checkpoint_commits_only_for_the_current_goal_instance(
     tmp_path,
     monkeypatch,

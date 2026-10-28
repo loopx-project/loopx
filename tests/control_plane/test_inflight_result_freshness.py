@@ -7,14 +7,15 @@ import pytest
 
 from tests.control_plane.test_default_result_freshness import _default_fixture
 from tests.control_plane.test_quota_settlement_cli import (
-    AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count,
+    AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _run_cli, _spend_run_count,
 )
 
 
 def _admit(provider, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     rc, guard = _run_cli(registry, runtime, 'quota', 'should-run', '--codex-app',
-        '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID, cwd=project)
+        '--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID,
+        '--turn-instance-id', TURN_ID, cwd=project)
     assert rc == 0, guard
     context = guard['delivery_result_context']
     args = ('refresh-state', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
@@ -39,7 +40,8 @@ def test_supplement_direction_keeps_primary_goal_source_fresh(provider, change, 
     document['goals'][0]['authority_sources'] = [{'kind': 'goal_doc', 'path': 'GOAL.md'}]
     registry.write_text(json.dumps(document), encoding='utf-8')
     identity = ('--goal-id', GOAL_ID, '--agent-id', AGENT_ID, '--todo-id', TODO_ID)
-    rc, guard = _run_cli(registry, runtime, 'quota', 'should-run', '--codex-app', *identity, cwd=project)
+    rc, guard = _run_cli(registry, runtime, 'quota', 'should-run', '--codex-app', *identity,
+        '--turn-instance-id', TURN_ID, cwd=project)
     assert rc == 0, guard
     turn = guard['delivery_result_context']['settlement_identity']['turn_instance_id']
     args = ('refresh-state', *identity, '--turn-instance-id', turn,

@@ -31,7 +31,8 @@ def _default_fixture(provider, tmp_path, monkeypatch, *, handoff_mode="soft_clai
 def test_default_guard_restores_actual_basis_and_result_commit(provider, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
-    guard_args = ("quota", "should-run", "--codex-app", *identity)
+    # Automatic default admission has no caller-selected Todo or invented Turn.
+    guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     rc, first = _run_cli(registry, runtime, *guard_args, cwd=project)
     assert rc == 0 and "delivery_result_context" in first, json.dumps(first)
     context = first["delivery_result_context"]
@@ -68,11 +69,28 @@ def test_concurrent_default_reads_share_original_turn_and_basis(provider, tmp_pa
     def read():
         barrier.wait()
         return _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-            "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+            "--agent-id", AGENT_ID, cwd=project)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: read(), range(2)))
     assert all(rc == 0 for rc, _ in results), json.dumps(results, indent=2)
     assert results[0][1]["delivery_result_context"] == results[1][1]["delivery_result_context"]
+
+
+def test_explicit_todo_selection_still_requires_a_turn(tmp_path):
+    project, runtime, registry = _write_fixture(tmp_path)
+    events = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    before = events.read_text().splitlines() if events.exists() else []
+    rc, rejected = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+    assert rc == 1 and rejected["error_code"] == "QUOTA_VALIDATION_FAILED", rejected
+    assert "requires --turn-instance-id or --begin-turn" in rejected["reason"], rejected
+    assert "heartbeat_receipt" not in rejected
+    # A diagnostic quota_should_run event is allowed; it cannot mint the
+    # settlement binding that distinguishes a durable work admission.
+    after = events.read_text().splitlines() if events.exists() else []
+    assert after[:len(before)] == before
+    assert all(not json.loads(line).get("details", {}).get("settlement_identity")
+               for line in after[len(before):])
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -81,7 +99,8 @@ def test_todo_only_source_after_work_read_rejects_result_commit(provider, tmp_pa
     from loopx.todos import list_goal_todos
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity, cwd=project)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity,
+        "--turn-instance-id", TURN_ID, cwd=project)
     assert rc == 0 and "delivery_result_context" in guard, guard
     original_contexts = {path: path.read_bytes() for path in
                          (runtime / "goals" / GOAL_ID / "checkpoint-contexts").glob("*.json")}
@@ -102,7 +121,8 @@ def test_successful_result_replay_precedes_later_goal_source_loss(provider, sour
     from loopx.todos import list_goal_todos
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity, cwd=project)
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity,
+        "--turn-instance-id", TURN_ID, cwd=project)
     assert rc == 0, guard
     complete = ("todo", "complete", *identity, "--note", "Verified result committed before source loss.")
     rc, committed = _run_cli(registry, runtime, *complete, cwd=project)
@@ -145,7 +165,7 @@ def test_default_commit_keeps_basis_after_unrelated_todo_revision(provider, tmp_
     project, runtime, registry, state = _default_fixture(provider, tmp_path, monkeypatch)
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
     rc, work = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity,
-        cwd=project)
+        "--turn-instance-id", TURN_ID, cwd=project)
     assert rc == 0, work
     rc, peer = _run_cli(registry, runtime, "todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
         "--text", "Validate an independent follow-up.", "--claimed-by", AGENT_ID, cwd=project)
@@ -160,7 +180,7 @@ def test_default_commit_keeps_basis_after_unrelated_todo_revision(provider, tmp_
 def test_damaged_work_input_blocks_default_dispatch_and_preserves_admission(provider, tmp_path, monkeypatch):
     project, runtime, registry, _ = _default_fixture(provider, tmp_path, monkeypatch)
     args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID)
     rc, first = _run_cli(registry, runtime, *args, cwd=project)
     assert rc == 0, first
     path = next((runtime / "goals" / GOAL_ID / "checkpoint-contexts").glob("*.json"))
@@ -342,7 +362,7 @@ raise SystemExit(main())
                 context_path.write_text("{", encoding="utf-8")
         rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
             "--goal-id", goal, "--agent-id", agent, "--todo-id", "todo_fixture0001",
-            cwd=project)
+            "--turn-instance-id", failed["turn_key"], cwd=project)
         assert rc == 0 and guard.get("ok") is True, guard
         assert guard["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"] == failed["turn_key"]
         assert guard.get("result_committed") is True and "delivery_result_context" not in guard, guard
@@ -374,6 +394,28 @@ raise SystemExit(main())
     assert committed["result_work_binding"]["read_context_id"] == committed["result_work_context"]["read_context_id"]
     rc, replay = _run_cli(registry, runtime, *args, "--resume-turn-key", failed["turn_key"], cwd=project)
     assert rc == 0 and replay["replayed"] is True and replay["effects"]["host_invoked"] is False, replay
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_default_mcp_revalidation_cannot_mint_work_without_original_admission(provider, tmp_path, monkeypatch):
+    from tests.test_goal_mode_mcp_settlement import _write_fixture as mcp_fixture, _control, GOAL_ID as goal, AGENT_ID as agent
+    from loopx.todos import add_goal_todo
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, state = mcp_fixture(tmp_path, provider=provider)
+    added = add_goal_todo(registry_path=registry, goal_id=goal, role="agent",
+        text="Verify a bounded candidate.", task_class="advancement_task", claimed_by=agent,
+        continuation_policy="same_agent_non_delivery")
+    before = state.read_bytes()
+    runtime = tmp_path / "runtime"
+    index = runtime / "goals" / goal / "runs/index.jsonl"
+    before_index = index.read_bytes() if index.exists() else b""
+    rejected = json.loads(_control(registry).should_run(revalidate_todo_id=added["todo_id"]))
+    assert rejected["ok"] is False and rejected["error_code"] == "QUOTA_VALIDATION_FAILED", rejected
+    assert "requires --turn-instance-id" in rejected["reason"]
+    assert "heartbeat_receipt" not in rejected and "delivery_result_context" not in rejected
+    assert state.read_bytes() == before
+    assert (index.read_bytes() if index.exists() else b"") == before_index
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -448,7 +490,8 @@ def test_default_mcp_reads_before_work_and_rejects_stale_result(provider, receip
 def test_unpromoted_work_read_does_not_restore_retired_mutation_authority(operation, tmp_path, monkeypatch):
     project, runtime, registry, state = _default_fixture("legacy", tmp_path, monkeypatch)
     rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", TURN_ID, cwd=project)
     assert rc == 1 and admitted["error_code"] == "canonical_authority_required", admitted
     assert "delivery_result_context" not in admitted
     original = state.read_bytes()

@@ -233,6 +233,7 @@ def _run_cli(
             "PYTHONPATH": str(REPO_ROOT),
         },
     )
+    assert result.stdout.strip(), (result.returncode, result.stderr)
     return result.returncode, json.loads(result.stdout)
 
 

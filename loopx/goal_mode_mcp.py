@@ -194,7 +194,12 @@ class GoalModeMCPControlPlane:
             return self.no_goal_message()
         args, legacy_args = self.should_run_args(goal_id, self.bound_agent_id())
         suffix = ["--todo-id", revalidate_todo_id] if revalidate_todo_id else []
-        output = self.run_cli([*args, *suffix], legacy_args=[*legacy_args, *suffix])
+        guard_suffix = list(suffix)
+        if revalidate_todo_id:
+            turn = self._original_work_turn(revalidate_todo_id)
+            if turn is not None:
+                guard_suffix += ["--turn-instance-id", turn]
+        output = self.run_cli([*args, *guard_suffix], legacy_args=[*legacy_args, *guard_suffix])
         if revalidate_todo_id:
             guard = json.loads(output)
             if guard.get("ok") is True and guard.get("delivery_result_context"):

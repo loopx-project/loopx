@@ -1,8 +1,8 @@
 /** Receipt-bound work and direction commits. Index/source claims survive the requesting CLI;
  * the real provider fence lasts through the synchronous durable append. */
 import {createHash} from "node:crypto";
-import {closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync} from "node:fs";
-import {dirname, join, resolve} from "node:path";
+import {closeSync, existsSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync} from "node:fs";
+import {basename, dirname, join, resolve} from "node:path";
 import type {JsonObject} from "../effect_program.ts";
 import {settlementIdentity, settlementIdentityPayload} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -109,12 +109,18 @@ export function inspectCheckpointReplay(value: unknown): JsonObject {
 
 function runPath(value: unknown, runsDir: string, extension: string): string {
   const path = resolve(requireNonEmptyString(value, "run artifact path"));
-  if (dirname(path) !== resolve(runsDir) || !path.endsWith(extension)) {
+  let parent: string;
+  try { parent = realpathSync(dirname(path)); }
+  catch { unknown("checkpoint artifact directory is unavailable"); }
+  if (parent !== realpathSync(runsDir) || !path.endsWith(extension)) {
     unknown("checkpoint artifact path is invalid");
   }
-  try { if (!lstatSync(path).isFile()) unknown("checkpoint artifact is not a regular file"); }
+  // Resolve only the directory alias. Following the leaf would admit a file
+  // symlink, and writing through the original alias could follow a later retarget.
+  const physical = join(parent, basename(path));
+  try { if (!lstatSync(physical).isFile()) unknown("checkpoint artifact is not a regular file"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  return path;
+  return physical;
 }
 
 function writeSynced(path: string, text: string): void {
@@ -299,7 +305,9 @@ export async function commitCheckpoint(value: unknown,
     throw new EffectRuntimeRequestError("checkpoint settlement identity is invalid");
   }
   const runsDir = join(root, "goals", identity.goal_id, "runs");
-  const indexPath = join(runsDir, "index.jsonl");
+  const physicalRuns = realpathSync(runsDir);
+  const directoryIdentity = statSync(physicalRuns, {bigint: true});
+  const indexPath = join(physicalRuns, "index.jsonl");
   const statePath = resolve(requireNonEmptyString(request.state_file, "state_file"));
   const firstDelivery = request.purpose === "first_delivery";
   const resultWork = request.purpose === "delivery_result";
@@ -484,6 +492,9 @@ export async function commitCheckpoint(value: unknown,
               mutation_digest: recovery.mutation_digest, json_path: jsonPath, markdown_path: markdownPath,
               index_record: row}});
         }
+        const currentDirectory = statSync(physicalRuns, {bigint: true});
+        if (realpathSync(runsDir) !== physicalRuns || currentDirectory.dev !== directoryIdentity.dev ||
+            currentDirectory.ino !== directoryIdentity.ino) unknown("checkpoint artifact directory changed");
         writeSynced(jsonPath, JSON.stringify(record, null, 2) + "\n");
         writeSynced(markdownPath, requireNonEmptyString(request.markdown, "checkpoint Markdown"));
         appendJsonLineSync(indexPath, row);

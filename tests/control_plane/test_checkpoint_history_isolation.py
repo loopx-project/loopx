@@ -53,11 +53,11 @@ def test_settled_peer_read_damage_preserves_independent_delivery(provider, purpo
         "--no-global-sync", "--suppress-external-sinks")
     assert rc == 0, baseline
     args = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", peer,
-            "--todo-id", todo, "--runtime-profile", "claude_code")
+            "--todo-id", todo, "--runtime-profile", "claude_code", "--turn-instance-id", "peer-original-turn")
     rc, guard = _run_cli(registry, *args)
     assert rc == 0 and guard.get("delivery_result_context"), guard
     identity = guard["delivery_result_context"]["settlement_identity"]
-    rc, selected = _run_cli(registry, *args, "--turn-instance-id", identity["turn_instance_id"])
+    rc, selected = _run_cli(registry, *args)
     assert rc == 0 and selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True, selected
     control = GoalModeMCPControlPlane(GoalModeMCPConfig(server_name="fixture-peer",
         runtime_profile="claude_code", legacy_host_surface="claude_code"),

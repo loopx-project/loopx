@@ -28,7 +28,8 @@ def test_owner_change_survives_agent_state_rollback(provider, tmp_path, monkeypa
         "--ttl-seconds", "600", cwd=project)
     assert rc == 0, lease
     identity = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
-    rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity, cwd=project)
+    rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *identity,
+        "--turn-instance-id", "owner-document-turn", cwd=project)
     assert rc == 0, admitted
     original = admitted["delivery_result_context"]
     assert original["basis"]["goal"]["primary_documents"] == [
@@ -73,7 +74,8 @@ def test_missing_primary_document_cannot_be_rebuilt_from_agent_state(provider, t
     registry.write_text(json.dumps(registration), encoding="utf-8")
     before = state.read_bytes()
     rc, rejected = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "missing-owner-turn", cwd=project)
     assert rc != 0 and rejected["error_code"] == "checkpoint_goal_source_unavailable", rejected
     assert state.read_bytes() == before
     assert _spend_run_count(runtime) == 0
@@ -89,7 +91,8 @@ def test_owner_change_during_native_capture_is_rechecked_at_provider_fence(provi
         {"kind": "goal_doc", "path": "GOAL.md", "role": "primary_goal_document"}]
     registry.write_text(json.dumps(registration), encoding="utf-8")
     rc, admitted = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID, cwd=project)
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "capture-race-turn", cwd=project)
     assert rc == 0, admitted
     wrapper = project / "capture_race.py"
     wrapper.write_text(f'''
