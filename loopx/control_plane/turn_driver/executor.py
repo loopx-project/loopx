@@ -1556,6 +1556,27 @@ def _typed_settlement_stage(
     )
 
 
+def _execution_host(
+    plan: Mapping[str, Any],
+    *,
+    host_runner: HostRunner | None,
+    host_argv: Sequence[str] | None,
+) -> tuple[list[str] | None, dict[str, Any]]:
+    if host_runner is not None and host_argv is not None:
+        raise ValueError("run-once accepts either host_argv or host_runner, not both")
+    if host_runner is None:
+        argv = normalize_host_argv(host_argv or [])
+        host_projection = {"executable": Path(argv[0]).name, "argv_count": len(argv)}
+    else:
+        argv = None
+        planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
+        host_projection = {
+            "executable": "built-in",
+            "kind": str(planned_host.get("kind") or "codex-cli"),
+        }
+    return argv, host_projection
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
@@ -1589,18 +1610,9 @@ def run_loopx_turn_once(
     result_work: TurnResultWork | None = None,
     post_result_checkpoint: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    if host_runner is not None and host_argv is not None:
-        raise ValueError("run-once accepts either host_argv or host_runner, not both")
-    if host_runner is None:
-        argv = normalize_host_argv(host_argv or [])
-        host_projection = {"executable": Path(argv[0]).name, "argv_count": len(argv)}
-    else:
-        argv = None
-        planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
-        host_projection = {
-            "executable": "built-in",
-            "kind": str(planned_host.get("kind") or "codex-cli"),
-        }
+    argv, host_projection = _execution_host(
+        plan, host_runner=host_runner, host_argv=host_argv,
+    )
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )

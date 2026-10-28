@@ -210,6 +210,36 @@ def _obligation_was_created_by_current_completion(
     )
 
 
+def _retained_writeback_obligation(
+    source: dict[str, Any] | None,
+    *,
+    guard_scoped: bool,
+    selected_id: str | None,
+    lifecycle: Mapping[str, Any] | None,
+    current_obligation: dict[str, Any] | None,
+    guard_recorded_at: str | None,
+    agent_id: str,
+    todo_items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if source is None or not guard_scoped:
+        return current_obligation
+    obligation = current_obligation
+    if source.get("obligation_id") != selected_id:
+        raise ValueError("guard_source_invalid: writeback source identity differs")
+    if not lifecycle:
+        obligation = source
+        if (source.get("resolution_mode") == "todo_lifecycle_settlement"
+                and guard_recorded_at and todo_items):
+            from ..effect_runtime import effect_runtime_result
+            obligation = effect_runtime_result("work_item.replan_semantics.project", {
+                "operation": "lifecycle_obligation", "obligation": source,
+                "selected_obligation_id": selected_id,
+                "guard_recorded_at": guard_recorded_at,
+                "agent_id": agent_id, "items": todo_items,
+            })["obligation"]
+    return obligation
+
+
 @effect_runtime_request_scope()
 def qualify_replan_writeback(
     *,
@@ -375,20 +405,13 @@ def qualify_replan_writeback(
             context.get("replan_transition_candidates", [])
             if isinstance(candidate.get("obligation"), dict) and
             candidate["obligation"].get("obligation_id") == guard_semantic_replan_obligation_id), None)
-    if receipt_bound_source is not None and guard_scoped:
-        if receipt_bound_source.get("obligation_id") != guard_semantic_replan_obligation_id:
-            raise ValueError("guard_source_invalid: writeback source identity differs")
-        if not lifecycle:
-            obligation = receipt_bound_source
-            if (receipt_bound_source.get("resolution_mode") == "todo_lifecycle_settlement"
-                    and receipt_bound_guard_recorded_at and agent_todo_source_items):
-                from ..effect_runtime import effect_runtime_result
-                obligation = effect_runtime_result("work_item.replan_semantics.project", {
-                    "operation": "lifecycle_obligation", "obligation": receipt_bound_source,
-                    "selected_obligation_id": guard_semantic_replan_obligation_id,
-                    "guard_recorded_at": receipt_bound_guard_recorded_at,
-                    "agent_id": safe_agent_id, "items": agent_todo_source_items,
-                })["obligation"]
+    obligation = _retained_writeback_obligation(
+        receipt_bound_source, guard_scoped=guard_scoped,
+        selected_id=guard_semantic_replan_obligation_id,
+        lifecycle=lifecycle, current_obligation=obligation,
+        guard_recorded_at=receipt_bound_guard_recorded_at,
+        agent_id=safe_agent_id, todo_items=agent_todo_source_items,
+    )
     # Every selected replan retains its exact receipt-bound source. A missing
     # reconstruction must not fall through as an unselected future obligation
     # and commit an unqualified writeback. Plain outcome reviews additionally

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from pathlib import Path

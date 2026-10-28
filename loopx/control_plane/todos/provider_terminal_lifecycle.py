@@ -242,6 +242,40 @@ def _persist_validated_completion_result(
             raise ValueError("completion result changed during acceptance validation")
 
 
+def _terminal_validation_updates(
+    result: Mapping[str, Any],
+    *,
+    request: dict[str, Any],
+    runtime_root: Path,
+    registry_path: Path,
+    goal_id: str,
+    delivery_workspace: Mapping[str, Any] | None,
+    validation_workspace_path: Path | None,
+) -> tuple[dict[str, Any], bool]:
+    context = request.get("delivery_context")
+    recovery = None
+    if isinstance(context, Mapping) and context.get("read_context_id"):
+        from ..goals.checkpoint_context_io import terminal_validation_effect_io
+
+        recovery = terminal_validation_effect_io(
+            runtime_root=runtime_root, request=request, context=context, execution_result=result,
+        )
+    if recovery is not None and recovery["effect"] == "replay":
+        updates = recovery["updates"]
+    else:
+        updates = execute_completion_validation_effects(
+            result, registry_path=registry_path, goal_id=goal_id,
+            delivery_workspace=delivery_workspace,
+            validation_workspace_path=validation_workspace_path,
+        )
+        if recovery is not None:
+            terminal_validation_effect_io(
+                runtime_root=runtime_root, request=request, context=context,
+                execution_result=result, updates=updates,
+            )
+    return updates, recovery is None or recovery["effect"] == "run"
+
+
 def terminal_canonical_todo_if_promoted(
     *,
     registry_path: Path,
@@ -454,27 +488,13 @@ def terminal_canonical_todo_if_promoted(
     completion_validation_executed = False
     if isinstance(result, Mapping) and result.get("status") == "execute_validation":
         request["validation_source_provider_revision"] = result["provider_revision"]
+        updates, completion_validation_executed = _terminal_validation_updates(
+            result, request=request, runtime_root=runtime_root,
+            registry_path=registry_path, goal_id=goal_id,
+            delivery_workspace=completion_delivery_workspace,
+            validation_workspace_path=completion_validation_workspace_path,
+        )
         context = request.get("delivery_context")
-        recovery = None
-        if isinstance(context, Mapping) and context.get("read_context_id"):
-            from ..goals.checkpoint_context_io import terminal_validation_effect_io
-
-            recovery = terminal_validation_effect_io(
-                runtime_root=runtime_root, request=request, context=context, execution_result=result,
-            )
-        if recovery is not None and recovery["effect"] == "replay":
-            updates = recovery["updates"]
-        else:
-            updates = execute_completion_validation_effects(
-                result, registry_path=registry_path, goal_id=goal_id,
-                delivery_workspace=completion_delivery_workspace,
-                validation_workspace_path=completion_validation_workspace_path,
-            )
-            if recovery is not None:
-                terminal_validation_effect_io(
-                    runtime_root=runtime_root, request=request, context=context,
-                    execution_result=result, updates=updates,
-                )
         request.update(updates)
         if isinstance(context, Mapping) and context.get("read_context_id"):
             from ..goals.checkpoint_context_io import bind_terminal_result_validation
@@ -487,7 +507,6 @@ def terminal_canonical_todo_if_promoted(
                 request=request, source=completion_result_file, runtime_root=runtime_root,
                 goal_id=goal_id, expected_descriptor=result_descriptor,
             )
-        completion_validation_executed = recovery is None or recovery["effect"] == "run"
         request["observed_at"] = now_local()
         result = invoke()
     if not isinstance(result, Mapping):
