@@ -248,6 +248,31 @@ test("only an unstarted native lane refusal keeps delegation queued", () => {
   assert.throws(() => transitionDelegationObservation({...input, to: "prepared"}), /transition/);
 });
 
+test("native interval waits retain only an unstarted effect-free operation", () => {
+  const effects = {host_invoked: false, state_written: false, quota_spent: false,
+    scheduler_acknowledged: false};
+  const admission = {admitted: false, reserved: false, resumed: null, reason: "minimum_interval_wait",
+    min_interval_minutes: 3, next_eligible_at_ms: 180_001, pre_model_admission: "managed_turn_only"};
+  const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
+    dry_run: false, replayed: false, status: "interval_wait", reason: "minimum_interval_wait",
+    result_kind: null, quota_slot_spend_count: 0, host: {executable: "configured-host"}, effects, admission};
+  const input = {from: "running", to: "turn_returned", unstarted_turn: true, turn_execution: result};
+  assert.deepEqual(transitionDelegationObservation(input), {status: "prepared"});
+  for (const unstarted_turn of [false, undefined])
+    assert.deepEqual(transitionDelegationObservation({...input, unstarted_turn}), {status: "turn_returned"});
+  for (const patch of [
+    {admitted: true}, {admitted: null}, {reserved: true}, {reserved: null}, {resumed: true},
+    {reason: "duplicate_or_stale_trigger"}, {pre_model_admission: "not_qualified"},
+    ...[null, 0, -1, "3", 1.5].map(min_interval_minutes => ({min_interval_minutes})),
+    ...[null, 0, -1, "180001", 1.5].map(next_eligible_at_ms => ({next_eligible_at_ms})),
+  ]) assert.deepEqual(transitionDelegationObservation({...input,
+    turn_execution: {...result, admission: {...admission, ...patch}}}), {status: "turn_returned"});
+  for (const patch of [{admission: null}, {reason: "duplicate_or_stale_trigger"},
+    {replayed: true}, {quota_slot_spend_count: 1}, {effects: {...effects, state_written: true}}])
+    assert.deepEqual(transitionDelegationObservation({...input, turn_execution: {...result, ...patch}}),
+      {status: "turn_returned"});
+});
+
 test("only a conversation-origin accepted result leaves a wake intent for the exact requester", () => {
   // An ordinary CLI/MCP delegation has no conversation. It must keep the
   // transition it always had: no intent, no wake state, no widened readback.
@@ -486,6 +511,7 @@ test("preflight uses scoped native lane facts without inventing App presence", (
   const original = delegationPreflight(params);
   assert.equal(original.state, "runtime_unverified");
   assert.equal(original.dispatch_allowed, true);
+  assert.equal(original.queueable, false);
   assert.equal(original.turn_lane, undefined);
   for (const state of ["absent", "released", "dead"]) {
     const {turn_lane, ...observed} = delegationPreflight({...params, lane: {state, holder: "withheld"}});
@@ -497,6 +523,7 @@ test("preflight uses scoped native lane facts without inventing App presence", (
     assert.equal(observed.state, "turn_blocked");
     assert.equal(observed.turn_eligible, false);
     assert.equal(observed.dispatch_allowed, false);
+    assert.equal(observed.queueable, true);
     assert.equal(observed.reason, state === "live" ? "turn_lane_in_flight" : "turn_lane_state_unknown");
     assert.equal(observed.acceptance_ready, true);
     assert.deepEqual(observed.effects, original.effects);
@@ -504,6 +531,12 @@ test("preflight uses scoped native lane facts without inventing App presence", (
   }
   for (const lane of [null, {}, {state: "idle"}, {state: ["live"]}, {state: true}])
     assert.throws(() => delegationPreflight({...params, lane}));
+  for (const change of [
+    {acceptance: null}, {validation_files_current: false},
+    {preview: {...params.preview, route: {...params.preview.route, selected_todo_id: "other"}}},
+    {preview: {...params.preview, route: {...params.preview.route, would_invoke_host: false}}},
+    {preview: {...params.preview, managed_executor: {...params.preview.managed_executor, available: false}}},
+  ]) assert.equal(delegationPreflight({...params, ...change, lane: {state: "live"}}).queueable, false);
 });
 
 const runtimePreflight = (executor: Record<string, unknown>) => delegationPreflight({

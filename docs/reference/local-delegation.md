@@ -153,17 +153,29 @@ matching prepared operations may resume only under the restored current grant,
 and matching terminal operations are read back in place. Historical operator
 inspection remains available through the ordinary read command.
 
-A Chat handoff with a separate source execution grant can recover when its
-requester exits after saving the original operation but before starting the
-worker. Replaying that handoff rechecks the source Turn and exact grant, then
-rejoins only its original `prepared` operation. The worker retains this
-precondition across process startup under the existing execution lock. A busy
-worker is observed; an operation that has already reached `running`, returned
-or stopped is not automatically resumed by this replay. Uncertain Host work
-still needs explicit original-operation reconciliation. Recovery preserves the
-original Inbox request, binding, conversation and governed Turn; it creates no
-replacement task, grant or scheduler. This remains the explicit task-bound
-route described here, not general automatic activation of an idle Inbox owner.
+A Chat handoff with a separate source execution grant saves its original
+`prepared` operation even when an occupied or unknown native lane prevents the
+first submission, provided the other current admission, acceptance and runtime
+checks permit deferral. Saving that intent launches no worker or Host. The
+existing Chat return service also resumes these saved source operations after
+the requester finishes its Chat Turn; no sender retry is needed. It considers
+at most 20 local records and one full native preflight per 30-second probe,
+advancing its cursor past refused records. Known busy or unknown lanes use only
+the scoped liveness observation. Source context, grant, binding, full brief,
+return conversation and current native preflight are rechecked before resuming.
+Restart resets only the host probe cursor and delay, never the operation. A
+slow or failed execution preview cannot block the service's separate return IO;
+shutdown is checked again after preview, before offering a worker resume.
+
+Only the original source Chat host can offer that saved operation. Context-only
+Inbox rows and operator/MCP operations do not enroll; removing the source grant,
+closing its session, stopping work or exhausting quota still prevents execution.
+The worker retains the prepared-source condition under its existing execution
+lock across process startup. A busy worker is observed; `running`, returned,
+stopped or uncertain work is not automatically resumed. Explicit reconciliation
+still owns uncertain Host work. Recovery creates no replacement task, grant,
+queue or scheduler. This remains the explicit task-bound route described here,
+not general automatic activation of an idle Inbox owner.
 
 A still-prepared replay also performs the same current native preflight as a
 first submission. A busy or unknown Turn lane, refused task admission,
@@ -175,12 +187,17 @@ An operation that has already advanced is read back without probing its Todo
 for a new launch. The preflight remains a point-in-time observation; the native
 start fence still owns a later race. For task-bound CLI, MCP and Chat workers,
 if that fence refuses an operation with no prior Turn journal, the typed
-observation owner keeps it `prepared` only for the
-native `turn_lane_in_flight` result proving no Host invocation, state write,
-quota spend or scheduler ACK. Readback retains that reason; a later authorized
+observation owner keeps it `prepared` only for the native `turn_lane_in_flight`
+refusal or a `minimum_interval_wait` with an explicit unreserved native
+admission, both proving no Host invocation, state write, quota spend or
+scheduler ACK. Readback retains that reason; a later authorized
 retry uses the same request, operation and lease identity. A journaled,
 effectful or uncertain result follows existing recovery and cannot be rewound.
-This adds no automatic retry or wake pump.
+The Turn validates its original capture before interval admission and publishes
+it only after admission; a refused start must not freeze a changed observation
+without a Turn journal. Existing captures remain immutable and fully checked.
+Automatic offers cover only the saved Chat-source `prepared` operations above;
+other operations keep their existing explicit recovery.
 
 中文：Chat 发起的执行保留原 Inbox 请求、固定的对话来源和原 operation。worker 在
 入口、Host 启动前和完成结算前重新核对当前发送者、接收者及精确
@@ -192,13 +209,21 @@ brief、peer request、当前 binding 和原回传 Session/Turn；选择另一�
 不能改派既有 operation，身份不符时返回原执行不可用反馈且不新发请求。身份一致的
 prepared operation 可在恢复的当前 grant 下续接原 owner，终态 operation 原位读回。
 
-中文：另有来源执行授权的 Chat 交接，在原 operation 已保存、worker 尚未启动时
-请求方退出，可重放同一交接恢复。重放重新核对来源 Turn 与精确 grant，只续接原
-`prepared` operation；worker 启动后仍在既有执行锁内核对同一前置条件。忙碌 worker
-仅被观察，已进入 `running`、已返回或已停止的执行不因该重放自动恢复；Host 结果
-不确定时仍须显式对账原执行。原 Inbox 请求、binding、对话与受治理 Turn 均保留，
-不创建替代任务、授权或调度器。这仍是本文的精确任务绑定路径，不代表普通 Inbox
-空闲接收者的自动激活已完成。
+中文：另有来源执行授权的 Chat 交接，首次提交因原生 lane 忙碌或未知而受阻、但
+其他当前准入、验收和运行时检查允许延期时，也会保存原 `prepared` operation，
+不启动 worker 或 Host。现有 Chat 返回服务在请求方结束本轮后自动续接该操作，
+无需发送方重试。每 30 秒最多读 20 条本地记录、做一次完整原生预检，游标越过
+受阻记录；已知忙碌或未知 lane 只读其作用域内存活事实。续接前重核来源、grant、
+binding、完整 brief、原回传对话及当前原生预检；重启只重置宿主的探测游标和间隔，
+不更换原操作。执行预检缓慢或失败不阻塞独立的结果回传 IO；预检后、续接 worker
+之前再次检查服务是否关闭。
+
+只有原来源 Chat 宿主可以提交该已保存操作。context-only Inbox 和 operator/MCP
+操作不加入自动续接；撤权、关闭来源会话、停止或额度不足仍阻止执行。worker 启动
+后在既有执行锁内核对 prepared-source 条件。忙碌 worker 仅被观察，`running`、
+已返回、已停止或不确定的执行不自动恢复；Host 结果不确定时仍须显式对账原执行。
+不创建替代任务、授权、队列或调度器。这仍是本文的精确任务绑定路径，不代表普通
+Inbox 空闲接收者的自动激活已完成。
 
 仍为 `prepared` 的重放也执行首次提交所用的当前原生预检。Turn lane 忙碌或未知、
 任务准入拒绝、运行时不可用或当前验收依据缺失时，原 operation 保持 `prepared`，
@@ -206,11 +231,13 @@ prepared operation 可在恢复的当前 grant 下续接原 owner，终态 opera
 prepared-source 启动条件下续接同一 operation；已推进的 operation 直接读回，
 不按新启动重查其 Todo。预检仍只是当时观察，之后的竞争由原生启动 fence 拒绝。
 对精确任务绑定的 CLI、MCP 和 Chat worker，原 operation 尚无 Turn journal，
-且原生 `turn_lane_in_flight` 结果明确证明未调用
-Host、未写 Turn 状态、未扣额度、未 ACK scheduler 时，类型化观察 owner 将其保留为
+且原生 `turn_lane_in_flight` 拒绝或带明确未预留准入的 `minimum_interval_wait`
+结果证明未调用 Host、未写 Turn 状态、未扣额度、未 ACK scheduler 时，类型化观察 owner 将其保留为
 `prepared` 并读回原原因；之后获授权的重试沿用原请求、operation 和租约身份。
 已有 journal、已有副作用或结果未知均沿原恢复流程，不回退执行状态。
-本改动不新增自动重试或唤醒循环。
+Turn 在间隔准入前校验原捕获，通过准入后才发布；未准入的启动不能留下没有
+Turn journal 的旧观察，阻断之后的原身份重试。已有捕获仍不可变且完整核对。
+自动续接只覆盖上述已保存的 Chat-source `prepared` 操作；其他操作保留既有显式恢复。
 
 Member completion uses the ordinary active-Goal continuation, including legacy
 non-hard-lease routes. It does not declare terminal `no_followup` for a

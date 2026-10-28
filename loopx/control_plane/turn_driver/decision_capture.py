@@ -35,9 +35,13 @@ def write_decision_capture(
 
 def prepare_turn_decision_capture(
     plan: Mapping[str, Any], *, journal_path: Path,
-    decision: Mapping[str, Any] | None, existing_journal: bool,
+    decision: Mapping[str, Any] | None, existing_journal: bool, persist: bool = True,
 ) -> dict[str, Any]:
-    """Called under the Turn journal lock before Host/admission effects.
+    """Called under the Turn journal lock before Host effects.
+
+    ``persist=False`` validates the exact source before cadence admission without
+    freezing a refused, unstarted observation. After admission the caller must
+    run the normal publication path before giving that plan to the Host.
 
     Existing journals must retain their original reference. A missing legacy
     observation cannot be reconstructed from today's guard. Already committed
@@ -71,7 +75,7 @@ def prepare_turn_decision_capture(
         # Legacy journals retain their recorded delivery/recovery route.
         reader_argv=current_loopx_cli_argv() if not existing_journal else None,
     )
-    if not path.exists():
+    if persist and not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         write_decision_capture(path, observation)
     return {**plan, "turn_envelope": bound}

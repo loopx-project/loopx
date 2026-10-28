@@ -151,6 +151,12 @@ def record_turn_result(
         )}
         host = result.get("host")
         observation["host"] = {"executable": host.get("executable")} if isinstance(host, dict) else None
+        admission = result.get("admission")
+        if isinstance(admission, dict):
+            observation["admission"] = {key: admission.get(key) for key in (
+                "admitted", "reserved", "resumed", "reason", "next_eligible_at_ms",
+                "min_interval_minutes", "pre_model_admission",
+            )}
         decision = effect_runtime_result("collaboration.delegation.observe", {
             "from": row["status"], "to": "turn_returned",
             "turn_execution": observation, "unstarted_turn": unstarted_turn,

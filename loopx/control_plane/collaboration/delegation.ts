@@ -272,6 +272,15 @@ function delegationAcceptanceFacts(todoId: unknown, acceptance: JsonObject | nul
     acceptance_next_action: "review_original_task_acceptance"};
 }
 
+/** Shared interpretation of the native lock owner's read-only liveness facts. */
+export function delegationLaneReadiness(params: JsonObject): JsonObject {
+  const lane = requireJsonObject(params.lane, "Turn lane observation");
+  requireThat(typeof lane.state === "string"
+    && ["live", "released", "dead", "absent", "foreign_host", "unreadable"].includes(lane.state),
+  "invalid Turn lane observation");
+  return {available: ["released", "dead", "absent"].includes(lane.state), state: lane.state};
+}
+
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
@@ -369,11 +378,8 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   // Reuse the file-lock owner's liveness facts. These describe only the native
   // Turn lane, never the presence/availability of an App or CLI conversation.
   // Omission preserves earlier callers; an explicit unknown fails closed.
-  const lane = params.lane === undefined ? null : requireJsonObject(params.lane, "Turn lane observation");
-  if (lane !== null) requireThat(typeof lane.state === "string"
-    && ["live", "released", "dead", "absent", "foreign_host", "unreadable"].includes(lane.state),
-  "invalid Turn lane observation");
-  const laneBlocked = lane !== null && !["released", "dead", "absent"].includes(String(lane.state));
+  const lane = params.lane === undefined ? null : delegationLaneReadiness(params);
+  const laneBlocked = lane !== null && lane.available !== true;
   const eligible = route.would_invoke_host === true && route.selected_todo_id === binding.todo_id && !laneBlocked;
   const acceptance = params.acceptance === null ? null : requireJsonObject(params.acceptance, "task acceptance");
   const acceptanceFacts = delegationAcceptanceFacts(binding.todo_id, acceptance, params.validation_files_current);
@@ -384,6 +390,10 @@ export function delegationPreflight(params: JsonObject): JsonObject {
   return {
     schema_version: "loopx_delegation_preflight_v0", binding,
     state, dispatch_allowed: state === "launchable" || state === "runtime_unverified",
+    // Only lane contention may defer an otherwise admissible source launch.
+    // This permits saving its original intent, never a Host invocation.
+    queueable: laneBlocked && route.would_invoke_host === true
+      && route.selected_todo_id === binding.todo_id && pinned && executor.available !== false,
     turn_eligible: eligible, turn_route: route.kind,
     ...acceptanceFacts, authority_ready: true, authority_reason: null,
     authority_state: "promoted", authority_next_action: "none",
@@ -522,19 +532,30 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
   const from = params.from as Observation, to = params.to as Observation;
   requireThat(Object.hasOwn(transitions, from) && Object.hasOwn(transitions, to), "invalid delegation observation");
   requireThat(from === to || transitions[from].includes(to), "invalid delegation observation transition");
-  // Losing the native lane race before this operation has a Turn is queued
-  // work, not a failed execution. Only the native effect-free refusal permits
-  // returning to prepared; a partial/resumed/unknown Turn keeps normal recovery.
+  // A native lane race or owner interval wait before this operation has a
+  // Turn retains its original intent. Partial/resumed/unknown Turns keep normal
+  // recovery; only an exact, effect-free native refusal can return to prepared.
   if (from === "running" && to === "turn_returned" && params.unstarted_turn === true
       && params.turn_execution !== undefined) {
     const result = requireJsonObject(params.turn_execution, "native Turn execution");
     const effects = result.effects as JsonObject | undefined;
     const host = result.host as JsonObject | undefined;
+    const admission = result.admission as JsonObject | undefined;
+    const laneWait = result.status === "unavailable" && result.reason === "turn_lane_in_flight"
+      && host?.executable === "not_invoked";
+    const intervalWait = result.status === "interval_wait" && result.reason === "minimum_interval_wait"
+      && admission?.reason === "minimum_interval_wait" && admission.admitted === false
+      && admission.reserved === false && admission.resumed !== true
+      && admission.pre_model_admission === "managed_turn_only"
+      && typeof admission.min_interval_minutes === "number" && Number.isSafeInteger(admission.min_interval_minutes)
+      && admission.min_interval_minutes > 0
+      && typeof admission.next_eligible_at_ms === "number" && Number.isSafeInteger(admission.next_eligible_at_ms)
+      && admission.next_eligible_at_ms > 0;
     if (result.schema_version === "loopx_turn_execution_v0" && result.mode === "run_once"
         && result.ok === false && result.dry_run === false && result.replayed === false
-        && result.status === "unavailable" && result.reason === "turn_lane_in_flight"
+        && (laneWait || intervalWait)
         && result.result_kind === null && result.quota_slot_spend_count === 0
-        && host?.executable === "not_invoked" && effects !== undefined && effects !== null
+        && effects !== undefined && effects !== null
         && ["host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"]
           .every(key => effects[key] === false)
         && Object.values(effects).every(value => value === false)) return {status: "prepared"};

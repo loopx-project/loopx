@@ -705,7 +705,7 @@ class Delegations:
     def start(self, binding_id: str, operation_id: str, brief: dict,
               parent_request_id: str | None = None, *, conversation: dict | None = None,
               confirmed_operation_id: str | None = None,
-              source_request_id: str | None = None) -> dict:
+              source_request_id: str | None = None, _defer_worker: bool = False) -> dict:
         """Start or replay one bound operation.
 
         ``conversation`` is supplied only by the trusted Chat host, never by
@@ -714,6 +714,8 @@ class Delegations:
         that conversation and no other. ``source_request_id`` is also host-only:
         the receiver's existing inbox request, separate from the user brief.
         """
+        if _defer_worker and source_request_id is None:
+            raise ValueError("deferred execution requires the original Chat source")
         binding = self.binding(binding_id, require_active=True)
         require_operation_id(operation_id)
         brief = normalize_request({"goal_id": self.goal_id, "agent_id": binding["agent_id"], "brief": brief})["brief"]
@@ -753,7 +755,8 @@ class Delegations:
                 prepare_host_process_record(self._host_process_record(path))
                 _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
                               **({"conversation": origin} if origin else {})})
-                self._spawn(operation_id)
+                if not _defer_worker:
+                    self._spawn(operation_id)
         return self.read(operation_id)
 
     def _spawn(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:

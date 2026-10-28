@@ -8,6 +8,8 @@ import copy
 import json
 from pathlib import Path
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -25,6 +27,145 @@ def durable_bytes(root):
     # Scoped read locks update diagnostic holder timestamps, not business state.
     return {p.relative_to(root): p.read_bytes() for p in root.rglob("*")
             if p.is_file() and not p.name.endswith(".lock")}
+
+
+@pytest.mark.parametrize("change", ["revoked", "closed", "other_host", "context_only", "advanced", "cancelled"])
+def test_background_source_recovery_cannot_create_or_retarget_execution(saved_handoff, monkeypatch, change):  # noqa: F811
+    root, worker, binding, (store, session, turn, _, receipt, policy), operation = saved_handoff
+    if change == "revoked":
+        policy["sources"][session["channel_id"]]["execution_bindings"] = []
+        _write(_root(worker.root) / "policy.json", policy)
+    elif change == "closed":
+        store.update_session(session["session_id"], status="closed")
+    elif change == "other_host":
+        from loopx.chat_store import ChatSessionStore
+        store = ChatSessionStore(root / "another-chat-host")
+    elif change == "context_only":
+        worker.path(operation).unlink()  # A saved Inbox alone is never launch intent.
+    elif change == "advanced":
+        row = _read(worker.path(operation))
+        row["status"] = "running"
+        _write(worker.path(operation), row)
+    calls = []
+    monkeypatch.setattr(execution.Delegations, "_spawn", lambda *_args, **kwargs: calls.append(kwargs))
+    before, tasks = durable_bytes(worker.root), demo.canonical_tasks(root)
+    pump = execution.QueuedSourcePump(worker.root, worker.registry, store)
+    pump.tick(cancelled=lambda: change == "cancelled")
+    assert calls == []
+    assert durable_bytes(worker.root) == before
+    assert demo.canonical_tasks(root) == tasks
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
+    assert not list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+
+
+@pytest.mark.parametrize("preview", ["refused", "error"])
+def test_background_source_recovery_rechecks_current_preflight_and_its_bounded_retry(saved_handoff, monkeypatch, preview):  # noqa: F811
+    root, worker, binding, (store, _, _, _, _, _), operation = saved_handoff
+    calls = []
+    monkeypatch.setattr(execution.Delegations, "_spawn", lambda *_args, **kwargs: calls.append(kwargs))
+    clock = [0.0]
+    monkeypatch.setattr(execution, "monotonic", lambda: clock[0])
+    inspect = execution.Delegations.inspect
+    observations = []
+    def blocked(self, selected):
+        observations.append(selected)
+        if preview == "error":
+            raise RuntimeError("native preview unavailable")
+        return {**inspect(self, selected), "dispatch_allowed": False}
+    monkeypatch.setattr(execution.Delegations, "inspect", blocked)
+    pump = execution.QueuedSourcePump(worker.root, worker.registry, store)
+    # Multiple candidates cannot turn a failed full preview into repeated IO
+    # in one probe. Use the real retained source at every candidate address.
+    pump.paths = iter([worker.path(operation)] * 3)
+    pump.tick()
+    pump.tick()
+    assert len(observations) == 1 and calls == []
+    assert _read(worker.path(operation))["status"] == "prepared"
+    monkeypatch.setattr(execution.Delegations, "inspect", inspect)
+    # A new service after restart may inspect immediately, but recovers only
+    # the original prepared operation and carries its worker-entry CAS.
+    restarted = execution.QueuedSourcePump(worker.root, worker.registry, store)
+    restarted.tick()
+    assert calls == [{"prepared_source_request_id": _read(worker.path(operation))["identity"]["source_request_id"]}]
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
+    assert not demo.canonical_tasks(root)[binding["todo_id"]]["done"]
+
+
+def test_slow_queue_preview_does_not_block_original_return_or_server_close(saved_handoff, monkeypatch):  # noqa: F811
+    from loopx.capabilities.manager_context.roundtrip import ReturnService, report
+    from loopx.capabilities.manager_context import acknowledge
+
+    _, worker, _, (store, session, turn, _, receipt, _), operation = saved_handoff
+    store.update_turn(session["session_id"], turn["turn_id"], status="completing",
+        response={"context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    entered, release, sent = threading.Event(), threading.Event(), threading.Event()
+    launched = []
+    def slow_preview(*_):
+        entered.set()
+        assert release.wait(15)
+        return {"dispatch_allowed": True}
+    monkeypatch.setattr(execution.Delegations, "inspect", slow_preview)
+    monkeypatch.setattr(execution.Delegations, "_spawn", lambda *args, **kwargs: launched.append(args))
+    def transport(*_):
+        sent.set()
+        return {"reply_verified": True, "idempotency_key": "fixture-provider-return"}
+    background = ReturnService(worker.root, worker.registry, store, transport)
+    try:
+        background.start()
+        assert entered.wait(5)
+        acknowledge(worker.root, worker.goal_id, "analyst", receipt["request_id"], "no_change", "Reviewed original")
+        report(worker.root, worker.goal_id, "analyst", receipt["request_id"], "conclusion", "No execution needed")
+        assert sent.wait(8), "An unrelated slow execution preview blocked the completed source return"
+        started = time.monotonic()
+        background.close()
+        assert time.monotonic() - started < 4
+    finally:
+        background.close()
+        release.set()
+        background.execution_thread.join(timeout=5)
+    assert not launched
+    assert not background.thread.is_alive() and not background.execution_thread.is_alive()
+    assert _read(worker.path(operation))["status"] == "prepared"
+
+
+def test_unstarted_native_cadence_wait_retains_source_until_its_original_interval(saved_handoff):  # noqa: F811
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+
+    root, worker, binding, (_, _, _, _, receipt, _), operation = saved_handoff
+    scope = {"runtime_root": str(worker.root), "goal_id": worker.goal_id,
+        "agent_id": binding["agent_id"], "automation_id": None}
+    effect_runtime_result("quota.automation_cadence.manage", {**scope, "operation": "configure",
+        "expected_revision": 0, "min_interval_minutes": 1,
+        "owner_reference": "fixture-owner-cadence", "execute": True})
+    # Seed a prior native reservation in this disposable runtime, retaining a
+    # real interval with enough time for the first worker to observe its wait.
+    anchor = time.time_ns() // 1_000_000 - 40_000
+    previous = {**scope, "request_id": "fixture-preceding-turn", "now_ms": anchor, "trigger_at_ms": anchor}
+    assert effect_runtime_result("quota.automation_cadence.admit", previous)["admitted"]
+    effect_runtime_result("quota.automation_cadence.confirm_start", previous)
+    original, tasks = _read(worker.path(operation)), demo.canonical_tasks(root)
+    worker.execute(operation, prepared_source_request_id=receipt["request_id"])
+    waiting = _read(worker.path(operation))
+    assert waiting["turn_result"]["reason"] == "minimum_interval_wait", waiting
+    assert waiting["status"] == "prepared", waiting
+    assert "turn_key" not in waiting
+    assert waiting["identity"] == original["identity"]
+    assert demo.canonical_tasks(root) == tasks
+    assert not (Path(binding["workspace"]) / "host-invocations").exists()
+    assert not list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+    # Wait for the real floor; do not rewrite a start receipt or bypass policy.
+    assert not list((worker.root / "goals" / worker.goal_id / "turns" / "decisions").glob("*.json"))
+    due = effect_runtime_result("quota.automation_cadence.manage", {**scope, "operation": "read"})["next_eligible_at_ms"]
+    time.sleep(max(0, (due - time.time_ns() // 1_000_000) / 1000) + .02)
+    worker.execute(operation, prepared_source_request_id=receipt["request_id"])
+    accepted = _read(worker.path(operation))
+    assert accepted["status"] == "accepted", accepted
+    assert accepted["identity"] == original["identity"]
+    assert (Path(binding["workspace"]) / "host-invocations").read_text() == "1"
+    journals = list((worker.root / "goals" / worker.goal_id / "turns").glob("*.json"))
+    assert len(journals) == 1
+    assert json.loads(journals[0].read_text())["completed_phases"].count("quota_spend") == 1
 
 
 @pytest.mark.parametrize("change", ["binding", "brief", "source_request", "peer_request", "conversation"])

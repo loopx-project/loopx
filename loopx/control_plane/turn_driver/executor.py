@@ -1621,6 +1621,7 @@ def run_loopx_turn_once(
             plan = prepare_turn_decision_capture(
                 original_plan, journal_path=journal_path,
                 decision=decision_capture_payload, existing_journal=journal is not None,
+                persist=admit_start is None,
             )
             # Preserve any session recovery adjustment; only the original
             # observation replaces the fresh request's context.
@@ -1648,6 +1649,15 @@ def run_loopx_turn_once(
                 return execution_payload(
                     plan, waiting, execute=True, replayed=False, effects=empty_effects
                 )
+        if require_decision_capture and needs_host and admit_start is not None:
+            # Validate before reserving cadence/settlement identity, but publish
+            # only an admitted observation. Otherwise an interval refusal leaves
+            # a capture without a journal which poisons the same Turn's retry.
+            plan = prepare_turn_decision_capture(
+                original_plan, journal_path=journal_path,
+                decision=decision_capture_payload, existing_journal=journal is not None,
+            )
+            request = {**request, "turn_envelope": plan["turn_envelope"]}
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
                 recovery_decision,

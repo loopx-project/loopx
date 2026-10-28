@@ -611,6 +611,7 @@ export function createEffectRuntimeHandlers(
     ["collaboration.delegation.source_replay", lazyHandler(() => import("./collaboration/delegation.ts"), ({verifyDelegationSourceReplay}) => verifyDelegationSourceReplay)],
     ["turn.selection.rejection", lazyHandler(() => import("./turn_driver/selection_rejection.ts"), ({projectTurnSelectionRejection}) => projectTurnSelectionRejection)],
     ["collaboration.delegation.preflight", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationPreflight}) => delegationPreflight)],
+    ["collaboration.delegation.lane_readiness", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationLaneReadiness}) => delegationLaneReadiness)],
     ["collaboration.delegation.validation_plan", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationValidationPlan}) => delegationValidationPlan)],
     ["collaboration.delegation.checked_artifacts", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationCheckedArtifacts}) => delegationCheckedArtifacts)],
     ["collaboration.delegation.turn_plan", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationTurnPlanDecision}) => delegationTurnPlanDecision)],
