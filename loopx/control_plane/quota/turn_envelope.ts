@@ -21,7 +21,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, scopeInteractionOutcomeReadGuidance, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { assertGoalContextDelivered, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, scopeInteractionOutcomeReadGuidance, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -2076,8 +2076,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       agent_id: scalarString(object(decision.agent_identity).agent_id, "Turn Agent identity").trim(),
       todo_id: (selectedWorkTodoId(decision) ?? "").trim()};
   }
-  if (operation === "host_context") {
+  if (operation === "host_context" || operation === "host_dispatch_context") {
     const {decision, projection} = completeHostSource(request);
+    if (operation === "host_dispatch_context" && Object.keys(object(projection.replan_action_packet)).length === 0) {
+      assertGoalContextDelivered(object(object(decision.interaction_contract).agent_channel));
+    }
     // The caller already holds this exact checked source. Return only the
     // resolved facts it needs, not another full copy over the transport.
     return {primary_action: object(projection.action).primary_action ?? null,

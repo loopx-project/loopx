@@ -1347,3 +1347,18 @@ C1/C2 组合/capture/最终输入工作与这些精简同属一个候选前沿�
 目录即索引。规划/源码检查记录不证明 runtime 交付；当前优先级与认领仍在 roadmap 和
 canonical 工作中维护。历史记录保持 append-only，当前规范性计划在本文修订，不能把
 某日审计当作永久执行队列。
+
+
+### 本地注册 Goal 材料交付检查点
+
+完整 Turn writer 和现有 native context-delivery 显式启用路径，现在在 capture 前
+请求完整的注册 Goal 材料。源 adapter 为未标记或混合文件返回原始 UTF-8 全文；
+现有 TypeScript context owner 核对完整文件 revision 后完成该项读取。已标记区域
+的 lineage 和 canonical Todo 权威保留。普通 quota 在 delivery 关闭时继续渐进读取。
+桥接要求 `complete_goal_v1` 回执；旧 runtime 不能静默忽略这个要求。
+
+自动业务执行的 Host 上下文使用 `host_dispatch_context`，在加载 provider 前拒绝未完成或无效的
+Goal 材料。历史 `host_context` 元数据读取继续用于按原版本解释与必要结果收尾；
+已保存的 capture 不被重写。本项是范围有限的材料交付前置。通用 capability 必读
+强制、当前条件复核、安装采用、真实模型遵守和完整成本，仍各需独立证据。C1 未获
+完整资格。Replan 材料读取调用仍按原有阶段与工作限制执行。

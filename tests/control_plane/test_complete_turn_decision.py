@@ -104,6 +104,27 @@ def test_complete_source_rejects_tampering_and_binding_substitution():
         compose_turn_decision({**source, "schema_version": "unknown"})
 
 
+def test_pending_goal_capture_remains_readable_but_cannot_dispatch_business_work():
+    from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
+    from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, execution_profile_present
+    from tests.test_turn_envelope import _full_decision
+
+    source = _full_decision()
+    source["interaction_contract"]["agent_channel"]["required_reads"] = [
+        {"source": "goal_state", "command": "cat -- original-goal.md", "ordering": "before_work"}]
+    contract = compose_turn_decision(source)
+    before = copy.deepcopy(contract)
+    plan = build_loopx_turn_plan(build_turn_controller_input(contract).envelope(), work_contract=contract,
+        host="dsh", execution_mode="isolated-headless", turn_instance_id="original-turn")
+    request = build_loopx_turn_host_request(plan)
+    assert isinstance(execution_profile_present(request), bool)
+    with pytest.raises(ValueError, match="complete Turn contract rejected") as rejected:
+        extract_turn_authority(request)
+    assert "Goal source" in str(rejected.value.__cause__)
+    assert contract == before
+
+
 @pytest.mark.parametrize("action", ["future_execution", "", None, 0])
 def test_complete_source_refuses_unknown_required_action_before_capture(action):
     from tests.control_plane.test_replan_host_context_projection import _quota_payload

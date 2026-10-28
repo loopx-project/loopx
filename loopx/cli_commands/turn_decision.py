@@ -170,6 +170,7 @@ def _build_turn_decision(
     ) -> dict[str, Any]:
         decision = build_live_quota_should_run_decision(
             status_payload,
+            inline_goal_source=True,
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             available_capabilities=args.available_capabilities,

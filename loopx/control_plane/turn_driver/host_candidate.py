@@ -127,7 +127,7 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
     """Use the complete source; decode the old layout for historical input only."""
 
     try:
-        checked = _complete_host_source(request, operation="host_context")
+        checked = _complete_host_source(request, operation="host_dispatch_context")
     except RuntimeError as exc:
         raise ValueError("complete Turn contract rejected") from exc
     if checked is not None:

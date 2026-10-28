@@ -13,6 +13,7 @@ import {
   INTERACTION_EXECUTION_FACTS_SCHEMA_VERSION,
   projectInteractionRequiredReads,
   projectInteractionWorkContext,
+  assertGoalContextDelivered,
   scopeInteractionOutcomeReadGuidance,
   projectBlockedSuccessorWaitObservation,
   type AgentInteractionChannel,
@@ -667,6 +668,31 @@ test("scoped presentation keeps the original objective, refinement and stop obli
   }
 });
 
+
+test("full original Goal delivery fulfills its read without excluding legacy text", () => {
+  const text = "Original intent\nUnknown section\n停止条件：不得发布。\n";
+  const read = {source: "goal_state", command: "cat -- goal.md", ordering: "before_work"};
+  const content = {state_file: "goal.md", text, full_source: true,
+    revision: `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`};
+  const project = (value: JsonObject | null) => projectInteractionWorkContext({
+    required_reads: [read], require_full_goal_source: true,
+    source_results: value ? [{command: read.command, content: value}] : [],
+  });
+  const fulfilled = project(content);
+  assert.equal(fulfilled.source_delivery_profile, "complete_goal_v1");
+  assert.deepEqual(fulfilled.required_reads, []);
+  assert.equal((fulfilled.work_context as JsonObject).complete, true);
+  const [source] = (fulfilled.work_context as JsonObject).sources as JsonObject[];
+  assert.deepEqual(source.content, content);
+  for (const invalid of [null, {state_file: "goal.md", revision: content.revision},
+    {...content, text: "Original intent\n"}, {...content, full_source: false},
+    {...content, excluded_todo_regions: []}, {...content, read_complete: false}]) {
+    assert.throws(() => project(invalid), /Goal source/);
+  }
+  assert.throws(() => assertGoalContextDelivered({required_reads: [read]}), /Goal source/);
+  assert.throws(() => assertGoalContextDelivered({required_reads: [],
+    work_context: {sources: [{source: "goal_state", content: {...content, read_complete: false}}]}}), /Goal source/);
+});
 
 test("Goal narrative fulfillment needs complete source and ordered region lineage", () => {
   const read = {source: "goal_state", command: "cat -- goal.md"};

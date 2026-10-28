@@ -883,9 +883,17 @@ export function planInteractionWorkContext(request: JsonObject): JsonObject {
 
 /** The registered file adapter reuses the writer's strict region parser.
  * No heading/prose classification here: its exact complement is Goal context,
- * and canonical Todo readers retain task authority. Unknown/legacy input keeps
- * the complete progressive read rather than pretending to fulfill it. */
+ * and canonical Todo readers retain task authority. A complete original file
+ * needs no exclusions; metadata alone retains the progressive read. */
 function completeGoalNarrative(content: JsonObject): boolean {
+  if (Object.hasOwn(content, "read_complete") && content.read_complete !== true) return false;
+  if (Object.hasOwn(content, "full_source")) {
+    return content.full_source === true && typeof content.text === "string"
+      && typeof content.state_file === "string" && content.state_file.length > 0
+      && content.revision === `sha256:${createHash("sha256").update(content.text, "utf8").digest("hex")}`
+      && !Object.hasOwn(content, "excluded_todo_regions")
+      && !Object.hasOwn(content, "excluded_monitor_receipts");
+  }
   if (!Array.isArray(content.excluded_todo_regions) || !content.excluded_todo_regions.length
       || typeof content.text !== "string" || typeof content.state_file !== "string" || !content.state_file
       || typeof content.revision !== "string" || !ENVELOPED_SHA256_PATTERN.test(content.revision)) return false;
@@ -935,6 +943,24 @@ function completeGoalNarrative(content: JsonObject): boolean {
   }) && Number.isSafeInteger(count) && count === expectedCount;
 }
 
+export function assertGoalContextDelivered(channel: JsonObject): void {
+  const reads = Array.isArray(channel.required_reads) ? channel.required_reads : [];
+  if (reads.some(read => jsonObject(read)?.source === "goal_state")) {
+    throw new EffectRuntimeRequestError("Complete Goal source is required before host dispatch");
+  }
+  const context = channel.work_context === undefined ? {}
+    : requireJsonObject(channel.work_context, "Goal work context");
+  if (context.sources !== undefined && !Array.isArray(context.sources)) {
+    throw new EffectRuntimeRequestError("Goal source records must be an array");
+  }
+  for (const value of Array.isArray(context.sources) ? context.sources : []) {
+    const source = jsonObject(value);
+    if (source?.source === "goal_state" && !completeGoalNarrative(jsonObject(source.content) ?? {})) {
+      throw new EffectRuntimeRequestError("Goal source content or revision is invalid");
+    }
+  }
+}
+
 /** Completion binds to the admitted body, including whitespace, never a live
  * reread or display prefix. Both complete contracts and historical journals
  * use this resolver; absence of the old witness retains receipt recovery. */
@@ -968,6 +994,9 @@ export function capturedTodoTextSha256(
 /** Deliver full registered sources once. Unowned mixed Goal documents remain
  * progressive reads; failed/changed sources forbid dependent work. */
 export function projectInteractionWorkContext(request: JsonObject): JsonObject {
+  if (request.require_full_goal_source !== undefined && typeof request.require_full_goal_source !== "boolean") {
+    throw new EffectRuntimeRequestError("Goal source delivery requirement must be boolean");
+  }
   if (!Array.isArray(request.required_reads) || !Array.isArray(request.source_results)) {
     throw new EffectRuntimeRequestError("context reads and source results must be arrays");
   }
@@ -1023,11 +1052,13 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       pending.push(read);
     } else if (read.source === "goal_state") {
       if (completeGoalNarrative(content!)) sources.push({...read,
-        reason: `${String(read.reason ?? "")} This registered source delivers all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims.${content!.excluded_monitor_receipts ? " Recognized historical Monitor receipt lines retain source lineage instead of repeating their encoded bodies; the original file remains available for receipt recovery." : ""}`,
+        reason: content!.full_source === true
+          ? `${String(read.reason ?? "")} This registered source delivers the complete original Goal file inline, bound to its full-file revision; canonical Todo reads retain task authority.`
+          : `${String(read.reason ?? "")} This registered source delivers all text outside explicitly generated Todo regions inline, with full-file revision and excluded-region lineage; exact canonical Todo reads own task state/claims.${content!.excluded_monitor_receipts ? " Recognized historical Monitor receipt lines retain source lineage instead of repeating their encoded bodies; the original file remains available for receipt recovery." : ""}`,
         content: content!});
       else {
         pending.push(read);
-        if (Object.hasOwn(content!, "excluded_todo_regions")) failures.push({
+        if (Object.hasOwn(content!, "excluded_todo_regions") || Object.hasOwn(content!, "full_source")) failures.push({
           source: read.source, command: read.command, error_code: "context_source_unavailable",
           instruction: "Recover complete Goal source and rerun the guard; malformed region lineage cannot fulfill it.",
         });
@@ -1077,6 +1108,9 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
       }
     }
   }
+  if (request.require_full_goal_source === true) {
+    assertGoalContextDelivered({required_reads: pending, work_context: {sources}});
+  }
   const dispatch = jsonObject(request.hook_dispatch);
   const unavailable = projectTurnStartUnavailableContext(dispatch);
   const users = jsonObject(request.user_todos);
@@ -1084,7 +1118,8 @@ export function projectInteractionWorkContext(request: JsonObject): JsonObject {
     instruction: "Recover current User obligations and rerun the guard."});
   const includeUserTodos = users && !users.error_code
     && (!Array.isArray(users.todos) || users.todos.length > 0 || users.authority_read != null);
-  return {required_reads: pending, work_context: {complete: failures.length === 0,
+  return {...(request.require_full_goal_source === true ? {source_delivery_profile: "complete_goal_v1"} : {}),
+    required_reads: pending, work_context: {complete: failures.length === 0,
     ...(selectedTodoTextVerified ? {selected_todo_text_verified: true} : {}),
     ...(selectedTodoRef ? {selected_todo_ref: "selected_todo"} : {}),
     ...(selectedTodoAuthority ? {selected_todo_authority: selectedTodoAuthority} : {}),

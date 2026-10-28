@@ -9,6 +9,7 @@ from typing import Any
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
+    native_context_activation,
 )
 from ..control_plane.turn_driver.decision_capture import (
     context_capture_read_command,
@@ -371,8 +372,6 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
-    from .quota_capture import native_context_activation
-
     context_delivery_enabled = payload.get("ok") is True and native_context_activation(args)["enabled"]
     bind_capture_selection_transport(payload, args)
     delivery_request = None
@@ -617,6 +616,7 @@ def handle_quota_command(
                 status_payload,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
+                inline_goal_source=native_context_activation(args)["enabled"],
                 available_capabilities=args.available_capabilities,
                 include_scheduler_detail="scheduler" in detail_sections,
                 include_agent_todo_detail=(

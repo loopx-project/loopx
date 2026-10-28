@@ -1,4 +1,4 @@
-"""Full Goal availability checks do not transport an unconsumed source body."""
+"""Progressive quota and complete host delivery retain their distinct IO contracts."""
 from __future__ import annotations
 
 import contextlib
@@ -37,13 +37,17 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     source_args = dict(registry_path=registry, runtime_root=runtime, goal_id=goal, todo_id=todo_id)
     original_effect = context_readback.effect_runtime_result
     requests, plans = [], []
+    omit_delivery_profile = [False]
 
     def observe(operation, request, **kwargs):
         if operation == "work_item.context.plan":
             plans.append(deepcopy(request["packet"]))
         if operation == "work_item.context.project":
             requests.append(deepcopy(request))
-        return original_effect(operation, request, **kwargs)
+        result = original_effect(operation, request, **kwargs)
+        if operation == "work_item.context.project" and omit_delivery_profile[0]:
+            result.pop("source_delivery_profile", None)
+        return result
 
     monkeypatch.setattr(context_readback, "effect_runtime_result", observe)
 
@@ -77,6 +81,16 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     assert len(json.dumps(small_request).encode()) == len(json.dumps(large_request).encode())
     content = context_readback._source_content({"source": "goal_state"}, **source_args)
     assert content == {"state_file": str(state), "revision": "sha256:" + sha256(large).hexdigest()}
+    full = context_readback._source_content(
+        {"source": "goal_state"}, **source_args, inline_goal_source=True)
+    assert full == {**content, "text": large.decode("utf-8"), "full_source": True}
+    omit_delivery_profile[0] = True
+    try:
+        with pytest.raises(RuntimeError, match="unsupported by this runtime"):
+            context_readback.attach_work_context(deepcopy(captured_plan), registry_path=registry,
+                runtime_root=runtime, hook_dispatch=None, inline_goal_source=True)
+    finally:
+        omit_delivery_profile[0] = False
     # Independently compare the current typed projector with the former full
     # source input. Removing the transport must not weaken its obligations.
     legacy_request = deepcopy(large_request)
@@ -111,5 +125,8 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
         assert channel["delivery_allowed"] is False
         assert channel["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
+        with pytest.raises(RuntimeError, match="Goal source"):
+            context_readback.attach_work_context(deepcopy(captured_plan), registry_path=registry,
+                runtime_root=runtime, hook_dispatch=None, inline_goal_source=True)
         state.write_bytes(large)
         assert guard() == large_channel

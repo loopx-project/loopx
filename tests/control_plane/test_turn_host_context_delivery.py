@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+from pathlib import Path
 import shlex
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from loopx.control_plane.turn_driver.decision_capture import prepare_turn_decisi
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import build_loopx_turn_host_request
 from loopx.control_plane.turn_driver.host_candidate import _canonical_hash
+from loopx.control_plane.turn_driver import codex_context
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_agent_context import POLICY
 from tests.control_plane.test_quota_settlement_cli import (
@@ -41,15 +43,28 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     _initialize_fixture_authority(project, runtime, provider=provider)
 
     capture = tmp_path / "capture"
-    code, envelope = _run_cli(registry, runtime, "quota", "should-run",
+    if mode != "legacy_reference":
+        native_directory = tmp_path / "context"
+        native_directory.mkdir(mode=0o700)
+        codex_context.codex_context_hook(str(native_directory), {
+            "session_id": "host-context-fixture", "cwd": str(project),
+            "hook_event_name": "SessionStart", "source": "startup",
+        })
+    delivery = (["--context-delivery", "on", "--codex-context-dir", str(tmp_path / "context")]
+        if mode != "legacy_reference" else [])
+    binary = Path(sys.executable).with_name("loopx.exe" if sys.platform == "win32" else "loopx")
+    guard = [str(binary), "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "host-context-turn", "--codex-app",
         "--available-capability", "filesystem_read", "--available-capability", "subagent_spawn",
-        "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
-    assert code == 0, envelope
+        "--turn-envelope", "--decision-output-dir", str(capture), *delivery]
+    produced = subprocess.run(guard, cwd=project, text=True, capture_output=True, timeout=30)
+    assert produced.returncode == 0, produced.stdout + produced.stderr
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)
-    assert envelope == source
+    if mode == "legacy_reference":
+        assert json.loads(produced.stdout) == source
     assert source["schema_version"] == "loopx_turn_envelope_v1"
     envelope = build_turn_envelope(source, captured_decision_path=str(capture / "decision.json"))
     context = source["interaction_contract"].get("agent_context")
@@ -126,9 +141,12 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
             rejected = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
             assert rejected.returncode != 0 and "complete Turn contract rejected" in rejected.stderr
             assert prompt_path.read_text() == prompt  # Refusal precedes the provider seam.
-        assert source["interaction_contract"]["agent_channel"]["required_reads"]
+        channel = source["interaction_contract"]["agent_channel"]
+        assert not any(read.get("source") == "goal_state" for read in channel["required_reads"])
+        assert any(row.get("source") == "goal_state"
+            for row in channel["work_context"]["sources"])
         invalid = deepcopy(request)
-        invalid["work_contract"]["interaction_contract"]["agent_channel"]["required_reads"] = []
+        invalid["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["sources"] = []
         rejected = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
         assert rejected.returncode != 0 and "complete Turn contract rejected" in rejected.stderr
         assert prompt_path.read_text() == prompt

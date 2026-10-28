@@ -1826,3 +1826,23 @@ The directory is the index. A planning/source-inspection entry does not establis
 runtime delivery; live priorities and claims remain in the roadmap and canonical
 work. Keep historical entries append-only and refine the current normative plan
 here rather than treating a dated audit as a permanent execution queue.
+
+
+### Local registered Goal material checkpoint
+
+The complete Turn writer and existing native context-delivery opt-in now request
+full registered Goal material before capture. The source adapter returns original
+UTF-8 text for unmarked or mixed files; the existing TypeScript context owner
+checks the full-file revision and fulfills that read. Existing marked-region
+lineage and canonical Todo authority remain. Ordinary quota with delivery off
+keeps progressive reads. The bridge requires a `complete_goal_v1` acknowledgement;
+an older runtime cannot silently ignore the request.
+
+Automatic business-work Host context uses `host_dispatch_context`, which refuses pending or
+invalid Goal material before provider loading. Historical `host_context` metadata
+reads remain available for original-version interpretation and necessary result
+finalization; stored captures are not rewritten. This is a bounded material
+delivery prerequisite. General capability-read interlocks, current-condition
+revalidation, packaged adoption, real-model adherence and complete costs still
+need their own evidence. Replan material-reading invocations retain their staged
+reader and work restrictions. C1 remains unqualified.

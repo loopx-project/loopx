@@ -20,7 +20,8 @@ from ..scheduler.monitor_batch_receipts import is_monitor_receipt_line
 from ..todos.summary_item import todo_text_content_revision
 
 
-def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id, agent_id=None):
+def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id, agent_id=None,
+                    inline_goal_source=False):
     source = read.get("source")
     if source == "goal_state":
         _goal, _project, state_file = resolve_goal_state(
@@ -32,8 +33,8 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id, agen
             "revision": "sha256:" + sha256(source_bytes).hexdigest()}
         # Only the writer's explicitly marked regions have generated ownership.
         # Retain every other byte, except identity-bound historical Monitor
-        # receipt lines owned by their codec. Legacy/unmarked input stays a full
-        # progressive read; malformed ownership fails rather than hiding text.
+        # receipt lines owned by their codec. Progressive callers keep legacy
+        # reads; complete-host delivery retains the entire unmarked source.
         lines = text.splitlines(keepends=True)
         visible = visible_markdown_lines(lines)
         regions = find_todo_regions(lines, visible=visible)
@@ -63,6 +64,8 @@ def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id, agen
                 # grows the current prompt without adding recovery information.
                 content["excluded_monitor_receipts"] = {"count": receipt_count,
                     "line_ranges": receipt_ranges}
+        if inline_goal_source and "text" not in content:
+            content.update(text=text, full_source=True)
         return content
     if source == "goal_acceptance":
         # The typed acceptance owner scopes task-binding observations while
@@ -127,7 +130,8 @@ def _user_context(*, registry_path, runtime_root, goal_id, agent_id):
 
 
 def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
-                        runtime_root: Path, hook_dispatch: dict[str, Any] | None) -> None:
+                        runtime_root: Path, hook_dispatch: dict[str, Any] | None,
+                        inline_goal_source: bool = False) -> None:
     packet_selected = payload.get("selected_todo")
     selected_text_snapshot = None
     if isinstance(packet_selected, dict):
@@ -152,7 +156,8 @@ def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
         result = {"command": read["command"]}
         try:
             result["content"] = _source_content(read, registry_path=registry_path,
-                runtime_root=runtime_root, goal_id=goal_id, todo_id=plan.get("todo_id"), agent_id=agent_id)
+                runtime_root=runtime_root, goal_id=goal_id, todo_id=plan.get("todo_id"),
+                agent_id=agent_id, inline_goal_source=inline_goal_source)
         except (OSError, ValueError, RuntimeError):
             result["error_code"] = "context_source_unavailable"
         results.append(result)
@@ -166,8 +171,12 @@ def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
     projected = effect_runtime_result("work_item.context.project", {
         "required_reads": reads, "source_results": results,
         "selected_todo": plan.get("selected_todo"), "user_todos": users,
-        "hook_dispatch": hook_dispatch,
+        "hook_dispatch": hook_dispatch, "require_full_goal_source": inline_goal_source,
     }, large_local_snapshot=True)
+    # An older runtime must not silently ignore the required delivery profile.
+    profile = projected.pop("source_delivery_profile", None)
+    if inline_goal_source and profile != "complete_goal_v1":
+        raise RuntimeError("Complete Goal source delivery is unsupported by this runtime")
     channel.update(projected)
     selected_todo = payload.get("selected_todo")
     if isinstance(selected_todo, dict):
