@@ -173,6 +173,13 @@ small controls, escaped Unicode and the actual snapshot limit. This repairs the
 source proposal's large-input path; independent review, installed adoption and
 long-horizon cost/benefit remain separate qualification.
 
+Integration with the current ordinary-request caller retains its explicit
+`SettlementIdentity` at the public Python boundary. The typed controller reuses
+the existing identity decoder to require the exact request subject and effect;
+it does not invent Todo lineage or weaken ordered material-settlement checks.
+Real File/SQLite original-message execution and replay qualify this source
+combination, while formal App adoption and complete outcome cost remain open.
+
 ## C4.2 — Thin outer-worker semantic adoption
 
 **Candidate for bounded policy convergence.**

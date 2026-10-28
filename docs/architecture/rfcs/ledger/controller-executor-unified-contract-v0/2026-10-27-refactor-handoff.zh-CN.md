@@ -131,6 +131,11 @@ Python 标量文本，包括 `1.0` 和 `1e-07`，签名不一致仍拒绝。同�
 真实传输测试覆盖两种输入、小输入控制、转义 Unicode 和实际 snapshot 上限。
 这修复源码提案的大输入路径；独立复审、安装采用和长程完整成本/收益仍分别验收。
 
+与当前普通原始请求调用方整合后，公开 Python 边界保留其显式 `SettlementIdentity`。
+typed controller 复用既有 identity decoder，要求请求主体与 effect 精确匹配，
+不伪造 Todo lineage，也不弱化有序 material settlement 检查。真实 File/SQLite
+原始消息执行与重放验证了该源码组合；正式 App 采用及完整成果成本仍待验收。
+
 ## C4.2 — 外层 worker 的薄语义采用
 
 **有界策略收敛候选。** `scripts/external_scheduler_worker.py` 的 `_host_attempt`、
