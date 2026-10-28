@@ -25,6 +25,7 @@ from .turn_contract_generated import (
 )
 from .turn_contract_generated import LoopDisposition  # compatibility re-export
 from ..quota.effective_action import EffectiveAction
+from ..quota.turn_envelope import TurnControllerInput
 
 from collections.abc import Mapping
 from typing import Any, Literal
@@ -96,7 +97,9 @@ def _decision_lineage(decision: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def _envelope_route(decision: Mapping[str, Any]) -> LoopXTurnRoute:
+def _envelope_route(
+    decision: Mapping[str, Any], *, projected_route: LoopXTurnRoute | None = None,
+) -> LoopXTurnRoute:
     """Return the shared typed route for a fresh quota/scheduler decision.
 
     Reuses the Turn plan driver's ``_typed_route`` contract, which requires a
@@ -107,7 +110,7 @@ def _envelope_route(decision: Mapping[str, Any]) -> LoopXTurnRoute:
     decision.
     """
 
-    route = _typed_route(decision)
+    route = _typed_route(decision) if projected_route is None else projected_route
     if route is LoopXTurnRoute.CONTRACT_ERROR:
         raise ValueError(
             "quota decision failed the shared envelope contract "
@@ -441,12 +444,15 @@ class _ControllerInputs:
     def __init__(
         self,
         receipt: ValidatedTurnReceipt | None,
-        decision: Mapping[str, Any],
+        decision: Mapping[str, Any] | TurnControllerInput,
         predecessor: str | None,
         budget: BoundedTurnBudget | None,
     ) -> None:
         self.receipt = receipt
-        self.decision = decision
+        self.projected_route = (
+            LoopXTurnRoute(decision.route) if isinstance(decision, TurnControllerInput) else None
+        )
+        self.decision = decision.envelope() if isinstance(decision, TurnControllerInput) else decision
         self.predecessor = predecessor
         self.budget = budget
         self.route: LoopXTurnRoute
@@ -497,7 +503,7 @@ class _ControllerInputs:
     def check(self, name: str) -> None:
         receipt = self.receipt
         if name == "envelope":
-            self.route = _envelope_route(self.decision)
+            self.route = _envelope_route(self.decision, projected_route=self.projected_route)
         elif name == "decision_actor":
             self.decision_lineage = _decision_lineage(self.decision)
             if (
@@ -658,7 +664,7 @@ class _ControllerInputs:
 def decide_loop_disposition(
     *,
     turn_receipt: ValidatedTurnReceipt | None,
-    quota_decision: Mapping[str, Any],
+    quota_decision: Mapping[str, Any] | TurnControllerInput,
     predecessor_turn_key: str | None = None,
     bounded_turn_budget: BoundedTurnBudget | None = None,
 ) -> dict[str, Any]:

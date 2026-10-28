@@ -31,6 +31,7 @@ FAKE_SERVER = """#!/usr/bin/env python3
 import json, sys
 thread = "owned-app-server-thread"
 import os
+thread = os.environ.get("FAKE_OPERATION_THREAD_ID", thread)
 turn = os.environ.get("FAKE_OPERATION_TURN_ID", "native-app-server-turn")
 key = None
 def emit(value):
@@ -103,7 +104,7 @@ def _registered_host_goal(tmp_path: Path) -> Path:
 
 def _claimed_native_fixture(tmp_path: Path):
     from examples import operation_action_fixtures as fixtures
-    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+    from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
 
     service, store = fixtures.service(tmp_path, goal_id="fixture-goal")
     executable = tmp_path / "fake-codex-operation"
@@ -286,15 +287,77 @@ def test_process_launch_without_native_acceptance_cannot_record_operation_start(
     assert store.load(claimed["proposal_id"])["operation"].get("host_start") is None
 
 
+@pytest.mark.parametrize("existing_binding", [False, True])
+def test_native_initialization_cannot_overwrite_a_concurrent_session_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing_binding: bool,
+) -> None:
+    from loopx.control_plane.turn_driver import codex_operation_host as owner
+    from loopx.control_plane.turn_driver.codex_sessions import _session_path
+
+    store, _claimed, request, options = _claimed_native_fixture(tmp_path)
+    path = _session_path(options["runtime_root"], _lineage(request))
+    replacement = json.loads(path.read_text())
+    replacement["session_id"] = "concurrent-native-session"
+    if not existing_binding:
+        path.unlink()
+        request["session"]["action"] = "start_new"
+    original_start = owner.CodexChatAgentSession.start
+
+    def concurrent_start(**kwargs):
+        session = original_start(**kwargs)
+        # A different admitted launch wins while the real native connection
+        # initializes. Its binding must survive, with no prompt/tool dispatch.
+        path.write_text(json.dumps(replacement))
+        return session
+
+    monkeypatch.setattr(owner.CodexChatAgentSession, "start", concurrent_start)
+    prompt = tmp_path / "unexpected-prompt.txt"
+    monkeypatch.setenv("FAKE_OPERATION_PROMPT_FILE", str(prompt))
+    actions = store.path.read_bytes()
+    with pytest.raises(ValueError, match="binding changed"):
+        run_codex_operation_host(request, **options)
+    assert json.loads(path.read_text()) == replacement
+    assert store.path.read_bytes() == actions
+    assert not prompt.exists()
+
+
+def test_resume_retains_checkpoint_source_and_fresh_native_identity_does_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+
+    store, claimed, request, options = _claimed_native_fixture(tmp_path)
+    original = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+    _store_codex_cli_session(
+        options["runtime_root"], lineage=_lineage(request),
+        session_id=original["session_id"], operation_profile_digest=original["operation_profile_digest"],
+        operation_model="test-model", operation_reasoning_effort="xhigh",
+        checkpoint_artifact_sha256="c" * 64, checkpoint_artifact_root=str(tmp_path.resolve()),
+    )
+    run_codex_operation_host(request, **options)
+    resumed = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+    assert resumed["session_id"] == original["session_id"]
+    assert resumed["checkpoint_artifact_sha256"] == "c" * 64
+    start = store.load(claimed["proposal_id"])["operation"]["host_start"]
+    monkeypatch.setenv("FAKE_OPERATION_THREAD_ID", "fresh-native-session")
+    request["session"] = {"action": "start_new", "context_policy": {"mode": "fresh"}}
+    run_codex_operation_host(request, **options)
+    fresh = load_codex_cli_session(options["runtime_root"], lineage=_lineage(request))
+    assert fresh["session_id"] == "fresh-native-session"
+    assert "checkpoint_artifact_sha256" not in fresh
+    assert "checkpoint_artifact_root" not in fresh
+    assert store.load(claimed["proposal_id"])["operation"]["host_start"] == start
+
+
 def test_start_receipt_failure_aborts_before_operation_tool_dispatch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from loopx.chat_action_store import ChatActionStore
-    from loopx.control_plane.turn_driver import codex_operation_host
     store, claimed, request, options = _claimed_native_fixture(tmp_path)
     before = store.path.read_bytes()
     calls = []
-    original = codex_operation_host.operation_tool_handler
+    from loopx.control_plane.turn_driver import managed_operation_host
+    original = managed_operation_host.operation_tool_handler
 
     def observe(**options):
         handler = original(**options)
@@ -308,7 +371,7 @@ def test_start_receipt_failure_aborts_before_operation_tool_dispatch(
     def fail(*args, **kwargs):
         raise RuntimeError("synthetic receipt write failure")
 
-    monkeypatch.setattr(codex_operation_host, "operation_tool_handler", observe)
+    monkeypatch.setattr(managed_operation_host, "operation_tool_handler", observe)
     monkeypatch.setattr(ChatActionStore, "record_agent_operation_host_start", fail)
     with pytest.raises(BuiltInHostError) as error:
         run_codex_operation_host(request, **options)
@@ -373,10 +436,7 @@ def test_registered_source_tokens_survive_owned_native_prepare_and_store_readbac
         service,
     )
     from loopx.chat_agent import CodexChatAgentSession
-    from loopx.control_plane.turn_driver.codex_operation_host import (
-        OPERATION_TOOL,
-        operation_tool_handler,
-    )
+    from loopx.control_plane.turn_driver.managed_operation_host import OPERATION_TOOL, operation_tool_handler
     from loopx.thread_agent_binding import (
         bind_thread_agent_in_registry,
         resolve_registry_thread_agent_binding,
@@ -689,9 +749,9 @@ def test_owned_operation_host_reaps_descendants_on_success_and_timeout(
 def test_live_owned_app_server_native_tool_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str, effort: str
 ) -> None:
-    from loopx.control_plane.turn_driver import codex_operation_host
 
-    original = codex_operation_host.operation_tool_handler
+    from loopx.control_plane.turn_driver import managed_operation_host
+    original = managed_operation_host.operation_tool_handler
     calls = []
 
     def observe(**options):
@@ -704,7 +764,7 @@ def test_live_owned_app_server_native_tool_metadata(
 
         return record
 
-    monkeypatch.setattr(codex_operation_host, "operation_tool_handler", observe)
+    monkeypatch.setattr(managed_operation_host, "operation_tool_handler", observe)
     request = _request()
     request["turn_envelope"]["action"]["selected_todo"]["text"] = (
         "Non-financial transport qualification only. Call loopx_operation context once. "

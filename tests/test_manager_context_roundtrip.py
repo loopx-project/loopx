@@ -32,6 +32,120 @@ from loopx.control_plane.collaboration import conversation_scope
 
 
 @pytest.fixture
+def frozen_private_reply(tmp_path):
+    """Existing provider/Chat receipts, without starting a model or consumer."""
+    from loopx.control_plane.collaboration import conversation_reply_context
+    from loopx.extensions.lark.conversation_identity import identity_ref, lark_private_source
+
+    store = ChatSessionStore(tmp_path)
+    event = {"message_id": "om_current", "parent_id": "om_parent", "root_id": "om_root",
+             "thread_id": "omt_topic", "chat_id": "oc_owner", "sender_id": "ou_owner",
+             "sender_type": "user", "chat_type": "p2p"}
+    provider = identity_ref("cli_fixture")
+    source = lark_private_source(provider_ref=provider, event=event)
+    saved = {"kind": "bound_steward", "project_ref": "a" * 24, "workspace_path": str(tmp_path),
+             "audience": "bound_owner", "grant": "portfolio_read", "binding_id": "b" * 24,
+             "provider_ref": provider, "operator_ref": source["sender_ref"],
+             "source_ref": source["source_ref"], "goal_ids": []}
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="original", steward_context=saved,
+        channel_id=f"manager.external.native.{saved['binding_id']}.{source['source_ref']}")
+    parent = "Original parent with a code sample.\n\n```py\nprint('example')\n```"
+    source_text = "只核对这次修改。\n\nCurrent user message:\n用户自己输入的字样也要保留。"
+    context = {**event, "source_conversation_id": event["chat_id"], "reply_context": {
+        "message_id": event["parent_id"], "conversation_id": event["chat_id"], "content": parent},
+        "thread_context": {"conversation_id": event["chat_id"], "root_message_id": event["root_id"],
+            "thread_id": event["thread_id"], "messages": [
+                {"message_id": event["root_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                 "position": -1, "content": "Earlier topic introduction", "sender": {"id": "ou_owner", "kind": "user"}},
+                {"message_id": event["message_id"], "conversation_id": event["chat_id"], "thread_id": event["thread_id"],
+                 "position": 2, "content": source_text}]}}
+    text = conversation_reply_context(context)["context_text"] + "\n\nCurrent user message:\n" + source_text
+    request = identity_ref(provider, event["message_id"])
+    turn, _ = store.create_turn(session["session_id"], client_turn_id=f"external-{request}", message=text, origin="lark")
+    correlation = {"request_ref": request, "binding_id": saved["binding_id"], "source": source,
+                   "session_id": session["session_id"], "turn_id": turn["turn_id"]}
+    native = {**correlation, "message": text, "command": None}
+    record = {**correlation, "event": event, "reply_context_message": text, "reply_context_source_text": source_text}
+    for directory, value in (("external-requests", native), ("lark-private-deliveries", record)):
+        _write(store.root / directory / f"{request}.json", value)
+    return store, session, turn, request, native, record, source_text, parent
+
+
+def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path):
+    store, session, turn, _, _, _, source_text, parent = frozen_private_reply
+    before = {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
+    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json",
+                                          message_limit=1)
+    message = snapshot["messages"][0]
+    assert message["text"] == turn["message"]
+    assert message["reply_context"]["source_text"] == source_text
+    assert message["reply_context"]["parent"]["content"] == parent
+    assert message["reply_context"]["parent"]["complete"] is True
+    assert [row["content"] for row in message["reply_context"]["thread"]["messages"]] == ["Earlier topic introduction"]
+    assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
+
+
+def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private_reply, tmp_path):
+    store, session, original, request, native, record, source_text, _ = frozen_private_reply
+    client = f"external-{request}-recovery-21-quota-1"
+    store.update_turn(session["session_id"], original["turn_id"], status="failed", error_code="synthetic_upstream_failure")
+    store.release_active_turn(session["session_id"], original["turn_id"])
+    recovery, _ = store.create_turn(session["session_id"], client_turn_id=client, message=original["message"], origin="lark")
+    native.update(turn_id=recovery["turn_id"], context_recovery={"client_turn_id": client, "failed_turn_id": original["turn_id"]})
+    record["turn_id"] = recovery["turn_id"]
+    for directory, row in (("external-requests", native), ("lark-private-deliveries", record)):
+        _write(store.root / directory / f"{request}.json", row)
+    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json")
+    assert [m["reply_context"]["source_text"] for m in snapshot["messages"]] == [source_text, source_text]
+    # A plausible-looking suffix without its original native receipt is not a source.
+    store.update_turn(session["session_id"], recovery["turn_id"], status="completed")
+    store.release_active_turn(session["session_id"], recovery["turn_id"])
+    store.create_turn(session["session_id"], client_turn_id=f"external-{request}-recovery-999", message=original["message"], origin="lark")
+    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json")
+    assert "reply_context" not in snapshot["messages"][-1]
+
+
+@pytest.mark.parametrize("drift", ["session", "turn", "binding", "source", "native_message", "frozen_message",
+                                  "parent", "thread", "order", "timestamp", "sender", "event_shape", "missing", "user_spoof", "foreign_origin"])
+def test_private_reply_view_requires_exact_frozen_source(frozen_private_reply, tmp_path, drift):
+    store, session, turn, request, native, record, _, _ = frozen_private_reply
+    path = store.root / "lark-private-deliveries" / f"{request}.json"
+    if drift in {"session", "turn", "binding"}:
+        record[{"session": "session_id", "turn": "turn_id", "binding": "binding_id"}[drift]] = "foreign"
+    elif drift == "source":
+        record["source"] = {**record["source"], "source_ref": "d" * 24}
+    elif drift == "native_message":
+        native["message"] = "different input"
+    elif drift == "frozen_message":
+        record["reply_context_message"] += "changed"
+    elif drift == "event_shape":
+        record["event"] = []
+    elif drift in {"parent", "thread"}:
+        record["event"]["parent_id" if drift == "parent" else "thread_id"] = "foreign"
+    elif drift in {"order", "timestamp", "sender"}:
+        # Keep all correlation text identical, but challenge the wire decoder's ordering oracle.
+        replacement = {"order": '"position":-2', "timestamp": '"position":-1,"created_at":{}',
+                       "sender": '"position":-1,"sender":"invalid"'}[drift]
+        text = turn["message"].replace('"position":-1', replacement)
+        if drift == "sender":
+            text = text.replace(',"sender":{"id":"ou_owner","kind":"user"}', '')
+        native["message"] = record["reply_context_message"] = text
+        _write(store._turn_path(session["session_id"], turn["turn_id"]), {**turn, "message": text})
+        store.append_message(session["session_id"], role="user", text=text, turn_id=turn["turn_id"], origin="lark")
+    _write(path, record)
+    _write(store.root / "external-requests" / f"{request}.json", native)
+    if drift in {"missing", "user_spoof"}:
+        path.unlink()
+    if drift == "foreign_origin":
+        store.append_message(session["session_id"], role="user", text=turn["message"], turn_id=turn["turn_id"], origin="peer")
+    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json")
+    message = snapshot["messages"][-1]
+    assert "reply_context" not in message
+    assert message["text"] in {turn["message"], record["reply_context_message"]}
+
+
+@pytest.fixture
 def flow(tmp_path):
     registry = tmp_path / "registry.json"
     registry.write_text(

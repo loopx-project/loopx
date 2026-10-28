@@ -145,6 +145,11 @@ S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格�
 和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
 唤醒来源和 benchmark 评估组保持正交。这是设计方向，不是已交付行为或成本收益证据。
 
+Controller 会话的[智能中介作用](controller-executor-unified-contract-v0.zh-CN.md#controller-的智能与语义压缩)
+把任务选择、必要材料和结果解释集中到该会话；确定性 composition 与精确 delta 编码
+仍归各自 owner。以保留义务及后续验收成果，对照 controller 新增完整成本验收，不能
+用查询次数或文本体积代替。
+
 C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 覆盖 quota emission、直接生产契约的 Turn 入口和最终 native/structured host prompt。
 共享 capture 不表示这些消费者已统一。资格检查须追踪来源义务经过组合、重建到实际

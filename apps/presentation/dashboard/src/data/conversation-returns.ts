@@ -9,6 +9,8 @@ type ConversationMessage = {
   pending?: boolean;
   collaboration?: ChatVisibleMessage["collaboration"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
+  replyContext?: ChatVisibleMessage["reply_context"];
+  text?: string;
 };
 
 /** Delivery of one result does not close the conversation or its later updates. */
@@ -60,10 +62,16 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     const returnDelivery = source.return_delivery ?? row.returnDelivery;
     const collaboration = source.collaboration ?? row.collaboration;
     const sourceCreatedAt = source.created_at ?? row.sourceCreatedAt;
+    const replyContext = source.reply_context ?? row.replyContext;
+    // Only the exact canonical user body can switch to its source-backed view.
+    // A background read never replaces a live answer or a different draft.
+    const text = row.role === "user" && source.reply_context && row.text === source.text
+      ? source.reply_context.source_text : row.text;
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
-      && JSON.stringify(row.collaboration) === JSON.stringify(collaboration) && row.sourceCreatedAt === sourceCreatedAt) return row;
+      && JSON.stringify(row.collaboration) === JSON.stringify(collaboration) && row.sourceCreatedAt === sourceCreatedAt
+      && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text) return row;
     changed = true;
-    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration };
+    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, replyContext, text };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;

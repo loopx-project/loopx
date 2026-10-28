@@ -4,11 +4,161 @@ import json
 
 import pytest
 
+from extensions.test_lark_private_manager_returns import private_return, return_root  # noqa: F401
 from test_chat_ordinary_project import ordinary  # noqa: F401, F811
 from test_native_steward_private import steward  # noqa: F401
 from test_manager_context_roundtrip import flow  # noqa: F401
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.extensions.lark.conversation_identity import identity_ref
+
+
+@pytest.fixture
+def recorded_return_continuation(private_return, monkeypatch):  # noqa: F811
+    """Use the real admission/recovery owners; only model/provider IO is fake."""
+    from datetime import datetime, timedelta, timezone
+    from pathlib import Path
+    from loopx.capabilities import manager_context
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    sender, session, _, route, _, provider, transport, _ = private_return
+    runtime = transport.core.controller
+    store = transport.core.controller.store
+    runtime.adapters.pop(session["session_id"]).close_session()
+    fake = Path(runtime.codex_bin)
+    marker = fake.with_name("quota-failed-once")
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "usageLimitExceeded"')
+    source = source.replace('        if "typed terminal failure" in json.dumps(request.get("params") or {}):',
+        f'        if "typed terminal failure" in json.dumps(request.get("params") or {{}}) and not __import__("os").path.exists({str(marker)!r}):\n'
+        f'            open({str(marker)!r}, "w").close()')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    transport.runner = provider
+    event = provider.event("steward-app", "quota-original", "typed terminal failure")
+    if route["source_id"].startswith("lark:"):
+        register = manager_context.register_ingress
+        def legacy_ingress(root, **kwargs):
+            if kwargs["message"] == event["content"]:
+                kwargs["source_id"] = "lark:" + event["message_id"]
+            return register(root, **kwargs)
+        monkeypatch.setattr(manager_context, "register_ingress", legacy_ingress)
+    transport.admit("steward-app", event)
+    ref = identity_ref(session["steward_context"]["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    failed_path = store._turn_path(row["session_id"], row["turn_id"])
+    failed_bytes = failed_path.read_bytes()
+    transport.reconcile()
+    clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+    class AfterBackoff(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock
+    monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: {
+        "thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+        "only_original_user_item": True, "codex_error_info": "usageLimitExceeded",
+        "quota_available": True, "quota_observed_at": clock.timestamp() - 1}))
+    # A restarted reply worker has no previous monotonic discovery hint.
+    transport._context_recovery_probe_at.clear()
+    transport.reconcile()
+    row = transport.core.read_request(ref)
+    assert row["turn_id"] != failed["turn_id"]
+    turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert turn["status"] == "completed" and turn["client_turn_id"].endswith("-quota-1")
+    transport.reconcile()
+    session = store.load_session(row["session_id"])
+    delivered = manager_context.deliver(sender.root, runtime.registry_path,
+        session=session, turn=turn, request={k: route[k] for k in ("goal_id", "agent_id")},
+        source_store=store)
+    route = {**route, "source_id": "lark:" + event["message_id"] if route["source_id"].startswith("lark:") else ref,
+             "request_id": delivered["request_id"]}
+    replies = []
+    def runner(args, cwd=None, timeout=None):
+        if "+messages-reply" not in args and not ("+messages-send" in args and "--content" in args):
+            return provider(args, cwd, timeout)
+        provider.calls.append(list(args))
+        assert args[args.index("--profile") + 1] == "steward-app"
+        if "--message-id" in args:
+            assert args[args.index("--message-id") + 1] == event["message_id"]
+        else:
+            assert args[args.index("--chat-id") + 1] == event["chat_id"]
+        content = args[args.index("--content") + 1]
+        if "--dry-run" in args:
+            data = {"api": [{"body": {"msg_type": "post", "content": content}}]}
+        else:
+            replies.append(list(args))
+            provider.messages["om_out_recovered_worker"] = {"message_id": "om_out_recovered_worker", "msg_type": "post", "body": {"content": content}}
+            data = {"data": {"message_id": "om_out_recovered_worker"}}
+        return {"returncode": 0, "stdout": json.dumps(data)}
+    transport.runner = runner
+    yield sender, session, turn, route, row, provider, transport, replies
+    assert failed_path.read_bytes() == failed_bytes
+
+
+def test_recorded_continuation_returns_original_worker_result_once(recorded_return_continuation):
+    from datetime import datetime, timedelta, timezone
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
+    from loopx.chat_store import ChatSessionStore
+
+    sender, session, turn, route, _, provider, transport, replies = recorded_return_continuation
+    controller = transport.core.controller
+    store = controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    before_host_calls = capture.read_bytes()
+    before_turns = sorted(store._session_dir(session["session_id"]).glob("turns/*.json"))
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "adopt", "Use the original audience")
+    report(sender.root, route["goal_id"], route["agent_id"], route["request_id"], "conclusion", "Verified worker conclusion")
+    provider.verify_replies = False
+    drain(sender.root, controller.registry_path, store, sender)
+    assert len(replies) == 1
+    assert reply_status(sender.root, route)[0]["status"] == "verification_required"
+    provider.verify_replies = True
+    cold = ChatSessionStore(store.root.parent)
+    drain(sender.root, controller.registry_path, cold, sender,
+          now=datetime.now(timezone.utc) + timedelta(minutes=10))
+    assert reply_status(sender.root, route)[0]["status"] == "delivered"
+    assert len(replies) == 1
+    returned = [r for r in cold.messages(session["session_id"]) if r.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
+    assert "Verified worker conclusion" in returned[0]["text"]
+    assert sorted(store._session_dir(session["session_id"]).glob("turns/*.json")) == before_turns
+    assert capture.read_bytes() == before_host_calls
+
+
+@pytest.mark.parametrize("fault", ["unrecorded", "transport", "native", "unknown-client", "review-policy", "binding", "source"])
+def test_continuation_return_rejects_missing_or_changed_source(recorded_return_continuation, fault):
+    from loopx.chat_store import _atomic_write_json, _read_json
+
+    sender, session, turn, route, row, provider, transport, replies = recorded_return_continuation
+    if fault in {"unrecorded", "transport", "native", "review-policy"}:
+        roots = (transport.root, transport.core.root) if fault == "unrecorded" else (
+            transport.core.root if fault in {"native", "review-policy"} else transport.root,)
+        for root in roots:
+            path = root / f"{row['request_ref']}.json"
+            value = _read_json(path)
+            if fault == "unrecorded":
+                value.pop("context_recovery")
+            elif fault == "review-policy":
+                value["context_recovery"]["read_only_review"] = True
+            else:
+                value["context_recovery"]["client_turn_id"] += "-changed"
+            _atomic_write_json(path, value)
+    elif fault == "unknown-client":
+        turn = {**turn, "client_turn_id": turn["client_turn_id"] + "-unknown"}
+    elif fault == "binding":
+        transport.bindings.disconnect(row["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    else:
+        record = _read_json(transport.root / f"{row['request_ref']}.json")
+        provider.messages[record["event"]["message_id"]]["sender"]["id"] = "ou_other"
+    try:
+        result = sender(route, session, turn, "Must stay with the original authorized source")
+        assert not result["reply_verified"]
+    except ValueError:
+        pass
+    assert replies == []
 
 
 def _history_page_brief():

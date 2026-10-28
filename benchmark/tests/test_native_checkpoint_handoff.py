@@ -370,7 +370,8 @@ def test_midwake_native_profile_refusal_precedes_interruption(tmp_path, monkeypa
                    os.environ.get("LOOPX_CHECKPOINT_EXTERNAL_CONTROLLER") != "1",
                    reason="Requires the real native CLI and explicitly attached checkpoint supervisor")
 @pytest.mark.parametrize("explore_mode", ["off", "planning"])
-def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, explore_mode):
+@pytest.mark.parametrize("context_delivery", ["off", "on"])
+def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, explore_mode, context_delivery):
     """Six real settled work wakes -> pre-decision capture -> stride -> work.
 
     Inference is deterministic; native history/tools, canonical SQLite, quota,
@@ -383,6 +384,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     from benchmark.runtime.worker import run_once
     from tests.control_plane import test_quota_settlement_cli as cli
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+    from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, native_context_command
 
     project, runtime, registry = cli._write_fixture(tmp_path / "authority")
     document = json.loads(registry.read_text())
@@ -403,6 +405,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     skills.mkdir()
     requests, guards, work_turns = [], [], []
     phase = {"kind": "initial", "values": [], "tool_sent": False}
+    reader = NativeContextReader()
 
     def run(*args):
         code, result = cli._run_cli(registry, runtime, *args, cwd=project)
@@ -422,6 +425,22 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
 
     def response(payload, index, message):
         requests.append(payload)
+        if context_delivery == "on" and phase["kind"] != "initial":
+            follow = reader.follow(payload)
+            if follow:
+                return follow
+            if not phase.get("context_started"):
+                phase["context_started"] = True
+                return reader.begin(native_context_command(payload,
+                    todo_id=cli.TODO_ID if phase["kind"] == "work" else None), phase["kind"])
+            if phase["kind"] == "work" and not phase["tool_sent"]:
+                # Only after complete native input delivery, inspect the
+                # original decision as an independent authority oracle.
+                source = Path(reader.deliveries[-1]["recovery"]["path"]).with_name("decision.json")
+                current = json.loads(source.read_text())
+                assert not current.get("autonomous_replan_obligation")
+                assert current["interaction_contract"]["agent_channel"]["delivery_allowed"]
+                (project / "work-guard.json").write_text(json.dumps(current))
         if phase["kind"] == "work" and not phase["tool_sent"]:
             phase["tool_sent"] = True
             prefix = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
@@ -436,6 +455,14 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
                     "assert not g.get('autonomous_replan_obligation'); "
                     "assert g['interaction_contract']['agent_channel']['delivery_allowed']; "
                     "Path('work-guard.json').write_text(p.stdout); "
+                    f"values={phase['values']!r}; "
+                    "[(Path('candidate.txt').write_text(str(v)),"
+                    "Path('evidence-'+str(v)+'.json').write_text(json.dumps({'value':v,'synthetic':True}))) for v in values]; "
+                    "assert Path('candidate.txt').read_text()==str(values[-1]); print('CANDIDATE_VERIFIED')")
+            if context_delivery == "on":
+                code = ("import json; from pathlib import Path; "
+                    "g=json.loads(Path('work-guard.json').read_text()); "
+                    "assert g['interaction_contract']['agent_channel']['delivery_allowed']; "
                     f"values={phase['values']!r}; "
                     "[(Path('candidate.txt').write_text(str(v)),"
                     "Path('evidence-'+str(v)+'.json').write_text(json.dumps({'value':v,'synthetic':True}))) for v in values]; "
@@ -465,6 +492,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             assert not guard["interaction_contract"]["agent_channel"]["delivery_allowed"]
             # The sealed point precedes the policy decision and seventh work.
             assert candidate.read_text() == "6"
+            if context_delivery == "on":
+                message["content"][0]["text"] = "Original packet read completely through native context tools."
+                return message
             return {"type": "function_call", "id": "fc_packet", "call_id": "call_packet",
                     "name": "exec_command", "arguments": json.dumps({
                         "cmd": "cat " + shlex.quote(str(paths[0])), "max_output_tokens": 30000})}
@@ -500,11 +530,18 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             LOOPX_ITERATION_CONTEXT="resume", LOOPX_SHARED_SKILLS=str(skills), MODEL_NAME="fixture",
             REASONING_EFFORT="high", OPENAI_BASE_URL=base["model_providers"]["fixture"]["base_url"],
             OPENAI_API_KEY="synthetic-local-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60")
+        env["LOOPX_CONTEXT_DELIVERY"] = context_delivery
         for value in range(1, 7):
-            phase.update(kind="work", values=[value], tool_sent=False)
+            phase.update(kind="work", values=[value], tool_sent=False, context_started=False)
             prior = run_once(env)
             settle_work(prior, value)
-        assert len(set(work_turns)) == 6 and len(calls) == 13
+        assert len(set(work_turns)) == 6
+        if context_delivery == "off":
+            assert len(calls) == 13
+        else:
+            assert reader.deliveries[0]["mode"] == "full"
+            assert any(row["mode"] == "delta" for row in reader.deliveries[1:])
+        review_request_index = len(requests)
         if explore_mode == "planning":
             from loopx.capabilities.explore.result_log import (
                 append_explore_result_events, build_explore_node_event, build_explore_finding_event,
@@ -525,19 +562,21 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             "point_metadata": {},
             "trigger": "fresh_replan", "native_session": True, "loopx_state": True,
             "evaluation_opportunity": True, "controller_handoff": True}))
-        phase.update(kind="review", tool_sent=False)
+        phase.update(kind="review", tool_sent=False, context_started=False)
         result = run_once({**env, "LOOPX_CHECKPOINT_REQUEST": str(request)})
         assert result["ok"] and result["checkpoint"]["captured"], result
         assert "turn_envelope" not in prior and "turn_envelope_source" not in prior
         assert "turn_envelope" not in result and "turn_envelope_source" not in result
-        assert 'Use TurnEnvelope:' not in json.dumps(requests[13])
+        assert 'Use TurnEnvelope:' not in json.dumps(requests[review_request_index])
         assert 'interaction_contract' in guards[0] and 'action_signature' not in guards[0]
         assert result["checkpoint"]["phase"] == "before_replan"
         assert result["checkpoint"]["source_turn_id"] == prior["turn_id"]
         assert result["session"]["session_id"] == prior["session"]["session_id"]
-        assert not result.get("checkpoint_handoffs") and len(calls) == 15
+        assert not result.get("checkpoint_handoffs")
+        if context_delivery == "off":
+            assert len(calls) == 15
         assert cli._heartbeat_receipt_count(runtime, result["turn_id"]) == 1
-        assert "settlement_binding_owed" in json.dumps(requests[14]) and len(guards) == 1
+        assert "settlement_binding_owed" in json.dumps(requests[-1]) and len(guards) == 1
 
         # The original source now admits its review; capture has granted nothing.
         selected = run("quota", "should-run", "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
@@ -580,14 +619,17 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
             "--agent-vision-json", str(vision),
             "--no-global-sync", "--suppress-external-sinks")
         run("quota", "spend-slot", *binding, "--source", "heartbeat", "--execute")
-        phase.update(kind="work", values=[7, 8], tool_sent=False)
+        phase.update(kind="work", values=[7, 8], tool_sent=False, context_started=False)
         adopted = run_once(env)
         settle_work(adopted, 8)
-        assert len(calls) == 17 and len(work_turns) == 7
+        assert len(work_turns) == 7
+        if context_delivery == "off":
+            assert len(calls) == 17
         assert all(json.loads((project / f"evidence-{v}.json").read_text())["value"] == v for v in (7, 8))
         (tmp_path / "controller-result.json").write_text(json.dumps({**result["checkpoint"],
             "natural_work_turns": work_turns[:6], "stride_action": "grow", "explore_mode": explore_mode,
-            "source_followthrough_verified": True, "adopted_turn_id": adopted["turn_id"]}))
+            "source_followthrough_verified": True, "adopted_turn_id": adopted["turn_id"],
+            "context_delivery": context_delivery, "context_reads": reader.deliveries}))
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN") or os.name != "posix",

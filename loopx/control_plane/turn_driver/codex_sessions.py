@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from .driver import selected_turn_todo, session_identity_fields
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
 SESSION_ID_MAX_CHARS = 256
+_UNCHECKED_SESSION_DOCUMENT = object()
 
 
 def _host_session_schema(host: str) -> str:
@@ -94,14 +96,18 @@ def load_codex_cli_session(
     session_scope: str = "todo",
     host: str = "codex-cli",
 ) -> dict[str, Any] | None:
+    _host_session_schema(host)
+    return _session_document_value(
+        _read_codex_cli_session_document(runtime_root, lineage=lineage, session_scope=session_scope),
+        lineage=lineage, session_scope=session_scope, host=host,
+    )
+
+
+def _session_document_value(
+    value: object, *, lineage: Mapping[str, str], session_scope: str = "todo",
+    host: str = "codex-cli",
+) -> dict[str, Any] | None:
     schema = _host_session_schema(host)
-    path = _session_path(runtime_root, lineage, session_scope)
-    if not path.exists():
-        return None
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
     if not isinstance(value, dict):
         return None
     if value.get("schema_version") != schema or value.get("host", "codex-cli") != host:
@@ -199,6 +205,7 @@ def _store_codex_cli_session(
     checkpoint_artifact_sha256: str | None = None,
     checkpoint_artifact_root: str | None = None,
     checkpoint_model_transition: Mapping[str, str] | None = None,
+    expected_document: object = _UNCHECKED_SESSION_DOCUMENT,
 ) -> None:
     if checkpoint_artifact_sha256 is not None and not BARE_SHA256_PATTERN.fullmatch(checkpoint_artifact_sha256):
         raise ValueError("checkpoint session source digest is invalid")
@@ -210,9 +217,13 @@ def _store_codex_cli_session(
     with exclusive_file_lock(path):
         if require_absent and (path.exists() or path.is_symlink()):
             raise ValueError("session binding already exists; read back the original admission")
+        _host_session_schema(host)
+        current = _read_codex_cli_session_document(runtime_root, lineage=lineage, session_scope=session_scope)
+        if expected_document is not _UNCHECKED_SESSION_DOCUMENT and current != expected_document:
+            raise ValueError("managed session binding changed during native initialization")
         # Provenance survives ordinary observations of this exact conversation,
         # but cannot migrate to a replacement session, profile or Goal lifetime.
-        prior = load_codex_cli_session(runtime_root, lineage=lineage, session_scope=session_scope, host=host)
+        prior = _session_document_value(current, lineage=lineage, session_scope=session_scope, host=host)
         retained_source = None
         retained_root = None
         retained_refresh = None
@@ -253,6 +264,95 @@ def _store_codex_cli_session(
             checkpoint_context_refresh=retained_refresh,
             checkpoint_model_transition=transition,
         )
+
+
+@dataclass(frozen=True)
+class ManagedOperationSession:
+    """Selected file snapshot and its initialization commit, not an authority.
+
+    Both transports retain the existing session file/schema. The Goal admission
+    owner checks selection and acceptance; the file lock fences replacement
+    during native initialization. DSH keeps its original replace-only writer;
+    Codex keeps checkpoint provenance for the exact original conversation.
+    """
+
+    runtime_root: Path
+    lineage: Mapping[str, str]
+    host: str
+    binding: dict[str, Any] | None
+    original: dict[str, Any] | None
+    goal_ref: Mapping[str, Any] | None
+    profile_digest: str
+    model: str
+    reasoning_effort: str
+    goal_admission: FirstPartyHostGoalAdmission | None
+
+    def store(self, session_id: str) -> None:
+        def commit() -> None:
+            values: dict[str, Any] = dict(
+                lineage=self.lineage, host=self.host, session_id=session_id,
+                goal_ref=self.goal_ref, operation_profile_digest=self.profile_digest,
+                operation_model=self.model, operation_reasoning_effort=self.reasoning_effort,
+            )
+            if self.host == "dsh":
+                with exclusive_file_lock(_session_path(self.runtime_root, self.lineage)):
+                    if _read_codex_cli_session_document(self.runtime_root, lineage=self.lineage) != self.original:
+                        raise ValueError("DSH binding changed during SDK initialization")
+                    _write_codex_cli_session(self.runtime_root, **values)
+            else:
+                _store_codex_cli_session(self.runtime_root, **values, expected_document=self.original)
+
+        if self.goal_admission is None:
+            commit()
+        else:
+            self.goal_admission.accept_result(commit)
+
+
+def select_managed_operation_session(
+    runtime_root: Path, *, request: Mapping[str, Any], lineage: Mapping[str, str],
+    host: str, transport: str, profile_digest: str, model: str, reasoning_effort: str,
+    goal_admission: FirstPartyHostGoalAdmission | None = None,
+) -> ManagedOperationSession:
+    _host_session_schema(host)
+    # Read Codex's selected document once, through admission when present. The
+    # same snapshot is normalized for legacy loading and compared at commit.
+    # DSH retains its pre-selection snapshot to preserve its initialization fence.
+    if host == "codex-cli":
+        if goal_admission is None:
+            original = _read_codex_cli_session_document(runtime_root, lineage=lineage)
+            binding = _session_document_value(original, lineage=lineage)
+        else:
+            original = goal_admission.select_state(
+                read_state=lambda: _read_codex_cli_session_document(runtime_root, lineage=lineage),
+                goal_ref_of=lambda value: _codex_session_goal_ref(value, lineage=lineage),
+            )
+            binding = dict(original) if original is not None else None
+    else:
+        original = _read_codex_cli_session_document(runtime_root, lineage=lineage)
+        binding = select_codex_cli_session(
+            runtime_root, lineage=lineage, host=host, goal_admission=goal_admission,
+        )
+    session_plan = request.get("session") or {}
+    if (session_plan.get("context_policy") or {}).get("mode") == "fresh":
+        binding = None
+    elif host == "dsh" and original is not None and binding is None:
+        raise ValueError("existing session is not a qualified DSH operation binding; select fresh explicitly")
+    action = session_plan.get("action")
+    has_binding = binding is not None if host == "dsh" else bool(binding)
+    if action not in {"start_new", "resume"} or (action == "resume") != has_binding:
+        raise ValueError(f"managed {'DSH' if host == 'dsh' else 'Codex'} session changed after Turn planning")
+    if binding and (
+        binding.get("operation_transport") != transport
+        or binding.get("operation_profile_digest") != profile_digest
+    ):
+        raise ValueError(
+            "DSH operation profile changed; select fresh and obtain fresh approval" if host == "dsh"
+            else "managed operation profile changed; explicitly select a fresh iteration and obtain fresh approval"
+        )
+    return ManagedOperationSession(
+        runtime_root, dict(lineage), host, binding, original, request.get("goal_ref"),
+        profile_digest, model, reasoning_effort, goal_admission,
+    )
 
 
 def _replace_checkpoint_codex_session(

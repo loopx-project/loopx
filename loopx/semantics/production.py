@@ -112,9 +112,14 @@ def _typescript_scan(
     root: Path, ts_sources: list[SourceFile], field: str | None,
     returns: list[str], mode: str = 'production',
 ) -> list[Production]:
-    if not ts_sources or not field:
+    if not ts_sources or (not field and not returns):
         return []
-    rows = run_typescript_scan(root, ts_sources, {'field': field, 'return_functions': returns, 'mode': mode})
+    # A return-owned vocabulary need not also claim a global field name.
+    # Omit the field entirely so dynamic object keys cannot match JSON null.
+    request = {'return_functions': returns, 'mode': mode}
+    if field:
+        request['field'] = field
+    rows = run_typescript_scan(root, ts_sources, request)
     # The parser names the same blocker vocabulary as the Python scanner;
     # ``typescript_dynamic`` stays the fallback for a form it cannot classify.
     return [Production(r['site'], r['line'], r['form'], frozenset(r['values']), r['unresolved'],

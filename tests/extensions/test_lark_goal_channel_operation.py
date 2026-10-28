@@ -150,6 +150,9 @@ def test_callback_wake_uses_one_operator_granted_delegation_without_consuming(
         if fault == "dispatch":
             raise RuntimeError("private argv must not be returned")
     monkeypatch.setattr(Delegations, "_spawn", spawn)
+    # This wire fixture owns callback identity/replay, not native Turn admission.
+    # Real File/SQLite preflight and worker execution are covered separately.
+    monkeypatch.setattr(Delegations, "inspect", lambda self, binding_id: {"dispatch_allowed": True})
     cards = {}
     runner = _runner([], cards)
     deliver_goal_channel_operation_card(proposal_id=proposal["proposal_id"], action_store_root=store.root,

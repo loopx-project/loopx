@@ -407,6 +407,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                         "--capture-file", descriptor["path"], "--capture-sha256", descriptor["sha256"],
                         "--offset", str(offset)]))
                 phase = name + "_read"
+                if not queue:
+                    return response(request, number, message)
                 command = queue.pop(0)
             else:
                 name = phase.split("_")[0]
@@ -422,10 +424,12 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 return response(request, number, message)
             if host == "app_code_mode":
                 return {"type": "custom_tool_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                    "name": "exec", "input": 'text((await tools.exec_command('
-                        + json.dumps({"cmd": command, "max_output_tokens": 2000}) + ')).output);'}
+                    "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.exec_command('
+                        + json.dumps({"cmd": command, "max_output_tokens": 22000}) + ')).output);'}
+            # Match the generated native profile's 64000-byte page transport;
+            # the old 3000-token tool cap truncated its valid JSON first page.
             return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                "name": "exec_command", "arguments": json.dumps({"cmd": command, "max_output_tokens": 3000})}
+                "name": "exec_command", "arguments": json.dumps({"cmd": command, "max_output_tokens": 22000})}
         except Exception as error:
             errors.append(error)
             return message
@@ -467,6 +471,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             assert result["session"]["session_id"] == session_id
         else:
             _configure_provider(home, url)
+            config = home / "config.toml"
+            overrides = "".join(f"{key}={json.dumps(value)}\n"
+                for key, value in configuration["config_overrides"].items())
+            config.write_text(overrides + config.read_text())
             with (home / "config.toml").open("a") as config:
                 config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
             if host == "app_code_mode":

@@ -35,8 +35,10 @@ routes remain failures in the semantic verifier.
 
 ## The decision is not a result-kind string map
 
-There is no unary result-kind-to-route projection. The driver qualifies the
-fresh quota envelope into a route. The controller then evaluates:
+There is no unary result-kind-to-route projection. The existing TypeScript
+`quota/turn_envelope.ts::turnEnvelopeRoute` qualifies the fresh quota envelope
+into a route; the Python driver and loop controller consume that same decision.
+The controller then evaluates:
 
 `decide_loop_disposition(receipt, quota_decision, predecessor_turn_key, budget)`.
 
@@ -46,12 +48,18 @@ adapter. A string-to-string result map would discard these inputs and precedence
 
 The generated contract contains 29 ordered rows: 10 admission checks and 19
 returns. Conditions use finite partitions; the first matching return wins.
-The existing Python controller remains the sole evaluator. TypeScript exports
-shared data/types and the projection data, not a second decision implementation.
+The existing Python controller remains the sole evaluator of these ordered
+disposition rows. TypeScript owns envelope route qualification and the shared
+data/types; it does not implement another receipt/budget disposition engine.
 
-Receipt settlement/completion qualification, budget construction, envelope
-signature validation, lineage and retry normalization remain their existing
-Python-owned primitives. The JSON specifies when those checks run; it is not a
+Receipt settlement/completion qualification, budget construction and retry
+normalization retain their existing owners. Python preserves the historical
+scalar/numeric codecs used by persisted Turn identities; TypeScript owns route
+and envelope-signature interpretation. Plan projection returns route and
+signature together, and managed-step consumes an immutable local envelope/route
+result from one producer call. An extra field in a wire dictionary cannot carry
+that qualification; ordinary or historical dictionaries still use the shared
+route reader. The JSON specifies when those checks run; it is not a
 self-contained validator for arbitrary raw objects. Rejection is part of the
 function contract, not another enum value. No host launch, quota spend or state
 write is authorized by a controller output.

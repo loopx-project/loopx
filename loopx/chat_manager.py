@@ -1008,7 +1008,8 @@ def manager_session_model_allocation(
 # 21: migrate the former transcript-in-objective representation to persisted
 #     native history. Merely removing it from new prompts leaves old upstream
 #     conversations overfull and unable to compact before their next request.
-MANAGER_CONTEXT_VERSION = 21
+# 22: resolve role shorthand by subject evidence; a past handoff is not ownership.
+MANAGER_CONTEXT_VERSION = 22
 
 # An installed manager workspace keeps the marker it was written with. The
 # writer refreshes that workspace skill while the file still carries any
@@ -1018,8 +1019,9 @@ MANAGED_SKILL_MARKER_V1 = "<!-- loopx-managed-manager-skill:v1 -->"
 MANAGED_SKILL_MARKER_V2 = "<!-- loopx-managed-manager-skill:v2 -->"
 MANAGED_SKILL_MARKER_V3 = "<!-- loopx-managed-manager-skill:v3 -->"
 MANAGED_SKILL_MARKER_V4 = "<!-- loopx-managed-manager-skill:v4 -->"
-MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4)
-MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V4
+MANAGED_SKILL_MARKER_V5 = "<!-- loopx-managed-manager-skill:v5 -->"
+MANAGED_SKILL_MARKERS = (MANAGED_SKILL_MARKER_V1, MANAGED_SKILL_MARKER_V2, MANAGED_SKILL_MARKER_V3, MANAGED_SKILL_MARKER_V4, MANAGED_SKILL_MARKER_V5)
+MANAGED_SKILL_CURRENT_MARKER = MANAGED_SKILL_MARKER_V5
 
 
 def manager_skill_text() -> str:

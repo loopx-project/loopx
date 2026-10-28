@@ -26,6 +26,41 @@ from test_quota_settlement_cli import (
 )
 
 
+def test_relocated_current_source_overlay_crosses_the_real_typed_codec(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    acceptance = {"outcome_requirements": {"revision": 1, "outcomes": [{"id": "outcome",
+        "requirements": [{"id": f"r{i}", "description": "Preserve exact evidence and the original stop. " * 8,
+            "status": "unverified", "agent_review": {"conclusion": "uncertain", "basis_current": False,
+                "note": "An observation is not acceptance. " * 8}} for i in range(24)]}]}}
+    original = {"planning_horizon": {"core_goal": {"acceptance_contract": acceptance}}}
+    current = {"interaction_contract": {"agent_channel": {"work_context": {"complete": True,
+        "sources": [{"source": "goal_acceptance", "content": {
+            "provider_revision": "current", "goal_acceptance_contract": deepcopy(acceptance)}}]}}}}
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    delta = prepare_context_delivery(current, capture_id="after", baseline=first,
+        retained={"complete": True, "target": first["target"]}, **args)
+    assert delta["mode"] == "delta"
+    overlays = []
+    def visit(node):
+        if not isinstance(node, dict) or "value" in node:
+            return
+        if "from" in node and "edit" in node:
+            overlays.append(node)
+        for child in node.get("changed", node.get("items", {})).values():
+            visit(child)
+    visit(delta["changes"])
+    assert overlays, "Real RPC must carry the registered overlay, not silently downgrade it"
+    assert restore_context_delivery(delta, baseline=first, current=full)["context"] == current
+    # The same original capture is the fallback for unsupported/damaged edits.
+    del overlays[0]["edit"]
+    restored = restore_context_delivery(delta, baseline=first, current=full)
+    assert restored["mode"] == "full" and restored["context"] == current
+    assert first["context"] == original
+
+
 @pytest.mark.parametrize("body", ["plain text " * 900, '汉🙂"\\\t\n' * 700])
 @pytest.mark.parametrize("limit", [1600, 7000])
 def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, monkeypatch, body, limit):

@@ -80,6 +80,12 @@ def execute_turn_run_once(
     """Adapt one prepared CLI Turn plan to the bounded Turn driver."""
     execution_started = False
     try:
+        if args.execute and goal_admission is None:
+            # Cached-result recovery still requires the current Goal lifetime.
+            goal_admission = FirstPartyHostGoalAdmission.for_plan(
+                registry_path=registry_path, goal_id=args.goal_id,
+                planned_goal_ref=goal_ref,
+            )
         project, raw_argv, task_validator, envelope = prepare_turn_host_request(
             args, payload, native_host_runner=native_host_runner,
             native_session_binding_resolver=native_session_binding_resolver,

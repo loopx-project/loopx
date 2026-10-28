@@ -5,7 +5,7 @@
     "receipt": "ValidatedTurnReceipt.from_execution; material settlement, durable completion and host failure qualification remain admission preconditions",
     "budget": "BoundedTurnBudget; strict integers, finite ranges and nonempty lineage remain admission preconditions",
     "rejection": "Checks raise ValueError; rejection is not a LoopDisposition. A check is evaluated only if reached and its finite when partition matches.",
-    "result_route_relation": "No unary result-kind to route projection exists. driver._typed_route qualifies quota input; decide_loop_disposition combines receipt, quota, causal predecessor and budget. Named admission primitives remain Python-owned."
+    "result_route_relation": "No unary result-kind to route projection exists. turn_envelope.turnEnvelopeRoute qualifies quota input in TypeScript; decide_loop_disposition combines receipt, quota, causal predecessor and budget. Receipt and budget admission primitives remain Python-owned."
   },
   "partitions": {
     "receipt_kind": {
@@ -54,7 +54,7 @@
     ]
   },
   "checks": {
-    "envelope": "Shared _typed_route rejects schema/signature/capability-intent contract_error before user projection; user action then overrides a valid route.",
+    "envelope": "Shared TypeScript turnEnvelopeRoute rejects schema/signature/capability-intent contract_error before user projection; user action then overrides a valid route.",
     "decision_actor": "Require fresh nonempty goal and agent lineage.",
     "receipt_binding": "Require predecessor_turn_key, then equality to receipt.turn_key, then matching goal and agent, in that order.",
     "initial_terminal": "Require terminal_no_followup state for the terminal action.",

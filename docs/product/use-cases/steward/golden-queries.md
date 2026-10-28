@@ -172,6 +172,35 @@ without treating quoted content as authority. Directory metadata tests do not
 qualify model interpretation, receiver adoption or the original-channel return;
 observe each separately in the live journey.
 
+#### Topic owner and misroute correction / 主题归属与误派纠正
+
+Use the bounded public [routing cases](../../../../examples/evaluations/chat-routing.public.json)
+with the existing [intake evaluator](../../../../examples/evaluations/chat-intake.py).
+Two Agents share a generalist role; the first Agent's id resembles the owner's
+shorthand, but relevant current work and recent delivery identify the other as
+the RFC researcher. A delivered earlier misroute is evidence of where the
+message went, not ownership. Require the topic owner's exact Goal/Agent pair
+and preserve the original artifact, purpose, privacy boundary and return audience.
+Then explicitly name the other pair for a separate verification request: the
+topic-owner inference must not override that instruction. A standalone
+explanation requires no handoff; equally relevant evidence requires one focused
+clarification. Missing delivery permission cannot be repaired by substituting
+the tempting role match. Qualified new work needs no pre-existing matching Todo.
+
+Supply a delivered correct-topic handoff with no read/adoption record. Do not
+resend it. If the old recipient still has uncorrected intent, send only the
+bounded ownership correction through the existing permitted path. Once both
+corrections are delivered, answer from their receipts with zero further effects.
+Neither receipt proves cancellation, receiver adoption or the RFC revision.
+Preserve unknown effects and do not interrupt unrelated work or change authority.
+
+Offline tests check prompt/managed-skill delivery, parser/scorer oracles and
+negative outputs; they do not qualify model reasoning. Release-only live runs
+use `--cases examples/evaluations/chat-routing.public.json` and the existing
+explicit paid-call opt-in below. Review the complete rationale and correction
+brief, including no invented cancellation/adoption. Score actual discovery,
+receiver assessment and original-channel return separately in the live journey.
+
 #### Repair and merge / 修复并合并
 
 GQ03/GQ07 include “修复并合并这个 PR。” / “Fix and merge this PR,” with

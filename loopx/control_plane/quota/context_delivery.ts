@@ -4,7 +4,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {reusableTurnContextPaths} from "../capability_hooks.ts";
+import {reusableTurnContext} from "../capability_hooks.ts";
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
 
 const VERSION = "context_delivery_v1";
@@ -53,7 +53,7 @@ function parentAt(root: JsonObject, path: Path): Record<string | number, unknown
 /** Registered requirement fields and capability evidence subtrees are reusable. Revisions, source
  * failures, claims, review conclusions, grants, current gates and unknown fields stay fresh.
  * Source-array order is transport layout, never the identity of a requirement. */
-function splitContext(context: JsonObject): Split {
+function splitContext(context: JsonObject, binding: JsonObject): Split {
   const fresh = clone(context), identities = new Set<string>();
   let valid = context.complete === true;
   const add = (identity: string, path: Path, structured = false) => {
@@ -76,7 +76,8 @@ function splitContext(context: JsonObject): Split {
     if (!source || !content || content.ok === false || content.read_complete === false) continue;
     const prefix: Path = ["sources", i, "content"];
     const kind = source.source;
-    const known = ["goal_state", "selected_todo", "goal_acceptance"].includes(String(kind)) || reusableTurnContextPaths(source).length > 0;
+    const reuse = reusableTurnContext(source, binding);
+    const known = ["goal_state", "selected_todo", "goal_acceptance"].includes(String(kind)) || reuse !== null;
     if (known && typeof source.reason === "string") add(`source_reason:${i}`, ["sources", i, "reason"]);
     const readModel = jsonObject(jsonObject(content.authority_read)?.todo_read_model);
     if (kind === "selected_todo" && Array.isArray(readModel?.contract_fields)
@@ -143,10 +144,8 @@ function splitContext(context: JsonObject): Split {
         }
       }
     } else {
-      const paths = reusableTurnContextPaths(source);
-      if (!paths.length) continue;
-      if (content.ok !== true || typeof content.goal_id !== "string" || typeof content.agent_id !== "string") continue;
-      const identity = [kind, source.hook_id, source.capability_id, content.goal_id, content.agent_id, content.todo_id ?? null];
+      if (!reuse) continue;
+      const {identity, paths} = reuse;
       const id = JSON.stringify(identity);
       if (sourceIds.has(id)) { valid = false; continue; }
       sourceIds.add(id);
@@ -166,7 +165,7 @@ function splitContext(context: JsonObject): Split {
  * Keep one exact codec for quota and Turn; source-only callers use the same codec. */
 const SURFACES = ["work_context", "quota_packet", "turn_envelope"] as const;
 type Surface = typeof SURFACES[number];
-type Delta = {value: unknown} | {from: Path} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
+type Delta = {value: unknown} | {from: Path; edit?: Delta} | {changed?: Record<string, Delta>; values?: Record<string, unknown>; removed?: string[]}
   | {items: Record<string, Delta>; values?: Record<string, unknown>; length?: number};
 const pathKey = (path: Path): string => JSON.stringify(path);
 
@@ -189,7 +188,7 @@ const REUSABLE_PACKET_FIELDS = new Set([
 /** Current controls are forced into the change tree even when equal. This avoids
  * duplicating them in both a fresh frame and a patch. Static authoring guidance
  * remains binding via exact reuse; commands, conditions and identity stay fresh. */
-function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[]): {paths: Path[]; valid: boolean} {
+function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[], binding: JsonObject): {paths: Path[]; valid: boolean} {
   const paths: Path[] = [];
   let valid = true;
   const leaves = (value: unknown, path: Path) => {
@@ -201,7 +200,7 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
   const work = (value: unknown, path: Path) => {
     const source = jsonObject(value);
     if (!source) { paths.push(path); return; }
-    const split = splitContext(source); valid &&= split.valid;
+    const split = splitContext(source, binding); valid &&= split.valid;
     leaves(split.fresh, path);
   };
   const vision = (value: unknown, path: Path) => {
@@ -335,7 +334,7 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
   // Binding or source reordering can relocate already-read authoring. Index
   // exact strings and structured subtrees from the immutable base. A target
-  // containing any forced-current descendant cannot use a subtree reference.
+  // with current descendants needs literal overrides, never a bare reference.
   const strings = new Map<string, {from: Path}>();
   type Candidate = {reference: {from: Path}; value: unknown};
   const subtrees = new Map<number, {candidates: Candidate[]; indexed?: Map<string, Candidate>}>();
@@ -356,16 +355,19 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
     }
   };
   index(before, []);
-  const visit = (a: unknown, b: unknown, path: Path): Delta | null => {
+  const visit = (a: unknown, b: unknown, path: Path, relocate = true): Delta | null => {
     const key = pathKey(path);
     if (exact.has(key)) return {value: clone(b)};
     if (!ancestors.has(key) && equal(a, b)) return null;
     if (typeof b === "string" && strings.has(b)) return clone(strings.get(b)!);
     let reference: {from: Path} | undefined;
-    if (!ancestors.has(key) && (Array.isArray(b) || jsonObject(b))) {
-      // Most current controls cannot reuse a subtree, and unchanged siblings
-      // already returned above. Hash only size buckets actually needed by a
-      // remaining candidate; avoid hashing the complete baseline eagerly.
+    let overlay: Delta | undefined;
+    if ((!ancestors.has(key) || relocate && a === undefined) && (Array.isArray(b) || jsonObject(b))) {
+      // Hash only size buckets needed by a relocated candidate. A complete
+      // exact base may carry the body while an edit repeats all current leaves.
+      // Current containers already present at this path use ordinary edits;
+      // repeatedly indexing their forced descendants adds work without moving
+      // a body. A newly inserted source is the actual relocation boundary.
       const bucket = subtrees.get(size(b));
       if (bucket && !bucket.indexed) {
         bucket.indexed = new Map();
@@ -376,14 +378,23 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
       }
       const reusable = bucket?.indexed?.get(digest(b));
       // Size and hash lookup are indices: exact equality remains the oracle.
-      if (reusable && equal(reusable.value, b)) reference = reusable.reference;
+      if (reusable && equal(reusable.value, b)) {
+        if (!ancestors.has(key)) reference = reusable.reference;
+        else if (relocate) {
+          // Compare against this exact body at its new location. Disabling
+          // relocation for this node avoids recursion; descendants still use
+          // the ordinary codec. Forced paths retain their CURRENT literals.
+          const edit = visit(b, b, path, false);
+          if (edit) overlay = {...reusable.reference, edit};
+        }
+      }
     }
     let delta: Delta;
     if ((jsonObject(a) || a === undefined) && jsonObject(b)) {
       const old = (a ?? {}) as JsonObject, next = b as JsonObject;
       const changed: [string, Delta][] = [];
       for (const [field, value] of Object.entries(next)) {
-        const child = visit(Object.hasOwn(old, field) ? old[field] : undefined, value, [...path, field]);
+        const child = visit(Object.hasOwn(old, field) ? old[field] : undefined, value, [...path, field], relocate && !overlay);
         if (child) changed.push([field, child]);
       }
       const removed = Object.keys(old).filter(field => !Object.hasOwn(next, field));
@@ -392,15 +403,16 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
       const old = a as unknown[] | undefined;
       const items: [string, Delta][] = [];
       b.forEach((value, i) => {
-        const child = visit(old?.[i], value, [...path, i]);
+        const child = visit(old?.[i], value, [...path, i], relocate && !overlay);
         if (child) items.push([String(i), child]);
       });
       delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})}, size);
     } else delta = {value: clone(b)};
     // Sizing does not publish a value. Copy only a replacement that is chosen,
     // rather than every unchanged subtree and every discarded ancestor value.
-    const result = size(delta) < size({value: b}) ? delta : {value: clone(b)};
-    return reference && size(reference) < size(result) ? clone(reference) : result;
+    let result = size(delta) < size({value: b}) ? delta : {value: clone(b)};
+    if (reference && size(reference) < size(result)) result = clone(reference);
+    return overlay && size(overlay) < size(result) ? overlay : result;
   };
   return visit(before, after, []);
 }
@@ -413,7 +425,8 @@ function applyTree(before: unknown, delta: Delta | null, baseline: unknown = bef
   if (delta === null) return clone(before);
   if ("value" in delta) return clone(delta.value);
   if ("from" in delta) {
-    if (Object.keys(delta).length !== 1 || !Array.isArray(delta.from)) throw new Error("invalid baseline reference");
+    if (Object.keys(delta).some(key => key !== "from" && key !== "edit")
+        || !Array.isArray(delta.from)) throw new Error("invalid baseline reference");
     let value = baseline;
     for (const key of delta.from) {
       if (!(typeof key === "string" || typeof key === "number" && Number.isSafeInteger(key) && key >= 0)
@@ -423,7 +436,9 @@ function applyTree(before: unknown, delta: Delta | null, baseline: unknown = bef
     }
     if (typeof value !== "string" && !Array.isArray(value) && !jsonObject(value))
       throw new Error("reference has no exact baseline string or subtree");
-    return clone(value);
+    // Every nested reference still resolves against the immutable whole base,
+    // never the overlay or the partially reconstructed current projection.
+    return delta.edit === undefined ? clone(value) : applyTree(value, delta.edit, baseline);
   }
   if ("items" in delta) {
     if (before !== undefined && !Array.isArray(before)) throw new Error("array baseline missing");
@@ -443,6 +458,12 @@ function applyTree(before: unknown, delta: Delta | null, baseline: unknown = bef
       enumerable: true, writable: true, configurable: true});
   }
   return result;
+}
+
+function hasOverlay(delta: Delta | null): boolean {
+  if (!delta || "value" in delta) return false;
+  if ("from" in delta) return delta.edit !== undefined;
+  return Object.values("items" in delta ? delta.items : delta.changed ?? {}).some(hasOverlay);
 }
 
 function targetBinding(request: JsonObject, context: JsonObject, surface: Surface): JsonObject {
@@ -485,7 +506,7 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
       || binding.context_digest !== digest(prior)) return full("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return full("full_refresh_due");
-  const before = freshPaths(prior, surface, legacyQuotaFields), after = freshPaths(context, surface, legacyQuotaFields);
+  const before = freshPaths(prior, surface, legacyQuotaFields, binding), after = freshPaths(context, surface, legacyQuotaFields, target);
   if (!before.valid || !after.valid) return full("source_not_reusable");
   const changes = changeTree(prior, context, after.paths);
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
@@ -498,7 +519,9 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
         + "Do not also fetch the full projection just to materialize JSON or replace missing Code Mode variables; "
         + "tool-process memory is separate from retained model context. If required baseline content is unavailable "
         + "or continuity is uncertain, recover this capture in full before dependent work. " : "")
-      + "A value replaces its subtree; from copies the exact string, array or object at that path in the base capture, never in current changes. Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+      + "A value replaces its subtree; from copies the exact string, array or object at that path in the base capture, never in current changes. "
+      + (hasOverlay(changes) ? "An optional edit then applies to that copied value, with all nested from paths still rooted in the immutable base. " : "")
+      + "Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   // Native consumers page the wire before they can use its baseline. Deliver
@@ -527,7 +550,7 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
         || !equal(delivery.base, base) || !compatible(base, target) || base.context_digest !== digest(context)
         || !Number.isSafeInteger(baseline.ancestry) || Number(baseline.ancestry) < 0
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
-    const before = freshPaths(context, surface, legacyQuotaFields), after = freshPaths(currentContext, surface, legacyQuotaFields);
+    const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
     if (!before.valid || !after.valid) return fallback();
     const expected = changeTree(context, currentContext, after.paths);
     // Also rejects omitted unchanged controls, redundant/conflicting edits,

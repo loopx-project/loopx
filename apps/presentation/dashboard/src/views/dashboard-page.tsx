@@ -530,6 +530,7 @@ type PersonalHomeModel = {
   workers?: WorkspaceWorker[];
 };
 type PersonalManagerMessage = {
+  replyContext?: ChatVisibleMessage["reply_context"];
   goalDraft?: GoalDraft | null;
   sourceMessageId?: string;
   sourceSessionId?: string;
@@ -1739,9 +1740,10 @@ function PersonalGoalHome({
         id: managerMessageId.current++, lines: [],
         role: message.role === "user" ? "user" : "assistant",
         returnDelivery: message.return_delivery, collaboration: message.collaboration,
+        replyContext: message.reply_context,
         sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
           : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${selectedAgent.label} 会话`,
-        text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
+        text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
       }));
       return updated === previous ? current : { ...current, [contextId]: updated };
     });
@@ -2895,6 +2897,7 @@ function PersonalGoalHome({
         endedAt: message.endedAt,
         returnDelivery: message.returnDelivery,
         collaboration: message.collaboration,
+        replyContext: message.replyContext,
         goalDraft: message.goalDraft,
         role: message.role,
         sourceTurnId: message.sourceTurnId,
@@ -3102,11 +3105,12 @@ function PersonalGoalHome({
                 sourceSessionId: sessionId,
                 agentLabel: message.role === "user" ? undefined : run.agentLabel,
                 attachments: workspaceImageAttachments(message.attachments),
+                replyContext: message.reply_context,
                 id: managerMessageId.current++,
                 lines: [],
                 role: message.role === "user" ? "user" : "assistant",
                 sourceLabel: message.role === "user" ? undefined : `${run.agentLabel} · 执行 Session`,
-                text: message.role === "user" ? message.text : visibleAgentMessage(message.text),
+                text: message.role === "user" ? message.reply_context?.source_text ?? message.text : visibleAgentMessage(message.text),
               })),
             }));
             recordRuntimeBinding(run.goalId, {

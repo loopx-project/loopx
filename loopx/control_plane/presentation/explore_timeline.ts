@@ -156,7 +156,11 @@ export function buildExploreTimeline(nodes: readonly ExploreHistoryNode[], edges
   const span = start !== null && end !== null ? Math.max(1, end - start) : 0;
   const binCount = span ? Math.max(1, Math.min(targetBins, Math.ceil(span / 3_600_000))) : 0;
   const bins: TimelineBin[] = Array.from({length: binCount}, (_, index) => ({start: start! + span * index / binCount, end: start! + span * (index + 1) / binCount, events: 0, nodes: 0, labels: {}, decisions: {}}));
-  const phases: TimelinePhase[] = span ? [0, 1, 2].map(index => ({index, start: start! + span * index / 3, end: start! + span * (index + 1) / 3, nodes: 0, findings: 0, labels: {}, decisions: {}, lastDecision: null})) : [];
+  // Thirds only when the recorded span is long enough; short runs (all
+  // records within minutes) get one whole-history group instead of empty
+  // early/middle/late cards.
+  const phaseCount = span >= MIN_THIRDS_SPAN_MS ? 3 : 1;
+  const phases: TimelinePhase[] = span ? Array.from({length: phaseCount}, (_, index) => ({index, start: start! + span * index / phaseCount, end: start! + span * (index + 1) / phaseCount, nodes: 0, findings: 0, labels: {}, decisions: {}, lastDecision: null})) : [];
   const slot = <T,>(items: T[], at: number) => items[Math.min(items.length - 1, Math.floor((at - start!) / span * items.length))]!;
   for (const event of events) { const at = time(event.recorded_at); if (at !== null && bins.length) slot(bins, at).events++; }
   for (const item of timelineNodes.values()) if (item.first !== null && bins.length) { slot(bins, item.first).nodes++; slot(phases, item.first).nodes++; }
@@ -172,3 +176,8 @@ export function buildExploreTimeline(nodes: readonly ExploreHistoryNode[], edges
   }
   return {start, end, bins, phases, nodes: timelineNodes, routes, singles, edges, findings, decisions, structuredCount: findings.filter(item => item.sections).length};
 }
+
+/** Minimum record-time span where thirds are meaningful. Below it a single
+ * "whole history" reading group avoids empty early/middle/late cards. */
+export const MIN_THIRDS_SPAN_MS = 6 * 60 * 60_000;
+export const WHOLE_HISTORY_PHASE = "whole";

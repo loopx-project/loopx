@@ -68,3 +68,48 @@ test('real CLI writes all reports and rejects malformed input without output',()
     writeFileSync(input,'{}');command[command.length-1]=join(dir,'invalid');assert.notEqual(spawnSync(process.execPath,command).status,0);assert.equal(existsSync(join(dir,'invalid.json')),false);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test('missing terminal audit is unreviewed, not verified zero failure', () => {
+  const r=buildReport(fixture());
+  assert.equal(r.summary[0].first_attempt_execution.unreviewed,3);
+  assert.equal(r.summary[0].first_attempt_execution.audited,0);
+  assert.match(renderMarkdown(r),/未审计/);
+  assert.match(renderMarkdown(r),/缺失记录不证明没有故障/);
+});
+test('idle with unknown goal verdict remains unknown even with a valid score', () => {
+  const d=fixture();
+  d.execution_audit=[{arm_id:'b',case_id:'one',run_id:'b-one',initial_attempt:true,
+    outcome:'unknown',attribution:'not_applicable',goal_verdict:'unavailable',evidence_refs:['event:idle']}];
+  const r=buildReport(d),e=r.summary[1].first_attempt_execution;
+  assert.equal(e.outcomes.unknown,1);assert.equal(e.outcomes.normal_end,0);
+  assert.equal(e.goal_verdict_observed,0);assert.equal(e.unreviewed,2);
+  assert.deepEqual(r.comparisons,buildReport(fixture()).comparisons);
+  d.execution_audit[0].outcome='normal_end';
+  assert.throws(()=>buildReport(d),/satisfied verdict/);
+});
+test('first attempts stay distinct from recovered replacements and ownership', () => {
+  const d=fixture();
+  d.execution_audit=[
+    {arm_id:'a',case_id:'one',run_id:'a-first',initial_attempt:true,outcome:'runtime_failure',attribution:'unknown',goal_verdict:'unavailable',evidence_refs:['receipt:terminal']},
+    {arm_id:'a',case_id:'one',run_id:'a-one',initial_attempt:false,outcome:'normal_end',attribution:'not_applicable',goal_verdict:'satisfied',evidence_refs:['receipt:replacement']},
+    {arm_id:'a',case_id:'two',run_id:'a-two',initial_attempt:true,outcome:'budget_exhausted',attribution:'not_applicable',goal_verdict:'unavailable',evidence_refs:['receipt:budget']},
+    {arm_id:'a',case_id:'three',run_id:'a-three',initial_attempt:true,outcome:'operator_cancelled',attribution:'not_applicable',goal_verdict:'unavailable',evidence_refs:['receipt:interrupt']},
+  ];
+  const e=buildReport(d).summary[0].first_attempt_execution;
+  assert.equal(e.audited,3);assert.equal(e.outcomes.runtime_failure,1);
+  assert.equal(e.unattributed_runtime_failures,1);assert.equal(e.confirmed_product_failures,0);
+  assert.equal(e.outcomes.normal_end,0);assert.equal(e.outcomes.budget_exhausted,1);assert.equal(e.outcomes.operator_cancelled,1);
+});
+test('audit requires unique initial identity and evidence', () => {
+  const d=fixture();const row={arm_id:'a',case_id:'one',run_id:'first',initial_attempt:true,
+    outcome:'runtime_failure' as const,attribution:'product' as const,goal_verdict:'failed' as const,evidence_refs:['event:failure']};
+  d.execution_audit=[row,{...row,run_id:'other'}];assert.throws(()=>buildReport(d),/duplicate first/);
+  d.execution_audit=[{...row,evidence_refs:[]}];assert.throws(()=>buildReport(d),/evidence/);
+  d.execution_audit=[{...row,run_id:'b-one'}];assert.throws(()=>buildReport(d),/identity mismatch/);
+});
+test('same-attempt recovered error is not a terminal failure', () => {
+  const d=fixture();d.execution_audit=[{arm_id:'a',case_id:'one',run_id:'a-one',initial_attempt:true,
+    outcome:'normal_end',attribution:'not_applicable',goal_verdict:'satisfied',evidence_refs:['event:transient-error','event:recovered-completion']}];
+  const e=buildReport(d).summary[0].first_attempt_execution;
+  assert.equal(e.outcomes.normal_end,1);assert.equal(e.outcomes.runtime_failure,0);
+});

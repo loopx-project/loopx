@@ -1406,7 +1406,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     journal_writes = turn_executor._write_journal
 
     def die_before_attempt_record(path: Path, journal: dict[str, object]) -> None:
-        if "host_attempt_count" in journal:
+        if journal.get("host_attempt_count", 0) > 0:
             raise RuntimeError("simulated process death before the attempt record")
         journal_writes(path, journal)
 
@@ -1418,7 +1418,7 @@ def test_reserved_managed_start_recovers_after_death_before_the_attempt_record(
     monkeypatch.setattr(turn_executor, "_write_journal", journal_writes)
 
     journal = _journal(runtime_root)
-    assert "host_attempt_count" not in journal
+    assert journal["host_attempt_count"] == 0
     assert journal["admission"]["reserved"] is True
     assert [
         (row["state"], row["request_id"]) for row in _cadence_starts(runtime_root)

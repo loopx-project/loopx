@@ -150,6 +150,13 @@ expected public tag is `vX.Y.Z` for that version.
 
 Before moving `stable`, maintainers should:
 
+- before freezing the candidate, fetch `stable` from the verified target
+  repository and check that its released commit is an ancestor of the candidate
+  with `git merge-base --is-ancestor STABLE_COMMIT CANDIDATE_COMMIT`.
+  Inspect its exit status directly: only zero permits the fast-forward path;
+  a later successful command does not make an earlier ancestry check pass.
+  Resolve divergent history through a reviewed merge PR, retain current behavior,
+  then qualify the new exact source. Never force-update the released ref;
 - run the complete packaged Personal Workspace journey against the exact
   candidate before publishing a release, including every catalog scenario and
   the companion flows in `npm run smoke:personal-workspace-packaged`;

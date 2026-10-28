@@ -86,7 +86,21 @@ assert.equal(recoveredInstructions.find(row => row.text === "My request").source
 assert.equal(recoveredInstructions.find(row => row.text === "Chinese first").sourceMessageId, "instruction-1");
 assert.equal(recoveredInstructions.find(row => row.text === "Do not publish").sourceMessageId, "instruction-2");
 assert.equal(reconcileConversationHistory(recoveredInstructions, withInstructions, createHistory), recoveredInstructions);
-console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation and continued revision observation)");
+// A source-backed view updates only the matching user's canonical input.
+const replyContext = {source_text: "Compare this change", parent: {message_id: "original-parent", content: "Earlier constraint", complete: true}};
+const rawReply = {message_id: "reply-user", turn_id: "reply-turn", role: "user", text: "Frozen model input", reply_context: replyContext};
+const replyRows = [
+  {sourceSessionId: "original", sourceMessageId: "reply-user", role: "user", text: "Frozen model input"},
+  {sourceSessionId: "foreign", sourceMessageId: "reply-user", role: "user", text: "Keep foreign text"},
+  {sourceSessionId: "original", sourceMessageId: "answer", role: "assistant", text: "Live streamed answer"},
+];
+const projectedReply = reconcileConversationReturns(replyRows, "original", [rawReply, {message_id: "answer", role: "agent", text: "Stored answer"}], createReply);
+assert.equal(projectedReply[0].text, "Compare this change");
+assert.deepEqual(projectedReply[0].replyContext, replyContext);
+assert.equal(projectedReply[1], replyRows[1]);
+assert.equal(projectedReply[2].text, "Live streamed answer");
+assert.equal(reconcileConversationReturns(projectedReply, "original", [rawReply], createReply), projectedReply);
+console.log("conversation-returns: passed (session isolation, late return, deduplication, transport uncertainty, stream preservation, reply context and continued revision observation)");
 // A fast history read may add the stored queue row before its HTTP receipt
 // hydrates the original bubble. Both now carry the same canonical identity.
 const queueRace = [

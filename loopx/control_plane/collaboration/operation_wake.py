@@ -214,6 +214,13 @@ def dispatch_confirmed_operation_wake(
                             "model": profile["model"],
                             "reasoning_effort": profile["reasoning_effort"]},
         )
+        # Confirmation does not make an occupied/unknown native lane idle.
+        # Reuse the same typed preflight as Chat; a refused callback retains
+        # its canonical confirmation without publishing peer work or a worker.
+        preflight = service.inspect(configuration["binding_id"])
+        if preflight.get("dispatch_allowed") is not True:
+            return {**base, "state": "blocked", "reason_code": "execution_not_launchable",
+                    "preflight": preflight}
         brief = {
             "schema_version": "collaboration_brief_v0",
             "purpose": "Resume the exact human-confirmed canonical operation",

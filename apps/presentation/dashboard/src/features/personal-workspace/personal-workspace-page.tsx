@@ -13,7 +13,7 @@ import type { ConversationHistoryStatus } from "../../data/use-conversation-hist
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import { CollaborationCard } from "./collaboration-card";
-import {ConversationRequests, OriginalProjectRequests} from "./conversation-requests";
+import {ConversationRequests, ConversationReplyContext, OriginalProjectRequests} from "./conversation-requests";
 import {
   compileActionReviewPlan,
   isStaleActionFailure,
@@ -416,7 +416,7 @@ function ManagerConversationTray({
   onCancelPreparation?: () => void;
   title?: string;
 }) {
-  const { t } = useWorkspaceI18n();
+  const { t, locale } = useWorkspaceI18n();
   const latestUserIndex = messages.reduce((latest, message, index) => message.role === "user" ? index : latest, 0);
   const latestExchange = messages.slice(Math.max(0, latestUserIndex));
   const visibleMessages = latestExchange.slice(-3);
@@ -474,6 +474,7 @@ function ManagerConversationTray({
             <strong>{message.role === "user" ? message.agentLabel ?? t("common.you") : message.agentLabel ?? agentLabel ?? t("header.manager")}</strong>
             <div className="personal-manager-conversation-bubble">
               {message.role === "user" ? <p>{message.text}</p> : <MarkdownText text={message.text} />}
+              <ConversationReplyContext context={message.replyContext} zh={locale === "zh-CN"}/>
               {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn} onCancelPreparation={onCancelPreparation} /> : null}
               {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
               <CollaborationCard request={message.collaboration} />
@@ -1429,11 +1430,19 @@ export function PersonalWorkspacePage({
     // without a new message. Keep following only while the reader is at the end.
     const observer = new ResizeObserver(follow);
     const scroller = channelScrollRef.current;
+    const readQuote = (event: Event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement) || !details.open || !details.classList.contains("conversation-reply-context")) return;
+      followConversationRef.current = false;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => details.querySelector("summary")?.scrollIntoView({block: "nearest"}));
+    };
     if (scroller) {
+      scroller.addEventListener("toggle", readQuote, true);
       observer.observe(scroller);
       scroller.querySelectorAll(".personal-channel-timeline").forEach(element => observer.observe(element));
     }
-    return () => {observer.disconnect(); window.cancelAnimationFrame(frame);};
+    return () => {observer.disconnect(); scroller?.removeEventListener("toggle", readQuote, true); window.cancelAnimationFrame(frame);};
   }, [conversationOpen, conversationKey, selectedAgentId, conversationMessages.length,
     latestMessageTextLength, latestMessage?.pending, latestMessage?.activity?.length, latestMessage?.steps]);
   useEffect(() => {

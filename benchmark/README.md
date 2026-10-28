@@ -396,30 +396,61 @@ python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
   --tasks-dir /path/to/tasks --log-dir /path/to/private-run-logs
 ```
 
-The supported public checkpoint provider is the compatibility fork at
-[`071a884012754127f28f5b84be10f533a42db527`](https://github.com/loopx-agent/EdgeBench/commit/071a884012754127f28f5b84be10f533a42db527).
-It contains `sforge.harness.checkpoint` and the native
-`create_app(..., checkpoints=True)` seam used by the controller below. The earlier
-`0e20fb499ee248f012d6467c00b3dec00a29fe85` compatibility pin and upstream
-`sforge==1.1.0` do not contain that API and cannot qualify joint continuation.
-Enabling capture against an unsupported provider fails before adding routes.
-This is pinned proposed source, not an upstream release. From this LoopX checkout,
-prepare an isolated Python 3.12 environment and verify the imported API:
+Select the checkpoint provider through the same
+[shared EdgeBench source protocol](edgebench/README.md#select-and-freeze-the-native-provider)
+as the workers and judge. A new qualification cohort resolves the canonical
+integration branch and applies the reviewed native compatibility patch under
+that protocol; its `.edgebench-source/receipt.json` records the effective provider
+commit, upstream revision and patch digest. Existing cohorts remain frozen.
+Patch representation changes receive a new digest and effective commit even
+when the provider tree is unchanged; the original frozen bytes and provenance
+remain independently verifiable for an older cohort.
+An explicit source selection uses unmodified provider code and may not include
+the fix; follow the linked protocol when qualifying or replaying a known source.
+
+The provider must expose `sforge.harness.checkpoint` and native
+`create_app(..., checkpoints=True)`. API presence alone does not qualify
+continuation: a released result with a non-finite score or nested metric must
+remain capturable without changing native ranking, history or consumed rounds.
+The controller transports native v1 and v2 manifests and verifies their bound
+bytes; the provider owns non-finite encoding and restoration. New default cohorts
+receive this fix through the bundled compatibility patch. Updating the LoopX
+runner alone does not change an older cohort's frozen provider.
+Run the HTTP continuity regression below against the selected source before
+using it for a new cohort; an older provider can expose the API and still fail
+this regression. From this LoopX checkout:
 
 ```sh
 CKPT_PROVIDER_ROOT=$(mktemp -d)
-git clone https://github.com/loopx-agent/EdgeBench.git "$CKPT_PROVIDER_ROOT/provider"
-git -C "$CKPT_PROVIDER_ROOT/provider" checkout --detach 071a884012754127f28f5b84be10f533a42db527
+python -m benchmark.edgebench.source --log-dir "$CKPT_PROVIDER_ROOT/cohort"
 uv venv --python 3.12 "$CKPT_PROVIDER_ROOT/venv"
 uv pip install --python "$CKPT_PROVIDER_ROOT/venv/bin/python" \
-  -e '.[test]' -e "$CKPT_PROVIDER_ROOT/provider" 'httpx>=0.28,<1'
-"$CKPT_PROVIDER_ROOT/venv/bin/python" -c 'import inspect,sforge,loopx,sforge.harness.checkpoint; from sforge.harness.judge_server import create_app; assert "checkpoints" in inspect.signature(create_app).parameters; print(sforge.__file__); print(loopx.__file__)'
-"$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q benchmark/tests/test_checkpoint_judge.py
+  -e '.[test]' -e "$CKPT_PROVIDER_ROOT/cohort/.edgebench-source/checkout" 'httpx>=0.28,<1'
+LOOPX_EDGEBENCH_SOURCE_RECEIPT="$CKPT_PROVIDER_ROOT/cohort/.edgebench-source/receipt.json" \
+  "$CKPT_PROVIDER_ROOT/venv/bin/python" - <<'PY'
+import inspect
+import json
+import sforge.harness.checkpoint
+from benchmark.edgebench.source import active_source_receipt
+from sforge.harness.judge_server import create_app
+assert "checkpoints" in inspect.signature(create_app).parameters
+print(json.dumps(active_source_receipt(), indent=2))
+PY
+LOOPX_EDGEBENCH_SOURCE_RECEIPT="$CKPT_PROVIDER_ROOT/cohort/.edgebench-source/receipt.json" \
+  "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q \
+  benchmark/tests/test_checkpoint_judge.py \
+  benchmark/tests/test_checkpoint_controller.py::test_native_controller_transport_preserves_original_point_and_fresh_authority \
+  benchmark/tests/test_checkpoint_controller.py::test_native_controller_transport_retains_nonfinite_released_results
 # Linux with an owned disposable Docker daemon; grades only synthetic fixtures.
 LOOPX_EDGEBENCH_DOCKER_SMOKE=1 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m pytest -q \
   benchmark/tests/test_edgebench_feedback_docker.py::test_checkpoint_opportunity_uses_native_admission_and_real_grade
 ```
 
+The HTTP regression uses synthetic grading and a synthetic backend, with the real
+native HTTP service and LoopX capture/export/restore transport. It retains a
+finite incumbent beside a partial non-finite result, preserves nested native
+values and consumed opportunities, and accepts the next eligible submission
+without mutating the source. It does not run a model, Docker or benchmark task.
 The Docker journey checks a real grade, remaining rounds/cooldown, incumbent bytes,
 and the cold-registration counterexample; it does not restore evaluator authority.
 Native session qualification is separate: the tested Host is `codex-cli 0.160.0`.
@@ -788,6 +819,15 @@ CKPT_GUEST_NODE=/absolute/path/to/node
   --guest-dependencies "$CKPT_PROVIDER_ROOT/guest-deps" \
   --output "$CKPT_PROVIDER_ROOT/joint-result"
 ```
+
+Pass `--context-delivery on` with a supported native hook host (Codex CLI
+`0.162.1`) to qualify the opt-in transport in the same joint path. The source
+must actually deliver a complete full packet and later deltas across worker
+wakes; every fresh receiver must begin with a complete current full packet.
+The static inference follows model-visible page cursors, and a separate byte-map
+oracle checks complete delivery and retained delta bases before candidate work.
+The default remains `off`. Neither mode measures paid inference, task quality or
+fees; reusing a point still does not count its source test as passed in this run.
 
 The public fixture runs six actual native work wakes, captures the pending
 pre-decision guard and continues the source; the ordinary and stride receivers

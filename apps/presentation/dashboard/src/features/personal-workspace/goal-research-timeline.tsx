@@ -44,6 +44,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     span: "记录跨度", start: "起点", end: "末端", replan: "转向", continue: "继续", stop: "停止", wait: "等待", no_change: "无变化", ask_human: "请人决定",
     ...findingCopy.labels, unlabeled: "无结论", phaseNote: "按记录时间三等分，仅为阅读分组，不是预声明的评估窗口。",
     noTime: "没有可用的记录时间，无法放上时间轴；下方记录仍可完整阅读。",
+    whole: "全程",
   } : {
     early: "Early", middle: "Middle", late: "Late", items: "Research items", findings: "Findings",
     decisions: "Explicit decisions", none: "No explicit decision recorded", changed: "Changed", stopped: "Stopped", retained: "Retained",
@@ -54,6 +55,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     span: "Recorded span", start: "Start", end: "End", replan: "Replan", continue: "Continue", stop: "Stop", wait: "Wait", no_change: "No change", ask_human: "Ask human",
     ...findingCopy.labels, unlabeled: "No finding", phaseNote: "Equal thirds of record time, for reading only; not a pre-declared evaluation window.",
     noTime: "No usable record time; the history cannot be placed on a time axis. All records remain readable below.",
+    whole: "Whole run",
   };
   const {start, end} = timeline;
   if (start === null || end === null) return <ContextHelp label={zh ? "记录时间未知" : "Record time unknown"} icon={CircleHelp}><p className="research-history-note">{copy.noTime}</p></ContextHelp>;
@@ -89,7 +91,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   const groupedIds = new Set(dayGroups.flatMap(group => group.nodes.map(node => node.id)));
   const swarm = timeline.singles.filter(id => !groupedIds.has(id)).map(id => timeline.nodes.get(id)!).filter(item => item.first !== null);
   const unknownTime = [...timeline.nodes.values()].filter(item => item.first === null).length;
-  const phaseName = (item: TimelinePhase) => [copy.early, copy.middle, copy.late][item.index];
+  const phaseName = (item: TimelinePhase) => timeline.phases.length === 1 ? copy.whole : [copy.early, copy.middle, copy.late][item.index];
   const phaseDescription = (item: TimelinePhase) => {
     const counts = Object.entries(item.decisions);
     return [
@@ -111,7 +113,7 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
   };
   return <div className="research-timeline">
     <div className="research-timeline-guide"><span>{zh ? "记录时间" : "Record time"}</span><ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
-      <p>{copy.phaseNote}</p><p>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
+      <p>{timeline.phases.length === 1 ? (zh ? "全部记录归入同一阅读分组，仅为阅读组织，不是预声明的评估窗口。" : "All records share one reading group, for reading only; not a pre-declared evaluation window.") : copy.phaseNote}</p><p>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
       <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹按研究问题归组，组内保留各轮显式决策，最近记录在前；同名问题不会自动合并。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history groups explicit decisions by question, newest record first; matching titles do not merge questions."}</p>

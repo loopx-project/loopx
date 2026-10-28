@@ -480,6 +480,15 @@ a retained report route cannot fall back to another Session or audience.
 Provider, owner and original-message verification still apply. Owner Todo
 notifications retain their existing private-chat route selection.
 
+Worker conclusions from an already recovered original conversation use the
+recorded Core continuation when resolving their private return route. A client
+suffix alone is insufficient: the transport and Core journals must agree on
+the current Session, Turn, source and recovery record. Quota, routing and
+unfinished-work continuations retain the same audience and existing saved-send
+verification; this lookup neither retries model work nor resends an unknown
+provider effect. Missing records, changed identity or revoked grants still
+block delivery.
+
 Portfolio evidence collection finishes before the governed driver captures its
 launch authority. A long read can then observe legitimate registry rewrites
 without immediately invalidating an earlier launch witness. The original

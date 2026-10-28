@@ -179,8 +179,8 @@ export const navigationSortingScenario = {
       const usageVitals = page.getByTestId("goal-vitals").locator(".goal-vital-cell")
         .filter({ has: page.locator(".goal-vital-label", { hasText: /^(Agent 用时|成本)$/ }) });
       const unknownUsage = await usageVitals.locator(".goal-vital-value").allTextContents();
-      if (unknownUsage.length !== 2 || unknownUsage.some(value => value !== "—")) {
-        throw new Error(`Unknown usage became a zero or disappeared: ${unknownUsage}`);
+      if (unknownUsage.length !== 2 || unknownUsage.some(value => value !== "未采集")) {
+        throw new Error(`Unknown usage lost its explicit unmeasured state: ${unknownUsage}`);
       }
       for (const label of ["Agent 用时", "成本"]) {
         const cell = usageVitals.filter({ has: page.getByText(label, { exact: true }) });

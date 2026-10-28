@@ -304,6 +304,8 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     # or re-reading every off-page Turn for each page.
     snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
+    from ...extensions.lark.private_conversations import project_private_reply_history
+    snapshot["messages"] = project_private_reply_history(store, store.load_session(session_id) or {}, snapshot["messages"])
     if page is not None:
         snapshot["message_page"] = page["message_page"]
     return snapshot
@@ -582,9 +584,13 @@ class ReturnService:
         self.thread = threading.Thread(
             target=self.run, daemon=True, name="loopx-manager-returns"
         )
+        self.execution_thread = threading.Thread(
+            target=self.run_executions, daemon=True, name="loopx-manager-executions"
+        )
 
     def start(self) -> None:
         self.thread.start()
+        self.execution_thread.start()
 
     def run(self):
         try:
@@ -600,7 +606,20 @@ class ReturnService:
                 )
             self.stop.wait(3)
 
+    def run_executions(self) -> None:
+        # Native previews may wait on a subprocess. Keep result publication
+        # independent, using the same server lifetime and one serial probe.
+        from .execution import QueuedSourcePump
+        execution_pump = QueuedSourcePump(*self.args[:3])
+        while not self.stop.is_set():
+            try:
+                execution_pump.tick(cancelled=self.stop.is_set)
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                logging.getLogger(__name__).warning("Queued source execution unavailable; retrying")
+            self.stop.wait(3)
+
     def close(self) -> None:
         self.stop.set()
-        if self.thread.ident is not None:
-            self.thread.join(timeout=3)
+        for thread in (self.thread, self.execution_thread):
+            if thread.ident is not None:
+                thread.join(timeout=1.5)

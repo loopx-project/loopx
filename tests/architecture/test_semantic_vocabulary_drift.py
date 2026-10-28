@@ -22,6 +22,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SMOKE = REPO_ROOT / "examples" / "semantic-vocabulary-drift-smoke.py"
 
 
+def test_typescript_return_producers_do_not_require_a_global_field() -> None:
+    from loopx.semantics.inventory import SourceFile
+    from loopx.semantics.production import collect_production
+
+    path = "loopx/control_plane/quota/route_probe.ts"
+    source = SourceFile(path, ".ts", '''
+export function route(changed: boolean) {
+  const unrelated = {[changed ? "x" : "y"]: "not_a_route"};
+  return changed ? "run" : "wait";
+}
+export function other() { return "unregistered_elsewhere"; }
+export function unknown(value: string) { return value; }
+''')
+    vocabulary = {"owners": {}, "return_producers": [path + "::route", path + "::unknown"]}
+    rows = collect_production(REPO_ROOT, vocabulary, [source])
+    assert len(rows) == 2
+    assert rows[0].values == frozenset({"run", "wait"}) and not rows[0].unresolved
+    assert not rows[1].values and rows[1].unresolved
+
+
 def test_semantic_vocabulary_registry_matches_the_code() -> None:
     completed = subprocess.run(
         [sys.executable, "-B", str(SMOKE)],

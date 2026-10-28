@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {ChevronRight, ListChecks, RefreshCw, X} from "lucide-react";
-import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage} from "../../data/chat";
+import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
 import {z} from "zod";
 import {fetchConversationRequests, type ConversationRequest, type ConversationRequestInventory} from "../../data/conversation-requests";
 import {ContextHelp} from "./context-help";
@@ -136,6 +136,24 @@ function OriginalImage({attachment, zh}: {attachment: ChatImageAttachment; zh: b
     : <img src={attachment.data_url} alt={attachment.name} onError={() => setFailed(true)}/>;
 }
 
+export function ConversationReplyContext({context, zh}: {context?: ChatReplyContext; zh: boolean}) {
+  if (!context) return null;
+  const earlier = context.thread?.messages.filter(row => row.message_id !== context.parent.message_id) ?? [];
+  return <details className="conversation-reply-context">
+    <summary>{zh ? "引用与话题上下文" : "Reply and thread context"}</summary>
+    <blockquote><MarkdownText text={context.parent.content}/>
+      {!context.parent.complete ? <span>{zh ? "引用为节选" : "Quoted excerpt"}</span> : null}</blockquote>
+    {earlier.map(row => <section key={row.message_id}>
+      <strong>{row.sender?.kind === "user" ? (zh ? "用户" : "User") : row.sender?.kind === "app" ? (zh ? "应用" : "App") : (zh ? "原消息" : "Original message")}</strong>
+      {row.created_at ? <time>{row.created_at}</time> : null}
+      <MarkdownText text={row.content}/>
+      {row.content_truncated ? <span>{zh ? "消息为节选" : "Message excerpt"}</span> : null}
+    </section>)}
+    {context.thread ? <span>{zh ? "话题上下文为节选" : "Thread context is an excerpt"}
+      {context.thread.omitted_message_count ? ` · ${context.thread.omitted_message_count} ${zh ? "条更早消息未包含" : "earlier messages omitted"}` : ""}</span> : null}
+  </details>;
+}
+
 function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest; zh: boolean; revision: number; active: boolean}) {
   const [messages, setMessages] = useState<ChatVisibleMessage[] | null>(null);
   const [error, setError] = useState(false);
@@ -164,7 +182,8 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
   return <details onToggle={event => {focusOnRead.current = event.currentTarget.open; setOpen(event.currentTarget.open);}}><summary>{zh ? "原对话" : "Original conversation"}</summary>
     <div ref={content} tabIndex={-1}>{error ? <p role="alert">{zh ? "原对话暂时无法读取，请重新打开重试。" : "Original conversation unavailable. Reopen to retry."}</p>
         : messages ? messages.map(message => <article key={message.message_id}>
-          <strong>{message.role === "user" ? (zh ? "你" : "You") : "LoopX"}</strong><MarkdownText text={message.text}/>
+          <strong>{message.role === "user" ? (zh ? "你" : "You") : "LoopX"}</strong><MarkdownText text={message.reply_context?.source_text ?? message.text}/>
+          <ConversationReplyContext context={message.reply_context} zh={zh}/>
           {message.attachments?.length ? <div className="conversation-request-images">
             {message.attachments.map(attachment => <OriginalImage key={attachment.id} attachment={attachment} zh={zh}/>)}
           </div> : null}

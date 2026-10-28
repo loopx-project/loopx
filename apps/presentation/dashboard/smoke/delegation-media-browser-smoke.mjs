@@ -62,6 +62,8 @@ try {
     const response = await route.fetch(), value = await response.json();
     const source = value.messages.find(message => message.role === 'user');
     source.text = body;
+    source.reply_context = {source_text: body, parent: {message_id: 'synthetic-original-parent',
+      content: 'Original quoted requirement remains available.', complete: true}};
     const image = (id, name, data_url = raster) => ({id, name, data_url, mime_type: 'image/png', size: 2048});
     source.attachments = mode === 'text' ? [] : [image('one', '原始图一.png'), image('two', 'Original image two.png')];
     if (mode === 'broken') source.attachments = [image('broken', '不可读图片.png', 'data:image/png;base64,AA==')];
@@ -94,7 +96,7 @@ try {
   await original.click();
   const articles = row.locator('article');
   await articles.first().waitFor();
-  assert.equal(await articles.first().locator('.personal-md').innerText(), body);
+  assert.equal(await articles.first().locator(':scope > .personal-md').innerText(), body);
   assert.equal(await row.getByText('Other turn must stay hidden.', {exact: true}).count(), 0);
   const images = row.locator('img');
   if (process.env.LOOPX_MEDIA_BEFORE === '1') {
@@ -104,6 +106,11 @@ try {
     console.log('BASELINE: the original full body is present, but both supplied images are absent.');
   } else {
     assert.equal(await images.count(), 2);
+    const quote = articles.first().locator('.conversation-reply-context');
+    assert.equal(await quote.getAttribute('open'), null);
+    await quote.locator('summary').click();
+    await quote.getByText('Original quoted requirement remains available.', {exact: true}).waitFor();
+    await quote.locator('summary').click();
     assert.deepEqual(await images.evaluateAll(nodes => nodes.map(node => node.alt)), ['原始图一.png', 'Original image two.png']);
     await images.first().waitFor({state: 'visible'});
     await page.waitForFunction(() => [...document.querySelectorAll('.conversation-request-images img')].every(img => img.complete && img.naturalWidth === 600));
@@ -122,7 +129,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.conversation-requests-body')?.getAttribute('aria-busy') === 'false');
     assert.equal(await original.evaluate(node => node.parentElement.open), true,
       'A same-source refresh must keep the original conversation expanded');
-    assert.equal(await articles.first().locator('.personal-md').innerText(), body);
+    assert.equal(await articles.first().locator(':scope > .personal-md').innerText(), body);
     assert.equal(await images.count(), 2);
     const refreshOriginal = async nextMode => {
       mode = nextMode;

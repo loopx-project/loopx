@@ -29,6 +29,11 @@
 .conversation-request-detail article {margin:16px 0;border-left:2px solid var(--pw-line);padding-left:16px;}
 .conversation-request-images {display:grid;gap:12px;margin-top:12px;}
 .conversation-request-images img {display:block;max-width:100%;height:auto;border:1px solid var(--pw-line);border-radius:6px;}
+.conversation-reply-context {margin:12px 0;overflow-wrap:anywhere;font-size:var(--text-body);line-height:var(--leading-prose);}
+.conversation-reply-context > summary {cursor:pointer;color:var(--pw-muted);min-height:36px;}
+.conversation-reply-context blockquote,.conversation-reply-context section {margin:12px 0;padding-left:16px;border-left:2px solid var(--pw-line);}
+.conversation-reply-context time {margin-left:8px;color:var(--pw-muted);font-size:var(--text-caption);}
+.conversation-reply-context span {color:var(--pw-muted);}
 .conversation-requests-dialog :focus-visible,.conversation-requests-entry :focus-visible {outline:2px solid var(--pw-blue);outline-offset:2px;}
 .conversation-requests-dialog h2:focus {outline:none;}
 @media(max-width:640px) {.conversation-requests-dialog {width:calc(100vw - 16px);max-height:calc(100dvh - 16px);}.conversation-requests-dialog > header,.conversation-requests-dialog > nav,.conversation-requests-body {padding-inline:16px;}.conversation-request-row > summary {grid-template-columns:16px minmax(0,1fr) auto;}.conversation-request-row > summary > time {grid-column:3;grid-row:2;}.conversation-request-row > summary strong {grid-column:2 / -1;}.conversation-request-row > summary > span {grid-column:2;grid-row:2;}.conversation-requests-body {max-height:calc(100dvh - 180px);}}
