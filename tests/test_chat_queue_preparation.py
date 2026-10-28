@@ -38,6 +38,40 @@ def session_runtime(tmp_path, *, channel="goal.public-research"):
     )
 
 
+def test_restarted_queue_delivers_original_material_to_native_turn(tmp_path, monkeypatch):
+    import queue
+    from types import SimpleNamespace
+    from loopx.chat_agent import CodexChatAgentSession
+
+    store, sid, _ = session_runtime(tmp_path)
+    material = "Explain this exact source:\n```python\nif ready:\n    print('a  b')\n```\n\n原文：a\u00a0b"
+    original, _ = store.create_queued_turn(
+        sid, client_turn_id="material-request", message=material, origin="web")
+    store = ChatSessionStore(tmp_path)
+    runtime = ChatRuntimeController(store=store, codex_bin="unused-test-codex")
+    native = CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(), thread_id="public-thread", work_dir=tmp_path)
+    sent = []
+
+    def write(packet):
+        assert packet["method"] == "turn/start"
+        sent.append(packet["params"])
+        native.messages.put({"id": packet["id"], "result": {"turn": {"id": "native-material"}}})
+        native.messages.put({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "final_answer", "text": "Received the source."}}})
+        native.messages.put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+
+    monkeypatch.setattr(native, "_write", write)
+    monkeypatch.setattr(runtime, "_ensure_adapter", lambda *a, **kw: CodexAppServerAdapter(native))
+    runtime.resume_session_queue(session_id=sid, work_dir=tmp_path, objective="Explain source")
+    result = runtime.wait_for_turn(session_id=sid, turn_id=original["turn_id"], timeout_sec=10)
+    assert result["status"] == "completed"
+    assert len(sent) == 1 and sent[0]["threadId"] == "public-thread"
+    assert sent[0]["input"][0]["text"].endswith(material)
+    assert store.turn_for_client(sid, "material-request")["message"] == material
+    assert store.messages(sid)[0]["text"] == material
+
+
 @pytest.mark.parametrize("failure", ["before_message", "after_message", "before_event"])
 @pytest.mark.parametrize("display", ["Execution request", "Original visible request 原文"])
 def test_queue_replay_leaves_prepared_managed_input_with_its_owner(tmp_path, monkeypatch, failure, display):

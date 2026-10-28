@@ -21,6 +21,38 @@ import loopx.chat_runtime as chat_runtime
 import pytest
 
 
+@pytest.mark.parametrize("mode", ["chat", "execution", "structured", "review"])
+def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
+    material = "  修复下面的代码，保留字面值：\r\n```python\r\nif ready:\r\n\tprint('a  b')\r\n```\n\nname:\u00a0value  \n"
+    session = chat_agent.CodexChatAgentSession(
+        process=SimpleNamespace(poll=lambda: None), messages=queue.Queue(),
+        thread_id="material-thread", work_dir=tmp_path,
+        execution_mode=mode in {"execution", "structured"}, read_only_review=mode == "review",
+    )
+    sent = []
+
+    def write(packet):
+        assert packet["method"] == "turn/start"
+        sent.append(packet["params"])
+        session.messages.put({"id": packet["id"], "result": {"turn": {"id": "material-turn"}}})
+        session.messages.put({"method": "item/completed", "params": {"item": {
+            "type": "agentMessage", "phase": "final_answer", "text": '{"answer":"received"}'}}})
+        session.messages.put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+
+    monkeypatch.setattr(session, "_write", write)
+    session.send(material, output_schema={"type": "object"} if mode == "structured" else None)
+    prompt = sent[0]["input"][0]["text"]
+    assert prompt.endswith(material)
+    if mode == "structured":
+        assert prompt == material
+    if mode == "review":
+        assert "do not re-execute" in prompt
+    for blank in ["", " \r\n\t\u00a0"]:
+        with pytest.raises(ValueError, match="user message is required"):
+            session.send(blank)
+    assert len(sent) == 1
+
+
 @pytest.mark.parametrize("fault", [None, "active", "completed", "final", "missing-phase", "correction",
     "unknown", "foreign", "duplicate", "live-tool", "late-items", "late-turn"])
 def test_interrupted_result_review_requires_stable_full_inventory_without_final_or_live_effects(tmp_path, monkeypatch, fault):

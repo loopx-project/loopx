@@ -658,7 +658,7 @@ def _turn_prompt(
             if context_summary.strip()
             else ""
         )
-        + f"Operator user message:\n{user_message.strip()}"
+        + f"Operator user message:\n{user_message}"
     )
 
 
@@ -1696,7 +1696,7 @@ class CodexChatAgentSession:
         on_native_item: Callable[[dict[str, Any]], None] | None = None,
         turn_start_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> dict[str, Any]:
-        text = str(user_message or "") if project_collaboration else " ".join(str(user_message or "").split())
+        text = str(user_message or "")
         if not text.strip():
             raise ValueError("user message is required")
         if self.read_only_review:
