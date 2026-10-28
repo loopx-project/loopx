@@ -87,9 +87,13 @@ neither enables native tracing nor changes the default-off transport switch.
 
 During the C1 migration, exact current-Task title sharing is owned by the
 TypeScript decision composer in `turn_envelope.ts`. The legacy Python display
-helper shares one coarse transport call with Explore-guidance sharing; each
-explicit detail selector is preserved. No source carrier or both detail selectors
-means no sharing call. Its label-prefix omission stays display-only.
+helper shares one coarse transport call with Explore-guidance and Goal-acceptance
+sharing; each explicit task/Explore detail selector is preserved. Acceptance
+still shares exact duplicates when both selectors request inline detail. A call
+limited to task/Explore sharing needs no transport without a source carrier or
+with both selectors disabled. Replan-authoring projection keeps its separate
+lifecycle; it is not another acceptance/task/Explore call. Label-prefix omission
+stays display-only.
 Complete `loopx_turn_envelope_v1` decisions share before hashing/capture and
 validate the same-capture target on recovery. Conflicting inline/reference values,
 chains, malformed paths or a no-longer-verified selected Task reject even with
@@ -99,9 +103,11 @@ it does not select an alternative complete contract. Retire its delegate with th
 legacy display callers while retaining supported historical capture recovery.
 
 C1 迁移中，当前 Task 标题的精确共享归 `turn_envelope.ts` 的 TypeScript decision
-composer 所有；旧 Python 展示 helper 与 Explore 指引共享合用一次粗粒度调用，
-分别保留 detail 选择；无源载体或两项 detail 均开启时无需共享调用。按 label 前缀
-省略仍仅属于展示。
+composer 所有；旧 Python 展示 helper 与 Explore 指引、Goal acceptance 共享合用
+一次粗粒度调用，分别保留任务／Explore detail 选择；两项均要求内联详情时，验收
+仍共享精确重复。仅请求任务／Explore 共享时，无源载体或两项均停用才无需传输。
+Replan authoring 投影保留独立生命周期，不构成另一轮验收／任务／Explore 调用。
+按 label 前缀省略仍仅属于展示。
 完整 `loopx_turn_envelope_v1` 在 hash／capture 前共享，恢复时验证同一 capture 的目标。
 原文／引用冲突、引用链、非法路径或当前选中 Task 无法继续核验时，即使完整性 hash
 有效也拒绝。该来源共享不要求开启差分。上文 `--include-detail` 描述历史展示投影，

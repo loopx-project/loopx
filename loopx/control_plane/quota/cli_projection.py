@@ -635,28 +635,25 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
     return promoted
 
 
-def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Legacy display adapter; the complete contract uses this same TS owner."""
-    from .turn_envelope import _turn_envelope_result
-
-    return _turn_envelope_result("reference_goal_acceptance", payload=payload)
-
-
 def _reference_context(
     payload: dict[str, Any], *, task_title: bool = True, explore_guidance: bool = True,
+    goal_acceptance: bool = False,
 ) -> dict[str, Any]:
     """One coarse transport call for the existing typed context owner."""
     contract = payload.get("interaction_contract")
     agent = contract.get("agent_channel") if isinstance(contract, dict) else None
     context = agent.get("work_context") if isinstance(agent, dict) else None
-    # No source carrier means neither operation can act. Leave semantic matching
-    # and reference validation in TypeScript, rather than replicating its rules.
-    if not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources"):
+    # Task/Explore sharing needs a source carrier; acceptance may use other root
+    # owners. Leave semantic matching and reference validation in TypeScript.
+    if not goal_acceptance and (
+        not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources")
+    ):
         return payload
     from .turn_envelope import _turn_envelope_result
 
     return _turn_envelope_result("reference_context", payload=payload,
-        task_title=task_title, explore_guidance=explore_guidance)
+        task_title=task_title, explore_guidance=explore_guidance,
+        goal_acceptance=goal_acceptance)
 
 
 def compact_quota_should_run_cli_payload(
@@ -747,9 +744,8 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action = dict(agent_lane_next_action)
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
-    compact = _reference_inline_goal_acceptance(compact)
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
-        explore_guidance=not include_vision_detail)
+        explore_guidance=not include_vision_detail, goal_acceptance=True)
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )

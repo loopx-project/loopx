@@ -1,11 +1,12 @@
 """One complete acceptance survives composition, display and actual admission."""
 from copy import deepcopy
+from functools import partial
 import json
 
 import pytest
 
 from loopx.control_plane.quota.cli_projection import (
-    _reference_inline_goal_acceptance, compact_quota_should_run_cli_payload,
+    _reference_context, compact_quota_should_run_cli_payload,
 )
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope, compose_turn_decision, quota_action_signature_document,
@@ -14,7 +15,8 @@ from loopx.control_plane.quota.turn_envelope import (
 from test_replan_host_context_projection import _quota_payload
 
 
-@pytest.fixture(params=[_reference_inline_goal_acceptance, compose_turn_decision],
+@pytest.fixture(params=[partial(_reference_context, task_title=False,
+    explore_guidance=False, goal_acceptance=True), compose_turn_decision],
                 ids=["legacy-display", "complete-composition"])
 def share(request):
     return request.param

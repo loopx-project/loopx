@@ -158,9 +158,14 @@ def test_context_sharing_uses_one_boundary_and_keeps_explicit_detail(monkeypatch
     task_detail, vision_detail = detail in {"task", "both"}, detail in {"vision", "both"}
     result = compact_quota_should_run_cli_payload(source,
         include_todo_summary_detail=task_detail, include_vision_detail=vision_detail)
-    assert len(calls) == (0 if detail == "both" else 1)
-    assert calls.count("reference_context") == (0 if detail == "both" else 1)
+    # Acceptance still shares its exact source when both display selectors are
+    # explicit; it now uses the same request as task/Explore sharing.
+    assert calls.count("reference_context") == 1
+    assert "reference_goal_acceptance" not in calls
     assert "reference_current_task_title" not in calls and "reference_explore_guidance" not in calls
+    # Replan authoring has its own applicable lifecycle; this assertion measures
+    # the merged acceptance/task/Explore operation, not unrelated projections.
+    assert calls.count("reference_replan_authoring") == (0 if vision_detail else 1)
     if task_detail:
         assert result["agent_lane_next_action"]["title"] == title
     else:
