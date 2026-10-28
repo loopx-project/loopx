@@ -41,6 +41,10 @@ Codex discovery budget, and do not eagerly import linked detail documents.
 See [loading and maintenance](docs/development/README.md#agent-instruction-loading-and-maintenance)
 for host-specific checks; delivery does not prove model compliance.
 
+Prefer [progressive context](docs/development/README.md#progressive-context-for-development):
+current goals, constraints and acceptance criteria first; supporting evidence and
+procedures on demand under their owning read/recovery contract.
+
 ## Goal-Oriented Development
 
 Before selecting non-trivial work, resolve the current requested outcome from

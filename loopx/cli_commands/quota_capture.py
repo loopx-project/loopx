@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
-from ..control_plane.effect_runtime import EffectRuntimeRejected
+from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
@@ -37,7 +37,9 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   output_limit: int | None, instruction: bool,
                   presentation: dict[str, Any] | None = None,
                   next_page_bytes: int | None = None,
-                  next_page_output_bytes: int | None = None) -> dict[str, Any]:
+                  next_page_output_bytes: int | None = None,
+                  select: list[str] | None = None,
+                  selection_sha256: str | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -48,11 +50,17 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
         result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
             "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
             "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
-        if instruction:
+        if select is not None:
+            result.update(selection_sha256=selection_sha256, selected_pointers=select)
+            result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
+                "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
+                "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
+        elif instruction:
             result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
-                max_page_output_bytes=next_page_output_bytes or output_limit)
+                max_page_output_bytes=next_page_output_bytes or output_limit,
+                select=select, selection_sha256=selection_sha256)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -85,7 +93,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
-    in that exact capture, so a replacement cannot silently mix two decisions.
+    in that capture or its separately digest-bound selection, so a replacement
+    cannot silently mix two decisions or detail views.
     EOF describes this page, never a model's complete-consumption receipt.
     """
     try:
@@ -124,18 +133,44 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
             raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
                 "larger pages require a sufficient max-page-output-bytes within the capture limit")
-        path, raw, _ = _read_capture(value, digest)
+        path, raw, payload = _read_capture(value, digest)
+        selectors = getattr(args, "select", None)
+        selection_digest = getattr(args, "selection_sha256", None)
+        if selectors is None and selection_digest is not None:
+            raise ValueError("selection-sha256 requires --select")
+        if selectors is not None:
+            if getattr(args, "format", None) != "json":
+                raise ValueError("selected context-read requires JSON output")
+            if offset > 0 and selection_digest is None:
+                raise ValueError("selected continuation requires selection-sha256; follow next_command")
+            from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+            plan = _turn_envelope_result("context_select", context=payload, select=selectors)
+            views: list[dict[str, Any]] = []
+            for item in plan["selections"]:
+                selected: Any = payload
+                for key in item["path"]:
+                    selected = selected[key]
+                views.append({"pointer": item["pointer"], "value": selected})
+            raw = json.dumps({"schema_version": "context_capture_selection_v1", "selections": views},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            expected = hashlib.sha256(raw).hexdigest()
+            if selection_digest is not None and selection_digest != expected:
+                raise ValueError("selected view digest changed; restore the original selection and reader")
+            selection_digest = expected
+            selectors = [item["pointer"] for item in views]
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
-            next_page_output_bytes=next_page_output_bytes)
-    except (OSError, ValueError, RecursionError) as exc:
+            next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest)
+    except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
         return {"ok": False, "schema_version": "context_capture_page_v1",
-            "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
+            "reason": str(exc) if isinstance(exc, (ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError))
+                else "original capture could not be read",
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
