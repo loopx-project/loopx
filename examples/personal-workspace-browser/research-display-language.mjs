@@ -275,8 +275,20 @@ export const researchDisplayLanguageScenario = {
         assert.equal(await comparison.getByRole("status").innerText(), changedCount,
           "Translation changes never alter the count of changed source fields");
         await history.getByRole("button", {name: "查看译文", exact: true}).click();
+        const recordEntry = revision.locator(":scope > summary");
+        await comparison.getByRole("button", {name: "返回当前记录", exact: true}).click();
+        await page.waitForFunction(element => element === document.activeElement, await recordEntry.elementHandle());
+        assert.equal(await search.inputValue(), "finding-0", "Returning from a long comparison retains the exact search");
+        assert.equal(await revision.getAttribute("open"), "", "The original record stays open");
         await compareEntry.focus(); await compareEntry.press("Enter");
-        assert(await compareEntry.evaluate(element => element === document.activeElement));
+        assert.equal(await comparison.getByRole("combobox").inputValue(), comparisonIds, "Reopening preserves the exact comparison pair");
+        const nestedOriginal = comparison.locator(".research-comparison-field details > summary").first();
+        await nestedOriginal.click(); await nestedOriginal.press("Escape");
+        assert.equal(await nestedOriginal.evaluate(element => element.parentElement.open), false, "Escape closes the inner original first");
+        assert.equal(await comparison.getAttribute("open"), "", "Inner Escape preserves the comparison");
+        await compareEntry.focus(); await compareEntry.press("Escape");
+        await page.waitForFunction(element => element === document.activeElement, await recordEntry.elementHandle());
+        assert.equal(await comparison.getAttribute("open"), null, "Comparison Escape returns to the same record");
         await allRecords.getByRole("button", {name: "清除筛选", exact: true}).click();
         await allRecords.locator(":scope > summary").click();
         await history.getByRole("button", {name: "查看分析", exact: true}).click();

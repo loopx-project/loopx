@@ -15,6 +15,9 @@ const raw = renderToStaticMarkup(createElement(TeamArtifactContent, {artifact, l
 assert.doesNotMatch(raw, /<table>|<a /); assert.match(raw, /\| Measure \| Value \|/);
 const chat = renderToStaticMarkup(createElement(MarkdownText, {text}));
 assert.match(chat, /<table>/, "A conversation renders the same safe report table as an artifact");
+assert.match(chat, /<h2[^>]*class="personal-md-heading is-h1"[^>]*>Research<\/h2>/,
+  "A document heading is navigable semantic HTML beneath the page title");
+assert.doesNotMatch(chat, /<h1\b/, "Embedded documents do not create a second page title");
 assert.doesNotMatch(chat, /<script|<img|href="javascript:/);
 assert.match(chat, /&lt;script&gt;/);
 const malformed = renderToStaticMarkup(createElement(MarkdownText, {text: "| One | Two |\n|---|\n| kept | intact |"}));

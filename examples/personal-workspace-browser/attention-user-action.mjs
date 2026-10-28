@@ -91,10 +91,16 @@ print(json.dumps({'port':s.server_port,'ids':ids}),flush=True); s.serve_forever(
       assert.equal(denied.status, 400);
       assert.equal((await read(actionId)).status, "open");
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
-      await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
-      await page.getByRole("button", { name: /^任务$/ }).first().click();
+      const attention = page.getByTestId("personal-brief-needs");
+      assert.equal(Number(await attention.locator("header b").innerText()), operation === "complete" ? 2 : 1,
+        "Two requests in one Goal are two items; readback removes only the completed request");
+      assert.match(await attention.locator("footer").first().innerText(), /1/,
+        "The affected-Goal count is separate from the item count");
+      assert.equal(await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").count(), 1);
+      await attention.locator(`[data-attention-id="${actionId}"]`).click();
+      assert.equal(new URL(page.url()).searchParams.get("goalId") || null, null,
+        "A native home item opens its request without forcing a Goal navigation");
       const openTask = () => page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(new RegExp(`^Handle ${operation}`)).first().click();
-      await openTask();
       await drawer.getByText("提出请求：Agent codex-review", {exact: true}).waitFor();
       await drawer.getByText("回复交给：Agent codex-delivery", {exact: true}).waitFor();
       if (operation === "complete") {
@@ -176,9 +182,7 @@ export const attentionUserActionScenario = {
     const drawer = page.locator(".personal-context-drawer");
     async function openRequest(text) {
       await page.getByRole("button", { name: /LoopX 管家/ }).first().click();
-      await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
-      await page.getByRole("button", { name: /^任务$/ }).first().click();
-      await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(text, { exact: true }).click();
+      await page.getByTestId("personal-brief-needs").getByText(text, { exact: true }).click();
       await drawer.getByText(text, { exact: true }).first().waitFor({ state: "visible" });
     }
     try {
@@ -195,6 +199,29 @@ export const attentionUserActionScenario = {
       await done.click();
       await drawer.getByRole("alert").getByText(/未能准备这项变更.*没有保存任何内容/u).waitFor({ state: "visible" });
       assert.equal(api.durableWriteCount, writesBefore, "A failed preview must not write");
+      let releasePreview, previewStarted;
+      const heldPreview = new Promise(resolve => { releasePreview = resolve; });
+      const started = new Promise(resolve => { previewStarted = resolve; });
+      await page.route("**/api/actions/preview", async route => {
+        previewStarted(); await heldPreview; await route.fallback();
+      }, {times: 1});
+      const previewsBefore = api.actionPreviews.length;
+      await done.evaluate(button => { button.click(); button.click(); });
+      await started;
+      await drawer.getByRole("button", {name: /关闭|Close/}).first().click();
+      const previewResponse = page.waitForResponse(response => new URL(response.url()).pathname === "/api/actions/preview");
+      releasePreview(); await previewResponse;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(api.actionPreviews.length, previewsBefore + 1, "Repeated activation while preparing creates one preview");
+      assert.equal(await page.locator('[data-context-kind="proposal"]').count(), 0,
+        "A late preview cannot reopen a drawer the owner closed");
+      assert.equal(api.durableWriteCount, writesBefore);
+      await openRequest(actionText);
+      await done.click();
+      await page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
+      await drawer.getByRole("button", {name: "返回原待处理事项", exact: true}).click();
+      await drawer.getByText(actionText, {exact: true}).first().waitFor();
+      assert.equal(api.durableWriteCount, writesBefore, "Returning to the original request performs no write");
       await done.click();
       await page.locator('[data-context-kind="proposal"]').waitFor({ state: "visible" });
       const completion = api.actionPreviews.at(-1);
@@ -203,9 +230,26 @@ export const attentionUserActionScenario = {
       assert.equal(completion.normalized_parameters.todo_id, "todo-browser-user-action");
       assert.equal(completion.normalized_parameters.agent_id, "codex-delivery", "Uses the request's bound Agent, never the first available Agent");
       assert.equal(api.durableWriteCount, writesBefore, "Preview waits for owner confirmation");
+      let releaseApply, applyStarted;
+      const heldApply = new Promise(resolve => { releaseApply = resolve; });
+      const applying = new Promise(resolve => { applyStarted = resolve; });
+      await page.route("**/api/actions/*/apply", async route => {
+        applyStarted(); await heldApply; await route.fallback();
+      }, {times: 1});
       await page.locator('[data-context-kind="proposal"]').getByRole("button", { name: "确认并应用" }).click();
-      await page.getByRole("button", { name: "查看更新后的 Goal" }).click();
+      await applying;
+      await drawer.getByRole("button", {name: "返回原待处理事项", exact: true}).click();
+      await drawer.getByRole("button", {name: /关闭|Close/}).first().click();
+      await openRequest(idlessText);
+      const applyResponse = page.waitForResponse(response => /\/api\/actions\/[^/]+\/apply$/.test(new URL(response.url()).pathname));
+      releaseApply(); await applyResponse;
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await drawer.getByText(idlessText, {exact: true}).first().waitFor();
+      assert.equal(await page.locator('[data-context-kind="proposal"]').count(), 0,
+        "A completed apply retains its receipt without replacing the newer request");
       assert.equal(api.durableWriteCount, writesBefore + 1, "Confirmation writes exactly once");
+      await drawer.getByRole("button", {name: /关闭|Close/}).first().click();
+      await page.getByTestId("personal-home-lane-needs_you").locator(".personal-home-goal-card").first().click();
       await page.getByRole("button", { name: /^任务$/ }).first().click();
       await page.locator('[data-goal-panel="tasks"]:not([hidden])').getByText(idlessText, { exact: true }).waitFor({ state: "visible" });
       assert.equal(await page.getByText(actionText, { exact: true }).count(), 0, "The completed request leaves needs-you on readback");
@@ -253,6 +297,24 @@ export const attentionUserActionScenario = {
       } finally {
         await fresh.close();
       }
+
+      const linked = await openWorkspacePage(browser, url, {
+        apiOptions: {userActionAttention: true},
+        beforeGoto: api => { api.transformStatus = data => {
+          data.run_history.goals.find(goal => goal.id === data.attention_queue.items[0].goal_id).source_access = {
+            namespace: "a".repeat(64), label: "Archived release", read_only: true,
+          };
+        }; },
+      });
+      try {
+        await linked.page.getByTestId("personal-brief-needs").getByText(actionText, {exact: true}).click();
+        const linkedDrawer = linked.page.locator('[data-context-kind="attention"]');
+        await linkedDrawer.getByText(/只读/).first().waitFor();
+        assert.equal(await linkedDrawer.getByRole("button", {name: /我已完成|批准|不再需要|在对话中回复/}).count(), 0,
+          "A linked source stays read-only when opened directly from the home list");
+        assert.equal(linked.api.actionPreviews.length, 0);
+        assert.equal(linked.api.durableWriteCount, 0);
+      } finally { await linked.close(); }
 
       // A User gate keeps its approve/reject decision.
       await openRequest("确认本轮独立审查范围");

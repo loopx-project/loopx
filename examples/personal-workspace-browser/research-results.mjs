@@ -14,6 +14,8 @@ export const researchResultsScenario = {
     let mode = "ready";
     let reads = 0;
     let indexes = 0;
+    let delayedRead = null;
+    const revisedHash = "b".repeat(64);
     let projection = fixture.projection;
     let surface = {
       extension_id: projection.extension_id, extension_revision: projection.extension_revision,
@@ -41,20 +43,26 @@ export const researchResultsScenario = {
           if (["404", "410", "500"].includes(mode)) return route.fulfill({status: Number(mode), json: {ok: false}});
           if (mode === "html") return route.fulfill({contentType: "text/html", body: "<html>HTTP 404 is diagnostic text, not the response status</html>"});
           if (mode === "malformed") return route.fulfill({json: {ok: true}});
-          const items = mode === "disabled" ? [] : [{...surface, visibility: mode === "owner-only" ? "owner-only" : "public-safe"}];
+          const current = mode === "new-version" ? {...surface, detail_ref: {...surface.detail_ref, payload_sha256: revisedHash}} : surface;
+          const items = mode === "disabled" ? [] : [{...current, visibility: mode === "owner-only" ? "owner-only" : "public-safe"}];
+          if (!nativeUrl && mode === "ready") items.push({...surface, surface_id: "separate-research",
+            detail_ref: {...surface.detail_ref, surface_id: "separate-research"}});
           return route.fulfill({json: {ok: true, presentation_surfaces: {
             schema_version: "extension_presentation_surfaces_v0", count: items.length, ready_count: 0,
             review_due_count: items.length, empty_count: 0, invalid_count: 0, items,
           }}});
         });
-        await page.route("**/extension-projection?**", route => {
+        await page.route("**/extension-projection?**", async route => {
           reads++;
           const query = new URL(route.request().url()).searchParams;
-          assert.equal(query.get("payload_sha256"), projection.payload_sha256);
+          assert.equal(query.get("payload_sha256"), mode === "new-version" ? revisedHash : projection.payload_sha256);
           assert.equal(query.get("extension_revision"), projection.extension_revision);
+          if (delayedRead) await delayedRead;
           if (nativeUrl && mode === "ready") return route.continue();
           if (mode === "stale") return route.fulfill({status: 409, json: {error: "revision changed"}});
           return route.fulfill({json: {...fixture, projection: {...projection,
+            payload_sha256: mode === "new-version" ? revisedHash : projection.payload_sha256,
+            surface_id: query.get("surface_id"),
             goal_id: mode === "wrong-goal" ? "research-monitor" : projection.goal_id}}});
         });
       },
@@ -71,6 +79,12 @@ export const researchResultsScenario = {
       assert.equal(reads, 0, "Overview must not read an output projection");
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "研究成果", exact: true});
+      const catalogRow = results.locator(".result-catalog-row").filter({hasText: surface.surface_id});
+      await catalogRow.waitFor();
+      assert.equal(reads, 0, "Files initially lists research without reading any projection body");
+      assert.equal(await results.locator(".result-catalog-row").count(), nativeUrl ? 1 : 2,
+        "Research surfaces with equal titles retain their separate native identities");
+      await catalogRow.click();
       await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
       assert.match(await results.textContent(), /Insufficient Evidence/);
       assert.match(await results.textContent(), /Counterevidence/);
@@ -86,6 +100,40 @@ export const researchResultsScenario = {
       await page.screenshot({path: resolve(outputDir, "research-results-mobile.png"), animations: "disabled"});
       assert(await results.evaluate(el => el.scrollWidth <= el.clientWidth + 1), "Research must fit a phone: " + JSON.stringify(await results.evaluate(el => [...el.querySelectorAll("*")].filter(node => node.scrollWidth > node.clientWidth + 1).slice(0, 6).map(node => ({tag: node.tagName, css: node.className, text: node.textContent.slice(0,80), width: node.clientWidth, scroll: node.scrollWidth})))));
       const refresh = results.getByRole("button", {name: "刷新", exact: true});
+      const back = results.getByRole("button", {name: "返回成果目录", exact: true});
+      await back.click();
+      assert(await catalogRow.evaluate(el => new Promise(done => requestAnimationFrame(() => done(el === document.activeElement)))), "Returning focuses the exact extension/surface row");
+      let releaseRead;
+      delayedRead = new Promise(resolveRead => {releaseRead = resolveRead;});
+      const pending = page.waitForRequest(request => request.url().includes("/extension-projection?"));
+      await catalogRow.click();
+      await pending;
+      await back.click();
+      assert(await catalogRow.evaluate(el => new Promise(done => requestAnimationFrame(() => done(el === document.activeElement)))), "Cancel remains available during projection verification");
+      const late = page.waitForResponse(response => response.url().includes("/extension-projection?"));
+      releaseRead(); delayedRead = null;
+      await late;
+      await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+      assert.equal(await results.getByText("123456789.1234567891 SYN", {exact: true}).count(), 0,
+        "Canceled projection response cannot restore a closed reader");
+      await catalogRow.click();
+      await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
+      mode = "new-version";
+      const beforeVersionChange = reads;
+      await refresh.click();
+      await results.getByRole("alert").filter({hasText: "上次研究版本"}).waitFor();
+      assert.equal(reads, beforeVersionChange, "A new catalog hash cannot silently replace the selected research version");
+      await back.click();
+      assert(await results.locator("[data-result-catalog]").evaluate(el => new Promise(done => requestAnimationFrame(() => done(el === document.activeElement)))),
+        "A removed version returns focus to the catalog without choosing its replacement");
+      await catalogRow.click();
+      await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
+      assert.equal(await results.getByTestId("research-detail-ref-hash").textContent(), revisedHash);
+      await back.click();
+      mode = "ready";
+      await refresh.click();
+      await catalogRow.click();
+      await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
       await refresh.focus();
       mode = "wrong-goal";
       await page.keyboard.press("Enter");
@@ -149,6 +197,7 @@ export const researchResultsScenario = {
       await page.locator(".personal-goal-link", {hasText: "Product Release"}).click();
       await page.getByRole("button", {name: "Files", exact: true}).click();
       const english = page.getByRole("region", {name: "Research results", exact: true});
+      await english.locator(".result-catalog-row").filter({hasText: surface.surface_id}).click();
       await english.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
       for (const status of ["disabled", "404", "410"]) {
         mode = status;

@@ -41,11 +41,28 @@ export const goalDraftScenario = {
       assert.equal(await form.getByLabel("目标", {exact: true}).inputValue(), draft.objective);
       assert.equal(await form.getByLabel("完成标准", {exact: true}).inputValue(), "重点比较资本支出，列出来源");
       assert.equal(await form.getByLabel("执行权限", {exact: true}).inputValue(), "read_only");
+      const objective = form.getByLabel("目标", {exact: true});
+      const completion = form.getByLabel("完成标准", {exact: true});
+      const boundary = form.getByLabel("执行边界（可选）", {exact: true});
+      await completion.fill("完成");
+      await boundary.fill("");
+      // "完成标准：完成" contributes seven code points, plus the separating space.
+      const suffixLength = Array.from(" 完成标准：完成").length;
+      for (const count of [999,1000,1001]) {
+        await objective.fill("🌱".repeat(count - suffixLength));
+        assert.equal(await form.getByRole("button", {name: "检查配置"}).isEnabled(), count <= 1000,
+          "The Goal's combined objective uses the same normalized bound as preview");
+      }
+      await objective.fill("\u0085\u001c");
+      assert.equal(await form.getByRole("button", {name: "检查配置"}).isEnabled(), false);
+      await objective.fill(`\u0085${draft.objective}\u001c`);
+      await boundary.fill(draft.execution_boundary);
       await form.getByLabel("完成标准", {exact: true}).fill("资本支出对照表与原始来源");
       await form.getByRole("button", {name: "检查配置"}).click();
       await page.getByText("确认执行", {exact: true}).waitFor();
       const preview = api.actionPreviews.at(-1);
       assert.equal(preview.action_kind, "goal.create");
+      assert.equal(preview.normalized_parameters.title, draft.objective);
       assert.equal(preview.normalized_parameters.workspace_ref, "current");
       assert.equal(preview.normalized_parameters.permission, "read_only");
       assert.equal(preview.normalized_parameters.heartbeat.enabled, false);

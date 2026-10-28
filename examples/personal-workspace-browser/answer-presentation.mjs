@@ -10,6 +10,7 @@ import { openWorkspacePage } from "./scenario-context.mjs";
 const LONG_URL = `https://example.org/review?candidate=${"0123456789abcdef".repeat(24)}&view=full-history`;
 const LONG_PROMPT = `请比较两个方案，给出完整依据和边界。完整预览：${LONG_URL}`;
 const SHORT_PROMPT = "方案 A 的公开来源是什么？";
+const LONG_CODE = [`unwrapped-command ${"exact-argument-".repeat(80)}`, ...Array.from({length: 200}, (_, index) => `retained-line-${index}: complete evidence`)].join("\n");
 const LONG_ANSWER = [
   "建议先验证方案 A，再决定是否采用。现有记录支持小范围试行，尚不足以证明生产部署成功。",
   "",
@@ -25,13 +26,19 @@ const LONG_ANSWER = [
   `候选分支：\`codex/${"research-history-".repeat(24)}\`。`,
   "",
   "```text",
-  `unwrapped-command ${"exact-argument-".repeat(80)}`,
+  LONG_CODE,
   "```",
   "填写地址：https://example.org/forms/community。English: https://example.org/forms/en。",
   "",
   "<script>window.pwned=true</script>",
   "",
+  "## 进一步核验",
+  "",
   "下一步：请项目 Agent 核验部署与可回退路径，再提交采用建议。",
+  "",
+  "## 进一步核验",
+  "",
+  "历史版本需要按原始来源逐项核对，未确认状态仍然保留。",
 ].join("\n");
 const SHORT_ANSWER = "方案 A 的公开来源：https://example.org/report。";
 
@@ -158,7 +165,7 @@ export const answerPresentationScenario = {
           }
           const block = themed.locator(".personal-md-pre");
           if (!await block.evaluate(node => node.scrollWidth > node.clientWidth)
-            || await block.innerText() !== `unwrapped-command ${"exact-argument-".repeat(80)}`) {
+            || await block.innerText() !== LONG_CODE) {
             throw new Error("Theme switching must preserve complete code and its own horizontal scroll");
           }
           await block.scrollIntoViewIfNeeded();
@@ -199,12 +206,38 @@ export const answerPresentationScenario = {
         || await page.locator(".answer-report-content script").count() || await page.evaluate(() => window.pwned === true)) {
         throw new Error("The standalone answer lost content or executed model HTML");
       }
+      const headingIds = await page.locator(".answer-report-content h2").evaluateAll(nodes => nodes.map(node => node.id));
+      if (headingIds.length !== 3 || new Set(headingIds).size !== 3 || await page.locator("h1").count() !== 1) {
+        throw new Error("The answer must have semantic document headings with unique stable anchors below one page title");
+      }
+      await page.locator(".answer-report-outline summary").click();
+      await page.getByRole("navigation", {name: "答复目录"}).getByRole("link", {name: "进一步核验", exact: true}).last().click();
+      await page.waitForFunction(id => document.activeElement?.id === id, headingIds.at(-1));
+      await page.reload({waitUntil: "networkidle"});
+      await page.locator(".answer-report-content h2").last().waitFor();
+      if (JSON.stringify(await page.locator(".answer-report-content h2").evaluateAll(nodes => nodes.map(node => node.id))) !== JSON.stringify(headingIds)) {
+        throw new Error("Reload changed the saved answer's heading destinations");
+      }
+      await page.evaluate(() => {history.replaceState(null, "", location.pathname + location.search); window.scrollTo(0, 1200);});
+      const readingTop = await page.evaluate(() => scrollY);
+      await page.reload({waitUntil: "networkidle"});
+      await page.waitForFunction(top => Math.abs(scrollY - top) <= 1, readingTop);
+      await page.evaluate(() => {history.replaceState(null, "", location.pathname + location.search); window.scrollTo(0, 0);});
       await page.screenshot({ path: resolve(outputDir, "answer-report-desktop.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       const reportOverflow = await page.locator(".answer-report-body").evaluate((node) => node.scrollWidth > node.clientWidth + 1);
       if (reportOverflow) throw new Error("The standalone answer overflows its mobile reading surface");
       await page.screenshot({ path: resolve(outputDir, "answer-report-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
+      await page.evaluate(() => {
+        Object.defineProperty(navigator, "clipboard", {configurable: true, value: {writeText: async () => {throw new Error("Synthetic clipboard failure");}}});
+      });
+      await page.getByRole("button", {name: "复制 Markdown", exact: true}).click();
+      const manualCopy = page.getByRole("textbox", {name: "答复 Markdown 原文"});
+      await manualCopy.waitFor();
+      if (await manualCopy.inputValue() !== LONG_ANSWER || !await manualCopy.evaluate(node => document.activeElement === node && node.selectionEnd === node.value.length)) {
+        throw new Error("Clipboard failure must offer the complete visible Markdown source for manual copying");
+      }
       await page.reload({ waitUntil: "networkidle" });
       await page.locator(".answer-report-content table").waitFor({ state: "visible", timeout: 15_000 });
       if (await page.locator(".answer-report-content table").count() !== 1
@@ -228,11 +261,58 @@ export const answerPresentationScenario = {
       if (api.turnRequests.length !== originalTurnCount) {
         throw new Error("Returning to the Steward conversation replayed a Turn");
       }
+      await page.waitForFunction(() => document.activeElement?.matches(".personal-message[data-message-id]"));
+      const originalMessageId = new URL(reportHref).searchParams.get("reportMessageId");
+      if (await page.evaluate(() => document.activeElement?.getAttribute("data-message-id")) !== originalMessageId
+        || returned.searchParams.get("message") !== originalMessageId) {
+        throw new Error("Returning from the reader must focus the exact original Session/message");
+      }
+      // The reply already being read stays open as a later answer arrives.
+      await send(page, SHORT_PROMPT);
+      await page.locator(".personal-message.is-assistant", {hasText: SHORT_ANSWER}).waitFor();
+      const longHistory = page.locator(".personal-message.is-assistant", {hasText: "建议先验证方案 A"});
+      if (!await longHistory.locator(".personal-md-pre").count()) throw new Error("A new answer collapsed the message being read");
+      const historyUrl = new URL(page.url());
+      historyUrl.searchParams.delete("message"); historyUrl.searchParams.delete("messageSession");
+      await page.goto(historyUrl.toString(), {waitUntil: "networkidle"});
+      const expandHistory = longHistory.getByRole("button", {name: "展开完整消息", exact: true});
+      await expandHistory.waitFor();
+      if (await longHistory.locator(".personal-md-pre").count() || !await longHistory.getByText("原文节选", {exact: true}).count()) {
+        throw new Error("Stable historical answers must expose an honest complete-block excerpt");
+      }
+      await expandHistory.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "answer-history-collapsed-desktop.png"), animations: "disabled"});
+      const beforeExpand = await expandHistory.evaluate(node => node.getBoundingClientRect().top);
+      await expandHistory.click();
+      const collapseHistory = longHistory.getByRole("button", {name: "收起消息", exact: true});
+      await longHistory.locator(".personal-md-pre").waitFor();
+      if (await longHistory.locator(".personal-md-pre").innerText() !== LONG_CODE
+        || Math.abs(await collapseHistory.evaluate(node => node.getBoundingClientRect().top) - beforeExpand) > 2) {
+        throw new Error("Expanding history lost original code or moved the reading anchor");
+      }
+      await collapseHistory.click();
+      if (Math.abs(await expandHistory.evaluate(node => node.getBoundingClientRect().top) - beforeExpand) > 2) {
+        throw new Error("Collapsing history moved the reading anchor");
+      }
+      await page.setViewportSize({width: 390, height: 844});
+      await assertConversationFits(page);
+      await expandHistory.scrollIntoViewIfNeeded();
+      await page.screenshot({path: resolve(outputDir, "answer-history-collapsed-mobile.png"), animations: "disabled"});
+      await page.setViewportSize({width: 1512, height: 982});
+      const liveText = await page.locator(".personal-live-region").innerText();
+      if (liveText.length > 160 || liveText.includes(SHORT_ANSWER)) throw new Error("Live announcements must not repeat the answer body");
+      const turnCountAfterHistory = api.turnRequests.length;
+      const missingFocus = new URL(page.url());
+      missingFocus.searchParams.set("messageSession", new URL(reportHref).searchParams.get("reportSessionId"));
+      missingFocus.searchParams.set("message", "missing-original-message");
+      await page.goto(missingFocus.toString(), {waitUntil: "networkidle"});
+      await page.locator(".personal-message-focus-notice", {hasText: "原消息不在当前已读取的对话中"}).waitFor();
+      if (api.turnRequests.length !== turnCountAfterHistory) throw new Error("A missing original message must not replay a Turn");
       const missingUrl = new URL(reportHref);
       missingUrl.searchParams.set("reportMessageId", "missing-answer");
       await page.goto(missingUrl.toString(), { waitUntil: "networkidle" });
       await page.locator('[role="alert"]', { hasText: "找不到这份答复" }).waitFor({ state: "visible" });
-      if (api.turnRequests.length !== originalTurnCount) throw new Error("Missing report replayed a Turn");
+      if (api.turnRequests.length !== turnCountAfterHistory) throw new Error("Missing report replayed a Turn");
       await page.goto(url, { waitUntil: "networkidle" });
 
       await page.getByRole("navigation", { name: "管家视图" })
@@ -270,6 +350,11 @@ export const answerPresentationScenario = {
       const goalTurnCount = api.turnRequests.length;
       await page.goto(goalReportHref, { waitUntil: "networkidle" });
       await page.locator(".answer-report-content", { hasText: "建议先验证方案 A" }).waitFor({ state: "visible" });
+      // A report shared or kept open can outlive the reader's executor choice.
+      await page.evaluate(id => {
+        const key = "loopx.personal-agent-selection.v1";
+        localStorage.setItem(key, JSON.stringify({...JSON.parse(localStorage.getItem(key) ?? "{}"), [id]: "claude-code"}));
+      }, goalId);
       await page.getByRole("button", { name: "返回对话", exact: true }).click();
       await page.locator(".personal-channel-timeline .personal-message.is-assistant", {
         hasText: "建议先验证方案 A",
@@ -277,12 +362,21 @@ export const answerPresentationScenario = {
       if (new URL(page.url()).searchParams.get("goalId") !== goalId || api.turnRequests.length !== goalTurnCount) {
         throw new Error("Returning from a saved Goal answer changed its Goal or replayed a Turn");
       }
+      await page.waitForFunction(id => document.activeElement?.getAttribute("data-message-id") === id,
+        new URL(goalReportHref).searchParams.get("reportMessageId"));
+      if (!/^codex$/iu.test(await page.locator(".personal-message.is-assistant", {hasText: "建议先验证方案 A"}).locator("header strong").innerText())) {
+        throw new Error("A saved answer must retain its original Session executor identity after the current runtime changes");
+      }
+      if (!(await page.getByRole("combobox", {name: "选择聊天 Runtime", exact: true}).innerText()).includes("Claude Code")
+        || await page.evaluate(id => JSON.parse(localStorage.getItem("loopx.personal-agent-selection.v1") ?? "{}")[id], goalId) !== "claude-code") {
+        throw new Error("Reading an earlier executor's answer changed the current Goal executor choice");
+      }
       if (!api.turnRequests.some((turn) => turn.message === LONG_PROMPT)
         || !api.turnRequests.some((turn) => turn.message === SHORT_PROMPT)) {
         throw new Error("Answers did not come from accepted conversation Turns");
       }
       return { coverageEntries: context.coverageEntries,
-        note: "Steward and Goal Chat wrap long URLs without conversation overflow; full answers survive reload while code and tables retain local scrolling." };
+        note: "Saved answers retain semantic anchors, reading position, exact copy fallback and original message focus across runtime choices; stable historical excerpts preserve complete Markdown and expand/collapse anchors without replaying Turns." };
     } finally {
       await context.close();
     }

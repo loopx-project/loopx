@@ -180,8 +180,18 @@ export const taskInspectorReturnScenario = {
       const field = drawer.getByRole("textbox", {name: "完整任务要求"});
       assert.equal(await field.inputValue(), initial.text, "Editing must start from the exact source, never the 500-character list");
       await drawer.getByRole("button", {name:"标记完成",exact:true}).waitFor({state:"hidden"});
-      const next = initial.text + " Keep the additional delivery condition.";
-      await field.fill(next);
+      const saveButton = drawer.getByRole("button", {name: "保存要求", exact: true});
+      for (const count of [7999, 8000, 8001]) {
+        await field.fill("🌱".repeat(count));
+        assert.equal(await saveButton.isEnabled(), count <= 8000, "Task requirements use the normalized code-point boundary");
+      }
+      await field.fill("\u0085\u001c");
+      assert.equal(await saveButton.isEnabled(), false, "Python-only whitespace is not a requirement");
+      const next = initial.text + " " + "🌱".repeat(4001) + "\ufeff Keep the additional delivery condition.";
+      const rawDraft = `\u0085${initial.text}${"\u0085".repeat(500)}${"🌱".repeat(4001)}\ufeff Keep the additional delivery condition.\u001c`;
+      await field.fill(rawDraft);
+      assert.equal(await field.inputValue(), rawDraft, "Typing keeps the original draft until a verified save");
+      assert.equal(await saveButton.isEnabled(), true, "UTF-16 length must not refuse a legal emoji requirement");
       await page.screenshot({path: resolve(outputDir, "task-requirements-edit-desktop.png"), animations: "disabled"});
       await field.press("Tab");
       await page.keyboard.press("Enter");
@@ -199,7 +209,7 @@ export const taskInspectorReturnScenario = {
         "--format", "json", "todo", "update", "--goal-id", "progress-projection", "--todo-id", "todo_requirements_source",
         "--agent-id", "agent-a", "--note", "Concurrent progress"], {cwd: repoRoot});
       assert.equal(JSON.parse(changed.stdout).ok, true);
-      await drawer.getByRole("button", {name:"保存要求",exact:true}).click();
+      await saveButton.click();
       await drawer.getByRole("alert").filter({hasText:"Task source changed"}).waitFor();
       await page.screenshot({path: resolve(outputDir, "task-requirements-edit-mobile-conflict.png"), animations: "disabled"});
       assert.equal(applyCount, 1, "A stale source must fail before apply");

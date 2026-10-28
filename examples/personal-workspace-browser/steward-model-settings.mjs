@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import assert from "node:assert/strict";
 
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
@@ -89,11 +90,52 @@ export const stewardModelSettingsScenario = {
       await page.getByRole("radio", { name: "Simplified Chinese", exact: true }).click();
       await settingsTabs.getByRole("button", { name: "管家", exact: true }).click();
       await detail.getByText("管家模型与思考深度").waitFor();
+      let releasePreview;
+      let previewRequested;
+      const previewGate = new Promise(resolve => { releasePreview = resolve; });
+      const previewStarted = new Promise(resolve => { previewRequested = resolve; });
+      const previewRoute = "**/api/chat/machine-configuration/preview";
+      await page.route(previewRoute, async route => {
+        previewRequested();
+        await previewGate;
+        await route.fallback();
+      });
+      await detail.getByLabel("模型").fill("discarded-steward-draft");
+      const delayedPreview = page.waitForResponse(response => response.url().endsWith("/machine-configuration/preview"));
+      await detail.getByRole("button", { name: "预览变更" }).click();
+      await previewStarted;
+      await capabilityList.getByRole("button", { name: "运行环境" }).click();
+      await detail.getByRole("heading", { name: "运行环境", exact: true }).waitFor();
+      releasePreview();
+      await (await delayedPreview).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await detail.locator(".personal-machine-preview").count(), 0,
+        "A late model preview must not appear under the runtime capability");
+      assert.equal(await detail.getByRole("button", {name: "应用已审阅预览"}).isEnabled(), false);
+      await page.unroute(previewRoute);
+      await capabilityList.getByRole("button", { name: "模型与执行器" }).click();
+      assert.notEqual(await detail.getByLabel("模型").inputValue(), "discarded-steward-draft",
+        "Changing capability discards its previous draft and preview");
       await detail.getByLabel("模型").fill("gpt-6.1-sol");
       await detail.getByLabel("推理档位").selectOption("high");
       const readsBeforeApply = capabilityReads;
+      let readbackUnavailable = true;
+      await page.route("**/api/chat/machine-configuration", async route => {
+        if (readbackUnavailable && api.machineConfigurationRequests.some(item => item.phase === "apply")) {
+          await route.fulfill({status: 503, json: {ok: false, error: "Synthetic configuration readback outage"}});
+        } else await route.fallback();
+      });
       await detail.getByRole("button", { name: "预览变更" }).click();
       await detail.getByRole("button", { name: "应用已审阅预览" }).click();
+      const recovery = page.locator(".personal-capability-recovery");
+      await recovery.getByText("配置已写入，读回尚未确认", {exact: true}).waitFor();
+      assert.equal(await detail.getByLabel("模型").inputValue(), "gpt-6.1-sol", "A readback failure retains the edited value");
+      const writesBeforeRetry = api.machineConfigurationRequests.filter(item => item.phase === "apply").length;
+      readbackUnavailable = false;
+      await recovery.getByRole("button", {name: "刷新源配置", exact: true}).click();
+      await recovery.waitFor({state: "hidden"});
+      assert.equal(api.machineConfigurationRequests.filter(item => item.phase === "apply").length, writesBeforeRetry,
+        "Recovering a written configuration only reads; it does not apply again");
       const applied = api.machineConfigurationRequests.find((item) => item.phase === "apply");
       if (applied?.namespace !== "steward_executor"
           || applied?.namespace_configuration?.executor_model !== "gpt-6.1-sol"
@@ -131,7 +173,7 @@ export const stewardModelSettingsScenario = {
       if (!(await modelControl.innerText()).includes("gpt-6.1-sol")) throw new Error("Adopted model did not reach the header");
       await page.screenshot({ path: resolve(outputDir, "steward-model-entry-mobile.png"), animations: "disabled" });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error("Model control overflows the narrow viewport");
-      if (context.errors.length) throw new Error(context.errors.join(" | "));
+      if (context.errors.some(error => !/503/.test(error))) throw new Error(context.errors.join(" | "));
       return { coverageEntries: await context.close(), note: "Steward settings stay limited to steward configuration; the removed DSH topology is absent in Chinese and English, causes no capability read, and Sol 6.1/high saves and reads back in desktop and narrow layouts" };
     } catch (error) {
       await context.close();
