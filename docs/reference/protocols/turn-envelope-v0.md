@@ -598,6 +598,37 @@ work context 中已加载的来源，其次保留 planning horizon 或第一份�
 签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
 上游读取减少、模型采用或完整任务效率提升。
 
+Known Todo diagnostic lanes use `quota/diagnostic_projection.ts` in the same
+coarse legacy context call and in scoped native model-context composition.
+Read-only `quota status`/`plan` projects its entire row collection in one call.
+Unknown lists, nested fields and complete retained items survive; no suffix
+heuristic removes future obligations. A known lane with unknown item fields,
+an unknown item version or complex nested content stays full; field recognition
+reuses the canonical Todo contract. Capability candidates, portfolio text,
+planning horizon and full selected-work sources remain complete. Explicit
+legacy detail preserves the original summaries. Legacy detail commands observe
+current state; they cannot recover an earlier decision. A scoped native
+summary's `full_detail_capture_ref` resolves to `source_capture`; read that
+immutable original file with its digest, without repeating a command per lane. Upstream summary-compaction metadata remains available
+as `source_projection`; this reader restores captured diagnostics, not omitted
+canonical records. Full/delta baselines and context-loss recovery contain the
+exact delivered presentation. Unscoped native/failure fallback retains the
+original complete input. This is presentation reuse, not default promotion or
+proof of model retention, reduced total cost or better accepted outcomes.
+
+中文：已登记的 Todo 诊断列表由 `quota/diagnostic_projection.ts` 统一投影，旧 CLI
+复用同一次上下文调用，scoped 原生输入在同一组合调用中采用；只读 status/plan
+整批行只调用一次。未知列表、嵌套字段和保留条目的完整字段不删除，不按名称后缀
+推测新义务。已知列表含未知条目字段、未知版本或复杂嵌套内容时保留全文，字段识别
+复用规范 Todo 契约。候选、portfolio 正文、规划视野和完整当前工作来源保持；旧详情选项
+保留完整原摘要。旧详情命令读取当前状态，不能恢复过去的决定；scoped 原生摘要
+的 `full_detail_capture_ref` 指向已有 `source_capture`，据原文件和 digest 补读，
+不逐列表重复完整命令。上游压缩信息保留于
+`source_projection`，恢复的是已捕获诊断，不是来源本已省略的规范记录。full/delta
+基线及上下文丢失恢复都使用实际交付的完整 presentation；未 scoped 或失败回退仍
+保留原完整输入。此处只证明展示代码复用，不代表默认转正、模型保持、完整成本
+下降或验收成果提高。
+
 The selected-Todo display body is display-only and may be bounded; the typed
 owner validates the exact read against selected identity, lifecycle, claim and
 source revision. A supplied full-body snapshot must match before fulfilling the read. If the full body is already

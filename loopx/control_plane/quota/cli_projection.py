@@ -5,14 +5,8 @@ from typing import Any
 from .decision_summary import compact_quota_decision
 from .should_run_packet import reference_duplicate_fallback_guidance
 
-QUOTA_CLI_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_todo_summary_compaction_v0"
-)
 QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND = (
     "quota should-run --include-detail agent-todos"
-)
-QUOTA_CLI_USER_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_user_todo_summary_compaction_v0"
 )
 QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND = (
     "quota should-run --include-detail user-todos"
@@ -30,66 +24,12 @@ QUOTA_CLI_VISION_DETAIL_COMMAND = "quota should-run --include-detail vision"
 QUOTA_CLI_REPLAN_ACTION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_replan_action_compaction_v0"
 )
-QUOTA_CLI_CAPABILITY_GATE_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_capability_gate_compaction_v0"
-)
-QUOTA_CLI_ACTION_PORTFOLIO_COMPACTION_SCHEMA_VERSION = (
-    "quota_cli_action_portfolio_compaction_v1"
-)
 QUOTA_CLI_MONITOR_POLL_DECISION_COMPACTION_SCHEMA_VERSION = (
     "quota_cli_monitor_poll_decision_compaction_v0"
 )
 QUOTA_CLI_MONITOR_POLL_DECISION_DETAIL_COMMAND = (
     "quota monitor-poll --include-detail decisions"
 )
-_RETAINED_AGENT_ITEM_LANES = {
-    "first_executable_items": 3,
-    "unclaimed_priority_open_items": 3,
-    "monitor_due_items": 1,
-    "monitor_capability_blocked_due_items": 2,
-    "monitor_schedule_gap_items": 1,
-    "current_agent_blocker_items": 2,
-}
-_RETAINED_USER_ITEM_LANES = {
-    "first_open_items": 3,
-    "gate_open_items": 3,
-    "active_next_action_items": 3,
-}
-_RETAINED_AGENT_ITEM_FIELDS = (
-    "schema_version",
-    "todo_id",
-    "index",
-    "text",
-    "status",
-    "priority",
-    "task_class",
-    "action_kind",
-    "task_domain",
-    "claimed_by",
-    "bound_agent",
-    "goal_bound",
-    "blocks_agent",
-    "global_gate",
-    "task_repository",
-    "required_capabilities",
-    "required_write_scopes",
-    "excluded_agents",
-    "unblocks_todo_id",
-    "continuation_policy",
-    "resume_when",
-    "resume_monitor_generation",
-    "target_key",
-    "cadence",
-    "next_due_at",
-    "expires_at",
-    "last_checked_at",
-    "consecutive_no_change",
-    "material_change",
-    "material_change_generation",
-    "result_hash",
-    "reason",
-)
-_RETAINED_SUCCESSION_WARNING_TODO_IDS = 3
 _RUNTIME_CAPABILITY_PREFIX_FIELDS = (
     "ok",
     "status_health_ok",
@@ -260,115 +200,6 @@ def compact_quota_monitor_poll_cli_payload(
     return projected
 
 
-def _compact_agent_item(item: Any) -> Any:
-    if not isinstance(item, dict):
-        return item
-    return {
-        key: item[key]
-        for key in _RETAINED_AGENT_ITEM_FIELDS
-        if key in item
-    }
-
-
-def _compact_nested_item_lists(
-    value: dict[str, Any],
-    *,
-    omitted_lanes: dict[str, int],
-    path: str,
-) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    for key, child in value.items():
-        if isinstance(child, list) and key.endswith("items"):
-            if path == "todo_succession_warning":
-                todo_ids = [
-                    str(item.get("todo_id"))
-                    for item in child
-                    if isinstance(item, dict) and item.get("todo_id")
-                ][:_RETAINED_SUCCESSION_WARNING_TODO_IDS]
-                if todo_ids:
-                    compact["todo_ids"] = todo_ids
-            if child:
-                omitted_lanes[f"{path}.{key}"] = len(child)
-            continue
-        compact[key] = child
-    return compact
-
-
-def _compact_agent_todo_summary(
-    summary: dict[str, Any], *, detail_command: str = QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND
-) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    omitted_lanes: dict[str, int] = {}
-    for key, value in summary.items():
-        if isinstance(value, list):
-            limit = _RETAINED_AGENT_ITEM_LANES.get(key)
-            if limit is None:
-                if value:
-                    omitted_lanes[key] = len(value)
-                continue
-            compact[key] = [
-                _compact_agent_item(item)
-                for item in value[:limit]
-            ]
-            if len(value) > limit:
-                omitted_lanes[key] = len(value) - limit
-            continue
-        if isinstance(value, dict):
-            compact[key] = _compact_nested_item_lists(
-                value,
-                omitted_lanes=omitted_lanes,
-                path=key,
-            )
-            continue
-        compact[key] = value
-
-    compact["payload_compaction"] = {
-        "schema_version": QUOTA_CLI_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION,
-        "retained_item_lanes": sorted(
-            lane
-            for lane in _RETAINED_AGENT_ITEM_LANES
-            if lane != "current_agent_blocker_items" or summary.get(lane)
-        ),
-        "omitted_lanes": omitted_lanes,
-        "full_detail_cold_path": detail_command,
-    }
-    return compact
-
-
-def _compact_user_todo_summary(
-    summary: dict[str, Any], *, detail_command: str = QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND
-) -> dict[str, Any]:
-    compact: dict[str, Any] = {}
-    omitted_lanes: dict[str, int] = {}
-    for key, value in summary.items():
-        if isinstance(value, list):
-            limit = _RETAINED_USER_ITEM_LANES.get(key)
-            if limit is None:
-                if value:
-                    omitted_lanes[key] = len(value)
-                continue
-            compact[key] = value[:limit]
-            if len(value) > limit:
-                omitted_lanes[key] = len(value) - limit
-            continue
-        if isinstance(value, dict):
-            compact[key] = _compact_nested_item_lists(
-                value,
-                omitted_lanes=omitted_lanes,
-                path=key,
-            )
-            continue
-        compact[key] = value
-
-    compact["payload_compaction"] = {
-        "schema_version": QUOTA_CLI_USER_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION,
-        "retained_item_lanes": sorted(_RETAINED_USER_ITEM_LANES),
-        "omitted_lanes": omitted_lanes,
-        "full_detail_cold_path": detail_command,
-    }
-    return compact
-
-
 def _compact_goal_boundary(boundary: dict[str, Any]) -> dict[str, Any]:
     authority = boundary.get("checkpointed_boundary_authority")
     if not isinstance(authority, dict) or not isinstance(
@@ -386,41 +217,6 @@ def _compact_goal_boundary(boundary: dict[str, Any]) -> dict[str, Any]:
     }
     compact = dict(boundary)
     compact["checkpointed_boundary_authority"] = compact_authority
-    return compact
-
-
-def _compact_action_portfolio(portfolio: dict[str, Any]) -> dict[str, Any]:
-    compact = dict(portfolio)
-    suggested = portfolio.get("suggested_actions")
-    if isinstance(suggested, list):
-        compact["suggested_actions"] = [
-            {
-                **{
-                    key: item[key]
-                    for key in ("todo_id", "selection_role", "priority", "action_kind")
-                    if key in item
-                },
-                **{
-                    key: " ".join(str(item[key]).split())[:180]
-                    for key in ("text", "continuation_hint")
-                    if item.get(key)
-                },
-            }
-            for item in suggested
-            if isinstance(item, dict)
-        ]
-        compact["suggested_action_details"] = {
-            "schema_version": QUOTA_CLI_ACTION_PORTFOLIO_COMPACTION_SCHEMA_VERSION,
-            "inlined_fields": [
-                "todo_id",
-                "selection_role",
-                "priority",
-                "action_kind",
-                "text",
-                "continuation_hint",
-            ],
-            "ref": "$.agent_todo_summary.first_executable_items",
-        }
     return compact
 
 
@@ -464,28 +260,6 @@ def _reference_vision_continuation(payload: dict[str, Any]) -> dict[str, Any]:
     from .turn_envelope import _turn_envelope_result
 
     return _turn_envelope_result("reference_vision_continuation", payload=payload)
-
-
-def _compact_capability_gate(gate: dict[str, Any]) -> dict[str, Any]:
-    omitted_fields = (
-        "available",
-        "candidate_order_policy",
-        "runnable_candidates",
-        "blocked_candidates",
-        "resolution_bindings",
-    )
-    compact = {key: value for key, value in gate.items() if key not in omitted_fields}
-    compact["payload_compaction"] = {
-        "schema_version": QUOTA_CLI_CAPABILITY_GATE_COMPACTION_SCHEMA_VERSION,
-        "omitted_fields": [key for key in omitted_fields if key in gate],
-        "omitted_candidate_counts": {
-            "runnable": len(gate.get("runnable_candidates") or []),
-            "blocked": len(gate.get("blocked_candidates") or []),
-            "resolution_bindings": len(gate.get("resolution_bindings") or []),
-        },
-        "full_detail_cold_path": QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND,
-    }
-    return compact
 
 
 def _deduplicate_next_action_warning(
@@ -637,7 +411,7 @@ def _promote_interaction_contract(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _reference_context(
     payload: dict[str, Any], *, task_title: bool = True, explore_guidance: bool = True,
-    goal_acceptance: bool = False,
+    goal_acceptance: bool = False, diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One coarse transport call for the existing typed context owner."""
     contract = payload.get("interaction_contract")
@@ -645,7 +419,7 @@ def _reference_context(
     context = agent.get("work_context") if isinstance(agent, dict) else None
     # Task/Explore sharing needs a source carrier; acceptance may use other root
     # owners. Leave semantic matching and reference validation in TypeScript.
-    if not goal_acceptance and (
+    if diagnostics is None and not goal_acceptance and (
         not (task_title or explore_guidance) or not isinstance(context, dict) or not context.get("sources")
     ):
         return payload
@@ -653,7 +427,7 @@ def _reference_context(
 
     return _turn_envelope_result("reference_context", payload=payload,
         task_title=task_title, explore_guidance=explore_guidance,
-        goal_acceptance=goal_acceptance)
+        goal_acceptance=goal_acceptance, **({"diagnostics": diagnostics} if diagnostics is not None else {}))
 
 
 def compact_quota_should_run_cli_payload(
@@ -667,30 +441,6 @@ def compact_quota_should_run_cli_payload(
     """Bound CLI-only diagnostics after the full decision is computed."""
 
     compact = payload
-    compacted_roles: list[str] = []
-    summary = payload.get("agent_todo_summary")
-    if not include_todo_summary_detail and isinstance(summary, dict):
-        compact = dict(compact)
-        compact["agent_todo_summary"] = _compact_agent_todo_summary(summary)
-        compacted_roles.append("agent")
-
-    user_summary = payload.get("user_todo_summary")
-    if not include_user_todo_summary_detail and isinstance(user_summary, dict):
-        compact = dict(compact)
-        compact["user_todo_summary"] = _compact_user_todo_summary(user_summary)
-        compacted_roles.append("user")
-
-    if compacted_roles:
-        compact["todo_summary_projection"] = {
-            "schema_version": QUOTA_CLI_TODO_SUMMARY_COMPACTION_SCHEMA_VERSION,
-            "mode": "compact_hot_path",
-            "compacted_roles": compacted_roles,
-            "detail_ref": (
-                QUOTA_CLI_TODO_SUMMARY_DETAIL_COMMAND
-                if compacted_roles[0] == "agent"
-                else QUOTA_CLI_USER_TODO_SUMMARY_DETAIL_COMMAND
-            ),
-        }
     goal_boundary = payload.get("goal_boundary")
     if not include_goal_boundary_detail and isinstance(goal_boundary, dict):
         compact_goal_boundary = _compact_goal_boundary(goal_boundary)
@@ -710,16 +460,6 @@ def compact_quota_should_run_cli_payload(
             compact = dict(compact)
             compact["replan_action_packet"] = compact_replan_action
     if not include_todo_summary_detail:
-        action_portfolio = payload.get("action_portfolio")
-        if isinstance(action_portfolio, dict):
-            compact = dict(compact)
-            compact["action_portfolio"] = _compact_action_portfolio(
-                action_portfolio
-            )
-        capability_gate = payload.get("capability_gate")
-        if isinstance(capability_gate, dict):
-            compact = dict(compact)
-            compact["capability_gate"] = _compact_capability_gate(capability_gate)
         warning = payload.get("next_action_projection_warning")
         if isinstance(warning, dict):
             compact = dict(compact)
@@ -745,7 +485,8 @@ def compact_quota_should_run_cli_payload(
         agent_lane_next_action.pop("content_revision", None)
         compact["agent_lane_next_action"] = agent_lane_next_action
     compact = _reference_context(compact, task_title=not include_todo_summary_detail,
-        explore_guidance=not include_vision_detail, goal_acceptance=True)
+        explore_guidance=not include_vision_detail, goal_acceptance=True, diagnostics={
+            "agent_detail": include_todo_summary_detail, "user_detail": include_user_todo_summary_detail})
     return _promote_interaction_contract(
         _promote_runtime_capability_reentry(compact)
     )
@@ -758,19 +499,6 @@ def compact_quota_plan_cli_payload(
     if payload.get("mode") not in {"status", "plan"} or not isinstance(payload.get("groups"), dict):
         return payload
 
-    def project_row(row: dict[str, Any]) -> dict[str, Any]:
-        result = dict(row)
-        for role, compact_summary in (("agent", _compact_agent_todo_summary), ("user", _compact_user_todo_summary)):
-            key = f"{role}_todos"
-            if f"{role}-todos" not in detail_sections and isinstance(row.get(key), dict):
-                result[key] = compact_summary(row[key], detail_command=(
-                    f"quota {payload['mode']} --include-detail {role}-todos"
-                ))
-        return result
-
-    result = dict(payload)
-    result["groups"] = {state: [project_row(row) for row in rows]
-                        for state, rows in payload["groups"].items()}
-    if isinstance(payload.get("next_automatic_turn"), dict):
-        result["next_automatic_turn"] = project_row(payload["next_automatic_turn"])
-    return result
+    return _reference_context(payload, task_title=False, explore_guidance=False, diagnostics={
+        "agent_detail": "agent-todos" in detail_sections,
+        "user_detail": "user-todos" in detail_sections})

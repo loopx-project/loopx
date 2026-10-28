@@ -7,6 +7,7 @@ import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from
 import {prepareContextDelivery, restoreContextDelivery, OUTCOME_CONTEXT_PROJECTION_SCHEMA} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 import {OUTCOME_CONTEXT_READ_PLAN_SCHEMA} from "../goals/outcome_requirements.ts";
+import {projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 
 import {
@@ -451,7 +452,8 @@ function capturedOutcomeContext(request: JsonObject): JsonObject {
   requireNonEmptyString(source.path, "original capture path");
   if (typeof source.sha256 !== "string" || !BARE_SHA256_PATTERN.test(source.sha256))
     throw new EffectRuntimeRequestError("outcome context needs the original file digest");
-  const context = structuredClone(payload), carriers = acceptanceCarriers(context);
+  const context = projectQuotaDiagnostics(structuredClone(payload), {capture_ref: "$.source_capture"});
+  const carriers = acceptanceCarriers(context);
   const channel = jsonObject(jsonObject(context.interaction_contract)?.agent_channel);
   if (!channel || !scopeInteractionOutcomeReadGuidance(channel)) return payload;
   const sources = jsonObject(jsonObject(jsonObject(context.interaction_contract)?.agent_channel)?.work_context)?.sources;
@@ -474,6 +476,8 @@ function capturedOutcomeContext(request: JsonObject): JsonObject {
       "Read this entire presentation before dependent work. The nested context expands every required outcome; " +
       "other independent outcomes retain current index facts and exact references in source_capture. " +
       "Use quota context-read on that original file/hash with --outcome-ref for complete detail before relying on it. " +
+      "Known Todo diagnostic lists are bounded; their full_detail_capture_ref resolves to source_capture. " +
+      "Read that original file/hash with quota context-read for captured diagnostics, without a new guard. " +
       "Goal-wide acceptance or unproven relevance requires the complete original source. " +
       "After context loss recover this exact presentation, not a fresh admission. Original requirements and evidence remain binding.",
     context};
@@ -2140,6 +2144,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   }
   if (operation === "reference_context") {
     let payload = requireJsonObject(request.payload, "quota decision");
+    if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
     if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload);
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);

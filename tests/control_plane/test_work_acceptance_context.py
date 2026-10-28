@@ -215,6 +215,17 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert "Preserve the original Goal and earlier requirements" in reason
         assert [row["id"] for row in basis["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]] == ["export-agent-a"]
         assert json.loads(Path(delivered["source_capture"]["path"]).read_bytes()) == packet
+        # Bounded diagnostics reference the original immutable decision, never
+        # a new guard. Read every byte through the public recovery command.
+        diagnostics = delivered["context"]["agent_todo_summary"]["payload_compaction"]
+        assert diagnostics["full_detail_capture_ref"] == "$.source_capture"
+        source_ref = delivered["source_capture"]
+        original_page = read_context_capture(build_parser().parse_args(["--format", "json", "quota", "context-read",
+            "--capture-file", source_ref["path"], "--capture-sha256", source_ref["sha256"]]))
+        assert consume(original_page) == packet
+        for key in ("selected_todo", "planning_horizon", "capability_gate", "action_portfolio"):
+            if key in packet:
+                assert delivered["context"][key] == packet[key]
         candidate = json.loads((native_root / "session.json").read_text())["candidate"]
         assert candidate["capture_file"] == projected["recovery"]["path"]
         assert json.loads(Path(candidate["capture_file"]).read_bytes()) == delivered
@@ -249,7 +260,12 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         recovery = read_context_capture(build_parser().parse_args(shlex.split(warm["recovery"]["command"])[1:]))
         restored = consume(recovery)
         assert restored["read_scope"]["required_outcome_refs"] == delivered["read_scope"]["required_outcome_refs"]
-        assert restored["context"] == delivered["context"]
+        assert restored == json.loads(Path(warm["recovery"]["path"]).read_bytes())
+        restored_diagnostics = restored["context"]["agent_todo_summary"]["payload_compaction"]
+        assert restored_diagnostics["full_detail_capture_ref"] == "$.source_capture"
+        source_ref = restored["source_capture"]
+        assert consume(read_context_capture(build_parser().parse_args(["--format", "json", "quota", "context-read",
+            "--capture-file", source_ref["path"], "--capture-sha256", source_ref["sha256"]]))) == packet
         assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == source_before
         assert capture.read_bytes() == captured
         # Optional scope/codec failure recovers the complete original source,

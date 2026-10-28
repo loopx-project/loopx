@@ -334,6 +334,62 @@ def _items(count: int, *, prefix: str) -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.parametrize("role", ["agent", "user"])
+def test_shared_diagnostics_preserve_unknown_lists_nested_fields_and_complete_items(role):
+    lane = "first_executable_items" if role == "agent" else "first_open_items"
+    item = {**_items(1, prefix="retained")[0], "text": "Original constraint. " * 200,
+        "future_requirements": ["Keep the tail stop."], "lease": {"owner": "peer", "epoch": 7}}
+    unknown = [None, False, 0, {"requirement": "A new obligation"}]
+    summary = {"schema_version": "todo_summary_v0", lane: [item], "backlog_items": _items(5, prefix="diagnostic"),
+        "future_items": unknown, "future_rules": unknown,
+        "deferred_items": [{"todo_id": "later", "future_global_stop": "Do not continue."}],
+        "recent_completed_advancement_items": [{"todo_id": "old", "completion_result": {"future_stop": True}}],
+        "claim_scope": {"owner": "peer", "future_items": unknown, "blocked_claimed_items": []},
+        "future_object": {"items": unknown},
+        "todo_succession_warning": {"items": _items(4, prefix="old"), "todo_ids": ["original-id"], "future_items": unknown}}
+    payload = {f"{role}_todo_summary": summary, "capability_gate": {"runnable_candidates": [item], "future": unknown},
+        "action_portfolio": {"suggested_actions": [item]}, "planning_horizon": {"work_items": [item]}}
+    original = deepcopy(payload)
+    projected = compact_quota_should_run_cli_payload(payload)
+    result = projected[f"{role}_todo_summary"]
+    assert result[lane] == [item]
+    assert result["future_items"] == result["future_rules"] == unknown
+    assert result["future_object"] == {"items": unknown}
+    assert result["deferred_items"] == summary["deferred_items"]
+    assert result["recent_completed_advancement_items"] == summary["recent_completed_advancement_items"]
+    assert result["claim_scope"] == {"owner": "peer", "future_items": unknown}
+    assert result["todo_succession_warning"]["todo_ids"] == ["original-id"]
+    assert result["todo_succession_warning"]["future_items"] == unknown
+    for key in ("capability_gate", "action_portfolio", "planning_horizon"):
+        assert projected[key] == payload[key]
+    assert payload == original
+    assert compact_quota_should_run_cli_payload(projected) == projected
+    detailed = compact_quota_should_run_cli_payload(payload,
+        include_todo_summary_detail=True, include_user_todo_summary_detail=True)
+    assert detailed == payload
+
+
+def test_readonly_plan_projects_all_rows_in_one_typed_call(monkeypatch):
+    from loopx.control_plane.quota.cli_projection import compact_quota_plan_cli_payload
+    from loopx.control_plane.quota import turn_envelope
+    summary = {"schema_version": "todo_summary_v0", "backlog_items": _items(3, prefix="cold"),
+        "first_executable_items": _items(1, prefix="work"), "future_items": [False, None]}
+    row = {"agent_todos": summary, "user_todos": summary}
+    calls, real = [], turn_envelope._turn_envelope_result
+    def observed(operation, **params):
+        calls.append(operation)
+        return real(operation, **params)
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observed)
+    payload = {"mode": "plan", "groups": {"ready": [row] * 8}, "next_automatic_turn": row}
+    projected = compact_quota_plan_cli_payload(payload, detail_sections=frozenset({"user-todos"}))
+    assert calls == ["reference_context"]
+    for result in [*projected["groups"]["ready"], projected["next_automatic_turn"]]:
+        assert result["user_todos"] == summary
+        assert "backlog_items" not in result["agent_todos"]
+        assert result["agent_todos"]["future_items"] == [False, None]
+        assert result["agent_todos"]["payload_compaction"]["full_detail_cold_path"] == "quota plan --include-detail agent-todos"
+
+
 def test_markdown_distinguishes_peer_blockers_from_native_admission() -> None:
     peer = {"mode": "task_scoped_peer", "execution_scope": "peer_agent_activation",
             "execution_state": "blocked", "task_selection": "canonical_claimed_candidates",
@@ -418,15 +474,7 @@ def test_compact_quota_should_run_cli_payload_keeps_decision_lanes_and_counts() 
     assert summary["open_count"] == 40
     assert "first_open_items" not in summary
     assert len(summary["first_executable_items"]) == 3
-    assert summary["first_executable_items"][0] == {
-        "schema_version": "todo_item_v0",
-        "todo_id": "execute-0",
-        "text": "execute item 0",
-        "status": "open",
-        "priority": "P1",
-        "task_class": "advancement_task",
-        "action_kind": "execute-action",
-    }
+    assert summary["first_executable_items"][0] == first_executable[0]
     assert [item["todo_id"] for item in summary["unclaimed_priority_open_items"]] == [
         "unclaimed-0",
         "unclaimed-1",
@@ -438,28 +486,7 @@ def test_compact_quota_should_run_cli_payload_keeps_decision_lanes_and_counts() 
         "monitor-gap-0",
     ]
     assert summary["current_agent_blocker_count"] == 3
-    assert summary["current_agent_blocker_items"] == [
-        {
-            "schema_version": "todo_item_v0",
-            "todo_id": "blocker-0",
-            "text": "blocker item 0",
-            "status": "blocked",
-            "priority": "P1",
-            "task_class": "blocker",
-            "action_kind": "blocker-action",
-            "reason": "blocker reason 0",
-        },
-        {
-            "schema_version": "todo_item_v0",
-            "todo_id": "blocker-1",
-            "text": "blocker item 1",
-            "status": "blocked",
-            "priority": "P1",
-            "task_class": "blocker",
-            "action_kind": "blocker-action",
-            "reason": "blocker reason 1",
-        },
-    ]
+    assert summary["current_agent_blocker_items"] == current_agent_blockers[:2]
     assert "backlog_items" not in summary
     assert "claimed_open_items" not in summary
     assert "other_agent_claimed_items" not in summary["claim_scope"]
@@ -831,7 +858,9 @@ def test_compact_quota_deduplicates_vision_without_losing_decision_rules() -> No
     )
 
     assert len(json.dumps(payload, indent=2)) > 40_000
-    assert len(json.dumps(compact, indent=2)) <= 40_000
+    # The historical 40KB fixture hid 28 candidate/binding records. Retaining
+    # that decision context is an intentional cost, not a compaction success.
+    assert len(json.dumps(compact, indent=2)) < len(json.dumps(payload, indent=2))
     assert compact["selected_todo"] == payload["selected_todo"]
     assert compact["interaction_contract"]["mode"] == "bounded_delivery"
     assert {
@@ -851,7 +880,7 @@ def test_compact_quota_deduplicates_vision_without_losing_decision_rules() -> No
     assert compact["interaction_contract"]["agent_channel"][
         "vision_continuation_audit"
     ]["vision_gap_judge"]["decision"] == "continue"
-    assert "runnable_candidates" not in compact["capability_gate"]
+    assert compact["capability_gate"] == payload["capability_gate"]
     assert compact["next_action_projection_warning"]["projection_refs"][
         "active_state_next_action"
     ] == "$.active_state_next_action"

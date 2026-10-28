@@ -193,6 +193,51 @@ function nativeProjection(payload: JsonObject, source_capture: JsonObject): Json
   return (prepared.projection ?? (prepared.delivery as JsonObject).context) as JsonObject;
 }
 
+test("native and legacy diagnostics share one owner without hiding decision context", () => {
+  const payload = outcomeContextPacket();
+  const task = {todo_id: "todo_own", text: "Original requirement and final stop. ".repeat(80),
+    future_requirements: ["Retain this new obligation"], lease: {owner: "author", epoch: 2}};
+  const future = [null, false, 0, {constraint: "Unknown relevance"}];
+  const diagnostic = {todo_id: "known", text: "Known diagnostic", status: "open"};
+  const unknownTail = {todo_id: "later", future_global_stop: "Retain this new stop"};
+  payload.agent_todo_summary = {schema_version: "todo_summary_v0", open_count: 1,
+    first_executable_items: [task], backlog_items: [diagnostic], future_items: future,
+    deferred_items: [unknownTail], recent_completed_advancement_items: [{todo_id: "old", completion_result: {future_stop: true}}],
+    future_object: {items: future}, claim_scope: {blocked_claimed_items: [diagnostic], future_items: future}};
+  payload.capability_gate = {runnable_candidates: [task], available: ["shell"], future};
+  payload.action_portfolio = {suggested_actions: [task]};
+  payload.planning_horizon = {work_items: [task]};
+  const before = structuredClone(payload), source_capture = {path: "/capture/one ' quoted.json", sha256: "a".repeat(64)};
+  const native = nativeProjection(payload, source_capture);
+  const scoped = native.context as JsonObject;
+  const legacy = evaluateTurnEnvelope({operation: "reference_context", payload, diagnostics: {}});
+  const one = scoped.agent_todo_summary as JsonObject, two = legacy.agent_todo_summary as JsonObject;
+  assert.equal(one.backlog_items, undefined);
+  assert.deepEqual(one.first_executable_items, [task]);
+  assert.deepEqual(one.future_items, future);
+  assert.deepEqual(one.future_object, {items: future});
+  assert.deepEqual(one.deferred_items, [unknownTail]);
+  assert.deepEqual(one.recent_completed_advancement_items, [{todo_id: "old", completion_result: {future_stop: true}}]);
+  assert.deepEqual(one.claim_scope, {future_items: future});
+  assert.deepEqual({...one, payload_compaction: null}, {...two, payload_compaction: null});
+  assert.equal((one.payload_compaction as JsonObject).full_detail_capture_ref, "$.source_capture");
+  assert.equal((one.payload_compaction as JsonObject).full_detail_cold_path, undefined);
+  assert.equal((two.payload_compaction as JsonObject).full_detail_cold_path, "quota should-run --include-detail agent-todos");
+  for (const key of ["capability_gate", "action_portfolio", "planning_horizon"]) {
+    assert.deepEqual(scoped[key], before[key]); assert.deepEqual(legacy[key], before[key]);
+  }
+  const detail = evaluateTurnEnvelope({operation: "reference_context", payload,
+    diagnostics: {agent_detail: true, user_detail: true}});
+  assert.deepEqual(detail, payload);
+  assert.deepEqual(payload, before);
+  // The derived wrapper must still be checked against the exact original.
+  evaluateTurnEnvelope({operation: "captured_outcome", payload: native, source_payload: payload, outcome_ref: ""});
+  const altered = structuredClone(native);
+  ((altered.context as JsonObject).agent_todo_summary as JsonObject).future_items = [];
+  assert.throws(() => evaluateTurnEnvelope({operation: "captured_outcome", payload: altered,
+    source_payload: payload, outcome_ref: ""}), /differs from its original source/);
+});
+
 test("scoped model context retains canonical source, global controls and exact optional detail", () => {
   const payload = outcomeContextPacket(), before = structuredClone(payload);
   const source_capture = {path: "/capture/original.json", sha256: "a".repeat(64)};
