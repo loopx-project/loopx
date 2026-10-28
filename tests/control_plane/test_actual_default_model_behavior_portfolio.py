@@ -927,9 +927,7 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
     assert regression_signature["action"]["selected_todo"]["todo_id"] == (
         "todo_c0ffee123456"
     )
-    assert regression["capability_gate"]["payload_compaction"][
-        "omitted_candidate_counts"
-    ] == {"runnable": 24, "blocked": 16, "resolution_bindings": 16}
+    assert regression["capability_gate"] == regression_source["capability_gate"]
     assert set(regression["next_action_projection_warning"]["projection_refs"]) == {
         "active_state_next_action",
         "latest_run_recommended_action",
@@ -957,6 +955,7 @@ def test_live_packet_builder_preserves_gate_and_vision_contracts(tmp_path: Path)
         "external_write_requested",
     )
     for clean_id, noisy_id in invariant_pairs:
+        assert packets[noisy_id]["capability_gate"] == sources[noisy_id]["capability_gate"]
         assert (
             len(
                 json.dumps(sources[noisy_id], ensure_ascii=False, indent=2).encode(
@@ -1196,6 +1195,33 @@ def test_planning_horizon_fixed_facts_oracle_rejects_shared_relation_drift(
         )
 
     assert calls == 0
+
+
+@pytest.mark.parametrize("lane", ["runnable_candidates", "blocked_candidates", "resolution_bindings"])
+@pytest.mark.parametrize("mutation", ["drop", "text"])
+def test_portfolio_rejects_candidate_context_loss_before_actor_call(
+    tmp_path: Path, lane: str, mutation: str,
+) -> None:
+    sources, packets = _scenario_inputs(tmp_path)
+    candidates = packets["turn_quota_hot_path_compaction_regression"]["capability_gate"][lane]
+    if mutation == "drop":
+        candidates.pop()
+    else:
+        candidates[0]["text"] = "Shortened candidate context."
+
+    def unexpected_actor(*_args: Any, **_kwargs: Any) -> Mapping[str, Any]:
+        pytest.fail("candidate context must be validated before any actor call")
+
+    with pytest.raises(ValueError, match="must preserve complete capability candidate context"):
+        run_actual_default_model_behavior_portfolio(
+            packets,
+            scenario_sources=sources,
+            qualification_id="actual-default-candidate-context-loss",
+            turn_actor=unexpected_actor,
+            onboarding_actor=unexpected_actor,
+            selected_todo_actor=_selected_todo_actor,
+            replan_semantic_action_actor=_replan_semantic_action_actor,
+        )
 
 
 def test_portfolio_source_oracle_rejects_mutated_compact_user_action(
@@ -1728,7 +1754,7 @@ def test_portfolio_contrast_rejects_noisy_gate_semantic_collapse(
         capability_gate = packet.get("capability_gate") or {}
         if (
             capability_gate.get("action") == "operator_gate"
-            and "payload_compaction" in capability_gate
+            and capability_gate.get("runnable_candidates")
         ):
             result["decision"] = {
                 **result["decision"],

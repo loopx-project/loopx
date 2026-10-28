@@ -11,6 +11,15 @@ read obligations before capture. Recovering delivery from that immutable capture
 does not refresh authority; a legitimate new selection/authority check remains
 distinct from retrying transport.
 
+The RFC's [candidate context by decision stage](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage)
+proposes complete captured alternatives with discoverable decision facts and
+same-capture batch detail reads. It does not change current read obligations.
+The current capability gate leaves candidate selection to the Agent; a selected
+Todo display is not proof that it can ignore alternatives. Existing full-context
+captures must still be read completely. A future staged caller must replace its
+delivery, required reads and recovery together, including unknown-scope full
+fallback; an index read cannot establish delivery of hidden bodies.
+
 Ordinary Heartbeat/quota delivers the full effective selected Todo, enabled
 canonical acceptance and Agent-scoped User obligations at
 `interaction_contract.agent_channel.work_context`. These are current work
@@ -74,6 +83,71 @@ rewritten; a historical pending Goal read cannot become fulfilled merely by
 restoring its capture. This change neither grants execution permission nor
 establishes enforcement for other pending capability reads. Replan material-reading
 invocations retain their existing staged reader and work restrictions.
+
+Native delta delivery and source fulfillment share the same integrity predicate.
+Only exact verified Goal text can be inherited from the retained baseline;
+current source witnesses and unknown fields remain literal. Cold delivery and
+full-capture recovery retain the complete original text, including arbitrary
+sections, comments and final stops.
+
+Enabled native quota delivery separates known acceptance requirements from their
+supporting material before full/delta presentation. The TypeScript acceptance
+projection keeps every scoped outcome objective, requirement description,
+review conclusion, current-basis flag, independent-verification flag, work link
+and source revision inline. Outcome source history and Agent review notes/evidence
+references remain in the immutable original capture. Each projected outcome has
+a `supporting_material_pointer`; `context_details` supplies the original path,
+SHA-256 and `quota context-read --select` command. Read needed evidence before a
+decision, verification or review that depends on it; repeated selectors batch
+related source, note and evidence fields without replaying the outcome's inline
+requirements. An unmet or stale review stays visible before its explanation
+is opened. Agent review still does not establish independent acceptance.
+
+The archive remains `projection.json`; the required model view is
+`required-context.json`. Required reads, full/delta preparation and recovery use
+that same model view. A selected detail page cannot acknowledge the required
+view, establish a full baseline or prove that other hidden details were read.
+The adapter edits paths selected by the typed owner without round-tripping the
+original JSON values through JavaScript. Unknown outcome fields, unknown source
+read obligations, unsupported schemas, signed envelopes and unavailable planning
+retain their original full content. Context delivery off remains unchanged.
+If the required view and its index are not smaller in serialized UTF-8 bytes,
+delivery retains the original full view and read obligations; small material
+does not need a more expensive detail round trip. This is a transport-size
+comparison, not a relevance heuristic or a model-token estimate.
+Historical captures retain their original obligations. This acceptance-material
+slice does not yet stage candidate selection, preferences or Explore history,
+and a smaller body alone does not establish lower total model cost.
+
+A context epoch is not a work Turn. Compaction or a failed native hook invalidates
+delta reuse; it does not require another admission or unconditional replay of the
+old quota packet. Within the existing Turn, continue from the working brief with
+the Goal, applicable requirements/stops, task and original capture/settlement
+identity. Before an action that depends on missing or uncertain facts, recover
+those facts from the same immutable capture. An unfinished initial required read
+still requires its missing content; summarizing it does not fulfill that read.
+Do not repeat completed work or settle the original Turn twice. If the original
+reference is lost, repair it before dependent work; independently authorized work
+can continue. A later work Turn obtains its own current guard and required
+context, without prefetching an older packet to manufacture a delta baseline.
+
+The native lifecycle still invalidates the previous baseline. A working brief
+is sufficient only for the work whose necessary facts it preserves; it is not
+input-byte coverage, a new baseline, renewed authority or proof of freshness or
+model retention. These separate boundaries prevent transport loss from becoming
+either a repeated full-input loop or permission to act on missing requirements.
+No token savings or accepted outcome gains follow from instruction delivery alone.
+
+Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
+with an explicitly enabled native JSON `should-run` capture. It collects the
+same complete Goal source for admitted work-context reads and writes the ordinary
+immutable CLI view, without
+reading or replacing the model session's continuity state. After native lifecycle
+hooks run, the model presents that saved view with `context-project`; this does
+not re-enter admission. Deferred presentation requires a capture destination and
+cannot be combined with socket handoff. Ordinary callers keep their existing
+presentation, and context delivery off keeps its original pending Goal reads.
+Unbound staged replans retain their existing review-owned original Goal read.
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. In ordinary progressive delivery with
@@ -245,12 +319,16 @@ branch identity, selection, status, resume facts and orchestration gates remain
 current. Reordering, refutation, removed evidence and changed guidance reconstruct
 the exact current source; no timestamp, revision or text is normalized away.
 
-Within successfully read cumulative Goal outcomes, source summaries, review notes
-and string evidence references also use exact reuse. They are provenance and
-explanations, not current acceptance decisions. Requirement status, review
+Within successfully read cumulative Goal outcomes, string source references,
+source summaries, review notes and string evidence references also use exact
+reuse. They are provenance and explanations, not current acceptance decisions. Requirement status, review
 conclusion, basis currency, independent verification, revisions and unknown fields
 remain literal current input. Changed, removed or reordered evidence reconstructs
 the complete current source; failed or incomplete sources retain full delivery.
+Containers emptied solely by removing reusable fields do not force those fields
+back into the delta. Originally empty unknown records and non-string source
+references remain literal current input. Reuse keeps the locator's exact value;
+it neither rereads the referenced material nor refreshes its authority.
 
 The registered preference owner permits exact reuse of its complete instructions,
 statements, source quotes and source references. Each read still supplies the
@@ -262,6 +340,14 @@ or parsing its read command. Explore retains its explicit scoped hook identity.
 Unknown, failed, incompatible or ambiguous hook views stay complete. A changed
 scope or lost baseline still selects full delivery; reuse never makes a retired
 or expired preference actionable or grants authority.
+
+Quota capability candidates use the same exact codec for registered Todo text,
+title and note strings. Every candidate remains in the complete cold input;
+warm input still carries current membership/order, identity, revision, ownership,
+eligibility, handoff and unknown fields. Unknown schemas, duplicate identities or
+structured values in those text fields stay literal. This removes repeated
+authoring only when a complete baseline is usable; it neither narrows candidate
+selection nor implements the proposed decision-stage read contract.
 
 Object edits may group complete current fields in `values`, alongside recursive
 `changed` edits and `removed` keys. Array edits use exact indices in `items` and
@@ -519,8 +605,32 @@ Todo 区域相交的区间均拒绝。
 普通注释、代码块中的示例、损坏或未知回执、其他 Goal 的回执和附带其他文字的行均原样
 保留。这样首轮全文读取不再携带累积的恢复日志；不改变回执重放校验，也不据此宣称
 模型输入或 token 成本已经降低。
-Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；未标记或混合归属
-仅在内部桥接传路径与修订，避免未被消费的正文副本，Agent 仍须渐进式全文读取。显式
+未合并的 C1 完整 Turn writer 同样在捕获前请求完整 Goal；自动业务 Host dispatch
+通过 `host_dispatch_context` 在加载 Host 前拒绝未完成或无效的 Goal 材料。历史解释与
+结果收尾继续使用 `host_context` 元数据读取，恢复旧 capture 不会自动履行其原本未完成
+的 Goal 读取。本增量不扩大权限，也不声称强制其他 capability 的待完成读取。
+
+显式开启的 native context delivery 在捕获前请求完整 Goal。未标记或混合归属的来源
+由原 registered-source adapter 提供全部原始 UTF-8 正文、完整修订与 `full_source: true`。
+既有 TypeScript interaction owner 核对正文 digest 后才履行读取；`complete_goal_v1`
+确认 runtime 支持，防止旧版静默保留未完成 Goal 读取。来源缺失或无效仍拒绝；已有标记
+来源保留生成区域血缘和 canonical Todo 权限。
+
+native 差分与来源履行共享同一完整性判断；只有精确核验的 Goal 正文可从保留的
+baseline 继承，当前来源凭据和未知字段仍明文提供。冷态及上下文丢失恢复保留完整
+原文，包括任意章节、注释和末尾停止条件。不据此证明模型保留、执行权限、token 节省
+或已验收成果收益。
+
+Checkpoint Host 预检在显式开启 native JSON `should-run` 捕获时使用隐藏参数
+`--defer-context-presentation`。它为已准入工作上下文读取捕获完整 Goal，并保存普通
+不可变 CLI 视图，不读取或替换模型会话的连续性状态。原生生命周期 hook 运行后，模型
+通过 `context-project` 呈现同一视图，不重复准入。延迟呈现必须指定捕获位置，不能
+与 socket handoff 组合。普通调用保持既有呈现；关闭差分时保留原来的待完成 Goal
+读取。未绑定任务的分阶段重规划继续沿用 review 所属的原始 Goal 读取。
+
+Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；关闭 native
+context delivery 时，未标记或混合归属仅在内部桥接传路径与修订，避免未被消费的正文
+副本，Agent 仍须渐进式全文读取。显式
 归属的来源才向 typed owner 传完整非生成正文和区域血缘。字节减少不能证明模型费用、
 延迟或任务效果改善。
 已附带的内容不要求重复读取；未提供的 provider 内容继续保留精确命令与顺序。
@@ -592,10 +702,17 @@ TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `
 条件、身份、命令与未知控制仍逐轮发送。Explore owner 登记分支证据审计与证据关联
 模板的精确复用；分支身份、选择、状态、恢复事实与编排门仍是当前输入。重排、反证、
 移除与指导变更完整重建当前来源，不规范化时间戳、修订或正文。
-已成功完整读取的累计 Goal outcome 中，来源说明、复核笔记及字符串证据引用也按精确
+已成功完整读取的累计 Goal outcome 中，字符串来源引用、来源说明、复核笔记及字符串证据引用也按精确
 差分传输。它们是来源与解释；要求状态、复核结论、依据是否当前、独立验证标记、修订
 及未知字段仍逐轮完整发送。证据变化、移除或重排后仍须精确还原当前来源；来源失败或
 读取不完整时保留完整投递。
+仅因移除可复用字段而变空的容器，不会把这些字段重新带回差分；原本为空的未知对象和
+非字符串来源引用仍逐轮发送。复用保留定位符的精确值，不重读其指向的材料，也不刷新权限。
+quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标题与笔记字符串。
+冷启动仍完整交付全部候选；warm 仍逐轮携带当前成员与顺序、身份、修订、归属、
+准入能力、交接及未知字段。未知 schema、重复身份或文本字段中的结构化值保持原文。
+这只在完整基线可用时减少重复正文，不缩小候选选择范围，也不等于按决策阶段读取的
+替代契约已经实现。
 对象编辑可以在 `values` 中合并携带本轮完整字段，同时保留递归 `changed` 与删除
 `removed`；数组的 `items` 与 `values` 使用精确索引，`length` 调整长度。
 字段仍在本轮输入中，只减少重复 wrapper；codec 比较普通编辑、合并字段
@@ -723,6 +840,60 @@ journal，防止短暂 IO 故障恢复后复活旧基线。不可变 capture 与
 不固化当前机器默认值或自动生成路径。已有 v2 loader 每次唤醒重读设置；旧展开式提示须
 重新生成。此开关不重启停用 Goal、不改变额度或 lease；正常 Desktop、全部 Goal 的实际
 采用和真实 solver 完整成本及效果仍须分别验收。
+
+### Selected capture details / 按需读取捕获详情
+
+`quota context-read --select /path --select /another/path` reads an explicit
+batch of RFC 6901 JSON pointers from the original digest-bound capture. Supply
+the existing `--capture-file` and `--capture-sha256` reference, or start through
+the existing session lookup. Omit `--select` for unchanged full-capture reads.
+Selection is JSON-only; `~1` escapes `/`, `~0` escapes `~`, and the empty pointer
+selects the root. Missing pointers or invalid array indices reject the whole
+batch; a present JSON `null` is a valid value. Duplicate pointers are removed
+and the remaining pointers are sorted.
+
+Explicit `context-read` capture/hash or native-location arguments are independent
+of Goal registry discovery and machine configuration. Conflicting default runtime
+roots cannot block that read; capture integrity and native-session scope still
+apply. A read without an explicit source keeps its existing machine lookup.
+Admission and accounting retain their registry/runtime route checks.
+
+The existing page envelope keeps the original `sha256` and adds
+`selected_pointers` and `selection_sha256`. Concatenated `content` is a
+`context_capture_selection_v1` object with `selections: [{pointer, value}]`.
+Its offsets, total bytes and EOF describe only that derived view. Follow
+`next_command`, which retains both hashes and the exact selection; a nonzero
+offset requires `--selection-sha256`. The reader verifies both hashes, preserves
+original JSON values (including large integers), and performs no admission,
+settlement or live Goal lookup. Selection requires the existing typed runtime;
+ordinary full reads retain their file-only path.
+
+Selected EOF, including a root selection, cannot establish a full-context
+baseline in the native hook. This shared reader enables exact detail expansion;
+it does not change which facts a caller must read, relax required reads, or
+switch existing native input to a necessary-only view. Those consumers must
+integrate their scope, instructions and recovery together before claiming a
+progressive-delivery or total-cost improvement.
+
+`quota context-read --select /path --select /another/path` 用 RFC 6901 JSON
+pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--capture-file` 与
+`--capture-sha256`，或从已有会话查询入口开始；省略 `--select` 保持原有全量读取。
+选择模式仅支持 JSON：`~1` 表示 `/`，`~0` 表示 `~`，空 pointer 选择根对象。
+任一路径不存在或数组索引无效时整批失败；已存在的 `null` 合法。路径去重并排序。
+
+显式提供 capture/hash 或原生会话位置的 `context-read` 不依赖 Goal registry 发现或
+机器配置。默认 runtime root 冲突不阻断该读取，原 capture 完整性与原生会话作用域
+检查仍生效。未显式指定来源时仍沿原机器配置查找；准入与记账保留原路由检查。
+
+分页保留原始 `sha256`，新增 `selected_pointers` 与 `selection_sha256`。
+拼接 `content` 后得到带 `selections: [{pointer, value}]` 的
+`context_capture_selection_v1`；偏移、总字节数与 EOF 仅描述此派生视图。
+沿 `next_command` 继续，它保留两个摘要及精确路径；非零偏移必须携带
+`--selection-sha256`。读取器校验两者，保留包括大整数在内的原 JSON 值，
+不准入、不结算、不查询实时 Goal。选择模式依赖已有 typed runtime；普通全量
+读取仍只走文件路径。包括根对象选择在内的详情 EOF 均不能被原生 hook 记为
+完整上下文基线。此共享读取器提供精确展开能力，不改变调用方必读事实或自动切换
+必要视图；调用方须共同接入范围、指引与恢复后，再验收渐进投递及完整成本收益。
 
 ### Saved context cache / 已保存上下文缓存
 

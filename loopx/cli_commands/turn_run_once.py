@@ -124,6 +124,7 @@ def execute_turn_run_once(
             ),
             replan_obligation_id=(raw_identity.get("replan_obligation_id")
                                   if isinstance(raw_identity, Mapping) else None),
+            request_subject=raw_identity.get("request_subject"),
         )
         persisted_effect_id = str(raw_identity.get("effect_id") or "")
         if (
@@ -490,12 +491,12 @@ def execute_turn_run_once(
                 execute=True,
                 source=(quota_spend_source_for_execution_context(
                     payload.get("scheduler_execution_context"),
-                ) if settlement_identity.replan_obligation_id else "adapter"),
+                ) if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None else "adapter"),
                 agent_id=args.agent_id,
                 workspace_path=delivery_workspace_path,
                 replan_obligation_id=settlement_identity.replan_obligation_id,
                 turn_instance_id=(settlement_identity.turn_instance_id
-                                  if settlement_identity.replan_obligation_id else None),
+                                  if settlement_identity.replan_obligation_id or settlement_identity.request_subject is not None else None),
                 available_capabilities=args.available_capabilities,
                 scheduler_execution_context=(
                     payload.get("scheduler_execution_context")
@@ -899,7 +900,22 @@ def execute_turn_run_once(
                     args, workspace=project, environ=operator_environ,
                 )
 
+        request_locator = payload.get("delegation_operation_locator")
+        settlement_admission = None
+        if settlement_identity.request_subject is not None:
+            if not isinstance(request_locator, dict):
+                raise ValueError("request Turn is missing its original delegation locator")
+            from ..control_plane.collaboration.delegation_context import (
+                require_current_request_operation, request_settlement_lifetime,
+            )
+            def settlement_admission():
+                return request_settlement_lifetime(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
+
         def on_managed_start_admitted() -> None:
+            if settlement_identity.request_subject is not None:
+                require_current_request_operation(request_locator, settlement_identity,
+                    registry_path=registry_path, runtime_root=runtime_root, workspace=project)
             replan_packet = execution_context["replan_action_packet"]
             capability_guard = (
                 replan_packet.get("capability_guard")
@@ -939,6 +955,7 @@ def execute_turn_run_once(
             execute=bool(args.execute),
             retry_failed=bool(args.retry_failed_turn),
             task_validator=task_validator,
+            settlement_admission=settlement_admission,
             writeback=writeback if args.execute else None,
             completion_writeback=completion_writeback if args.execute else None,
             completion_intent=completion_intent if args.execute else None,

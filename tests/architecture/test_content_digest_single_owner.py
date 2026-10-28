@@ -167,6 +167,7 @@ CONSUMER_MODULES = (
     "loopx.capabilities.issue_fix.outcome_projection",
     "loopx.capabilities.issue_fix.reviewer_notification",
     "loopx.capabilities.machine_configuration.store",
+    "loopx.capabilities.manager_context.execution",
     "loopx.capabilities.manager_context.roundtrip",
     "loopx.capabilities.manager_context.tracking",
     "loopx.capabilities.periodic_report.adapters",

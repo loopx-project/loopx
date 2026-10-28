@@ -16,7 +16,8 @@ from ..chat_server import (
     serve_chat,
 )
 from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from ..dashboard_launcher import launch_dashboard, replace_existing_loopx_chat
+from ..dashboard_launcher import launch_dashboard
+from ..runtime_activation import replace_managed_loopx_chat as replace_existing_loopx_chat
 from ..execution_profile import execution_profile_turn_granularity
 from ..heartbeat_prequota import (
     render_heartbeat_pre_quota_markdown,

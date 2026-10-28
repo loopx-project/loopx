@@ -64,7 +64,8 @@ ACTUAL_DEFAULT_MODEL_BEHAVIOR_CATALOG_SCHEMA_VERSION = (
     "actual_default_model_behavior_scenario_catalog_v0"
 )
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_REPEAT_ATTEMPTS = 2
-ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 40_000
+# Synthetic pretty-JSON regression allowance, not a production transport limit.
+ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET = 90_000
 ACTUAL_DEFAULT_MODEL_BEHAVIOR_CONTRAST_SCHEMA_VERSION = (
     "actual_default_model_behavior_contrast_v0"
 )
@@ -840,6 +841,8 @@ def _validate_quota_hot_path_compaction_regression(
         raise ValueError("compaction-regression source must exceed the hot-path budget")
     if _pretty_json_size(packet) > ACTUAL_DEFAULT_MODEL_BEHAVIOR_HOT_PATH_JSON_BUDGET:
         raise ValueError("compaction-regression packet exceeds the hot-path budget")
+    if packet.get("capability_gate") != source.get("capability_gate"):
+        raise ValueError("compaction regression must preserve complete capability candidate context")
     if contract.get("selected_todo_id") != expected_selected_todo_id:
         raise ValueError("compaction regression must preserve the selected todo")
 

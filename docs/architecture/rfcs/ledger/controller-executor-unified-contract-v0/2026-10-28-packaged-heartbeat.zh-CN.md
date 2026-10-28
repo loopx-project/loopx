@@ -335,3 +335,29 @@ peer 成果每阶段仍另增 13,940 正文字节和十次 CLI／hook 调用。�
 丢失恢复的请求／响应字节增长。一次非受控 cohort 不认证延迟、模型保留／token／
 cache、账单、人工或验收成果。剩余调用方替换、writer 切换、历史 reader 退役及实际
 单会话决策／成果资格仍未完成；controller 模型比较另作后续实验。
+
+## 主线集成与不可变 reader 身份
+
+既有 C1 提案 #7430 集成 main `447c35ed6`，采用共享的原生渐进材料 planner、通用
+capture selector、request-scoped settlement 及当前 request 授权。继续以这些 owner
+为准，不新增决策或 schema。原生操作在相同 typed 边界内调用既有材料 planner：无需
+材料编辑的输入保留一次 RPC；确需编辑时，仍在 capture 和编码前应用于原始 Python
+JSON。C1 scope 回退保留完整来源。已签名完整 v1 的材料分阶段迁移尚未完成，其完整
+回退不能称为已迁移或已压缩。
+
+修复两处 reader 接线。通用 `context-read --select` 接续的 selection digest 通过既有
+CLI 校验。历史 replan 命令在为 executor 展开诊断引用前，先绑定原始 capture 中的完整
+输入；此前对展开视图取 hash，会使不可变原 capture 拒绝其生成的有效命令。两项修复
+均复用既有 selector、reader 和 hash owner，不另行准入、记回执或扣额。篡改及不同
+作用域的读取仍拒绝。
+
+独立的无材料 RPC 次数 oracle 在冻结的初次集成上失败，修复后通过。新增重复 replan
+读取 oracle 在完整来源复用 Todo 摘要列表时同样复现失败，保留原绑定后通过。修复后
+源码通过 160 项 typed、23 项真实 File／SQLite replan CLI、control-plane typecheck、
+配置内 mypy 和限定 Ruff。既有 resumed-task 展示断言与完整输入断言同时保留；未为
+通过测试而移除候选正文、未知字段或上限。
+
+这是集成验证，不是新安装或模型行为。先前中断的 cohort、随后三项真实 reader 失败
+仍保留原失败观察。既有成本表及 **25,862 > 13,000** 仍绑定原版本与状态；未提高上限，
+不推断最新版完整成本收益。调用方／writer 迁移、历史 reader 退役及实际单会话决策、
+验收成果和完整成本仍属 C1 工作，提案保持未完成。

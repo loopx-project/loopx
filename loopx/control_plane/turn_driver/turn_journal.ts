@@ -15,7 +15,7 @@ import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import { recordedTurnEffects, type RecordedTurnEffects } from "./turn_journal_effect_readback.ts";
 import { selectedWorkTodoId } from "../work_items/interaction_contract.ts";
-import { turnEnvelopeReplanSettlementIdentity } from "../quota/turn_envelope.ts";
+import { turnEnvelopeScopedSettlementIdentity } from "../quota/turn_envelope.ts";
 
 export const TURN_JOURNAL_INSPECTION_SCHEMA_VERSION =
   "loopx_turn_journal_inspection_v1";
@@ -269,9 +269,9 @@ function typedSettlementIdentityState(
   });
   let bindingMatches = selectedTodoId !== null && parsed.value.binding_kind === "todo"
     && parsed.value.todo_id === selectedTodoId && parsed.value.binding_id === selectedTodoId;
-  if (selectedTodoId === null && parsed.value.binding_kind === "autonomous_replan") {
+  if (selectedTodoId === null && ["autonomous_replan", "request"].includes(parsed.value.binding_kind)) {
     try {
-      bindingMatches = turnEnvelopeReplanSettlementIdentity(envelope, expectedTurnInstance)?.effect_id
+      bindingMatches = turnEnvelopeScopedSettlementIdentity(envelope, expectedTurnInstance)?.effect_id
         === parsed.value.effect_id;
     } catch {
       bindingMatches = false; // Corrupt evidence remains a refusal, never a surrogate task.

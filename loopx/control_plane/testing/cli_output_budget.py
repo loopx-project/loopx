@@ -155,8 +155,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
             "crowded": {"json": 42_000, "markdown": 10_500},
-            # Matched canonical base/head both emit 24,820 JSON characters.
-            "multi_agent": {"json": 25_500, "markdown": 7_000},
+            # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
+            # this candidate both emit 25,836 JSON characters (96 matched
+            # surface/mode measurements, no semantic or route differences).
+            # Preserve complete decision facts; calibrate only this synthetic
+            # presentation ceiling. The historical 25,500 failure remains;
+            # line/growth guards and production transport limits are unchanged.
+            "multi_agent": {"json": 26_500, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 190},

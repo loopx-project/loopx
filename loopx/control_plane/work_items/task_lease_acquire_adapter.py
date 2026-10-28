@@ -8,15 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from ..projects.registry_codec import load_registry
-from ...paths import resolve_runtime_root
 from ..coordination.coordination_state_contract_generated import (
     TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA,
     TASK_LEASE_CANONICAL_LIFECYCLE_REQUEST_SCHEMA,
     TASK_LEASE_CANONICAL_CLAIM_TRANSFER_REQUEST_SCHEMA,
     TASK_LEASE_LIFECYCLE_REQUEST_SCHEMA,
-)
-from ..goals.legacy_event_source import (
-    state_event_log_candidates as _state_event_log_candidates,
 )
 from ..todos.handoff_mode import HANDOFF_MODE_LEGACY
 from .local_lease_record import TASK_LEASE_SCHEMA_VERSION, TaskLeaseError
@@ -57,57 +53,6 @@ def _registry_goal(registry: dict[str, Any], goal_id: str) -> dict[str, Any] | N
     )
 
 
-def _task_lease_authority_source_paths(
-    *,
-    registry_path: Path,
-    registry: dict[str, Any],
-    goal_id: str,
-) -> tuple[dict[str, Any] | None, Path | None, list[tuple[str, Path]]]:
-    from ...rollout_event_log import rollout_event_log_path
-    from ...state_refresh import resolve_goal_state
-    sources: list[tuple[str, Path]] = [("registry", registry_path)]
-    goal = _registry_goal(registry, goal_id)
-    if goal is None:
-        return None, None, sources
-    try:
-        _goal, _project, state_file = resolve_goal_state(
-            registry=registry,
-            goal_id=goal_id,
-            project_override=None,
-            state_file_override=None,
-        )
-    except (OSError, ValueError):
-        return goal, None, sources
-    sources.append(("active_state", state_file))
-    for index, path in enumerate(
-        _state_event_log_candidates(
-            goal,
-            state_path=state_file,
-        )
-    ):
-        sources.append((f"state_event_{index}", path))
-    projection_runtime_root = resolve_runtime_root(
-        registry,
-        None,
-        registry_path=registry_path,
-    )
-    sources.append(
-        (
-            "rollout_events",
-            rollout_event_log_path(projection_runtime_root, goal_id),
-        )
-    )
-    unique: list[tuple[str, Path]] = []
-    seen: set[str] = set()
-    for source_id, path in sources:
-        key = str(path.expanduser().resolve(strict=False))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append((source_id, path))
-    return goal, state_file, unique
-
-
 def _raw_registered_agent_candidates(goal: dict[str, Any]) -> list[Any]:
     coordination = goal.get("coordination")
     spawn_policy = goal.get("spawn_policy")
@@ -120,101 +65,6 @@ def _raw_registered_agent_candidates(goal: dict[str, Any]) -> list[Any]:
         if isinstance(spawn_policy, dict)
         else None,
     ]
-
-
-def _task_lease_authority_projection(
-    *,
-    goal: dict[str, Any] | None,
-    state_file: Path | None,
-) -> tuple[Any, list[Any]]:
-    from ..goals.active_state_metadata import parse_state_frontmatter
-
-    if goal is None:
-        return HANDOFF_MODE_LEGACY, []
-
-    handoff_mode: Any = HANDOFF_MODE_LEGACY
-    if state_file is not None and state_file.exists():
-        handoff_mode = parse_state_frontmatter(
-            state_file.read_text(encoding="utf-8")
-        ).get("handoff_mode")
-    return handoff_mode, _raw_registered_agent_candidates(goal)
-
-
-def _authority_source_identity(
-    sources: list[tuple[str, Path]],
-) -> list[tuple[str, str]]:
-    return [
-        (source_id, str(path.expanduser().resolve(strict=False)))
-        for source_id, path in sources
-    ]
-
-
-def _task_lease_authority_snapshot_attempt(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    todo_id: str,
-) -> dict[str, Any] | None:
-    registry_receipt_before = _authority_source_receipt("registry", registry_path)
-    registry = load_registry(registry_path)
-    goal, state_file, sources = _task_lease_authority_source_paths(
-        registry_path=registry_path,
-        registry=registry,
-        goal_id=goal_id,
-    )
-    receipts_before = [
-        _authority_source_receipt(source_id, path) for source_id, path in sources
-    ]
-    if receipts_before[0] != registry_receipt_before:
-        return None
-
-    handoff_mode, registered_candidates = _task_lease_authority_projection(
-        goal=goal, state_file=state_file,
-    )
-
-    registry_after = load_registry(registry_path)
-    _goal_after, _state_file_after, sources_after = _task_lease_authority_source_paths(
-        registry_path=registry_path,
-        registry=registry_after,
-        goal_id=goal_id,
-    )
-    if _authority_source_identity(sources_after) != _authority_source_identity(sources):
-        return None
-    receipts_after = [
-        _authority_source_receipt(source_id, path) for source_id, path in sources_after
-    ]
-    if receipts_before != receipts_after:
-        return None
-    return {
-        "handoff_mode": handoff_mode,
-        "registered_agent_candidates": registered_candidates,
-        "todos": [],
-        "todo_projection_error": None,
-        "source_receipts": receipts_after,
-    }
-
-
-def task_lease_acquire_authority_facts(
-    *,
-    registry_path: Path,
-    goal_id: str,
-    todo_id: str,
-) -> dict[str, Any]:
-    """Read source-stable history metadata without reviving Todo admission."""
-
-    for _attempt in range(TASK_LEASE_AUTHORITY_SNAPSHOT_ATTEMPTS):
-        facts = _task_lease_authority_snapshot_attempt(
-            registry_path=registry_path,
-            goal_id=goal_id,
-            todo_id=todo_id,
-        )
-        if facts is not None:
-            return facts
-    raise TaskLeaseError(
-        "task-lease authority sources changed while preparing acquire; retry",
-        code="authority_source_changed",
-        payload={"goal_id": goal_id, "todo_id": todo_id},
-    )
 
 
 def _require_native_acquire_shape(payload: object) -> dict[str, Any]:

@@ -117,6 +117,16 @@ def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
     _turn_envelope_result("complete_consumer", payload=dict(payload))
 
 
+def turn_envelope_scoped_settlement_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> dict[str, Any] | None:
+    identity = _turn_envelope_result("scoped_settlement_identity", envelope=dict(envelope),
+                                    turn_instance_id=turn_instance_id).get("identity")
+    if identity is not None and not isinstance(identity, Mapping):
+        raise RuntimeError("TypeScript Turn settlement identity must be an object")
+    return dict(identity) if identity is not None else None
+
+
 def build_turn_envelope(
     payload: Mapping[str, Any],
     *,

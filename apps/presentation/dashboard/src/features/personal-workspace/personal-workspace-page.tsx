@@ -1046,6 +1046,7 @@ export function PersonalWorkspacePage({
   }, [agentWorkActive, selectionScope, selectedWorkAgentId, selectedGoalTab]);
   const selectedWorkspaceRef = workspaceConversations?.selectedRef ?? null;
   const originalConversation = workspaceConversations?.bound;
+  const originalSourceUnresolved = Boolean(originalConversation && !originalConversation.session);
   const originalTitle = originalConversation?.source?.project_title
     ?? (locale === "zh-CN" ? "原会话" : "Original conversation");
   const selectedWorkspaceProject = workspaceConversations?.projects?.find((project) => project.project_ref === selectedWorkspaceRef) ?? null;
@@ -3024,7 +3025,15 @@ export function PersonalWorkspacePage({
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
                 onViewAllOperations={() => setSelectedGoalTab("chat")} />
             ) : (
-              <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly} emptyState={workspaceTitle ? { title: workspaceTitle, description: t("workspace.empty") } : undefined} onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
+              <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly}
+                emptyState={originalConversation && (originalSourceUnresolved
+                  || (conversationHistoryState && conversationHistoryState.phase !== "ready")) ? {
+                  title: originalConversation.error || conversationHistoryState?.phase === "unavailable" || conversationHistoryState?.phase === "partial"
+                    ? (locale === "zh-CN" ? "原会话暂不可用" : "Original conversation unavailable")
+                    : (locale === "zh-CN" ? "正在读取原会话…" : "Reading the original conversation…"),
+                  description: "",
+                } : workspaceTitle ? {title: workspaceTitle, description: t("workspace.empty")} : undefined}
+                onReviewGoalDraft={readOnly ? undefined : reviewGoalDraft} onSuggestReply={readOnly ? undefined : suggestReply}
                 items={selectedWorkspaceRef || originalConversation ? managerChatItems.filter((item) => item.kind === "message") : managerChatItems}
                 onSelect={setSelection} selectedGoal={null} showManagerTeamResults={!selectedWorkspaceRef && !originalConversation}
                 onAdjustTurn={steeringTurnId ? focusTurnComposer : undefined}
@@ -3140,7 +3149,7 @@ export function PersonalWorkspacePage({
               </figure>
             ))}</div> : null}
             {imageAttachmentError ? <p className="personal-composer-error" role="alert">{imageAttachmentError}</p> : null}
-            {!readOnly && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
+            {!readOnly && !originalSourceUnresolved && (selectedGoal || managerChatOpen) && (runtimeReadiness.kind === "none_available" || runtimeReadiness.kind === "selected_unavailable") ? (
               <p className="personal-composer-status personal-runtime-readiness-line" data-testid="runtime-readiness-line" role="status">
                 <span>{runtimeReadiness.kind === "none_available" ? t(agents.some((agent) => agent.adapterKind === "status_projection" && agent.available)
                   ? "readiness.selectedUnavailableReadonly" : "readiness.selectedUnavailableNone") : t("readiness.selectedUnavailable", { label: runtimeReadiness.selected.label })}</span>

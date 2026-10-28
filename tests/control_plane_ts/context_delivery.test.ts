@@ -74,6 +74,70 @@ function warm(value: JsonObject, baseline: JsonObject): JsonObject {
 const recover = (delivery: JsonObject, baseline: JsonObject, value: JsonObject): JsonObject =>
   restoreContextDelivery({delivery, baseline, current: full(value, "capture-2")});
 
+test("candidate requirements reuse exact retained text while eligibility remains current", () => {
+  const row = (id: string) => ({schema_version: "todo_item_v0", todo_id: id,
+    text: `Complete ${id}; preserve the tail condition. `.repeat(120),
+    title: `Full objective for ${id}. `.repeat(80), note: "Evidence is not acceptance. ".repeat(80),
+    content_revision: "revision-a", status: "open", claimed_by: "agent",
+    required_capabilities: ["shell"], missing_capabilities: [], capability_action: "run",
+    unknown_control: {stop: false}, handoff_note: {intent: "implement", evidence_refs: ["evidence:a"]}});
+  const original = {capability_gate: {schema_version: "capability_gate_v0", action: "run",
+    runnable_candidates: [row("one"), row("two")], blocked_candidates: [row("blocked")],
+    resolution_bindings: [{capability: "shell", owner: "user", blocked_todo_ids: ["blocked"]}]}};
+  const saved = structuredClone(original);
+  const args = {scope, surface: "quota_packet", capture_id: "current"};
+  const baseline = prepareContextDelivery({...args, context: original, capture_id: "base"});
+  assert.deepEqual(baseline.context, original); // Cold still contains every candidate and full body.
+  const project = (context: JsonObject, extra = {}) => prepareContextDelivery({...args, context,
+    baseline, retained: {complete: true, target: baseline.target}, ...extra});
+  const delta = project(original);
+  assert.equal(delta.mode, "delta");
+  for (const lane of ["runnable_candidates", "blocked_candidates"] as const) {
+    for (const [i, candidate] of original.capability_gate[lane].entries()) {
+      for (const [key, value] of Object.entries(candidate)) {
+        const visible = inline(delta, ["capability_gate", lane, i, key]);
+        if (["text", "title", "note"].includes(key)) assert.equal(visible, undefined);
+        else assert.deepEqual(visible, value);
+      }
+    }
+  }
+  assert.deepEqual(inline(delta, ["capability_gate", "resolution_bindings"]), original.capability_gate.resolution_bindings);
+  assert.ok(JSON.stringify(delta).length < JSON.stringify(baseline).length / 2);
+  const changed = structuredClone(original);
+  changed.capability_gate.action = "ask_owner";
+  changed.capability_gate.runnable_candidates[0].text += "New final condition: do not execute.";
+  changed.capability_gate.runnable_candidates[0].claimed_by = "peer";
+  changed.capability_gate.runnable_candidates[0].unknown_control.stop = true;
+  const moved = structuredClone(original);
+  moved.capability_gate.blocked_candidates.push(moved.capability_gate.runnable_candidates.shift()!);
+  moved.capability_gate.runnable_candidates.reverse();
+  const removed = structuredClone(original); removed.capability_gate.runnable_candidates = [];
+  for (const current of [original, changed, moved, removed]) {
+    const delivery = project(current), full = prepareContextDelivery({...args, context: current});
+    assert.deepEqual(restoreContextDelivery({delivery, baseline, current: full}).context, current);
+  }
+  assert.equal(inline(project(changed), ["capability_gate", "action"]), "ask_owner");
+  assert.equal(inline(project(changed), ["capability_gate", "runnable_candidates", 0, "text"]),
+    changed.capability_gate.runnable_candidates[0].text);
+  for (const retention of [undefined, {complete: false, target: baseline.target}])
+    assert.deepEqual(project(original, {retained: retention}).context, original);
+  assert.equal(project(original, {scope: {...scope, context_epoch: "after-compaction"}}).mode, "full");
+  // Unknown or ambiguous identity cannot authorize reuse of a candidate body.
+  const unknownGate = structuredClone(original); unknownGate.capability_gate.schema_version = "future";
+  const unknownRow = structuredClone(original); unknownRow.capability_gate.runnable_candidates[0].schema_version = "future";
+  const duplicate = structuredClone(original); duplicate.capability_gate.runnable_candidates[1].todo_id = "one";
+  const malformed = structuredClone(original) as JsonObject;
+  ((malformed.capability_gate as JsonObject).runnable_candidates as JsonObject[])[0].text = {stop: true};
+  for (const current of [unknownGate, unknownRow, duplicate, malformed]) {
+    const gate = current.capability_gate as JsonObject, first = (gate.runnable_candidates as JsonObject[])[0];
+    const delivery = project(current);
+    const visible = delivery.mode === "full" ? (delivery.context as JsonObject).capability_gate
+      : {runnable_candidates: [{text: inline(delivery, ["capability_gate", "runnable_candidates", 0, "text"])}]};
+    assert.deepEqual(((visible as JsonObject).runnable_candidates as JsonObject[])[0].text, first.text);
+  }
+  assert.deepEqual(original, saved);
+});
+
 test("scoped preferences reuse complete prose while every current lifecycle fact stays inline", () => {
   const preferences = {ok: true, status: "read", current: {schema_version: "agent_preferences_v1",
     revision: "revision-a", authority: "advisory_only",
@@ -302,7 +366,9 @@ test("fresh control with exact warm bodies; changed source revisions do not rese
 test("cumulative acceptance evidence reuses exact history while current judgments stay inline on every surface", () => {
   const evidence = "artifact:validation/" + "evidence-segment/".repeat(80);
   const outcome = {id: "result", objective: "Preserve the original goal.", revision: 1,
-    sources: [{ref: "owner:original", summary: long, unknown_source_control: {must_read: true}}],
+    sources: [{ref: "owner:original-" + "source-segment-".repeat(6), summary: long,
+      unknown_source_control: {must_read: true}, unknown_empty_control: {}},
+      {ref: "owner:second", summary: "A second source."}],
     requirements: Array.from({length: 12}, (_, i) => ({id: `r${i}`, description: "Verify the result.",
       status: "unverified", planning_satisfied: false,
       agent_review: {id: `r${i}`, conclusion: "uncertain", basis_current: false,
@@ -331,10 +397,15 @@ test("cumulative acceptance evidence reuses exact history while current judgment
     assert.equal(inline(delta, [...row, "status"]), "unverified");
     assert.equal(inline(delta, [...row, "planning_satisfied"]), false);
     assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "unknown_source_control"]), {must_read: true});
+    assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "unknown_empty_control"]), {});
+    assert.equal(inline(delta, [...root, "outcomes", 0, "sources", 0, "ref"]), undefined);
+    assert.equal(inline(delta, [...root, "outcomes", 0, "sources", 1, "ref"]), undefined);
     assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)}).context, wrap(current));
     assert.deepEqual(baseline.context, original);
     // Changed, reordered, removed and empty evidence never inherit an old claim.
     updated.outcomes[0].sources[0].summary = "A new owner correction.";
+    updated.outcomes[0].sources[0].ref = "owner:corrected";
+    updated.outcomes[0].sources.reverse();
     updated.outcomes[0].requirements.reverse();
     updated.outcomes[0].requirements[0].agent_review.note = "";
     updated.outcomes[0].requirements[0].agent_review.evidence_refs = ["artifact:new"];
@@ -343,6 +414,18 @@ test("cumulative acceptance evidence reuses exact history while current judgment
     const edited = {...args, context: wrap(current)};
     const next = prepareContextDelivery({...edited, baseline, retained: {complete: true, target: baseline.target}});
     assert.deepEqual(restoreContextDelivery({delivery: next, baseline, current: prepareContextDelivery(edited)}).context, wrap(current));
+    for (const sources of [updated.outcomes[0].sources.slice(0, 1), [],
+      [{ref: {unknown_authority: "Do not reuse this control record."}, summary: long}]]) {
+      const changed = structuredClone(current) as JsonObject;
+      const outcomes = ((source(changed, 0).goal_acceptance_contract as JsonObject)
+        .outcome_requirements as JsonObject).outcomes as JsonObject[];
+      outcomes[0].sources = sources;
+      const args = {context: wrap(changed), scope, capture_id: "changed", surface};
+      const delta = prepareContextDelivery({...args, baseline, retained: {complete: true, target: baseline.target}});
+      assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)}).context, wrap(changed));
+      if (sources.length && typeof sources[0].ref !== "string")
+        assert.deepEqual(inline(delta, [...root, "outcomes", 0, "sources", 0, "ref"]), sources[0].ref);
+    }
   }
   // An unavailable source is not historical evidence eligible for omission.
   const unavailable = structuredClone(work) as JsonObject;

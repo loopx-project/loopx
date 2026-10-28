@@ -316,6 +316,48 @@ def test_local_research_outcomes_preserve_root_continuation_and_runnable_work(ac
     assert declaration["execution_authority_granted"] is False
 
 
+@pytest.mark.parametrize("invalid_field", ["evidence_refs", "acceptance_summary", "agent_id"])
+def test_batched_refinement_rejects_invalid_vision_before_mutation(acceptance_goal, invalid_field):
+    project, _, cli, run = acceptance_goal
+    before = cli("inspect")[1]
+    update = project / "update.json"
+    update.write_text(json.dumps({
+        "operation_id": "validated-writeback",
+        "expected_provider_revision": before["provider_revision"],
+        "refinement": refinement([{"id": "opening", "description": "Keep the introduction"}], "message:first"),
+    }))
+    packet = {
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "The introduction still needs validation."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "Retain the introduction.",
+            "observed_reality": "Independent validation remains open.",
+            "retained": ["Original content"], "evidence_refs": ["artifact:tour"]},
+    }
+    invalid = json.loads(json.dumps(packet))
+    if invalid_field == "evidence_refs":
+        invalid["path_delta"]["evidence_refs"] = [f"artifact:part-{i}" for i in range(5)]
+    elif invalid_field == "acceptance_summary":
+        invalid["vision_patch"]["acceptance_summary"] = "x" * 421
+    else:
+        invalid["agent_id"] = "other-agent"
+    vision = project / "vision.json"
+    vision.write_text(json.dumps(invalid))
+    args = ("refresh-state", "--goal-id", "goal-acceptance", "--agent-id", "agent-a",
+        "--no-global-sync", "--goal-outcome-update-json", str(update), "--agent-vision-json", str(vision))
+    for suffix in [(), ("--dry-run",)]:
+        code, rejected = run(*args, *suffix)
+        assert code == 1 and not rejected["appended"], rejected
+        assert invalid_field in rejected["error"], rejected
+        assert cli("inspect")[1] == before, "bad input must not advance the outcome or provider revision"
+        assert "goal_outcome_update" not in rejected
+    # Repair only the malformed packet: no new basis or operation identity.
+    vision.write_text(json.dumps(packet))
+    for status in ["applied", "replayed"]:
+        code, result = run(*args)
+        assert code == 0 and result["goal_outcome_update"]["status"] == status, result
+    assert cli("inspect")[1]["goal_acceptance_contract"]["outcome_requirements"]["revision"] == 1
+
+
 def test_batched_refinement_receipt_survives_later_writeback_failure(acceptance_goal, monkeypatch, capsys):
     from loopx.cli import main
     import loopx.cli_commands.project_lifecycle_refresh_state as refresh

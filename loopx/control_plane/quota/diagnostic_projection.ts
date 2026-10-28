@@ -133,14 +133,12 @@ export function referenceQuotaSummaryLanes(payload: JsonObject): JsonObject {
 // The read codec adds these display fields to canonical records. Retain them
 // on visible items; they do not make a known diagnostic list a future schema.
 const ITEM_FIELDS = new Set<string>([...TODO_CANONICAL_READ_RECORD_FIELDS, "index", "content_revision"]);
-function knownItems(items: unknown[]): boolean {
+function knownItem(value: unknown): boolean {
   const scalar = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value);
-  return items.every(value => {
-    const item = jsonObject(value);
-    return item !== null && (item.schema_version === undefined || item.schema_version === "todo_item_v0") &&
-      Object.entries(item).every(([key, field]) => ITEM_FIELDS.has(key) &&
-        (scalar(field) || (Array.isArray(field) && field.every(scalar))));
-  });
+  const item = jsonObject(value);
+  return item !== null && (item.schema_version === undefined || item.schema_version === "todo_item_v0") &&
+    Object.entries(item).every(([key, field]) => ITEM_FIELDS.has(key) &&
+      (scalar(field) || (Array.isArray(field) && field.every(scalar))));
 }
 
 function compactSummary(summary: JsonObject, role: "agent" | "user", detail: string, captured: boolean): JsonObject {
@@ -151,11 +149,14 @@ function compactSummary(summary: JsonObject, role: "agent" | "user", detail: str
   const owned = previous?.schema_version === schema;
   const omitted: JsonObject = {...(owned ? jsonObject(previous?.omitted_lanes) : {})};
   for (const [key, value] of Object.entries(summary)) {
-    if (!DIAGNOSTIC_LANES.has(key) || !Array.isArray(value) || !knownItems(value)) continue;
+    if (!DIAGNOSTIC_LANES.has(key) || !Array.isArray(value)) continue;
     const limit = limits[key] ?? 0;
-    if (limit) compact[key] = value.slice(0, limit); // Complete items, including unknown fields.
+    // Preserve each unfamiliar record verbatim, wherever it occurs. One such
+    // record must not disable the existing projection for every known sibling.
+    const retained = value.filter((item, i) => i < limit || !knownItem(item));
+    if (limit || retained.length) compact[key] = retained;
     else delete compact[key];
-    if (value.length > limit) omitted[key] = value.length - limit;
+    if (value.length > retained.length) omitted[key] = value.length - retained.length;
   }
   for (const [parentKey, fields] of [
     ["claim_scope", ["other_agent_claimed_items", "blocked_claimed_items"]],
@@ -166,13 +167,15 @@ function compactSummary(summary: JsonObject, role: "agent" | "user", detail: str
     const projected = {...parent};
     for (const key of fields) {
       const value = parent[key];
-      if (!Array.isArray(value) || !knownItems(value)) continue;
+      if (!Array.isArray(value)) continue;
       if (parentKey === "todo_succession_warning" && !Object.hasOwn(parent, "todo_ids")) {
         const ids = value.map(item => jsonObject(item)?.todo_id).filter(id => typeof id === "string" && id).slice(0, 3);
         if (ids.length) projected.todo_ids = ids;
       }
-      delete projected[key];
-      if (value.length) omitted[`${parentKey}.${key}`] = value.length;
+      const retained = value.filter(item => !knownItem(item));
+      if (retained.length) projected[key] = retained;
+      else delete projected[key];
+      if (value.length > retained.length) omitted[`${parentKey}.${key}`] = value.length - retained.length;
     }
     compact[parentKey] = projected;
   }
@@ -181,6 +184,27 @@ function compactSummary(summary: JsonObject, role: "agent" | "user", detail: str
     retained_item_lanes: Object.keys(limits).filter(key => key !== "current_agent_blocker_items" ||
       (Array.isArray(summary[key]) && (summary[key] as unknown[]).length > 0)).sort(),
     omitted_lanes: omitted};
+  // A removed lane has zero visible rows. Fold its known upstream truncation
+  // into one total instead of describing an intermediate list no longer shown.
+  // Retained lanes still need the source's text/row truncation evidence. Unknown
+  // schemas, fields or inconsistent counts remain verbatim for diagnosis.
+  if (!owned && previous?.schema_version === "quota_todo_summary_payload_compaction_v0") {
+    const lanes = jsonObject(previous.compacted_lanes);
+    if (lanes) {
+      const remaining = {...lanes};
+      for (const [key, value] of Object.entries(lanes)) {
+        const counts = jsonObject(value), rows = summary[key];
+        if (Object.hasOwn(compact, key) || !Array.isArray(rows) || !counts ||
+            Object.keys(counts).some(field => field !== "shown" && field !== "total") ||
+            !Number.isSafeInteger(counts.shown) || !Number.isSafeInteger(counts.total) ||
+            counts.shown !== rows.length || (counts.total as number) < rows.length ||
+            omitted[key] !== rows.length) continue;
+        omitted[key] = counts.total;
+        delete remaining[key];
+      }
+      metadata.source_projection = {...previous, compacted_lanes: remaining};
+    }
+  }
   delete metadata.full_detail_cold_path;
   delete metadata.full_detail_capture_ref;
   metadata[captured ? "full_detail_capture_ref" : "full_detail_cold_path"] = detail;

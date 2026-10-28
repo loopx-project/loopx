@@ -11,7 +11,7 @@ import {
   effectIdsMatch,
   settlementBindReduce,
   settlementFailed,
-  settlementIdentity,
+  executionRequestSubject, settlementIdentity,
   settlementIdentityPayload,
   settlementPure,
   settlementReceipt,
@@ -575,7 +575,7 @@ function findWriteback(
     isTurnScopedSettlementOutcome(
       run.delivery_outcome,
       run.progress_observation,
-      identity.todo_id ?? identity.replan_obligation_id,
+      identity.todo_id ?? identity.replan_obligation_id ?? (identity.request_subject ? identity.binding_id : null),
     )
   ) ?? null;
 }
@@ -852,6 +852,15 @@ function resolveIdentity(
     request.replan_obligation_id,
   );
   let turnInstanceId = request.turn_instance_id;
+  let requestSubject = null;
+  if (!todoId && !replanObligationId && agentId && turnInstanceId) {
+    try {
+      const original = effectiveHeartbeatReceipt(events, {goal_id: request.goal_id, agent_id: agentId, turn_instance_id: turnInstanceId});
+      requestSubject = executionRequestSubject(original ? heartbeatReceiptFactFromEvent(original).request_subject : null);
+    } catch (error) {
+      return failedIdentity((error as Error).message, "identity_mismatch");
+    }
+  }
   if (request.infer_turn_instance_id) {
     if (
       !agentId ||
@@ -894,7 +903,7 @@ function resolveIdentity(
     const fact = heartbeatReceiptFactFromEvent(guard);
     const originalTodoId = normalizeTodoId(fact.todo_id);
     const originalReplanId = normalizeReplanObligationId(fact.replan_obligation_id);
-    if (!originalTodoId && !originalReplanId) {
+    if (!originalTodoId && !originalReplanId && !requestSubject) {
       return failedIdentity("the original Turn guard has no settlement binding", "receipt_unbound");
     }
     if ((request.todo_id !== null && (todoId === null || todoId !== originalTodoId)) ||
@@ -905,7 +914,7 @@ function resolveIdentity(
     todoId = originalTodoId;
     replanObligationId = originalReplanId;
   }
-  if (!agentId || !turnInstanceId || Boolean(todoId) === Boolean(replanObligationId)) {
+  if (!agentId || !turnInstanceId || [todoId, replanObligationId, requestSubject].filter(Boolean).length !== 1) {
     return failedIdentity(
       "turn-scoped settlement requires agent_id, turn_instance_id, and exactly one todo_id or replan_obligation_id",
       "invalid_identity",
@@ -916,7 +925,7 @@ function resolveIdentity(
     agent_id: agentId,
     todo_id: todoId,
     turn_instance_id: turnInstanceId,
-    replan_obligation_id: replanObligationId,
+    replan_obligation_id: replanObligationId, request_subject: requestSubject,
   });
   let receiptEvent: JsonObject | null;
   try {
@@ -935,7 +944,7 @@ function resolveIdentity(
   const receiptReplanObligationId = normalizeReplanObligationId(
     receiptDetails.replan_obligation_id,
   );
-  if (receiptTodoId === null && receiptReplanObligationId === null) {
+  if (receiptTodoId === null && receiptReplanObligationId === null && heartbeatReceiptFactFromEvent(receiptEvent).request_subject == null) {
     // A same-turn guard that ran before any work item was chosen commits a
     // receipt with no settlement binding, and the documented wake order (guard,
     // then select) produces exactly that state. This read model never binds --
@@ -1187,6 +1196,7 @@ function readQuotaSettlementFromRequest(
     todo_id: optionalString(identityResult.value.todo_id),
     turn_instance_id: String(identityResult.value.turn_instance_id),
     replan_obligation_id: optionalString(identityResult.value.replan_obligation_id),
+    request_subject: executionRequestSubject(identityResult.value.request_subject),
   });
   const events = indexedEvents(
     snapshot,

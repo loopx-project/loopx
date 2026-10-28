@@ -30,7 +30,7 @@ from ..quota.turn_envelope import TurnControllerInput
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from ..effect_program import SettlementStepKind
+from ..effect_program import SettlementIdentity, SettlementStepKind
 from .driver import LoopXTurnRoute, _typed_route, selected_turn_todo
 from .host_failure import (
     host_failure_retry_available,
@@ -163,6 +163,7 @@ class ValidatedTurnReceipt:
             "goal_id": str(lineage.get("goal_id") or ""),
             "agent_id": str(lineage.get("agent_id") or ""),
             "todo_id": str(lineage.get("todo_id") or ""),
+            **({"request_binding_id": lineage["request_binding_id"]} if lineage.get("request_binding_id") else {}),
         }
         self.turn_key = turn_key
         self.host_failure = dict(host_failure or {}) or None
@@ -172,7 +173,7 @@ class ValidatedTurnReceipt:
 
     @classmethod
     def from_execution(
-        cls, execution_payload: Mapping[str, Any]
+        cls, execution_payload: Mapping[str, Any], *, request_identity: SettlementIdentity | None = None,
     ) -> ValidatedTurnReceipt:
         execution = _mapping(execution_payload)
         if execution.get("schema_version") != LOOPX_TURN_EXECUTION_SCHEMA_VERSION:
@@ -206,7 +207,13 @@ class ValidatedTurnReceipt:
                 "Turn execution and receipt"
             )
         lineage = _mapping(receipt.get("lineage"))
-        if not all(lineage.get(k) for k in ("goal_id", "agent_id", "todo_id")):
+        if request_identity is not None:
+            expected = {"goal_id": request_identity.goal_id, "agent_id": request_identity.agent_id,
+                        "todo_id": "", "request_binding_id": request_identity.binding_id}
+            if (request_identity.request_subject is None or lineage != expected
+                    or receipt.get("settlement_effect_id") != request_identity.effect_id):
+                raise ValueError("validated receipt does not match its original request identity")
+        elif not all(lineage.get(k) for k in ("goal_id", "agent_id", "todo_id")):
             raise ValueError(
                 "validated turn receipt is missing goal/agent/todo lineage"
             )

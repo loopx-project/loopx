@@ -30,7 +30,7 @@ def serve() -> None:
     bootstrap.add_argument("--runtime-root", type=Path, required=True)
     bootstrap.add_argument("--goal-id", required=True)
     bootstrap.add_argument("--agent-id", required=True)
-    bootstrap.add_argument("--todo-id", required=True)
+    bootstrap.add_argument("--todo-id")
     bound = bootstrap.parse_args()
     workspace = Path.cwd().resolve()
     parser = _build_selected_parser("turn")

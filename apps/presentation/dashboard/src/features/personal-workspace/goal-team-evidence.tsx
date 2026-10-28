@@ -140,6 +140,7 @@ export function GoalTeamEvidence({sessionId, operationId, zh, canMessage, ingres
         <summary>{zh ? "本次验收依据" : "Current validation basis"}</summary>
         {result.validation ? <>
           <p>{result.validation.source === "goal_acceptance" ? (zh ? "Goal 验收规则" : "Goal acceptance rules")
+            : result.validation.source === "request_validation" ? (zh ? "请求独立验收规则" : "Independent request validation rules")
             : (zh ? "任务验收规则" : "Task validation rules")}{" · "}
             {result.validation.check_count} {zh ? "项检查" : "checks"}{" · "}
             {result.validation.pinned_file_count} {zh ? "项文件版本固定" : "file pins"}</p>

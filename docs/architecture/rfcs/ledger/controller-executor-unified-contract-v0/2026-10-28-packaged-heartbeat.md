@@ -444,3 +444,40 @@ model retention/tokens/cache, billing, human cost or accepted outcomes. Remainin
 caller replacement, writer cutover, historical-reader retirement and actual
 single-session decision/outcome qualification stay open; the controller-model
 comparison remains a separate later experiment.
+
+## Mainline integration and immutable reader identity
+
+The existing C1 proposal #7430 integrates main `447c35ed6`, including the shared
+native progressive-material planner, generic capture selectors, request-scoped
+settlement and current-request authorization. Those owners remain authoritative;
+the integration does not create another policy or schema. The native operation
+uses the existing material planner in the same typed boundary: sources needing
+no material edits keep one RPC, while actual edits still apply to the original
+Python JSON before capture and encoding. C1 scope fallbacks retain the complete
+source. Signed complete v1 material staging remains unfinished; its full fallback
+must not be reported as migrated or compacted.
+
+Two reader seams are repaired. Generic `context-read --select` continuations
+carry their selection digest through the existing CLI validator. Historical
+replan commands bind the original captured complete input before diagnostic
+references are expanded for the executor view; hashing that expanded view made
+the original immutable capture reject a valid generated command. Both repairs
+reuse the existing selector, reader and hash owners, without another admission,
+receipt or debit. Tampered or differently scoped reads still reject.
+
+The independent no-material RPC-count oracle fails on the frozen initial
+integration and passes after repair. A new repeated replan-read oracle also
+fails there when the complete source shares a Todo-summary lane, then passes
+with the original binding. The repaired source passes 160 typed cases and 23
+real File/SQLite replan CLI cases, control-plane typecheck, configured mypy and
+scoped Ruff. Existing legacy resumed-task display assertions remain alongside
+the complete-input assertions; no candidate text, unknown fields or ceiling is
+removed to obtain a pass.
+
+This is integration qualification, not new installed or model behavior. Earlier
+interrupted cohorts and the subsequent three real reader failures remain failed
+historical observations. Earlier cost tables and **25,862 > 13,000** retain their
+original revisions and status; no threshold is raised and no latest complete-cost
+result is inferred. Caller/writer migration, historical-reader retirement and
+actual single-session decisions, accepted outcomes and complete costs remain C1
+work; the proposal stays unfinished.

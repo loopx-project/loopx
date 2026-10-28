@@ -23,7 +23,6 @@ from loopx.control_plane.coordination.local_authority_shadow_projection import (
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
-from loopx.control_plane.work_items import task_lease_acquire_adapter
 from loopx.control_plane.work_items.task_lease import renew_task_lease
 
 REPO = Path(__file__).resolve().parents[2]
@@ -101,10 +100,15 @@ def test_public_renew_preserves_canonical_authority_and_historical_receipt(tmp_p
         assert first["lease"]["write_scopes"] == lease["write_scopes"]
         second = renew(2)
         assert second["lease"]["version"] == 3
-        def forbidden_legacy_path(*args, **kwargs):
-            raise AssertionError("canonical renew used a legacy capture/write path")
+        # Guard the actual source IO, not the name of a retired capture helper.
+        # Both read_bytes and read_text enter Path.open, even for missing files.
+        display_path, original_open = state.resolve(), Path.open
+        def forbidden_display_open(path, *args, **kwargs):
+            if path.resolve() == display_path:
+                raise AssertionError("canonical renew accessed the Goal display")
+            return original_open(path, *args, **kwargs)
         with monkeypatch.context() as guard:
-            guard.setattr(task_lease_acquire_adapter, "task_lease_acquire_authority_facts", forbidden_legacy_path)
+            guard.setattr(Path, "open", forbidden_display_open)
             third = renew_task_lease(registry_path=registry, runtime_root=runtime, goal_id=goal,
                 todo_id="todo_renew", owner="agent-a", idempotency_key="execution-a", expected_version=3, ttl_seconds=600)
         assert third["lease"]["version"] == 4

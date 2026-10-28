@@ -261,9 +261,8 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
     can actually produce; a successful call does.
 
     The module and the function are fixed here rather than named by registry
-    data, so the registry cannot select an arbitrary callable. The four cases
-    are the builder's whole binding domain: a todo binding, a replan binding,
-    neither, and the pair it must refuse.
+    data, so the registry cannot select an arbitrary callable. Exercise each
+    binding, the unbound input and every conflicting combination.
     """
     from pathlib import Path as _Path
 
@@ -276,6 +275,10 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
     expected = {
         'todo': {'todo_id': 't1'},
         'autonomous_replan': {'replan_obligation_id': 'r1'},
+        'request': {'request_subject': {
+            'request_id': 'a' * 64, 'request_revision': 1,
+            'request_digest': 'b' * 64, 'execution_scope_sha256': 'c' * 64,
+        }},
         'unbound': {},
     }
     if set(expected) != set(vocabulary['values']):
@@ -283,7 +286,11 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
 
     root = _Path(__file__).resolve().parents[2]
     probes = [expected[value] for value in vocabulary['values']]
-    probes.append({'todo_id': 't1', 'replan_obligation_id': 'r1'})
+    from itertools import combinations
+    bindings = [expected[key] for key in ('todo', 'autonomous_replan', 'request')]
+    conflicts = [dict(item for binding in group for item in binding.items())
+                 for count in (2, 3) for group in combinations(bindings, count)]
+    probes.extend(conflicts)
     completed = subprocess.run(
         ['node', '--no-warnings', '--experimental-strip-types',
          str(root / 'scripts/settlement_binding_witness.mts')],
@@ -305,6 +312,7 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
             goal_id='g', agent_id='a', turn_instance_id='t',
             todo_id=expected[value].get('todo_id'),
             replan_obligation_id=expected[value].get('replan_obligation_id'),
+            request_subject=expected[value].get('request_subject'),
         )
         if bridged.binding_kind is not SettlementBindingKind(value):
             raise ValueError(
@@ -312,9 +320,8 @@ def probe_settlement_binding_production(vocabulary: dict[str, Any]) -> list[Prod
         rows.append(Production(site, SETTLEMENT_IDENTITY_LINE, 'input_witness',
                                frozenset({value}), False))
 
-    refused = observed[-1]
-    if refused.get('ok'):
-        raise ValueError('settlement_binding_kind: builder accepted both bindings at once')
+    if any(result.get('ok') for result in observed[len(expected):]):
+        raise ValueError('settlement_binding_kind: builder accepted conflicting bindings')
     return rows
 
 

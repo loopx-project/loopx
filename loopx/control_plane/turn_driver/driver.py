@@ -21,7 +21,7 @@ from .subagent_execution_topology import (
 from ..quota.turn_envelope import (
     assert_turn_envelope_consumer_version,
     _turn_envelope_result,
-    turn_envelope_replan_settlement_identity,
+    turn_envelope_scoped_settlement_identity,
 )
 from ..scheduler.execution_context import (
     scheduler_execution_context_for_turn,
@@ -168,7 +168,7 @@ def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def _receipt_bound_replan_identity(
+def _receipt_bound_scoped_identity(
     envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> SettlementIdentity | None:
     """Transport the quota owner's signed binding; never invent an obligation.
@@ -177,7 +177,7 @@ def _receipt_bound_replan_identity(
     planning needs the existing scoped identity from the complete settlement
     plan, as well as its matching semantic obligation and original Turn.
     """
-    raw = turn_envelope_replan_settlement_identity(envelope, turn_instance_id=turn_instance_id)
+    raw = turn_envelope_scoped_settlement_identity(envelope, turn_instance_id=turn_instance_id)
     if raw is None:
         return None
     return SettlementIdentity.from_runtime_payload(raw)
@@ -188,6 +188,7 @@ def _turn_lineage(
     *,
     work_contract: object = _ABSENT_WORK_CONTRACT,
     projection: Mapping[str, Any] | None = None,
+    settlement_identity: SettlementIdentity | None = None,
 ) -> dict[str, str]:
     resolved = projection if projection is not None else _turn_envelope_result(
         "driver_lineage", envelope=dict(envelope),
@@ -204,12 +205,18 @@ def _turn_lineage(
         identity = resolved
     # Persisted Turn keys depend on Python's JSON number encoding. Keep this
     # transport codec while the TS owner selects and validates identity facts.
-    return {
+    lineage = {
         **{field: str(identity.get(field) or "") for field in ("goal_id", "agent_id", "todo_id")},
         "action_hash": "sha256:" + sha256(json.dumps(
             signature, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
         ).encode("utf-8")).hexdigest(),
     }
+    if settlement_identity is not None:
+        if settlement_identity.request_subject is not None:
+            lineage["request_binding_id"] = settlement_identity.binding_id
+        elif settlement_identity.replan_obligation_id is not None:
+            lineage["replan_obligation_id"] = settlement_identity.replan_obligation_id
+    return lineage
 
 
 def _session_plan(
@@ -221,6 +228,8 @@ def _session_plan(
     session_scope: str = "agent",
 ) -> tuple[dict[str, Any], str | None]:
     identity_fields = session_identity_fields(session_scope)
+    if lineage.get("request_binding_id") and iteration_context_policy == "fresh":
+        identity_fields = ("goal_id", "agent_id")
     context_policy = {
         "schema_version": LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION,
         "mode": iteration_context_policy,
@@ -240,7 +249,7 @@ def _session_plan(
             "context_policy": context_policy,
         }, None
     if (not all(lineage.get(field) for field in (*identity_fields, "action_hash"))
-            or not (lineage.get("todo_id") or lineage.get("replan_obligation_id"))):
+            or not (lineage.get("todo_id") or lineage.get("replan_obligation_id") or lineage.get("request_binding_id"))):
         return {
             "schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
             "action": "reject",
@@ -302,15 +311,14 @@ def reconcile_failed_turn_session_request(
                {"historical_route_text": _historical_route_text(envelope)}),
         )
         selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
+        settlement_identity = (None if selected_todo else _receipt_bound_scoped_identity(
+            envelope, turn_instance_id=None,
+        ))
         lineage = _turn_lineage(
             envelope, projection=projection,
             work_contract=request.get("work_contract", _ABSENT_WORK_CONTRACT),
+            settlement_identity=settlement_identity,
         )
-        settlement_identity = (None if selected_todo else _receipt_bound_replan_identity(
-            envelope, turn_instance_id=None,
-        ))
-        if settlement_identity is not None:
-            lineage["replan_obligation_id"] = str(settlement_identity.replan_obligation_id)
     except (ValueError, RuntimeError) as exc:
         raise FailedTurnSessionRecoveryError("turn_lineage_missing", str(exc)) from exc
     planned_session = _mapping(request.get("session"))
@@ -480,7 +488,6 @@ def build_loopx_turn_plan(
            {"historical_route_text": _historical_route_text(envelope)}),
     )
     selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
-    lineage = _turn_lineage(envelope, work_contract=work_contract, projection=projection)
     route = (
         LoopXTurnRoute(projection["route"])
         if execution_context.ok and contract_error is None
@@ -488,19 +495,20 @@ def build_loopx_turn_plan(
     )
     settlement_identity = None
     identity_error = None
-    if route is LoopXTurnRoute.REPLAN_REQUIRED:
+    if route is LoopXTurnRoute.REPLAN_REQUIRED or (route is LoopXTurnRoute.READY_FOR_HOST and not selected_todo):
         try:
-            settlement_identity = _receipt_bound_replan_identity(
+            settlement_identity = _receipt_bound_scoped_identity(
                 envelope, turn_instance_id=turn_instance_id,
             )
         except (ValueError, RuntimeError) as exc:
             identity_error = str(exc)
             route = LoopXTurnRoute.CONTRACT_ERROR
         if (not selected_todo and identity_error is None
-                and (settlement_identity is None or session_scope != "agent")):
+                and (settlement_identity is None or (session_scope != "agent"
+                  and not (settlement_identity.request_subject is not None and iteration_context_policy == "fresh")))):
             route = LoopXTurnRoute.BLOCKED
-    if settlement_identity is not None:
-        lineage["replan_obligation_id"] = str(settlement_identity.replan_obligation_id)
+    lineage = _turn_lineage(envelope, work_contract=work_contract, projection=projection,
+        settlement_identity=settlement_identity)
     session, session_error = _session_plan(
         route=route,
         lineage=lineage,

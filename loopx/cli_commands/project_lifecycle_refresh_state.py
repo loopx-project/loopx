@@ -29,6 +29,7 @@ from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+from ..control_plane.goals.vision_checkpoint import prepare_vision_refresh
 from ..control_plane.quota.settlement import (
     attach_settlement_progress,
     read_heartbeat_settlement,
@@ -515,6 +516,18 @@ def handle_refresh_state_command(
                 turn_instance_id=args.turn_instance_id,
             ),
         )
+        if outcome_update is not None and agent_vision_packet is not None:
+            # Reject malformed input before committing the independent outcome
+            # refinement. Reuse the typed owner; do not authorize a transition
+            # or replace the original packet with this context-free result.
+            # Refresh still checks merged history and policy against current
+            # state, including whether a terminal stride is actually enabled.
+            prepare_vision_refresh(
+                agent_vision_packet, goal_id=args.goal_id, agent_id=args.agent_id,
+                existing_agent_vision=None, merge_patch=False,
+                require_path_delta_for_durable_change=False,
+                allow_terminal_stride_path=True,
+            )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(
             getattr(args, "reward_memory_reflection_json", None) or ""

@@ -1,6 +1,6 @@
 /** Explicit local execution bindings. Registration/messages alone grant no launch.
  * These are host observations; canonical task/Turn/acceptance remain authoritative. */
-import type {JsonObject} from "../effect_program.ts";
+import {executionRequestSubject, type JsonObject} from "../effect_program.ts";
 import {requireInteger, requireJsonObject, requireStringArray} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
@@ -9,6 +9,8 @@ import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
 import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {PROJECTION_ENVELOPE_SEAL_REQUEST, sealProjectionEnvelope} from "../projection_envelope.ts";
+import {readRequestControl, requestOriginalDigest, requestRevisionDigest} from "./request_control.ts";
+import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {normalizeCollaborationBrief, planCollaborationRequestPublication} from "./semantic_request.ts";
 
 function requireThat(ok: unknown, message: string): asserts ok {
@@ -23,6 +25,24 @@ function text(value: unknown): value is string {
  * Private declarations must match the current Todo authority, also on readback. */
 export function delegationValidationPlan(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "delegation binding");
+  if (binding.todo_id == null) {
+    requireThat(requireJsonObject(params.basis, "canonical validation basis").status === "loaded", "delegation canonical authority unavailable");
+    const normalized = normalizeTodoCompletionValidationDeclaration(
+      binding.request_validation == null ? {} : requireJsonObject(binding.request_validation, "request validation"), {
+      strict_fields: true, require_command: true, require_canonical_input: true,
+    });
+    if (!normalized.ok) return {todo_id: null, state: "unbound", source: null,
+      reason: "independent_delegation_validation_required", effects: [], canonical_done: false};
+    const declaration = normalized.value;
+    const effects = [{kind: "caller_validation", validation_command: declaration.validation_command,
+      validation_argv: declaration.validation_command_argv, validation_label: declaration.validation_label,
+      validation_timeout_seconds: declaration.validation_timeout_seconds,
+      validation_declaration_sha256: canonicalAuthoritySha256(declaration), task_repository: null}];
+    return {todo_id: null, state: "ready", source: "request_validation", effects,
+      canonical_done: false, task_basis_sha256: canonicalAuthoritySha256(binding),
+      observation: {source: "request_validation", basis_sha256: canonicalAuthoritySha256({binding, effects}),
+        check_count: effects.length, pinned_file_count: 0}};
+  }
   const basis = requireJsonObject(params.basis, "canonical validation basis");
   const todo = requireJsonObject(basis.todo, "canonical delegation Todo");
   requireThat(basis.status === "loaded" && text(basis.provider_revision)
@@ -95,10 +115,11 @@ function currentOracleChecks(basis: JsonObject, effects: JsonObject[]): JsonObje
 export function delegationCheckedArtifacts(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "delegation binding");
   const plan = requireJsonObject(params.plan, "current validation plan");
-  requireThat(plan.todo_id === binding.todo_id && plan.state === "ready" && plan.canonical_done === true,
+  requireThat(plan.todo_id === binding.todo_id && plan.state === "ready" && (plan.canonical_done === true
+      || binding.todo_id == null && plan.source === "request_validation"),
     "delegation requires current canonical completion");
   const observation = requireJsonObject(plan.observation, "current validation observation");
-  requireThat((observation.source === "goal_acceptance" || observation.source === "todo_validation")
+  requireThat((observation.source === "goal_acceptance" || observation.source === "todo_validation" || observation.source === "request_validation")
     && typeof observation.basis_sha256 === "string" && BARE_SHA256_PATTERN.test(observation.basis_sha256)
     && Number.isInteger(observation.check_count) && Number(observation.check_count) > 0
     && Number.isInteger(observation.pinned_file_count) && Number(observation.pinned_file_count) >= 0,
@@ -146,7 +167,8 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   const binding = rows.find(row => row.id === params.binding_id);
   requireThat(binding, "delegation binding unavailable");
   requireThat(new TextEncoder().encode(JSON.stringify(binding)).length <= 16000, "delegation binding exceeds limit");
-  requireThat([binding.id, binding.agent_id, binding.todo_id, binding.workspace].every(text), "binding identity/workspace required");
+  requireThat([binding.id, binding.agent_id, binding.workspace].every(text)
+    && (binding.todo_id == null || text(binding.todo_id)), "binding identity/workspace required");
   requireThat(Array.isArray(binding.requesters) && binding.requesters.includes(params.agent_id)
     && binding.agent_id !== params.agent_id, "caller has no delegation grant");
   requireThat(Array.isArray(binding.host_args) && binding.host_args.length > 0
@@ -156,7 +178,7 @@ export function selectDelegationBinding(params: JsonObject): JsonObject {
   requireThat(Array.isArray(binding.output_refs) && binding.output_refs.length > 0
     && binding.output_refs.length <= 20 && binding.output_refs.every(ref => text(ref)
       && !ref.startsWith("/") && !ref.includes("\\") && !ref.split("/").includes("..")), "bounded relative output refs required");
-  return binding;
+  return binding.todo_id === undefined ? {...binding, todo_id: null} : binding;
 }
 
 /** An operation locator is not proof that a new selection owns its result.
@@ -183,7 +205,8 @@ export function verifyDelegationSourceReplay(params: JsonObject): JsonObject {
   requireThat(text(params.operation_id) && typeof peer.request_id === "string"
     && BARE_SHA256_PATTERN.test(peer.request_id)
     && same(identity, {binding, request_id: peer.request_id,
-      operation_id: params.operation_id, source_request_id: params.source_request_id}),
+      operation_id: params.operation_id, source_request_id: params.source_request_id,
+      ...(binding.todo_id == null ? {request_subject: delegationRequestSubject(source, binding)} : {})}),
   "delegation replay operation identity mismatch");
   const brief = normalizeCollaborationBrief(params.brief);
   requireThat(same(source.brief, brief) && same(peer.brief, brief), "delegation replay brief changed");
@@ -193,11 +216,90 @@ export function verifyDelegationSourceReplay(params: JsonObject): JsonObject {
   return {matched: true};
 }
 
+/** The original request revision and exact operator binding own ordinary work. */
+export function delegationRequestSubject(entry: JsonObject, binding: JsonObject, expected?: unknown): JsonObject {
+  requireThat(binding.todo_id == null && entry.agent_id === binding.agent_id
+    && typeof entry.request_id === "string" && BARE_SHA256_PATTERN.test(entry.request_id),
+  "ordinary delegation requires its original request");
+  const control = entry.request_control == null ? null : readRequestControl(entry);
+  const revision = control?.revisions.at(-1);
+  requireThat(control?.cancellation == null, "delegation request was cancelled");
+  const subject = executionRequestSubject({request_id: entry.request_id,
+    request_revision: revision?.revision ?? 1,
+    request_digest: revision ? requestRevisionDigest(entry, revision) : requestOriginalDigest(entry),
+    execution_scope_sha256: canonicalAuthoritySha256(binding)})!;
+  if (expected !== undefined) requireThat(
+    canonicalAuthoritySha256(executionRequestSubject(expected)) === canonicalAuthoritySha256(subject),
+    "original request revision or scope changed");
+  return subject;
+}
+
+/** Called only after the host has re-read the original Inbox/source grant. */
+export function delegationRequestDecision(params: JsonObject): JsonObject {
+  const subject = executionRequestSubject(params.request_subject);
+  requireThat(subject !== null, "original request subject required");
+  const packet = structuredClone(requireJsonObject(params.decision, "current quota decision"));
+  // A request never bypasses Stop, budget, health, a true gate or required replan.
+  if (packet.should_run !== true || packet.effective_action !== EffectiveAction.NORMAL_RUN
+      || packet.normal_delivery_allowed !== true) return packet;
+  delete packet.selected_todo;
+  delete packet.agent_lane_next_action;
+  delete packet.action_portfolio;
+  delete packet.task_orchestration_contract;
+  delete packet.action_selection_qualification;
+  delete packet.goal_route_hint;
+  delete packet.next_action_projection_warning;
+  if (packet.planning_horizon != null) {
+    const horizon = requireJsonObject(packet.planning_horizon, "planning horizon");
+    delete horizon.selected_todo_id;
+    delete horizon.selection_contract;
+    if (Array.isArray(horizon.work_items)) for (const raw of horizon.work_items) {
+      const item = requireJsonObject(raw, "horizon item");
+      if (Array.isArray(item.context_reasons)) item.context_reasons = item.context_reasons.filter(reason =>
+        reason !== "related_to_selected" && reason !== "higher_priority_than_selected");
+    }
+  }
+  packet.recommended_action = "Process the original delegated request and return its validated result.";
+  const cli = requireJsonObject(requireJsonObject(packet.interaction_contract, "interaction contract").cli_channel, "CLI channel");
+  for (const key of ["selection_required", "selection_command", "selection_instruction"]) delete cli[key];
+  cli.spend_after_validation = true;
+  cli.spend_policy = "spend once after independent request validation and durable writeback";
+  const contract = requireJsonObject(packet.interaction_contract, "interaction contract");
+  const agent = requireJsonObject(contract.agent_channel, "agent channel");
+  const work = requireJsonObject(agent.work_context, "work context");
+  if (Array.isArray(work.sources)) work.sources = work.sources.filter(raw =>
+    requireJsonObject(raw, "work source").source !== "selected_todo");
+  delete work.selected_todo_text_verified;
+  delete work.selected_todo_authority;
+  agent.must_attempt = true;
+  agent.delivery_allowed = true;
+  agent.quiet_noop_allowed = false;
+  agent.primary_action = "Process the original delegated request and return its validated result.";
+  packet.request_subject = subject;
+  return packet;
+}
+
 /** Original work is a captured material, not an implicit workspace convention.
  * The host has reobserved the operation/grant through the existing owners.
  * No locator, Host configuration or new authority enters the model input. */
 export function delegationTurnWorkContext(params: JsonObject): JsonObject {
   const binding = selectDelegationBinding(params);
+  if (params.record === null) {
+    const call = requireJsonObject(params.turn, "request preview Turn");
+    const source = requireJsonObject(params.source_request, "original request");
+    requireThat(binding.todo_id == null && call.todo_id == null
+      && call.agent_id === binding.agent_id && call.workspace === binding.workspace
+      && text(call.turn_instance_id) && source.goal_id === call.goal_id
+      && source.agent_id === binding.agent_id && source.execution_binding_id === binding.id
+      && typeof source.message === "string" && source.message === params.original_message,
+      "request preview does not match its original source");
+    return {request_id: source.request_id, goal_id: source.goal_id, agent_id: source.agent_id,
+      todo_id: null, turn_instance_id: call.turn_instance_id,
+      brief: normalizeCollaborationBrief(source.brief), instruction: source.instruction,
+      request_subject: delegationRequestSubject(source, binding),
+      source_request: {request_id: source.request_id, message: source.message,
+        brief: source.brief, instruction: source.instruction}};
+  }
   const record = requireJsonObject(params.record, "delegation record");
   const identity = requireJsonObject(record.identity, "delegation identity");
   const call = requireJsonObject(params.turn, "delegated Turn");
@@ -222,10 +324,13 @@ export function delegationTurnWorkContext(params: JsonObject): JsonObject {
     && same(source.brief, brief) && typeof source.message === "string"
     && source.message === params.original_message,
   "original delegation message or identity changed");
+  if (binding.todo_id == null) requireThat(same(identity.request_subject,
+    delegationRequestSubject(source ?? peer, binding)), "original request revision or scope changed");
   return {
     operation_id: identity.operation_id, request_id: peer.request_id,
     goal_id: peer.goal_id, agent_id: peer.agent_id, todo_id: binding.todo_id,
     turn_instance_id: call.turn_instance_id, brief, instruction: peer.instruction,
+    ...(binding.todo_id == null ? {request_subject: delegationRequestSubject(source ?? peer, binding)} : {}),
     ...(source === null ? {} : {source_request: {
       request_id: source.request_id, message: source.message, brief: source.brief,
       instruction: source.instruction,
@@ -303,7 +408,7 @@ function delegationAcceptanceFacts(todoId: unknown, acceptance: JsonObject | nul
   if (matching && acceptance?.state === "unbound" && typeof acceptance.reason === "string"
       && todoValidationReasons.has(acceptance.reason)) {
     return {acceptance_ready: false, acceptance_reason_code: acceptance.reason,
-      acceptance_next_action: "review_original_todo_validation"};
+      acceptance_next_action: todoId == null ? "review_original_request_validation" : "review_original_todo_validation"};
   }
   if (matching && acceptance?.state === "ready" && filesCurrent === false) {
     return {acceptance_ready: false, acceptance_reason_code: "validation_files_unavailable",
@@ -325,7 +430,7 @@ export function delegationLaneReadiness(params: JsonObject): JsonObject {
 /** Read the actual dry-run route/profile, never infer readiness from assignment. */
 export function delegationPreflight(params: JsonObject): JsonObject {
   const binding = requireJsonObject(params.binding, "binding identity");
-  requireThat([binding.id, binding.agent_id, binding.todo_id].every(text), "binding identities required");
+  requireThat([binding.id, binding.agent_id].every(text) && (binding.todo_id == null || text(binding.todo_id)), "binding identities required");
   // Missing observations preserve older host compatibility. Filesystem facts
   // cannot establish canonical authority or executor readiness.
   if (params.workspace !== undefined) {
@@ -386,6 +491,16 @@ export function delegationPreflight(params: JsonObject): JsonObject {
         + "Promote or repair authority explicitly before retrying; inspection never promotes a provider.",
     };
   }
+  if (params.request_required === true) return {
+    schema_version: "loopx_delegation_preflight_v0", binding, state: "turn_blocked",
+    request_required: true,
+    dispatch_allowed: false, turn_eligible: false, turn_route: null, acceptance_ready: false,
+    authority_ready: true, authority_reason: null, authority_state: "promoted",
+    authority_next_action: "none", promotion_from_surface_allowed: false,
+    acceptance_reason_code: null, acceptance_next_action: "none", executor: null,
+    reason: "An ordinary binding needs its original request for preflight; start preserves that request.",
+    effects: {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false},
+  };
   const preview = requireJsonObject(params.preview, "Turn preview");
   const effects = requireJsonObject(preview.effects, "preview effects");
   if (preview.ok === false && preview.selection_rejection !== undefined) {
@@ -484,13 +599,15 @@ export function delegationInventoryItem(params: JsonObject): JsonObject {
   requireThat(observation.operation_id === record.operation_id && record.operation_id !== null,
     "delegation inventory identity mismatch");
   requireThat(Object.hasOwn(transitions, String(observation.status)), "invalid delegation observation");
-  requireThat([observation.request_id, observation.agent_id, observation.todo_id].every(text),
+  requireThat([observation.request_id, observation.agent_id].every(text)
+    && (text(observation.todo_id) || observation.todo_id == null && executionRequestSubject(observation.request_subject) !== null),
     "delegation request and task identities required");
   requireThat(typeof observation.worker_active === "boolean"
     && typeof observation.recovery_required === "boolean", "current worker observation required");
   const result: JsonObject = {
     record_id: record.record_id, operation_id: observation.operation_id,
     request_id: observation.request_id, agent_id: observation.agent_id, todo_id: observation.todo_id,
+    ...(observation.request_subject ? {request_subject: observation.request_subject} : {}),
     status: observation.status, worker_active: observation.worker_active,
     recovery_required: observation.recovery_required,
   };
@@ -601,7 +718,8 @@ export function transitionDelegationObservation(params: JsonObject): JsonObject 
           .every(key => effects[key] === false)
         && Object.values(effects).every(value => value === false)) return {status: "prepared"};
   }
-  if (to === "accepted") requireThat(params.canonical_done === true
+  if (to === "accepted") requireThat((params.canonical_done === true
+    || params.request_validated === true && executionRequestSubject(params.request_subject) !== null)
     && params.acceptance_ready === true && params.artifacts_current === true,
   "accepted return requires current canonical completion and artifacts");
   if (to === "accepted" && from !== "accepted" && wakesItsConversation(params)) {

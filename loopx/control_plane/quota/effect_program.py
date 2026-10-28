@@ -135,6 +135,7 @@ def build_turn_scoped_cli_settlement_plan(
     command_prefix: str = "loopx",
     todo_id: str | None = None,
     replan_obligation_id: str | None = None,
+    request_subject: Mapping[str, Any] | None = None,
     scoped_cli_args: str,
     lifecycle_actor_args: str,
     turn_instance_id: str,
@@ -144,7 +145,7 @@ def build_turn_scoped_cli_settlement_plan(
     goal_ref: Mapping[str, object] | None = None,
     autonomous_replan: bool = False,
 ) -> SettlementPlan:
-    if bool(todo_id) == bool(replan_obligation_id):
+    if sum(bool(value) for value in (todo_id, replan_obligation_id, request_subject)) != 1:
         raise ValueError(
             "turn-scoped CLI settlement requires exactly one Todo or autonomous "
             "replan obligation binding"
@@ -160,6 +161,7 @@ def build_turn_scoped_cli_settlement_plan(
         todo_id=todo_id,
         turn_instance_id=turn_instance_id,
         replan_obligation_id=replan_obligation_id,
+        request_subject=request_subject,
     )
     scoped_cli_args = _settlement_actor_args(scoped_cli_args, identity.agent_id)
     lifecycle_actor_args = _settlement_actor_args(lifecycle_actor_args, identity.agent_id)
@@ -168,7 +170,7 @@ def build_turn_scoped_cli_settlement_plan(
     binding_arg = (
         f" --todo-id {shlex.quote(todo_id)}"
         if todo_id
-        else f" --replan-obligation-id {shlex.quote(str(replan_obligation_id))}"
+        else f" --replan-obligation-id {shlex.quote(str(replan_obligation_id))}" if replan_obligation_id else ""
     )
     turn_arg = f" --turn-instance-id {quoted_turn}"
     goal_ref_arg = (

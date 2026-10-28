@@ -550,6 +550,7 @@
       "values": [
         "todo",
         "autonomous_replan",
+        "request",
         "unbound"
       ],
       "input_producer": "loopx/control_plane/effect_program.ts::settlementIdentity",
@@ -559,7 +560,8 @@
       "value_notes": {
         "todo": "Chosen by settlementIdentity when the todo id is non-blank after trimming; supplying both a todo id and a replan obligation id throws before this point. It fixes the effect id to the goal, agent, todo and turn instance form, and is re-derived when a persisted identity payload is decoded.",
         "autonomous_replan": "Chosen when the todo id is blank and the replan obligation id is non-blank after trimming, so the turn settles a replan obligation rather than a selected Todo. The effect id gains an explicit autonomous_replan segment instead of a Todo segment.",
-        "unbound": "Chosen when both ids are blank, naming a goal, agent and turn with no work-item binding at all. It is reachable mainly because some constructors pass an empty string rather than validating, and every validating entry path refuses it; readback also reports it as failure detail to describe a heartbeat receipt that carries neither binding."
+        "request": "Chosen for an already admitted original request with its id, revision, content digest and operator execution-scope digest. Its canonical subject hash binds the effect and native Turn lineage; this identity grants no execution authority and creates no Todo or replan obligation.",
+        "unbound": "Chosen when no Todo, replan or request subject is present, naming a goal, agent and turn with no work-item binding. Validating execution paths refuse it; readback reports it for a heartbeat receipt carrying no binding."
       }
     },
     "settlement_failure_kind": {

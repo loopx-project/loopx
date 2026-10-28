@@ -93,6 +93,44 @@ test("complete producer and Host preserve action semantics when diagnostic lanes
   assert.deepEqual(source, before);
 });
 
+test("complete validation and replan reads preserve the original shared source", () => {
+  const source = payload(), interaction = source.interaction_contract as JsonObject;
+  const authoring = {instruction: "Preserve every original requirement and stop. ".repeat(40),
+    future: {approved: false, observations: [null, 0]}};
+  const guidance = "Return the original complete evidence without granting publication. ".repeat(30);
+  (interaction.cli_channel as JsonObject).settlement_plan = {ordered_steps: [
+    {kind: "durable_writeback", vision_authoring: authoring,
+      optional_attachments: [{capability_id: "explore", guidance}]},
+  ]};
+  (interaction.agent_channel as JsonObject).work_context = {complete: true, sources: [
+    {kind: "explore_turn_context", content: {graph: {result_writeback_guidance: guidance}}},
+  ]};
+  source.replan_read_path = "/capture/original.json";
+  source.replan_action_packet = {obligation_id: "original-obligation",
+    writeback_contract: {vision_authoring: structuredClone(authoring)}};
+  source.autonomous_replan_obligation = {replan_context: {
+    obligation_id: "original-obligation", context_id: "original-context"}};
+  const lane = [{todo_id: "original-work", text: "Complete original work. ".repeat(30), future: {stop: true}}];
+  source.agent_todo_summary = {first_executable_items: lane, first_open_items: structuredClone(lane)};
+  const original = structuredClone(source);
+  const contract = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  assert.deepEqual(source, original, "composition must not erase the caller's original authoring or evidence");
+  assert.ok(contract.replan_action_packet.writeback_contract.vision_authoring_ref);
+  assert.equal(contract.agent_todo_summary.first_open_items_ref, "$.agent_todo_summary.first_executable_items");
+  const before = structuredClone(contract);
+  for (let i = 0; i < 2; i++) {
+    evaluateTurnEnvelope({operation: "complete_consumer", payload: contract});
+    const envelope = buildTurnEnvelope({payload: contract, scheduler_execution_args: ""});
+    const command = String((envelope.replan_action_packet as JsonObject).review);
+    const hash = /--source-hash (sha256:[a-f0-9]{64})/.exec(command);
+    assert.ok(hash);
+    const read = evaluateTurnEnvelope({operation: "replan_view", payload: contract,
+      source_hash: hash[1], stage: "review"});
+    assert.equal(read.obligation_id, "original-obligation");
+    assert.deepEqual(contract, before, "validation and repeated reads must retain the same immutable source");
+  }
+});
+
 test("captured outcome lookup shares exact content across registered carriers and retains revisions", () => {
   const one = {id: "shared", owner_agent_id: "peer", objective: "Original", revision: 1,
     requirements: [{id: "a", planning_satisfied: false, status: "unverified", description: "Full a"},

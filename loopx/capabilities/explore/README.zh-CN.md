@@ -320,6 +320,8 @@ loopx explore worker-branch-plan --goal-id <id> --worker-width 5 \
 
 资源输入可选。没有 `--resource-capacity` 时，无 lane 与 legacy todos 保留现有 width/scheduler 行为。资源感知模式下，无 tag todos 保持原来的无约束行为；带 tag lane 必须有匹配的声明容量。使用没有匹配容量的 usage 会 fail closed，以捕捉拼错的 lane key。
 
+Lane key 会统一大小写、空格与连字符（`LONG POOL` 和 `long-pool` 都表示 `long_pool`）。CLI 与映射输入都会拒绝规范化后的重复 key，避免覆盖容量或占用。计数必须是非负整数；布尔值与非整数小数会被拒绝。
+
 这仍是仅分析证据：`resource_portfolio.score_delta=0`、typed evidence 保持 `score_delta=0`、planner 只读。容量与占用不 claim todo、不 acquire lease、不 launch worker、不写状态、不授予 quota 权威。它们只约束预测 portfolio；执行仍进入下面描述的正常 LoopX 生命周期。
 
 该命令只读，需要开启 Goal 有效模式。它设计为**叠加在现有 LoopX harness 之上**，而不是并排或取代：
