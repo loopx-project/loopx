@@ -146,7 +146,12 @@ operations without a Chat source retain their existing binding authority.
 
 Chat retry also verifies the saved operation against the original Inbox request,
 complete brief, peer request, current binding and original return Session/Turn
-before reporting its status. Selecting another authorized binding does not
+before reporting its status. The worker uses this same typed comparison before
+launch and completion/settlement, even without a Chat retry. Its return identity
+must match the observed original source conversation; consistent-looking saved
+records cannot supply a replacement conversation. Missing or changed provenance
+retains the original failure/Turn for recovery without accepting new work.
+Selecting another authorized binding does not
 retarget an existing operation. A mismatch returns the existing unavailable
 execution response without publishing a peer request or resubmitting the worker;
 matching prepared operations may resume only under the restored current grant,
@@ -202,7 +207,10 @@ other operations keep their existing explicit recovery.
 中文：Chat 发起的执行保留原 Inbox 请求、固定的对话来源和原 operation。worker 在
 入口、Host 启动前和完成结算前重新核对当前发送者、接收者及精确
 Goal/Agent/requester/binding grant；撤权、来源不可读或身份变化会拒绝在原
-operation 上的新执行。最终来源观察、规范完成和原 Turn 结算共享来源策略锁，
+operation 上的新执行。同一个 typed owner 还核对完整来源/peer 简报、原 peer
+operation 和实际来源对话，不依赖 Chat 再次重放；保存的返回地址不能替换实际
+来源对话。来源缺失或变化保留原失败和 Turn，恢复后沿原身份继续。
+最终来源观察、规范完成和原 Turn 结算共享来源策略锁，
 撤权只能发生在观察之前或两项副作用完成之后；历史仍可检查。Host 已返回时保留原 Turn 和未结算效果；
 恢复授权后只结算该 operation，不重跑 Host。重试在报告状态前核对原 Inbox、完整
 brief、peer request、当前 binding 和原回传 Session/Turn；选择另一个合法 binding

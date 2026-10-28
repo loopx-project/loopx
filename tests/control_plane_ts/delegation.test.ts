@@ -22,7 +22,7 @@ test("source replay requires the original binding, complete brief, peer and retu
     source_request_id: source.request_id};
   const input = {...params, goal_id: "goal", goal_ref: goalRef, operation_id: identity.operation_id,
     source_request_id: source.request_id, source_request: source, peer_request: peer, peer_operation: peer,
-    brief, conversation, record: {identity, conversation, status: "prepared"}};
+    brief, conversation, source_conversation: conversation, record: {identity, conversation, status: "prepared"}};
   assert.deepEqual(verifyDelegationSourceReplay(input), {matched: true});
   for (const record of [{...input.record, status: "accepted"}, {...input.record, status: "stopped"}])
     assert.deepEqual(verifyDelegationSourceReplay({...input, record}), {matched: true});
@@ -31,6 +31,10 @@ test("source replay requires the original binding, complete brief, peer and retu
     {source_request_id: "c".repeat(64)}, {operation_id: "other-operation"},
     {brief: {...brief, constraints: ["Different scope"]}},
     {conversation: {...conversation, turn_id: "other-turn"}},
+    {source_conversation: {...conversation, turn_id: "other-turn"}},
+    {source_conversation: null},
+    {conversation: {session_id: "other-session", turn_id: "other-turn"},
+      record: {...input.record, conversation: {session_id: "other-session", turn_id: "other-turn"}}},
     {source_request: {...source, execution_binding_id: "other"}},
     {peer_request: {...peer, source_agent_id: "another-requester"}},
     {peer_request: {...peer, brief: {...brief, acceptance: ["Different work"]}}},

@@ -66,7 +66,7 @@ from .control_plane.collaboration.goal_instance_scope import (
 )
 from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
 from .control_plane.collaboration.source_grant_observation import (
-    read_delegation_source_execution, require_delegation_source_execution,
+    read_delegation_source_execution, verify_delegation_source_execution,
 )
 from .control_plane.collaboration.source_policy_fence import source_policy_fence
 from .control_plane.collaboration.peers import (
@@ -868,9 +868,13 @@ class Delegations:
         if row["identity"]["binding"] != binding:
             raise ValueError("delegation binding changed; reconcile original execution")
         if require_active and "source_request_id" in row["identity"]:
-            require_delegation_source_execution(self.root, self.registry, goal_id=self.goal_id,
-                requester_agent_id=self.agent_id, source_request_id=row["identity"]["source_request_id"], binding=binding,
-                caller_goal_ref=self._caller_goal_ref(), policy_locked=policy_locked)
+            try:
+                verify_delegation_source_execution(self, binding["id"], row["identity"]["operation_id"],
+                    source_request_id=row["identity"]["source_request_id"],
+                    brief=delegation_results.operation_brief(self, row), conversation=row.get("conversation", {}),
+                    policy_locked=policy_locked)
+            except OSError as exc:
+                raise ValueError("original source execution provenance unavailable") from exc
         return binding
 
     @staticmethod

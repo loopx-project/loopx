@@ -188,7 +188,8 @@ export function verifyDelegationSourceReplay(params: JsonObject): JsonObject {
   const brief = normalizeCollaborationBrief(params.brief);
   requireThat(same(source.brief, brief) && same(peer.brief, brief), "delegation replay brief changed");
   requireThat(Object.keys(conversation).length === 2 && text(conversation.session_id) && text(conversation.turn_id)
-    && same(record.conversation, conversation), "delegation replay return conversation changed");
+    && same(record.conversation, conversation) && same(params.source_conversation, conversation),
+  "delegation replay return conversation changed");
   return {matched: true};
 }
 
