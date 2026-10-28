@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -37,7 +36,9 @@ from loopx.status import collect_status  # noqa: E402
 from loopx.control_plane.scheduler.execution_context import (  # noqa: E402
     scheduler_execution_context_for_runtime_profile,
 )
-from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+from loopx.control_plane.testing.canary_harness import (  # noqa: E402
+    import_fixture_authority, temporary_canary_directory,
+)
 
 
 GOAL_ID = "interface-budget-goal"
@@ -398,7 +399,7 @@ def assert_cadence_projection(
 def main() -> int:
     # Prompt rendering inspects implicit routes even though status reads the
     # declared fixture registry. Keep both default-route probes in this fixture.
-    with tempfile.TemporaryDirectory(prefix="loopx-hot-path-budget-") as tmp, patch.multiple(
+    with temporary_canary_directory(prefix="loopx-hot-path-budget-") as tmp, patch.multiple(
         "loopx.paths",
         DEFAULT_RUNTIME_ROOT=Path(tmp) / "default-runtime",
         LEGACY_RUNTIME_ROOT=Path(tmp) / "legacy-runtime",

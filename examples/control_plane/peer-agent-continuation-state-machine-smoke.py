@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import sys
 import json
-import tempfile
 from pathlib import Path
 
 
@@ -16,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 from loopx.control_plane.testing.canary_harness import (  # noqa: E402
     import_fixture_authority,
     run_json_cli,
+    temporary_canary_directory,
     write_fixture_registry,
 )
 
@@ -102,7 +102,7 @@ def should_run(project: Path, runtime: Path, registry_path: Path, agent_id: str)
 
 
 def assert_same_peer_continuation() -> None:
-    with tempfile.TemporaryDirectory(prefix="loopx-peer-continuation-") as tmp:
+    with temporary_canary_directory(prefix="loopx-peer-continuation-") as tmp:
         project, runtime, registry_path = write_fixture(Path(tmp))
         first = should_run(project, runtime, registry_path, PEER_ALPHA)
         assert first["decision"] == "run", first
@@ -177,7 +177,7 @@ def assert_same_peer_continuation() -> None:
 
 
 def assert_review_is_action_semantics_over_generic_handoff() -> None:
-    with tempfile.TemporaryDirectory(prefix="loopx-peer-review-handoff-") as tmp:
+    with temporary_canary_directory(prefix="loopx-peer-review-handoff-") as tmp:
         project, runtime, registry_path = write_fixture(Path(tmp), include_review=True)
         completed = run_cli(
             "todo",
