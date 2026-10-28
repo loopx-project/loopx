@@ -43,6 +43,7 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "quota.settlement.read",
   "quota.spend.commit",
   "quota.turn_envelope.evaluate",
+  "turn.controller",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",

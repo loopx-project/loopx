@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..quota.turn_envelope import TurnControllerInput
 from .driver import _historical_route_text
 from .transaction import LoopXTurnResultKind
@@ -40,7 +40,15 @@ def _controller_result(operation: str, **facts: Any) -> dict[str, Any]:
         facts["integer_facts"] = {
             key: str(value) if type(value) is int else None for key, value in scalars.items()
         }
-    payload = effect_runtime_result("turn.controller", {"operation": operation, **facts})
+    request = {"operation": operation, **facts}
+    try:
+        payload = effect_runtime_result("turn.controller", request)
+    except EffectRuntimeRejected as error:
+        if error.diagnostic_code != "request_too_large":
+            raise
+        # The pure request was refused before sending. Preserve complete facts
+        # through the existing bounded snapshot transport, as the envelope does.
+        payload = effect_runtime_result("turn.controller", request, large_local_snapshot=True)
     if not isinstance(payload, dict):
         raise RuntimeError("TypeScript Turn controller returned an invalid response")
     if payload.get("ok") is False and isinstance(payload.get("message"), str):
