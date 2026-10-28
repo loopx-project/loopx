@@ -171,6 +171,8 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
             registry_path=registry, runtime_root=runtime)
         assert code == 0, json.dumps(packet, indent=2)
         assert packet["should_run"] is True, packet.get("reason")
+        # The harness adds transport metadata outside the signed CLI stdout.
+        packet.pop("_returncode", None)
         return packet
 
     envelope = guard("--turn-envelope")
@@ -263,12 +265,30 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert expected in _prompt(request)
     authority = extract_turn_authority(request)
     assert authority["selected_todo"]["todo_id"] == "todo_cursor_work"
-    assert authority["required_reads"] == channel["required_reads"]
-    assert authority["work_context"] == {
+    authority_channel = authority["interaction_contract"]["agent_channel"]
+    assert authority_channel["required_reads"] == []
+    native_context = authority_channel["work_context"]
+    delivered_goal = [row for row in native_context["sources"] if row["source"] == "goal_state"]
+    assert len(delivered_goal) == 1 and delivered_goal[0]["command"] == goal_read["command"]
+    assert delivered_goal[0]["content"]["full_source"] is True
+    assert delivered_goal[0]["content"]["text"] == before.decode()
+    assert json.dumps(before.decode(), ensure_ascii=False) in render_prompt(authority)
+    assert {key: value for key, value in native_context.items() if key != "sources"} == {
+        key: value for key, value in context.items() if key != "sources"
+    }
+    assert [row for row in native_context["sources"] if row["source"] != "goal_state"] == context["sources"]
+    assert native_context["selected_todo_text_verified"] is True
+    assert read["command"] in render_prompt(authority)
+    # Keep the old layout's independent requirement assertions while the
+    # complete source uses its canonical channel instead of duplicate aliases.
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    historical = extract_turn_authority({"turn_envelope": build_turn_envelope(envelope)})
+    assert historical["required_reads"] == channel["required_reads"]
+    assert historical["work_context"] == {
         key: value for key, value in context.items() if key != "selected_todo_text_verified"
     }
-    assert authority["selected_todo"]["text_source_verified"] is True
-    assert read["command"] in render_prompt(authority)
+    assert historical["selected_todo"]["text_source_verified"] is True
+    assert read["command"] in render_prompt(historical)
 
     # A fresh CLI process must recover current requirements from the same owner,
     # including a changed last condition, rather than reusing a cached summary.

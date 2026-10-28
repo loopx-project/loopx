@@ -503,10 +503,17 @@ def build_loopx_turn_plan(
         except (ValueError, RuntimeError) as exc:
             identity_error = str(exc)
             route = LoopXTurnRoute.CONTRACT_ERROR
-        if (not selected_todo and identity_error is None
-                and (settlement_identity is None or (session_scope != "agent"
-                  and not (settlement_identity.request_subject is not None and iteration_context_policy == "fresh")))):
-            route = LoopXTurnRoute.BLOCKED
+        if not selected_todo and identity_error is None:
+            if settlement_identity is None:
+                # An unbound replan remains controller work. Ordinary work
+                # without a Task or request binding must still fail session
+                # validation rather than disguising a malformed contract as wait.
+                if route is LoopXTurnRoute.REPLAN_REQUIRED:
+                    route = LoopXTurnRoute.BLOCKED
+            elif (session_scope != "agent" and not (
+                settlement_identity.request_subject is not None and iteration_context_policy == "fresh"
+            )):
+                route = LoopXTurnRoute.BLOCKED
     lineage = _turn_lineage(envelope, work_contract=work_contract, projection=projection,
         settlement_identity=settlement_identity)
     session, session_error = _session_plan(
