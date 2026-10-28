@@ -100,17 +100,17 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
     partial: "历史尚未完整载入", failure: "无法继续读取历史。已读记录保留；请重试。",
-    time: "记录时间（本地）", unknown: "时间未记录", records: "条记录", evidence: "已记录依据",
+    time: "记录时间（本地）", unknown: "时间未记录", record: "条记录", records: "条记录", evidence: "已记录依据",
     interpretation: "独立检查与实际采用尚未核验", versions: "来源与版本引用", updates: "历史记录",
-    changes: "次记录", findings: "条结论", links: "显式关联", missing: "部分关联的来源节点尚未记录",
+    changes: "次记录", question: "个问题", questions: "个问题", links: "显式关联", missing: "部分关联的来源节点尚未记录",
     group: "来源分组", lost: "当前记录中找不到所选节点，其他历史仍可浏览。",
   } : {
     title: "Research history", loading: "Reading the full recorded history", reading: "Reading", refresh: "Refresh history",
     all: "Whole graph", scope: "Recorded Explore history", coverage: "Other-source coverage and attempt-time coverage are unverified",
     partial: "History is not fully loaded", failure: "Cannot continue reading history. Loaded records remain; retry.",
-    time: "Recorded time (local)", unknown: "Time not recorded", records: "records", evidence: "Recorded evidence",
+    time: "Recorded time (local)", unknown: "Time not recorded", record: "record", records: "records", evidence: "Recorded evidence",
     interpretation: "Independent checking and actual adoption are unverified", versions: "Source and version references", updates: "History",
-    changes: "records", findings: "findings", links: "Explicit relationships", missing: "Some linked source nodes are not recorded",
+    changes: "records", question: "question", questions: "questions", links: "Explicit relationships", missing: "Some linked source nodes are not recorded",
     group: "Source grouping", lost: "The selected node is absent from this snapshot. Other history remains readable.",
   };
   // Labels reuse Explore's existing vocabulary; they confer no verification state.
@@ -415,12 +415,12 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
             <span className="research-node-meta">{node.latest.node_kind === "experiment" ? <FlaskConical size={13} aria-hidden/> : <Circle size={12} aria-hidden/>}{kindLabel(node.latest.node_kind)}<small>{stateLabel(node.latest.status)}</small></span>
             <strong>{node.latest.title}</strong>{measured ? <span className="research-node-count" title={`${measured.metric} (${measured.unit}) · ${measured.comparison_scope} · ${measured.evaluation_ref}`}>
               {measured.metric} {formatExploreMeasurementValue(measured.latest.measurement.value, zh)} · best {formatExploreMeasurementValue(measured.best?.value ?? null, zh)} {measured.higher_is_better ? "↑" : "↓"}
-            </span> : <span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>}
+            </span> : <span className="research-node-count"><time>{timeLabel(node.updates[0]?.recorded_at)}</time>{node.updates.length > 1 ? ` · ${node.updates.length} ${copy.changes}` : ""}{node.findings.length ? ` · ${findingCopy.count(node.findings.length)}` : ""}</span>}
           </button>})}
           {grouped.groups.map((group, index) => <button type="button" key={`day:${group.day}`} className={`research-history-node research-history-group${selectedGroup === group ? " is-selected" : ""}`} style={{left: (index % 4) * 230 + 24, top: clusterY + Math.floor(index / 4) * 124}}
             data-research-day={group.day} aria-pressed={selectedGroup === group} onClick={() => select({nodes: [], day: group.day})}>
             <span className="research-node-meta"><Circle size={12} aria-hidden/>{zh ? "未关联问题" : "Unlinked questions"}</span>
-            <strong>{group.day ? `${group.day} UTC` : copy.unknown}</strong><span className="research-node-count">{group.nodes.length} {zh ? "个问题 · 展开全部" : "questions · read all"}</span>
+            <strong>{group.day ? `${group.day} UTC` : copy.unknown}</strong><span className="research-node-count">{group.nodes.length} {group.nodes.length === 1 ? copy.question : copy.questions} · {zh ? "展开全部" : "read all"}</span>
           </button>)}
         </div>
       </div>;
@@ -475,7 +475,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     <div className="research-history-meta">
       <p className="research-history-coverage" role="status">{copy.time}{value?.startAt ? <> · <time>{timeLabel(value.startAt)}</time> — <time>{timeLabel(value.endAt)}</time></> : null} · {busy ? `${copy.reading} ${loaded}${read.total ? ` / ${read.total}` : ""}`
         : read.total === null ? (zh ? "来源尚未读到" : "Source has not been read")
-          : `${read.events.length} / ${read.total} ${copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p>
+          : `${read.events.length} / ${read.total} ${read.total === 1 ? copy.record : copy.records}${read.complete ? "" : ` · ${copy.partial}`}`}</p>
       {!readingSelection ? displayControl : null}
     </div>
     {readFailure ? <div className="research-history-read-error" role="alert">
@@ -570,7 +570,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
         {displayControl}
         <ol className="research-question-index">{selectedMembers.map(node => <li key={node.id} data-research-node={node.id}>
           <button type="button" onClick={() => {collectionOpener.current = opener.current; chooseQuestion(node, {nodes: selection.nodes, day: selection.day});}}>
-            <strong>{node.latest.title}</strong><span>{stateLabel(node.findings.at(-1)?.status ?? node.latest.status)}{node.latest.status === "blocked" && node.findings.length ? ` · ${stateLabel(node.latest.status)}` : ""}{node.findings.length ? ` · ${node.findings.length} ${copy.findings}` : ""}</span>
+            <strong>{node.latest.title}</strong><span>{stateLabel(node.findings.at(-1)?.status ?? node.latest.status)}{node.latest.status === "blocked" && node.findings.length ? ` · ${stateLabel(node.latest.status)}` : ""}{node.findings.length ? ` · ${findingCopy.count(node.findings.length)}` : ""}</span>
             {node.latest.blocked_reason ? <span className="research-history-error">{node.latest.blocked_reason}</span> : null}
           </button>
         </li>)}</ol>
