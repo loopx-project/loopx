@@ -558,7 +558,8 @@ function nativeContextDelivery(request: JsonObject): JsonObject {
   // Do not reinterpret that fallback through the older material-only contract.
   if (projection === request.payload && !declaredScope) {
     const material = progressiveContextPlan(request);
-    if ((material.deferred as unknown[]).length) return {required_context_plan: material};
+    if ((material.deferred as unknown[]).length ||
+        Array.isArray(material.references) && material.references.length) return {required_context_plan: material};
   }
   try {
     const delivery = prepareContextDelivery({...request, context: projection}, LEGACY_QUOTA_CONTEXT_FIELDS);

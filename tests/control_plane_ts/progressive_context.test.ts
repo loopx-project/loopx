@@ -40,3 +40,36 @@ test("unknown and failed source semantics remain whole rather than becoming gues
   assert.deepEqual(plan.instructions, []);
   assert.deepEqual(plan.deferred, []);
 });
+
+test("exact repeated Todo rows preserve membership without collapsing distinct evidence or revisions", () => {
+  const row = {schema_version: "todo_item_v0", todo_id: "same-title", text: "Shared title.",
+    note: "Keep this complete final constraint. ".repeat(20), content_revision: "revision:one",
+    claimed_by: "peer", resume_condition: {schema_version: "todo_resume_condition_v0", satisfied: false}};
+  const revised = {...row, content_revision: "revision:two", note: "Contrary evidence requires reconsideration."};
+  const summary = {schema_version: "todo_summary_v0", first_open_items: [row, revised],
+    backlog_items: [row, revised, {...row, claimed_by: "other"}]};
+  const payload = {ok: true, agent_todo_summary: summary};
+  const before = structuredClone(payload);
+  const plan = progressiveContextPlan({surface: "quota_packet", payload});
+  assert.deepEqual(plan.references, [
+    {path: ["agent_todo_summary", "backlog_items", 0], from: ["agent_todo_summary", "first_open_items", 0],
+      value: {todo_id: row.todo_id, context_ref: "/agent_todo_summary/first_open_items/0"}},
+    {path: ["agent_todo_summary", "backlog_items", 1], from: ["agent_todo_summary", "first_open_items", 1],
+      value: {todo_id: row.todo_id, context_ref: "/agent_todo_summary/first_open_items/1"}},
+  ]);
+  assert.deepEqual(plan.deferred, []);
+  assert.deepEqual(payload, before);
+  const pendingSource = {...source, content: {...source.content, read_complete: false}};
+  const pendingPlan = progressiveContextPlan({surface: "quota_packet", payload: {...payload,
+    interaction_contract: {agent_channel: {work_context: {sources: [pendingSource]},
+      required_reads: [{source: "goal_acceptance", reason: FULL_OUTCOME_READ_GUIDANCE}]}}}});
+  assert.deepEqual(pendingPlan.deferred, []);
+  assert.deepEqual(pendingPlan.instructions.map(row => row.path), [["context_reference_instruction"]]);
+  for (const unknown of [{...row, new_obligation: "Keep inline."}, {...row, schema_version: "future"},
+    {...row, resume_monitor_generation: 2 ** 60}, {...row, resume_monitor_generation: 1.25}]) {
+    const view = {ok: true, agent_todo_summary: {...summary, first_open_items: [unknown], backlog_items: [unknown]}};
+    assert.equal(progressiveContextPlan({surface: "quota_packet", payload: view}).references, undefined);
+  }
+  assert.equal(progressiveContextPlan({surface: "quota_packet", payload: {...payload,
+    contract_binding: {signature: "signed"}}}).references, undefined);
+});

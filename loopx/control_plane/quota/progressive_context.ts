@@ -4,6 +4,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject} from "../runtime_decode.ts";
 import {GOAL_OUTCOMES_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../work_items/interaction_contract.ts";
+import {quotaSummaryReferences} from "./diagnostic_projection.ts";
 
 type Path = (string | number)[];
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -19,7 +20,9 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
   // Signed envelopes need their own presentation contract. Unknown shapes and
   // already projected packets retain their entire original content.
   if (request.surface !== "quota_packet" || payload.ok !== true || payload.schema_version !== undefined
-      || payload.contract_binding !== undefined || payload.context_details !== undefined) return unchanged;
+      || payload.contract_binding !== undefined || payload.context_details !== undefined
+      || payload.context_reference_instruction !== undefined) return unchanged;
+  const references = quotaSummaryReferences(payload);
   const carriers: Path[] = [
     ["planning_horizon", "core_goal", "acceptance_contract"],
     ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"],
@@ -67,10 +70,10 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
         deferred.push({path: [...parent, "requirements", j, "agent_review", field], parent, index_key});
     });
   }
-  if (!deferred.length) return unchanged;
+  if (!deferred.length && !references.length) return unchanged;
   // Replace only the exact source-owned obligation. Other merged obligations,
   // objective adoption, unknown provider prose and pending reads remain intact.
-  for (const listPath of [sourcePath, [...agent, "required_reads"]]) {
+  for (const listPath of deferred.length ? [sourcePath, [...agent, "required_reads"]] : []) {
     const rows = at(payload, listPath);
     if (!Array.isArray(rows)) continue;
     rows.forEach((value, i) => {
@@ -81,5 +84,9 @@ export function progressiveContextPlan(request: JsonObject): JsonObject {
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  return {deferred, instructions};
+  if (references.length) instructions.push({path: ["context_reference_instruction"], value:
+    "A Todo row with context_ref is exactly the complete row at that JSON pointer in THIS required view. "
+    + "Use that row for every referenced lane; all constraints, evidence, ownership and order still apply. "
+    + "No detail read or older baseline is needed. Missing target content requires recovery of this same capture before dependent work."});
+  return {deferred, instructions, ...(references.length ? {references} : {})};
 }

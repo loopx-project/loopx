@@ -693,6 +693,19 @@ For every automatic heartbeat turn, the agent-facing checklist is:
 
 1. Guard first: `quota should-run --turn-instance-id <HEARTBEAT_TURN_ID>` using
    this trigger's `<current_time_iso>` and reusing it for same-heartbeat retries.
+   If the caller has already chosen the unfinished work for this new Turn,
+   append `--todo-id <chosen-id>` to that first guard. This requests current
+   qualification and complete required context in one call; it does not adopt
+   the previous Turn's authority, read coverage or settlement. Read the current
+   contract before work and follow rejection/recovery when the choice is stale
+   or gated. When the choice is unknown, discover candidates and then use the
+   returned `selection_command`. Never guess a Todo or change an existing Turn
+   binding to avoid a read. Same-Turn compaction alone does not start this flow.
+   若本次新 Turn 已明确继续哪项未完成工作，可在首次 guard 中直接附加
+   `--todo-id <chosen-id>`，一次取得当前资格及必要上下文。旧任务引用不继承旧
+   权限、阅读覆盖或结算身份；仍须读取当前合同，过期或受限时按返回结果恢复。
+   尚未选定工作则先发现候选，再用 `selection_command`；不猜测任务、不为少读
+   一次而更换既有 Turn 绑定，同一 Turn 的压缩恢复也不触发这条新准入路径。
    If `loopx` is not initially on PATH, export `$HOME/.local/bin:$PATH`
    and run the local installer fallback before declaring preflight failure.
 2. If `should_run=false` with `state=operator_gate`, ask the user/controller the

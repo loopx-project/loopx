@@ -76,6 +76,7 @@ def test_native_configuration_cli_is_read_only_and_usable_without_registry(tmp_p
         "shell_environment_policy.set.LOOPX_CONTEXT_PAGE_OUTPUT_BYTES": "64000"}
     assert "--max-page-output-bytes 64000" in native["developer_instructions"]
     assert "max_output_tokens=22000" in native["developer_instructions"]
+    assert "max_output_tokens=24000" in native["developer_instructions"]
     assert "hooks.state" not in native and list(tmp_path.iterdir()) == []
     missing_identity = subprocess.run(command[:-2], cwd=tmp_path,
         env={**os.environ, "PYTHONPATH": str(repo)}, capture_output=True, text=True, timeout=15)
@@ -119,6 +120,7 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
         # The additional work-Turn/read-obligation distinction is intentional;
         # this synthetic allowance is not a host output or context limit.
+        assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
         assert payload["requirements"] not in body and len(body) < 2300
     else:
         assert result == {}

@@ -105,6 +105,10 @@ def test_compact_full_recovery_becomes_next_resume_baseline(tmp_path, monkeypatc
     assert invalid["context_epoch"] != before["context_epoch"]
     assert invalid["recovery"] == before["recovery"]
     assert invalid["recovery"]["command"] in str(recovery_instruction)
+    guidance = recovery_instruction["hookSpecificOutput"]["additionalContext"]
+    assert "max_output_tokens=22000" in guidance
+    assert "max_output_tokens=24000" in guidance
+    assert "grants no new authority/freshness" in guidance and "retention proof" in guidance
 
     reference = invalid["recovery"]
     offset, index = 0, 0
@@ -254,7 +258,12 @@ def test_real_hook_rejects_fifo_history_without_waiting_for_a_writer(tmp_path, m
         assert "candidate" not in after and "pending" not in after
         assert after["context_epoch"] != before["context_epoch"]
         assert after["recovery"] == reference
-        assert reference["command"] in result["hookSpecificOutput"]["additionalContext"]
+        guidance = result["hookSpecificOutput"]["additionalContext"]
+        assert reference["command"] in guidance
+        # Actual CLI hook recovery must stand alone after persistent context loss.
+        assert "max_output_tokens=22000" in guidance
+        assert "max_output_tokens=24000" in guidance
+        assert "grants no new authority/freshness" in guidance and "retention proof" in guidance
         _, fallback = project(tmp_path, "after-fifo", payload=payload)
         assert fallback["mode"] == "full" and fallback["context"] == payload
     assert Path(reference["path"]).read_bytes() == captured
