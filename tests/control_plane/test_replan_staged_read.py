@@ -193,6 +193,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
+    with fixture["state"].open("a") as stream:
+        stream.write("\n## Original additional requirements\nPreserve this final independent stop.\n")
     if not replan:
         fixture["index"].write_text("")
     wake = tmp_path / "wakes" / TURN
@@ -231,6 +233,21 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
+            assert "--defer-context-presentation" in commands[0]
+            assert "--context-delivery" in commands[0]
+            assert not list(native.iterdir()), "Host preflight must not alter native continuity"
+            assert not any(read.get("source") == "goal_state" for read in
+                view["interaction_contract"]["agent_channel"]["required_reads"])
+            delivered = [row["content"] for row in view["interaction_contract"]["agent_channel"]
+                ["work_context"]["sources"] if row.get("source") == "goal_state"]
+            if replan:
+                # This fixture has no bound work: the staged review owns the
+                # original Goal read, not ordinary work-context delivery.
+                core = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+                assert shlex.split(core["read_action"]) == ["cat", "--", str(fixture["state"].resolve())]
+            else:
+                assert len(delivered) == 1 and delivered[0]["full_source"] is True
+                assert delivered[0]["text"] == fixture["state"].read_text()
             # The optional full/delta transport must present the staged CLI
             # view too. Its full recovery must not restore old inline hints.
             command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]

@@ -422,13 +422,14 @@ def _emit_quota_result(
     # actual-input observation owns its projection when explicitly selected;
     # never wrap one context-delivery wire in a second projection.
     native_context = context_delivery_enabled and bool(getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None))
-    if (args.format == "json" and succeeded and delivery_request is not None and not native_context
+    deferred_context = getattr(args, "defer_context_presentation", False)
+    if (not deferred_context and args.format == "json" and succeeded and delivery_request is not None and not native_context
             and context_delivery_enabled):
         payload = project_captured_context(payload, directory=capture_directory,
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
             surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
-    if (args.format == "json" and succeeded and capture_directory
+    if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         import hashlib
         from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context

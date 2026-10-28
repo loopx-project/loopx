@@ -303,6 +303,14 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "defer_context_presentation", False) and (
+        args.quota_command != "should-run" or args.format != "json"
+        or not native_context_activation(args)["enabled"]
+        or getattr(args, "decision_handoff_socket", None)
+        or not (getattr(args, "decision_output_dir", None) or getattr(args, "decision_output_root", None))
+    ):
+        raise QuotaCommandValidationError(
+            "deferred context presentation requires a native JSON should-run capture without socket handoff")
     if directory is None and (
         getattr(args, "decision_output_dir", None) is not None
         or getattr(args, "decision_output_root", None) is not None

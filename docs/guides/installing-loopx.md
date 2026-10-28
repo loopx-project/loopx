@@ -139,6 +139,21 @@ Chat listener before switching to launchd, and read back the original Sessions
 and one consumer per App. A generated plist alone does not qualify recovery
 after logout or reboot.
 
+The managed Chat replacement entry also checks accepted work before sending
+SIGTERM. It resolves the existing listener's runtime from its live macOS
+LaunchAgent and holds the same ingress fence used by update activation; a new
+command's empty runtime cannot authorize stopping a different busy store.
+Queued, running or completing work defers replacement with `chat_work_pending`.
+An unknown manager, route or unreadable store returns `chat_state_unverified`
+and leaves the listener running. A free port still starts normally. This check
+does not intercept external `launchctl bootout` or operating-system termination.
+
+中文：受管 Chat 的显式替换入口同样先检查已受理任务。它按现有 listener 的真实
+macOS LaunchAgent 确定运行目录，并持有升级激活共用的准入锁；新命令的空目录不能
+作为停止另一份忙碌状态的依据。排队、运行中或结算中的任务使替换延期；管理器、路由
+或状态无法核验时保留原进程。空闲端口仍可正常启动；外部 `launchctl bootout` 和操作
+系统终止不受此入口拦截。
+
 The helper reads the full `/status.json` contract with a one-second connection
 deadline and a 15-second total deadline. A responding feed that takes longer
 than five seconds can therefore still show its schema and write-API setting.

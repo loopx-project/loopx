@@ -11,6 +11,15 @@ read obligations before capture. Recovering delivery from that immutable capture
 does not refresh authority; a legitimate new selection/authority check remains
 distinct from retrying transport.
 
+The RFC's [candidate context by decision stage](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage)
+proposes complete captured alternatives with discoverable decision facts and
+same-capture batch detail reads. It does not change current read obligations.
+The current capability gate leaves candidate selection to the Agent; a selected
+Todo display is not proof that it can ignore alternatives. Existing full-context
+captures must still be read completely. A future staged caller must replace its
+delivery, required reads and recovery together, including unknown-scope full
+fallback; an index read cannot establish delivery of hidden bodies.
+
 Ordinary Heartbeat/quota delivers the full effective selected Todo, enabled
 canonical acceptance and Agent-scoped User obligations at
 `interaction_contract.agent_channel.work_context`. These are current work
@@ -71,6 +80,17 @@ current source witnesses and unknown fields remain literal. Cold delivery and
 context-loss recovery retain the complete original text, including arbitrary
 sections, comments and final stops. This does not establish model retention,
 execution authority, token savings or accepted outcome gains.
+
+Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
+with an explicitly enabled native JSON `should-run` capture. It collects the
+same complete Goal source for admitted work-context reads and writes the ordinary
+immutable CLI view, without
+reading or replacing the model session's continuity state. After native lifecycle
+hooks run, the model presents that saved view with `context-project`; this does
+not re-enter admission. Deferred presentation requires a capture destination and
+cannot be combined with socket handoff. Ordinary callers keep their existing
+presentation, and context delivery off keeps its original pending Goal reads.
+Unbound staged replans retain their existing review-owned original Goal read.
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
 and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
@@ -479,6 +499,13 @@ native 差分与来源履行共享同一完整性判断；只有精确核验的 
 baseline 继承，当前来源凭据和未知字段仍明文提供。冷态及上下文丢失恢复保留完整
 原文，包括任意章节、注释和末尾停止条件。不据此证明模型保留、执行权限、token 节省
 或已验收成果收益。
+
+Checkpoint Host 预检在显式开启 native JSON `should-run` 捕获时使用隐藏参数
+`--defer-context-presentation`。它为已准入工作上下文读取捕获完整 Goal，并保存普通
+不可变 CLI 视图，不读取或替换模型会话的连续性状态。原生生命周期 hook 运行后，模型
+通过 `context-project` 呈现同一视图，不重复准入。延迟呈现必须指定捕获位置，不能
+与 socket handoff 组合。普通调用保持既有呈现；关闭差分时保留原来的待完成 Goal
+读取。未绑定任务的分阶段重规划继续沿用 review 所属的原始 Goal 读取。
 
 Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；关闭 native
 context delivery 时，未标记或混合归属仅在内部桥接传路径与修订，避免未被消费的正文

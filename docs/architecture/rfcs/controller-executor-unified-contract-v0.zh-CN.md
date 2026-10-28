@@ -5,7 +5,7 @@
 - **交付成熟度：** Proposal；本文不交付新运行时、schema 或默认行为。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-10-27
+- **最近规范性修订：** 2026-10-28
 - **实现基线：** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
@@ -293,6 +293,55 @@ session、role、epoch、schema、source capture 下证明已完整送达并保�
 全量恢复，不重新准入/扣额。执行仍检查来源有效性与当前权限；恢复旧 capture 不能复活
 已取消工作。Executor 任务对话独立消费语义材料，不是 controller Core packet 换名后的
 delta。
+
+### 按决策阶段交付候选上下文
+
+Canonical capture 保留完整候选上下文，由同一 C1/C2 owner 按消费者实际要做的决策
+交付。本节提出替换契约，不允许跳过已有必读项。当前 capability gate 将选择交给
+Agent；`selected_todo` 投影或列表顺序本身不能证明比较已经完成。在消费者与恢复义务
+一起替换前，保留 [#7557](https://github.com/loopx-project/loopx/pull/7557) 的完整
+上下文修复。
+
+| 决策阶段 | 依赖决策前必须取得的输入 |
+| --- | --- |
+| 选工作或重新考虑选择 | 完整、可发现的候选索引：身份/版本、原目标、已声明的 Goal 贡献、优先级、资格、归属、依赖/阻塞、当前证据/不确定性和同次捕获详情引用。缺失事实保持未知。比较备选项前读其完整详情；索引不能判明某项是否相关时，先展开再选择。不能静默只保留 top-K。 |
+| 继续已准入工作 | 完整当前任务、原始和累计要求、适用的全局/共享约束、依赖、反证、当前权限与停止条件。注册的继续执行契约可延后独立备选项，同时暴露可能触发重新考虑的新资格/资格变化和证据。仍被要求在全部 runnable 候选中选择的 Agent，依然处于选择阶段。 |
+| 重规划或验收 Goal | 展开全部受影响工作与验收，包括跨 Agent 依赖和冲突证据。范围未知时展开完整捕获依据；归属和之前的局部完成不能证明无关。 |
+
+这些是消费者义务，不是三套 packet schema 或新 scheduler mode。Typed owner 按明确
+契约决定哪些读取可延后，Agent/controller 负责语义选择。作者提供的目的或风险摘要
+帮助发现，不能证明省略正文无关。不按关键词、领取标签或模型评分推断相关性。缺少充分
+typed 事实时，比较仍可能需要所有正文；冷态选择不承诺压缩比例。普通工作默认展开当前
+Agent 的 outcomes、让其他成果可发现是有用的；共享要求、依赖、冲突证据和未知关系
+必须突破默认范围。Outcome scope 与候选选择保留各自 owner。
+
+扩展既有不可变 reader，从**同次 capture** 批量读取所选详情，保留各请求项的版本、
+来源、完整性、覆盖与游标。同 Todo 不同版本仍分开。详情缺失、截断、不受支持或变化时
+阻止依赖工作，使用该 capture 的完整恢复；fresh guard 不能充当详情 reader。一次
+读取可交付多个正文，受支持的保留会话内无需重复交付已验证正文。读索引不等于确认隐藏
+正文已读。Delta 基线只包含实际交付给该消费者的材料；新成为必需的详情必须提供正文，
+不能因为机器已经存有它而省略。上下文丢失恢复必需模型产物，范围未知时扩大到完整来源。
+历史 capture 保留原义务。读取回执证明覆盖，不证明理解、保留、新鲜权限或验收。
+
+单会话 Agent 消费同一管线。Controller/executor profile 中，由 controller 比较备选项
+并承担 Core 记账；executor 经既有 host 通道取得完整当前工作与授权材料。它不会成为
+Core 客户端，也不用接收全部备选项来弥补 brief 的缺失。复用 capability 资格、
+work-context/读取履行、capture/detail 与 delta owner，不新增候选存储、Python
+相关性规则或逐项审批往返。
+
+在相同输入上，与原 quota 单会话和修正后的完整上下文对照。覆盖：初始未展开候选末尾
+的决定性约束、展示上限之外的有价值备选项、peer 证据变化、阻塞项变为可执行、同标题
+不同要求、缺失元数据、上下文丢失及批读失败。实际选择与后续已验证工作必须遵守约束；
+可重建 JSON 或 selected ID 不变不足以通过。计入从首轮输入到验收成果的全部详情读取、
+分页、重试、恢复、两个会话的调用、延迟和人工介入；保留分阶段交付更昂贵的小任务与
+冷态选择反例。字节与使用真实模型 tokenizer 测得的 token 分开报告。
+
+交付仍归 C1/C2：先由真实 caller 验证共享同 capture reader 与必读恢复，再将该 caller
+的阶段交付和义务一起替换，最后验证 retained delta 与可比成果/完整成本。复用
+[#7560](https://github.com/loopx-project/loopx/pull/7560) 的 outcome scope 工作，
+不能将 outcome 关系当成候选选择证明。
+[#7587](https://github.com/loopx-project/loopx/pull/7587) 的诊断计数折叠是独立兼容
+切片，不代表本次替换。每个切片可有独立 PR 与回退，不要求通用检索框架或启用双会话。
 
 ## 6. 备选方案与取舍
 
@@ -590,7 +639,7 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 | 任务 / 依赖 | Owner 与实际替换内容 | 决定性退出 / 回退 |
 | --- | --- | --- |
 | **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段与指令条款，捕获同一 schema，迁移真实普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节相对 quota 基线的效果/完整成本对照；cutover 合格前保留绑定版本的 reader |
-| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约，删除 packet 格式分支和重复上下文副本 | 正常/replan/resume 中同 capture 恢复及精确 role/session 连续性；full 回退不重新准入；编码可回退 full |
+| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约，按决策阶段替换候选交付，删除 packet 格式分支和重复上下文副本 | 必需详情先于实际选择/工作；正常/replan/resume 保留跨 Agent 约束与精确 role/session 连续性，并测量完整成本；full 回退不重新准入；编码可回退 full |
 | **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
 | **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
 | **C5 — Replan 与结果编写边界；C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |

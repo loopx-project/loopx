@@ -32,6 +32,21 @@ def test_disabled_capture_does_not_touch_disk(tmp_path):
 
 
 @pytest.mark.parametrize('overrides', [
+    {'context_delivery': 'off'}, {'format': 'markdown'}, {'quota_command': 'plan'},
+    {'decision_output_dir': None}, {'decision_handoff_socket': '/unused/socket'},
+])
+def test_deferred_native_presentation_requires_original_capture_before_admission(tmp_path, overrides):
+    from loopx.cli_commands.quota_capture import prepare_quota_capture
+    values = dict(defer_context_presentation=True, format='json', context_delivery='on',
+                  codex_app=True, decision_output_dir=tmp_path / 'capture')
+    values.update(overrides)
+    path = values.pop('decision_output_dir')
+    with pytest.raises(QuotaCommandValidationError, match='deferred context presentation'):
+        prepare_quota_capture(request(path, **values), None)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('overrides', [
     {'quota_command': 'spend-slot'}, {'turn_instance_id': None},
 ])
 def test_invalid_request_does_not_create_directory(tmp_path, overrides):

@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-10-27
+- **Last normative revision:** 2026-10-28
 - **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
@@ -380,6 +380,74 @@ capture automatically, without another admission/debit. Execution still checks
 current source validity and authority; recovering an old capture cannot revive
 cancelled work. The executor's task conversation is a separate consumer of
 semantic material, not a relabeled delta of the controller's Core packet.
+
+### Candidate context by decision stage
+
+Preserve complete candidate context in the canonical capture; deliver it according
+to the decision the consumer must make through the same C1/C2 owners. This is a
+proposed replacement contract, not permission to skip existing required reads.
+The current capability gate assigns selection to the Agent. A `selected_todo`
+projection or list order alone does not prove that comparison is finished. Keep
+the complete-context repair in [#7557](https://github.com/loopx-project/loopx/pull/7557)
+until consumers and recovery obligations are replaced together.
+
+| Decision stage | Required input before the dependent decision |
+| --- | --- |
+| Select or reconsider work | Complete discoverable candidate index: identity/revision, original objective, declared Goal contribution, priority, eligibility, ownership, dependencies/blockers, current evidence/uncertainty and exact captured detail reference. Missing facts remain unknown. Read full detail for compared alternatives; if the index cannot establish whether an alternative matters, expand it before choosing. Do not silently keep only a top-K set. |
+| Continue admitted work | Full selected task, original and cumulative requirements, applicable global/shared constraints, dependencies, contrary evidence, current authority and stops. A registered continuation contract may defer independent alternatives while exposing new/changed eligibility and evidence that can require reconsideration. An Agent still instructed to select over all runnable candidates remains in the selection stage. |
+| Replan or accept the Goal | Expand all affected work and acceptance, including cross-Agent dependencies and contradictory evidence. Unknown scope expands to the complete captured basis. Ownership and earlier local completion do not prove irrelevance. |
+
+These are consumer obligations, not three packet schemas or new scheduler modes.
+The typed owner determines which reads can be deferred under an explicit contract;
+the Agent/controller makes the semantic choice. Author-provided purpose or risk
+summaries help discovery but cannot prove omitted prose irrelevant. Do not infer
+relevance from keywords, claim labels or a model-authored score. Without sufficient
+typed facts, comparison can still require all bodies: cold selection has no
+promised compression ratio. Default expansion of the current Agent's outcomes is
+useful for ordinary work, with other outcomes discoverable; shared requirements,
+dependencies, conflicting evidence and unknown relationships override that default.
+Outcome scope and candidate selection remain distinct owners.
+
+Extend the existing immutable reader to batch selected details from the **same
+capture**, retaining each requested item's revision, lineage, integrity, coverage
+and cursor. Distinct revisions of one Todo stay distinct. Missing, truncated,
+unsupported or changed detail holds dependent work and uses that capture's full
+recovery; a fresh guard is not a detail reader. One read can deliver several bodies;
+verified bodies need not be repeated within a supported retained session. Reading
+an index never acknowledges hidden bodies. Delta baselines contain only material
+actually delivered to that consumer: newly required detail must supply its text
+even if the machine already holds it. Context loss recovers the required model
+artifact, widening to the full source when its scope is unknown. Historical captures
+keep their original obligations. Read receipts prove coverage, not comprehension,
+retention, fresh authority or acceptance.
+
+The single-session Agent consumes this same pipeline. In the controller/executor
+profile, the controller compares alternatives and absorbs Core bookkeeping;
+the executor receives the complete selected work and authorized materials through
+the existing host channel. It does not become a Core client or receive every
+alternative to compensate for an incomplete brief. Reuse capability eligibility,
+work-context/read fulfillment, capture/detail and delta owners; add no parallel
+candidate store, Python relevance policy or per-item approval round trip.
+
+Qualify against original quota single-session delivery and the corrected complete
+context on matched inputs. Include a decisive constraint at the end of an initially
+unexpanded candidate, a useful alternative beyond any display limit, changed peer
+evidence, a now-runnable blocker, identical titles with different requirements,
+missing metadata, context loss and failed batch reads. Actual choice and subsequent
+verified work must honor the constraint; reconstructable JSON or an unchanged
+selected ID is insufficient. Count initial input, all detail reads, paging, retries,
+recovery, both sessions' calls, latency and human intervention through accepted
+outcomes. Keep small-task and cold-selection counterexamples where staging costs
+more. Report bytes separately from tokens measured with the actual model tokenizer.
+
+Delivery stays within C1/C2: qualify the shared same-capture reader and required-read
+recovery through an actual caller; replace that caller's stage-specific delivery
+and obligations together; then qualify retained delta and matched outcomes/full
+cost. Reuse [#7560](https://github.com/loopx-project/loopx/pull/7560)'s outcome-scope
+work without treating outcome relations as candidate-selection proof. Diagnostic
+counter folding in [#7587](https://github.com/loopx-project/loopx/pull/7587) is a
+separate compatible slice, not this replacement. Each slice can have its own PR
+and rollback; no generic retrieval framework or two-session rollout is required.
 
 ## 6. Alternatives and design choices
 
@@ -782,7 +850,7 @@ are stable design references, not claims that a canonical Todo is complete.
 | Task / dependency | Owner and concrete replacement | Decisive exit / rollback |
 | --- | --- | --- |
 | **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields and instruction clauses, capture one schema, migrate actual ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus the quota-baseline effectiveness/full-cost comparison in §9; retain version-pinned readers until cutover qualifies |
-| **C2 — One context-delivery pipeline; C1** | Context owner + host observers: absorb full/delta/detail/recovery into the canonical contract; remove packet-format branches and duplicate context copies | Same-capture recovery and exact role/session continuity through normal/replan/resume; full fallback without a new admission; rollback encoding to full |
+| **C2 — One context-delivery pipeline; C1** | Context owner + host observers: absorb full/delta/detail/recovery into the canonical contract; replace candidate delivery by decision stage; remove packet-format branches and duplicate context copies | Required detail precedes actual selection/work; normal/replan/resume preserve cross-Agent constraints and exact role/session continuity at measured complete cost; full fallback without a new admission; rollback encoding to full |
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |

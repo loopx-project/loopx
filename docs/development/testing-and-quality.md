@@ -1287,6 +1287,37 @@ performance criteria, and does not qualify a model by itself.
 90,000；原超限失败保留。新增候选丢失/正文缩短的零模型调用负例，原选择、人工门禁、
 结算、重复次数、对照及生产硬边界不变；本次预算修正不等于真实模型通过。
 
+This allowance is not a target architecture. A source-level attribution at
+`d4980a0e9aa8acf8b847e2fec73d29454c23690d` reproduces those three output sizes.
+Their standalone pretty-JSON capability gates occupy 80,874 / 80,874 / 80,807
+UTF-8 bytes. The fixture deliberately repeats a 28-sentence diagnostic in each
+row: runnable text alone is 28,767 bytes, blocked text 19,168, and binding text
+19,168. These are synthetic stress costs, not a production-volume estimate.
+The fixture's 16 resolution bindings are Todo-shaped text rows; the real
+`agents/capability_gate.ts` owner produces capability/owner/blocked-ID bindings.
+Its selected Todo is outside the runnable set in the two execution fixtures;
+the human-gate fixture has no selected Todo. Preserve this regression fixture
+and its historical failures, but do not use selected-ID invariance alone to
+qualify actual candidate choice or remove those rows to claim a saving.
+
+For the proposed [decision-stage delivery](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage),
+add a separate representative producer-to-consumer comparison: actual eligible
+candidates, non-repeated requirements, meaningful alternatives and a decisive
+tail constraint. Match source, model/policy and acceptance; count all batch
+detail reads and recovery through subsequent verified work. A smaller first
+response or a larger regression allowance cannot qualify the replacement.
+Current full-context preflight remains in force until the replacement has an
+explicit required-read contract; this design does not weaken or rewrite it.
+
+上述归因复现同一组三个输出：capability gate 单独 pretty-JSON 为
+80,874 / 80,874 / 80,807 UTF-8 字节。Fixture 每行重复 28 句诊断；runnable、
+blocked、binding 正文分别为 28,767、19,168、19,168 字节。16 个 binding 是带正文的
+Todo 形状，与生产 owner 的 capability/owner/blocked-ID binding 不同；两个执行
+fixture 的 selected Todo 不在 runnable 集合，human gate 没有 selected Todo。
+这些是压力成本，不是生产规模估计。保留原 fixture/失败，另用真实 producer、非重复
+要求、有意义备选项及末尾约束验证选择与后续工作；计入全部批读/恢复成本。新必读契约
+合格前，当前完整上下文 preflight 保持生效，不能靠删候选或首屏变小宣称收益。
+
 Complete registry routes exposed an existing brief heartbeat regression on the
 unchanged 128-character-root fixture. Commit
 `fb20c153ba2c2a7376efe68091a76ca470effbde` added those routes: its immediate parent
