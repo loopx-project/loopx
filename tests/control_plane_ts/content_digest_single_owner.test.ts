@@ -70,9 +70,9 @@ const DECLARED_UNFOLDABLE: Record<string, { count: number; reason: string }> = {
     count: 2,
     reason: "store identity selector; 32 hex, not a 64 digest",
   },
-  "control_plane/coordination/todo_agents.ts": {
+  "control_plane/coordination/python_whitespace.ts": {
     count: 2,
-    reason: "whitespace class assembled from a shared character-class constant",
+    reason: "Python whitespace class assembled from a shared character-class constant, not digest matchers",
   },
   "control_plane/presentation/decision_notice.ts": {
     count: 1,

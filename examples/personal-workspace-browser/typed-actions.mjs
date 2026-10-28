@@ -998,7 +998,10 @@ export const typedActionsScenario = {
       await page.getByRole('button', { name: '列表', exact: true }).click();
       await assertDeferredTask();
       const listHistory = page.locator('[data-goal-panel="tasks"]').getByTestId('completed-task-lane');
-      await listHistory.getByRole('button', { name: '已完成', exact: false }).click();
+      // Selecting a completed task opens its history. Switching to the list
+      // preserves that expansion instead of requiring another toggle.
+      const completedToggle = listHistory.getByRole('button', { name: '已完成', exact: false });
+      assert.equal(await completedToggle.getAttribute('aria-expanded'), 'true');
       await listHistory.getByText('4087', { exact: true }).waitFor();
       await listHistory.getByText('Completed A', { exact: true }).waitFor();
       await listHistory.locator('.personal-task-lane-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -1744,7 +1747,8 @@ export const typedActionsScenario = {
       const taskDraftForm = page.getByRole("dialog", {name: "创建任务", exact: true});
       if (!(await taskDraftForm.getByLabel("任务内容", {exact: true}).inputValue())) throw new Error("Task form lost the reply");
       await taskDraftForm.getByLabel("任务内容", {exact: true}).fill(`${"长".repeat(200)}\n\n${"文".repeat(201)}`);
-      await taskDraftForm.getByRole("status").waitFor();
+      await taskDraftForm.getByRole("status").filter({hasText: /任务内容 \d+\/400/}).waitFor();
+      assert.equal(await taskDraftForm.getByRole("status", {name: "合计保存字数", exact: true}).innerText(), "402 / 400");
       if (!(await taskDraftForm.getByRole("button", {name: "检查配置"}).isDisabled())) throw new Error("Over-limit task text reached preview");
       await taskDraftForm.getByRole("button", {name: "取消", exact: true}).click();
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: /^(Chat|对话)$/ }).click();

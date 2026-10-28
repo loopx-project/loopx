@@ -35,11 +35,14 @@ export const reportDownloadScenario = {
     try {
       const ready = await receive("ready");
       let reportRequests = 0;
+      const bodyReads = [];
       context = await openWorkspacePage(browser, url, {collectCoverage, beforeGoto: async (api, page) => {
         api.transformStatus = fixture => Object.assign(fixture, JSON.parse(JSON.stringify(fixture).replaceAll("product-release", ready.goal_id)));
         await page.route("**/api/chat/goal-results**", async route => {
           reportRequests++;
           assert.equal(route.request().method(), "GET");
+          const requestUrl = new URL(route.request().url());
+          if (requestUrl.pathname !== "/api/chat/goal-results") bodyReads.push(requestUrl.pathname);
           await route.fulfill({response: await fetchWorkspaceBackend(route, ready.origin)});
         });
       }});
@@ -48,7 +51,14 @@ export const reportDownloadScenario = {
       await page.getByRole("navigation", {name: "Goal 视图"}).getByRole("button", {name: "成果", exact: true}).click();
       const results = page.getByRole("region", {name: "已验收的团队报告"});
       const button = results.getByRole("button", {name: "下载原文", exact: true});
+      const report = results.getByRole("navigation", {name: "选择团队报告"})
+        .getByRole("button", {name: /todo_lead-report/});
+      await report.waitFor();
+      assert.deepEqual(bodyReads, [], "Files initially reads the catalog without exporting or loading a report body");
+      assert.equal(await button.count(), 0, "Download is offered only after choosing a report");
+      await report.click();
       await button.waitFor();
+      assert.deepEqual(bodyReads, ["/api/chat/goal-results/todo_lead-report"], "Choosing a report reads only its exact native result");
       const readsBefore = reportRequests;
       async function download(keyboard = false) {
         const pending = page.waitForEvent("download");
@@ -93,7 +103,7 @@ export const reportDownloadScenario = {
       assert.equal(state.sha256, ready.sha256);
       assert.equal(api.turnRequests.length, 0);
       assert.equal(api.actionApplies.length, 0);
-      return {note: "Exact canonical report download, repeated/keyboard/narrow, source withdrawal/recovery and Goal isolation", coverageEntries: await context.close()};
+      return {note: "Catalog-first exact canonical report download, repeated/keyboard/narrow, source withdrawal/recovery and Goal isolation", coverageEntries: await context.close()};
     } finally {
       if (context && !context.page.isClosed()) await context.close();
       backend.stdin.end();
