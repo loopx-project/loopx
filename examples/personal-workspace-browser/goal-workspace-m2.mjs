@@ -151,7 +151,13 @@ export const goalWorkspaceM2Scenario = {
       await page.screenshot({path:resolve(outputDir,'overview-populated-mobile.png'),animations:'disabled'});
       await page.setViewportSize({width:1440,height:1000});
       const expandStart = performance.now();
-      for (const summary of await now.locator('.goal-work-more > summary').all()) {await summary.focus();await page.keyboard.press('Enter');}
+      // A late dependency read can reprioritize the owner groups. Keep each
+      // keyboard target bound to its owner rather than its current position.
+      const ownerIds = await now.locator('.goal-owner-group').evaluateAll(groups => groups.map(group => group.dataset.ownerId));
+      for (const ownerId of ownerIds) {
+        const summary = now.locator(`.goal-owner-group[data-owner-id="${ownerId}"] .goal-work-more > summary`);
+        await summary.focus();await page.keyboard.press('Enter');
+      }
       // Each toggle renders asynchronously; the budget below covers all of them.
       const visibleWork = () => now.locator('.goal-owner-group [data-todo-id]:visible').count();
       for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) await page.waitForTimeout(50);

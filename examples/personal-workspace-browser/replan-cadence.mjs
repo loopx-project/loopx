@@ -25,6 +25,8 @@ export const replanCadenceScenario = {
     let context;
     let heldReadback;
     let goalApplyCount = 0;
+    let goalReadCount = 0;
+    const goalPreviews = [];
     function holdGoalReadback() {
       let started, release;
       const readback = {
@@ -43,6 +45,8 @@ export const replanCadenceScenario = {
             await page.route(`**/api/chat/${endpoint}**`, async (route) => {
               const parsed = new URL(route.request().url());
               if (parsed.pathname.endsWith("/goal-configuration/apply")) goalApplyCount++;
+              if (parsed.pathname.endsWith("/goal-configuration/preview")) goalPreviews.push(route.request().postDataJSON());
+              if (parsed.pathname === "/api/chat/goal-configuration" && route.request().method() === "GET") goalReadCount++;
               const response = await fetchWorkspaceBackend(route, authority.url);
               if (heldReadback && parsed.pathname === "/api/chat/goal-configuration" && route.request().method() === "GET") {
                 const pending = heldReadback;
@@ -308,14 +312,41 @@ export const replanCadenceScenario = {
       const committedApplies = goalApplyCount;
       failedReadback.release(true);
       await page.getByRole("alert").filter({ hasText: "Configuration readback unavailable" }).waitFor();
-      assert.equal(await englishCount.count(), 0, "A failed readback must not expose a stale editor");
+      const recovery = page.locator(".personal-capability-recovery");
+      await recovery.getByText("Configuration written; readback unverified", {exact: true}).waitFor();
+      assert.equal(await englishCount.inputValue(), "5", "A failed readback preserves the submitted draft");
+      for (const control of [englishCount, englishUnit, englishStrategy,
+        page.getByRole("button", {name: "Edit JSON", exact: true}),
+        page.getByRole("button", {name: "Preview changes", exact: true}),
+        page.getByRole("button", {name: "Apply preview", exact: true})]) {
+        assert.equal(await control.isDisabled(), true, "Unverified readback cannot admit editing, preview or another apply");
+      }
+      assert.equal(await page.locator(".personal-capability-preview").count(), 0, "The committed preview is invalidated even when readback fails");
       assert.equal((await readGoalCadence()).current.count, 5, "Readback failure does not undo the committed write");
       await page.screenshot({ path: resolve(outputDir, "replan-cadence-readback-error.png"), animations: "disabled" });
-      await page.getByRole("button", { name: "Retry", exact: true }).click();
-      await page.getByRole("navigation", { name: "Goal capability catalog" }).getByRole("button", { name: /Goal review and stride/ }).click();
+      const readsBeforeRetry = goalReadCount;
+      const previewsBeforeRetry = goalPreviews.length;
+      await recovery.getByRole("button", {name: "Refresh source value", exact: true}).click();
+      await recovery.waitFor({state: "hidden"});
+      await page.getByRole("alert").filter({hasText: "Configuration readback unavailable"}).waitFor({state: "hidden"});
       await waitForInputValue(englishCount, "5");
+      assert.equal(await englishCount.isDisabled(), false, "The verified value reopens the same editor");
+      assert.equal(goalReadCount, readsBeforeRetry + 1, "Recovery rereads the current Goal configuration");
+      assert.equal(goalPreviews.length, previewsBeforeRetry, "Readback recovery must not prepare another mutation");
       assert.equal(goalApplyCount, committedApplies, "Readback recovery must not submit the mutation again");
-      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Delayed post-apply readback keeps editing closed across capability changes; failed readback recovers the committed value without another mutation." };
+      await englishCount.fill("4");
+      assert.equal(await page.getByRole("button", {name: "Apply preview", exact: true}).isDisabled(), true,
+        "Editing after recovery still requires a fresh preview");
+      await page.getByRole("button", {name: "Preview changes", exact: true}).click();
+      await page.locator(".personal-capability-preview").waitFor();
+      assert.equal(goalPreviews.length, previewsBeforeRetry + 1);
+      assert.equal(goalPreviews.at(-1).configuration.count, 4, "The new preview uses the edited value");
+      assert.equal((await readGoalCadence()).current.count, 5, "Preview does not replace the recovered committed value");
+      await applyGoalPreview("Apply preview");
+      await page.waitForFunction(element => !element.disabled, await englishCount.elementHandle());
+      assert.equal(goalApplyCount, committedApplies + 1);
+      assert.equal((await readGoalCadence()).current.count, 4, "A fresh preview can be applied after readback recovery");
+      return { coverageEntries: context.coverageEntries, note: "Packaged default six effective Turns, machine v0→v2 migration, strategy-only JSON/form inheritance across later machine changes, equal-value explicit pin and interval-only clear, default-off/versioned strategy, invalid preview, Goal override/clear, device removal, mobile keyboard and English labels through real handlers. Delayed post-apply readback keeps editing closed across capability changes; failed readback retains the disabled draft and invalidates its preview, recovers through GET only, then admits a new explicitly previewed change." };
     } catch (error) {
       if (context) {
         await context.page.screenshot({ path: resolve(outputDir, "replan-cadence-failure.png"), animations: "disabled" });
