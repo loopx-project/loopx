@@ -54,6 +54,11 @@ def main() -> None:
         )
         runtime = root / "runtime"
         runtime.mkdir()
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        config = json.loads(registry.read_text(encoding="utf-8"))
+        config["common_runtime_root"] = str(runtime)
+        registry.write_text(json.dumps(config), encoding="utf-8")
+        import_fixture_authority(registry, "goal", provider="sqlite")
         global_payload = json.loads(registry.read_text(encoding="utf-8"))
         global_payload["registry_role"] = "global-local"
         global_payload["goals"][0]["source_registry"] = str(registry)
@@ -163,8 +168,15 @@ def main() -> None:
             goal_text="start another task",
         )
         gate = unbound["guided_transaction"]["identity_selection_gate"]
-        assert gate["default_action"] == "select_agent_identity", gate
-        assert gate["fresh_agent_registration"] is None, gate
+        assert gate["default_action"] == "register_fresh_agent", gate
+        registration = gate["fresh_agent_registration"]
+        assert registration["mode"] == "register_fresh_agent"
+        assert registration["recommended"] is True
+        assert registration["continuation_contract"]["requires_execute_result"] is True
+        assert registration["continuation_contract"]["required_result"] == {
+            "ok": True, "changed": True, "written": True,
+            "global_sync": {"ok": True}, "registration_readback": {"verified": True},
+        }
         assert {choice["agent_id"] for choice in gate["choices"]} == {
             "codex-a",
             "codex-b",

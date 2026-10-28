@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from .contract import normalize_todo_id, normalize_todo_status, todo_done_for_status
-from .handoff_note import handoff_context_source, project_handoff_context
+from .handoff_note import todo_read_source, project_handoff_context
 from .todo_summary import _compact_todo_item_record
 
 TODO_INDEX_SCHEMA_VERSION = "todo_index_v0"
@@ -179,8 +179,8 @@ def build_todo_index(
             source="attention_queue", public_safe_compact_text=public_safe_compact_text)
         if row is not None:
             status_rows.append(row)
-            context_sources.append(handoff_context_source(compact))
-            followups.append(handoff_context_source(row))
+            context_sources.append(todo_read_source(compact))
+            followups.append(todo_read_source(row))
     current_count = len(status_rows)
 
     rollout_event_count = 0
@@ -216,7 +216,7 @@ def build_todo_index(
                 continue
             event_rows.append(event_item)
     contexts = project_handoff_context([
-        *context_sources, *(handoff_context_source(row) for row in event_rows)],
+        *context_sources, *(todo_read_source(row) for row in event_rows)],
         followups=[*followups, *([None] * len(event_rows))])
     for row, context in zip([*status_rows, *event_rows], contexts, strict=True):
         if context["note"]:

@@ -449,6 +449,10 @@ def run_once(env: dict[str, str]) -> dict:
     # Preserve this trial's resolved off/on choice in both preflight and solver
     # subprocesses; an omitted off must not inherit a machine-wide opt-in.
     env["LOOPX_CONTEXT_DELIVERY"] = execution.context_delivery
+    if execution.context_delivery == "on":
+        # The CLI validates this declaration before enabling native transport.
+        # Carry the resolved default as well as an explicitly supplied mode.
+        env["LOOPX_EXECUTION_MODE"] = execution.mode
     # Internal transport arguments are derived afresh, never ambient authority.
     env.pop("LOOPX_CODEX_CONTEXT_DIR", None)
     env.pop("LOOPX_CODEX_CONTEXT_TRUST_ARGS", None)

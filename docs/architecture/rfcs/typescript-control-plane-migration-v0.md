@@ -35,6 +35,20 @@ real PostgreSQL server, Node 22.22.3, Windows and browser lanes, plus inherited
 main failures tracked by #7433–#7436 and #7389. See the [ownership, economics and validation ledger](ledger/typescript-control-plane-migration-v0/2026-10-27-primary-action-instruction-selection.md)
 for negative cases, retained-code deletion conditions and code-only rollback.
 
+### Todo summary-display projection has one TypeScript owner (2026-10-26)
+
+The existing `todo.context.page` owns standalone summary/planning source
+selection, display normalization and handoff composition. Quota planning
+composes display in process; Python retains JSON/Python-value compatibility,
+bounded transport, mutable-row attachment and the text-revision codec.
+Completion and display share the registered scoped-decision receipt version;
+no persisted format or authority boundary changes. Both planning decisions
+remain. The [original source checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-26-todo-summary-display-projection.md)
+retains its initial counts and unverified boundaries. The [follow-up qualification](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md)
+records subsequent schema, recovery, packaging and matched-cost evidence at
+separate immutable revisions. Later results do not relabel historical failures
+or certify unrelated platform, large-Goal or long-run behavior.
+
 ### Goal agent-context delegation projection converges in TypeScript (2026-10-25)
 
 `capability_hook.agent_context.project`
@@ -2793,3 +2807,5 @@ Event replay and the reconciled cutover inventory: [2026-09-25](ledger/shared-go
 
 The native query now owns recovery lookup and completion capability evidence,
 with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.
+
+- Summary-display final-head qualification and preserved tail cohorts: [2026-10-27 follow-up](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md).

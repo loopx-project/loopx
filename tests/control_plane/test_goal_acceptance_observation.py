@@ -282,7 +282,9 @@ def collect_fixture(
         )
     )
     from loopx.state_refresh import refresh_state_run
+    from canonical_authority_fixture import initialize_canonical_source_fixture
 
+    initialize_canonical_source_fixture(runtime, "acceptance-demo", state_path=state, provider="sqlite")
     refresh_state_run(
         registry_path=registry,
         runtime_root_override=str(runtime),

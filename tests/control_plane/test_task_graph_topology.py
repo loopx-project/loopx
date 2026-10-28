@@ -73,7 +73,7 @@ def test_lineage_and_condition_between_same_pair_are_both_retained():
 
 
 @pytest.mark.parametrize("provider,display", [
-    ("legacy", "current"), ("file", "current"), ("sqlite", "current"),
+    ("file", "current"), ("sqlite", "current"),
     ("file", "missing"), ("sqlite", "missing"),
 ])
 def test_real_status_reader_uses_provider_snapshot_without_repair_writes(tmp_path, monkeypatch, provider, display):

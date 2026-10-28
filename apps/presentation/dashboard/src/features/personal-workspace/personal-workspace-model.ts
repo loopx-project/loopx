@@ -1,7 +1,7 @@
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import type { TurnStep } from "../../data/turn-steps";
 import type { ChatProject, CollaborationReadback, LoopXModeSettings } from "../../data/chat-model";
-import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource } from "../../data/chat";
+import type { BoundConversationTarget, ChatSessionSummary, BoundConversationSource, ChatReplyContext } from "../../data/chat";
 import type { TeamPlanAppliedOutcome } from "./team-plan-preview";
 import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/presentation/action_review_plan.js";
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
@@ -393,6 +393,7 @@ export type WorkspaceActionPreview = {
 };
 
 export type WorkspaceMessage = {
+  replyContext?: ChatReplyContext;
   createdAt?: string;
   goalDraft?: GoalDraft | null;
   activity?: string[];

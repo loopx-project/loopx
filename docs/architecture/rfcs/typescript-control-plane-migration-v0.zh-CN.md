@@ -32,6 +32,17 @@ merge_gate_passed: `true`、manual_holds: `0`，失败数为 0；八条 benchmar
 以及由 #7433–#7436 和 #7389 跟踪的 main 继承失败。负例、保留代码删除条件及纯代码回滚见
 [归属、经济性与验证 ledger](ledger/typescript-control-plane-migration-v0/2026-10-27-primary-action-instruction-selection.zh-CN.md)。
 
+### Todo 摘要展示投影收敛至唯一 TypeScript owner（2026-10-26）
+
+既有 `todo.context.page` 统一负责独立摘要／规划来源选择、展示规范化及 handoff
+组合。Quota planning 在进程内组合展示；Python 保留 JSON／Python 值兼容、
+有界传输、可变行 attachment 及文本 revision codec。Completion 和展示共享已注册的
+scoped-decision 回执版本，不改变持久化格式或 authority 边界，两次规划决策保留。
+[原始源码 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-26-todo-summary-display-projection.zh-CN.md)
+保留当时的计数与未验证边界；[后续资格记录](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.zh-CN.md)
+按各自不可变版本记录 schema、恢复、打包与匹配成本证据。后续结果不追认历史失败，
+也不认证无关平台、大 Goal 或长期行为。
+
 ### Goal agent-context 委派投影收敛至 TypeScript（2026-10-25）
 
 `capability_hook.agent_context.project`
@@ -2069,3 +2080,5 @@ SQLite 中位数略升，收益不能外推为全面加速。这只资格化本�
 ### settlement 定位的 Turn journal 回读
 
 原生查询统一拥有恢复定位和 completion capability 证据，并共享写入／回读的状态阶段约束。兼容变更、实测代价、验证范围与 facade 退出条件见 [2026-10-02 检查点](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.zh-CN.md)。
+
+- 摘要展示最终 head 验收与历史尾延迟批次：[2026-10-27 后续记录](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.zh-CN.md)。

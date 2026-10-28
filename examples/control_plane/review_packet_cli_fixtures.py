@@ -186,6 +186,8 @@ def write_planned_registry(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, GOAL_ID, provider="sqlite")
     return registry_path
 
 
@@ -244,6 +246,18 @@ def mark_owner_review_todo_done(root: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.testing.canary_harness import advance_fixture_authority
+    current = read_canonical_todos_if_promoted(runtime_root=root / "runtime", goal_id=GOAL_ID)
+    reviews = [row for row in current["todos"]
+        if row["role"] == "user" and row["text"] == "Read owner review worksheet first."]
+    assert len(reviews) == 1, reviews
+    reviews[0].update(status="done", done=True)
+    advance_fixture_authority(root / "runtime", GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=current["todos"], handoff_mode="soft_claim"),
+        operation_id="owner-review-completed")
 
 
 def run_cli(root: Path, registry_path: Path, *args: str) -> subprocess.CompletedProcess[str]:

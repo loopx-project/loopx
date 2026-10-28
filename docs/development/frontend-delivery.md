@@ -170,6 +170,39 @@ same query. Browsing does not acknowledge, cancel or execute a request.
 时保留提示，**重试**沿用当前查询。搜索沿用既有来源授权和扫描上限，不确认、
 取消或执行任何请求。
 
+### Reading original replies / 阅读原回复
+
+For a bound external conversation, the transcript and delegation's **Original
+conversation** show the original user body with **Reply and thread context**
+closed by default. Expand it to read the exact quoted target and ordered earlier
+thread excerpts. Excerpt labels remain visible inside the reader; this does not
+claim a complete provider thread. Opening long context keeps its summary in view
+instead of following the latest message to the end.
+
+The read projection requires the original Session, Turn and both existing
+transport/Core correlation receipts. Canonical messages, model input and history
+cursors remain unchanged. Missing, changed or unsupported frozen context keeps
+the full original message visible. Browsing neither replays work nor contacts the
+provider to fill missing context.
+
+外部原会话和委派的**原对话**优先显示用户原文，**引用与话题上下文**默认折叠。
+展开后可读准确引用和按原顺序保存的话题节选，长内容不会跳到末尾。节选标记保留，
+不据此宣称完整话题已同步；原 Session、Turn 或任一关联回执不匹配时保留完整旧正文。
+只读投影不改模型输入、历史游标或业务执行。
+
+After building Chat, reproduce the production SQLite/HTTP journey with:
+
+```sh
+node apps/presentation/dashboard/smoke/conversation-reply-browser-smoke.mjs
+node apps/presentation/dashboard/smoke/delegation-media-browser-smoke.mjs
+```
+
+The first uses synthetic provider identity and the real existing frozen-context
+producer; the second also checks the shared reader inside original delegations.
+Both check read-only browsing. Source/receipt negatives live in
+`tests/test_manager_context_roundtrip.py`; captures and limits are described in
+[the history evidence](../assets/personal-workspace/conversation-pagination/README.md).
+
 ## Task-first delivery / 从用户任务开始
 
 Use the existing task/PR delivery brief, not a second checklist or approval form.

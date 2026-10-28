@@ -16,6 +16,42 @@ from canonical_authority_fixture import (
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+from loopx.control_plane.todos.contract import TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_quota_next_action_preserves_canonical_decision_receipt_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    state = fixture._configure_read_only_todo(project)
+    rows = read_fixture_todos(state)
+    target = next(row for row in rows if row["todo_id"] == fixture.TODO_ID)
+    target["decision_scope_outcomes"] = [{
+        "schema_version": TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION,
+        "outcome": "reject",
+        "decision_scope": {"schema_version": "decision_scope_v0", "kind": "direction",
+                           "granularity": "action", "scope_key": "previous_route"},
+        "source_todo_id": "todo_previous_gate",
+    }]
+    initialize_canonical_authority(runtime, fixture.GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=fixture.GOAL_ID, todos=rows,
+            handoff_mode="soft_claim", leases=[]), state_path=state, provider=provider)
+    code, source = fixture._run_cli(registry, runtime, "todo", "list",
+        "--goal-id", fixture.GOAL_ID, cwd=project)
+    assert code == 0, source
+    canonical = next(row for row in source["todos"] if row["todo_id"] == fixture.TODO_ID)
+    version = canonical["decision_scope_outcomes"][0]["schema_version"]
+    assert version == TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION
+    code, guard = fixture._run_cli(registry, runtime, "quota", "should-run",
+        "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID, "--codex-app",
+        cwd=project)
+    assert code == 0, guard
+    action = guard["agent_lane_next_action"]
+    assert action["todo_id"] == canonical["todo_id"]
+    assert action["decision_scope_outcomes"][0]["schema_version"] == version
+
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

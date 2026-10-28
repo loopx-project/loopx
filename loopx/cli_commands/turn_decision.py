@@ -32,7 +32,9 @@ from ..capabilities.periodic_report.pending_intent import (
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.effective_action import EffectiveAction
-from ..control_plane.quota.turn_envelope import build_turn_envelope
+from ..control_plane.quota.turn_envelope import (
+    TurnControllerInput, build_turn_controller_input, build_turn_envelope,
+)
 from ..control_plane.quota.settlement import SettlementIdentity, build_turn_scoped_cli_settlement_plan
 from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
@@ -447,32 +449,14 @@ def current_heartbeat_host_launch_decision(
         else current.get("effective_action"))}
 
 
-def fresh_turn_envelope(
-    decision: Mapping[str, Any],
-    *,
-    scheduler_execution_context: Any,
-) -> dict[str, Any]:
-    """Sign the decision into the envelope the loop controller consumes.
-
-    The causal link to a failed predecessor is *not* written here: the envelope
-    schema is a signed contract, so the managed step passes its predecessor
-    beside the envelope instead of mutating it.
-    """
-
-    return build_turn_envelope(
-        decision,
-        scheduler_execution_context=scheduler_execution_context,
-    )
-
-
 def build_fresh_envelope_for_managed_step(
     args: argparse.Namespace,
     *,
     registry_path: Path,
     runtime_root: Path,
     runtime_root_arg: str | None,
-) -> dict[str, Any]:
-    """Project the current decision as the managed step's fresh envelope.
+) -> TurnControllerInput:
+    """Project the current envelope and its route together for managed-step.
 
     Read-only: no Turn-start hooks are dispatched and no Turn instance is
     minted, because the managed step only decides whether the outer scheduler
@@ -485,7 +469,7 @@ def build_fresh_envelope_for_managed_step(
         runtime_root=runtime_root,
         runtime_root_arg=runtime_root_arg,
     )
-    return fresh_turn_envelope(
+    return build_turn_controller_input(
         owner.resolve(),
         scheduler_execution_context=owner.scheduler_execution_context,
     )
@@ -498,5 +482,4 @@ __all__ = [
     "build_fresh_envelope_for_managed_step",
     "build_fresh_turn_decision_owner",
     "collect_turn_status_payload",
-    "fresh_turn_envelope",
 ]

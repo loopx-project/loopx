@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from loopx.control_plane.quota import live_decision, should_run_packet
@@ -519,6 +520,7 @@ def test_managed_turn_projects_prior_unsettled_heartbeat_recovery(
         },
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -724,6 +726,7 @@ def test_managed_turn_accepts_exact_material_monitor_poll_closeout(
         coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -820,6 +823,7 @@ def test_recovery_reads_lifecycle_when_status_summary_omits_bound_todo(
         coordination={"registered_agents": [agent_id], "agent_model": "peer_v1"},
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     packet = build_live_quota_should_run_decision(
         status,
         goal_id=GOAL_ID,
@@ -1253,6 +1257,7 @@ def test_prior_closeout_identity_conflict_fails_closed(
         },
         claim_scope_agent_id=agent_id,
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state_path, provider="sqlite")
     with pytest.raises(HeartbeatReceiptIdentityConflictError):
         build_live_quota_should_run_decision(
             status,

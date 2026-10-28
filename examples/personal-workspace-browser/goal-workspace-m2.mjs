@@ -152,7 +152,10 @@ export const goalWorkspaceM2Scenario = {
       await page.setViewportSize({width:1440,height:1000});
       const expandStart = performance.now();
       for (const summary of await now.locator('.goal-work-more > summary').all()) {await summary.focus();await page.keyboard.press('Enter');}
-      assert.equal(await now.locator('.goal-owner-group [data-todo-id]:visible').count(),200,"All work remains reachable in the original owner order");
+      // Each toggle renders asynchronously; the budget below covers all of them.
+      const visibleWork = () => now.locator('.goal-owner-group [data-todo-id]:visible').count();
+      for (const deadline = Date.now() + 5000; await visibleWork() !== 200 && Date.now() < deadline;) await page.waitForTimeout(50);
+      assert.equal(await visibleWork(),200,"All work remains reachable in the original owner order");
       const expandMs = performance.now() - expandStart;
       assert.ok(expandMs < 2000, `Full 200-item expansion exceeded 2s budget: ${expandMs}ms`);
       await now.getByRole('button',{name:'关系图',exact:true}).click();
@@ -257,6 +260,9 @@ async function verifyRemoteSelection(browser, url) {
     assert.equal(await observation.getByText('Archived totals have not been independently reconciled.',{exact:true}).count(),0,"Wrong-Goal observations never survive a refresh");
     await page.getByRole('button',{name:'Goal 信息',exact:true}).click();
     const unavailableDrawer = page.locator('.personal-context-drawer');
+    // Opening moves focus to the drawer title on the next frame; focusing the
+    // help first would let that handoff blur and dismiss its tooltip.
+    await page.waitForFunction(() => document.activeElement?.id === 'personal-drawer-title');
     await unavailableDrawer.getByRole('button',{name:'验收观察未获取',exact:true}).focus();
     await page.getByRole('tooltip').getByText('验收观测不可用，Goal 是否达成仍未知。',{exact:true}).waitFor();
     await page.keyboard.press('Escape');

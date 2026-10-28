@@ -67,6 +67,10 @@ def write_fixture(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry_path.read_text())["goals"]:
+        import_fixture_authority(registry_path, record["id"], provider="sqlite")
     return registry_path
 
 

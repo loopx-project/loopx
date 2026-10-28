@@ -8,6 +8,7 @@ import {requireBoolean, requireJsonObject, requireStringLiteral} from "../runtim
 import {decisionScopeCovers} from "./decision_scope.ts";
 import {normalizeTodoDecisionScope, normalizeTodoRequiredDecisionScopes} from "./decision_metadata.ts";
 import type {DecisionOutcome, ResumeState} from "./user_completion_types.ts";
+import {TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION} from "./user_completion_types.ts";
 
 interface ResumeReceipt extends JsonObject { readonly state: ResumeState; }
 
@@ -79,7 +80,7 @@ export function planUserCompletion(
   const updates: JsonObject = {};
   if (gate && outcome !== "approve") {
     if (!scope) return {...empty, unblock_resume: {...base, state: "target_or_decision_scope_not_found"}};
-    const recorded = {schema_version: "todo_decision_scope_outcome_v0", outcome,
+    const recorded = {schema_version: TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION, outcome,
       decision_scope: scope, source_todo_id: source.todo_id};
     // Match the legacy codec: the newest decision replaces the same exact
     // scope in place, while independent scopes retain their order and evidence.

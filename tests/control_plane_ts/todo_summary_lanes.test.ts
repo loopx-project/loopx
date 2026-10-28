@@ -96,3 +96,39 @@ test("conflicting display fragments cannot certify a complete source", () => {
       {identity: "todo_same", task_class: "advancement_task", actionable: true}]});
   assert.equal(result.complete, false);
 });
+
+import {projectTodoSummaryDisplay} from "../../loopx/control_plane/todos/context_projection.ts";
+
+test("display source lanes preserve first identity, legacy coordinates and explicit readiness", () => {
+  const record = {active_next_action_items: [{todo_id: "todo_first", text: " First ", status: "open", resume_when: "todo_done:todo_gate"}],
+    items: [{todo_id: "todo_first", text: "Duplicate identity"}, {index: 7, text: " Legacy "},
+      {index: 7, text: "Legacy"}, {text: "Completed", done: true}, {text: "  "},
+      {todo_id: "todo_explicit", text: "Explicit wait", resume_when: "todo_done:todo_gate", resume_ready: false}],
+    blocker_items: [{todo_id: "todo_blocker", text: "Blocked", status: "blocked"}]};
+  const before = structuredClone(record);
+  const rows = projectTodoSummaryDisplay({source: {record}, handoff_gates: [{gate_state: "cleared_with_successor",
+    successor_todo_ids: ["todo_first", "todo_explicit"]}]});
+  assert.deepEqual(rows.map(row => row.text), ["First", "Blocked", "Legacy", "Explicit wait"]);
+  assert.equal(rows[0]!.resume_ready, true);
+  assert.deepEqual(rows[0]!.resume_condition, {schema_version: "todo_resume_condition_v0", resume_when: "todo_done:todo_gate",
+    satisfied: true, source: "handoff_gate_cleared_with_successor"});
+  assert.equal(rows[3]!.resume_ready, false);
+  assert.deepEqual(record, before);
+});
+
+test("planning keeps distinct domain states and terminal frontier evidence, without presentation-lane expansion", () => {
+  const record = {items: [{todo_id: "todo_open", text: "Open", depends_on_todo_ids: ["todo_dependency"]},
+      {todo_id: "todo_done", text: "Complete", status: "done", no_followup: true, note: "Evidence tail"},
+      {todo_id: "todo_x", text: "Legacy short id", status: "done"}],
+    deferred_items: [{todo_id: "todo_wait", text: "Wait", status: "deferred"}],
+    blocker_items: [{todo_id: "todo_open", text: "Duplicate"}],
+    monitor_open_items: [{todo_id: "todo_monitor", text: "Monitor", task_class: "continuous_monitor"}],
+    first_open_items: [{todo_id: "todo_display", text: "Only a display lane"}]};
+  const plain = projectTodoSummaryDisplay({source: {record}, include_terminal: false});
+  assert.deepEqual(plain.map(row => row.todo_id), ["todo_open", "todo_wait", "todo_monitor"]);
+  assert.equal(plain[0]!.depends_on_todo_ids, undefined);
+  const terminal = projectTodoSummaryDisplay({source: {record}, include_terminal: true});
+  assert.deepEqual(terminal.map(row => row.todo_id), ["todo_open", "todo_done", "todo_x", "todo_wait", "todo_monitor"]);
+  assert.deepEqual(terminal[0]!.depends_on_todo_ids, ["todo_dependency"]);
+  assert.equal(terminal[1]!.note, "Evidence tail");
+});

@@ -282,7 +282,9 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     # Reading this view neither enables stride nor settles another Turn.
     ordinary = project_replan_context(
         goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status, stride_strategy="off")
-    assert "decision_followthrough" not in ordinary
+    assert ordinary["decision_followthrough"] == follow
+    assert "stride_strategy" not in ordinary
+    assert "explore_basis" not in ordinary
     assert _spend_run_count(runtime) == 3
 
     # Preserve compatibility without turning a descriptive or unsupported

@@ -1145,8 +1145,9 @@ def test_manager_restart_uses_the_session_allocation_instead_of_new_defaults(
     }
 
 
+@pytest.mark.parametrize("previous_context_version", [None, 21])
 def test_legacy_manager_migrates_without_project_and_refreshes_each_turn(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, previous_context_version
 ):
     store = ChatSessionStore(tmp_path / "runtime" / "chat")
     runtime = ChatRuntimeController(
@@ -1176,6 +1177,8 @@ def test_legacy_manager_migrates_without_project_and_refreshes_each_turn(
         upstream_mode="chat",
         codex_home=str(runtime.codex_home),
     )
+    if previous_context_version is not None:
+        store.update_session(legacy["session_id"], manager_context_version=previous_context_version)
     session, resumed = runtime.open_session(
         goal_id="different-project",
         agent_id="codex",

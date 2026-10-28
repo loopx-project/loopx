@@ -10,6 +10,7 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority
 
 from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
     LocalCoordinationAuthorityUnavailable,
     canonical_todo_summary_fields,
     read_canonical_todos_if_promoted,
@@ -311,7 +312,8 @@ def test_todo_add_replan_guard_binds_canonical_obligation_without_display(
 def test_refresh_uses_newest_vision_by_utc_instant_across_offsets(
     tmp_path: Path,
 ) -> None:
-    registry, _, _ = _fixture(tmp_path)
+    registry, path, goal = _fixture(tmp_path)
+    _promote(registry, path, goal)
     _write_run_index(
         registry,
         [
@@ -355,7 +357,8 @@ def test_todo_replan_guard_closes_later_utc_ack_across_offsets(
     from argparse import Namespace
     from loopx.cli_commands.todo import _validated_replan_successor_obligation
 
-    registry, _, goal = _fixture(tmp_path)
+    registry, path, goal = _fixture(tmp_path)
+    _promote(registry, path, goal)
     stalled_runs = [
         {
             "generated_at": f"2026-01-01T08:0{index}:00+08:00",
@@ -437,7 +440,7 @@ def test_todo_replan_guard_closes_later_utc_ack_across_offsets(
 
 
 @pytest.mark.parametrize("promoted", [False, True])
-def test_preview_refresh_retains_legacy_parity_and_uses_one_provider_read(
+def test_preview_refresh_uses_one_provider_read_and_refuses_unmigrated_source(
     tmp_path: Path, monkeypatch, promoted: bool
 ) -> None:
     from loopx.control_plane.work_items import refresh_recommendation
@@ -455,10 +458,17 @@ def test_preview_refresh_retains_legacy_parity_and_uses_one_provider_read(
         return result
 
     monkeypatch.setattr(refresh_recommendation, "read_canonical_todos_if_promoted", read)
+    if not promoted:
+        before = path.read_bytes()
+        with pytest.raises(CanonicalAuthorityRequired):
+            _refresh(registry)
+        assert reads == []
+        assert path.read_bytes() == before
+        return
     result = _refresh(registry)
     assert "Canonical work" in json.dumps(result)
     assert len(reads) == 1
-    assert (reads[0] is not None) == promoted
+    assert reads[0] is not None
 
 
 @pytest.mark.parametrize("promoted", [False, True])
@@ -470,6 +480,14 @@ def test_refresh_todo_text_is_record_content_not_an_artifact_path(
     if promoted:
         _promote(registry, path, goal)
     before = path.read_bytes()
+    if not promoted:
+        with pytest.raises(CanonicalAuthorityRequired):
+            _refresh(registry, dry_run=False)
+        assert path.read_bytes() == before
+        assert not list((tmp_path / "runtime/goals/goal-a/runs").glob("*.json"))
+        assert not (tmp_path / "runtime/goals/goal-a/runs/index.jsonl").exists()
+        assert not list(tmp_path.rglob("escape.json"))
+        return
     result = _refresh(registry, dry_run=False)
     runs = tmp_path / "runtime/goals/goal-a/runs"
     for key in ("json_path", "markdown_path", "index_path"):
@@ -495,9 +513,9 @@ def test_preview_refresh_missing_projection_is_readable_not_implicitly_rebuilt(
         _promote(registry, path, goal)
     path.unlink()
     if not promoted:
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(CanonicalAuthorityRequired):
             _refresh(registry)
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(CanonicalAuthorityRequired):
             _refresh(
                 registry,
                 next_action="Replace the missing narrative",

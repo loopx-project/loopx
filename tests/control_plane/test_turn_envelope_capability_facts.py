@@ -14,7 +14,7 @@ import pytest
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from tests.control_plane.canonical_authority_fixture import (
-    initialize_canonical_authority, isolate_sqlite_runtime,
+    initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos,
 )
 from tests.control_plane.reward_memory_host_fixture import enable_live_memory
 from tests.control_plane.test_quota_settlement_cli import (
@@ -34,10 +34,8 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace("action_kind=validate ",
         "action_kind=validate continuation_policy=same_agent_non_delivery "))
-    code, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert code == 0, listed
     projection = build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
+        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state),
     )
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     if mode != "off":
@@ -88,10 +86,8 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state.write_text(state.read_text().replace("action_kind=validate ",
         "action_kind=validate continuation_policy=same_agent_non_delivery "))
-    code, listed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID)
-    assert code == 0, listed
     initialize_canonical_authority(runtime, GOAL_ID, build_todo_runtime_shadow_projection(
-        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=listed["todos"],
+        goal_id=GOAL_ID, handoff_mode="soft_claim", todos=read_fixture_todos(state),
     ), state_path=state, provider=provider)
 
     # A synthetic retained checkpoint drives the real frontier and CLI owners.
@@ -185,7 +181,7 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     plan = build_loopx_turn_plan(envelope, host="dsh", execution_mode="isolated-headless",
                                  turn_instance_id="vision-contract-turn")
     assert plan["route"]["would_invoke_host"] is True
-    assert envelope["action"]["delivery_allowed"] is True
+    assert envelope["action"]["delivery_allowed"] is (not replan)
     request = {"schema_version": "loopx_turn_host_request_v0", "turn_key": plan["transaction"]["turn_key"],
                "route": "replan_required" if replan else "primary_delivery", "turn_envelope": envelope}
     result = subprocess.run(command, input=json.dumps(request), text=True, capture_output=True, timeout=30)
@@ -226,7 +222,8 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     read = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True).stdout
     assert read == original
     assert build_turn_envelope(json.loads(read))["action_signature"]["source_decision_hash"] == authority["action_signature"]["source_decision_hash"]
-    assert "writeback" not in authority and "scheduler" not in authority
+    assert "writeback" not in authority
+    assert authority["scheduler"] == envelope["scheduler"]
     assert "Do not execute its state or scheduler commands" in prompt
     for field, value in (
         ("required_before_closeout", list(reversed(projected["required_before_closeout"]))),

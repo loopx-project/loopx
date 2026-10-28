@@ -2101,13 +2101,14 @@ class ChatRuntimeController:
                 return turn
             # Persist stop intent before changing status or contacting native
             # IO, so a service crash cannot turn an interrupted stop into an
-            # automatic review of the work the user just cancelled.
-            self.store.append_event(session_id, turn_id, kind="turn.interrupt_requested", payload={})
-            interrupting = self.store.update_turn(
+            # automatic review of the work the user just cancelled. The store
+            # checks the status and writes the intent under the Turn lock, so a
+            # Turn that completed while this call was reading it keeps its
+            # terminal event history and is not relabelled as interrupted.
+            interrupting = self.store.begin_turn_interrupt(
                 session_id,
                 turn_id,
                 expected_statuses={"queued", "starting", "running", "interrupting"},
-                status="interrupting",
             )
         if interrupting is None:
             current = self.store.load_turn(session_id, turn_id)

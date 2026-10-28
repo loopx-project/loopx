@@ -326,16 +326,24 @@ def write_planned_registry(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, goal_id, provider="sqlite")
     return registry_path
 
 
 def mark_planned_todos_done(root: Path) -> None:
     goal_id = "planned-main-control"
-    state_path = root / "project" / ".codex" / "goals" / goal_id / "ACTIVE_GOAL_STATE.md"
-    state_text = state_path.read_text(encoding="utf-8")
-    state_text = state_text.replace(f"- [ ] {USER_TODO_TEXT}", f"- [x] {USER_TODO_TEXT}")
-    state_text = state_text.replace(f"- [ ] {AGENT_TODO_TEXT}", f"- [x] {AGENT_TODO_TEXT}")
-    state_path.write_text(state_text, encoding="utf-8")
+    from loopx.control_plane.testing.canary_harness import advance_fixture_authority, run_json_cli
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    registry = root / "project/.loopx/registry.json"
+    todos = run_json_cli("todo", "list", "--goal-id", goal_id,
+        registry_path=registry, runtime_root=root / "runtime")["todos"]
+    for todo in todos:
+        if todo["text"] in {USER_TODO_TEXT, AGENT_TODO_TEXT}:
+            todo.update(status="done", done=True)
+    advance_fixture_authority(root / "runtime", goal_id,
+        build_todo_runtime_shadow_projection(goal_id=goal_id, todos=todos, handoff_mode="soft_claim"),
+        operation_id="fixture-owner-review-completed")
 
 
 def write_connected_delivery_registry(root: Path) -> Path:
@@ -438,6 +446,8 @@ def write_connected_delivery_registry(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, DELIVERY_GOAL_ID, provider="sqlite")
     return registry_path
 
 
@@ -512,6 +522,8 @@ def write_connected_readonly_registry(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, CONNECTED_READONLY_GOAL_ID, provider="sqlite")
     return registry_path
 
 
@@ -586,4 +598,7 @@ def write_dependency_blocker_registry(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, DEPENDENCY_CURRENT_GOAL_ID, provider="sqlite")
+    import_fixture_authority(registry_path, DEPENDENCY_BLOCKER_GOAL_ID, provider="sqlite")
     return registry_path

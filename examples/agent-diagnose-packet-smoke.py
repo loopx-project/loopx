@@ -239,6 +239,8 @@ def write_agent_scoped_registry(root: Path, runtime: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, SCOPED_GOAL_ID, provider="sqlite")
     return registry
 
 
@@ -302,6 +304,8 @@ def write_capability_scoped_registry(root: Path, runtime: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry, CAPABILITY_GOAL_ID, provider="sqlite")
     return registry
 
 

@@ -164,7 +164,7 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
     registry.write_text(
         json.dumps(
             {
-                "runtime_root": str(runtime_root),
+                "common_runtime_root": str(runtime_root),
                 "goals": [
                     {
                         "id": "reward-overlay-goal",
@@ -206,6 +206,10 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry.read_text())["goals"]:
+        import_fixture_authority(registry, record["id"], provider="sqlite")
     return registry, runtime_root, project
 
 

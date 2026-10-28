@@ -22,6 +22,7 @@ from loopx.control_plane.coordination.legacy_writer_fence import (
     legacy_coordination_writer_fence_path,
 )
 from loopx.control_plane.coordination.local_authority import (
+    CanonicalAuthorityRequired,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
     claim_canonical_todo_if_promoted,
@@ -132,21 +133,13 @@ def test_python_terminal_adapter_rejects_coercible_numeric_values(
     assert not runtime_root.exists()
 
 
-def test_absent_fence_preserves_legacy_path_without_starting_typescript(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.setattr(
-        "loopx.control_plane.coordination.local_authority.effect_runtime_result",
-        lambda *_args, **_kwargs: pytest.fail("pre-cutover read must stay legacy"),
-    )
-    assert (
-        read_canonical_todos_if_promoted(
-            runtime_root=tmp_path,
-            goal_id="goal-a",
-        )
-        is None
-    )
+def test_absent_fence_refuses_without_reconstructing_legacy_authority(tmp_path: Path) -> None:
+    with pytest.raises(CanonicalAuthorityRequired) as caught:
+        read_canonical_todos_if_promoted(runtime_root=tmp_path, goal_id="goal-a")
+    assert caught.value.code == "canonical_authority_required"
+    assert caught.value.payload["write_admitted"] is False
+    assert caught.value.payload["legacy_fallback_used"] is False
+    assert not legacy_coordination_writer_fence_path(runtime_root=tmp_path, goal_id="goal-a").exists()
 
 
 def test_engaged_fence_reads_typescript_provider_result(
@@ -1157,7 +1150,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
                         "repo": str(project),
                         "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
                         "coordination": {
-                            "registered_agents": ["agent-a", "agent-b"]
+                            "registered_agents": ["agent-a"]
                         },
                     }
                 ],
@@ -1201,11 +1194,12 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
         "todo_atomic_claim",
         "--claimed-by",
         "agent-a",
-        "--agent-id",
-        "agent-a",
         "--claim-operation-id",
         "atomic-cli-claim",
     ]
+    # The legacy single-agent call has no explicit actor and must not acquire
+    # execution. Explicit self-claim is a different, managed operation.
+    before = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
     initial_failure = subprocess.run(
         base_command,
         capture_output=True,
@@ -1224,15 +1218,17 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     assert recovery.get("command") == "loopx todo claim"
     assert recovery.get("requires_flags") == ["--task-lease-idempotency-key"]
     assert "--task-lease-expected-version" in (recovery.get("optional_flags") or [])
+    _assert_same_todo_content(list_goal_todos(registry_path=registry_path, goal_id="goal-a"), before)
 
     command = [
         *base_command,
+        "--agent-id",
+        "agent-a",
         "--task-lease-idempotency-key",
         "turn:atomic-cli-claim",
         "--task-lease-expected-version",
         "0",
     ]
-    before = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
     preview = json.loads(
         subprocess.run(
             [*command, "--dry-run"],
@@ -2250,6 +2246,27 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
         "--claim-operation-id",
         "initial-cli-claim",
     ]
+
+    def recover_native_claim(operation_id):
+        # Ordinary CLI self-claims expose the execution reference, while the
+        # existing transaction owner retains the complete durable receipt.
+        recovered = claim_canonical_todo_if_promoted(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id="goal-a",
+            todo_id="todo_claimable",
+            role=None,
+            claimed_by="agent-a",
+            actor_agent_id="agent-a",
+            operation_id=operation_id,
+            manage_execution=True,
+            dry_run=False,
+        )
+        assert recovered["status"] == "replayed"
+        assert recovered["original_receipt"]["operation_id"] == operation_id
+        assert recovered["original_receipt"]["goal_id"] == "goal-a"
+        return recovered
+
     # Duplicate callers race from separate processes, but one operation must
     # produce exactly one accepted claim and the same durable receipt.
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2269,7 +2286,13 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     assert all(
         item["status"] in {"applied", "recovered", "replayed"} for item in claims
     )
-    assert claims[0]["original_receipt"] == claims[1]["original_receipt"]
+    for claim in claims:
+        assert claim["execution_managed"] is True
+        assert claim["claim_operation_id"] == "initial-cli-claim"
+        assert "original_receipt" not in claim
+    receipts = [recover_native_claim(claim["claim_operation_id"]) for claim in claims]
+    assert receipts[0]["original_receipt"] == receipts[1]["original_receipt"]
+    assert all(receipt["provider_revision"] == claims[0]["provider_revision"] for receipt in receipts)
     assert claims[0]["provider_revision"] == claims[1]["provider_revision"]
     claimed = next(item for item in claims if item["status"] == "applied")
     assert claimed["ok"] is True
@@ -2313,7 +2336,13 @@ def test_real_canonical_provider_preserves_complete_complex_todo_semantics(
     )
     assert original["status"] == "no_change"
     assert replay["status"] == "replayed"
-    assert replay["original_receipt"] == original["original_receipt"]
+    assert original["claim_operation_id"] == replay["claim_operation_id"] == "retryable-cli-claim"
+    assert "original_receipt" not in original and "original_receipt" not in replay
+    original_receipt = recover_native_claim(original["claim_operation_id"])
+    replay_receipt = recover_native_claim(replay["claim_operation_id"])
+    assert replay_receipt["original_receipt"] == original_receipt["original_receipt"]
+    assert original_receipt["original_receipt"]["result"]["changed"] is False
+    assert replay_receipt["provider_revision"] == replay["provider_revision"]
     assert replay["provider_revision"] == original["provider_revision"]
     changed_intent = [
         "agent-b" if part == "agent-a" else part for part in claim_command

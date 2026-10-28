@@ -1,0 +1,292 @@
+{
+  "_comment": "Pre-cutover Python summary-display projections of synthetic quota CLI rows at c6462f902; characterization only.",
+  "scenarios": [
+    {
+      "name": "quota-n1",
+      "items": [
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "role": "agent",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "index": 1,
+          "role": "agent",
+          "priority": "P1",
+          "status": "open",
+          "task_class": "advancement_task",
+          "text": "[P1] Inspect delegated evidence"
+        },
+        {
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "priority": "P1",
+          "text": "[P1] Inspect delegated evidence"
+        },
+        {
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "text": "[P1] Inspect delegated evidence",
+          "priority": "P1"
+        },
+        {
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        }
+      ],
+      "expected": [
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "role": "agent",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "role": "agent",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": null,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": null,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_466a1d03137cb098dbef1ee1",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        }
+      ]
+    },
+    {
+      "name": "quota-n3",
+      "items": [
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "role": "agent",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "index": 1,
+          "role": "agent",
+          "priority": "P1",
+          "status": "open",
+          "task_class": "advancement_task",
+          "text": "[P1] Inspect delegated evidence"
+        },
+        {
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "priority": "P1",
+          "text": "[P1] Inspect delegated evidence"
+        },
+        {
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "text": "[P1] Inspect delegated evidence",
+          "priority": "P1"
+        },
+        {
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        }
+      ],
+      "expected": [
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "role": "agent",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "role": "agent",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": null,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": null,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        },
+        {
+          "index": 1,
+          "text": "[P1] Inspect delegated evidence",
+          "todo_id": "todo_63b0e0ccdfa833376b996112",
+          "status": "open",
+          "priority": "P1",
+          "task_class": "advancement_task"
+        }
+      ]
+    }
+  ],
+  "source": {
+    "items": [
+      {
+        "todo_id": "todo_first",
+        "index": 1,
+        "text": " First work ",
+        "status": "open",
+        "note": "Continue validation"
+      },
+      {
+        "todo_id": "todo_done",
+        "text": "Done",
+        "status": "done",
+        "done": true
+      }
+    ],
+    "blocker_items": [
+      {
+        "todo_id": "todo_blocked",
+        "text": "Blocked",
+        "status": "blocked",
+        "reason": "Input pending"
+      }
+    ],
+    "handoff_gates": []
+  },
+  "summary": [
+    {
+      "index": null,
+      "text": "Blocked",
+      "todo_id": "todo_blocked",
+      "status": "blocked",
+      "task_class": "advancement_task",
+      "reason": "Input pending"
+    },
+    {
+      "index": 1,
+      "text": "First work",
+      "todo_id": "todo_first",
+      "status": "open",
+      "task_class": "advancement_task",
+      "continuation_hint": "Continue validation"
+    }
+  ],
+  "planning": [
+    {
+      "index": 1,
+      "text": "First work",
+      "todo_id": "todo_first",
+      "status": "open",
+      "task_class": "advancement_task",
+      "continuation_hint": "Continue validation"
+    },
+    {
+      "index": null,
+      "text": "Blocked",
+      "todo_id": "todo_blocked",
+      "status": "blocked",
+      "task_class": "advancement_task",
+      "reason": "Input pending"
+    }
+  ],
+  "terminal": [
+    {
+      "index": 1,
+      "text": " First work ",
+      "todo_id": "todo_first",
+      "status": "open",
+      "task_class": "advancement_task",
+      "continuation_hint": "Continue validation",
+      "note": "Continue validation"
+    },
+    {
+      "index": null,
+      "text": "Done",
+      "todo_id": "todo_done",
+      "status": "done",
+      "task_class": "advancement_task",
+      "done": true
+    },
+    {
+      "index": null,
+      "text": "Blocked",
+      "todo_id": "todo_blocked",
+      "status": "blocked",
+      "task_class": "advancement_task",
+      "reason": "Input pending"
+    }
+  ]
+}

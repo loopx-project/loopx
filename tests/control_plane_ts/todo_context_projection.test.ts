@@ -167,3 +167,84 @@ test("handoff context is an exclusive read lens with aligned stages", () => {
   // No execution grant or source record is manufactured by this projection.
   assert.deepEqual(Object.keys(result), ["handoff_context"]);
 });
+
+// Captured before the cutover; independent rule cases below constrain its meaning.
+import displayFixture from "./fixtures/todo_summary_display.json" with {type: "json"};
+import {projectTodoSummaryDisplay} from "../../loopx/control_plane/todos/context_projection.ts";
+const display = (item: JsonObject) => projectTodoSummaryDisplay({items: [{record: item}]})[0]!;
+const handoff = (item: JsonObject, extras: JsonObject = {}) =>
+  (projectTodoContextPage({handoff_sources: [{record: item, ...extras}]}).handoff_context as JsonObject[])[0]!;
+
+test("summary display keeps the canonical scoped-decision receipt version verbatim", () => {
+  const receipt = {schema_version: "todo_decision_scope_outcome_v0", outcome: "reject",
+    decision_scope: {schema_version: "decision_scope_v0", kind: "direction",
+      granularity: "action", scope_key: "publish_release"}, source_todo_id: "todo_gate"};
+  const compacted = display({todo_id: "todo_work", text: "Review the next action",
+    decision_scope_outcomes: [receipt]});
+  const projected = (compacted.decision_scope_outcomes as JsonObject[])[0]!;
+  assert.equal(projected.schema_version, receipt.schema_version);
+  assert.notEqual(projected.schema_version, "decision_scope_outcome_v0");
+  assert.deepEqual(projected, receipt);
+});
+
+test("summary display matches pre-cutover synthetic CLI characterization", () => {
+  for (const scenario of displayFixture.scenarios) {
+    assert.deepEqual(projectTodoSummaryDisplay({items: scenario.items.map(record => ({record})), strip_text: true}), scenario.expected);
+  }
+  for (const [options, expected] of [[{handoff_gates: []}, displayFixture.summary],
+    [{include_terminal: false}, displayFixture.planning], [{include_terminal: true}, displayFixture.terminal]] as const) {
+    assert.deepEqual(projectTodoSummaryDisplay({source: {record: displayFixture.source}, ...options}), expected);
+  }
+});
+
+test("handoff preserves identity and nested precedence without granting completion", () => {
+  const item = {todo_id: "todo_original", role: "agent", status: "open", claimed_by: "Agent A",
+    text: "Read the complete requirement", note: "Keep the unfinished validation", evidence: "opaque evidence",
+    successor_todo_ids: ["todo_successor"], resume_when: "todo_done:todo_dependency", excluded_agents: ["agent-b"]};
+  const before = structuredClone(item);
+  assert.deepEqual(handoff(item, {goal_id: "goal-a", source: "canonical_provider"}).note, {
+    schema_version: "handoff_note_v0", handoff_id: "handoff_original", todo_id: "todo_original", goal_id: "goal-a",
+    to_agent: "agent-a", intent: "continue", summary: "Keep the unfinished validation",
+    evidence_refs: ["todo:todo_original:evidence", "todo:todo_original:note"], blocked_on: "todo_done:todo_dependency",
+    suggested_next_action: "Read the complete requirement", source: "canonical_provider", successor_todo_ids: ["todo_successor"], excluded_agents: ["agent-b"]});
+  assert.deepEqual(item, before);
+  assert.equal(handoff({todo_id: "todo_plain", note: "continue"}).note, null);
+  const nested = handoff({...item, handoff: {to_agent: "agent-b", note: "", reason: "nested reason"}});
+  assert.equal(nested.continuation_hint, "nested reason");
+  assert.equal((nested.note as JsonObject).to_agent, "agent-b");
+  const legacy = {goal_id: "goal-a", role: "agent", index: 7, text: "Legacy work"};
+  for (const note of ["First continuation", "Revised continuation"]) {
+    assert.equal((handoff({...legacy, handoff: {note}}).note as JsonObject).handoff_id, "handoff_7e32bf123341");
+  }
+});
+
+test("handoff excludes credentials before truncation and preserves Unicode boundaries", () => {
+  // Assemble synthetic assignments to keep source safe for the public-boundary scan.
+  const tokenLabel = "tok" + "en";
+  for (const label of ["ak", "sk", "api_key", "access_key_id", "secret_key", tokenLabel, "password"]) {
+    const context = handoff({handoff: {note: "x".repeat(400) + " " + label + "=v"}});
+    assert.equal(context.continuation_hint, null);
+    assert.equal((context.note as JsonObject).summary, undefined);
+  }
+  for (const [note, expected] of [["a\u0085b\u001cc", "a b c"], ["token budget for validation", "token budget for validation"],
+    ["😀".repeat(281), "😀".repeat(279) + "..."], ["令" + tokenLabel + "=v", "令" + tokenLabel + "=v"], ["apİ_key=v", null],
+    ["bearer\ufeffv", "bearer\ufeffv"], ["bearer\u0085v", null]]) assert.equal(handoff({note}).continuation_hint, expected);
+  const context = handoff({todo_id: "todo_original", successor_todo_ids: ["todo_next"],
+    handoff: {evidence_refs: ["ref:one", "ref:one", "ref:two", "ref:three", "ref:four"]}, evidence: "opaque",
+    note: "continuation", latest_event_kind: "todo_update"});
+  assert.deepEqual((context.note as JsonObject).evidence_refs,
+    ["ref:one", "ref:two", "ref:three", "ref:four", "todo:todo_original:evidence", "todo:todo_original:note"]);
+});
+
+test("only open advancement projects hints; blocked cause is bounded and public safe", () => {
+  for (const task_class of ["advancement_task", "continuous_monitor"]) for (const status of ["open", "blocked", "done"]) {
+    const row = display({text: "Work", status, task_class, note: "Continue validation", reason: "Input pending"});
+    assert.equal(row.continuation_hint, task_class === "advancement_task" && status === "open" ? "Continue validation" : undefined);
+    assert.equal(row.reason, status === "blocked" ? "Input pending" : undefined);
+    assert.equal(row.note, undefined); assert.equal(row.evidence, undefined);
+  }
+  assert.equal(display({status: "blocked", reason: "/" + "home/example/plan.md"}).reason, undefined);
+  for (const field of ["note", "continuation_hint"]) for (const label of ["api_key", "token", "password"]) {
+    assert.equal(display({text: "Work", status: "open", [field]: label + "=v"}).continuation_hint, undefined);
+  }
+});

@@ -120,12 +120,15 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
 def assert_parseable_agent_todos(agent_todos: dict, *, hot_path: bool = False) -> None:
     assert agent_todos["schema_version"] == "todo_summary_v0", agent_todos
     assert agent_todos["total_count"] == 5, agent_todos
-    assert agent_todos["open_count"] == 2, agent_todos
+    assert agent_todos["open_count"] == (1 if hot_path else 2), agent_todos
     assert agent_todos["done_count"] == 3, agent_todos
     assert agent_todos["deferred_count"] == 2, agent_todos
     item_lane = "first_executable_items" if hot_path else "first_open_items"
     visible_items = agent_todos[item_lane]
-    assert [item["index"] for item in visible_items] == [1, 5], agent_todos
+    assert [item["index"] for item in visible_items] == ([1] if hot_path else [1, 5]), agent_todos
+    if hot_path:
+        assert agent_todos["claim_scope"]["other_agent_claimed_open_count"] == 1
+        assert agent_todos["claim_scope"]["other_agent_claimed_weight"] == "diagnostic_only"
 
     first_open = visible_items[0]
     assert first_open["schema_version"] == "todo_item_v0", first_open
@@ -143,6 +146,14 @@ def assert_parseable_agent_todos(agent_todos: dict, *, hot_path: bool = False) -
         ), first_open
     assert str(first_open["todo_id"]).startswith("todo_"), first_open
 
+    if hot_path:
+        assert "first_open_items" not in agent_todos, agent_todos
+        assert "deferred_items" not in agent_todos, agent_todos
+        assert agent_todos["payload_compaction"]["schema_version"] == (
+            "quota_cli_todo_summary_compaction_v0"
+        ), agent_todos
+        return
+
     second_open = visible_items[1]
     assert second_open["priority"] == "P2", second_open
     assert second_open["status"] == "open", second_open
@@ -156,13 +167,6 @@ def assert_parseable_agent_todos(agent_todos: dict, *, hot_path: bool = False) -
         assert handoff_note["intent"] == "review_pr", handoff_note
         assert handoff_note["evidence_refs"] == ["todo:todo_handoff_review:evidence"], handoff_note
 
-    if hot_path:
-        assert "first_open_items" not in agent_todos, agent_todos
-        assert "deferred_items" not in agent_todos, agent_todos
-        assert agent_todos["payload_compaction"]["schema_version"] == (
-            "quota_cli_todo_summary_compaction_v0"
-        ), agent_todos
-        return
 
     deferred_by_id = {item["todo_id"]: item for item in agent_todos["deferred_items"]}
     assert set(deferred_by_id) == {"todo_deferred_surface", "todo_pr_deferred"}, agent_todos
@@ -261,6 +265,15 @@ def assert_pr_resume_repository_binding() -> None:
 def assert_lifecycle(provider: str) -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-todo-durability-") as tmp:
         registry_path, runtime = write_fixture(Path(tmp))
+        # Declare every existing claim owner before the one canonical import.
+        registry = json.loads(registry_path.read_text(encoding='utf-8'))
+        registry['goals'][0]['coordination'] = {
+            'agent_model': 'peer_v1',
+            'registered_agents': ['fixture-agent', 'codex-product-capability',
+                'codex-side-bypass', 'codex-reviewer', 'codex-builder'],
+        }
+        registry_path.write_text(json.dumps(registry), encoding='utf-8')
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
         status_payload = run_cli("status", registry_path=registry_path, runtime=runtime)
         item = attention_item(status_payload)
 
@@ -304,22 +317,14 @@ def assert_lifecycle(provider: str) -> None:
         assert indexed_handoff["handoff_note"]["goal_id"] == GOAL_ID, indexed_handoff
         assert indexed_handoff["handoff_note"]["to_agent"] == "codex-reviewer", indexed_handoff
 
-        guard = run_cli("quota", "should-run", "--goal-id", GOAL_ID, registry_path=registry_path, runtime=runtime)
+        guard = run_cli("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", "fixture-agent",
+            "--host-surface", "generic_cli", "--scheduler-owner", "none", "--execution-mode", "interactive",
+            registry_path=registry_path, runtime=runtime)
         assert guard["should_run"] is True, guard
         assert_parseable_agent_todos(guard["agent_todo_summary"], hot_path=True)
         assert "completed_todo_archive_warning" not in guard, guard
 
         first_todo_id = guard["agent_todo_summary"]["first_executable_items"][0]["todo_id"]
-        # Historical inspection above is read-only. Declare the fixture's
-        # existing claim owners before the reviewed import and normal writes.
-        registry = json.loads(registry_path.read_text(encoding='utf-8'))
-        registry['goals'][0]['coordination'] = {
-            'agent_model': 'peer_v1',
-            'registered_agents': ['fixture-agent', 'codex-product-capability',
-                'codex-side-bypass', 'codex-reviewer', 'codex-builder'],
-        }
-        registry_path.write_text(json.dumps(registry), encoding='utf-8')
-        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
         original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
         assert original['source_authority'] == provider + '_v0'
         assert original['decision_read_from_provider'] is True and original['legacy_fallback_used'] is False

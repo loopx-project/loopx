@@ -56,7 +56,7 @@ def selected_summary(registry: Path, runtime: Path, state: Path, todo_id: str, *
     return projected.summaries['agent_todos']
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_real_cli_historical_route_advisory_preserves_old_source_and_provider(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime, state, registry = tmp_path / 'runtime', tmp_path / 'state.md', tmp_path / 'registry.json'
@@ -92,7 +92,7 @@ def test_real_cli_historical_route_advisory_preserves_old_source_and_provider(tm
     assert (state.read_bytes() if state.exists() else None) == source
 
 
-@pytest.mark.parametrize('provider', ['legacy', 'file', 'sqlite'])
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_real_cli_graph_selection_history_and_read_only_manager(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = fixture_projection()

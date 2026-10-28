@@ -901,7 +901,6 @@ def test_lost_receipt_then_new_conversation_cannot_dispatch_twice(mode, monkeypa
 def test_the_in_turn_tool_pins_the_conversation_it_runs_in(mode, monkeypatch):  # noqa: F811
     """The model supplies the brief, never the wake routing: the host fixes it."""
     from loopx.collaboration_mcp import Delegations
-    from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
     pinned = []
 
@@ -911,7 +910,6 @@ def test_the_in_turn_tool_pins_the_conversation_it_runs_in(mode, monkeypatch):  
 
     monkeypatch.setattr(Delegations, "start", start)
     service, sid, _, settings, _ = mode
-    import_fixture_authority(service.controller.registry_path, "research")
     apply(mode, "start", settings=settings)
     adapter = type("A", (), {})()
     adapter.session = type("S", (), {})()

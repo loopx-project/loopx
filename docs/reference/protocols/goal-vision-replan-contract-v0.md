@@ -279,10 +279,16 @@ readable but create no work links; the literal prefix `action:` is not supported
 不创建、认领或授权任务。历史描述文本仍可读取，但不会形成工作关联；
 `action:` 不是可用动作前缀。
 
-With `evidence_conditioned_v1` enabled, when the captured history contains a prior
-accepted evidence-linked Vision path,
+When the captured history contains a prior accepted evidence-linked Vision path,
 `replan_context.decision_followthrough` returns that path with the later recorded
-progress references. It uses the existing Goal/Agent/Turn binding and immutable
+progress references. This read-only history projection also applies with stride
+`off`; it does not activate the stride strategy or its Explore basis.
+
+当历史中存在已接受且关联证据的 Vision 路径时，`decision_followthrough` 回读该路径
+及其后续进展。stride 为 `off` 时也保留这一只读历史投影，不会启用 stride 策略或
+其 Explore 上下文。
+
+The projection uses the existing Goal/Agent/Turn binding and immutable
 history source order; timestamps do not decide causality. The full local index
 supplies append positions. Compact newest-first carriers and the named
 `newest_first_runs` builder reverse those positions without reordering ordinary

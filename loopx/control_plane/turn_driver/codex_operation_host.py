@@ -16,234 +16,22 @@ from pathlib import Path
 from typing import Any
 
 from ...chat_agent import CodexChatAgentError, CodexChatAgentSession
-from ...chat_action_store import ChatActionStore
-from ...chat_actions import ChatActionService
-from ..collaboration.goal_instance_scope import collaboration_goal_scope
-from ..collaboration.operation_handoff import (
-    agent_operation_action,
-    pending_operation_handoffs,
-)
+from ...extensions.codex_native_child import native_child_observer
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
-from ..effect_runtime import EffectRuntimeRejected
+from . import managed_operation_host as operations
 from .codex_cli import (
     _prompt,
     normalize_codex_stdio_mcp_server,
     codex_cli_result_schema,
 )
-from .codex_sessions import (
-    _lineage,
-    _read_codex_cli_session_document,
-    _codex_session_goal_ref,
-    _store_codex_cli_session,
-    load_codex_cli_session,
-)
-from ...extensions.codex_native_child import native_child_observer
+from .codex_sessions import _lineage, select_managed_operation_session
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
 from .operation_requests import (
-    BoundOperationRequest, operation_request_source, request_reference_instruction,
+    operation_request_source, request_reference_instruction,
 )
 
 TRANSPORT = "app-server-operation-tools-v0"
-REVISION = "managed-turn-handoff-v0"
-OPERATION_TOOL = {
-    "name": "loopx_operation",
-    "description": "Read/prepare a scoped operation, consume exact human approval once, or report original evidence. Identity comes from this native connection, never arguments. A receipt is not permission to retry an effect.",
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": [
-                    "context",
-                    "pending",
-                    "prepare",
-                    "inspect",
-                    "consume",
-                    "report",
-                ],
-            },
-            "proposal_id": {"type": "string"},
-            "consumption_id": {"type": "string"},
-            "request": {"type": "object"},
-            "outcome": {"type": "object"},
-            "cursor": {"type": "string"},
-        },
-        "required": ["action"],
-        "additionalProperties": False,
-    },
-}
-
-
-def operation_tool_handler(
-    *,
-    runtime_root: Path,
-    registry_path: Path,
-    lineage: Mapping[str, str],
-    session_id: str,
-    profile_digest: str,
-    model: str,
-    reasoning_effort: str,
-    source_route: Mapping[str, str] | None = None,
-    goal_admission: FirstPartyHostGoalAdmission | None = None,
-    host: str = "codex-cli",
-    frozen_request: BoundOperationRequest | None = None,
-):
-    """Private closure installed only on a process owned by the Turn driver.
-
-    The caller must already have checked native thread/Turn metadata. This is
-    not an MCP endpoint or a public actor/proof deserializer.
-    """
-    if host not in {"codex-cli", "dsh"}:
-        raise ValueError("unsupported owned operation host")
-    surface = "loopx-managed-dsh" if host == "dsh" else "loopx-managed-codex"
-    executor = {
-        "kind": "managed_turn",
-        "todo_id": lineage["todo_id"],
-        "session_id": session_id,
-        "profile_digest": profile_digest,
-        "revision": REVISION,
-        "model": model,
-        "reasoning_effort": reasoning_effort,
-        **({"host": "dsh"} if host == "dsh" else {}),
-    }
-    executor_route = {
-        **lineage,
-        "host_surface": surface,
-        "thread_id": session_id,
-        "profile_digest": profile_digest,
-    }
-
-    def handle(tool: str, arguments: Any, native: dict[str, Any]) -> dict[str, Any]:
-        if tool != "loopx_operation" or not isinstance(arguments, dict):
-            return {"ok": False, "error": "unsupported_operation_tool"}
-        if native.get("thread_id") != session_id or not native.get("host_turn_id"):
-            return {"ok": False, "error": "tool_turn_mismatch"}
-        allowed = {
-            "context": {"action"},
-            "pending": {"action"},
-            "prepare": {"action", "request"},
-            "inspect": {"action", "proposal_id"},
-            "consume": {"action", "proposal_id", "consumption_id"},
-            "report": {"action", "proposal_id", "outcome"},
-        }
-        action = arguments.get("action")
-        keys = set(arguments) - ({"cursor"} if action == "pending" else set())
-        if (
-            not isinstance(action, str)
-            or action not in allowed
-            or keys != allowed[action]
-        ):
-            return {"ok": False, "error": "invalid_operation_arguments"}
-        try:
-            if goal_admission is not None:
-                goal_admission.require_current()
-            if action == "context":
-                return {
-                    "ok": True,
-                    **lineage,
-                    "executor": executor,
-                    "authority": "approval_and_first_consumption_required",
-                    "external_write_performed": False,
-                    **({"prepared_request": {"ref": frozen_request.ref}}
-                       if frozen_request is not None else {}),
-                }
-            if action == "pending":
-                with collaboration_goal_scope(
-                    registry_path,
-                    goal_id=lineage["goal_id"],
-                    agents=(lineage["agent_id"],),
-                ) as scope:
-                    cursor_scope = hashlib.sha256(
-                        json.dumps(
-                            ["managed-operation-v0", str(runtime_root.resolve()),
-                             scope.target(lineage["agent_id"]), executor],
-                            sort_keys=True, separators=(",", ":"),
-                        ).encode()
-                    ).hexdigest()
-                    return {
-                        "ok": True,
-                        **pending_operation_handoffs(
-                            runtime_root,
-                            lineage["goal_id"],
-                            lineage["agent_id"],
-                            registry_path=registry_path,
-                            scope=scope,
-                            cursor=arguments.get("cursor"),
-                            cursor_scope=cursor_scope,
-                            executor_route=executor_route,
-                        ),
-                    }
-            if action == "prepare":
-                request = (frozen_request.resolve(arguments["request"])
-                           if frozen_request is not None else dict(arguments["request"]))
-                terms = dict(request.get("normalized_parameters") or {})
-                if "source_route" in terms and terms["source_route"] != source_route:
-                    raise ValueError("the model cannot retarget the host-selected return audience")
-                if source_route is not None:
-                    terms["source_route"] = dict(source_route)
-                for key, expected in {
-                    "goal_id": lineage["goal_id"],
-                    "agent_id": lineage["agent_id"],
-                    "executor": executor,
-                }.items():
-                    if key in terms and terms[key] != expected:
-                        raise ValueError(
-                            "operation request cannot select another execution subject"
-                        )
-                    terms[key] = expected
-                if request.get("action_kind") != "operation.execute":
-                    raise ValueError("operation tool prepares only typed operations")
-                request["normalized_parameters"] = terms
-                service = ChatActionService(
-                    store=ChatActionStore(runtime_root / "chat" / "actions"),
-                    registry_path=registry_path,
-                )
-                return {
-                    "ok": True,
-                    "proposal": service.preview(request),
-                    "execution_allowed": False,
-                }
-            actor = {
-                **lineage,
-                "host_surface": surface,
-                "thread_id": session_id,
-                "profile_digest": profile_digest,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
-                "host_turn_id": native["host_turn_id"],
-            }
-            return {
-                "ok": True,
-                **agent_operation_action(
-                    runtime_root,
-                    registry_path,
-                    proposal_id=arguments["proposal_id"],
-                    actor=actor,
-                    action=action,
-                    consumption_id=arguments.get("consumption_id"),
-                    outcome=arguments.get("outcome"),
-                ),
-            }
-        except EffectRuntimeRejected as exc:
-            if exc.diagnostic_code == "operation_source_route_ambiguous":
-                return {"ok": False, "error": "operation_source_route_ambiguous",
-                        "execution_allowed": False,
-                        "next_action": (
-                            "Select a registered return audience in the owned DSH host source_route; source routing is not executor authority."
-                            if host == "dsh" else
-                            "Select a registered return audience with --codex-operation-source-route-json in the host invocation; source routing is not executor authority."
-                        )}
-            return {"ok": False, "error": "operation_admission_rejected", "execution_allowed": False}
-        except (ValueError, KeyError, TypeError, RuntimeError):
-            # Private payloads, paths and adapter error text never enter the model tool error.
-            return {
-                "ok": False,
-                "error": "operation_admission_rejected",
-                "execution_allowed": False,
-            }
-
-    return handle
 
 
 def run_codex_operation_host(
@@ -303,55 +91,18 @@ def run_codex_operation_host(
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    binding = load_codex_cli_session(runtime_root, lineage=lineage)
-    if goal_admission is not None:
-        selected = goal_admission.select_state(
-            read_state=lambda: _read_codex_cli_session_document(
-                runtime_root, lineage=lineage
-            ),
-            goal_ref_of=lambda value: _codex_session_goal_ref(value, lineage=lineage),
-        )
-        binding = dict(selected) if selected is not None else None
-    session_plan = request.get("session") or {}
-    if (session_plan.get("context_policy") or {}).get("mode") == "fresh":
-        binding = None
-    action = session_plan.get("action")
-    if (
-        action not in {"start_new", "resume"}
-        or (action == "resume" and not binding)
-        or (action == "start_new" and binding)
-    ):
-        raise ValueError("managed Codex session changed after Turn planning")
-    if binding and (
-        binding.get("operation_transport") != TRANSPORT
-        or binding.get("operation_profile_digest") != profile_digest
-    ):
-        raise ValueError(
-            "managed operation profile changed; explicitly select a fresh iteration and obtain fresh approval"
-        )
-    if confirmed_operation_id is not None:
-        # Final admission recheck before native resume. A queued delegation must
-        # not create/rebind a Session if approval, Todo, profile or lifetime
-        # changed after the callback. This grants no tool/effect authority.
-        from ..collaboration.operation_handoff import managed_operation_binding_current
-        from ..collaboration.operation_wake import require_current_operation_scope
-
-        store = ChatActionStore(runtime_root / "chat" / "actions")
-        proposal = store.load(confirmed_operation_id)
-        if proposal is None or binding is None or action != "resume":
-            raise ValueError("confirmed operation requires its original resumable session")
-        require_current_operation_scope(registry_path, proposal["normalized_parameters"])
-        store._agent_operation_plan(
-            proposal, action="wake",
-            binding_current=managed_operation_binding_current(
-                runtime_root, proposal["normalized_parameters"]
-            ),
-            launch_context={"host": "codex-cli", "operation_tools": True,
-                            "iteration_context": (session_plan.get("context_policy") or {}).get("mode")},
-            executor_route={**lineage, "host_surface": "loopx-managed-codex",
-                            "thread_id": binding["session_id"], "profile_digest": profile_digest,
-                            "model": model, "reasoning_effort": reasoning_effort},
-        )
+    selection = select_managed_operation_session(
+        runtime_root, request=request, lineage=lineage, host="codex-cli",
+        transport=TRANSPORT, profile_digest=profile_digest, model=model,
+        reasoning_effort=reasoning_effort, goal_admission=goal_admission,
+    )
+    binding = selection.binding
+    operations.require_confirmed_operation_resume(
+        runtime_root=runtime_root, registry_path=registry_path, request=request,
+        lineage=lineage, binding=binding, host="codex-cli", profile_digest=profile_digest,
+        model=model, reasoning_effort=reasoning_effort,
+        confirmed_operation_id=confirmed_operation_id,
+    )
     host_config = (
         {
             "mcp_servers": {
@@ -382,7 +133,7 @@ def run_codex_operation_host(
             model=model,
             reasoning_effort=reasoning_effort,
             resume_thread_id=binding["session_id"] if binding else None,
-            dynamic_tools=[OPERATION_TOOL],
+            dynamic_tools=[operations.OPERATION_TOOL],
             host_config=host_config,
             launch_guard=lambda: launch_scope("codex_operation_process_launch"),
             response_timeout_sec=30 if timeout_seconds is None else min(timeout_seconds, 30),
@@ -390,22 +141,8 @@ def run_codex_operation_host(
             idle_timeout_sec=180 if timeout_seconds is None else min(timeout_seconds, 180),
         )
 
-        def store_binding():
-            _store_codex_cli_session(
-                runtime_root,
-                lineage=lineage,
-                session_id=session.thread_id,
-                goal_ref=request.get("goal_ref"),
-                operation_profile_digest=profile_digest,
-                operation_model=model,
-                operation_reasoning_effort=reasoning_effort,
-            )
-
-        if goal_admission is None:
-            store_binding()
-        else:
-            goal_admission.accept_result(store_binding)
-        session.bound_tool_handler = operation_tool_handler(
+        selection.store(session.thread_id)
+        session.bound_tool_handler = operations.operation_tool_handler(
             runtime_root=runtime_root,
             registry_path=registry_path,
             lineage=lineage,
@@ -419,46 +156,32 @@ def run_codex_operation_host(
                 session_id=session.thread_id, profile_digest=profile_digest)
                 if request_source is not None else None),
         )
-        route = {**lineage, "host_surface": "loopx-managed-codex",
-                 "thread_id": session.thread_id, "profile_digest": profile_digest}
-        continuations = []
-        if (runtime_root / "chat" / "actions" / "actions.json").is_file():
-            with collaboration_goal_scope(
-                registry_path, goal_id=lineage["goal_id"], agents=(lineage["agent_id"],),
-                caller_goal_ref=request.get("goal_ref"), require_active=True,
-            ) as scope:
-                pending = pending_operation_handoffs(
-                    runtime_root, lineage["goal_id"], lineage["agent_id"],
-                    registry_path=registry_path, scope=scope, executor_route=route,
-                    cursor_scope=hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest(),
-                )
-            # Bounded canonical locators only. Private terms still require the
-            # existing authenticated inspect tool; these locators grant nothing.
-            continuations = [
-                {key: item[key] for key in ("operation_id", "payload_digest", "confirmation_digest", "claim_id")}
-                for item in pending["items"] if item["status"] == "authorized_pending"
-            ]
+        route = operations.operation_executor_route(
+            lineage, host="codex-cli", session_id=session.thread_id, profile_digest=profile_digest,
+        )
+        continuations = (
+            operations.operation_continuations(
+                runtime_root=runtime_root, registry_path=registry_path, lineage=lineage,
+                route=route, goal_ref=request.get("goal_ref"),
+            ) if (runtime_root / "chat" / "actions" / "actions.json").is_file() else []
+        )
 
         def on_event(kind: str, event: dict[str, Any]) -> None:
             if kind != "turn.started":
                 return
-            # send emits this only after the native turn/start response. A
-            # launched process, callback ACK or model assertion cannot issue it.
-            for locator in continuations:
-                try:
-                    agent_operation_action(
-                        runtime_root, registry_path, proposal_id=locator["operation_id"],
-                        actor={**route, "model": model, "reasoning_effort": reasoning_effort,
-                               "host_turn_id": event.get("upstream_turn_id")},
-                        action="observe_host_start", turn_key=request["turn_key"],
-                    )
-                except (ValueError, KeyError, TypeError, RuntimeError) as exc:
-                    # Stop before dispatching operation tools if confirmation,
-                    # Goal or binding changed while native start was in flight.
-                    raise BuiltInHostError(
-                        "codex_operation_host_start_unrecorded", failure_kind="unknown",
-                        recovery_kind="resume_session",
-                    ) from exc
+            # Only the authenticated native turn/start response reaches here.
+            try:
+                operations.record_operation_start(
+                    runtime_root=runtime_root, registry_path=registry_path,
+                    continuations=continuations, route=route, model=model,
+                    reasoning_effort=reasoning_effort,
+                    host_turn_id=event.get("upstream_turn_id"), turn_key=request["turn_key"],
+                )
+            except (ValueError, KeyError, TypeError, RuntimeError) as exc:
+                raise BuiltInHostError(
+                    "codex_operation_host_start_unrecorded", failure_kind="unknown",
+                    recovery_kind="resume_session",
+                ) from exc
 
         child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
             registry_path=goal_admission.registry_path if goal_admission is not None else None)
@@ -493,7 +216,7 @@ def run_codex_operation_host(
             output_schema=codex_cli_result_schema(request),
             on_event=on_event,
             turn_start_guard=lambda: launch_scope("codex_operation_turn_start"),
-            **({"on_native_item": observe_child} if child_observer is not None else {}),
+            on_native_item=observe_child if child_observer is not None else None,
         )
         return result
     except CodexChatAgentError as exc:

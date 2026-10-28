@@ -128,11 +128,12 @@ def test_real_quota_output_is_held_across_native_fork(tmp_path):
     from benchmark.runtime.checkpoint import held_quota_decision
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TURN_ID, _write_fixture, _configure_autonomous_replan_fixture,
-        _heartbeat_receipt_count,
+        _heartbeat_receipt_count, _initialize_fixture_authority,
     )
 
     project, runtime, registry = _write_fixture(tmp_path / "authority")
     _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime)
     capture_root = project / "captures"
     capture_root.mkdir(mode=0o700)
     requests = []
@@ -220,11 +221,12 @@ def test_native_cli_interruption_retains_guard_beyond_tool_yield(tmp_path, outco
     from benchmark.runtime.checkpoint import held_quota_decision
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TURN_ID, _write_fixture, _configure_autonomous_replan_fixture,
-        _heartbeat_receipt_count,
+        _heartbeat_receipt_count, _initialize_fixture_authority,
     )
 
     project, runtime, registry = _write_fixture(tmp_path / "authority")
     _configure_autonomous_replan_fixture(project, runtime, registry)
+    _initialize_fixture_authority(project, runtime)
     capture_root = project / "captures"
     capture_root.mkdir(mode=0o700)
     requests = []
@@ -380,8 +382,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     from pathlib import Path
     from benchmark.runtime.worker import run_once
     from tests.control_plane import test_quota_settlement_cli as cli
-    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
-    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
     project, runtime, registry = cli._write_fixture(tmp_path / "authority")
     document = json.loads(registry.read_text())
@@ -408,11 +409,10 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
         assert code == 0, json.dumps(result, indent=2)
         return result
 
-    listed = run("todo", "list", "--goal-id", cli.GOAL_ID)
-    initialize_canonical_authority(runtime, cli.GOAL_ID,
-        build_todo_runtime_shadow_projection(goal_id=cli.GOAL_ID, todos=listed["todos"],
-                                            handoff_mode="hard_lease", leases=[]),
-        state_path=state_path, provider="sqlite")
+    initialize_canonical_source_fixture(
+        runtime, cli.GOAL_ID, state_path=state_path,
+        provider="sqlite", handoff_mode="hard_lease",
+    )
     run("task-lease", "acquire", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--owner", cli.AGENT_ID, "--idempotency-key", "source-work")
     configured = run("configure-goal", "--goal-id", cli.GOAL_ID,

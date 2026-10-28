@@ -71,6 +71,15 @@ def allow(f):
     return f["service"].configure(f["session"]["session_id"], f["grant"])
 
 
+def requester_agenda(f, agent="builder"):
+    from loopx.capabilities.manager_context import turn_start_hook
+    from loopx.control_plane.capability_hooks import dispatch_turn_start_hooks
+
+    observed = dispatch_turn_start_hooks([turn_start_hook(f["root"], f["registry"], "delivery", agent)])
+    assert observed["failures"] == []
+    return observed["contexts"][0]["content"]["unfinished_delegations"]
+
+
 def test_original_project_has_explicit_grant_and_returns_through_requester_inbox(project_peer):
     f = project_peer
     sid = f["session"]["session_id"]
@@ -88,11 +97,23 @@ def test_original_project_has_explicit_grant_and_returns_through_requester_inbox
     assert saved["goal_id"] is None and saved["upstream_thread_id"] == f["session"]["upstream_thread_id"]
     peer_messages = [row for row in f["store"].messages(sid) if row.get("origin") == "peer"]
     assert [row["text"] for row in peer_messages] == [f["body"]["brief"]["purpose"]]
+    from loopx.control_plane.collaboration.inbox import _root
+    before = {path: path.read_bytes() for path in _root(f["root"]).rglob("*.json")}
+    agenda = requester_agenda(f)
+    assert {path: path.read_bytes() for path in _root(f["root"]).rglob("*.json")} == before
+    assert agenda["scan_complete"] and agenda["unavailable_count"] == 0
+    outgoing = next(row for row in agenda["items"] if row["request_id"] == first["request_id"])
+    assert outgoing["direction"] == "outgoing" and outgoing["step"] == "consume_peer_result"
+    assert outgoing["recipient"] == f["body"]["recipient"] and "agent_id" not in outgoing
+    assert first["request_id"] not in {row["request_id"] for row in requester_agenda(f, "reviewer")["items"]}
+    assert "Verified original project result." not in json.dumps(agenda)
     result = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])
     assert result["peer_returns"]["items"][0]["text"] == "Verified original project result."
     assert result["peer_returns"]["items"][0]["decision"] == "adopt"
+    assert next(row for row in requester_agenda(f)["items"] if row["request_id"] == first["request_id"])["step"] == "consume_peer_result"
     assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"], caller_goal_ref=f["ref"])["consumed"]
     assert "peer_returns" not in read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])
+    assert requester_agenda(f)["outgoing_count"] == 0
     again = f["service"].publish(f["body"])
     assert again["turn_id"] == first["turn_id"] and again["replayed"]
     packets = [json.loads(line) for line in f["capture"].read_text().splitlines()]
@@ -102,6 +123,33 @@ def test_original_project_has_explicit_grant_and_returns_through_requester_inbox
     assert supplied["brief"] == f["body"]["brief"]
     assert not any(p.get("method", "").startswith("thread/goal") for p in packets)
     assert not any("dynamicTools" in p.get("params", {}) for p in packets)
+
+
+@pytest.mark.parametrize("changed_record", ["operation", "entry"])
+def test_outgoing_agenda_refuses_a_changed_original_requester(project_peer, monkeypatch, changed_record):
+    from loopx.control_plane.collaboration.inbox import _root
+    from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
+
+    f = project_peer
+    allow(f)
+    monkeypatch.setattr(f["runtime"], "resume_session_queue", lambda **_: None)
+    published = f["service"].publish(f["body"])
+    folder = _root(f["root"]) / ("peer-operations" if changed_record == "operation" else "entries")
+    paths = [path for path in folder.glob("*/*.json")
+        if json.loads(path.read_text()).get("request_id") == published["request_id"]]
+    assert len(paths) == 1
+    path = paths[0]
+    saved = json.loads(path.read_text())
+    saved["requester"] = {**saved["requester"], "goal_ref": {**f["ref"], "goal_instance_id": "ginst_" + "b" * 32}}
+    path.write_text(json.dumps(saved))
+    before = {path: path.read_bytes() for path in _root(f["root"]).rglob("*.json")}
+    agenda = read_delegation_turn_context(f["root"], f["registry"], "delivery", "builder")["unfinished_delegations"]
+    assert not agenda["scan_complete"] and agenda["unavailable_count"] == 1
+    assert published["request_id"] not in {row["request_id"] for row in agenda["items"]}
+    with pytest.raises(ValueError, match="scope mismatch"):
+        read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])
+    assert {path: path.read_bytes() for path in _root(f["root"]).rglob("*.json")} == before
+    assert not any(json.loads(line).get("method") == "turn/start" for line in f["capture"].read_text().splitlines())
 
 
 def test_queue_recovery_and_concurrent_retry_preserve_fifo_and_original_session(project_peer, monkeypatch):
@@ -123,6 +171,10 @@ def test_queue_recovery_and_concurrent_retry_preserve_fifo_and_original_session(
     queued = f["store"].queued_turns(sid)
     assert [row["turn_id"] for row in queued] == [human["turn_id"], results[0]["turn_id"]]
     assert [row["origin"] for row in queued] == ["web", "peer"]
+    agenda = requester_agenda(f)
+    assert agenda["scan_complete"] and agenda["unavailable_count"] == 0
+    outgoing = next(row for row in agenda["items"] if row["request_id"] == results[0]["request_id"])
+    assert outgoing["step"] == "await_peer_result" and outgoing["recipient"] == f["body"]["recipient"]
     for change in [{"brief": _brief("Changed payload")}, {"operation_id": "project-consultation", "parent_request_id": "b" * 64}]:
         with pytest.raises((ValueError, FileNotFoundError)):
             service.publish({**f["body"], **change})
@@ -217,6 +269,7 @@ def test_completed_request_correction_survives_queue_loss_restart_and_retry(proj
     assert original["status"] == "completed"
     assert read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"][0]["request_revision"] == 1
     assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"], caller_goal_ref=f["ref"])["consumed"]
+    assert requester_agenda(f)["outgoing_count"] == 0
     retained = {path: path.read_bytes() for path in result_paths(_root(f["root"]) / "replies" / first["request_id"])}
     view = f["service"]._view(f["service"]._entry(first["request_id"], f["body"]["recipient"]))
     control = {"requester": f["body"]["requester"], "recipient": f["body"]["recipient"],
@@ -239,6 +292,11 @@ def test_completed_request_correction_survives_queue_loss_restart_and_retry(proj
     assert current["queue_status"] == "queued"
     assert current["request_control_view"]["assessment"] is None
     assert [reply["request_revision"] for reply in current["returns"]] == [1]
+    agenda = requester_agenda(f)
+    assert agenda["scan_complete"] and agenda["unavailable_count"] == 0
+    corrected = next(row for row in agenda["items"] if row["request_id"] == first["request_id"])
+    assert corrected["request_revision"] == 2 and corrected["step"] == "await_peer_result"
+    assert corrected["purpose"] == "Verify corrected project evidence"
     f["runtime"].close()
     restarted = ChatRuntimeController(store=f["store"], codex_bin=str(f["fake"]), project_contexts=f["runtime"].project_contexts,
         registry_path=f["registry"])
@@ -261,6 +319,10 @@ def test_completed_request_correction_survives_queue_loss_restart_and_retry(proj
         returned = read_inbox(f["root"], f["registry"], "delivery", "builder", caller_goal_ref=f["ref"])["peer_returns"]["items"]
         assert [reply["request_revision"] for reply in returned] == [2]
         assert returned[0]["decision"] == "adopt"
+        assert next(row for row in requester_agenda(f)["items"] if row["request_id"] == first["request_id"])["step"] == "consume_peer_result"
+        assert consume_return(f["root"], "delivery", "builder", first["request_id"], registry=f["registry"],
+            caller_goal_ref=f["ref"], result_key=returned[0].get("result_key", "conclusion"))["consumed"]
+        assert requester_agenda(f)["outgoing_count"] == 0
         service.control(control)
         service.publish(f["body"])
         packets = [json.loads(line) for line in f["capture"].read_text().splitlines()]
@@ -396,10 +458,14 @@ def test_original_return_route_is_checked_before_model_input_and_requester_read(
     path = _root(f["root"]) / "roundtrips" / (first["request_id"] + ".json")
     original = _read(path)
     _write(path, {**original, "source_id": "peer:another-source"})
+    agenda = requester_agenda(f)
+    assert not agenda["scan_complete"] and agenda["unavailable_count"] == 1
+    assert first["request_id"] not in {row["request_id"] for row in agenda["items"]}
     with pytest.raises(ValueError, match="return route identity"):
         f["service"].validate_turn(sid, turn)
     assert not any(json.loads(line).get("method") == "turn/start" for line in f["capture"].read_text().splitlines())
     _write(path, original)
+    assert requester_agenda(f)["scan_complete"]
     f["service"].validate_turn(sid, turn)
     monkeypatch.setattr(f["runtime"], "resume_session_queue", original_resume)
     f["service"].publish(f["body"])

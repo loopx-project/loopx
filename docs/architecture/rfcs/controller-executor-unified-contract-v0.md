@@ -735,8 +735,19 @@ Implementation PRs must name the replaced caller, remaining gap, actual tests
 and rollback. No full language migration or unrelated manager rewrite is a
 prerequisite. No task is complete merely because a new abstraction compiles.
 
-For C1, the first implementation slice pairs the complete field/clause migration
-with a real single-session producer and consumer replacement. Start at the
+C1 is one acceptance target, not one mandatory PR. Independently useful
+prerequisites may land first when existing callers adopt the shared owner, their
+entrypoint contracts are qualified, and rollback is local. For example, move
+exact context-reference composition and recovery into the existing TypeScript
+owner while the current quota and Turn entries keep their schemas. Name the
+remaining cutover consumer; do not add unused infrastructure or a second ledger.
+Separate shared-owner prerequisites, producer/capture cutover, reader recovery
+and retirement, and adoption/full-cost qualification where each boundary is
+independently reviewable. Record dependencies in the existing tasks and PRs.
+Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+The first **cutover** slice pairs the complete field/clause migration with a
+real single-session producer and consumer replacement. Start at the
 shared quota emission boundary and trace both attached heartbeat delivery and
 the Turn adapter; retain their actual host ownership. Do not build an unused
 third serializer while both active writers keep their own semantics. Existing

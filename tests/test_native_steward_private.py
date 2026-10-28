@@ -74,6 +74,82 @@ def finish(runtime, row):
     return runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
 
 
+@pytest.mark.parametrize("change", ["status", "correction", "revoked", "source-changed", "unknown", "unchanged", "route-busy"])
+def test_recovery_source_read_does_not_block_new_input_or_reuse_waited_observations(steward, monkeypatch, change):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "contextWindowExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    event = provider.event("steward-app", "source-read-recovery", "typed terminal failure")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = finish(runtime, row)
+    store.update_session(row["session_id"], manager_context_version=20)
+    assert transport.reconcile() == 1
+    original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    before = capture.read_bytes()
+    record = json.loads((transport.root / f"{ref}.json").read_text())
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **_: None
+        if change == "unknown" else {"thread_id": "durable-thread", "turn_id": failed["upstream_turn_id"],
+            "only_original_user_item": True, "codex_error_info": "contextWindowExceeded"}))
+    started, release = threading.Event(), threading.Event()
+
+    def source_read(selected):
+        started.set()
+        assert release.wait(10)
+        return transport._recovery_source_observation(record, selected)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        recovery = pool.submit(transport.core.recover_failed_request, ref, source_observation=source_read)
+        responsive = True
+        try:
+            assert started.wait(5)
+            if change == "status":
+                peer = pool.submit(transport.admit, "steward-app", provider.event("steward-app", "fresh-status", "/status"))
+                try:
+                    assert peer.result(timeout=1)["status"] == "command_recorded"
+                except TimeoutError:
+                    responsive = False
+            elif change == "correction":
+                store.create_queued_turn(row["session_id"], client_turn_id="source-read-correction",
+                    message="Inspect this new correction first", origin="web")
+            elif change == "revoked":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+            elif change == "source-changed":
+                provider.messages[event["message_id"]]["content"] = "Revised original request"
+            elif change == "route-busy":
+                fence = transport.core.root / "source-fences" / f"{row['binding_id']}.{row['source']['source_ref']}.json"
+                with exclusive_file_lock(fence, operation="other_original_input"):
+                    release.set()
+                    assert recovery.result(timeout=1)["turn_id"] == row["turn_id"]
+        finally:
+            release.set()
+        if change == "revoked":
+            with pytest.raises(ValueError, match="binding|authorized"):
+                recovery.result(timeout=10)
+        else:
+            continued = recovery.result(timeout=10)
+            assert (continued["turn_id"] != row["turn_id"]) is (change == "unchanged")
+        assert responsive, "A provider source read must leave new original input admissible"
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+    if change != "unchanged":
+        assert capture.read_bytes() == before, "Changed, unknown or busy state cannot start model work"
+    if change == "route-busy":
+        # The existing worker's next visit gets fresh source proof. No new
+        # scheduler or retry queue is needed, and no old observation is reused.
+        continued = transport.core.recover_failed_request(ref,
+            source_observation=lambda selected: transport._recovery_source_observation(record, selected))
+        assert continued["turn_id"] != row["turn_id"]
+        finish(runtime, continued)
+
+
 @pytest.mark.parametrize("case", ["enabled", "disabled", "missing", "authority-unavailable"])
 def test_recovery_discovery_never_observes_provider_but_admission_still_does(steward, monkeypatch, case):
     store, runtime, provider, transport, binding, capture, _ = steward

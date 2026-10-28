@@ -6,11 +6,14 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .chat_manager_details import _text
 from .control_plane.runtime.run_context_retention import goal_semantic_history_from_runs
 from .control_plane.work_items.delivery_outcome import MATERIAL_DELIVERY_OUTCOMES, PROGRESS_DELIVERY_OUTCOMES
 from .history import STATUS_NEUTRAL_CLASSIFICATIONS, load_index_snapshot
+from .public_safe_text import PUBLIC_SAFE_REFERENCE_PATTERN, find_private_text_match
+from .control_plane.runtime.public_safety import validate_public_safe_value
 
 
 def delivery_history_window(window_start=None, window_end=None):
@@ -66,6 +69,26 @@ def _recorded_details(run, *, complete=False):
         "sha256:" + hashlib.sha256(item.encode()).hexdigest()
         for item in (evidence if complete else evidence[:8])
     ] if valid_evidence else []
+    # Exact reads already belong to the original scoped reader. Preserve the
+    # recorded provenance too; a digest cannot be reversed into a citation.
+    # Shape/disclosure checks are not public-access or publication permission.
+    recorded_refs = delta.get("evidence_refs")
+    citations = []
+    if complete and isinstance(recorded_refs, list):
+        for reference in recorded_refs:
+            if (not isinstance(reference, str) or not PUBLIC_SAFE_REFERENCE_PATTERN.fullmatch(reference)
+                    or find_private_text_match(reference)):
+                continue
+            try:
+                validate_public_safe_value(reference)
+                address = urlsplit(reference)
+                if address.scheme not in {"http", "https"} or not address.hostname:
+                    continue
+                address.port
+            except ValueError:
+                continue
+            citations.append({"source_ref": reference,
+                "evidence_ref": "sha256:" + hashlib.sha256(reference.encode()).hexdigest()})
     return {
         "source": "core_run_index",
         "verification": "recorded_claim_not_independent_verification",
@@ -83,6 +106,7 @@ def _recorded_details(run, *, complete=False):
             ],
         },
         "evidence_refs": refs,
+        **({"recorded_source_refs": citations} if complete else {}),
         "evidence_coverage": {
             "status": "read" if valid_evidence else "missing_or_invalid",
             "known": len(evidence) if valid_evidence else None,

@@ -49,9 +49,9 @@ def _start_args(**overrides: object) -> Namespace:
 def test_leading_fine_grained_switch_is_lossless_and_composes_with_route() -> None:
     assert _resolve_start_goal_input(
         _start_args(goal_text="Direct fine goal.", fine_grained=True)
-    ) == ("Direct fine goal.", None, True)
+    ) == ("Direct fine goal.", None, True, False)
 
-    goal_text, route, fine_grained = _resolve_start_goal_input(
+    goal_text, route, fine_grained, goal_loop = _resolve_start_goal_input(
         _start_args(
             slash_command_arguments=(
                 "--fine-grained --capability-route issue-fix "
@@ -60,6 +60,7 @@ def test_leading_fine_grained_switch_is_lossless_and_composes_with_route() -> No
         )
     )
 
+    assert goal_loop is False
     assert fine_grained is True
     assert route == "issue-fix"
     assert goal_text == "Investigate  two branches without recomposing this text."
@@ -71,7 +72,7 @@ def test_leading_fine_grained_switch_is_lossless_and_composes_with_route() -> No
             )
         )
     )
-    assert reverse == ("Keep exact goal text.", "issue-fix", True)
+    assert reverse == ("Keep exact goal text.", "issue-fix", True, False)
 
 
 def test_public_cli_accepts_direct_fine_start_and_bootstrap_flags(

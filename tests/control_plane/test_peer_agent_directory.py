@@ -506,6 +506,16 @@ def test_cli_agent_directory_continues_with_cursor(tmp_path) -> None:
         encoding="utf-8",
     )
 
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    state = tmp_path / "STATE.md"
+    state.write_text("# Goal\n\n## Agent Todo\n\n", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    config = json.loads(registry.read_text(encoding="utf-8"))
+    config["common_runtime_root"] = str(runtime)
+    config["goals"][0].update(repo=str(tmp_path), state_file=str(state))
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider="sqlite")
+
     def run(*extra: str) -> dict[str, object]:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):

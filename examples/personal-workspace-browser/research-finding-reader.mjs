@@ -117,7 +117,10 @@ export const researchFindingReaderScenario = {
         assert.equal(await group.locator("h4").innerText(), "合成研究：质量、延迟和未知成本应如何一起判断？");
         assert.match(await group.locator("header").innerText(), /20 条决策记录.*已反驳 3.*暂定结论 4/s);
         const decisions = group.locator(".research-trail-list button");
-        if (width === 1440) assert.equal(await decisions.count(), 3, "A question starts with three records, not repeated title cards");
+        // Returning from an older finding expands its question to that exact
+        // decision; research-history owns the default three-record view.
+        if (width === 1440) assert.ok(await decisions.evaluateAll(nodes => nodes.some(node => node === document.activeElement
+          && /比较 2：/.test(node.getAttribute("aria-label") ?? ""))), "Returning keeps the decision just read in view and focused");
         await group.scrollIntoViewIfNeeded();
         await page.screenshot({path: resolve(outputDir, `research-decision-groups-${width}.png`), animations: "disabled"});
         const older = decisions.nth(1);

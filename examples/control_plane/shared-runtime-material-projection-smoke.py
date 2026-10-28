@@ -81,6 +81,11 @@ def write_source(
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry.read_text())["goals"]:
+        import_fixture_authority(registry, record["id"], provider="sqlite")
+    goal = next(record for record in json.loads(registry.read_text())["goals"] if record["id"] == GOAL_ID)
     return project, registry, goal
 
 
@@ -112,7 +117,7 @@ def read_rows(runtime: Path) -> list[dict]:
     return [json.loads(line) for line in index.read_text(encoding="utf-8").splitlines()]
 
 
-def run_cli(registry: Path, runtime: Path, *args: str) -> dict:
+def run_cli(registry: Path, runtime: Path, *args: str, runtime_override: bool = True, expected_code: int = 0) -> dict:
     result = subprocess.run(
         [
             sys.executable,
@@ -122,8 +127,7 @@ def run_cli(registry: Path, runtime: Path, *args: str) -> dict:
             "json",
             "--registry",
             str(registry),
-            "--runtime-root",
-            str(runtime),
+            *(["--runtime-root", str(runtime)] if runtime_override else []),
             *args,
         ],
         cwd=REPO_ROOT,
@@ -132,7 +136,7 @@ def run_cli(registry: Path, runtime: Path, *args: str) -> dict:
         text=True,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "LOOPX_RUNTIME_ROOT": str(runtime)},
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == expected_code, result.stdout + result.stderr
     return json.loads(result.stdout)
 
 
@@ -218,7 +222,12 @@ def exercise_split_runtime(root: Path) -> None:
         assert mapped["shared_runtime_material_projection"]["status"] == "projected", mapped
         map_row = assert_public_projection(read_rows(shared_runtime), "read_only_project_map")
         assert isinstance(map_row.get("project_map"), dict), map_row
-        map_status = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID)
+        # A forced empty target runtime must refuse rather than borrow source
+        # authority. The ordinary global read below follows its declared route.
+        refused = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID, expected_code=1)
+        assert refused["error_code"] == "canonical_authority_required"
+        assert refused["authority_read"]["legacy_fallback_used"] is False
+        map_status = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID, runtime_override=False)
         assert map_status["run_history"]["goals"][0]["latest_status_run"][
             "classification"
         ] == "read_only_project_map"
@@ -227,7 +236,7 @@ def exercise_split_runtime(root: Path) -> None:
         assert gate["shared_runtime_material_projection"]["readback_verified"] is True, gate
         gate_row = assert_public_projection(read_rows(shared_runtime), "operator_gate_decision")
         assert gate_row["operator_gate"]["decision"] == "defer", gate_row
-        gate_status = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID)
+        gate_status = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID, runtime_override=False)
         latest_gate = gate_status["run_history"]["goals"][0]["latest_status_run"]
         assert latest_gate["classification"] == "operator_gate_deferred", latest_gate
         assert latest_gate["operator_gate"]["operator_question"], latest_gate
@@ -240,6 +249,7 @@ def exercise_split_runtime(root: Path) -> None:
             GOAL_ID,
             "--agent-id",
             AGENT_ID,
+            runtime_override=False,
         )
         assert gate_quota["state"] == "operator_gate", gate_quota
 
@@ -260,7 +270,7 @@ def exercise_split_runtime(root: Path) -> None:
         dream_row = assert_public_projection(read_rows(shared_runtime), "dreaming_decision")
         assert dream_row["dreaming_decision"]["decision"] == "defer", dream_row
         assert dream_row["source_dreaming_proposal"]["proposal_id"] == proposal_id, dream_row
-        dream_status = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID)
+        dream_status = run_cli(shared_registry, shared_runtime, "status", "--goal-id", GOAL_ID, runtime_override=False)
         assert dream_status["run_history"]["goals"][0]["latest_status_run"][
             "classification"
         ] == "dreaming_proposal_deferred"

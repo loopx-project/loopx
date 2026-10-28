@@ -50,14 +50,15 @@ def test_missing_cutover_marker_does_not_erase_an_unannotated_lease(service, mon
     assert inspect(runner)["lease"]["status"] == "released"
 
 
-def test_never_promoted_authority_needs_no_delegation_lease(service):
+def test_unpromoted_authority_cannot_prove_no_delegation_lease(service):
     from types import SimpleNamespace
 
     root, runner = service
     unused_runtime = root / "never-promoted"
     observer = SimpleNamespace(root=unused_runtime, goal_id=runner.goal_id)
     row = {"identity": {"binding": {"todo_id": "todo_analyst-initial"}}}
-    assert stop_lease.obligation(observer, row) is None
+    with pytest.raises(ValueError, match="canonical authority absence unproven"):
+        stop_lease.obligation(observer, row)
     assert not unused_runtime.exists(), "absence inspection must not create an authority"
 
 

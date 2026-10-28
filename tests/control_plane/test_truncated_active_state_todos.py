@@ -9,6 +9,9 @@ from loopx.contract import check_contract
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.status import active_state_todo_fields, collect_status
 from loopx.todos import list_goal_todos
+from loopx.control_plane.coordination.local_authority import LocalCoordinationAuthorityUnavailable, CanonicalAuthorityRequired
+from loopx.control_plane.todos.active_state_todo_parser import active_state_incomplete_warning
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 
 GOAL_ID = "goal-truncated-state"
@@ -66,51 +69,28 @@ def _fixture(tmp_path: Path, state_text: str) -> tuple[dict[str, object], Path, 
 def test_truncated_legacy_agent_todo_section_is_not_projected_as_empty(tmp_path: Path) -> None:
     healthy = _state_text(agent_heading="Agent Todo", agent_todo=True)
     wounded = healthy[: healthy.index("## Agent Todo")].rstrip() + "\n"
-    goal, runtime_root, registry_path, _state_path = _fixture(tmp_path, wounded)
-
-    listed = list_goal_todos(registry_path=registry_path, goal_id=GOAL_ID)
-    assert listed["ok"] is False
-    assert listed["error_code"] == "state_incomplete"
-    assert listed["todo_count"] == 0
-    assert listed["state_incomplete"]["kind"] == "state_incomplete"
-    assert listed["state_incomplete"]["roles"] == ["agent"]
-
-    fields = active_state_todo_fields(goal, runtime_root=runtime_root)
-    assert fields["state_incomplete"]["kind"] == "state_incomplete"
-    assert fields["state_incomplete"]["roles"] == ["agent"]
-
-    contract = check_contract(
-        registry_path=registry_path,
-        runtime_root_override=str(runtime_root),
-        scan_roots=[],
-        limit=5,
-        goal_id_filter=GOAL_ID,
-        include_public_boundary_scan=False,
-    )
+    goal, runtime_root, registry_path, state_path = _fixture(tmp_path, wounded)
+    original = state_path.read_bytes()
+    # Explicit source inspection still diagnoses the migration input. Ordinary
+    # readers must not use that input as a substitute for canonical authority.
+    source = active_state_incomplete_warning(wounded)
+    assert source["kind"] == "state_incomplete"
+    assert source["roles"] == ["agent"]
+    with pytest.raises(CanonicalAuthorityRequired) as error:
+        list_goal_todos(registry_path=registry_path, goal_id=GOAL_ID)
+    assert error.value.payload["write_admitted"] is False
+    assert error.value.payload["legacy_fallback_used"] is False
+    with pytest.raises(LocalCoordinationAuthorityUnavailable):
+        active_state_todo_fields(goal, runtime_root=runtime_root)
+    contract = check_contract(registry_path=registry_path, runtime_root_override=str(runtime_root),
+        scan_roots=[], limit=5, goal_id_filter=GOAL_ID, include_public_boundary_scan=False)
     assert contract["ok"] is False
-    assert any(
-        row["code"] == "state_incomplete"
-        and row["goal_id"] == GOAL_ID
-        for row in contract["error_diagnostics"]
-    )
-
-    status = collect_status(
-        registry_path=registry_path,
-        runtime_root_override=str(runtime_root),
-        limit=5,
-        goal_id=GOAL_ID,
-    )
-    assert status["ok"] is False
-    goal_attention = next(
-        item for item in status["attention_queue"]["items"] if item["goal_id"] == GOAL_ID
-    )
-    assert goal_attention["status"] == "state_incomplete"
-    assert goal_attention["waiting_on"] == "user_or_controller"
-    assert goal_attention["severity"] == "high"
-    assert goal_attention["state_incomplete"]["missing_sections"] == ["Agent Todo"]
-    assert goal_attention["project_asset"]["state_incomplete"]["roles"] == ["agent"]
-    assert "restore the missing Agent Todo section" in goal_attention["recommended_action"]
-    assert "first read-only adapter tick" not in goal_attention["recommended_action"]
+    assert any(row["code"] == "canonical_authority_required" and row["goal_id"] == GOAL_ID
+               for row in contract["error_diagnostics"])
+    with pytest.raises(LocalCoordinationAuthorityUnavailable):
+        collect_status(registry_path=registry_path, runtime_root_override=str(runtime_root),
+                       limit=5, goal_id=GOAL_ID)
+    assert state_path.read_bytes() == original
 
 
 @pytest.mark.parametrize("agent_heading", ["Agent Todo", "Codex Todo", "Project Agent Todo"])
@@ -122,6 +102,7 @@ def test_present_but_empty_agent_todo_section_remains_healthy(
         tmp_path,
         _state_text(agent_heading=agent_heading),
     )
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=_state_path)
 
     listed = list_goal_todos(registry_path=registry_path, goal_id=GOAL_ID)
     assert listed["ok"] is True
@@ -145,62 +126,25 @@ def test_present_but_empty_agent_todo_section_remains_healthy(
 def test_truncated_legacy_state_cli_paths_fail_closed(tmp_path: Path) -> None:
     healthy = _state_text(agent_heading="Agent Todo", agent_todo=True)
     wounded = healthy[: healthy.index("## Agent Todo")].rstrip() + "\n"
-    _goal, runtime_root, registry_path, _state_path = _fixture(tmp_path, wounded)
-
-    code, status = run_json_cli_result(
-        "status",
-        "--goal-id",
-        GOAL_ID,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-    )
-    assert code != 0
-    assert status["ok"] is False
-    assert any(
-        row["code"] == "state_incomplete" and row["goal_id"] == GOAL_ID
-        for row in status["contract"]["error_diagnostics"]
-    )
-    goal_attention = next(
-        item for item in status["attention_queue"]["items"] if item["goal_id"] == GOAL_ID
-    )
-    assert goal_attention["status"] == "state_incomplete"
-
-    code, listed = run_json_cli_result(
-        "todo",
-        "list",
-        "--goal-id",
-        GOAL_ID,
-        "--role",
-        "agent",
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-    )
-    assert code != 0
-    assert listed["ok"] is False
-    assert listed["error_code"] == "state_incomplete"
-    assert listed["todo_count"] == 0
-
+    _goal, runtime_root, registry_path, state_path = _fixture(tmp_path, wounded)
+    original = state_path.read_bytes()
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"] = {
-        "registered_agents": ["agent-a"],
-        "agent_model": "peer_v1",
+        "registered_agents": ["agent-a"], "agent_model": "peer_v1",
     }
     registry_path.write_text(json.dumps(registry), encoding="utf-8")
-
-    code, quota = run_json_cli_result(
-        "quota",
-        "should-run",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        "agent-a",
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-    )
-    assert code != 0
-    assert quota["should_run"] is False
-    assert quota["state"] == "blocked_health"
-    assert quota["status"] == "state_incomplete"
+    for arguments in [("status", "--goal-id", GOAL_ID),
+                      ("todo", "list", "--goal-id", GOAL_ID, "--role", "agent"),
+                      ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", "agent-a")]:
+        code, payload = run_json_cli_result(*arguments, registry_path=registry_path,
+                                           runtime_root=runtime_root)
+        assert code != 0 and payload["ok"] is False
+        assert payload["error_code"] == "canonical_authority_required", payload
+        proof = payload.get("authority_read", payload)
+        assert proof["write_admitted"] is False and proof["legacy_fallback_used"] is False
+        if arguments[0] == "quota":
+            assert payload["should_run"] is False and payload["state"] == "blocked_health"
+        assert state_path.read_bytes() == original
 
 
 def test_malformed_todo_region_is_a_contract_error_not_a_crash(tmp_path: Path) -> None:
@@ -221,7 +165,7 @@ def test_malformed_todo_region_is_a_contract_error_not_a_crash(tmp_path: Path) -
     )
     assert contract["ok"] is False
     assert any(
-        row["code"] == "active_state_read_failed"
+        row["code"] == "canonical_authority_required"
         and row["goal_id"] == GOAL_ID
         for row in contract["error_diagnostics"]
     )

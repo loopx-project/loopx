@@ -79,25 +79,29 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
     prompt_path = project / "received.txt"
     prompt = prompt_path.read_text()
     authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    # Capability context can be off or complete inline while the admitted Turn
+    # still needs its original evidence route and signed required reads.
+    assert authority["action_signature"] == envelope["action_signature"]
+    assert authority["required_reads"] == envelope["required_reads"]
+    detail = authority["detail_ref"]
+    assert detail == envelope["detail_ref"]
+    captured = detail["captured_decision"]
+    assert (captured["goal_id"], captured["agent_id"], captured["turn_instance_id"]) == (GOAL_ID, AGENT_ID, "host-context-turn")
+    read = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True).stdout
+    assert read == original
+    # Full decision JSON includes numeric values whose canonical wire is owned
+    # by TS (e.g. Python 1.0 and JSON.stringify's 1 differ).
+    assert build_turn_envelope(json.loads(read))["action_signature"]["source_decision_hash"] == authority["action_signature"]["source_decision_hash"]
     if context:
         # Independent source oracle after the actual subprocess boundary: two
         # agreeing reduced projections cannot prove delivery of the full source.
         assert authority["agent_context"] == envelope["agent_context"]
         if mode == "legacy_reference":
-            assert authority["action_signature"] == envelope["action_signature"]
-            detail = authority["detail_ref"]
-            assert detail == envelope["detail_ref"]
-            read = subprocess.run(shlex.split(detail["full_decision"]), capture_output=True, check=True).stdout
-            assert read == original
-            # Full decision JSON includes numeric values whose canonical wire
-            # is owned by TS (e.g. Python 1.0 and JSON.stringify's 1 differ).
-            assert build_turn_envelope(json.loads(read))["action_signature"]["source_decision_hash"] == authority["action_signature"]["source_decision_hash"]
             assert _canonical_hash(json.loads(read)["interaction_contract"]["agent_context"]) == authority["agent_context"]["content_hash"]
         else:
             assert envelope["agent_context"] == context
             assert "detail_ref" not in envelope["agent_context"]
             assert envelope["compaction"]["within_budget"] is False
-            assert "detail_ref" not in authority
         invalid = deepcopy(request)
         invalid["turn_envelope"]["agent_context"]["scope"]["agent_id"] = "wrong-agent"
         rejected = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
@@ -105,8 +109,14 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         assert prompt_path.read_text() == prompt  # Refusal precedes the provider seam.
     else:
         assert "agent_context" not in authority
-        assert "detail_ref" not in authority
-        assert "action_signature" not in authority
+    # Even with capability context off, dropping signed reads must be refused
+    # before the provider seam, without another admission or state mutation.
+    assert envelope["required_reads"]
+    invalid = deepcopy(request)
+    invalid["turn_envelope"]["required_reads"] = []
+    rejected = subprocess.run(command, input=json.dumps(invalid), text=True, capture_output=True, timeout=30)
+    assert rejected.returncode != 0 and "action signature" in rejected.stderr
+    assert prompt_path.read_text() == prompt
     assert (capture / "decision.json").read_bytes() == original
     assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == before
 

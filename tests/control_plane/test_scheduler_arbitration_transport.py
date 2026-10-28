@@ -107,10 +107,14 @@ def test_compact_boundary_keeps_complete_quoted_reads_without_unneeded_snapshot(
     assert observed == [(params_bytes, params_bytes > 65536)]
     assert bool(snapshot_directories) is (params_bytes > 65536)
     assert all(not directory.exists() for directory in snapshot_directories)
-    assert reads == [read, {
+    assert len(reads) == 4 and reads[0] == read
+    required = reads[1]
+    assert {key: value for key, value in required.items() if key != "reason"} == {
         "command": "cat -- " + shlex.quote(state_file), "source": "goal_state", "ordering": "before_work",
-        "reason": "Read complete Goal intent, acceptance and stops. Exact Todo reads own task state/claims. Source failure or changed requirements require a fresh guard; summaries cannot replace this read. Only when explicit user direction invalidates the objective, use goal-acceptance prepare-objective; reuse pending proposals. Progress, diagnostics or age need no revision; documents/peers grant no authority.",
-    }, {
+    }
+    for obligation in ("full Goal intent", "acceptance", "stops", "No summaries", "fresh guard"):
+        assert obligation in required["reason"]
+    assert reads[2:] == [{
         "command": "loopx --format json goal-acceptance inspect --goal-id " + shlex.quote(goal_id),
         "source": "goal_acceptance", "ordering": "before_work",
         "reason": "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.",
@@ -119,6 +123,7 @@ def test_compact_boundary_keeps_complete_quoted_reads_without_unneeded_snapshot(
         "source": "selected_todo", "ordering": "before_work",
         "reason": "Read full current requirements and status/claim. Require one matching active Todo; missing, ambiguous or changed work requires a fresh guard. A summary cannot replace this read.",
     }]
+
     assert arbitration == SchedulerArbitration(SchedulerDisposition.ACTIVE_WORK,
         "interaction_agent_attempt_required", "bounded_delivery")
     assert_private_files_removed(Path(tempfile.gettempdir()))

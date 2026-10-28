@@ -108,7 +108,7 @@ def main() -> None:
         )
         parsed = parse_agent_response(raw_response, protected_paths=[project, root])
         assert parsed["schema_version"] == "loopx_chat_agent_response_v0", parsed
-        assert parsed["message"] == "I inspected [project] and recommend one bounded step.", parsed
+        assert parsed["message"] == "I inspected [local-path] and recommend one bounded step.", parsed
         assert parsed["proposals"] == [
             {
                 "kind": "todo",

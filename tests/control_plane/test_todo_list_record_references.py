@@ -50,7 +50,7 @@ def test_projection_failure_returns_the_standard_cli_error_without_source_change
     from loopx.control_plane import effect_runtime
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = _write_fixture(tmp_path)
+    registry, state = _write_fixture(tmp_path, initialize=False)
     before = state.read_bytes()
 
     def unavailable(operation, payload, **kwargs):
@@ -70,13 +70,15 @@ def test_projection_failure_returns_the_standard_cli_error_without_source_change
 @pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
 def test_real_cli_references_reconstruct_all_scoped_lanes_and_counts(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, state = _write_fixture(tmp_path)
+    registry, state = _write_fixture(tmp_path, initialize=False)
     runtime = Path(json.loads(registry.read_text())["common_runtime_root"])
     if provider == "legacy":
-        from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
         before = state.read_bytes()
-        with pytest.raises(CanonicalAuthorityRequired):
+        from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired
+        with pytest.raises(CanonicalAuthorityRequired) as error:
             list_goal_todos(registry_path=registry, goal_id=GOAL_ID, json_references=True)
+        assert error.value.payload["write_admitted"] is False
+        assert error.value.payload["legacy_fallback_used"] is False
         assert state.read_bytes() == before
         return
     if provider != "legacy":

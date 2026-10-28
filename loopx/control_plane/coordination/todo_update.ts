@@ -1,3 +1,5 @@
+import {claimExecutionProof, maintainClaimExecution} from "./claim_execution.ts";
+import {canonicalTaskLease} from "./task_lease_state.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import type { JsonObject } from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
@@ -118,6 +120,7 @@ function updateRequestSha(input: CoordinationTodoUpdateInput): string {
     ...(input.completion_validation_revision === undefined ? {} :
       {completion_validation_revision: input.completion_validation_revision}),
     ...(Object.keys(input.planning_intent ?? {}).length ? {planning_intent: input.planning_intent} : {}),
+    ...(input.claim_operation_id === undefined ? {} : {claim_operation_id: input.claim_operation_id}),
     // Preserve receipt identity for pre-proof requests already persisted in v0.
     ...(input.lease_idempotency_key != null || input.lease_expected_version != null ? {
       lease_idempotency_key: input.lease_idempotency_key,
@@ -162,6 +165,7 @@ export async function executeCoordinationTodoUpdate(
       command: "complete", actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
       lifecycle_grants: input.lifecycle_grants ?? [], authority_reason: input.authority_reason ?? null,
       decision_outcome: null, operation_identity: {kind: "explicit", operation_id: input.operation_id},
+      ...(input.claim_operation_id === undefined ? {} : {claim_operation_id: input.claim_operation_id}),
       lease_idempotency_key: input.lease_idempotency_key ?? null, lease_expected_version: input.lease_expected_version ?? null,
       allow_user_gate_auto_acquire: input.lease_idempotency_key == null && input.lease_expected_version == null, requested_no_followup: intent.no_followup === true,
       requested_completion_turn_key: null, requested_completion_identity_source: null,
@@ -214,6 +218,11 @@ export async function executeCoordinationTodoUpdate(
 
   const target = loadUpdateTarget(head.head, input);
   if (isFailure(target)) return target;
+  const claimReference = input.claim_operation_id;
+  if (claimReference !== undefined) {
+    try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference), claim_operation_id: undefined}; }
+    catch (error) { return rejection("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"); }
+  }
   const rejected = todoUpdateAdmissionRejection(head.head, target.todo, target.leases, input);
   if (rejected !== null) return {...rejection(rejected.code, rejected.reason),
     ...(rejected.handoff_mode === undefined ? {} : {handoff_mode: rejected.handoff_mode}),
@@ -299,10 +308,21 @@ export async function executeCoordinationTodoUpdate(
   const workRequirementsTransition = workRequirements?.transition == null ? {} : {
     work_requirements_transition: workRequirements.transition,
   };
+  let maintainedLease: JsonObject | null = null;
+  if (claimReference !== undefined && target.todo.status === "open" && next.status === "open" &&
+      input.lease_idempotency_key != null &&
+      ![...cycle.mutations, ...(deferredCycle?.mutations ?? []), ...(blockedCycle?.mutations ?? []),
+        ...(workRequirements?.mutations ?? [])].some(m => m.kind === "lease_upsert")) {
+    try { maintainedLease = maintainClaimExecution(head.head, input, canonicalTaskLease(target.leases.get(input.todo_id)!, input.goal_id, input.todo_id)); }
+    catch (error) { return rejection("claim_execution_unavailable", error instanceof Error ? error.message : "Task execution maintenance rejected"); }
+  }
+  const todoChanged = changed;
+  changed ||= maintainedLease !== null;
   const commit: AuthorityStoreCommit = changed ? prepareCoordinationProjectionCommit({
     goal_id: input.goal_id, operation_id: input.operation_id,
     expected_provider_revision: head.provider_revision, projection: head.head,
-    mutations: [{kind: "todo_upsert", todo: next, clear_fields: clearFields},
+    mutations: [...(todoChanged ? [{kind: "todo_upsert" as const, todo: next, clear_fields: clearFields}] : []),
+      ...(maintainedLease ? [{kind: "lease_upsert" as const, lease: maintainedLease}] : []),
       ...cycle.mutations, ...(deferredCycle?.mutations ?? []), ...(blockedCycle?.mutations ?? []),
       ...(workRequirements?.mutations ?? [])],
   }) : {operation_id: input.operation_id,

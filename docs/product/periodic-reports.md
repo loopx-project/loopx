@@ -16,6 +16,17 @@ This is presentation validation, not a claim that a URL is reachable, public or
 authorized for another audience. Source collection, frozen evidence, redaction
 and delivery authorization retain those responsibilities.
 
+Exact authorized portfolio delivery reads retain eligible references recorded in
+the original Turn's path evidence, alongside their digest identities. New
+private portfolio inputs bind those references to the same frozen source and
+make them available to the report author as **recorded, unverified** citations.
+Local paths, credential-bearing and malformed reference values remain withheld;
+the source reader never fetches a URL. A recorded address proves neither public
+access nor permission to publish to a different audience. The original scope,
+source gaps and unread-artifact status remain authoritative; an opaque digest
+does not supply a missing URL. Existing v1 frozen inputs retain their original
+fact set and bytes. Ordinary managed Session inputs retain their existing scope.
+
 Text reports include the same authored overview values, labels and details as
 the HTML artifact. When that overview is present, it replaces the generated
 title-only opening; reports without highlights retain their compiled summary.
@@ -246,6 +257,10 @@ operation. Monitoring requires the separate explicit setting below.
 If the host restarts before a native watch observes anything, the original
 idle pump can create one separately correlated Chat continuation. It preserves
 the failed request and uses the same native observation identity and deadline.
+For a bound steward, this also covers a portfolio read explicitly refused
+because its authorization snapshot changed. The exact original failure and a
+single empty `external_authorization_changed` context must both be present;
+other runtime errors or missing, conflicting or unreadable context do not qualify.
 The shared typed admission requires an untouched observation-only request, an
 available original worker lock, complete event/history reads and no pending or
 committed native poll receipt. It rechecks current authority, lease generation

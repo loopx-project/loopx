@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import json
 import os
 from pathlib import Path
@@ -187,6 +188,74 @@ def test_oversize_requested_file_fails_closed(tmp_path: Path) -> None:
     res = scan_paths([big], limit_bytes=16)
     assert res.ok is False
     assert res.unscanned == ["content_too_large"]
+
+
+def test_bom_marked_unicode_candidates_are_decoded_before_the_rules(tmp_path: Path) -> None:
+    """Windows PowerShell 5.1 writes redirected output as UTF-16LE with a BOM.
+
+    Reading those bytes as UTF-8 leaves NUL-interleaved mojibake that no rule
+    can match, so a private path or credential would pass as clean. The BOM
+    declares the codec; UTF-32 must be recognised before UTF-16 because its
+    little-endian BOM starts with the UTF-16 one.
+    """
+
+    private = "\\".join(["C:", "Users", "example-user", "notes.txt"])
+    body = "run from " + private + "\nkey " + SK_SECRET + "\n"
+    cases = {
+        "utf-16": body.encode("utf-16"),
+        "utf-16-be": "\ufeff".encode("utf-16-be") + body.encode("utf-16-be"),
+        "utf-32": body.encode("utf-32"),
+        "utf-8-sig": body.encode("utf-8-sig"),
+    }
+    for label, data in cases.items():
+        candidate = tmp_path / f"{label}.log"
+        candidate.write_bytes(data)
+        res = scan_paths([candidate], root=tmp_path)
+        assert res.ok is False, label
+        assert res.unscanned == [], label
+        assert [hit.rule_id for hit in res.hits] == ["sk_bearer", "private_abs_path"], label
+        assert [hit.line for hit in res.hits] == [2, 1], label
+
+
+def test_undecodable_candidate_bytes_fail_closed_instead_of_reading_clean(tmp_path: Path) -> None:
+    """BOM-less UTF-16 and other NUL-bearing bytes name no reviewable text."""
+    private = "private=" + "\\".join(["C:", "Users", "example-user", "notes.txt"])
+    candidate = tmp_path / "bomless.log"
+    candidate.write_bytes(private.encode("utf-16-le"))
+    res = scan_paths([candidate])
+    assert res.ok is False
+    assert res.hits == []
+    assert res.unscanned == ["content_not_text"]
+    assert str(candidate) not in compact_json(res)
+
+
+def test_undecodable_candidate_bytes_never_read_clean(tmp_path: Path) -> None:
+    """Replacement decoding would certify a mangled copy of the candidate.
+
+    A malformed UTF-8 byte and a truncated BOM-marked UTF-16 candidate both
+    carry text the scanner cannot vouch for. Decoding them with ``errors=
+    "replace"`` yields U+FFFD, which no rule matches, so the scan would review
+    a different document and could return a clean receipt for bytes it never
+    saw. Both must be reported unscanned, not clean.
+    """
+    malformed_utf8 = tmp_path / "malformed-utf8.log"
+    malformed_utf8.write_bytes(b"run from C:\\Users\\example-user\\notes.txt\n\xff")
+    truncated_utf16 = tmp_path / "truncated-utf16.log"
+    body = ("key " + SK_SECRET + "\n").encode("utf-16-le")
+    truncated_utf16.write_bytes(codecs.BOM_UTF16_LE + body[:-1])
+    for candidate in (malformed_utf8, truncated_utf16):
+        res = scan_paths([candidate], root=tmp_path)
+        assert res.ok is False, candidate.name
+        assert res.hits == [], candidate.name
+        assert res.unscanned == ["content_not_text"], candidate.name
+
+
+def test_cr_only_unicode_candidate_keeps_the_text_read_line_numbers(tmp_path: Path) -> None:
+    """The decoded read keeps universal-newline line numbering."""
+    candidate = tmp_path / "cr-only.log"
+    candidate.write_bytes(("first line\rkey " + SK_SECRET + "\r").encode("utf-16"))
+    res = scan_paths([candidate])
+    assert [(hit.rule_id, hit.line) for hit in res.hits] == [("sk_bearer", 2)]
 
 
 def test_unreadable_requested_file_fails_closed(tmp_path: Path) -> None:

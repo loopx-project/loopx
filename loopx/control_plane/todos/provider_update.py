@@ -234,6 +234,7 @@ def update_canonical_todo_if_promoted(
     actor_agent_id: str | None, role: str | None, text: str | None,
     note: str | None, dry_run: bool,
     project: Path | None = None, state_file: Path | None = None,
+    claim_operation_id: str | None = None,
     operation_id: str | None = None, task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
     planning_intent: dict[str, Any] | None = None,
@@ -257,6 +258,9 @@ def update_canonical_todo_if_promoted(
         normalized_note = compact_todo_text(note)
         if normalized_note:
             patch["note"] = normalized_note
+    if claim_operation_id is not None and (completion_validation_revision is not None or monitor_observation is not None
+            or str((planning_intent or {}).get("status", "")).lower() == "done"):
+        raise ValueError("Claim execution progress does not change validators or observe Monitors; use todo complete for completion")
     completion = None
     validation_revision = None
     if completion_validation_revision is not None:
@@ -282,7 +286,8 @@ def update_canonical_todo_if_promoted(
                 persist_if_resolved=not dry_run)
         completion = {"validation_declaration": declaration}
     request = {
-        "schema_version": ("loopx_local_coordination_todo_update_request_v5" if validation_revision is not None
+        "schema_version": ("loopx_local_coordination_todo_update_request_v6" if claim_operation_id is not None
+                           else "loopx_local_coordination_todo_update_request_v5" if validation_revision is not None
                            else "loopx_local_coordination_todo_update_request_v4" if monitor_observation is not None
                            else "loopx_local_coordination_todo_update_request_v3" if completion is not None
                            else "loopx_local_coordination_todo_update_request_v2"),
@@ -296,6 +301,7 @@ def update_canonical_todo_if_promoted(
         "operation_id": (operation_id if operation_id is not None else
                          (monitor_observation.monitor_effect_id if monitor_observation else None)
                          or f"todo-update:{uuid4().hex}"),
+        **({"claim_operation_id": claim_operation_id} if claim_operation_id is not None else {}),
         "lease_idempotency_key": task_lease_idempotency_key,
         "lease_expected_version": task_lease_expected_version,
         "patch": patch, "clear_fields": [], "dry_run": dry_run,

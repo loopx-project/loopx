@@ -108,6 +108,13 @@ checking it. The saved requester route is verified at dispatch, source control,
 requester read and consumption. Results do not automatically go to the
 recipient conversation's external audience.
 
+The requester's existing automatic Goal Turn agenda also includes these outgoing
+requests, identified by their exact original-conversation recipient. Waiting for
+an answer, a returned answer needing consumption, and a corrected current revision
+remain distinct. Reading the Inbox does not consume its result. A missing or
+conflicting original route remains incomplete evidence; the agenda does not
+start work, resend a result or replace the full request read.
+
 ## Qualification boundary
 
 Isolated File/SQLite integration uses the real source, binding, request, FIFO,

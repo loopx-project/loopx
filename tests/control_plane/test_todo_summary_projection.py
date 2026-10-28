@@ -31,29 +31,6 @@ def test_user_request_creator_survives_summary_and_compact_workspace_projection(
     assert "created_by" not in project_asset_todo_summary(legacy, role="user")["items"][0]
 
 
-def test_recent_completions_compare_instants_not_offset_strings():
-    items = [row(1, status="done", no_followup=True, completed_at="2026-01-01T10:00:00+08:00"),
-             row(2, status="done", no_followup=True, completed_at="2026-01-01T03:00:00Z")]
-    result = summarize(items)
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == [
-        "todo_summary_2", "todo_summary_1"]
-
-
-def test_recent_completions_preserve_microseconds_across_offsets():
-    items = [row(2, status="done", no_followup=True, completed_at="2026-01-01T10:00:00.000001+08:00"),
-             row(1, status="done", no_followup=True, completed_at="2026-01-01T02:00:00.000002Z")]
-    result = summarize(items)
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == [
-        "todo_summary_1", "todo_summary_2"]
-
-
-def test_invalid_completion_time_does_not_displace_known_recent_work():
-    result = summarize([row(1, status="done", no_followup=True, completed_at="unknown"),
-                        row(2, status="done", no_followup=True, completed_at="2026-01-01T03:00:00Z")])
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == ["todo_summary_2"]
-    assert result["advancement_done_count"] == 2  # Still retained as completed work.
-
-
 def test_summary_caps_do_not_change_work_counts_or_hide_a_peer():
     items = [row(i, claimed_by="agent-a" if i < 24 else "agent-b") for i in range(32)]
     result = summarize(items, item_limit=1)
@@ -61,15 +38,6 @@ def test_summary_caps_do_not_change_work_counts_or_hide_a_peer():
     assert len(result["claimed_open_items"]) == 16
     assert {item["claimed_by"] for item in result["claimed_open_items"]} == {"agent-a", "agent-b"}
     assert result["claimed_open_count"] == 32
-
-
-def test_late_edit_does_not_make_an_old_completion_recent():
-    result = summarize([row(1, status="done", no_followup=True,
-                            completed_at="2026-01-01T00:00:00Z", updated_at="2026-09-01T00:00:00Z"),
-                        row(2, status="done", no_followup=True,
-                            completed_at="2026-02-01T00:00:00Z")])
-    assert [item["todo_id"] for item in result["recent_completed_advancement_items"]] == [
-        "todo_summary_2", "todo_summary_1"]
 
 
 def test_a_selection_cannot_restore_a_lost_full_source_proof():

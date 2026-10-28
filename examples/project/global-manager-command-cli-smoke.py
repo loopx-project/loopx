@@ -21,7 +21,7 @@ from loopx.control_plane.coordination.authority_source_capture import (  # noqa:
     build_todo_runtime_shadow_projection,
     capture_todo_archive_dependencies,
 )
-from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted  # noqa: E402
+from loopx.control_plane.coordination.local_authority import CanonicalAuthorityRequired, read_canonical_todos_if_promoted  # noqa: E402
 from loopx.control_plane.todos.goal_todo_projection import project_goal_todo_items  # noqa: E402
 
 GOAL_ID = "smoke-goal"
@@ -651,8 +651,21 @@ def run_scenario(provider: str | None) -> None:
 
 def main() -> int:
     os.environ["NODE_OPTIONS"] = os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite"
-    # Keep historical read compatibility alongside both canonical providers.
-    for provider in (None, "file", "sqlite"):
+    # Unmigrated ordinary reads refuse; both real providers retain the complete journey.
+    with tempfile.TemporaryDirectory(prefix="loopx-global-manager-unmigrated-") as tmp:
+        root = Path(tmp)
+        registry, runtime, _, _, fixture_files = write_fixture(root)
+        before = snapshot_files([registry, *fixture_files])
+        for goal_id in (GOAL_ID, RUNNABLE_GOAL_ID, DEFERRED_GOAL_ID):
+            try:
+                read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+            except CanonicalAuthorityRequired as error:
+                assert error.payload["write_admitted"] is False
+                assert error.payload["legacy_fallback_used"] is False
+            else:
+                raise AssertionError("Ordinary manager reads require canonical authority")
+        assert snapshot_files([registry, *fixture_files]) == before
+    for provider in ("file", "sqlite"):
         run_scenario(provider)
     print("global-manager-command-cli-smoke ok")
     return 0

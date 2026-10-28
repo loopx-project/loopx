@@ -5,6 +5,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
@@ -13,13 +15,22 @@ from tests.control_plane.test_quota_settlement_cli import (
     TODO_ID,
     _append_newly_due_monitor,
     _classification_count,
-    _initialize_fixture_authority,
     _projected_cli_args,
     _run_cli,
     _spend_run_count,
     _write_fixture,
 )
 from tests.control_plane.test_cli_output_budget import _stable_budget_fixture_root
+
+
+def _advance_monitor_fixture(project, runtime, *, handoff_mode="soft_claim", leases=None):
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    advance_canonical_fixture_authority(
+        runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=read_fixture_todos(state),
+            handoff_mode=handoff_mode, leases=leases or [],
+        ), operation_id="fixture-auxiliary-monitor-arrived",
+    )
 
 
 @pytest.fixture
@@ -34,7 +45,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
 ) -> None:
     """A post-settlement hold does not strand a due independent observation."""
     status = "blocked"
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     turn = "turn-settled-advancement-hold"
     binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                "--turn-instance-id", turn)
@@ -45,7 +56,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
     rc, first = _run_cli(registry, runtime, *guard)
     assert rc == 0, first
     _append_newly_due_monitor(project, watch_only=True)
-    _initialize_fixture_authority(project, runtime)
+    _advance_monitor_fixture(project, runtime)
     rc, admitted = _run_cli(registry, runtime, *guard)
     assert rc == 0, admitted
     poll_command = admitted["interaction_contract"]["cli_channel"][
@@ -96,7 +107,7 @@ def test_settled_advancement_hold_preserves_independent_monitor(
 def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     tmp_path: Path,
 ) -> None:
-    project, runtime, registry_path = _write_fixture(tmp_path)
+    project, runtime, registry_path = _write_fixture(tmp_path, provider="sqlite")
     turn_instance_id = "turn-advancement-with-auxiliary-monitor"
     guard_args = (
         "quota",
@@ -114,7 +125,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
 
     _append_newly_due_monitor(project, watch_only=True)
-    _initialize_fixture_authority(project, runtime)
+    _advance_monitor_fixture(project, runtime)
     capability_args = (
         "--available-capability",
         "network",
@@ -205,6 +216,7 @@ def test_receipt_bound_advancement_allows_one_auxiliary_due_monitor_receipt(
     ("provider", "writeback", "spend_first"),
     [
         ("file", False, False),
+        ("sqlite", False, False),
         ("file", True, False),
         ("sqlite", True, False),
         ("file", True, True),
@@ -226,7 +238,7 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry_path = _write_fixture(tmp_path)
+    project, runtime, registry_path = _write_fixture(tmp_path, provider=provider)
     turn = "turn-completed-advancement-with-auxiliary-monitor"
     binding = (
         "--goal-id",
@@ -271,10 +283,9 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             (DUE_MONITOR_TODO_ID, "own-monitor-execution"),
         )
     ]
-    _initialize_fixture_authority(
+    _advance_monitor_fixture(
         project,
         runtime,
-        provider=provider,
         handoff_mode="hard_lease",
         leases=leases,
     )
@@ -371,12 +382,12 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
     assert resume["identity"]["turn_instance_id"] == turn
     assert resume["grants_new_delivery"] is False
     assert resume["progress_ref"] == "$.settlement_progress"
-    # Same stable fixture: v1.3.1 writeback was 1,831 chars; the bounded vision
-    # authoring contract and unavailable-monitor closeout now require 5,328.
-    # Keep useful decision guidance, with 672 chars of measured headroom. Spend
-    # and settled packets retain the original 2,000-character regression budget.
+    # Matched complete canonical fixtures emit 6,806 writeback characters on
+    # both File and SQLite, unchanged across the compared source revisions.
+    # Keep the full bounded vision/decision guidance, with 694 chars headroom.
+    # Spend (1,432) and settled (572) retain their 2,000-character ceiling.
     resume_budget = (
-        6_000 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
+        7_500 if (resume["next_step"] or {}).get("kind") == "durable_writeback"
         else 2_000
     )
     assert len(json.dumps(resume, ensure_ascii=False, indent=2)) < resume_budget

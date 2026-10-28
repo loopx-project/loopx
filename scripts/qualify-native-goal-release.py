@@ -112,7 +112,7 @@ def setup(
     )
     fixture = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fixture)
-    project, runtime, registry = fixture.write_fixture(root)
+    project, runtime, registry = fixture.write_fixture(root, initialize=False)
     config = json.loads(registry.read_text())
     goal = config["goals"][0]
     goal.update(state_file="ACTIVE_GOAL_STATE.md", coordination={"registered_agents": [AGENT]})
@@ -165,7 +165,7 @@ def setup(
         "--backup-manifest",
         str(backup["manifest_path"]),
         "--provider",
-        "file",
+        "sqlite",
         "--target-handoff-mode",
         "soft_claim",
     )["cold_import"]

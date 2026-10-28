@@ -41,7 +41,7 @@ def test_list_and_quota_share_addressed_scope(task_class, scope, visible):
     assert filtered_todo_summary(source, role="user")["total_count"] == 1
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_scope_survives_missing_display_and_limits(tmp_path: Path, provider: str):
     state, registry, runtime = tmp_path / "STATE.md", tmp_path / "registry.json", tmp_path / "runtime"
     user_rows = [

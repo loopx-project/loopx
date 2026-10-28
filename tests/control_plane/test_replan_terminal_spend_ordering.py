@@ -17,7 +17,7 @@ from typing import Any
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID,
     GOAL_ID,
-    _configure_autonomous_replan_fixture,
+    _configure_autonomous_replan_fixture, _initialize_fixture_authority,
     _projected_cli_args,
     _run_cli,
     _spend_run_count,
@@ -162,6 +162,7 @@ def test_coverage_backed_no_followup_replan_does_not_strand_its_quota_spend(
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
     _write_terminal_frontier_state(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     vision_path = _write_no_followup_vision(tmp_path)
 
     guard = _should_run(registry_path, runtime, project)
@@ -242,6 +243,7 @@ def test_unbound_terminal_spend_stays_rejected(tmp_path: Path) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
     _write_terminal_frontier_state(project)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     vision_path = _write_no_followup_vision(tmp_path)
 
     guard = _should_run(registry_path, runtime, project)

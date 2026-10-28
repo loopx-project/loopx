@@ -88,7 +88,7 @@ def test_changed_preparation_cannot_borrow_an_unrelated_current_review(
                      "--claimed-by", "different-agent")
         return result
 
-    with pytest.raises(ValueError, match="preparation.*changed|not open"):
+    with pytest.raises(ValueError, match="preparation.*changed|not open|no actionable current preparation"):
         _read_preparation(interleaved, GOAL, AGENT, todo, {"deadline_epoch": int(time.time()) + 600})
     assert changed
     final = call("todo", "list", "--goal-id", GOAL, "--todo-id", todo)["todo"]

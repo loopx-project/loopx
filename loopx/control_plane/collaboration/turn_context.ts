@@ -3,6 +3,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireJsonObject, requireStringLiteral} from "../runtime_decode.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
+import {normalizeOriginalConversationRecipient} from "./semantic_request.ts";
 
 export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   const row = requireJsonObject(value, "delegation observation");
@@ -44,6 +45,7 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
     request_revision: control?.revision ?? 1,
     ...(control ? {request_digest: control.revision_digest} : {}),
     ...(request.source_agent_id ? {source_agent_id: request.source_agent_id} : {}),
+    ...(request.recipient ? {recipient: normalizeOriginalConversationRecipient(request.recipient)} : {}),
     agent_id: request.agent_id,
     purpose: [...purpose].slice(0, 120).join(""), purpose_truncated: [...purpose].length > 120,
     receipt_state: kind, decision: receipt.recorded_decision ?? null, step,

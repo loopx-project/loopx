@@ -21,7 +21,7 @@ def _deliver(transport, record, *, phase="admission"):
     return transport._deliver(path, record, phase, "Original source result", inbox=lambda: config)
 
 
-def test_send_then_lost_readback_recovers_with_one_fresh_source_authority_each_time(completed_group_stop):  # noqa: F811
+def test_send_fences_preflight_and_effect_but_readback_needs_no_second_send(completed_group_stop):  # noqa: F811
     _, provider, transport, root, _, record = completed_group_stop
     transport._inbox(record)
     provider.calls.clear()
@@ -30,7 +30,9 @@ def test_send_then_lost_readback_recovers_with_one_fresh_source_authority_each_t
     assert len(provider.writes) == 1
     before_send = next(i for i, args in enumerate(provider.calls)
                        if "+messages-reply" in args and "--dry-run" not in args)
-    assert sum("auth" in args for args in provider.calls[:before_send]) == 1
+    # One proof joins sender/source preflight; another fences the write after
+    # readonly provider preview. Recovery without a new write needs only one.
+    assert sum("auth" in args for args in provider.calls[:before_send]) == 2
     assert record["deliveries"]["admission"]["attempt"]["message_ref"] == "om_out_0"
     provider.verify_replies = True
     provider.calls.clear()
@@ -57,10 +59,39 @@ def test_ordinary_result_uses_the_same_fresh_app_proof_for_sender_and_source(ord
         transport._inbox(record)
         provider.calls.clear()
         assert _deliver(transport, record)
-        assert sum("auth" in args for args in provider.calls) == 1
+        assert sum("auth" in args for args in provider.calls) == 2
         assert provider.writes == [("notes-app", "Original source result")]
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize("change", ["app", "revoke"])
+def test_successful_preflight_cannot_authorize_a_send_after_authority_changes(
+    completed_group_stop, monkeypatch, change,  # noqa: F811
+):
+    _, provider, transport, _, _, record = completed_group_stop
+    transport._inbox(record)
+    original = transport._source_authority
+    proofs = []
+
+    def change_after_proof(*args):
+        proof = original(*args)
+        proofs.append(proof)
+        if len(proofs) == 1:
+            assert proof[0] and proof[1] is True
+            if change == "app":
+                provider.profile_apps["notes-app"] = "cli_other"
+            else:
+                transport.bindings.disconnect(
+                    record["binding_id"], expected_revision=transport.bindings.read()["revision"]
+                )
+        return proof
+
+    monkeypatch.setattr(transport, "_source_authority", change_after_proof)
+    assert not _deliver(transport, record)
+    assert len(proofs) == 2 and proofs[1][1] is False
+    assert not provider.writes and not provider.reaction_creates
+    assert not record["deliveries"]["admission"].get("started")
 
 
 @pytest.mark.parametrize("change", ["app", "bot", "owner", "revoke", "root", "sender", "chat", "parent", "thread"])

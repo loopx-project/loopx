@@ -144,6 +144,25 @@ def assert_adoption(provider: str) -> None:
         registry_path = write_planned_fixture(root)
         project = root / "project"
 
+        add_gate = (
+            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
+            "--task-class", "user_gate", "--global-gate", "--text", USER_TODO,
+        )
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        before_state, before_registry = state.read_bytes(), registry_path.read_bytes()
+        refused = run_cli(root, registry_path, *add_gate, check=False)
+        assert refused["ok"] is False, refused
+        assert refused["error_code"] == "canonical_authority_required", refused
+        assert state.read_bytes() == before_state
+        assert registry_path.read_bytes() == before_registry
+        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
+        imported = run_cli(root, registry_path, "todo", "list", "--goal-id", GOAL_ID)
+        assert imported["authority_read"]["source_authority"] == f"{provider}_v0", imported
+        assert imported["authority_read"]["legacy_fallback_used"] is False, imported
+        assert len(imported["todos"]) == 1, imported
+        original = imported["todos"][0]
+        assert original["text"] == AGENT_TODO and original["status"] == "open", original
+
         missing_context_quota = quota_should_run(
             root,
             registry_path,
@@ -182,24 +201,6 @@ def assert_adoption(provider: str) -> None:
         assert first_quota["agent_todo_summary"]["open_count"] == 1, first_quota
         assert first_quota["selected_todo"]["text"] == AGENT_TODO, first_quota
 
-        add_gate = (
-            "todo", "add", "--goal-id", GOAL_ID, "--role", "user",
-            "--task-class", "user_gate", "--global-gate", "--text", USER_TODO,
-        )
-        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
-        before_state, before_registry = state.read_bytes(), registry_path.read_bytes()
-        refused = run_cli(root, registry_path, *add_gate, check=False)
-        assert refused["ok"] is False, refused
-        assert refused["error_code"] == "canonical_authority_required", refused
-        assert state.read_bytes() == before_state
-        assert registry_path.read_bytes() == before_registry
-        import_fixture_authority(registry_path, GOAL_ID, provider=provider)
-        imported = run_cli(root, registry_path, "todo", "list", "--goal-id", GOAL_ID)
-        assert imported["authority_read"]["source_authority"] == f"{provider}_v0", imported
-        assert imported["authority_read"]["legacy_fallback_used"] is False, imported
-        assert len(imported["todos"]) == 1, imported
-        original = imported["todos"][0]
-        assert original["text"] == AGENT_TODO and original["status"] == "open", original
         todo_payload = run_cli(root, registry_path, *add_gate)
         assert todo_payload["ok"] is True, todo_payload
         assert todo_payload["added"] is True, todo_payload

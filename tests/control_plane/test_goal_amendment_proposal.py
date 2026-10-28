@@ -292,6 +292,7 @@ def _write_fixture(
     runs: Any = _DEFAULT_RUNS,
     other_goal_runs: Any = _DEFAULT_RUNS,
     provider: str = "sqlite",
+    initialize: bool = True,
 ) -> dict[str, Path]:
     project = root / "project"
     runtime = root / "runtime"
@@ -389,13 +390,14 @@ def _write_fixture(
     }
     if other_state_file is not None:
         paths["other_state_file"] = other_state_file
-    initialize_canonical_source_fixture(
-        runtime, GOAL_ID, state_path=state_file, provider=provider,
-    )
-    if other_state_file is not None:
+    if initialize:
         initialize_canonical_source_fixture(
-            runtime, OTHER_GOAL_ID, state_path=other_state_file, provider=provider,
+            runtime, GOAL_ID, state_path=state_file, provider=provider,
         )
+        if other_state_file is not None:
+            initialize_canonical_source_fixture(
+                runtime, OTHER_GOAL_ID, state_path=other_state_file, provider=provider,
+            )
     return paths
 
 

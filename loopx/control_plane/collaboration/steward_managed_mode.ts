@@ -28,10 +28,25 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
   const prior = requireJsonObject(original.loopx_request, "original watch request");
   const keys = Object.keys(request).filter(key => key !== "monitor_restart_recovery");
   const events = basis.event_kinds;
+  // Compatibility with persisted Chat failures: the exact error alone is not
+  // proof. Require the original collector's single, empty typed refusal too.
+  // Fresh scope/provider checks below still decide the new observation.
+  let scopeRefused = false;
+  if (original.error_code === "runtime_error" && original.error === "the portfolio observation omitted authorized Goals"
+      && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
+      && Array.isArray(basis.contexts) && basis.contexts.length === 1) {
+    const context = requireJsonObject(basis.contexts[0], "refused watch context");
+    const coverage = requireJsonObject(context.coverage, "refused watch coverage");
+    scopeRefused = context.schema_version === "manager_turn_context_v1"
+      && Array.isArray(context.goals) && context.goals.length === 0
+      && Array.isArray(context.warnings) && context.warnings.length === 1 && context.warnings[0] === "external_authorization_changed"
+      && coverage.discovered === null && coverage.verified === 0 && coverage.complete === false
+      && context.authorization_scope_id === undefined;
+  }
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || original.error_code !== "server_restarted"
+      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null

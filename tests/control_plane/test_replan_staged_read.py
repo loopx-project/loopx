@@ -129,7 +129,7 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
         # not suggest a new way around it or change its primary commit behavior.
         attachment = {**original["result_attachment_template"], "question": "Is the source valid?",
             "applicability": "Synthetic source", "input_revision": "source-v1", "observation": "Reviewed",
-            "interpretation": "Unresolved", "evidence_refs": ["evidence:source-review"]}
+            "interpretation": "Unresolved", "status": "tentative", "evidence_refs": ["evidence:source-review"]}
         with pytest.raises(ValueError, match="requires agent, Todo and Turn identity"):
             prepare_result_attachment(attachment, registry_path=tmp_path / "registry.json",
                 runtime_root=runtime, goal_id=goal, agent_id=agent, todo_id=None, turn_instance_id=turn)

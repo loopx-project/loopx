@@ -503,7 +503,7 @@ def test_quota_action_selection_requires_turn_identity() -> None:
         validate_quota_command_request(args)
 
     assert str(exc_info.value) == (
-        "`loopx quota should-run --todo-id` requires --turn-instance-id"
+        "`loopx quota should-run --todo-id` requires --turn-instance-id or --begin-turn"
     )
 
 

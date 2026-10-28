@@ -1,3 +1,4 @@
+import {registerManagedClaimExecutionConformance} from "./managed_claim_execution_conformance.ts";
 import {registerClaimContentionConformance} from "./claim_contention_conformance.ts";
 import {registerMonitorGateScopeConformance} from "./monitor_gate_scope_conformance.ts";
 import {projectCoordinationSource, SOURCE_PROJECTION_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/source_projection.ts";
@@ -393,6 +394,7 @@ export function registerAuthorityStoreConformance(
     }
   });
   registerCommandObservationConformance(providerName, factory);
+  registerManagedClaimExecutionConformance(providerName, factory);
   registerClaimAcquisitionProofConformance(providerName, factory);
   test(`${providerName} imported legacy policy requires upgrade before new execution`, async t => {
     const {store} = await factory(t);

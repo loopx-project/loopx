@@ -30,8 +30,8 @@ def main() -> int:
     compact_demo = compact(demo)
     for required in [
         '<div align="center">',
-        "long-horizon agents",
-        "personal agent teams",
+        "long-horizon goals",
+        "long-running agent teams",
         "## Meet the Personal Agent Workspace",
         "docs/assets/personal-workspace/research-workbench-hero.webp",
         "docs/architecture/rfcs/capable-manager-semantic-handoff-v0.md",

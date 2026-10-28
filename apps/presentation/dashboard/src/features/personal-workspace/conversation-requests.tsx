@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {ChevronRight, ListChecks, RefreshCw, X} from "lucide-react";
-import {fetchChatSession, fetchChatSessions, requestJson, type ChatVisibleMessage} from "../../data/chat";
+import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
 import {z} from "zod";
 import {fetchConversationRequests, type ConversationRequest, type ConversationRequestInventory} from "../../data/conversation-requests";
 import {ContextHelp} from "./context-help";
@@ -130,28 +130,64 @@ function requestStage(row: ConversationRequest, zh: boolean) {
   }
 }
 
-function OriginalRequest({row, zh}: {row: ConversationRequest; zh: boolean}) {
+function OriginalImage({attachment, zh}: {attachment: ChatImageAttachment; zh: boolean}) {
+  const [failed, setFailed] = useState(false);
+  return failed ? <p role="status">{zh ? "图片无法显示：" : "Image unavailable: "}{attachment.name}</p>
+    : <img src={attachment.data_url} alt={attachment.name} onError={() => setFailed(true)}/>;
+}
+
+export function ConversationReplyContext({context, zh}: {context?: ChatReplyContext; zh: boolean}) {
+  if (!context) return null;
+  const earlier = context.thread?.messages.filter(row => row.message_id !== context.parent.message_id) ?? [];
+  return <details className="conversation-reply-context">
+    <summary>{zh ? "引用与话题上下文" : "Reply and thread context"}</summary>
+    <blockquote><MarkdownText text={context.parent.content}/>
+      {!context.parent.complete ? <span>{zh ? "引用为节选" : "Quoted excerpt"}</span> : null}</blockquote>
+    {earlier.map(row => <section key={row.message_id}>
+      <strong>{row.sender?.kind === "user" ? (zh ? "用户" : "User") : row.sender?.kind === "app" ? (zh ? "应用" : "App") : (zh ? "原消息" : "Original message")}</strong>
+      {row.created_at ? <time>{row.created_at}</time> : null}
+      <MarkdownText text={row.content}/>
+      {row.content_truncated ? <span>{zh ? "消息为节选" : "Message excerpt"}</span> : null}
+    </section>)}
+    {context.thread ? <span>{zh ? "话题上下文为节选" : "Thread context is an excerpt"}
+      {context.thread.omitted_message_count ? ` · ${context.thread.omitted_message_count} ${zh ? "条更早消息未包含" : "earlier messages omitted"}` : ""}</span> : null}
+  </details>;
+}
+
+function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest; zh: boolean; revision: number; active: boolean}) {
   const [messages, setMessages] = useState<ChatVisibleMessage[] | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
   const content = useRef<HTMLDivElement>(null);
+  const focusOnRead = useRef(false);
   useEffect(() => {
-    if (open && messages) {content.current?.focus(); content.current?.scrollIntoView({block: "nearest"});}
-  }, [open, messages]);
+    if (open && (messages || error) && focusOnRead.current) {
+      focusOnRead.current = false;
+      content.current?.focus(); content.current?.scrollIntoView({block: "nearest"});
+    }
+  }, [open, messages, error]);
   useEffect(() => {
-    setMessages(null); setError(false);
-    if (!open) return;
+    setError(false);
+    if (!open || !active) {setMessages(null); return;}
     const abort = new AbortController();
     void fetchChatSession(row.source_session_id, abort.signal).then(value => {
       if (abort.signal.aborted) return;
+      if (value.session.session_id !== row.source_session_id) throw new Error("Original conversation scope changed.");
       const source = value.messages.filter(message => message.turn_id === row.source_turn_id);
-      if (!source.length) setError(true); else setMessages(source);
-    }).catch(() => {if (!abort.signal.aborted) setError(true);});
+      if (!source.length) throw new Error("Original turn unavailable.");
+      setMessages(source);
+    }).catch(() => {if (!abort.signal.aborted) {setMessages(null); setError(true);}});
     return () => abort.abort();
-  }, [open, row.source_session_id, row.source_turn_id]);
-  return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>{zh ? "原对话" : "Original conversation"}</summary>
+  }, [open, active, row.source_session_id, row.source_turn_id, revision]);
+  return <details onToggle={event => {focusOnRead.current = event.currentTarget.open; setOpen(event.currentTarget.open);}}><summary>{zh ? "原对话" : "Original conversation"}</summary>
     <div ref={content} tabIndex={-1}>{error ? <p role="alert">{zh ? "原对话暂时无法读取，请重新打开重试。" : "Original conversation unavailable. Reopen to retry."}</p>
-      : messages ? messages.map(message => <article key={message.message_id}><strong>{message.role === "user" ? (zh ? "你" : "You") : "LoopX"}</strong><MarkdownText text={message.text}/></article>)
+        : messages ? messages.map(message => <article key={message.message_id}>
+          <strong>{message.role === "user" ? (zh ? "你" : "You") : "LoopX"}</strong><MarkdownText text={message.reply_context?.source_text ?? message.text}/>
+          <ConversationReplyContext context={message.reply_context} zh={zh}/>
+          {message.attachments?.length ? <div className="conversation-request-images">
+            {message.attachments.map(attachment => <OriginalImage key={attachment.id} attachment={attachment} zh={zh}/>)}
+          </div> : null}
+        </article>)
       : <p role="status">{zh ? "正在读取…" : "Loading…"}</p>}</div>
   </details>;
 }
@@ -168,6 +204,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const [error, setError] = useState(false);
   const [noSession, setNoSession] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [originalRevision, setOriginalRevision] = useState(0);
+  const loadedScope = useRef<string | null>(null);
+  const loadedSource = useRef<string | null>(null);
   const generation = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -187,8 +226,13 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     requestAbort.current?.abort();
     const abort = new AbortController(); requestAbort.current = abort;
     setBusy(true); setError(false); setNoSession(false);
-    // Never retain a previous source/page behind an error or changed scope.
-    if (!offset) setPages([]);
+    const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
+    const sameScope = loadedScope.current === scope;
+    const pageCount = sameScope ? Math.max(1, pages.length) : 1;
+    // Keep verified rows during a same-source refresh, but never across scope
+    // changes or a failed read. Publish refreshed pages together below.
+    if (!sameScope) {setPages([]); loadedSource.current = null;}
+    loadedScope.current = scope;
     try {
       let source = sessionId && sessionId !== "new-session-pending" ? sessionId : undefined;
       if (!source && ownerFallback) {
@@ -196,14 +240,25 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         source = listed.sessions.find(row => row.channel_id === "manager")?.session_id;
       }
       if (current !== generation.current) return;
-      if (!source) {setNoSession(true); return;}
-      const value = await fetchConversationRequests(source, history, offset, abort.signal, search);
-      if (current !== generation.current) return;
-      // Returns and revised briefs can reorder a live list between pages.
-      // Restart the read rather than silently skipping work at an old offset.
-      if (offset && value.snapshot_digest !== pages[0]?.snapshot_digest) {void load(); return;}
-      if (offset && value.next_offset !== null && value.next_offset <= offset) throw new Error("Request paging did not advance.");
-      setPages(previous => offset ? [...previous, value] : [value]);
+      if (!source) {setPages([]); setNoSession(true); return;}
+      const sameSource = loadedSource.current === source;
+      if (!sameSource) setPages([]);
+      loadedSource.current = source;
+      const refreshed: ConversationRequestInventory[] = [];
+      let cursor: number | null = offset;
+      const limit = offset ? 1 : sameSource ? pageCount : 1;
+      for (let index = 0; index < limit && cursor !== null; index++) {
+        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search);
+        if (current !== generation.current) return;
+        // Returns can reorder a live inventory. A stale More cursor gets one
+        // fresh read; mixed snapshots during that read fail visibly for retry.
+        if (offset && value.snapshot_digest !== pages[0]?.snapshot_digest) {void load(); return;}
+        if (index && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
+        if (value.next_offset !== null && value.next_offset <= cursor) throw new Error("Request paging did not advance.");
+        refreshed.push(value); cursor = value.next_offset;
+      }
+      setPages(previous => offset ? [...previous, ...refreshed] : refreshed);
+      if (!offset) setOriginalRevision(value => value + 1);
     } catch {
       if (current === generation.current && !abort.signal.aborted) {setError(true); setPages([]);}
     } finally {if (current === generation.current) setBusy(false);}
@@ -274,7 +329,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
                 {row.evidence_refs.map(value => <p key={value}><code>{value}</code></p>)}
                 {row.warnings.length ? <p role="status">{zh ? "部分关联记录需要恢复。" : "Some linked records need recovery."}</p> : null}
               </details>
-              <OriginalRequest row={row} zh={zh}/>
+              <OriginalRequest key={`${row.source_session_id}:${row.source_turn_id}`} row={row} zh={zh} revision={originalRevision} active={open}/>
             </div>
           </details>)}
         </section>;})}

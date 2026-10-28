@@ -211,7 +211,14 @@ def assert_vision_budget(provider: str) -> None:
         else:
             raise AssertionError("unmigrated fixture must not admit a normal Todo write")
         assert state_path.read_bytes() == source_before
-        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
+        try:
+            read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        except LocalCoordinationAuthorityUnavailable as error:
+            assert error.code == "canonical_authority_required"
+            assert error.payload["write_admitted"] is False
+            assert error.payload["legacy_fallback_used"] is False
+        else:
+            raise AssertionError("an unmigrated read must refuse without Markdown fallback")
         import_fixture_authority(registry_path, GOAL_ID, provider=provider)
         original = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
         assert original["source_authority"] == provider + "_v0"

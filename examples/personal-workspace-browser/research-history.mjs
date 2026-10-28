@@ -139,11 +139,12 @@ from pathlib import Path
 from loopx.capabilities.explore.result_log import build_explore_node_event, build_explore_finding_event
 goal = 'synthetic-decision-reading'
 events = []
-for question in range(3):
+for question in range(4):
     node = f'question-{question}'
     title = ['对照能否区分修复机制与额外运行时间，并支持下一轮选择？',
              'Did the fixed-budget comparison support a different candidate?',
-             '新的证据是否改变了原问题的判断，哪些失败与未知仍需保留？'][question]
+             '新的证据是否改变了原问题的判断，哪些失败与未知仍需保留？',
+             '较早的问题还有哪些反例需要保留？'][question]
     events.append(build_explore_node_event(goal_id=goal, node_id=node, title=title,
         recorded_at='2026-01-01T00:00:00Z'))
     for record in range(5):
@@ -158,7 +159,7 @@ for question in range(3):
         events.append(build_explore_finding_event(goal_id=goal, node_id=node,
             finding_id=f'decision-{question}-{record}', title=f'Comparison {question}, decision {record}',
             summary=summary, status=['confirmed', 'refuted', 'tentative'][record % 3],
-            recorded_at=f'2026-01-0{question + 1}T0{record}:00:00Z'))
+            recorded_at=f'2025-12-31T0{record}:00:00Z' if question == 3 else f'2026-01-0{question + 1}T0{record}:00:00Z'))
 Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synthetic decision reading', 'events': events}, ensure_ascii=False))
 `, fixture], {cwd: repoRoot});
   let owner, page;
@@ -168,9 +169,16 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
     await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
     await page.goto(`${owner.base}/chat/?goalId=${owner.goal_id}&view=research&statusUrl=%2Fstatus.json`, {waitUntil: 'domcontentloaded'});
     const history = page.locator('.research-history');
-    await history.getByRole('status').filter({hasText: '18 / 18'}).waitFor();
+    await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
     const trail = history.locator('.research-trail');
     const group = trail.locator('.research-trail-question').first();
+    const assertReturn = async control => {
+      assert(await control.evaluate(e => e === document.activeElement), 'Return restores the exact finding control');
+      assert(await control.evaluate(e => {
+        const r = e.getBoundingClientRect();
+        return [r.top + 4, r.bottom - 4].every(y => e.contains(document.elementFromPoint(r.x + r.width / 2, y)));
+      }), 'The returned entry is readable above the footer and below the sticky header');
+    };
     assert.equal(await trail.locator('.research-trail-question').count(), 3);
     assert.equal(await group.locator('[data-research-decision]').count(), 3);
     assert.match(await group.locator('header').innerText(), /已反驳 2.*暂定结论 1|暂定结论 1.*已反驳 2/s);
@@ -189,7 +197,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
     for (const locale of ['zh-CN', 'en']) {
       await page.evaluate(value => localStorage.setItem('loopx-pw-locale', value), locale);
       await page.reload({waitUntil: 'domcontentloaded'});
-      await history.getByRole('status').filter({hasText: '18 / 18'}).waitFor();
+      await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
       const row = group.locator('[data-research-decision]').first();
       assert.match(await row.innerText(), locale === 'zh-CN' ? /停止 2.*保留 3/s : /Stopped 2.*Retained 3/s);
       await row.scrollIntoViewIfNeeded();
@@ -207,7 +215,7 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
         await page.screenshot({path: resolve(outputDir, 'decision-trail-reader-tail-phone.png'), animations: 'disabled'});
       }
       await detail.press('Escape');
-      assert(await row.evaluate(e => e === document.activeElement), 'Escape restores the exact decision control');
+      await assertReturn(row);
       const returned = await row.boundingBox();
       assert(returned.y >= 0 && returned.y + returned.height <= 844, 'Return brings the original decision back into the reading viewport');
       const noChange = trail.locator('.research-trail-question').nth(1).locator('[data-research-decision]').first();
@@ -220,14 +228,67 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id': goal, 'display_name': 'Synth
       const oldest = group.locator('[data-research-decision]').last();
       await oldest.click();
       assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0');
+      await page.reload({waitUntil: 'domcontentloaded'});
+      await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await detail.waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0', 'Reload keeps the exact historical finding');
+      await page.screenshot({path: resolve(outputDir, `decision-return-reader-${locale}.png`), animations: 'disabled'});
       await detail.press('Escape');
-      assert(await oldest.evaluate(e => e === document.activeElement));
+      await page.screenshot({path: resolve(outputDir, `decision-return-list-${locale}.png`), animations: 'disabled'});
+      assert.equal(await group.locator('[data-research-decision]').count(), 5, 'Returning after reload reveals the historical decision, not only the latest three');
+      await assertReturn(oldest);
+      const historicalReturn = await oldest.boundingBox();
+      assert(historicalReturn.y >= 0 && historicalReturn.y + historicalReturn.height <= 844, 'The reloaded historical entry returns to the reading viewport');
+      await page.goBack(); await detail.waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0');
+      await page.goForward(); await detail.waitFor({state: 'hidden'});
+      await assertReturn(oldest);
+      await oldest.click(); await detail.waitFor();
+      await page.goBack(); await detail.waitFor({state: 'hidden'});
+      await assertReturn(oldest);
+      await oldest.click(); await detail.waitFor();
+      await detail.press('Escape');
+      const previousDecision = group.locator('[data-research-decision]').nth(3);
+      await previousDecision.click(); await detail.waitFor();
+      await page.goBack(); await detail.waitFor({state: 'hidden'});
+      await assertReturn(previousDecision);
+      await page.goBack(); await detail.waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-2-0');
+      await detail.press('Escape');
+      await assertReturn(oldest);
+      await page.goBack(); await detail.waitFor();
+      await page.goBack(); await detail.waitFor({state: 'hidden'});
+      await assertReturn(oldest);
+      await trail.getByRole('button', {name: locale === 'zh-CN' ? '显示更多问题 · 1' : 'Show more questions · 1', exact: true}).click();
+      const earlierQuestion = trail.locator('.research-trail-question').last();
+      await earlierQuestion.getByRole('button', {name: locale === 'zh-CN' ? '显示更早记录 · 2' : 'Show earlier records · 2', exact: true}).click();
+      const earlierDecision = earlierQuestion.locator('[data-research-decision]').last();
+      await earlierDecision.click(); await page.reload({waitUntil: 'domcontentloaded'});
+      await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+      await detail.waitFor();
+      assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-3-0');
+      await detail.press('Escape');
+      assert.equal(await trail.locator('.research-trail-question').count(), 4, 'A bookmarked finding also reveals its older question');
+      assert.equal(await earlierQuestion.locator('[data-research-decision]').count(), 5);
+      await assertReturn(earlierDecision);
+      await page.screenshot({path: resolve(outputDir, `decision-return-earlier-question-${locale}.png`), animations: 'disabled'});
       if (locale === 'en') {
         await trail.evaluate(e => e.scrollIntoView({block: 'start'}));
         await page.screenshot({path: resolve(outputDir, 'decision-trail-english-phone.png'), animations: 'disabled'});
       }
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     }
+    await page.setViewportSize({width: 1280, height: 900});
+    const desktopOrigin = trail.locator('.research-trail-question').last().locator('[data-research-decision]').last();
+    await desktopOrigin.click(); await page.reload({waitUntil: 'domcontentloaded'});
+    await history.getByRole('status').filter({hasText: '24 / 24'}).waitFor();
+    const desktopReader = history.locator('.research-history-detail');
+    await desktopReader.waitFor();
+    assert.equal(new URL(page.url()).searchParams.get('research_finding'), 'decision-3-0');
+    await page.screenshot({path: resolve(outputDir, 'decision-return-reader-desktop.png'), animations: 'disabled'});
+    await desktopReader.press('Escape');
+    await assertReturn(desktopOrigin);
+    await page.screenshot({path: resolve(outputDir, 'decision-return-list-desktop.png'), animations: 'disabled'});
     const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
     assert.equal(readback.source_unchanged, true);
     assert.equal(readback.mutation_attempts, 0, 'Reading and returning cannot perform a write');

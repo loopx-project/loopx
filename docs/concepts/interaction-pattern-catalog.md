@@ -1211,13 +1211,14 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 **Trigger**
 
 - a typed machine-configuration namespace is about to change; the built-in
-  namespaces are `change_quality_qualification`, `codex_chat`, `goal_storage`,
-  `manager_runtime`, `periodic_report`, `pull_request_review`,
+  namespaces are `change_quality_qualification`, `codex_chat`, `context_delivery`,
+  `explore_harness`, `goal_storage`, `manager_runtime`, `periodic_report`, `pull_request_review`,
   `steward_executor`, and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
   complete rather than approximate;
 - `goal_storage` carries the storage target a newly created Goal is fixed to
-  (`new_goal_provider`, `file` by default or `sqlite` after reviewed promotion).
+  (`new_goal_provider`, canonical `sqlite` with hard leases by default; explicit
+  `file` and soft-claim creation choices remain available).
   It does not promote existing Goals or migrate their data, and existing Goals
   keep the selection they were created with; see
   `docs/reference/local-authority-provider-selection.md`;
@@ -1227,6 +1228,14 @@ main blocker or keeps following a stale local-only benchmark staging todo.
   attached Agent, or a LoopX Agent Loop, and it grants no permissions and
   stores no credentials; see
   `docs/integrations/session-runtime-control-plane-adapter.md#projection-boundary`;
+- `context_delivery` controls differential native Codex context (`off` by default).
+  A saved preference neither proves host readiness nor actual delta use; known
+  context loss keeps full context and unsupported declarations refuse. It grants
+  no execution authority; see `docs/reference/required-work-context.md#machine-default`;
+- `explore_harness` sets the default exploration mode (`off` by default) for new
+  and existing Goals; explicit Goal modes take precedence. Planning supplies
+  evidence and read-only guidance, while execution authority stays separate;
+  see `loopx/capabilities/explore/README.md#machine-default`;
 - `pull_request_review` carries `review_order` (`forward` by default, or
   `reverse`) and Goal-owned `agent_orders` for registered Agent overrides.
   Commands resolve explicit direction, Agent, Goal, then machine; reverse inverts

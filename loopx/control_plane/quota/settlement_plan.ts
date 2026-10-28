@@ -29,6 +29,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     "continue authorized work within existing limits or report a genuine typed blocker. " +
     "Set --delivery-boundary " + DELIVERY_BOUNDARIES.join("|") + " for the applicable case above. " +
     "Typed evidence: --progress-result-class " + PROGRESS_RESULT_CLASSES.join("|") +
+    ". For no_followup or exploration_exhausted, also pass --progress-coverage-scope-id; " +
+    "exploration_exhausted also needs --progress-coverage-complete. " +
+    "Todo completion alone does not establish scope coverage" +
     ". For blocked outcome_gap, --progress-work-item-id must match this plan's Todo/obligation id " +
     "and --progress-blocker-id names the blocker. Repeat --progress-evidence-id for evidence. " +
     "IDs are 1-128 characters, start with an ASCII letter/digit, then letters/digits or ._:/- " +

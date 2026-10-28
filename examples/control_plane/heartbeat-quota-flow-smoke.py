@@ -99,7 +99,7 @@ def run_cli_result(root: Path, *args: str, registry_path: Path, runtime: Path) -
     return result.returncode, json.loads(result.stdout)
 
 
-def write_fixture(root: Path) -> tuple[Path, Path, Path]:
+def write_fixture(root: Path, *, initialize: bool = True) -> tuple[Path, Path, Path]:
     project = root / "project"
     runtime = root / "runtime"
     state_file = f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
@@ -166,7 +166,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
         + "\n",
         encoding="utf-8",
     )
-    import_fixture_authority(registry_path, GOAL_ID)
+    if initialize:
+        import_fixture_authority(registry_path, GOAL_ID)
     return project, runtime, registry_path
 
 

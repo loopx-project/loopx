@@ -135,6 +135,8 @@ def write_registry(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, "configure-goal-fixture", provider="sqlite")
     return registry_path
 
 
@@ -168,7 +170,9 @@ def goal_from_registry(registry_path: Path) -> dict:
 
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="loopx-configure-goal-smoke-") as tmp:
-        root = Path(tmp)
+        # Canonical import binds the physical project path, including when the
+        # temporary directory is reached through a filesystem alias.
+        root = Path(tmp).resolve()
         registry_path = write_registry(root)
         original = registry_path.read_text(encoding="utf-8")
         agent_profile = {

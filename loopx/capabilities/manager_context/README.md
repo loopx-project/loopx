@@ -157,6 +157,13 @@ awaiting explicit requester consumption. The same read model is returned by
 private agenda contains current-purpose excerpts and explicit links, not source
 transcripts, result bodies or receiver rationale.
 
+Outgoing requests to an original project conversation use the same typed address
+reader as explicit peer returns. The agenda retains that conversation recipient
+and its current revision without inventing a Goal/Agent receiver. A changed
+requester or missing/conflicting original return route keeps coverage incomplete.
+Reading a result does not consume it, and observing the agenda never dispatches
+work or acknowledges a request.
+
 Each item names its request, receiving/source Agent where recorded, current
 revision, related Todo ids and the remaining receipt step. Counts are request
 records (`count_unit=request`), not distinct tasks: follow-up requests can link
@@ -373,11 +380,17 @@ The page does not expose host addresses or read host stores; `view=agent_route`
 remains the exact-identity, current-observation path. A registration or binding
 does not prove presence, execution readiness or delivery authority.
 
-Repeated role names alone do not require an owner question. The conversation's
-explicit identity corrections, established assignment, project and declared
-responsibilities guide recipient selection; binding metadata can support that
-context but cannot override an explicit identity or grant. Preserve both Goal
-and Agent identity. Forwarded requests retain their original speaker/addressee
+Repeated role names alone do not require an owner question. Resolve the subject,
+project, purpose and destination before matching a role alias or Agent id.
+Compare plausible recipients by conversation, current work and responsibilities;
+when the user refers to recent research, inspect relevant recent deliveries.
+A previous send proves delivery, not subject ownership: recheck a challenged
+route rather than preserving an earlier mistake. Explicit identity corrections
+take precedence; binding metadata cannot override them or a grant. Preserve both
+Goal and Agent identity. Correcting delivery does not retract an old misroute:
+reuse verified receipts and send only a still-needed bounded ownership correction
+through the existing path. Never claim cancellation or adoption from delivery.
+Forwarded requests retain their original speaker/addressee
 in the existing collaboration brief rather than redefining every “you” as the
 receiver. Clarify only competing interpretations that still change the action.
 

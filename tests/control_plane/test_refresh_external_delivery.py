@@ -8,15 +8,17 @@ from loopx import cli
 from loopx.control_plane.quota import refresh_external_delivery as bridge
 from loopx.control_plane.quota.settlement import SettlementIdentity
 from loopx.state_refresh import refresh_state_run
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _write_fixture, _initialize_fixture_authority,
 )
 
 
 @pytest.fixture
-def session(tmp_path, monkeypatch, capsys):
+def session(tmp_path, monkeypatch, capsys, request):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=getattr(request, "param", "file"))
     monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(tmp_path / "shared"))
     monkeypatch.chdir(project)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime)]

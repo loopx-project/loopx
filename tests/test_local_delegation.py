@@ -280,7 +280,8 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
     from loopx.cli import build_parser
     from loopx.control_plane.collaboration.operation_wake import dispatch_confirmed_operation_wake
     from loopx.control_plane.turn_driver.codex_cli import load_codex_cli_session
-    from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host, operation_tool_handler
+    from loopx.control_plane.turn_driver.codex_operation_host import run_codex_operation_host
+    from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
     from test_codex_operation_host import FAKE_SERVER
     from test_loopx_turn_codex_cli import _request
 

@@ -500,3 +500,19 @@ test("receipt retries precede later full-source caches without losing hidden ear
     assert.equal(planningDeadline([], [], {frontier_deadline: cache}, [invalid]).blocked_retry_wait, undefined);
   }
 });
+
+test("quota planning composes raw display before lane projection and keeps each decision independent", () => {
+  const payload = {todo_id: "todo_work", text: "  Work  ", status: "open", task_class: "advancement_task", note: "Run validation"};
+  const item = row("todo_work", {payload, display_source: {record: payload}, required: [], targets: [], due_at: null, expires_at: null});
+  const input = clockRequest([item]), before = structuredClone(input);
+  const first = projectTodoQuotaPlanning(input).lanes as JsonObject;
+  const projected = (first.active_next_action_items as JsonObject[])[0]!;
+  assert.equal(projected.text, "Work");
+  assert.equal(projected.continuation_hint, "Run validation");
+  assert.equal(projected.note, undefined);
+  assert.deepEqual(input, before);
+  const changed = {...payload, note: "Read revised evidence"};
+  const second = projectTodoQuotaPlanning(clockRequest([{...item, display_source: {record: changed}}])).lanes as JsonObject;
+  assert.equal((second.active_next_action_items as JsonObject[])[0]!.continuation_hint, "Read revised evidence");
+  assert.equal(projected.continuation_hint, "Run validation");
+});

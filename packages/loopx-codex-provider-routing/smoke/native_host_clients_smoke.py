@@ -148,6 +148,79 @@ with tempfile.TemporaryDirectory() as temporary:
         home.mkdir(mode=0o700)
         return Fixture(home)
 
+    # A consumer born after process enumeration must enter a fresh ownership
+    # snapshot before the ordinary service stop/switch/restore can proceed.
+    # Conversely, lsof can still report a process which has just exited.
+    for change in ("born", "exited"):
+        f = fixture()
+        f.holders = [] if change == "born" else [301]
+        if change == "born":
+            f.records.pop(301)
+        normal_run, scans = f.run, []
+        def churn_once(command, **kwargs):
+            if command[0] == "/usr/sbin/lsof":
+                scans.append(command)
+                if len(scans) == 1:
+                    if change == "born":
+                        f.records[301] = (300, "/test/codex", 901, 5)
+                        f.holders = [301]
+                    else:
+                        f.records.pop(301)
+                        f.holders = []
+                        return SimpleNamespace(returncode=0, stdout="p301\n")
+            return normal_run(command, **kwargs)
+        f.run = churn_once
+        with f.context():
+            assert f.handoff()["active_slot"] == "b"
+        assert f.loaded and f.switches == 1 and len(scans) >= 2
+        assert any(c[1] == "bootout" for c in f.calls) is (change == "born")
+
+    # Persistent churn is bounded; reuse and unreadable live holders cannot be
+    # laundered into a new identity by the read-only retry.
+    for change in ("churn", "reuse", "unreadable"):
+        f = fixture()
+        f.holders = [301]
+        normal_run, scans = f.run, []
+        def unstable_run(command, **kwargs):
+            if command[0] == "/usr/sbin/lsof":
+                scans.append(command)
+                if change == "churn":
+                    pid = 700 + len(scans)
+                    f.records[pid] = (300, "/test/codex", 2000 + pid, 1)
+                    f.holders = [pid]
+                elif change == "reuse":
+                    f.records[301] = (300, "/test/codex", 2000, 1)
+                else:
+                    f.records[301] = None  # kill(0) still confirms a live PID.
+            return normal_run(command, **kwargs)
+        f.run = unstable_run
+        with f.context():
+            error("client_changed", f.host._home_owners)
+        assert len(scans) == (3 if change == "churn" else 1)
+        assert not f.killed and f.switches == 0
+        assert not any(c[0] == "/bin/launchctl" and c[1] != "print" for c in f.calls)
+
+    # Environment reads race with process exit too. A denied/unreadable live
+    # Codex process remains unknown, even if the kernel identity also disappears.
+    for exited in (False, True):
+        f = fixture()
+        f.records[200] = (1, "/test/codex", 999, 3)
+        before = dict(f.records)
+        def failed_environment(pid):
+            if pid != 200:
+                return None
+            if exited:
+                f.records.pop(200)
+            else:
+                f.records[200] = None
+            raise OSError("process environment unavailable")
+        with f.context(), patch.object(host_module, "codex_home", side_effect=failed_environment):
+            if exited:
+                assert not f.host._cached_codex_owners(before)
+            else:
+                error("ownership_unverified", lambda: f.host._cached_codex_owners(before))
+        assert not f.killed and f.switches == 0
+
     # Service labels are installation details. A renamed same-home consumer
     # must be stopped and restored through its existing launch agent, including
     # when the plist filename differs from its launchd label.
@@ -552,6 +625,32 @@ if sys.platform == "darwin":
     finally:
         child.terminate()
         child.wait(timeout=5)
+
+    # Real ps/kernel/lsof evidence, with an explicitly synchronized birth
+    # between the two reads. This disposable directory contains no credentials.
+    with tempfile.TemporaryDirectory() as temporary:
+        host = host_module.NativeHost.__new__(host_module.NativeHost)
+        host.spec = {"home": Path(temporary).resolve()}
+        enumerate_processes, consumer = host._processes, None
+        def enumerate_then_start():
+            global consumer
+            records = enumerate_processes()
+            if consumer is None:
+                consumer = subprocess.Popen(
+                    [sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(20)"],
+                    cwd=host.spec["home"], stdout=subprocess.PIPE, text=True)
+                assert consumer.stdout.readline().strip() == "ready"
+            return records
+        host._processes = enumerate_then_start
+        try:
+            owners = host._home_owners()
+            assert consumer is not None and consumer.pid in owners
+            assert host._owner_identities[consumer.pid] == host_module.process_identity(consumer.pid)
+        finally:
+            if consumer is not None:
+                consumer.terminate()
+                consumer.wait(timeout=5)
+                consumer.stdout.close()
 
 # An argv lookalike cannot supply CODEX_HOME; empty argv entries do not shift
 # the environment boundary. Duplicate environment keys are unverifiable.

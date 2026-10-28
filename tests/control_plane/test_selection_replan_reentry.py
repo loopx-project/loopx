@@ -3,14 +3,25 @@ import json
 import shlex
 
 import pytest
+from canonical_authority_fixture import advance_canonical_fixture_authority, read_fixture_todos
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, SELECTED_REPLAN_TODO_ID, TODO_ID,
     _configure_autonomous_replan_fixture, _configure_selected_todo_replan_fixture,
     _configure_selectable_alternative, _heartbeat_receipt_count,
-    _initialize_git_checkout, _projected_cli_args, _run_cli, _run_generated_cli,
+    _initialize_fixture_authority, _initialize_git_checkout, _projected_cli_args, _run_cli, _run_generated_cli,
     _spend_run_count, _write_fixture,
 )
+
+
+def _advance_frontier(project, runtime, operation_id):
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    advance_canonical_fixture_authority(
+        runtime, GOAL_ID, build_todo_runtime_shadow_projection(
+            goal_id=GOAL_ID, todos=read_fixture_todos(state), handoff_mode="soft_claim",
+        ), operation_id=operation_id,
+    )
 
 
 @pytest.mark.parametrize(("binding", "initial_replan"), [
@@ -21,6 +32,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     _configure_selectable_alternative(project)
     if initial_replan:
         _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, )
@@ -42,6 +54,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     else:
         _configure_autonomous_replan_fixture(project, runtime, registry)
         selected_id = TODO_ID
+    _advance_frontier(project, runtime, "fixture-frontier-after-selection")
     rc, selected = _run_cli(registry, runtime, *guard, "--todo-id", selected_id)
     selection_deferred = binding == "todo"
     expected_before_resume = 2 if selection_deferred else 1
@@ -170,6 +183,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     _configure_selectable_alternative(project)
     if initial_replan:
         _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-recommendation-drift"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn, )
@@ -187,6 +201,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     # The original explicit choice leaves the refreshed frontier while a
     # different recommended Todo becomes visible under a hard replan.
     _configure_selected_todo_replan_fixture(project, registry)
+    _advance_frontier(project, runtime, "fixture-recommendation-drift")
     retained_todo_id = "todo_chain_000000000001"
     rc, resumed = _run_cli(
         registry, runtime, *guard, "--todo-id", retained_todo_id
@@ -278,6 +293,7 @@ def test_replan_preempts_unselected_todo_guards_on_selection_reentry(tmp_path, w
     )
     registry_data["goals"][0]["coordination"]["write_scope"] = write_scope
     registry.write_text(json.dumps(registry_data) + "\n", encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     _initialize_git_checkout(project)
 
     turn = "turn-selection-replan-workspace-guard"
@@ -329,6 +345,7 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
 
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-inline-reentry-new-gate"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,
@@ -344,7 +361,8 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
         if len(calls) == 1:
             assert result.rejected and result.receipt_status == "selection_retained"
             if changed_gate == "user_gate":
-                _append_blocking_user_gate(project)
+                _append_blocking_user_gate(project, global_gate=True)
+                _advance_frontier(project, runtime, "fixture-new-user-gate")
             else:
                 data = json.loads(registry.read_text())
                 data["goals"][0]["quota"]["compute"] = 0
@@ -386,6 +404,7 @@ def test_inline_reentry_reads_gates_changed_after_choice_receipt(
 def test_first_inline_result_has_matching_turn_envelope(tmp_path):
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-inline-envelope"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--turn-instance-id", turn,

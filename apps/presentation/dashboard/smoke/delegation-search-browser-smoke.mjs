@@ -34,7 +34,11 @@ try {
   await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
   const writes = []; page.on('request', request => {if (request.method() !== 'GET') writes.push(new URL(request.url()).pathname);});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  // This disposable source has manager history, but no original Lark binding.
+  await page.route('**/api/chat/app-steward', route => route.fulfill({json: {ok: true, binding_id: null, session_id: null}}));
   await page.goto(ready.origin + '/chat/');
+  await page.getByRole('navigation', {name: '管家视图'}).getByRole('button', {name: /^(Chat|对话)$/}).click();
+  await page.getByText('复核迁移说明中的示例', {exact: true}).filter({visible: true}).first().waitFor();
   const trigger = page.getByRole('button', {name: /委派，.*条待跟进/});
   await trigger.click();
   const dialog = page.getByRole('dialog', {name: '委派', exact: true});

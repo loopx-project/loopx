@@ -846,7 +846,7 @@ def test_real_promoted_provider_to_cli_projection(tmp_path: Path) -> None:
 
     code, result = run("unpromoted", "--execute")
     assert code == 1
-    assert "requires promoted canonical authority" in result["error"]
+    assert result["error_code"] == "canonical_authority_required"
     assert state.read_bytes() == source
 
     projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=_records())

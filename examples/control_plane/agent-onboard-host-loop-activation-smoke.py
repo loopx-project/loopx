@@ -23,6 +23,7 @@ from loopx.bootstrap_command_pack import (  # noqa: E402
 )
 from loopx.cli import build_parser  # noqa: E402
 from loopx.control_plane.quota.usage_summary import is_automation_run  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.control_plane.scheduler.automation_liveness import (  # noqa: E402
     build_automation_liveness,
 )
@@ -303,6 +304,7 @@ def main() -> int:
         global_registry.parent.mkdir(parents=True)
         state_file.write_text("# Active State\n\n## Agent Todo\n", encoding="utf-8")
         registry = {
+            "common_runtime_root": str(root / "runtime"),
             "goals": [
                 {
                     "id": "multi-agent-goal",
@@ -323,6 +325,9 @@ def main() -> int:
         }
         serialized_registry = json.dumps(registry)
         project_registry.write_text(serialized_registry, encoding="utf-8")
+        import_fixture_authority(project_registry, "multi-agent-goal", provider="sqlite")
+        registry = json.loads(project_registry.read_text(encoding="utf-8"))
+        serialized_registry = json.dumps(registry)
         global_registry.write_text(serialized_registry, encoding="utf-8")
         cli_bin = str(REPO_ROOT / "scripts" / "loopx")
 

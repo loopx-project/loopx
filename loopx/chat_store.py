@@ -1168,17 +1168,22 @@ class ChatSessionStore(ChatIngressStore):
                         payload={},
                     )
                 if plan.writes.settle_turn:
-                    settled = self.load_turn(session_token, plan.turn_id)
-                    if settled is None:
-                        raise ValueError(
-                            "chat turn acceptance lost its prepared turn"
-                        )
-                    settled.pop("_acceptance", None)
-                    _atomic_write_json(
+                    with exclusive_file_lock(
                         self._turn_path(session_token, plan.turn_id),
-                        settled,
-                        preserve_mode=True,
-                    )
+                        agent_id="loopx-chat",
+                        operation="settle_managed_chat_turn_acceptance",
+                    ):
+                        settled = self.load_turn(session_token, plan.turn_id)
+                        if settled is None:
+                            raise ValueError(
+                                "chat turn acceptance lost its prepared turn"
+                            )
+                        settled.pop("_acceptance", None)
+                        _atomic_write_json(
+                            self._turn_path(session_token, plan.turn_id),
+                            settled,
+                            preserve_mode=True,
+                        )
                     payload = settled
                 else:
                     current = self.load_turn(session_token, plan.turn_id)
@@ -1229,32 +1234,35 @@ class ChatSessionStore(ChatIngressStore):
 
         live_turns: list[dict[str, Any]] = []
         for turn in self.queued_turns(session_id):
-            expires_at = _instant(turn.get("expires_at"))
-            if expires_at is None or expires_at > now:
-                live_turns.append(turn)
-                continue
             turn_id = str(turn["turn_id"])
-            completed = utc_now()
-            turn.update(
-                {
-                    "status": "timed_out",
-                    "error_code": "session_queue_expired",
-                    "error": "Queued Agent ingress expired before dispatch.",
-                    "completed_at": completed,
-                    "last_activity_at": completed,
-                }
-            )
-            _atomic_write_json(
-                self._turn_path(session_id, turn_id),
-                turn,
-                preserve_mode=True,
-            )
-            self.append_event(
-                session_id,
-                turn_id,
-                kind="turn.failed",
-                payload={"error_code": "session_queue_expired"},
-            )
+            path = self._turn_path(session_id, turn_id)
+            with exclusive_file_lock(
+                path, agent_id="loopx-chat", operation="expire_queued_chat_turn",
+            ):
+                # Queue enumeration is only a candidate; a stop or claim may
+                # already own the Turn by the time its write lock is acquired.
+                current = self.load_turn(session_id, turn_id)
+                if current is None or current.get("status") != "queued":
+                    continue
+                expires_at = _instant(current.get("expires_at"))
+                if expires_at is None or expires_at > now:
+                    live_turns.append(current)
+                    continue
+                completed = utc_now()
+                current.update(
+                    {
+                        "status": "timed_out",
+                        "error_code": "session_queue_expired",
+                        "error": "Queued Agent ingress expired before dispatch.",
+                        "completed_at": completed,
+                        "last_activity_at": completed,
+                    }
+                )
+                _atomic_write_json(path, current, preserve_mode=True)
+                self.append_event(
+                    session_id, turn_id, kind="turn.failed",
+                    payload={"error_code": "session_queue_expired"},
+                )
         return live_turns
 
     def claim_next_queued_turn(
@@ -1324,38 +1332,60 @@ class ChatSessionStore(ChatIngressStore):
                     self._recover_queued_turn_input(session_id, turn)
                     if host_claim_id:
                         now_text = utc_now()
-                        turn.update(
-                            {
-                                "status": "running",
-                                "host_claim_id": _opaque_id(
-                                    host_claim_id,
-                                    field="host_claim_id",
-                                ),
-                                **(
-                                    {
-                                        "admitted_goal_instance_id": _opaque_id(
-                                            admitted_goal_instance_id,
-                                            field="admitted_goal_instance_id",
-                                        )
-                                    }
-                                    if admitted_goal_instance_id is not None
-                                    else {}
-                                ),
-                                "started_at": turn.get("started_at") or now_text,
-                                "last_activity_at": now_text,
-                            }
-                        )
-                        _atomic_write_json(
-                            self._turn_path(session_id, turn_id),
-                            turn,
-                            preserve_mode=True,
-                        )
-                        self.append_event(
-                            session_id,
-                            turn_id,
-                            kind="turn.claimed_by_attached_host",
-                            payload={"host_claim_id": host_claim_id},
-                        )
+                        turn_path = self._turn_path(session_id, turn_id)
+                        # Share the Turn write lock that `begin_turn_interrupt`
+                        # takes: the claim is the other writer of this Turn's
+                        # status and authority, so the queue scan above is only
+                        # a candidate. Re-reading under the lock means an
+                        # interrupt that already committed wins the transition
+                        # instead of being overwritten by this write, and a
+                        # claim that commits first is never rewritten from a
+                        # snapshot that predates it.
+                        with exclusive_file_lock(
+                            turn_path,
+                            agent_id="loopx-chat",
+                            operation="claim_queued_chat_turn",
+                        ):
+                            claimed = self.load_turn(session_id, turn_id)
+                            if claimed is None or claimed.get("status") != "queued":
+                                # Another writer owns this Turn now (an
+                                # interrupt, or a claim from another surface).
+                                # Starting a different queued Turn here would
+                                # leave the queue head in an unclaimed state.
+                                return None
+                            claimed.update(
+                                {
+                                    "status": "running",
+                                    "host_claim_id": _opaque_id(
+                                        host_claim_id,
+                                        field="host_claim_id",
+                                    ),
+                                    **(
+                                        {
+                                            "admitted_goal_instance_id": _opaque_id(
+                                                admitted_goal_instance_id,
+                                                field="admitted_goal_instance_id",
+                                            )
+                                        }
+                                        if admitted_goal_instance_id is not None
+                                        else {}
+                                    ),
+                                    "started_at": claimed.get("started_at") or now_text,
+                                    "last_activity_at": now_text,
+                                }
+                            )
+                            _atomic_write_json(
+                                turn_path,
+                                claimed,
+                                preserve_mode=True,
+                            )
+                            self.append_event(
+                                session_id,
+                                turn_id,
+                                kind="turn.claimed_by_attached_host",
+                                payload={"host_claim_id": host_claim_id},
+                            )
+                        turn = claimed
                     session.update(
                         {
                             "status": "busy",
@@ -1413,6 +1443,39 @@ class ChatSessionStore(ChatIngressStore):
                         or not isinstance(answer, dict) or payload.get("collaboration_answer", answer) != answer):
                     raise ValueError("original peer model output is immutable and belongs only to its admitted Turn")
             payload.update(changes)
+            _atomic_write_json(path, payload, preserve_mode=True)
+            return payload
+
+    def begin_turn_interrupt(
+        self,
+        session_id: str,
+        turn_id: str,
+        *,
+        expected_statuses: set[str],
+    ) -> dict[str, Any] | None:
+        """Record stop intent and enter `interrupting` as one Turn transition.
+
+        Holding the Turn write lock across the status check, the durable intent
+        event and the status write closes the completion race: a Turn that
+        already reached a terminal state cannot gain a stop-intent event after
+        its terminal outcome, and a Turn this call does interrupt cannot lose
+        that intent to a later completion. The event still precedes the status
+        change, so a crash between them leaves the requested stop recorded
+        rather than silently turning it into an automatic review.
+        """
+        path = self._turn_path(session_id, turn_id)
+        with exclusive_file_lock(
+            path,
+            agent_id="loopx-chat",
+            operation="begin_chat_turn_interrupt",
+        ):
+            payload = self.load_turn(session_id, turn_id)
+            if payload is None:
+                raise KeyError("chat turn was not found")
+            if payload.get("status") not in expected_statuses:
+                return None
+            self.append_event(session_id, turn_id, kind="turn.interrupt_requested", payload={})
+            payload["status"] = "interrupting"
             _atomic_write_json(path, payload, preserve_mode=True)
             return payload
 

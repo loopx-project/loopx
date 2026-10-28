@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.cli import main as cli_main  # noqa: E402
 from loopx.control_plane.coordination.local_authority import (  # noqa: E402
-    read_canonical_todos_if_promoted,
+    read_canonical_todos_if_promoted, CanonicalAuthorityRequired,
 )
 from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 
@@ -239,17 +239,22 @@ def assert_unpromoted_replan_preserves_todo_authority() -> None:
         project, runtime, workspace, registry = _write_fixture(root)
         state = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
         original_state = state.read_bytes()
-        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
-        result = _run_turn(
-            registry=registry, runtime=runtime, project=project,
-            workspace=workspace, host=_write_host(root), mode="material",
-        )
-        # Planning-only settlement does not grant a Todo writer or promote legacy
-        # state. The synthetic Host marker is the independently validated effect.
-        assert result["status"] == "committed", result
-        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
+        try:
+            read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)
+        except CanonicalAuthorityRequired as error:
+            assert error.payload["write_admitted"] is False
+            assert error.payload["legacy_fallback_used"] is False
+        else:
+            raise AssertionError("Unmigrated authority must refuse ordinary reads")
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            code = cli_main(["--registry", str(registry), "--runtime-root", str(runtime),
+                "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+                "--agent-id", AGENT_ID])
+        refusal = json.loads(output.getvalue())
+        assert code == 1 and refusal["error_code"] == "canonical_authority_required", refusal
+        assert refusal["write_admitted"] is False and refusal["legacy_fallback_used"] is False
         assert state.read_bytes() == original_state
-        assert (project / MARKER).with_suffix(".calls").read_text().splitlines() == ["material"]
+        assert not (project / MARKER).with_suffix(".calls").exists()
 
 
 def assert_canonical_turn_path_delta(provider: str) -> None:
@@ -258,9 +263,7 @@ def assert_canonical_turn_path_delta(provider: str) -> None:
         project, runtime, workspace, registry = _write_fixture(root)
         host = _write_host(root)
         # Select the provider explicitly to test canonical Todo preservation.
-        # The separate unpromoted case covers planning without a delivery Task;
-        # it must neither initialize Todo authority nor mutate the legacy state.
-        assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID) is None
+        # The separate unmigrated case proves explicit refusal without effects.
         calls = (project / MARKER).with_suffix(".calls")
         assert not calls.exists()
         import_fixture_authority(registry, GOAL_ID, provider=provider)

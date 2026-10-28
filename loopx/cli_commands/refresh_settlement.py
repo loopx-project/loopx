@@ -65,7 +65,7 @@ def settle_refreshed_turn(
         # call the lower-level debit without its receipt-producing adapter.
         result = subprocess.run(
             [sys.executable, "-m", "loopx.cli", "--format", "json", *command[1:]],
-            capture_output=True, text=True, timeout=60, check=False,
+            capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
         )
         value = json.loads(result.stdout)
         if not isinstance(value, dict):

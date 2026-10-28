@@ -126,7 +126,7 @@ def test_empty_projected_handoffs_suppress_raw_legacy_reconstruction(projected):
     assert "handoff_gate_count" not in result
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_public_quota_route_read_keeps_claim_exclusion_and_provider_unchanged(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -184,7 +184,7 @@ def test_quota_uses_complete_owned_commitment_count_before_display_cap(reverse):
     assert all(row["claimed_by"] == "agent-b" for row in result["first_executable_items"])
 
 
-@pytest.mark.parametrize("display", ["legacy", "empty", "stale"])
+@pytest.mark.parametrize("display", ["current", "empty", "stale"])
 @pytest.mark.parametrize("scope", ["global_gate=true", "blocks_agent=agent-b"])
 def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, display: str, scope: str):
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
@@ -199,16 +199,15 @@ def test_public_quota_keeps_gate_from_real_canonical_provider(tmp_path: Path, di
     write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
         goal_id="goal-scope", domain="quota-scope", adapter_kind="generic_project_goal_v0",
         state_file=str(state), registered_agents=["agent-a", "agent-b"], quota_allowed_slots=None)
-    if display != "legacy":
-        goal = json.loads(registry.read_text())["goals"][0]
-        fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
-        projection = build_todo_runtime_shadow_projection(goal_id="goal-scope",
-            todos=fields["agent_todos"]["items"] + fields["user_todos"]["items"], handoff_mode="soft_claim")
-        initialize_canonical_authority(runtime, "goal-scope", projection, state_path=state)
-        if display == "empty":
-            empty_todo_display(state)
-        else:
-            state.write_text("# Stale projection\n## User Todo\n- [x] Old approval.\n")
+    goal = json.loads(registry.read_text())["goals"][0]
+    fields = parse_active_state_todos(state.read_text(), goal=goal, item_limit=None)
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-scope",
+        todos=fields["agent_todos"]["items"] + fields["user_todos"]["items"], handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, "goal-scope", projection, state_path=state)
+    if display == "empty":
+        empty_todo_display(state)
+    elif display == "stale":
+        state.write_text("# Stale projection\n## User Todo\n- [x] Old approval.\n")
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-scope",
         "--agent-id", "agent-b",  registry_path=registry, runtime_root=runtime)

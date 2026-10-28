@@ -72,12 +72,13 @@ def _write_canonical_workspace(
     tmp_path: Path,
     *,
     handoff_mode: str,
+    registered_agents: list[str] | None = None,
 ) -> tuple[Path, Path]:
     registry, _runtime, state = promoted_create_fixture(
         tmp_path,
         goal_id=GOAL_ID,
         handoff_mode=handoff_mode,
-        registered_agents=[AGENT_A, AGENT_B],
+        registered_agents=registered_agents if registered_agents is not None else [AGENT_A, AGENT_B],
     )
     return registry, state
 
@@ -285,16 +286,38 @@ def test_handoff_mode_set_same_value_is_idempotent(
 # ---------------------------------------------------------------------------
 
 
-def test_cli_todo_claim_in_hard_mode_maps_typed_error_code(
+@pytest.mark.parametrize(
+    ("claim_actor", "registered_agents", "lease_args", "expected_error"),
+    [
+        (None, [AGENT_B], (), "handoff_mode_requires_lease"),
+        (AGENT_A, [AGENT_A, AGENT_B], (), "claim_actor_mismatch"),
+        (
+            AGENT_B,
+            [AGENT_A, AGENT_B],
+            ("--task-lease-idempotency-key", "missing-proof", "--task-lease-expected-version", "1"),
+            "version_mismatch",
+        ),
+    ],
+)
+def test_cli_hard_mode_claim_maps_typed_refusals_without_writing(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    claim_actor: str | None,
+    registered_agents: list[str],
+    lease_args: tuple[str, ...],
+    expected_error: str,
 ) -> None:
     registry, _state = _write_canonical_workspace(
         tmp_path,
         handoff_mode=HANDOFF_MODE_HARD_LEASE,
+        registered_agents=registered_agents,
     )
     todo = _add_todo(registry)
+    _, before = _run_cli(capsys, registry, "todo", "list", "--goal-id", GOAL_ID)
 
+    # Only explicit self-claim prepares execution. The old single-agent call
+    # without an actor still needs a lease; foreign actors and wrong CAS fail
+    # earlier without authorizing or mutating the assignment.
     exit_code, payload = _run_cli(
         capsys,
         registry,
@@ -306,14 +329,18 @@ def test_cli_todo_claim_in_hard_mode_maps_typed_error_code(
         todo["todo_id"],
         "--claimed-by",
         AGENT_B,
-        "--agent-id",
-        AGENT_B,
+        *(() if claim_actor is None else ("--agent-id", claim_actor)),
+        *lease_args,
     )
 
     assert exit_code == 1
     assert payload["ok"] is False
-    assert payload["error_code"] == "handoff_mode_requires_lease"
-    assert payload["handoff_mode"] == HANDOFF_MODE_HARD_LEASE
+    assert payload["error_code"] == expected_error
+    if expected_error == "handoff_mode_requires_lease":
+        assert payload["handoff_mode"] == HANDOFF_MODE_HARD_LEASE
+    _, after = _run_cli(capsys, registry, "todo", "list", "--goal-id", GOAL_ID)
+    assert after["todos"] == before["todos"]
+    assert after["authority_read"] == before["authority_read"]
 
 
 def test_cli_task_lease_acquire_in_soft_mode_maps_typed_error_code(

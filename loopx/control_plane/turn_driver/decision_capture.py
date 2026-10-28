@@ -133,27 +133,30 @@ CONTEXT_CAPTURE_READ_GUIDANCE = (
 )
 
 
-# Leave room below the native 2000-token exec output boundary for framing.
-# This does not establish downstream retained-history capacity or retention.
-NATIVE_CONTEXT_PAGE_BYTES = 8192
-NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 7900
-# Installed together by the opt-in native configuration. Unknown hosts retain
-# the small-page boundary; this declaration is output capacity, not retention.
+# Use the existing configured native output profile for every native caller,
+# including App shells that do not inherit the generated environment override.
+# Smaller explicit reader budgets remain available for same-capture recovery.
+NATIVE_CONTEXT_PAGE_BYTES = 64000
+NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 64000
+# Keep the configuration declaration usable by older installed readers too.
 NATIVE_CONTEXT_LARGE_OUTPUT_BYTES = 64000
 NATIVE_CONTEXT_HISTORY_TOKENS = 20000
 NATIVE_CONTEXT_OUTPUT_ENV = "LOOPX_CONTEXT_PAGE_OUTPUT_BYTES"
 
 
 def native_context_page_budget() -> tuple[int, int]:
-    if os.environ.get(NATIVE_CONTEXT_OUTPUT_ENV) == str(NATIVE_CONTEXT_LARGE_OUTPUT_BYTES):
-        return NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_LARGE_OUTPUT_BYTES
     return NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
 
 
-def context_capture_read_command(path: Path, digest: str, *, offset: int = 0, page_bytes: int = 4096,
+def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
+                                 page_bytes: int | None = None,
                                  max_page_output_bytes: int | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
+    if page_bytes is None:
+        page_bytes = NATIVE_CONTEXT_PAGE_BYTES
+        if max_page_output_bytes is None:
+            max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes),

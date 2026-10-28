@@ -52,6 +52,7 @@ Claude Code analogue of Codex's identity-scoped heartbeat prompt.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -156,6 +157,7 @@ def should_run(registry, goal_id, agent_id=None) -> bool | None:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
+            env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
         )
         if _runtime_profile_flag_is_unsupported(out):
             out = subprocess.run(
@@ -163,6 +165,7 @@ def should_run(registry, goal_id, agent_id=None) -> bool | None:
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 timeout=10,
+                env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"},
             )
     except Exception:
         return None  # caller fails CLOSED on None for non-read-only tools

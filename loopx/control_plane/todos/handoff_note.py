@@ -6,71 +6,33 @@ No fallback decision kernel runs when the typed owner is unavailable.
 """
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 from typing import Any
-
-from .contract import (
-    normalize_todo_action_kind, normalize_todo_claimed_by, normalize_todo_decision_scope,
-    normalize_todo_excluded_agents, normalize_todo_id, normalize_todo_id_list,
-    normalize_todo_required_decision_scopes, normalize_todo_resume_when,
-)
 
 TODO_HANDOFF_NOTE_SCHEMA_VERSION = "handoff_note_v0"
 TODO_CONTINUATION_HINT_MAX_CHARS = 280
-_TEXT_FIELDS = ("continuation_hint", "suggested_next_action", "note", "reason", "summary",
-                "intent", "blocked_on", "evidence", "title", "text", "task_class", "goal_id",
-                "source", "latest_event_kind")
 
 
-def _refs(value: Any) -> dict[str, Any]:
-    values = [str(raw or "") for raw in value] if isinstance(value, (list, tuple, set)) else []
-    return {**({"truthy": True} if value else {}), **({"values": values} if values else {})}
+def todo_read_source(item: dict[str, Any], **overrides: Any) -> dict[str, Any]:
+    """Carry raw values plus Python-only string/repr facts, without field rules."""
+    facts: list[Any] = []
 
+    def encode(value: Any, path: list[Any]) -> Any:
+        if isinstance(value, dict):
+            result = {str(key): encode(val, [*path, str(key)]) for key, val in value.items()}
+        elif isinstance(value, (list, tuple, set)):
+            result = [encode(val, [*path, index]) for index, val in enumerate(value)]
+        elif value is None or isinstance(value, (str, bool, int, float)):
+            result = str(value) if isinstance(value, float) and not math.isfinite(value) else value
+        else:
+            result = str(value or "")
+        if isinstance(value, (tuple, set, float)) or not isinstance(value, (dict, list, str, bool, int, type(None))):
+            facts.append([path, str(value or ""), repr(value)])
+        return result
 
-def handoff_context_source(item: dict[str, Any], *, goal_id: str | None = None,
-                           source: str | None = None) -> dict[str, Any]:
-    """Encode language-native scalar facts; selection/compaction belongs to TS."""
-    nested: dict[str, Any] = {}
-    nested_meta: dict[str, Any] = {}
-    for name in ("handoff", "handoff_note"):
-        value = item.get(name)
-        row = value if isinstance(value, dict) else {}
-        if value:
-            nested[name] = {"truthy": True, "fields":
-                {key: str(val or "") for key, val in row.items()} if isinstance(value, dict) else None}
-        nested_meta[name] = {
-            "from_agent": normalize_todo_claimed_by(row.get("from_agent") or item.get("agent_id")),
-            "to_agent": normalize_todo_claimed_by(row.get("to_agent")),
-            "evidence_refs": _refs(row.get("evidence_refs")),
-        }
-    todo_id = normalize_todo_id(item.get("todo_id"))
-    legacy_id = None if todo_id else "handoff_" + hashlib.sha1(str((
-        item.get("goal_id"), item.get("role"), item.get("index"), item.get("text") or item.get("title"),
-    )).encode("utf-8")).hexdigest()[:12]
-    result = {**nested, "nested_metadata": nested_meta,
-        "texts": {key: str(item[key]) for key in _TEXT_FIELDS if item.get(key)},
-        "metadata": {"todo_id": todo_id,
-            "claimed_by": normalize_todo_claimed_by(item.get("claimed_by")),
-            "excluded_agents": normalize_todo_excluded_agents(item.get("excluded_agents")),
-            "successor_todo_ids": normalize_todo_id_list(item.get("successor_todo_ids")),
-            "unblocks_todo_id": normalize_todo_id(item.get("unblocks_todo_id")),
-            "superseded_by": normalize_todo_id(item.get("superseded_by")),
-            "action_kind": normalize_todo_action_kind(item.get("action_kind")),
-            "resume_when": normalize_todo_resume_when(item.get("resume_when")),
-            "required_decision_scopes": normalize_todo_required_decision_scopes(item.get("required_decision_scopes")),
-            "decision_scope": normalize_todo_decision_scope(item.get("decision_scope"))},
-        "evidence_refs": _refs(item.get("evidence_refs")),
-        "has_evidence": bool(item.get("evidence")), "has_note": bool(item.get("note")),
-        "goal_id": str(goal_id or ""), "source": str(source or ""), "legacy_id": legacy_id}
-
-    # Omitted empty scalar/list facts have the codec's explicit empty default.
-    # Nested text keys are kept, including "", because presence changes priority.
-    for name, row in nested_meta.items():
-        nested_meta[name] = {key: value for key, value in row.items() if value}
-    result["metadata"] = {key: value for key, value in result["metadata"].items() if value}
-    result["nested_metadata"] = {key: value for key, value in nested_meta.items() if value}
-    return {key: value for key, value in result.items() if value}
+    record = encode(item, [])
+    return {"record": record, **({"python_values": facts} if facts else {}), **overrides}
 
 
 def validate_handoff_context(value: Any, count: int) -> list[dict[str, Any]]:
@@ -124,14 +86,14 @@ def project_handoff_context(sources: list[dict[str, Any]], *,
 
 
 def compact_todo_continuation_hint(item: dict[str, Any]) -> str | None:
-    return project_handoff_context([handoff_context_source(item)])[0]["continuation_hint"]
+    return project_handoff_context([todo_read_source(item)])[0]["continuation_hint"]
 
 
 def build_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None,
                             source: str | None = None) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
-    return project_handoff_context([handoff_context_source(item, goal_id=goal_id, source=source)])[0]["note"]
+    return project_handoff_context([todo_read_source(item, goal_id=goal_id, source=source)])[0]["note"]
 
 
 def attach_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None,
@@ -143,7 +105,7 @@ def attach_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None
 
 
 def attach_todo_handoff_notes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    results = project_handoff_context([handoff_context_source(item) for item in items])
+    results = project_handoff_context([todo_read_source(item) for item in items])
     for item, result in zip(items, results, strict=True):
         if result["note"]:
             item["handoff_note"] = result["note"]

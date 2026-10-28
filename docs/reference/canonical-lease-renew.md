@@ -4,11 +4,16 @@ An already promoted File or SQLite Goal runs `task-lease acquire`, `renew`,
 `transfer` and `release` through TS-owned provider transactions. Fresh execution
 and expired/ineffective-holder takeover now use the complete canonical head;
 previously standalone acquire still entered the fenced legacy file writer.
-Unpromoted Goals retain historical lease inspection, exact release and original
-receipt recovery. Fresh acquire, renew and transfer require reviewed import and
+Unpromoted Goals retain historical lease inventory through the migration reader,
+exact release and original receipt recovery. Ordinary `task-lease inspect` requires
+canonical authority; it does not select a historical source as current proof. Fresh acquire, renew and transfer require reviewed import and
 return `canonical_authority_required` with backup-and-migrate recovery, including
 `transfer --transfer-claim`. A provider selector does not promote a Goal or grant
 execution authority.
+
+未迁移 Goal 的历史租约由迁移 inventory reader 读取；普通 `task-lease inspect`
+要求 canonical authority，不把历史记录当作当前执行证明。精确 release 与原回执恢复
+仍可用于清理，均不授予新的执行权限。
 
 > **2.0 cutoff:** the capture-isolation section below records the pre-cutoff
 > migration stage, not an available Markdown write route. Retained receipts,

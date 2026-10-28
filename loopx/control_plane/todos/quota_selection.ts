@@ -1,3 +1,4 @@
+import {projectTodoSummaryDisplay} from "./context_projection.ts";
 import {isBoundedBlockedRetry} from "../quota/settlement_phase.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {countTodoWork, decodeMonitorSchedule, monitorIsDue, monitorHasScheduleGap,
@@ -417,7 +418,15 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
       "todo_quota_planning_request_v3", "todo_quota_planning_request_v4"].includes(String(request.schema_version))) {
     throw new EffectRuntimeRequestError("quota planning schema mismatch");
   }
-  const selection = requireJsonObject(request.selection, "selection");
+  const selection = {...requireJsonObject(request.selection, "selection")};
+  for (const key of ["items", "active_items", "active_executable_items"]) {
+    if (!Array.isArray(selection[key])) continue;
+    selection[key] = (selection[key] as unknown[]).map(value => {
+      const row = requireJsonObject(value, "selection display source");
+      return row.display_source === undefined ? row : {...row,
+        display: projectTodoSummaryDisplay({items: [row.display_source], strip_text: true})[0]};
+    });
+  }
   if (request.schema_version !== "todo_quota_planning_request_v0") {
     requireStringArray(selection.available, "available");
   }

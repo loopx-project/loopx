@@ -97,8 +97,19 @@ def test_source_lease_lifecycle_uses_retained_reader(
         "updated_at": "2026-09-01T00:00:00Z",
         "expires_at": "2099-01-01T00:00:00Z",
     }
+    def retained_source_record():
+        return json.loads(subprocess.check_output(
+            [sys.executable, "-S", "-c",
+             "import json,sys;from pathlib import Path;"
+             "from loopx.control_plane.work_items.local_lease_record import read_lease;"
+             "print(json.dumps(read_lease(Path(sys.argv[1]))))", str(lease_path)],
+            cwd=tmp_path, text=True, timeout=30,
+        ))
+
     lease_path.write_text(json.dumps(historical))
-    assert lease("inspect")["lease"] == historical
+    refused = lease("inspect", success=False)
+    assert refused["error_code"] == "canonical_authority_required"
+    assert retained_source_record() == historical
 
     renew = lease(
         "renew",
@@ -126,7 +137,9 @@ def test_source_lease_lifecycle_uses_retained_reader(
         success=False,
     )
     assert transfer["error_code"] == "canonical_authority_required"
-    assert lease("inspect")["lease"] == historical
+    refused = lease("inspect", success=False)
+    assert refused["error_code"] == "canonical_authority_required"
+    assert retained_source_record() == historical
 
     released = lease(
         "release",
@@ -137,8 +150,9 @@ def test_source_lease_lifecycle_uses_retained_reader(
         "1",
     )
     assert released["lease"]["status"] == "released"
-    retained = lease("inspect")
-    assert not retained["active"] and retained["lease"] == released["lease"]
+    retained = retained_source_record()
+    assert retained == released["lease"] and retained["status"] == "released"
+    assert lease("inspect", success=False)["error_code"] == "canonical_authority_required"
     assert (w.state.read_bytes(), w.registry.read_bytes()) == original
     if capture:
         # Read the retained journal after the lifecycle; no capture remains pending.

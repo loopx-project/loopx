@@ -192,6 +192,9 @@ def main() -> None:
             encoding="utf-8",
         )
 
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        import_fixture_authority(registry, GOAL_ID, provider="sqlite")
+
         packet_path = temp / "packet.json"
         contract, dev, holdout = write_contract_and_results(temp)
         packet_path.write_text(

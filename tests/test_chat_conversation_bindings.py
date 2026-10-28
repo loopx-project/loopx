@@ -17,6 +17,82 @@ def _history_page_brief():
         "inputs": [], "acceptance": ["Return the original conclusion"], "return_requirement": "Return here"}
 
 
+@pytest.mark.parametrize("change", ["status", "new-input", "source-read-input", "unrelated-source", "revoked", "unknown-native", "unchanged"])
+def test_slow_failed_request_probe_does_not_hold_the_source_route(steward, monkeypatch, change):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    fake = Path(runtime.codex_bin)
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "contextWindowExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    event = provider.event("steward-app", "slow-native-read", "typed terminal failure")
+    transport.admit("steward-app", event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    row = transport.core.read_request(ref)
+    failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+    assert failed["status"] == "failed" and failed["delta_count"] == 0
+    store.update_session(row["session_id"], manager_context_version=20)
+    assert transport.reconcile() == 1
+    original = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+    before = capture.read_bytes()
+    started, release = threading.Event(), threading.Event()
+
+    def slow_probe(**_):
+        started.set()
+        assert release.wait(10)
+        # Even a valid read cannot override input or revocation during IO.
+        return None if change == "unknown-native" else {"thread_id": "durable-thread",
+            "turn_id": failed["upstream_turn_id"], "only_original_user_item": True,
+            "codex_error_info": "contextWindowExceeded"}
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(slow_probe))
+
+    def source_observation(_):
+        if change == "source-read-input":
+            store.create_queued_turn(row["session_id"], client_turn_id="input-during-source-read",
+                message="A correction while reading the provider", origin="web")
+        return {"verified": True}
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        recovery = pool.submit(transport.core.recover_failed_request, ref,
+            source_observation=source_observation)
+        try:
+            assert started.wait(5)
+            if change in {"status", "unknown-native"}:
+                begin = time.monotonic()
+                admitted = transport.admit("steward-app", provider.event("steward-app", "during-native-read", "/status"))
+                assert admitted["status"] == "command_recorded"
+                assert time.monotonic() - begin < 1, "Native readback must not block fresh source admission"
+            elif change == "new-input":
+                store.create_queued_turn(row["session_id"], client_turn_id="later-correction",
+                    message="A later original correction", origin="lark")
+            elif change == "unrelated-source":
+                assert transport.admit("notes-app", provider.event("notes-app", "other-original-source", "/status"))["status"] == "command_recorded"
+            elif change == "revoked":
+                transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        finally:
+            release.set()
+        if change == "revoked":
+            with pytest.raises(ValueError):
+                recovery.result(timeout=10)
+        elif change in {"unchanged", "unrelated-source"}:
+            continued = recovery.result(timeout=10)
+            assert continued["turn_id"] != row["turn_id"]
+            assert continued["session_id"] == row["session_id"]
+            runtime.wait_for_turn(session_id=row["session_id"], turn_id=continued["turn_id"], timeout_sec=10)
+            assert transport.core.recover_failed_request(ref, source_observation=lambda _: pytest.fail("duplicate recovery"))["turn_id"] == continued["turn_id"]
+        else:
+            assert recovery.result(timeout=10)["turn_id"] == row["turn_id"]
+    assert bool(transport.core.read_request(ref).get("context_recovery")) is (change in {"unchanged", "unrelated-source"})
+    assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == original
+    if change not in {"unchanged", "unrelated-source"}:
+        assert capture.read_bytes() == before, "Unknown or changed state cannot create or resume model work"
+
+
 def test_history_page_keeps_one_original_collaboration_carrier(flow, monkeypatch):  # noqa: F811
     from loopx.capabilities.manager_context.roundtrip import project_chat_session_snapshot
 

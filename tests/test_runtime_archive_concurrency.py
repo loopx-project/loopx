@@ -300,11 +300,11 @@ def test_archive_waits_for_quota_writer_before_moving_goal(
         registry_path = tmp_path / "registry.json"
         _write_legacy_registry(registry_path, runtime_root)
 
-        def paused_effect(method: str, params: dict[str, Any]) -> Any:
+        def paused_effect(method: str, params: dict[str, Any], **kwargs: Any) -> Any:
             writer_paused.set()
             if not continue_writer.wait(timeout=10):
                 raise TimeoutError("legacy quota writer barrier was not released")
-            return actual_effect_runtime_result(method, params)
+            return actual_effect_runtime_result(method, params, **kwargs)
 
         monkeypatch.setattr(spend_commit, "effect_runtime_result", paused_effect)
 

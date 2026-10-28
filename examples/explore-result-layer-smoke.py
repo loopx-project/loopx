@@ -28,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from loopx.capabilities.explore import result_log  # noqa: E402
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
 from loopx.capabilities.explore.router_state import (  # noqa: E402
     advance_epoch,
     scope_family_key,
@@ -1189,6 +1190,8 @@ def check_cli_surface() -> None:
             + "\n",
             encoding="utf-8",
         )
+
+        import_fixture_authority(registry, goal_id, provider="sqlite")
 
         def run_cli(*extra_args: str) -> dict[str, object]:
             result = subprocess.run(

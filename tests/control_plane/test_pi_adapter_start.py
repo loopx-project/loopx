@@ -94,6 +94,8 @@ def test_pi_start_preserves_native_identity_authority(tmp_path, monkeypatch, cas
     }
     source = {"schema_version": "0.1", "common_runtime_root": str(runtime), "goals": [goal]}
     registry.write_text(json.dumps(source), encoding="utf-8")
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(runtime, "pi-test", state_path=state, provider="sqlite")
     global_registry = runtime / "registry.global.json"
     global_registry.write_text(json.dumps({
         **source, "registry_role": "global-local",

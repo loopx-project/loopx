@@ -212,7 +212,7 @@ def test_non_managed_prepare_does_not_mount_managed_source_resolution(tmp_path: 
 
 
 def test_managed_prepare_selects_registered_return_audience_without_rebinding_executor(tmp_path: Path) -> None:
-    from loopx.control_plane.turn_driver.codex_operation_host import operation_tool_handler
+    from loopx.control_plane.turn_driver.managed_operation_host import operation_tool_handler
 
     service, store = _service(tmp_path)
     registry = json.loads(service.registry_path.read_text())

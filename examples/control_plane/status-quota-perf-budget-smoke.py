@@ -242,8 +242,8 @@ def main() -> int:
         assert after["authority_read"]["legacy_fallback_used"] is False, after
         assert state_file.read_text(encoding="utf-8") == tampered
 
-        # Malformed historical source still has a read-only diagnostic/budget
-        # contract. It cannot act as the authority of the imported fixture.
+        # Malformed historical source must refuse within the same read budget,
+        # without falling back to its display or changing the imported fixture.
         registry_path, project, public_doc = write_fixture(root / "legacy-inspection", import_authority=False)
         state_file = project / ".codex" / "goals" / GOAL_ID / "ACTIVE_GOAL_STATE.md"
         state_text = state_file.read_text(encoding="utf-8")
@@ -272,7 +272,7 @@ def main() -> int:
             or []
         )
         assert any(
-            item.get("code") == "todo_status_invalid"
+            item.get("code") == "canonical_authority_required"
             for item in error_diagnostics
             if isinstance(item, dict)
         ), malformed_status_payload
@@ -303,13 +303,14 @@ def main() -> int:
             check=False,
         )
         assert malformed_quota_returncode != 0, malformed_quota_payload
-        assert malformed_quota_payload.get("status_health_ok") is False, (
-            malformed_quota_payload
-        )
+        assert malformed_quota_payload["ok"] is False, malformed_quota_payload
+        assert malformed_quota_payload["error_code"] == "canonical_authority_required"
+        assert malformed_quota_payload["write_admitted"] is False
+        assert malformed_quota_payload["legacy_fallback_used"] is False
         assert malformed_quota_payload.get("should_run") is False, (
             malformed_quota_payload
         )
-        assert malformed_quota_payload.get("effective_action") == "quota_skip", (
+        assert malformed_quota_payload.get("decision") == "skip", (
             malformed_quota_payload
         )
         assert PRIVATE_DOC_MARKER not in json.dumps(malformed_quota_payload), (

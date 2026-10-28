@@ -205,6 +205,10 @@ def main() -> int:
         assert migrated_run_payload["goal_id"] == NEW_GOAL_ID, migrated_run_payload
         assert "goal-harness" not in migrated_run_payload["recommended_action"], migrated_run_payload
 
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        # Path migration preserves source data; authority conversion is explicit.
+        import_fixture_authority(target_registry, NEW_GOAL_ID, provider="sqlite")
+
         status = run_loopx(
             "--registry",
             str(target_registry),

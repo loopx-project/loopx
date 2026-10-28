@@ -210,6 +210,11 @@ def test_public_quota_reads_revocation_from_full_history_without_mutating_displa
         registry_path=registry,
         runtime_root=runtime,
     )
+    if mode == "markdown":
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        return
     assert code == 0, packet
     authority = packet["standing_decision_authority"]
     assert authority["active_count"] == 0

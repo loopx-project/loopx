@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from canonical_authority_fixture import (
-    initialize_canonical_authority,
+    advance_canonical_fixture_authority, initialize_canonical_source_fixture, read_fixture_todos,
     isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
@@ -69,6 +69,7 @@ def test_interrupted_binding_survives_new_due_successor(
             )
             return rc, json.loads(capsys.readouterr().out)
 
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state, provider=provider)
     rc, vision = cli(
         "refresh-state",
         "--goal-id",
@@ -101,9 +102,8 @@ def test_interrupted_binding_survives_new_due_successor(
             )
         )
 
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID, "--limit", "200")
-    assert rc == 0, listed
-    initialize_canonical_authority(
+    listed = {"todos": read_fixture_todos(state)}
+    advance_canonical_fixture_authority(
         runtime,
         GOAL_ID,
         build_todo_runtime_shadow_projection(
@@ -121,8 +121,7 @@ def test_interrupted_binding_survives_new_due_successor(
             handoff_mode="hard_lease",
             leases=[],
         ),
-        state_path=state,
-        provider=provider,
+        operation_id="fixture-retained-frontier",
     )
 
     old_turn, new_turn = "interrupted-original", "current-after-interruption"

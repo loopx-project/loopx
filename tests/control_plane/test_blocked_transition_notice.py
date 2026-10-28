@@ -202,21 +202,6 @@ def test_compact_blocked_advancement_keeps_cause_for_fallback_notice() -> None:
     assert "private path" not in str(fallback)
 
 
-def test_compact_open_advancement_does_not_project_unneeded_reason() -> None:
-    open_item = {**_fallback(), "reason": "not an active blocker"}
-
-    assert "reason" not in compact_todo_summary_item(open_item)
-
-
-def test_compact_blocked_advancement_omits_unsafe_reason() -> None:
-    blocked = {
-        **_agent_owned_blocker(),
-        "reason": "/" + "Users/example/private/plan.md",
-    }
-
-    assert "reason" not in compact_todo_summary_item(blocked)
-
-
 def test_project_asset_blocked_advancement_cause_is_public_safe() -> None:
     blocked = _agent_owned_blocker()
     summary = {"items": [blocked], "first_open_items": [blocked], "open_count": 1}

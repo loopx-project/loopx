@@ -921,6 +921,15 @@ def test_agent_directory_withholds_a_credential_shaped_thread_from_the_packet(
     """
 
     registry = _registry(tmp_path, ["agent-a"])
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\n## Agent Todo\n", encoding="utf-8")
+    config = json.loads(registry.read_text())
+    config["common_runtime_root"] = str(runtime)
+    config["goals"][0].update(repo=str(tmp_path), state_file=str(state))
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, "goal", state_path=state)
     secret_thread = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234"
     assert (
         bind_thread_agent_in_registry(

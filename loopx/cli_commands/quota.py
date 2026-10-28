@@ -451,7 +451,8 @@ def _emit_quota_result(
                     "command": context_capture_read_command(original, capture_id),
                 }
             payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
-                metadata={"capture_sha256": capture_id, "recovery": recovery})
+                metadata={"capture_sha256": capture_id, "recovery": recovery},
+                max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(

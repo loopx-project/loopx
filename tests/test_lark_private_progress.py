@@ -703,7 +703,19 @@ def test_split_draft_retires_only_after_readback_and_keeps_the_full_next_reply(o
             sent = len(provider.writes)
             assert transport._deliver(path, record, "terminal", draft + "Final.", inbox=inbox)
             assert len(provider.writes) == sent
-            final_parts = [text.split("\n\n", 1)[1] for _, text in provider.writes[count:]]
+            from loopx.extensions.lark.post_delivery import _path
+
+            attempt = record["deliveries"]["terminal"]["attempt"]
+            assert attempt["message_ref"].startswith("lark-parts:")
+            parts = _read_json(_path(transport.runtime_root, inbox(), attempt["intent_digest"]))
+            concrete = [parts["delivery_part_attempts"][str(index)]["message_ref"]
+                        for index in range(len(parts["delivery_parts"]))]
+            assert len(concrete) == len(set(concrete))
+            # Inspect every retained provider post, including a verified draft
+            # prefix reused by the final delivery, against the authored text.
+            final_parts = [json.loads(provider.messages[ref]["body"]["content"])
+                           ["zh_cn"]["content"][0][0]["text"].split("\n\n", 1)[1]
+                           for ref in concrete]
             assert "".join(final_parts) == draft + "Final."
         assert all(message["msg_type"] == "post" for ref, message in provider.messages.items() if ref.startswith("om_out_"))
     finally:

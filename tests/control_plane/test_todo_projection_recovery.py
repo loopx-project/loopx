@@ -318,7 +318,7 @@ def test_unpromoted_missing_document_is_not_regenerated(canonical_display):
     state.unlink()
     legacy_coordination_writer_fence_path(runtime_root=runtime, goal_id="goal-a").unlink()
     code, result = _run(registry, revision, "--execute")
-    assert code == 1 and "requires promoted canonical authority" in result["error"]
+    assert code == 1 and result["error_code"] == "canonical_authority_required"
     assert not state.exists()
 
 

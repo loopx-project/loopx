@@ -26,6 +26,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
+from ..quota.turn_envelope import TurnControllerInput
 from .host_failure import normalize_host_failure_record, project_host_failure
 from .loop_controller import (
     LOOP_CONTROLLER_DISPOSITION_SCHEMA_VERSION,
@@ -270,7 +271,7 @@ def _managed_payload(
 
 def decide_managed_step(
     journal: Mapping[str, Any],
-    fresh_decision: Mapping[str, Any],
+    fresh_decision: Mapping[str, Any] | TurnControllerInput,
     *,
     goal_id: str,
     agent_id: str,
@@ -311,14 +312,14 @@ def decide_managed_step(
         agent_id=agent_id,
         turn_key=turn_key,
     )
-    envelope = _mapping(fresh_decision)
+    envelope = fresh_decision.envelope() if isinstance(fresh_decision, TurnControllerInput) else _mapping(fresh_decision)
     if str(envelope.get("goal_id") or "") not in {"", goal_id}:
         raise ValueError("fresh decision goal_id does not match the managed step")
     if str(envelope.get("agent_id") or "") not in {"", agent_id}:
         raise ValueError("fresh decision agent_id does not match the managed step")
     disposition = decide_loop_disposition(
         turn_receipt=receipt,
-        quota_decision=envelope,
+        quota_decision=fresh_decision if isinstance(fresh_decision, TurnControllerInput) else envelope,
         predecessor_turn_key=(
             turn_key if predecessor_turn_key is None else predecessor_turn_key
         ),

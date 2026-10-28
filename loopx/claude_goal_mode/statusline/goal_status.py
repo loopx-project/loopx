@@ -16,6 +16,7 @@ goal here or goal-mode is off.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -86,7 +87,8 @@ def main():
         cmd += ["--format", "json", "quota", "should-run", "--goal-id", gid]
         if st.get("agent_id"):
             cmd += ["--agent-id", st["agent_id"]]
-        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8)
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8,
+            env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"})
         d = json.loads(out.stdout or "{}")
         print(_render(gid, d))
     except Exception:

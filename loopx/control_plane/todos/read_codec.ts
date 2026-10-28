@@ -68,7 +68,7 @@ export function readExcludedAgents(value: unknown): string[] {
 }
 export const readNoFollowup = (value: unknown): boolean | null => normalizeTodoNoFollowup(typeof value === "boolean" ? value : text(value || ""));
 export function readResume(value: unknown): string | null {
-  const candidate = compactPythonWhitespace(text(value || ""));
+  const candidate = compactPythonWhitespace(scalarText(value));
   const known = normalizeTodoResumeWhen({schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when: candidate});
   if (known) return known;
   const lowered = candidate.toLowerCase();
@@ -78,12 +78,12 @@ export function readResume(value: unknown): string | null {
 export function readScope(value: unknown): JsonObject | null {
   if (value == null || value === "") return null;
   const raw = typeof value === "string" ? value : object(value);
-  const selected = typeof raw === "string" ? raw : {kind: raw.kind, granularity: raw.granularity, scope_key: raw.scope_key,
+  const selected = typeof raw === "string" ? raw : {kind: pythonFieldText(raw, "kind"), granularity: pythonFieldText(raw, "granularity"), scope_key: pythonFieldText(raw, "scope_key"),
     ...(id(raw.decision_id) ? {decision_id: id(raw.decision_id)} : {})};
   try {return normalizeTodoDecisionScope(selected);}
   catch (error) {if (error instanceof EffectRuntimeRequestError) return null; throw error;}
 }
-function readScopes(value: unknown): JsonObject[] {
+export function readScopes(value: unknown): JsonObject[] {
   const values = listValues(value), result: JsonObject[] = [];
   for (const raw of values) {
     const scope = readScope(raw);
@@ -104,8 +104,8 @@ function readCapabilities(value: unknown): string[] {
   }
   return result;
 }
-function writeScopes(value: unknown): string[] {
-  const scopes = listValues(value).map(raw => compactPythonWhitespace(scalarText(raw))).filter(scope => scope &&
+export function writeScopes(value: unknown): string[] {
+  const scopes = listValues(value).map((raw, i) => compactPythonWhitespace(Array.isArray(value) ? pythonFieldText(value, i) : scalarText(raw))).filter(scope => scope &&
     Array.from(scope).length <= 160 && !scope.startsWith("/") && !scope.startsWith("~") && !scope.split("/").includes("..") && !/[ <>]/u.test(scope));
   return [...new Set(scopes)];
 }
@@ -114,8 +114,8 @@ const truthy = (v: unknown): boolean => Array.isArray(v) ? v.length > 0 : v !== 
 function repr(value: unknown): string {
   if (value == null) return "None";
   if (typeof value === "boolean") return value ? "True" : "False";
-  if (Array.isArray(value)) return "[" + value.map(repr).join(", ") + "]";
-  if (typeof value === "object") return "{" + Object.entries(value).map(([k, v]) => `${repr(k)}: ${repr(v)}`).join(", ") + "}";
+  if (Array.isArray(value)) return "[" + value.map((_, i) => fieldRepr(value, i)).join(", ") + "]";
+  if (typeof value === "object") return "{" + Object.entries(value).map(([k, v]) => `${repr(k)}: ${fieldRepr(value as JsonObject, k)}`).join(", ") + "}";
   if (typeof value !== "string") return String(value);
   const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
   return quote + Array.from(value).map(point => {
@@ -133,22 +133,50 @@ function repr(value: unknown): string {
 }
 const scalarText = (value: unknown): string => !truthy(value) ? "" : typeof value === "string" ? value : repr(value);
 
+// Request-local Python scalar facts. These are codecs, never persisted metadata.
+const pythonValues = new WeakMap<object, Map<string, unknown[]>>();
+export function decodeTodoReadSource(value: JsonObject): JsonObject {
+  const record = object(value.record);
+  for (const fact of (value.python_values ?? []) as unknown[][]) {
+    const path = fact[0] as (string | number)[];
+    let parent: JsonObject = record;
+    for (const key of path.slice(0, -1)) parent = parent[key] as JsonObject;
+    const fields = pythonValues.get(parent) ?? new Map<string, unknown[]>();
+    fields.set(String(path.at(-1)), fact.slice(1)); pythonValues.set(parent, fields);
+  }
+  return record;
+}
+export function pythonFieldText(row: JsonObject | unknown[], key: string | number): string {
+  return pythonValues.get(row)?.get(String(key))?.[0] as string ?? scalarText((row as JsonObject)[key]);
+}
+function fieldRepr(row: JsonObject | unknown[], key: string | number): string {
+  return pythonValues.get(row)?.get(String(key))?.[1] as string ?? repr((row as JsonObject)[key]);
+}
+export function copyTodoPythonValues(source: JsonObject, target: JsonObject): void {
+  const fields = pythonValues.get(source);
+  if (fields) pythonValues.set(target, new Map([...fields].filter(([key]) => target[key] === source[key])));
+}
+export function handoffReadSource(value: JsonObject): JsonObject {
+  if (value.record === undefined) return value; // retained already-encoded transport callers
+  return {...handoffSource(decodeTodoReadSource(value)), goal_id: value.goal_id ?? "", source: value.source ?? ""};
+}
+
 export function handoffSource(item: JsonObject): JsonObject {
   const refs = (value: unknown): JsonObject => ({...(truthy(value) ? {truthy: true} : {}),
-    ...(Array.isArray(value) && value.length ? {values: value.map(scalarText)} : {})});
+    ...(Array.isArray(value) && value.length ? {values: value.map((_, i) => pythonFieldText(value, i))} : {})});
   const nestedMetadata: JsonObject = {}, nested: JsonObject = {};
   for (const key of ["handoff", "handoff_note"]) {
     const value = item[key], row = object(value);
     if (truthy(value)) nested[key] = {truthy: true, fields: value !== null && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(row).map(([k, v]) => [k, scalarText(v)])) : null};
+      ? Object.fromEntries(Object.entries(row).map(([k, v]) => [k, pythonFieldText(row, k)])) : null};
     nestedMetadata[key] = {from_agent: readAgent(truthy(row.from_agent) ? row.from_agent : item.agent_id),
       to_agent: readAgent(row.to_agent), evidence_refs: refs(row.evidence_refs)};
   }
   const fields = ["continuation_hint", "suggested_next_action", "note", "reason", "summary", "intent", "blocked_on", "evidence", "title", "text", "task_class", "goal_id", "source", "latest_event_kind"];
   const action = compactPythonWhitespace(scalarText(item.action_kind)).toLowerCase();
-  const legacy = "(" + [item.goal_id, item.role, item.index, truthy(item.text) ? item.text : item.title].map(repr).join(", ") + ")";
+  const legacy = "(" + ["goal_id", "role", "index", truthy(item.text) ? "text" : "title"].map(key => fieldRepr(item, key)).join(", ") + ")";
   return {...nested, nested_metadata: nestedMetadata,
-    texts: Object.fromEntries(fields.filter(key => truthy(item[key])).map(key => [key, scalarText(item[key])])),
+    texts: Object.fromEntries(fields.filter(key => truthy(item[key])).map(key => [key, pythonFieldText(item, key)])),
     metadata: {todo_id: id(item.todo_id), claimed_by: readAgent(item.claimed_by), excluded_agents: readExcludedAgents(item.excluded_agents),
       successor_todo_ids: ids(item.successor_todo_ids), unblocks_todo_id: id(item.unblocks_todo_id), superseded_by: id(item.superseded_by),
       action_kind: /^[a-z][a-z0-9_-]{0,63}$/.test(action) ? action : null, resume_when: readResume(item.resume_when),

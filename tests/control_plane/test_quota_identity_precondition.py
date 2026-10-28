@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from canonical_authority_fixture import initialize_canonical_source_fixture
 from loopx.cli import main
 from loopx.control_plane.agents.identity import build_quota_agent_identity
 from loopx.control_plane.quota.error_codes import (
@@ -66,6 +67,10 @@ def test_selected_registry_missing_roster_returns_typed_public_recovery(
         domain="quota-identity-precondition",
         adapter_kind="generic_project_goal_v0",
         registered_agents=[AGENT_ID],
+    )
+
+    initialize_canonical_source_fixture(
+        runtime_root, GOAL_ID, state_path=project_state_path(project, GOAL_ID), provider="sqlite",
     )
 
     exit_code = main(

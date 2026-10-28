@@ -264,22 +264,22 @@
       "value_notes": {
         "ready_for_host": "should_run with delivery_allowed and must_attempt set, and an effective action that is neither a replan nor a repair class. Projects to run_now, so a Host may be engaged.",
         "capability_action_required": "should_run whose effective action is governed_capability_intent and whose capability-intent projection matches the envelope goal and agent and names a command. A capability action runs before any Host; a malformed intent yields contract_error instead.",
-        "repair_required": "should_run whose effective action is an explicit typed REPAIR_ACTIONS member. Projects to repair; unregistered strings and spelling alone grant no repair authority.",
-        "replan_required": "should_run whose effective action is in REPLAN_ACTIONS: autonomous_replan, autonomous_replan_required or successor_replan_required. Projects to replan.",
+        "repair_required": "should_run whose effective action is classified as repair_required by the typed TURN_ACTION_ROUTES owner. Projects to repair; unregistered strings and spelling alone grant no repair authority.",
+        "replan_required": "should_run whose effective action is classified as replan_required by TURN_ACTION_ROUTES: autonomous_replan, autonomous_replan_required or successor_replan_required. Projects to replan.",
         "user_action_required": "Not should_run, and the envelope user slot marks an action required. Projects to the disposition of the same name.",
         "wait": "Not should_run, no user action required, and the action allows a quiet no-op. Projects to wait.",
         "blocked": "should_run without delivery_allowed or must_attempt, or not should_run with neither a user action nor a quiet no-op. Projects to wait, so a blocked lane waits rather than failing.",
         "contract_error": "A wrong envelope schema version, an action signature whose source and envelope hashes do not match, or a malformed capability intent. It is the one route with no disposition: the controller rejects instead of dispositioning."
       },
       "producers": [
+        "loopx/control_plane/quota/turn_envelope.ts::turnEnvelopeRoute",
         "loopx/control_plane/turn_driver/driver.py::_typed_route",
-        "loopx/control_plane/turn_driver/driver.py::unregistered_route",
         "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan",
         "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route"
       ],
       "return_producers": [
+        "loopx/control_plane/quota/turn_envelope.ts::turnEnvelopeRoute",
         "loopx/control_plane/turn_driver/driver.py::_typed_route",
-        "loopx/control_plane/turn_driver/driver.py::unregistered_route",
         "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route",
         "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"
       ],

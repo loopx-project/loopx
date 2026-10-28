@@ -8,7 +8,7 @@ from loopx.control_plane.coordination.local_authority import read_canonical_todo
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 
 
-@pytest.mark.parametrize("provider", ["markdown", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("explicit_target", [False, True, None])
 def test_quota_fallback_uses_real_source_and_explicit_relations(tmp_path, monkeypatch, provider, explicit_target):
     if provider == "sqlite":

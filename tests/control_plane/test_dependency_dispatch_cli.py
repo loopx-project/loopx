@@ -235,6 +235,9 @@ def test_dated_wait_rechecks_current_readiness_and_dispatches_original_work_once
         return original(*args, **kwargs)
 
     monkeypatch.setattr(resume_condition, "build_todo_resume_evaluation_request", evaluated)
+    # Native canonical queries receive the owning runtime clock directly.
+    monkeypatch.setattr("loopx.control_plane.runtime.time.now_utc",
+        lambda: datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=clock["seconds"]))
     vision = goal.root / "dated-vision.json"
     vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0", "state": "vision_drift_detected",
         "todo_delta": [f"activate:{waiting}"], "vision_patch": {"advancement_policy": "as_needed",

@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+from loopx.control_plane.testing.canary_harness import import_fixture_authority  # noqa: E402
+
 GOAL_ID = "closed-vision-successor-fixture"
 AGENT_ID = "fixture-agent"
 
@@ -90,6 +93,8 @@ with tempfile.TemporaryDirectory(prefix="loopx-closed-vision-successor-") as raw
         + "\n",
         encoding="utf-8",
     )
+
+    import_fixture_authority(registry, GOAL_ID, provider="sqlite")
 
     closed = run_cli(
         registry,

@@ -241,6 +241,18 @@ function returnConsumed(root: string, key: string, row: JsonObject, reply: JsonO
   if (Object.entries(expected).some(([field, value]) => !equal(saved[field], value))) fail("peer consumption receipt scope mismatch");
   return true;
 }
+function outgoingEntry(source: InboxSource, operation: JsonObject): JsonObject {
+  const conversation = operation.schema_version === CONVERSATION_ENTRY_SCHEMA;
+  const requester = conversation ? requireJsonObject(operation.requester, "original requester") : null;
+  if (conversation ? !source.exact || requester?.agent_id !== source.agent || !equal(requester?.goal_ref, source.scope.caller_goal_ref)
+    : operation.goal_id !== source.goal || operation.source_agent_id !== source.agent
+      || source.exact && !equal(operation.goal_ref, source.scope.caller_goal_ref)) fail("peer return scope mismatch");
+  const row = conversation ? entry({...source, recipient: normalizeOriginalConversationRecipient(operation.recipient)}, requestId(operation.request_id))
+    : entry(source, requestId(operation.request_id), requireNonEmptyString(operation.agent_id, "peer Agent"));
+  if (row.source_agent_id !== source.agent || row.source_id !== operation.source_id
+      || conversation && !equal(row.requester, requester)) fail("peer return scope mismatch");
+  return row;
+}
 async function collectReturns(source: InboxSource): Promise<{view: JsonObject; deliveries: ReturnDelivery[]}> {
   const items: JsonObject[] = [], deliveries: ReturnDelivery[] = [];
   if (source.recipient) return {view: {items: [], has_more: false}, deliveries};
@@ -250,15 +262,9 @@ async function collectReturns(source: InboxSource): Promise<{view: JsonObject; d
     if (!name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) continue;
     const operation = readRecord(join(folder, name));
     const conversation = operation.schema_version === CONVERSATION_ENTRY_SCHEMA;
-    const requester = conversation ? requireJsonObject(operation.requester, "original requester") : null;
-    if (conversation ? !source.exact || requester?.agent_id !== source.agent || !equal(requester?.goal_ref, source.scope.caller_goal_ref)
-      : operation.goal_id !== source.goal || operation.source_agent_id !== source.agent
-        || source.exact && !equal(operation.goal_ref, source.scope.caller_goal_ref)) fail("peer return scope mismatch");
     let row: JsonObject;
-    try { row = conversation ? entry({...source, recipient: normalizeOriginalConversationRecipient(operation.recipient)}, requestId(operation.request_id))
-      : entry(source, requestId(operation.request_id), requireNonEmptyString(operation.agent_id, "peer Agent")); }
+    try { row = outgoingEntry(source, operation); }
     catch (error) { if (missing(error)) continue; throw error; }
-    if (row.source_agent_id !== source.agent || row.source_id !== operation.source_id) fail("peer return scope mismatch");
     const replies = join(source.root, "replies", String(row.request_id));
     for (const [resultIndex, key] of resultKeys(replies).entries()) {
       if (resultIndex > 0 && resultIndex % 128 === 0) await yieldToRuntime();
@@ -346,14 +352,11 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
       let row: JsonObject;
       try {
         if (direction === "incoming") row = pendingEntry(source, join(folder, name));
-        else {
-          const operation = readRecord(join(folder, name));
-          if (operation.goal_id !== source.goal || operation.source_agent_id !== source.agent
-              || source.exact && !equal(operation.goal_ref, source.scope.caller_goal_ref)) fail("delegation operation scope mismatch");
-          row = entry(source, requestId(operation.request_id), requireNonEmptyString(operation.agent_id, "peer Agent"));
-          if (row.source_agent_id !== source.agent || row.source_id !== operation.source_id) fail("delegation request scope mismatch");
-        }
-        if (!lifecycle(source, "inbox_observe", row)) continue;
+        else row = outgoingEntry(source, readRecord(join(folder, name)));
+        if (row.schema_version === CONVERSATION_ENTRY_SCHEMA) {
+          verifyOriginalConversationReturnRoute({entry: row,
+            route: readRecord(join(source.root, "roundtrips", String(row.request_id) + ".json"))});
+        } else if (!lifecycle(source, "inbox_observe", row)) continue;
       } catch (error) { if (!recordFailure(error)) throw error; unavailable++; continue; }
       const state = receiptState(source.root, row), links = linksReceipt(source.root, row);
       let results: JsonObject[] = [], evidenceUnavailable = links.unavailable;
@@ -363,7 +366,7 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
       const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
       if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
         revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
-      observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref"]
+      observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]
         .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]])),
       purpose: (jsonObject(row.brief)?.purpose || [...(row.message as string ?? "")].slice(0, 2000).join(""))},
       receipt, todo_ids: links.value.todo_ids ?? [], evidence_unavailable: evidenceUnavailable, results});

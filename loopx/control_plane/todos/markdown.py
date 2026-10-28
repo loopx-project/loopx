@@ -4,6 +4,7 @@ import json
 import shlex
 from typing import Any
 
+from ..quota.settlement import render_settlement_progress_markdown
 from .contract import TODO_STATUS_OPEN, todo_marker_for_status
 
 
@@ -309,6 +310,13 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
         if payload.get("instruction"):
             lines.extend(["", str(payload["instruction"])])
         lines.extend(_render_settlement_plan(payload["settlement_plan"]))
+    if not payload.get("error") and payload.get("execution_managed"):
+        lines.extend(["", f"- claim_operation_id: `{payload['claim_operation_id']}`"])
+    if not payload.get("error"):
+        lines.extend(render_settlement_progress_markdown(payload))
+    if not payload.get("error") and (payload.get("execution_managed") or payload.get("settlement_progress")):
+        for command in payload.get("next_cli_actions", []):
+            lines.extend(["", "```sh", command, "```"])
     correctness = payload.get("local_state_write_correctness")
     if isinstance(correctness, dict):
         intent = correctness.get("write_intent") if isinstance(correctness.get("write_intent"), dict) else {}

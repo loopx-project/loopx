@@ -368,9 +368,9 @@ def test_native_group_topic_admission_does_not_block_another_topics_control(
 def test_native_source_lanes_preserve_topic_and_private_sender_order(tmp_path, monkeypatch):
     snapshot = _snapshot(tmp_path)
     snapshot["private_profiles"] = {
-        "mew": {"provider_ref": "a" * 24},
-        "alias": {"provider_ref": "a" * 24},
-        "other": {"provider_ref": "b" * 24},
+        "mew": {"provider_ref": "a" * 24, "audience": "group"},
+        "alias": {"provider_ref": "a" * 24, "audience": "group"},
+        "other": {"provider_ref": "b" * 24, "audience": "group"},
     }
 
     def unexpected(**_kwargs):

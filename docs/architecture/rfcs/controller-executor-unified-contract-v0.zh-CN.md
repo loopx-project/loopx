@@ -559,7 +559,15 @@ C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约�
 缺口、实际测试与回退。完整语言迁移或无关 manager 重写不是前置条件；新抽象能编译
 不能算任务完成。
 
-C1 首个实现片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
+C1 是一个验收目标，不要求放进一个 PR。独立有用的前置改动可以先落地，前提是现有
+调用方实际采用共享 owner、入口契约经过验证，且能局部回退。例如，在现有 quota 和
+Turn 入口保持各自 schema 时，将精确上下文引用组合与恢复收敛到既有 TypeScript
+owner。列明后续切换消费者；不能添加无人使用的基础设施或第二套台账。
+共享 owner 前置、producer/capture 切换、reader 恢复与退役、采用及完整成本验收，
+可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
+也不豁免第 9 节相对原 quota 基线的验证。
+
+首个**切换**片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
 从共享 quota emission 边界开始，同时追踪 attached heartbeat 交付与 Turn adapter，
 保留各自真实宿主归属。不能新增无人使用的第三个 serializer，而两个活跃 writer 继续
 各自拥有语义。既有 `test_quota_decision_capture.py` 与

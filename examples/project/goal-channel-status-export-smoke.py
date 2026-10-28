@@ -60,6 +60,7 @@ def write_registry(project: Path, runtime: Path) -> Path:
                         "repo": str(project),
                         "state_file": write_state(project),
                         "adapter": {"kind": "smoke_v0", "status": "connected"},
+                        "coordination": {"registered_agents": ["codex-side-bypass"]},
                         "authority_sources": [],
                     }
                 ],
@@ -70,6 +71,10 @@ def write_registry(project: Path, runtime: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry_path.read_text())["goals"]:
+        import_fixture_authority(registry_path, record["id"], provider="sqlite")
     return registry_path
 
 

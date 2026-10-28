@@ -143,6 +143,9 @@ def write_goal_fixture(
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    import_fixture_authority(registry_path, GOAL_ID, provider="sqlite")
     return registry_path
 
 
@@ -233,6 +236,14 @@ def main() -> None:
         # worktree. An explicit causal path preserves the delivery identity
         # without persisting that local path.
         split_runtime = root / "split-runtime"
+        # This second owned runtime is a separate canonical authority, not a
+        # Markdown fallback selected by the override. Import its source once.
+        split_registry = root / "split-registry.json"
+        split_source = json.loads(registry_path.read_text())
+        split_source["common_runtime_root"] = str(split_runtime)
+        split_registry.write_text(json.dumps(split_source))
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        import_fixture_authority(split_registry, GOAL_ID, provider="sqlite")
         with working_directory(delivery):
             split_refresh = refresh_state_run(
                 registry_path=registry_path,
@@ -278,6 +289,12 @@ def main() -> None:
         assert explicit_preview["delivery_workspace_validated"] is True, (
             explicit_preview
         )
+
+        invalid_runtime = root / "invalid-runtime"
+        invalid_source = {**split_source, "common_runtime_root": str(invalid_runtime)}
+        invalid_registry = root / "invalid-registry.json"
+        invalid_registry.write_text(json.dumps(invalid_source))
+        import_fixture_authority(invalid_registry, GOAL_ID, provider="sqlite")
 
         # An explicit canonical path cannot bless a peer delivery. Omitting the
         # override retains the existing fail-closed recorded-history behavior.

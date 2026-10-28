@@ -61,6 +61,17 @@ def process_identity(pid: int) -> tuple[int, str, int, int] | None:
         return None
 
 
+def process_exited(pid: int) -> bool:
+    """An unreadable kernel identity alone does not establish process exit."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        pass
+    return False
+
+
 # Address one inspected process, not an App bundle id shared by other routes.
 # terminate() requests the normal AppKit quit lifecycle and can be refused.
 QUIT = '''ObjC.import("AppKit");
@@ -280,18 +291,32 @@ class NativeHost:
         return self.status()
 
     def _home_owners(self) -> list[int]:
-        processes = self._processes()
-        result = subprocess.run(["/usr/sbin/lsof", "-Fp", "+d", str(self.spec["home"])],
-                                capture_output=True, text=True, timeout=10)
-        if result.returncode not in (0, 1):
-            raise HostError("ownership_unverified")
-        owners = {int(line[1:]) for line in result.stdout.splitlines()
-                  if line.startswith("p") and line[1:].isdigit()}
-        owners |= self._cached_codex_owners(processes)
-        if any(processes.get(p) is None or process_identity(p) != processes[p] for p in owners):
-            raise HostError("client_changed")
-        self._owner_identities = {p: processes[p] for p in owners}
-        return sorted(owners)
+        # ps/kernel enumeration and lsof are not an atomic snapshot. A consumer
+        # born between them needs a fresh read, not a restart against an identity
+        # which was never inspected. Rescan only discovery; never retry effects.
+        for _ in range(3):
+            processes = self._processes()
+            result = subprocess.run(["/usr/sbin/lsof", "-Fp", "+d", str(self.spec["home"])],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode not in (0, 1):
+                raise HostError("ownership_unverified")
+            owners = {int(line[1:]) for line in result.stdout.splitlines()
+                      if line.startswith("p") and line[1:].isdigit()}
+            owners |= self._cached_codex_owners(processes)
+            unstable = False
+            for pid in owners:
+                current, previous = process_identity(pid), processes.get(pid)
+                if previous is not None and current == previous:
+                    continue
+                if ((previous is None and current is not None)
+                        or (current is None and process_exited(pid))):
+                    unstable = True  # A new or proven-exited process: re-read.
+                else:
+                    raise HostError("client_changed")  # Reuse/unknown is a hold.
+            if not unstable:
+                self._owner_identities = {p: processes[p] for p in owners}
+                return sorted(owners)
+        raise HostError("client_changed")
 
     def _processes(self) -> dict:
         result = subprocess.run(["/bin/ps", "-axo", "pid="],
@@ -308,10 +333,13 @@ class NativeHost:
             try:
                 home = codex_home(pid)
             except OSError:
-                if process_identity(pid) is not None:
-                    raise HostError("ownership_unverified") from None
+                if process_identity(pid) is None and process_exited(pid):
+                    continue
+                raise HostError("ownership_unverified") from None
+            current = process_identity(pid)
+            if current is None and process_exited(pid):
                 continue
-            if process_identity(pid) != identity:
+            if current != identity:
                 raise HostError("client_changed")
             if home:
                 if not Path(home).is_absolute():
@@ -375,12 +403,8 @@ class NativeHost:
                 if current[1:] == frozen:
                     return False
             else:
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
+                if process_exited(pid):
                     continue
-                except OSError:
-                    pass
                 return False  # Unknown identity does not prove exit.
         return True
 
@@ -606,13 +630,7 @@ class NativeHost:
                 if current is not None and list(current[1:]) == owner["identity"]:
                     return  # A concurrent status read must not undo a live handoff.
                 if current is None:
-                    try:
-                        os.kill(owner["pid"], 0)
-                    except ProcessLookupError:
-                        pass
-                    except OSError:
-                        return
-                    else:
+                    if not process_exited(owner["pid"]):
                         return  # Unreadable identity does not prove worker exit.
         failed = False
         for label, entry in list(recovery["agents"].items()):

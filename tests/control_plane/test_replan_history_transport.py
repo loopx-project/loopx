@@ -7,7 +7,7 @@ from tests.control_plane.test_quota_settlement_cli import (
 
 
 def test_large_history_refresh_replay_and_spend_once(tmp_path):
-    project, runtime, registry = _write_fixture(tmp_path)
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
     index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
     code, baseline = _run_cli(registry, runtime, "refresh-state", "--goal-id", GOAL_ID,
                               "--agent-id", AGENT_ID, "--no-global-sync",

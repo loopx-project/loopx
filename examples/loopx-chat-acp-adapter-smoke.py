@@ -188,7 +188,7 @@ def main() -> None:
         )
         assert visible.strip() == "ACP 回答。", events
         assert "<loopx-review-json>" not in visible, visible
-        assert any(kind == "agent.phase" and "读取 [project]" in str(payload.get("label")) for kind, payload in events)
+        assert any(kind == "agent.phase" and "读取 [local-path]" in str(payload.get("label")) for kind, payload in events)
         assert str(root) not in str(events), events
         assert not any("private thought" in str(payload) for _, payload in events), events
         adapter.close_session()

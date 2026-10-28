@@ -52,7 +52,7 @@ def _commit_variant(paths, operation, todo_id):
 def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(tmp_path, monkeypatch, provider, display, ack_scope):
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
-    paths = _write_fixture(tmp_path)
+    paths = _write_fixture(tmp_path, initialize=False)
     projection = _fixture()
     # The shared fixture intentionally includes incomplete historical timestamps.
     # This variant exercises a complete checkpoint without changing that fixture's contract.

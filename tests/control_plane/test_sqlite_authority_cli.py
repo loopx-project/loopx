@@ -348,12 +348,9 @@ def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
     todo = command(*add)["todo_id"]
     claim = ["todo", "claim", "--goal-id", goal, "--todo-id", todo, "--agent-id", agent,
              "--claimed-by", agent, "--claim-operation-id", "ordinary-claim"]
-    assert command(*claim, expected_code=1)["error_code"] == "handoff_mode_requires_lease"
-    lease = command("task-lease", "acquire", "--goal-id", goal, "--todo-id", todo,
-                    "--owner", agent, "--idempotency-key", "ordinary-lease")
-    proof = ["--task-lease-idempotency-key", "ordinary-lease",
-             "--task-lease-expected-version", str(lease["lease"]["version"])]
-    command(*claim, *proof)
+    accepted = command(*claim)
+    assert accepted["execution_managed"] is True
+    proof = ["--claim-operation-id", accepted["claim_operation_id"]]
     guard = ["quota", "should-run", "--goal-id", goal, "--agent-id", agent,
              "--todo-id", todo, "--codex-app", "--turn-instance-id", turn,
              "--available-capability", "filesystem_read", ]
@@ -373,6 +370,7 @@ def test_installed_ordinary_lifecycle_keeps_archived_work_and_receipts_on_exit(
                 "--agent-id", agent, "--turn-instance-id", turn,
                 "--evidence", "synthetic:ordinary-lifecycle-validated", *proof]
     command(*complete)
+    command(*complete, "--no-follow-up")  # Same original managed claim; no copied released proof.
     # Replanning is a normal caller, too: replace another task through its owner,
     # then retain both the archived predecessor and the new successor on exit.
     obsolete = command("todo", "add", "--goal-id", goal, "--role", "agent", "--claimed-by", agent,

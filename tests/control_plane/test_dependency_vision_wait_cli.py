@@ -277,7 +277,7 @@ def test_unknown_dependency_keeps_bounded_supervision(public_goal):
     _, waiting = wait_on(goal, "todo_done", missing_source=True)
     packet = guard(goal)
     assert packet["vision_wait_state"]["selected_todo_id"] == waiting
-    assert "target_status" not in packet["vision_wait_state"]["resume_condition"]
+    assert packet["vision_wait_state"]["resume_condition"].get("target_status") is None
     assert packet["interaction_contract"]["agent_channel"]["must_attempt"] is True
     assert set(packet["scheduler_hint"]["unchanged_poll"]["limits"].values()) == {3}
 

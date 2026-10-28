@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx import history, state_refresh
+from loopx import history, state_refresh  # noqa: E402
 
 
 GOAL_ID = "reserved-run-path-fixture"
@@ -31,7 +31,8 @@ def write_registry(root: Path) -> Path:
         "---\n\n"
         "# Reserved Run Path Fixture\n\n"
         "## Next Action\n\n"
-        "- continue reserved run path validation\n\n",
+        "- continue reserved run path validation\n\n"
+        "## Agent Todo\n\n",
         encoding="utf-8",
     )
     registry_path = project / ".loopx" / "registry.json"
@@ -59,6 +60,8 @@ def write_registry(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    import_fixture_authority(registry_path, GOAL_ID, provider="sqlite")
     return registry_path
 
 

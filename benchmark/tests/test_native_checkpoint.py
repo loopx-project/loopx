@@ -194,6 +194,7 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
     boundary; a successful native fork alone must not loosen that contract.
     """
     import subprocess
+    from pathlib import Path
     from loopx.capabilities.benchmark_toolkit.native_codex_goal import StdioNativeGoalTransport
 
     workspace = tmp_path / "work"
@@ -261,6 +262,9 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
         with pytest.raises(ValueError, match="completed final cursor"):
             native_session_checkpoint(env, source, timeout=15)
         with native_host(env) as native:
+            source_rollouts = list((Path(env["CODEX_HOME"]) / "sessions").rglob(f"*{source}.jsonl"))
+            assert len(source_rollouts) == 1
+            original_rollout = source_rollouts[0].read_bytes()
             fork = native.request("thread/fork", {"threadId": source, "cwd": str(workspace),
                 "lastTurnId": turn, "persistExtendedHistory": True})["thread"]["id"]
             assert fork != source and history(native, fork) == retained
@@ -269,7 +273,17 @@ def test_real_native_interrupt_retains_branch_but_does_not_qualify_checkpoint(tm
             wait_terminal(native, fork, next_turn, "completed")
             assert (workspace / "continued.txt").read_text() == "continued-candidate\n"
             assert "retained-candidate" in json.dumps(requests[2])
-            assert history(native, source) == retained
+            assert len(requests) == 4
+            # Extended history may hydrate the interrupted command's terminal
+            # metadata later. The persisted original and all model input must
+            # remain unchanged; that derived metadata is not a new source Turn.
+            assert source_rollouts[0].read_bytes() == original_rollout
+            original = history(native, source)
+            assert [row["id"] for row in original] == [row["id"] for row in retained]
+            assert original[:-1] == retained[:-1]
+            assert original[-1]["status"] == retained[-1]["status"] == "interrupted"
+            assert [item for item in original[-1]["items"] if item["type"] == "userMessage"] == [
+                item for item in retained[-1]["items"] if item["type"] == "userMessage"]
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),

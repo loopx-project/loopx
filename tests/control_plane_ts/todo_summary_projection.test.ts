@@ -229,3 +229,43 @@ test("large native and imported corpora preserve source coverage across every di
     }
   }
 });
+
+import {projectTodoSummaryDisplay} from "../../loopx/control_plane/todos/context_projection.ts";
+
+test("summary display normalizes declarations and the last scoped outcome wins in place", () => {
+  const scope = {kind: "direction", granularity: "action", scope_key: "publish"};
+  const record = {text: "Work", status: "open", task_domain: " Engineering ",
+    task_repository: "https://example.com/team/project.git", required_write_scopes: ["docs/**", "../bad", "docs/**", "two words"],
+    required_decision_scopes: [scope, {...scope, decision_id: "todo_other"}],
+    decision_scope_outcomes: ["approve|direction:action:publish|todo_first", "reject|direction:action:publish|todo_second"],
+    replan_obligation_id: "invalid", removed_continuation_policy: " REVIEW_HANDOFF ", excluded_agents: ["Agent B", "agent-b"]};
+  const before = structuredClone(record);
+  const projected = projectTodoSummaryDisplay({items: [{record}]})[0]!;
+  assert.equal(projected.task_domain, "engineering");
+  assert.equal(projected.task_repository, "git:example.com/team/project");
+  assert.deepEqual(projected.required_write_scopes, ["docs/**"]);
+  assert.deepEqual(projected.required_decision_scopes, [{schema_version: "decision_scope_v0", ...scope}]);
+  assert.deepEqual(projected.decision_scope_outcomes, [{schema_version: "todo_decision_scope_outcome_v0", outcome: "reject",
+    decision_scope: {schema_version: "decision_scope_v0", ...scope}, source_todo_id: "todo_second"}]);
+  assert.equal(projected.replan_obligation_id, undefined);
+  assert.equal(projected.removed_continuation_policy, "review_handoff");
+  assert.deepEqual(projected.excluded_agents, ["agent-b"]);
+  assert.deepEqual(record, before);
+});
+
+test("recent completion compares offsets and never promotes an invalid completion date", () => {
+  const result = projectTodoSummary(request([
+    done({completed_at: "2026-01-01T10:00:00+08:00", updated_at: "2026-09-01T00:00:00Z"}),
+    done({completed_at: "2026-01-01T03:00:00Z"}), done({completed_at: "unknown"}),
+  ]));
+  assert.deepEqual(result.lanes.recent_completed_advancement_items.indices, [1, 0]);
+  assert.equal(result.fields.advancement_done_count, 3);
+});
+
+
+test("compatibility scopes use Python scalar spelling and sequence waits do not become tokens", () => {
+  const projected = projectTodoSummaryDisplay({items: [{record: {text: "Work", status: "open", decision_scope: {
+    kind: "other", granularity: "action", scope_key: true}, successor_todo_ids: ["todo_next"], resume_when: ["owner_review"]}}]})[0]!;
+  assert.deepEqual(projected.decision_scope, {schema_version: "decision_scope_v0", kind: "other", granularity: "action", scope_key: "true"});
+  assert.equal((projected.handoff_note as JsonObject).blocked_on, undefined);
+});

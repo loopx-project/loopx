@@ -94,6 +94,18 @@ authorize a restart. Discovery combines open home files with the private launch
 environment of Codex processes, covering warm app-servers that cached auth and
 closed their files. Arguments and environment values are never projected or logged.
 
+Version 0.12.10 retries only the read-only ownership scan, at most three times,
+when a consumer starts between process enumeration and file inspection or is
+independently proven to have exited during that inspection. A stable fresh
+snapshot must precede the existing service restart. PID reuse, an unreadable
+live process and persistent churn remain holds; no shutdown or credential
+transaction is retried by this scan. A failed environment read cannot turn an
+unreadable live Codex process into a proven exit.
+
+0.12.10 对进程枚举与文件检查之间新启动、或已独立证明退出的占用，最多进行三次
+只读重扫，再以稳定的新身份清单进入原受控重启流程。PID 复用、仍存活但身份不明及
+持续变化继续等待；重扫不重放退出、凭据事务或业务，也不扩大 VM 的重启权限。
+
 Each service's restoration intent is saved privately before unloading. Version
 0.12.7 waits up to five seconds for launchd to finish an acknowledged asynchronous
 unload; a job that remains loaded retains its recovery intent and fails without

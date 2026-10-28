@@ -999,6 +999,16 @@ saved-answer recovery reuse that revision without another model call; the first
 Turn and its result remain historical. The panel selects the current revision's
 state rather than presenting an older conclusion as its pending result.
 
+The requester's automatic Goal Turn agenda and explicit Inbox return read share
+the same typed outgoing-address reader. Original project requests retain their
+versioned conversation recipient, not a synthetic Goal/Agent. The agenda follows
+the current revision from waiting for a result to explicit requester consumption;
+reading a conclusion alone does not remove it. Changed requester identity or a
+missing/conflicting original return route leaves incomplete coverage, not an
+empty queue. This read-only source checkpoint neither acknowledges work nor
+dispatches another Turn; full briefs, live adoption and installed-provider
+qualification retain their separate acceptance.
+
 Keep one typed recipient identity across discovery, grants, request publication,
 receiver read/assessment and return. Extend the existing collaboration owner with
 an explicit original-conversation recipient alongside registered Goal/Agent

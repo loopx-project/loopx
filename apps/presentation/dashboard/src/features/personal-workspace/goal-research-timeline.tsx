@@ -11,7 +11,7 @@ import {ContextHelp} from "./context-help";
  * Position means first record time only; it never encodes progress or cause. */
 type Copy = Record<string, string>;
 type Props = {
-  timeline: ExploreTimeline; zh: boolean; selectedIds: readonly string[]; phase: number | null;
+  timeline: ExploreTimeline; zh: boolean; selectedIds: readonly string[]; selectedEventId?: string; phase: number | null;
   selectedDay: string | null; dayGroups: ReturnType<typeof groupUnlinkedHistoryQuestions>["groups"]; onGroupSelect: (day: string) => void;
   onSelect: (id: string, finding?: string) => void; onSelectMany: (ids: string[]) => void; onPhase: (index: number | null) => void;
   timeLabel: (value: number) => string; dayLabel: (value: number) => string;
@@ -21,7 +21,7 @@ const LABELS = ["confirmed", "refuted", "tentative"] as const;
 const tone = (label: string) => LABELS.includes(label as typeof LABELS[number]) ? `is-${label}` : "is-unlabeled";
 const isOpen = (item: TimelineNode) => ["open", "exploring", "blocked"].includes(item.node.latest.status);
 
-export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, dayGroups, onGroupSelect, phase, onSelect, onSelectMany, onPhase, timeLabel, dayLabel}: Props) {
+export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId, selectedDay, dayGroups, onGroupSelect, phase, onSelect, onSelectMany, onPhase, timeLabel, dayLabel}: Props) {
   const plot = useRef<HTMLDivElement>(null);
   const [plotWidth, setPlotWidth] = useState(0);
   useLayoutEffect(() => {
@@ -195,28 +195,36 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedDay, da
     <section className="research-trail" aria-label={copy.trail}>
       <h3>{copy.trail}</h3>
       {!timeline.decisions.length ? <ContextHelp label={zh ? "暂无结构化决策记录" : "No structured decision records"} icon={CircleHelp}><p className="research-history-note">{timeline.structuredCount ? copy.none : copy.unstructured}</p></ContextHelp>
-        : <TrailList groups={trail} copy={copy} label={label} timeLabel={timeLabel} selectedIds={selectedIds} onSelect={onSelect}/>}
+        : <TrailList groups={trail} copy={copy} label={label} timeLabel={timeLabel} selectedEventId={selectedEventId} onSelect={onSelect}/>}
     </section>
   </div>;
 }
 
-function TrailList({groups, copy, label, timeLabel, selectedIds, onSelect}: {
+function TrailList({groups, copy, label, timeLabel, selectedEventId, onSelect}: {
   groups: ReturnType<typeof groupExploreTimelineDecisions>; copy: Copy; label: (key: string) => string;
-  timeLabel: (value: number) => string; selectedIds: readonly string[]; onSelect: (id: string, finding?: string) => void;
+  timeLabel: (value: number) => string; selectedEventId?: string; onSelect: (id: string, finding?: string) => void;
 }) {
   const [limit, setLimit] = useState(3);
+  const selectedIndex = groups.findIndex(group => group.items.some(item => item.event.event_id === selectedEventId));
+  // A bookmarked finding also restores its place in the folded history.
+  // Keep that range open when the reader closes, without expanding every row.
+  useLayoutEffect(() => {setLimit(value => Math.max(value, selectedIndex + 1));}, [selectedIndex]);
+  const visible = Math.max(limit, selectedIndex + 1);
   return <>
-    <ol className="research-trail-groups">{groups.slice(0, limit).map(group => <TrailQuestion key={group.id}
-      group={group} copy={copy} label={label} timeLabel={timeLabel} selectedIds={selectedIds} onSelect={onSelect}/>)}</ol>
-    {groups.length > limit ? <button type="button" className="research-link" onClick={() => setLimit(value => value + 6)}>{copy.moreQuestions} · {groups.length - limit}</button> : null}
+    <ol className="research-trail-groups">{groups.slice(0, visible).map(group => <TrailQuestion key={group.id}
+      group={group} copy={copy} label={label} timeLabel={timeLabel} selectedEventId={selectedEventId} onSelect={onSelect}/>)}</ol>
+    {groups.length > visible ? <button type="button" className="research-link" onClick={() => setLimit(value => value + 6)}>{copy.moreQuestions} · {groups.length - visible}</button> : null}
   </>;
 }
 
-function TrailQuestion({group, copy, label, timeLabel, selectedIds, onSelect}: {
+function TrailQuestion({group, copy, label, timeLabel, selectedEventId, onSelect}: {
   group: ReturnType<typeof groupExploreTimelineDecisions>[number]; copy: Copy; label: (key: string) => string;
-  timeLabel: (value: number) => string; selectedIds: readonly string[]; onSelect: (id: string, finding?: string) => void;
+  timeLabel: (value: number) => string; selectedEventId?: string; onSelect: (id: string, finding?: string) => void;
 }) {
   const [limit, setLimit] = useState(3);
+  const selectedIndex = group.items.findIndex(item => item.event.event_id === selectedEventId);
+  useLayoutEffect(() => {setLimit(value => Math.max(value, selectedIndex + 1));}, [selectedIndex]);
+  const visible = Math.max(limit, selectedIndex + 1);
   const knownTimes = group.items.flatMap(item => item.at === null ? [] : [item.at]);
   const exceptions = LABELS.filter(status => status !== "confirmed")
     .map(status => ({status, count: group.items.filter(item => item.event.status === status).length})).filter(item => item.count);
@@ -229,7 +237,7 @@ function TrailQuestion({group, copy, label, timeLabel, selectedIds, onSelect}: {
         {exceptions.map(({status, count}) => <span className={tone(status)} key={status}>{label(status)} {count}</span>)}
       </div>
     </header>
-    <ol className="research-trail-list">{group.items.slice(0, limit).map(item => {
+    <ol className="research-trail-list">{group.items.slice(0, visible).map(item => {
       const decision = item.sections!.decision!;
       // Preview source text, never a generated title. Complete lists live in
       // the same exact-finding reader used by every other history selection.
@@ -237,7 +245,7 @@ function TrailQuestion({group, copy, label, timeLabel, selectedIds, onSelect}: {
       return <li key={item.event.event_id}>
         <button type="button" data-research-decision={item.event.event_id}
           aria-label={`${label(decision.outcome)} · ${item.at === null ? copy.unknownTime : timeLabel(item.at)} · ${label(item.event.status)} · ${item.event.title}`}
-          className={selectedIds.includes(item.event.node_id) ? "is-selected" : ""}
+          className={selectedEventId === item.event.event_id ? "is-selected" : ""}
           onClick={event => {event.currentTarget.focus({preventScroll: true}); onSelect(item.event.node_id, item.event.result_id);}}>
           <span className="research-trail-main">
             <span className="research-trail-meta"><b className={`research-outcome is-${decision.outcome}`}>{label(decision.outcome)}</b>
@@ -252,6 +260,6 @@ function TrailQuestion({group, copy, label, timeLabel, selectedIds, onSelect}: {
         </button>
       </li>;
     })}</ol>
-    {group.items.length > limit ? <button type="button" className="research-link" onClick={() => setLimit(value => value + 6)}>{copy.more} · {group.items.length - limit}</button> : null}
+    {group.items.length > visible ? <button type="button" className="research-link" onClick={() => setLimit(value => value + 6)}>{copy.more} · {group.items.length - visible}</button> : null}
   </li>;
 }

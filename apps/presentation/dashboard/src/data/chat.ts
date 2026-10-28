@@ -901,6 +901,8 @@ export type ChatVisibleMessage = {
   collaboration?: CollaborationReadback;
   origin?: string;
   attachments?: ChatImageAttachment[];
+  /** Read-only original-source view; text remains the canonical model input. */
+  reply_context?: ChatReplyContext;
   message_id: string;
   turn_id: string | null;
   role: string;
@@ -915,6 +917,17 @@ export type ChatVisibleMessage = {
     delivered_at?: string | null;
     error?: string | null;
     verification?: "reconciled_after_restart";
+  };
+};
+
+export type ChatReplyContext = {
+  source_text: string;
+  parent: {message_id: string; content: string; complete: boolean};
+  thread?: {
+    root_message_id: string; thread_id: string; before_message_id: string;
+    omitted_message_count: number; complete: false;
+    messages: Array<{message_id: string; content: string; content_truncated: boolean;
+      position: number; sender?: {id: string; kind: string}; created_at?: string}>;
   };
 };
 

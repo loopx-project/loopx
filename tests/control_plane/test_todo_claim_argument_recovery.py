@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -158,15 +159,14 @@ def test_lease_input_requirement_preserves_zero_cas(claim_cli):
     assert applied["lease"]["version"] == 1
 
 
-def test_grammar_packet_does_not_guess_authority_mode(claim_cli):
+def test_grammar_packet_does_not_guess_execution_actor(claim_cli):
     _, run, snapshot, prefix, claim, _, _, _ = claim_cli
     before = snapshot()
-    flags = ["--claimed-by", "peer-a"]
+    flags = ["--claimed-by", "peer-b"]
     rejected = run([*prefix, *claim, *flags], expected_exit=1)
     assert rejected.get("error_code") != "todo_claim_invalid_arguments"
     assert snapshot() == before
-    assert rejected["error_code"] == "handoff_mode_requires_lease"
-    assert rejected["recovery"]["requires_flags"] == ["--task-lease-idempotency-key"]
+    assert rejected["error_code"] == "claim_actor_mismatch"
 
 
 def test_markdown_exposes_the_same_required_input():
@@ -182,3 +182,31 @@ def test_markdown_exposes_the_same_required_input():
     rendered = render_todo_markdown(payload)
     assert "requires_flags: `--claimed-by`" in rendered
     assert json.dumps(payload["recovery"]["cli_args"]) in rendered
+
+
+def test_ordinary_claim_progress_completion_need_no_lease_flags(claim_cli):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    arguments = [*prefix, *claim, "--claimed-by", "peer-a", "--claim-operation-id", "managed-claim"]
+    accepted = run(arguments)
+    assert accepted["ok"] is True
+    assert accepted["execution_managed"] is True
+    assert "lease" not in accepted and "original_receipt" not in accepted
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    rendered = render_todo_markdown(accepted)
+    assert all(action in rendered for action in accepted["next_cli_actions"])
+    assert accepted["claim_operation_id"] == "managed-claim"
+    assert len(accepted["next_cli_actions"]) == 2
+    assert all("--claim-operation-id managed-claim" in action for action in accepted["next_cli_actions"])
+    assert all("task-lease" not in action for action in accepted["next_cli_actions"])
+    common = ["--goal-id", GOAL, "--todo-id", TODO, "--agent-id", "peer-a", "--claim-operation-id", "managed-claim"]
+    progress_args = shlex.split(accepted["next_cli_actions"][0])[1:]
+    progress_args = ["managed-progress" if part == "<progress-operation-id>" else "Validation passed" if part == "<progress>" else part for part in progress_args]
+    progress = run(progress_args)
+    assert progress["ok"] is True
+    complete_args = ["evidence:validated-output" if part == "<validated-evidence>" else part for part in shlex.split(accepted["next_cli_actions"][1])[1:]]
+    completed = run(complete_args)
+    assert completed["ok"] is True
+    before = snapshot()
+    replay = run([*prefix, "todo", "complete", *common, "--evidence", "evidence:validated-output"])
+    assert replay["ok"] is True
+    assert snapshot() == before

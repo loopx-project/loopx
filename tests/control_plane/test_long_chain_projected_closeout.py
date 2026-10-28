@@ -47,6 +47,7 @@ def test_managed_turn_counts_advancement_without_monitor_backlog(
 
     # The public managed-Turn entrypoint must keep both the first read and replay
     # free of a long-chain duty introduced solely by independent monitors.
+    _initialize_fixture_authority(project, runtime, provider="sqlite")
     for _ in range(2):
         rc, result = _run_cli(
             registry, runtime, "quota", "should-run", "--codex-app",

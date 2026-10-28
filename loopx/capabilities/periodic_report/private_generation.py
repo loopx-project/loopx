@@ -49,6 +49,16 @@ def _source_facts(source: dict[str, Any], *, local: bool) -> list[dict[str, Any]
             "status": "recorded" if local else "unknown" if row["kind"] == "coverage_gap" else "recorded",
             "source_ref": "todo:" + row["todo_id"] if local else row["source_ref"],
             "content_kind": "coverage"})
+        if not local and source.get("source_fact_binding") == "frozen_source_v2":
+            for citation_index, citation in enumerate(
+                    row["evidence"].get("recorded_details", {}).get("recorded_source_refs", [])):
+                facts.append({"fact_id": f"portfolio_{index}_source_{citation_index}",
+                    "title": f"{row.get('goal_id') or 'portfolio'} / 原记录出处（未读取）"[:240],
+                    "summary": f"原记录 {row['evidence'].get('source_ref', row['source_ref'])} 提供的出处；"
+                        f"冻结记录 {row['source_ref']}；标识 {citation['evidence_ref']}。"
+                        "仅限本次原授权受众；未读取引用产物，可达性和公开许可均未核验，不证明业务完成。",
+                    "status": "unverified", "source_ref": citation["source_ref"],
+                    "content_kind": "coverage"})
     return facts
 
 
@@ -57,8 +67,8 @@ def _verify_source_facts(request: dict[str, Any], source: dict[str, Any]) -> Non
     # marker belongs to this frozen IO format, not a new source/access policy.
     if "source_fact_binding" not in request and "source_fact_binding" not in source:
         return
-    if (request.get("source_fact_binding") != "frozen_source_v1"
-            or source.get("source_fact_binding") != "frozen_source_v1"
+    if (request.get("source_fact_binding") not in {"frozen_source_v1", "frozen_source_v2"}
+            or source.get("source_fact_binding") != request.get("source_fact_binding")
             or request.get("destination") not in {
                 "original_managed_session_full_body", "original_owner_private_chat_full_body"}
             or request.get("source_artifact_sha256") != _canonical_digest(source)
@@ -94,7 +104,7 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
                 or not set(source["goal_ids"]).issubset(authorization_goal_ids)):
             raise ValueError("report evidence is outside its frozen authorization")
         folder.mkdir(parents=True, exist_ok=True)
-        source = {**source, "source_fact_binding": "frozen_source_v1"}
+        source = {**source, "source_fact_binding": "frozen_source_v2"}
         atomic_write_json(folder / "source.json", source)
         request = _build_editorial_request(intent=cadence_intent(window), runtime_root=root,
             goal_id=window["goal_id"], agent_id=window["agent_id"],
@@ -103,7 +113,7 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
         request.update(authorization_scope_id=authorization_scope_id, reporting=reporting,
             source_artifact=str(folder / "source.json"), source_revision=source["source_revision"],
             source_artifact_sha256=_canonical_digest(source), window=window,
-            source_fact_binding="frozen_source_v1",
+            source_fact_binding="frozen_source_v2",
             coverage=source["coverage"], destination="original_owner_private_chat_full_body")
         # A partial portfolio read is not the authorization universe. Keep
         # this original identity witness inside the existing frozen digest.
@@ -111,6 +121,7 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
         request["narrative_contract"]["requirements"] += [
             "Follow REPORTING and cover every authorized Goal, including stopped and unreadable Goals.",
             "Read full frozen source records for substantive claims; excerpts and Agent claims are not independent verification.",
+            "Recorded source references are scoped provenance, not proof of access, public status or publication permission. Keep unverified references explicit; never infer a URL from a digest or reuse private sources for another audience.",
             "Distinguish implementation, merged source, installed adoption and actual original-message delivery.",
             "Describe current and relevant completed tasks, counterevidence, source gaps and concrete next steps.",
             "A due unchanged window still needs a substantive report; observations or CI counts are not business progress.",

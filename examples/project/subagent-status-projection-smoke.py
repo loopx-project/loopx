@@ -130,6 +130,10 @@ def write_fixture(root: Path) -> tuple[Path, Path]:
     with (run_dir / "index.jsonl").open("w", encoding="utf-8") as f:
         for run in runs:
             f.write(json.dumps(run, ensure_ascii=False, sort_keys=True) + "\n")
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+
+    for record in json.loads(registry_path.read_text())["goals"]:
+        import_fixture_authority(registry_path, record["id"], provider="sqlite")
     return registry_path, runtime
 
 

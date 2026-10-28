@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.status.autonomous_replan_projection import (
@@ -353,6 +354,7 @@ def _replan_gate_tmp_fixture(
         runtime_root / "goals" / GOAL_ID / "runs" / "index.jsonl"
     )
     _write_typed_repeat_runs_index(runs_index)
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider="sqlite")
     return registry_path, project, runtime_root, runs_index
 
 
@@ -452,6 +454,7 @@ def test_legacy_material_run_cadence_rejects_maintenance_writeback(tmp_path: Pat
         for run in _durable_runs(AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD):
             handle.write(json.dumps(run) + "\n")
 
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider="sqlite")
     with pytest.raises(ValueError) as exc:
         refresh_state_run(
             registry_path=registry_path,
@@ -690,6 +693,7 @@ def test_refresh_state_run_rejects_maintenance_after_vision_obligation_rotation(
         for run in reversed(_rotated_vision_runs()):
             handle.write(json.dumps(run) + "\n")
 
+    initialize_canonical_source_fixture(runtime_root, GOAL_ID, state_path=state, provider="sqlite")
     before = state.read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="required vision outcome"):
         refresh_state_run(

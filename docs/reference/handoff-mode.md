@@ -26,6 +26,42 @@ lease or change ownership policy to make the completion succeed. Other preview
 failures retain their own diagnostics. This explains an unavailable operation;
 it does not qualify App completion under `hard_lease`.
 
+## Ordinary Agent CLI work
+
+A CLI self-claim (`--claimed-by` equal to the explicit `--agent-id`) now prepares
+execution in the same canonical transaction. In `hard_lease`, it acquires the
+required scopes or reuses the caller's still-active grant. It renews only in the
+last third of the grant's original TTL. `soft_claim` does not create a lease.
+Assignment by another caller and explicit task-lease commands keep their existing
+semantics; this does not change any Goal's policy.
+
+```bash
+loopx --format json todo claim --goal-id example-goal --todo-id todo_example \
+  --agent-id worker-a --claimed-by worker-a --claim-operation-id work-a
+loopx --format json todo update --goal-id example-goal --todo-id todo_example \
+  --agent-id worker-a --claim-operation-id work-a --update-operation-id progress-a \
+  --note 'Validated progress'
+loopx --format json todo complete --goal-id example-goal --todo-id todo_example \
+  --agent-id worker-a --claim-operation-id work-a --evidence evidence:validated-output
+```
+
+Claim readback supplies ready progress/completion commands in JSON and Markdown
+with the original registry/runtime route. Normal self-claim output carries the
+claim reference instead of raw lease counters or a duplicated receipt; explicit
+lease commands retain their diagnostic output. Pre-upgrade plain-claim retries
+recover only their original assignment and never become managed execution.
+Keep any required original Turn identity and settlement.
+Progress can renew the still-active execution in the **same** write transaction;
+completion uses the existing terminal owner and release. Neither needs a separate
+inspection or a copied lease key/version. The reference resolves only the execution
+accepted by that claim: a later generation, foreign holder, expired grant, changed
+policy or unavailable receipt cannot be borrowed or silently reacquired. An
+explicit proof cannot be combined with the reference. Receipt recovery happens
+before maintenance, so retrying an accepted operation does not renew or repeat it.
+A read-only quota guard never claims or renews. Long-running delegated Hosts retain
+their existing supervision; this CLI path does not supervise an idle external
+process. The App's manual completion boundary described above is unchanged.
+
 ## Choose the policy independently of storage
 
 Use `soft_claim` for an explicitly single executor without parallel takeover.
@@ -279,3 +315,18 @@ claim+lease 均不可执行，必须先审核迁移；合并式 claim+lease 仍�
 冲突不会得到不可执行的 acquire 建议；修改已租用工作的要求或状态须走对应 lifecycle。
 提示不包含 execution key、不授予权限，也不修改 mode 或 provider。并发造成 version
 变化时重新读取，不能绕过 CAS；dry-run 和拒绝路径不产生 Todo 或租约写入。
+
+### Agent 普通 CLI 操作
+
+CLI 由明确的 `--agent-id` 认领给自己时，会在同一 canonical 事务中准备执行；
+`hard_lease` 自动取得任务要求的 scope，或复用自己尚有效的执行。仅在原租期最后
+三分之一内续租，`soft_claim` 不创建租约，其他调用方分配任务和显式租约操作保持原义。
+认领结果在 JSON 和 Markdown 中返回保留 registry/runtime 路由的进展与完成命令，
+常规输出不再展开租约计数和重复回执，显式租约操作保留诊断读回。升级前旧认领只
+恢复原来的分配，不被升级成新执行。新认领的进展与完成命令均携带原
+`--claim-operation-id`，无需单独 inspect 或复制 key/version。进展写回按需在同一事务
+续租，完成复用原终态 owner 及释放操作；必要的原 Turn 身份与结算仍须保留。
+该引用只承接当初认领接受的执行，过期、换代、外部占用、策略变化或回执不可用时拒绝，
+不自动借用或重新取得证明；显式证明不能与引用混用。原操作回执先于维护恢复，重试不
+重复写入或续租。只读 quota guard 不做认领或续租；长期委派 Host 仍走已有监督，
+本 CLI 路径不监督空闲外部进程，也不改变 App 手工完成的现有边界。

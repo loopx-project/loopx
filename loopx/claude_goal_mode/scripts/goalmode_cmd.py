@@ -24,6 +24,7 @@ contract is active and `quota should-run --agent-id cc` is satisfied.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -148,7 +149,8 @@ def goal_detail(ctx):
             ["--format", "json", "quota", "should-run", "--goal-id", gid]
         if agent:
             cmd += ["--agent-id", agent]
-        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            env={**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"})
         payload = json.loads(out.stdout or "{}")
     except Exception:
         pass

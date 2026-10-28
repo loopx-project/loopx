@@ -24,6 +24,12 @@ INLINE_VISION_FIELDS = {
 }
 
 
+class ProgressObservationArgumentError(ValueError):
+    """A pure argument rejection, before refresh dispatch or authority writes."""
+
+    code = "progress_observation_invalid_arguments"
+
+
 def split_explore_result_input(vision_packet, result_path, *, scope_context=None):
     """Transport explicit attachments; the capability owns validation/conflicts.
 
@@ -100,12 +106,12 @@ def inline_progress_observation(
     if not any(value is not None for value in fields.values()) and not evidence_ids:
         return None
     if not fields["result_class"]:
-        raise ValueError("typed progress observation requires --progress-result-class")
+        raise ProgressObservationArgumentError("typed progress observation requires --progress-result-class")
     if fields["result_class"] in {
         ProgressResultClass.EXPLORATION_EXHAUSTED.value,
         ProgressResultClass.NO_FOLLOWUP.value,
     } and not fields["coverage_scope_id"]:
-        raise ValueError(
+        raise ProgressObservationArgumentError(
             f"--progress-result-class {fields['result_class']} requires "
             "--progress-coverage-scope-id"
         )
@@ -113,7 +119,7 @@ def inline_progress_observation(
         fields["result_class"] == ProgressResultClass.EXPLORATION_EXHAUSTED.value
         and fields["coverage_complete"] is not True
     ):
-        raise ValueError(
+        raise ProgressObservationArgumentError(
             "--progress-result-class exploration_exhausted requires "
             "--progress-coverage-complete"
         )

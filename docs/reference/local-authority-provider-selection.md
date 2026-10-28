@@ -477,8 +477,8 @@ than guessing a replacement; explicit original-receipt readback remains availabl
 Pre-upgrade browser-only handles remain explicitly readable through the original
 API/CLI recovery path. A new server does not automatically adopt an unscoped
 browser cache from a possibly different runtime or registry.
-The operator-led POSIX stop path is exercised with actual owned Host processes
-and native unpromoted-source leases on File/SQLite: import refuses while the
+The operator-led POSIX stop path uses an owned pre-cutover Host process fixture,
+retained migration lease inventory, and native cleanup on File/SQLite: import refuses while the
 Host runs and after it exits with an active lease; native release permits
 cutover. The imported released lease retains its identity and history, and a
 restart using the old grant is rejected before the actual Host launches.

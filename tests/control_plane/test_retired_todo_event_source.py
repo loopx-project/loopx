@@ -11,7 +11,7 @@ import urllib.request
 import pytest
 
 from loopx.control_plane.goals.legacy_event_source import (
-    require_no_legacy_todo_events,
+    RetiredTodoEventSourceError, require_no_legacy_todo_events,
 )
 from loopx.control_plane.coordination.local_authority import (
     CanonicalAuthorityRequired,
@@ -22,7 +22,7 @@ from loopx.todos import complete_goal_todo
 from loopx.control_plane.todos.todo_index import build_todo_index
 from loopx.control_plane.runtime.public_safety import public_safe_compact_text
 from tests.control_plane.canonical_authority_fixture import (
-    initialize_canonical_authority, isolate_sqlite_runtime,
+    initialize_canonical_authority, initialize_canonical_source_fixture, isolate_sqlite_runtime,
 )
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import restart_effect_runtime
@@ -62,13 +62,15 @@ def test_all_old_source_selectors_refuse_reads_and_writes_without_data_loss(tmp_
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(tmp_path / "runtime"), "goals": [goal]}))
     before = state.read_bytes(), old.read_bytes()
+    with pytest.raises(RetiredTodoEventSourceError, match="legacy_todo_event_source_retired"):
+        require_no_legacy_todo_events(goal, state_path=state)
     for args in [
         ("todo", "list"),
         ("shared-goal-alignment", "--agent-id", "agent-a", "--project", str(tmp_path)),
     ]:
         code, result = run_json_cli_result(*args, "--goal-id", goal["id"], registry_path=registry)
         assert code != 0 or result.get("ok") is False, result
-        assert "legacy_todo_event_source_retired" in json.dumps(result), result
+        assert "canonical_authority_required" in json.dumps(result), result
         assert (state.read_bytes(), old.read_bytes()) == before
     for args in [
         ("todo", "add", "--text", "New work", "--role", "agent"),
@@ -131,12 +133,18 @@ def _portfolio_fixture(root: Path, alias: str | None = None):
     registry = root / "registry.json"
     registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
     old = root / "retired" / ("aliased.jsonl" if alias else "events.jsonl")
+    initialize_canonical_source_fixture(runtime, "healthy",
+        state_path=Path(goals[1]["state_file"]), provider="sqlite")
     return registry, runtime, goals, old
 
 
 def _assert_portfolio_refusal(payload):
-    rows = {item["goal_id"]: item for item in payload["attention_queue"]["items"]}
-    assert rows["retired"]["status"] == "legacy_todo_event_source_retired"
+    items = payload["attention_queue"]["items"]
+    rows = {
+        "retired": next(item for item in items if item["goal_id"] == "retired" and item.get("todo_source") == "unavailable"),
+        "healthy": next(item for item in items if item["goal_id"] == "healthy" and "agent_todos" in item),
+    }
+    assert rows["retired"]["status"] == "canonical_authority_required"
     assert rows["retired"]["todo_source"] == "unavailable"
     assert rows["retired"]["waiting_on"] == "user_or_controller"
     assert "agent_todos" not in rows["retired"]
@@ -162,8 +170,10 @@ def test_retired_source_is_scoped_and_later_healthy_goal_remains_visible(tmp_pat
     data["goals"] = goals[:1]
     registry.write_text(json.dumps(data))
     code, first = run_json_cli_result("status", registry_path=registry)
-    assert code == 0, first
-    assert first["attention_queue"]["items"][0]["status"] == "legacy_todo_event_source_retired"
+    assert code == 1 and first["ok"] is False, first
+    refused = next(item for item in first["attention_queue"]["items"]
+        if item["goal_id"] == "retired" and item.get("todo_source") == "unavailable")
+    assert refused["status"] == "canonical_authority_required"
     data["goals"] = goals
     registry.write_text(json.dumps(data))
     for rewrite_annotation in (False, True):
@@ -171,7 +181,7 @@ def test_retired_source_is_scoped_and_later_healthy_goal_remains_visible(tmp_pat
             state = Path(goals[0]["state_file"])
             state.write_text(state.read_text().replace("task_class=advancement_task", "task_class=maintenance_task"))
         code, payload = run_json_cli_result("status", registry_path=registry)
-        assert code == 0, payload
+        assert code == 1 and payload["ok"] is False, payload
         _assert_portfolio_refusal(payload)
         assert old.read_bytes() == before
     code, mutation = run_json_cli_result("todo", "add", "--goal-id", "retired",
@@ -181,7 +191,12 @@ def test_retired_source_is_scoped_and_later_healthy_goal_remains_visible(tmp_pat
     assert mutation["write_admitted"] is False
     assert mutation["legacy_fallback_used"] is False
     assert old.read_bytes() == before
-    old.unlink()  # Explicit owner recovery in a disposable synthetic fixture.
+    old.unlink()
+    code, still_unmigrated = run_json_cli_result("status", registry_path=registry)
+    assert code == 1 and still_unmigrated["ok"] is False
+    _assert_portfolio_refusal(still_unmigrated)
+    initialize_canonical_source_fixture(runtime, "retired",
+        state_path=Path(goals[0]["state_file"]), provider="sqlite")
     code, recovered = run_json_cli_result("status", registry_path=registry)
     assert code == 0, recovered
     assert {item["goal_id"] for item in recovered["todo_index"]["items"]} == {"healthy", "retired"}
@@ -215,11 +230,9 @@ def test_http_status_preserves_healthy_goal_when_retired_source_appears(tmp_path
             with urllib.request.urlopen(base + "/status", timeout=90) as response:
                 assert response.status == 200
                 payload = json.load(response)
+            _assert_portfolio_refusal(payload)
             if present:
-                _assert_portfolio_refusal(payload)
                 assert old.read_bytes() == b"old source preserved\n"
-            else:
-                assert {item["goal_id"] for item in payload["todo_index"]["items"]} == {"healthy", "retired"}
     finally:
         server.terminate()
         server.wait(timeout=10)

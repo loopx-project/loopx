@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
 
 
 GOAL_ID = "work-lane-narrative-fixture"
@@ -65,6 +66,7 @@ def _guard(
     (runs / "index.jsonl").write_text(json.dumps({
         **run, "json_path": str(run_path), "markdown_path": str(markdown_path),
     }) + "\n", encoding="utf-8")
+    initialize_canonical_source_fixture(runtime, GOAL_ID, state_path=state)
     result = subprocess.run(
         [sys.executable, "-c", "from loopx.cli import main; raise SystemExit(main())",
          "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",

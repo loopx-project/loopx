@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import runpy
 import socket
@@ -9,12 +10,19 @@ import sys
 import tempfile
 import threading
 
-import pytest
-
 REPO = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO), str(REPO / "tests/control_plane")]
 from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.chat_server import serve_chat
+
+
+class ProcessPatch:
+    """This fixture owns its process; the browser lane installs no test extras."""
+    setattr = staticmethod(setattr)
+
+    @staticmethod
+    def setenv(name: str, value: str) -> None:
+        os.environ[name] = value
 
 
 class SyntheticManagedSource:
@@ -84,8 +92,8 @@ class SyntheticManagedSource:
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
-with tempfile.TemporaryDirectory(prefix="loopx-managed-ui-") as directory, pytest.MonkeyPatch.context() as patch:
-    root = Path(directory)
+with tempfile.TemporaryDirectory(prefix="loopx-managed-ui-") as directory:
+    root, patch = Path(directory), ProcessPatch
     isolate_sqlite_runtime(root, patch)
     patch.setenv("CODEX_HOME", str(root / "synthetic-model-home"))
     registry, _, _ = promoted_create_fixture(root, provider="sqlite", goal_id="product-release", registered_agents=["worker", "peer"])

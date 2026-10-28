@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from control_plane.canonical_authority_fixture import (
-    initialize_canonical_authority,
+    initialize_canonical_authority, read_fixture_todos,
     isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
@@ -116,14 +116,12 @@ def test_bound_wait_recovers_original_turn_before_selecting_successor(
             f"claimed_by={dependency_owner} {dependency_metadata} -->\n"
         )
     )
-    rc, listed = cli("todo", "list", "--goal-id", GOAL_ID)
-    assert rc == 0, listed
     initialize_canonical_authority(
         runtime,
         GOAL_ID,
         build_todo_runtime_shadow_projection(
             goal_id=GOAL_ID,
-            todos=listed["todos"],
+            todos=read_fixture_todos(state),
             handoff_mode="soft_claim",
             leases=[],
         ),

@@ -12,7 +12,7 @@ from test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("peers,reverse", [(0, False), (20, False), (20, True)])
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_owned_chain_is_independent_of_display_pressure(tmp_path, monkeypatch, peers, reverse, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)

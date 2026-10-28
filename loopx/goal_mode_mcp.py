@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -132,12 +133,17 @@ class GoalModeMCPControlPlane:
         if registry:
             command += ["--registry", registry]
         command += ["--format", "json"]
+        # MCP parses/projects raw decisions itself. Pin only this subprocess;
+        # the existing environment opt-out also works with older CLI parsers.
+        environment = {**os.environ, "LOOPX_CONTEXT_DELIVERY": "off"}
         result = subprocess.run(
-            [*command, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
+            [*command, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            env=environment,
         )
         if legacy_args is not None and self._runtime_profile_flag_is_unsupported(result):
             result = subprocess.run(
-                [*command, *legacy_args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30
+                [*command, *legacy_args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                env=environment,
             )
         return (result.stdout or "") + (
             ("\n" + result.stderr) if result.returncode else ""

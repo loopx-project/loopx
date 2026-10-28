@@ -26,7 +26,7 @@ def isolated_runtime(tmp_path, monkeypatch):
     assert restart_effect_runtime()["status"] in {"stopped", "not_running"}
 
 
-@pytest.fixture(params=["legacy", "file", "sqlite"])
+@pytest.fixture(params=["file", "sqlite"])
 def goals(tmp_path, request):
     project = tmp_path / "project"
     project.mkdir()

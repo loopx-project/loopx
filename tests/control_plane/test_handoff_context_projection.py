@@ -8,92 +8,8 @@ import sys
 import pytest
 
 from loopx.control_plane.todos.handoff_note import (
-    attach_todo_handoff_note, build_todo_handoff_note, compact_todo_continuation_hint,
+    build_todo_handoff_note,
 )
-
-
-def test_handoff_keeps_source_identity_and_does_not_invent_completion():
-    source = {
-        "todo_id": "todo_original", "role": "agent", "status": "open",
-        "claimed_by": "Agent A", "text": "Read the complete requirement",
-        "note": "Keep the unfinished validation", "evidence": "opaque evidence",
-        "successor_todo_ids": ["todo_successor"],
-        "resume_when": "todo_done:todo_dependency",
-        "excluded_agents": ["agent-b"],
-    }
-    before = deepcopy(source)
-    note = build_todo_handoff_note(source, goal_id="goal-a", source="canonical_provider")
-    assert source == before
-    assert note == {
-        "schema_version": "handoff_note_v0", "handoff_id": "handoff_original",
-        "todo_id": "todo_original", "goal_id": "goal-a", "to_agent": "agent-a",
-        "intent": "continue", "summary": "Keep the unfinished validation",
-        "evidence_refs": ["todo:todo_original:evidence", "todo:todo_original:note"],
-        "blocked_on": "todo_done:todo_dependency",
-        "suggested_next_action": "Read the complete requirement",
-        "source": "canonical_provider", "successor_todo_ids": ["todo_successor"],
-        "excluded_agents": ["agent-b"],
-    }
-    assert attach_todo_handoff_note(source) is source
-    assert {key: source[key] for key in before} == before
-    assert "status" not in source["handoff_note"]
-    assert "resume_ready" not in source["handoff_note"]
-
-
-def test_plain_work_has_no_handoff_and_nested_fields_remain_authoritative():
-    assert build_todo_handoff_note({"todo_id": "todo_plain", "note": "continue"}) is None
-    item = {"todo_id": "todo_original", "note": "top-level fallback", "claimed_by": "agent-a",
-            "handoff": {"to_agent": "agent-b", "note": "", "reason": "nested reason"}}
-    note = build_todo_handoff_note(item)
-    assert note["to_agent"] == "agent-b"
-    assert note["summary"] == "nested reason"
-    assert compact_todo_continuation_hint(item) == "nested reason"
-
-
-def test_legacy_handoff_identity_does_not_depend_on_continuation_edits():
-    item = {"goal_id": "goal-a", "role": "agent", "index": 7, "text": "Legacy work",
-            "handoff": {"note": "First continuation"}}
-    first = build_todo_handoff_note(item, goal_id="goal-a")
-    item["handoff"]["note"] = "Revised continuation"
-    revised = build_todo_handoff_note(item, goal_id="goal-a")
-    # Golden compatibility identity for the historical tuple encoding; do not
-    # derive the expected ID from the function being characterized.
-    assert first["handoff_id"] == revised["handoff_id"] == "handoff_7e32bf123341"
-    assert first["summary"] != revised["summary"]
-
-
-@pytest.mark.parametrize("label", ["ak", "sk", "api_key", "access_key_id", "secret_key", "token", "password"])
-def test_credential_assignment_is_rejected_before_display_truncation(label):
-    # Values are synthetic and deliberately short. Even when the assignment
-    # follows the display cap, the entire candidate must be rejected.
-    item = {"handoff": {"note": "x" * 400 + " " + label + "=" + "v"}}
-    assert compact_todo_continuation_hint(item) is None
-    assert "summary" not in build_todo_handoff_note(item)
-
-
-def test_unicode_compaction_and_bounded_evidence_keep_existing_semantics():
-    assert compact_todo_continuation_hint({"note": "a\u0085b\u001cc"}) == "a b c"
-    assert compact_todo_continuation_hint({"note": "token budget for validation"}) == "token budget for validation"
-    assert compact_todo_continuation_hint({"note": "😀" * 281}) == "😀" * 279 + "..."
-    item = {"todo_id": "todo_original", "successor_todo_ids": ["todo_next"],
-            "handoff": {"evidence_refs": ["ref:one", "ref:one", "ref:two", "ref:three", "ref:four"]},
-            "evidence": "raw evidence is not copied", "note": "continuation",
-            "latest_event_kind": "todo_update"}
-    assert build_todo_handoff_note(item)["evidence_refs"] == [
-        "ref:one", "ref:two", "ref:three", "ref:four", "todo:todo_original:evidence", "todo:todo_original:note"]
-
-
-# Synthetic values exercise Unicode filtering without resembling credentials.
-_DOTTED_I_ASSIGNMENT = "apİ_key" + "=" + "v"
-_UNICODE_TOKEN_ASSIGNMENT = "令token" + "=" + "v"
-@pytest.mark.parametrize("text, expected", [
-    (_UNICODE_TOKEN_ASSIGNMENT, _UNICODE_TOKEN_ASSIGNMENT),  # Python Unicode word boundary: no boundary before token.
-    (_DOTTED_I_ASSIGNMENT, None),
-    ("bearer\ufeffv", "bearer\ufeffv"),  # BOM is not Python whitespace.
-    ("bearer\u0085v", None),
-])
-def test_credential_filter_keeps_unicode_boundary_and_whitespace_contract(text, expected):
-    assert compact_todo_continuation_hint({"note": text}) == expected
 
 
 def test_summary_and_index_use_batches_without_mutating_the_source(monkeypatch, tmp_path):
@@ -252,7 +168,7 @@ def test_byte_bounded_context_batches_retain_every_record(monkeypatch):
 @pytest.mark.parametrize("credential", [False, True])
 def test_oversized_single_source_reuses_private_snapshot_without_pretruncation(monkeypatch, credential):
     from loopx.control_plane import effect_runtime
-    from loopx.control_plane.todos.handoff_note import handoff_context_source, project_handoff_context
+    from loopx.control_plane.todos.handoff_note import todo_read_source, project_handoff_context
     calls, original = [], effect_runtime.effect_runtime_result
 
     def track(method, request, **kwargs):
@@ -265,8 +181,35 @@ def test_oversized_single_source_reuses_private_snapshot_without_pretruncation(m
         text += " " + "token" + "=" + "v"
     rows = [{"todo_id": f"todo_snapshot_{i}", "text": "Work", "successor_todo_ids": ["todo_next"],
              "note": text if i == 1 else "Continue"} for i in range(3)]
-    contexts = project_handoff_context([handoff_context_source(row) for row in rows])
+    contexts = project_handoff_context([todo_read_source(row) for row in rows])
     assert [row["note"]["todo_id"] for row in contexts] == [row["todo_id"] for row in rows]
     assert contexts[1]["continuation_hint"] == (None if credential else "a" * 279 + "...")
     assert contexts[1]["note"]["summary"] == ("Work" if credential else "a" * 279 + "...")
     assert calls == [("todo.context.page", False), ("todo.context.page", True), ("todo.context.page", False)]
+
+
+def test_python_sequence_and_scalar_facts_cross_the_retained_facade():
+    from loopx.control_plane.todos.summary_item import compact_todo_summary_items
+
+    row = {"todo_id": "todo_compat", "text": ("Check", True), "status": "open",
+           "note": 1.0, "required_write_scopes": (True, 1.0, "docs/**", "../bad"),
+           "excluded_agents": {"Agent B"}, "successor_todo_ids": ("todo_next",),
+           "decision_scope": {"kind": "other", "granularity": "action", "scope_key": 1.0}}
+    result = compact_todo_summary_items([row], strip_text=True)[0]
+    assert result["text"] == "('Check', True)"
+    assert result["continuation_hint"] == "1.0"
+    assert result["required_write_scopes"] == ["True", "1.0", "docs/**"]
+    assert result["excluded_agents"] == ["agent-b"]
+    assert result["decision_scope"]["scope_key"] == "1.0"
+    assert result["handoff_note"]["successor_todo_ids"] == ["todo_next"]
+    assert row["excluded_agents"] == {"Agent B"}
+    assert row["text"] == ("Check", True)
+
+
+def test_explicit_null_text_override_preserves_raw_text_even_with_strip_requested():
+    from loopx.control_plane.todos.summary_item import compact_todo_summary_items
+
+    row = {"text": "  Work  ", "status": "open"}
+    assert compact_todo_summary_items([row], texts=[None], strip_text=True)[0]["text"] == "  Work  "
+    with pytest.raises(ValueError, match="cardinality"):
+        compact_todo_summary_items([row], texts=[])

@@ -301,6 +301,40 @@ target. The terminal-settlement scenario requires the model to validate a real
 fixture artifact, then follow the quota-projected `durable_writeback ->
 quota_spend -> terminal_closeout` sequence under one stable effect identity; a
 premature no-follow-up or spend-before-writeback fails.
+The plan's conditional ordinary Todo completion may run during validation,
+before writeback and spend. The actor requires the original Goal/Agent/Todo/Turn
+arguments and its committed validation receipt; ordinary completion does not
+qualify terminal closeout. `--no-follow-up` still requires both matching
+writeback and spend receipts. Later receipts advance the original Turn's plan;
+they do not discard its identity-bound command templates. This follows the shared
+[quota-bound completion contract](../canonical-terminal-review.md#quota-bound-cli-completion)
+without changing the portfolio, repeats, contrasts or settlement order.
+The refresh CLI's pure progress-input decoder identifies invalid argument
+combinations before dispatch or authority writes. Its structured rejection is
+returned to the same model, which may correct its input within the original
+ten-call budget. Rejected calls remain counted and commit no settlement step;
+the actor never retries a command or restarts a scenario automatically. Other
+non-zero CLI results and fixture identity, route or ordering violations still
+fail immediately; non-zero execution alone does not prove rollback.
+The shared CLI transport retains the process exit code and transient stdout;
+even a non-zero process that emitted valid committed-receipt JSON fails unless
+it is that exact pre-dispatch input rejection. Raw stdout is never copied into
+durable qualification receipts.
+After the proof is read, a terminal actor may author a project draft in
+`.scratch/` using the existing OS-isolated shell. Original fixture inputs and
+authority stores remain protected; private host data and external networking
+are unavailable. LoopX mutations still use one direct, identity-bound CLI call
+at a time; the draft shell cannot invoke LoopX. The original ten-call limit and
+all committed receipt checks remain. Explicit foreign routes fail rather than
+being repaired. After the initial quota guard, completion, writeback and spend
+must retain the fixture Turn. The initial guard's host Turn reference is rebound
+by the existing CLI bridge; it is not a foreign-Turn refusal test. Failure
+receipts retain fixture-owned codes rather than echoing CLI errors or
+model-authored JSON.
+The shared plan also names the existing scope-input requirements for typed
+`no_followup` and `exploration_exhausted` observations. A Todo's completion is
+not itself evidence that a coverage scope is exhausted; the CLI still rejects
+missing coverage inputs before writeback.
 
 For selected-Todo and terminal qualification,
 a standalone `cat` may read up to eight workspace-confined files, optionally

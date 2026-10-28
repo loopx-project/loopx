@@ -461,8 +461,8 @@ def main() -> int:
         after_authority = run_cli(registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID)
         assert after_authority["todos"] == before_authority["todos"]
         assert after_authority["authority_read"]["provider_revision"] == before_authority["authority_read"]["provider_revision"]
-        # These diagnostics still belong to explicit legacy source inspection,
-        # before import. Display text outside canonical regions grants no work.
+        # Ordinary reads refuse an unimported malformed source before consulting
+        # its display diagnostics. The imported collection above stays unchanged.
         source_registry, source_runtime, source_state = write_fixture(
             Path(tmp) / "invalid-source", text=state_text() + invalid_rows,
             import_authority=False,
@@ -471,18 +471,11 @@ def main() -> int:
         invalid_status = run_cli(source_registry, source_runtime, "status", check=False)
         assert invalid_status["ok"] is False, invalid_status
         assert source_state.read_bytes() == before_source
-        assert any(
-            "todo_archived_open" in item and "executor exclusions" in item
-            for item in invalid_status["contract_errors"]
-        ), invalid_status
-        assert any(
-            "todo_archived_malformed" in item and "malformed status metadata" in item
-            for item in invalid_status["contract_errors"]
-        ), invalid_status
-        assert any(
-            "todo_archived_empty" in item and "malformed status metadata" in item
-            for item in invalid_status["contract_errors"]
-        ), invalid_status
+        refused = next(item for item in invalid_status["attention_queue"]["items"]
+            if item.get("goal_id") == GOAL_ID and item.get("todo_source") == "unavailable")
+        assert refused["error_code"] == "canonical_authority_required"
+        assert refused["authority_read"]["write_admitted"] is False
+        assert refused["authority_read"]["legacy_fallback_used"] is False
 
     assert_user_role_archive_retains_standing_decision()
 

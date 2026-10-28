@@ -18,7 +18,7 @@ from loopx.status import active_state_todo_fields, autonomous_replan_obligation_
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_complex_provider_snapshot_replan_and_quota_readback(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    paths = _write_fixture(tmp_path, runs=[])
+    paths = _write_fixture(tmp_path, runs=[], initialize=False)
     projection = _fixture()
     initialize_canonical_authority(paths["runtime"], GOAL_ID, projection,
                                    state_path=paths["state_file"], provider=provider)
@@ -51,7 +51,7 @@ def test_complex_provider_snapshot_replan_and_quota_readback(tmp_path, monkeypat
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_quota_shared_evidence_command_reads_exact_history_and_preserves_scope(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    paths = _write_fixture(tmp_path, runs=[])
+    paths = _write_fixture(tmp_path, runs=[], initialize=False)
     initialize_canonical_authority(paths["runtime"], GOAL_ID, _fixture(),
                                    state_path=paths["state_file"], provider=provider)
     history = [{**row, "health_check": f"Observation {i}\nFull tail constraint."}
@@ -87,7 +87,7 @@ def test_explicit_completed_todo_fallback_retains_twenty_record_threshold(
     tmp_path, monkeypatch, provider,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    paths = _write_fixture(tmp_path, runs=[])
+    paths = _write_fixture(tmp_path, runs=[], initialize=False)
     registry = json.loads(paths["registry"].read_text())
     registry["goals"][0]["adapter"] = {"kind": "harness_self_improvement"}
     paths["registry"].write_text(json.dumps(registry))

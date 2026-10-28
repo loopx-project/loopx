@@ -24,6 +24,7 @@ def _write_connected_project(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "schema_version": "0.1",
+                "common_runtime_root": str(project / ".loopx/runtime"),
                 "goals": [
                     {
                         "id": GOAL_ID,
@@ -41,6 +42,8 @@ def _write_connected_project(tmp_path: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    from canonical_authority_fixture import initialize_canonical_source_fixture
+    initialize_canonical_source_fixture(project / ".loopx/runtime", GOAL_ID, state_path=state_file, provider="sqlite")
     return project
 
 

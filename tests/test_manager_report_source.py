@@ -1,4 +1,5 @@
 """One original scoped reader supplies complete, fixed-window report evidence."""
+import hashlib
 import json
 from copy import deepcopy
 
@@ -202,7 +203,8 @@ def test_actual_canonical_sources_join_a_completed_task_and_fixed_boundaries(tmp
     assert todo["status"] == "done"
     path = runtime / "goals/goal-a/runs/index.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    run = {"goal_id": "goal-a", "todo_id": todo["todo_id"], "delivery_outcome": "outcome_progress"}
+    run = {"goal_id": "goal-a", "todo_id": todo["todo_id"], "delivery_outcome": "outcome_progress",
+        "agent_vision": {"path_delta": {"evidence_refs": ["https://example.org/results/42"]}}}
     path.write_text("".join(json.dumps({**run, "generated_at": timestamp,
         "delivery_outcome": "outcome_gap" if i == 0 else "outcome_progress"}) + "\n" for i, timestamp in enumerate((
         "2026-01-01T09:00:00+08:00", "2026-01-02T08:59:00+08:00", "2026-01-02T09:00:00+08:00"))))
@@ -217,6 +219,29 @@ def test_actual_canonical_sources_join_a_completed_task_and_fixed_boundaries(tmp
     linked = [row["evidence"] for row in snapshot["rows"] if row["kind"] == "delivery_task"]
     assert len(linked) == 1 and linked[0]["todo_id"] == todo["todo_id"] and linked[0]["status"] == "done"
     assert deliveries[0]["recorded_details"]["verification"] == "recorded_claim_not_independent_verification"
+    # The exact reader supplies the actual recorded reference alongside its
+    # digest; it has not read the remote artifact or qualified public access.
+    assert deliveries[0]["recorded_details"]["recorded_source_refs"] == [{
+        "source_ref": "https://example.org/results/42",
+        "evidence_ref": "sha256:" + hashlib.sha256(b"https://example.org/results/42").hexdigest()}]
     ordinary = tool.read(TOOL_NAME, {"view": "deliveries", "goal_id": "goal-a", **WINDOW})
     assert ordinary["matched"] == 1 and ordinary["rows"][0]["outcome"] == "outcome_progress"
     assert list_goal_todos(registry_path=registry, runtime_root_arg=str(runtime), goal_id="goal-a")["todos"][0] == todo
+
+
+@pytest.mark.parametrize("reference", [
+    "/Users/fixture/private.txt", "file:///tmp/private", "../.local/private.json",
+    "https://user:pass@example.org/file", "https://example.org/file?key=hidden",
+    "https://docs" + ".internal/design", "javascript:alert", "https://example.org/\nprivate",
+    "https://example.org:invalid/file", "https://#missing-host",
+])
+def test_exact_delivery_reference_disclosure_does_not_promote_private_or_unsafe_values(reference):
+    from loopx.chat_manager_history import _recorded_details
+
+    run = {"agent_vision": {"path_delta": {"evidence_refs": [reference]}},
+        "progress_observation": {"evidence_ids": ["evidence:original"]}}
+    details = _recorded_details(run, complete=True)
+    assert details["recorded_source_refs"] == []
+    assert len(details["evidence_refs"]) == 1
+    assert details["artifact_read_status"] == "not_read"
+    assert "recorded_source_refs" not in _recorded_details(run)

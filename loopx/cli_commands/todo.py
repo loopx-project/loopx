@@ -21,9 +21,12 @@ from ..control_plane.capability_hooks import PostWritebackHookRegistration
 from ..control_plane.quota.settlement import (
     QuotaSettlementReadback,
     SettlementIdentity,
+    SettlementStepKind,
     build_turn_scoped_cli_settlement_plan,
+    attach_settlement_progress,
     read_heartbeat_settlement,
     settlement_result_payload,
+    settlement_step_command,
 )
 from ..control_plane.runtime.time import chronology_key
 from ..control_plane.todos.markdown import render_todo_markdown
@@ -134,6 +137,7 @@ def _todo_settlement_plan(
     identity: SettlementIdentity, *, args: argparse.Namespace,
     registry_path: Path, runtime_root: Path,
     goal_ref: dict[str, str] | None,
+    quota_spend_source: str = "heartbeat",
 ) -> dict[str, object]:
     """Render the native plan with the original route and supplied lease facts."""
     actor_args = ""
@@ -156,7 +160,7 @@ def _todo_settlement_plan(
         replan_obligation_id=identity.replan_obligation_id,
         turn_instance_id=identity.turn_instance_id, command_prefix=prefix,
         scoped_cli_args="", lifecycle_actor_args=actor_args, writeback_path_args=path_args,
-        goal_ref=goal_ref,
+        goal_ref=goal_ref, quota_spend_source=quota_spend_source,
     ).as_dict()
 
     from ..capabilities.explore.turn_context import project_settlement_attachment
@@ -494,12 +498,28 @@ def handle_todo_command(
                 claimed_by=args.claimed_by,
                 agent_id=args.agent_id,
                 claim_only=True,
+                manage_execution=(args.agent_id is not None and args.agent_id == args.claimed_by
+                    and args.task_lease_idempotency_key is None and args.task_lease_expected_version is None),
                 claim_operation_id=args.claim_operation_id,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
+            if payload.get("ok") and payload.get("execution_managed") and not args.dry_run:
+                route = ["loopx", "--registry", str(registry_path), "--runtime-root",
+                    str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg)), "--format", "json"]
+                selected = ["--goal-id", args.goal_id, "--todo-id", args.todo_id,
+                    "--agent-id", args.agent_id, "--claim-operation-id", payload["claim_operation_id"]]
+                payload["next_cli_actions"] = [shlex.join([*route, "todo", action, *selected, *extra]) for action, extra in (
+                    ("update", ["--update-operation-id", "<progress-operation-id>", "--note", "<progress>"]),
+                    ("complete", ["--evidence", "<validated-evidence>"]),
+                )]
+                payload["instruction"] = "Continue the task. Use this original claim reference for progress or completion; retain normal Turn settlement when applicable."
+                # Normal callers need the accepted task reference, not lease
+                # counters or a second inline copy of the native receipt.
+                for internal in ("lease", "lease_changed", "lease_idempotent", "original_receipt"):
+                    payload.pop(internal, None)
         elif args.todo_command == "update":
             validate_todo_update_options(args)
             payload = update_goal_todo(
@@ -507,6 +527,7 @@ def handle_todo_command(
                 runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,
                 todo_id=args.todo_id,
+                claim_operation_id=args.claim_operation_id,
                 text=args.text,
                 priority=args.priority,
                 clear_priority=args.clear_priority,
@@ -616,6 +637,8 @@ def handle_todo_command(
                     no_follow_up=bool(args.no_follow_up),
                 )
                 if completion_error is not None:
+                    progress = settlement_readback.progress
+                    assert progress is not None
                     settlement_result = settlement_readback.settlement
                     payload = {
                         "ok": False,
@@ -635,6 +658,7 @@ def handle_todo_command(
                             registry_path=registry_path,
                             runtime_root=runtime_root,
                             goal_ref=goal_ref,
+                            quota_spend_source=progress["quota_spend_source"],
                         ),
                         "error": completion_error,
                     }
@@ -667,6 +691,7 @@ def handle_todo_command(
                     runtime_root_arg=runtime_root_arg,
                     goal_id=args.goal_id,
                     todo_id=args.todo_id,
+                    claim_operation_id=args.claim_operation_id,
                     role=args.role,
                     decision_outcome=args.decision_outcome,
                     evidence=args.evidence,
@@ -807,6 +832,25 @@ def handle_todo_command(
             payload["ok"] = False
             payload["receipt_repair_required"] = True
             payload["error"] = settlement_result.failure.reason
+        elif not args.no_follow_up:
+            attach_settlement_progress(
+                payload, settlement_readback, registry_path=registry_path,
+                runtime_root=runtime_root, goal_ref=goal_ref,
+            )
+            progress = settlement_readback.progress
+            assert progress is not None
+            if progress.get("next_step") == "durable_writeback":
+                identity = settlement_readback.identity.value
+                assert identity is not None
+                plan = _todo_settlement_plan(
+                    identity, args=args, registry_path=registry_path,
+                    runtime_root=runtime_root, goal_ref=goal_ref,
+                    quota_spend_source=progress["quota_spend_source"],
+                )
+                payload["settlement_plan"] = plan
+                payload["next_cli_actions"] = [settlement_step_command(
+                    plan, SettlementStepKind.DURABLE_WRITEBACK,
+                )]
     if (
         args.todo_command == "complete"
         and payload.get("ok")

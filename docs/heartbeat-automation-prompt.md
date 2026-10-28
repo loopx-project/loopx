@@ -482,9 +482,9 @@ The result contains `native_config.config_overrides`, `native_config.hooks` and
 its existing developer instructions. Apply each flat key/value in `config_overrides`
 to the native host configuration (or as a `-c key=value` override). This selects
 64000-byte context continuations, a 20000-token history limit, and a shell-scoped
-reader budget declaration. The initial guard stays small. Its instruction requests
+reader budget declaration. The initial guard uses the same output budget. Its instruction requests
 22000 tokens per reader result and 24000 for code-mode emission, with one directly
-forwarded stdout per call. Unconfigured hosts retain the small-page default;
+forwarded stdout per call. Native paging uses this default without the shell declaration;
 the isolated benchmark worker applies this profile automatically when opted in.
 Keep short context readers in the foreground (`exec_command`'s normal 10000 ms
 wait). Early output followed by polling can leave the native post-tool hook with
@@ -518,6 +518,13 @@ Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
 these options without freezing a Turn ID. Each wake loads current instructions
 and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
 the same transport. An unset wake identity fails in the shell before admission.
+
+Native guards and JSON recovery readers use the existing 64000-byte output
+profile even when an App shell lacks the configuration environment override.
+Small captures finish inline; larger captures continue with the same large-page
+budget. Explicit smaller budgets remain available for truncated-range recovery.
+The native hook accepts complete JSON records alongside other shell output and
+still verifies each record against the trusted original capture before reuse.
 
 Native reuse assumes a normally completed full read was read and remains
 available until a lifecycle invalidation. `PostToolUse` merges complete reader

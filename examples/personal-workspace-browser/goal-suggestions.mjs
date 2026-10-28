@@ -130,7 +130,10 @@ export const goalSuggestionsScenario = {
         await other.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
         const vitals = (await other.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
         assert.match(vitals, /0 等你决定|可选/, `the lane shows the item as optional: ${vitals}`);
-        assert.match(vitals, /已列出 5 项中的 0 项/, `the lane shows the partial listing truthfully: ${vitals}; listed: ${(await other.locator(".goal-overview").innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 400)}`);
+        // The work vital marks its unknown total; its help carries the partial counts.
+        await other.getByTestId("goal-vitals").getByRole("button", { name: "工作 · 总数未知", exact: true }).focus();
+        await other.getByRole("tooltip").getByText(/已列出 5 项中的 0 项/).waitFor();
+        await other.keyboard.press("Escape");
         await other.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
         const otherSummary = other.locator(".personal-composer-tools > summary");
         await otherSummary.waitFor({ state: "visible", timeout: 15_000 });

@@ -160,13 +160,14 @@ class StewardTurnHost:
                 and held.get("idempotency_key") == "monitor-recovery." + original["turn_id"])
             return {"monitor_restart_basis": {"original": original,
                 "event_kinds": [row["kind"] for row in events], "poll_absent": not present,
+                "contexts": [row["payload"] for row in events if row["kind"] == "manager.context"],
                 "old_worker_excluded": True, "lease_available": available}}
 
     @staticmethod
     def monitor_restart_request(original: Mapping[str, Any]) -> dict[str, Any] | None:
         """Prepare correlation only; current typed admission decides recovery."""
         prior = original.get("loopx_request") or {}
-        if (original.get("status") != "failed" or original.get("error_code") != "server_restarted"
+        if (original.get("status") != "failed" or original.get("error_code") not in {"server_restarted", "runtime_error"}
                 or prior.get("work_kind") != "monitor" or prior.get("monitor_restart_recovery") is not None):
             return None
         return {**prior, "monitor_restart_recovery": {"original_turn_id": original["turn_id"]}}
@@ -464,7 +465,10 @@ class StewardTurnHost:
                         client_id = native_steward_client_id(actor, request["turn_instance_id"])
                         existing = None
             if existing is not None:
-                restart_request = self.monitor_restart_request(existing) if work_kind == "monitor" else None
+                # Keep the separately proven legacy admission-refusal route
+                # below ahead of broader runtime-error observation candidates.
+                restart_request = (self.monitor_restart_request(existing)
+                    if work_kind == "monitor" and not self._monitor_selection_failed_before_poll(existing) else None)
                 if restart_request is not None:
                     client_id += ".restart-recovery"
                     continued = self.store.turn_for_client(actor["session_id"], client_id)

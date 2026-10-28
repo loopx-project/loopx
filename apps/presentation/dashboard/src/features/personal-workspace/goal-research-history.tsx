@@ -87,7 +87,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const opener = useRef<HTMLElement | null>(null);
   const readerParent = useRef<{selection: Selection; nodeId: string; opener: HTMLElement | null} | null>(null);
   const focusPending = useRef(Boolean(selection.nodes.length || selection.day !== null));
-  const focusReturn = useRef<{nodeId?: string; element: HTMLElement | null} | null>(null);
+  const focusReturn = useRef<{nodeId?: string; eventId?: string; element: HTMLElement | null} | null>(null);
   const copy = zh ? {
     title: "研究历程", loading: "正在读取完整记录", reading: "读取中", refresh: "刷新记录",
     all: "回到全图", scope: "Explore 已记录历史", coverage: "其他来源覆盖、尝试发生时序尚未核验",
@@ -158,19 +158,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   };
   const updateRecords = (events: readonly ExploreHistoryEvent[]) => <ol className="research-history-records">{events.map(event => <li key={event.event_id}><time>{timeLabel(event.recorded_at)}</time><div><p>{stateLabel(event.status)} · {event.title}</p>{event.summary ? findingBody(event) : null}</div>{event.parent_id ? <code>{copy.group}: {event.parent_id}</code> : null}{event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}{event.run_id ? <code>{event.run_id}</code> : null}</li>)}</ol>;
 
-  useEffect(() => {
-    const pop = () => {
-      readerParent.current = null;
-      focusReturn.current = null;
-      focusPending.current = true;
-      const next = selectedFromUrl(goalId);
-      setSelection(next);
-      setQuestionExpanded(!next.finding);
-      const view = viewFromUrl(goalId); setLens(view.lens); setPhase(view.phase);
-    };
-    window.addEventListener("popstate", pop);
-    return () => window.removeEventListener("popstate", pop);
-  }, [goalId]);
   useEffect(() => {
     if (!active) return;
     let current = true;
@@ -250,19 +237,38 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const positions = new Map(layout.map(item => [item.node.id, item]));
   const selectedId = selection.nodes.length === 1 ? selection.nodes[0]! : "";
   const selected = value?.nodes.find(node => node.id === selectedId);
+  const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
+    ?? (!selection.finding ? selected?.findings.at(-1) : undefined);
   const selectedGroup = selection.day !== null ? grouped.groups.find(group => group.day === selection.day) : undefined;
   const selectedMembers = selectedGroup?.nodes ?? (selection.nodes.length > 1 ? value?.nodes.filter(node => selection.nodes.includes(node.id)) : undefined);
+  useEffect(() => {
+    const pop = () => {
+      readerParent.current = null;
+      const next = selectedFromUrl(goalId);
+      const returning = !next.nodes.length && next.day === null && Boolean(selection.nodes.length || selection.day !== null);
+      focusReturn.current = returning ? {eventId: selectedFinding?.event_id, element: opener.current} : null;
+      focusPending.current = !returning;
+      setSelection(next);
+      setQuestionExpanded(!next.finding);
+      const view = viewFromUrl(goalId); setLens(view.lens); setPhase(view.phase);
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, [goalId, selection, selectedFinding?.event_id]);
   useLayoutEffect(() => {
     if (!active) return;
     if (focusReturn.current) {
-      const {nodeId, element} = focusReturn.current;
+      const {nodeId, eventId, element} = focusReturn.current;
       // The full-history view moves while reading. Resolve its remounted
       // control by the local return key rather than losing keyboard position.
-      const returnKey = element?.dataset.researchReturn;
+      const origin = !element?.dataset.researchDecision || element.dataset.researchDecision === eventId ? element : null;
+      const returnKey = origin?.dataset.researchReturn;
       const target = nodeId ? detail.current?.querySelector<HTMLButtonElement>(`[data-research-node="${CSS.escape(nodeId)}"] button`)
-        : element?.isConnected ? element : returnKey ? graph.current?.querySelector<HTMLButtonElement>(`[data-research-return="${CSS.escape(returnKey)}"]`) : null;
+        : (origin?.isConnected ? origin : null)
+          ?? (returnKey ? graph.current?.querySelector<HTMLButtonElement>(`[data-research-return="${CSS.escape(returnKey)}"]`) : null)
+          ?? (eventId ? graph.current?.querySelector<HTMLButtonElement>(`[data-research-decision="${CSS.escape(eventId)}"]`) : null);
       focusReturn.current = null;
-      if (target?.isConnected) {target.focus({preventScroll: true}); target.scrollIntoView({block: "nearest"});}
+      if (target?.isConnected) {target.focus({preventScroll: true}); target.scrollIntoView({block: "center"});}
       else graph.current?.focus();
       return;
     }
@@ -298,7 +304,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     const parent = readerParent.current;
     readerParent.current = null;
     focusPending.current = false;
-    focusReturn.current = {nodeId: parent?.nodeId, element: opener.current};
+    focusReturn.current = {nodeId: parent?.nodeId, eventId: selectedFinding?.event_id, element: opener.current};
     if (parent) opener.current = parent.opener;
     select(parent?.selection ?? {nodes: [], day: null}, false);
   };
@@ -322,8 +328,6 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     target.scrollIntoView({block: "start"});
   }, [active, reportScope, analysis.location.open, analysis.loading, analysis.pack, analysis.readError, analysis.panel, selection.nodes.length, selection.day]);
   const readingSelection = Boolean(selected || selectedMembers?.length);
-  const selectedFinding = selected?.findings.find(finding => finding.result_id === selection.finding)
-    ?? (!selection.finding ? selected?.findings.at(-1) : undefined);
   const selectedEdges = selected ? value?.edges.filter(edge => edge.from_node === selected.id || edge.to_node === selected.id) ?? [] : [];
   const selectedContextCitations = [...new Map((originalDisplay ? [] : currentDisplay?.fields ?? [])
     .filter(field => field.event_id === selected?.latest.event_id || field.event_id === selectedFinding?.event_id)
@@ -354,7 +358,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
       </ContextHelp>
     </div> : null;
   const historyView = !value ? null : lens === "timeline" && timeline ? <div className="research-history-canvas is-timeline" ref={graph} tabIndex={-1}>
-        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
+        <GoalResearchTimeline timeline={timeline} zh={zh} selectedIds={selection.nodes} selectedEventId={selectedFinding?.event_id} selectedDay={selection.day} dayGroups={grouped.groups} onGroupSelect={day => select({nodes: [], day})} phase={phase} onPhase={next => chooseView(lens, next)} onSelect={(id, finding) => choose(id, true, finding)} onSelectMany={nodes => select({nodes, day: null})} timeLabel={fullTime} dayLabel={dayTime}/>
       </div> : <div className="research-history-canvas" ref={graph} tabIndex={0} aria-label={zh ? "完整已载入研究关系图；可滚动" : "Full loaded research graph; scrollable"}>
         <div className="research-history-stage" style={{width, height}}>
           <svg width={width} height={height} aria-hidden="true" className="research-history-edges">

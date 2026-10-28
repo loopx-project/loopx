@@ -33,6 +33,21 @@ test("sent work remains visible before return and until the requester consumes i
     results: [{...conclusion, status: "delivered"}]}), []);
 });
 
+test("an original conversation retains its typed address instead of inventing a Goal receiver", () => {
+  const recipient = {schema_version: "collaboration_original_conversation_recipient_v0",
+    binding_id: "b".repeat(24), session_id: "original-session", identity_sha256: "c".repeat(64)};
+  const peer = {direction: "outgoing", request: {request_id: request.request_id,
+    source_kind: "peer", source_agent_id: "requester", recipient, purpose: request.purpose}};
+  const row = project(peer)[0];
+  assert.deepEqual(row.recipient, recipient);
+  assert.equal(row.agent_id, undefined);
+  assert.equal(row.goal_ref, undefined);
+  assert.equal(row.step, "await_peer_result");
+  assert.equal(project({...peer, receipt: settled, results: [conclusion]})[0].step, "consume_peer_result");
+  assert.throws(() => project({...peer, request: {...peer.request,
+    recipient: {...recipient, goal_id: "replacement"}}}), /unsupported|unexpected|invalid/);
+});
+
 test("current revisions, cancellation and unavailable receipts retain independent meanings", () => {
   const control = {revision: 2, revision_digest: "sha256:" + "b".repeat(64), brief: {purpose: "Revised requirement"},
     control_state: "active", active_reservation: null};

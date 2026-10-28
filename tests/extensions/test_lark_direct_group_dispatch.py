@@ -107,10 +107,15 @@ def test_three_direct_requests_keep_distinct_returns_and_replay_once(
         result = transport(args)
         if current_source in returns:
             returns[current_source] = reply_state["reply_text"]
-        result["stdout"] = (
-            result["stdout"].replace("linkmacbot", "LoopX Mew")
-            .replace("om_reply_fixture", "om_return_" + current_source)
-        )
+        payload = json.loads(result["stdout"].replace("linkmacbot", "LoopX Mew"))
+        if ("+messages-reply" in args or "+messages-send" in args) and "--dry-run" not in args:
+            original_id = payload["data"]["message_id"]
+            returned_id = "om_return_" + current_source
+            message = reply_state["messages"].pop(original_id)
+            message["message_id"] = returned_id
+            reply_state["messages"][returned_id] = message
+            payload["data"]["message_id"] = returned_id
+        result["stdout"] = json.dumps(payload)
         return result
 
     for event in events:

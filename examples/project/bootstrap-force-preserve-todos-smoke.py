@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 GOAL_ID = "bootstrap-preserve-fixture"
 
 
@@ -129,6 +130,7 @@ def assert_canonical_reconnect(root: Path, provider: str) -> None:
     assert before["authority_read"]["legacy_fallback_used"] is False, before
     stored = run_cli(*prefix, *read, "--todo-id", added["todo_id"])["todo"]
     assert stored["text"] == text and stored["status"] == "open", stored
+    from loopx.control_plane.testing.canary_harness import assert_todo_read_unchanged
     for force_args in (("--force",), ("--force", "--preserve-todos")):
         state_before, registry_before = state.read_bytes(), registry.read_bytes()
         refused = run_cli(*bootstrap, *force_args, check=False)
@@ -136,11 +138,11 @@ def assert_canonical_reconnect(root: Path, provider: str) -> None:
         assert "cannot rebuild existing state" in json.dumps(refused), refused
         assert state.read_bytes() == state_before
         assert registry.read_bytes() == registry_before
-        assert run_cli(*prefix, *read) == before
+        assert_todo_read_unchanged(run_cli(*prefix, *read), before)
     reconnected = run_cli(*bootstrap)
     assert reconnected["ok"] is True, reconnected
     assert reconnected["state_action"] == "kept-existing", reconnected
-    assert run_cli(*prefix, *read) == before
+    assert_todo_read_unchanged(run_cli(*prefix, *read), before)
     assert text in state.read_text(encoding="utf-8")
     assert goal_from_registry(project)["coordination"]["storage_target"]["provider"] == provider
 

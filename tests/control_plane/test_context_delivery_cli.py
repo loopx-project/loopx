@@ -119,13 +119,19 @@ def test_bounded_continuation_rechecks_original_capture_and_utf8_cursor(tmp_path
     assert "no guard, admission or spend" in result["recovery"]
 
 
-def test_page_output_budget_rejects_guard_use_without_admission(tmp_path, monkeypatch):
+@pytest.mark.parametrize("extra,limit,reason", [
+    ([], 7000, "only supported by JSON context-read"),
+    (["--codex-app", "--context-delivery", "off"], 7000, "only supported by JSON context-read"),
+    (["--codex-app", "--context-delivery", "on"], 0, "must be positive"),
+    (["--codex-app", "--context-delivery", "on"], -1, "must be positive"),
+])
+def test_page_output_budget_rejects_guard_use_without_admission(tmp_path, monkeypatch, extra, limit, reason):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     code, result = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "invalid-page-budget-guard",
-        "--max-page-output-bytes", "7000", cwd=project)
-    assert code == 1 and not result["ok"] and "only supported by JSON context-read" in result["reason"]
+        "--max-page-output-bytes", str(limit), *extra, cwd=project)
+    assert code == 1 and not result["ok"] and reason in result["reason"]
     assert _heartbeat_receipt_count(runtime, "invalid-page-budget-guard") == 0
     assert _spend_run_count(runtime) == 0
 
@@ -333,7 +339,8 @@ def test_optional_capture_projection_failure_falls_back_without_hiding_source(tm
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("output_limit", [None, 7900])
+def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(tmp_path, monkeypatch, provider, output_limit):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
     from test_quota_settlement_cli import _heartbeat_receipt_count
 
@@ -349,32 +356,55 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
     root, captures = tmp_path / "context", tmp_path / "captures"
     root.mkdir(mode=0o700)
     captures.mkdir()
+    projection_root = tmp_path / "projected"
+    projection_root.mkdir(mode=0o700)
     event = dict(session_id="native-session", cwd=str(project), hook_event_name="SessionStart", source="startup")
     codex_context_hook(str(root), event)
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    import shlex
+
+    limit = output_limit or 64000
+    def consume(page):
+        observed = b""
+        while True:
+            assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+            assert page["offset"] == len(observed)
+            observed += page["content"].encode()
+            if page["eof"]:
+                return observed
+            args = build_parser().parse_args(shlex.split(page["next_command"])[1:])
+            assert args.max_page_output_bytes == limit
+            page = read_context_capture(args)
+            assert page["ok"]
+
     for _ in range(2):
         rc, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
-            "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root), cwd=project)
+            "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root),
+            *([] if output_limit is None else ["--max-page-output-bytes", str(output_limit)]), cwd=project)
         assert rc == 0 and wire["mode"] == "full", wire
         assert "Native input observation independently verifies" not in wire["instruction"]
         assert "Native input observation independently verifies" not in wire["recovery"]["instruction"]
         # Consume the advertised first page and continuation, not another guard.
-        from loopx.cli import build_parser
-        from loopx.cli_commands.quota_capture import read_context_capture
-        import shlex
-        page, observed = wire, b""
-        while True:
-            assert page["offset"] == len(observed)
-            observed += page["content"].encode()
-            if page["eof"]:
-                break
-            args = build_parser().parse_args(shlex.split(page["next_command"])[1:])
-            page = read_context_capture(args)
-            assert page["ok"]
+        observed = consume(wire)
         assert hashlib.sha256(observed).hexdigest() == wire["sha256"]
         assert json.loads(observed) == json.loads(Path(wire["recovery"]["path"]).read_text())
         assert json.loads(observed)["heartbeat_receipt"]["turn_instance_id"] == "native-full"
-        assert len(wire["content"].encode()) <= 3072 and "context" not in wire
+        assert "context" not in wire
+        if output_limit is None:
+            assert wire["eof"] and wire["content"].encode() == observed
+        else:
+            assert not wire["eof"]
+            recovery_args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
+            assert recovery_args.max_page_output_bytes == limit
+            rc, projected = _run_cli(registry, runtime, "quota", "context-project", "--codex-app",
+                "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "native-full",
+                "--capture-file", wire["recovery"]["path"], "--capture-sha256", wire["recovery"]["sha256"],
+                "--decision-output-root", str(projection_root), "--context-delivery", "on",
+                "--codex-context-dir", str(root), "--max-page-output-bytes", str(limit), cwd=project)
+            assert rc == 0 and projected["mode"] == "full", projected
+            assert consume(projected) == observed
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original
 
@@ -602,8 +632,8 @@ def test_larger_pages_need_explicit_output_budget_and_preserve_every_byte(tmp_pa
     assert not read_context_capture(args)["ok"]
 
 
-@pytest.mark.parametrize("declaration,limit", [(None, 7900), ("64000", 64000), ("999999", 7900), ("unknown", 7900)])
-def test_native_configuration_budget_keeps_guard_small_and_continuations_complete(tmp_path, monkeypatch, declaration, limit):
+@pytest.mark.parametrize("declaration", [None, "64000", "7900", "999999", "unknown"])
+def test_native_large_pages_do_not_depend_on_shell_environment(tmp_path, monkeypatch, declaration):
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
 
@@ -614,7 +644,9 @@ def test_native_configuration_budget_keeps_guard_small_and_continuations_complet
     page = native_context_capture_view({"requirements": '汉🙂"\\\t\n' * 12000,
         "last": "Stop before publication."}, tmp_path)
     original = Path(page["path"]).read_bytes()
-    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+    limit = 64000
+    assert len(page["content"].encode()) > 32000
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
     collected, sizes = b"", []
     while True:
         assert page["ok"] and page["offset"] == len(collected)
@@ -627,5 +659,41 @@ def test_native_configuration_budget_keeps_guard_small_and_continuations_complet
         page = read_context_capture(args)
         assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
     assert collected == original and hashlib.sha256(collected).hexdigest() == page["sha256"]
-    if declaration == "64000":
-        assert max(sizes) > 32000 and len(sizes) < len(original) / 20000
+    assert max(sizes) > 32000 and len(sizes) < len(original) / 20000
+
+
+@pytest.mark.parametrize("output_limit", [0, -1])
+def test_native_frame_rejects_non_positive_output_before_wire_io(tmp_path, output_limit):
+    from loopx.cli_commands.quota_capture import native_context_capture_view, QuotaDecisionTransportError
+
+    with pytest.raises(QuotaDecisionTransportError):
+        native_context_capture_view({"requirements": "Keep the complete original."},
+            tmp_path, max_page_output_bytes=output_limit)
+    assert not list(tmp_path.iterdir())
+
+
+def test_default_json_reader_and_generated_recovery_use_large_pages(tmp_path):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+
+    raw = json.dumps({"requirements": "完整要求🙂 " * 30000}, ensure_ascii=False).encode()
+    capture = tmp_path / "capture.json"
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    parser = build_parser()
+    default = parser.parse_args(["--format", "json", "quota", "context-read",
+        "--capture-file", str(capture), "--capture-sha256", digest])
+    generated = parser.parse_args(shlex.split(context_capture_read_command(capture, digest))[1:])
+    for args in (default, generated):
+        collected, calls = b"", 0
+        while True:
+            page = read_context_capture(args)
+            assert page["ok"] and page["offset"] == len(collected)
+            collected += page["content"].encode()
+            calls += 1
+            if page["eof"]:
+                break
+            assert len(page["content"].encode()) > 32000
+            args = parser.parse_args(shlex.split(page["next_command"])[1:])
+        assert collected == raw and calls <= 10

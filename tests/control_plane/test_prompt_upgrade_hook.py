@@ -19,6 +19,7 @@ from loopx.control_plane.quota.live_decision import build_live_quota_should_run_
 from loopx.control_plane.scheduler.execution_context import scheduler_execution_context_for_runtime_profile
 from loopx.control_plane.testing.quota_fixtures import quota_status_payload
 from test_automation_prompt_upgrade import fixture, _set_fixture_prompt
+from canonical_authority_fixture import initialize_canonical_source_fixture
 
 
 def _deferred(tmp_path, monkeypatch, *, cli_bin="loopx", explicit_root=True):
@@ -220,7 +221,8 @@ def test_healthy_lane_does_not_dispatch_or_read_host_store(tmp_path, monkeypatch
 
 def test_real_quota_cli_exposes_hint_without_bypassing_health_gate(tmp_path, monkeypatch):
     _, path, database, registry, root, _, desired, _ = _deferred(tmp_path, monkeypatch)
-    # This minimal lifecycle fixture deliberately lacks a healthy active state.
+    # Canonical work is readable, but the minimal Goal document stays unhealthy.
+    initialize_canonical_source_fixture(root, "fixture-goal", state_path=tmp_path / "STATE.md", provider="sqlite")
     command = [sys.executable, "-m", "loopx.cli", "--format", "json",
         "--registry", str(registry), "--runtime-root", str(root),
         "quota", "should-run", "--goal-id", "fixture-goal", "--agent-id", "agent-a",

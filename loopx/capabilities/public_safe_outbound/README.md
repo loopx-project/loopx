@@ -69,8 +69,11 @@ installed/enabled，可经 `loopx capability list` / `show` 查看。
   无配置模式（只跑通用规则）；已设置却读不到或解析失败时，扫描以 `ok=false`、
   `unscanned_reasons=["config_unreadable"]` 结束，不会静默降级为通用规则。
   被请求的文件读不到或超过 `limit_bytes` 时同样记为
-  `content_unreadable` / `content_too_large`，`ok` 保持 false；目录等
-  不指向文件的路径跳过。`--scan-root` 指向不存在的路径记为 `scan_root_missing`，
+  `content_unreadable` / `content_too_large`，`ok` 保持 false。候选文件先按 BOM
+  声明的 Unicode 编码（UTF-8/UTF-16/UTF-32）解码：Windows PowerShell 5.1 的
+  `>`/`Out-File` 默认写 UTF-16LE BOM，按 UTF-8 读取会把其中的私有路径或凭据读成
+  干净；解码后仍含 NUL 的字节（例如无 BOM 的 UTF-16）记为 `content_not_text` 并使
+  `ok` 为 false。目录等不指向文件的路径跳过。`--scan-root` 指向不存在的路径记为 `scan_root_missing`，
   遍历中无法列出的目录（包括根目录本身）记为 `directory_unreadable`，两者都使
   `ok` 为 false 并返回回执，而不是静默缩小候选集或抛出带绝对路径的异常。被排除的
   目录（见下）从不进入，读不到也不影响结果；已存在的空目录没有可漏扫的内容，仍为通过。未扫描原因与命中位置一样只含相对标签或原因码，不含绝对路径。

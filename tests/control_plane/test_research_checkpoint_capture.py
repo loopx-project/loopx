@@ -322,9 +322,10 @@ def test_real_native_cursor_must_match_sealed_store_basis(tmp_path, monkeypatch,
         if source_moves:
             assert not receipt["checkpoint"]["captured"], receipt
             assert not destination.exists()
-            expected_error = ("checkpoint source moved" if mutation_stage == "capture" else
-                              "profile changed" if source_moves == "binding" else "native")
-            assert expected_error in receipt["checkpoint"]["error"]
+            expected_clauses = (("checkpoint source moved",) if mutation_stage == "capture" else
+                                ("source session", "binding or profile moved", "before sealing")
+                                if source_moves == "binding" else ("native",))
+            assert all(clause in receipt["checkpoint"]["error"] for clause in expected_clauses)
         else:
             assert receipt["checkpoint"]["captured"], receipt
             manifest = json.loads((destination / "checkpoint.json").read_text())

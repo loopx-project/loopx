@@ -208,6 +208,66 @@ def test_source_bound_report_keeps_complete_facts_and_original_artifacts(tmp_pat
         for section in bundle["document"]["sections"] for item in section["items"])
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_recorded_citation_reaches_frozen_facts_and_both_artifacts_without_public_access_claim(
+        tmp_path, legacy):
+    from loopx.capabilities.manager_context.report_source import collect_manager_report_source
+    from loopx.chat_manager_history import _recorded_details
+
+    root, window, response = _prepared_report(tmp_path / "template")
+    root = tmp_path / "citation-runtime"
+    reference = "https://example.org/results/42"
+    details = _recorded_details({"agent_vision": {"path_delta": {"evidence_refs": [reference]}}}, complete=True)
+
+    def read(arguments):
+        rows = ([{"goal_id": "encoding-goal"}] if arguments["view"] == "portfolio" else
+            [{"source_ref": "sha256:" + "d" * 64, "recorded_details": details}]
+            if arguments["view"] == "deliveries" else [])
+        return {"ok": True, "rows": rows, "matched": len(rows), "next_offset": None,
+            "source": {"status": "read", "source_revision": "sha256:" + "c" * 64}}
+
+    request = prepare_private_report(root=root, window=window, read=read,
+        authorization_scope_id="scope-example", authorization_goal_ids=["encoding-goal"], reporting="保留原出处。")
+    folder = attempt_directory(root, window)
+    # The shipped v1 input has no additional citation facts. Specify that
+    # compatibility delta directly rather than deriving it from a v1 helper.
+    if legacy:
+        source = json.loads((folder / "source.json").read_text())
+        request["facts"] = [fact for fact in request["facts"] if fact["source_ref"] != reference]
+        source["source_fact_binding"] = request["source_fact_binding"] = "frozen_source_v1"
+        request["source_artifact_sha256"] = _canonical_digest(source)
+        request["request_digest"] = _canonical_digest({k: v for k, v in request.items() if k != "request_digest"})
+        atomic_write_json(folder / "source.json", source)
+        atomic_write_json(folder / "editorial-request.json", request)
+    citation_facts = [fact for fact in request["facts"] if fact["source_ref"] == reference]
+    assert len(citation_facts) == (0 if legacy else 1)
+    if not legacy:
+        assert citation_facts[0]["status"] == "unverified"
+        assert "可达性和公开许可均未核验" in citation_facts[0]["summary"]
+        assert "sha256:" + "d" * 64 in citation_facts[0]["summary"]
+    response["request_digest"] = request["request_digest"]
+    for section in response["sections"]:
+        for item in section["items"]:
+            item["source_ref"] = request["facts"][0]["source_ref"] if legacy else reference
+    receipt = freeze_private_report(root=root, window=window, response=response)
+    before = {path.name: path.read_bytes() for path in folder.iterdir() if path.suffix in {".json", ".md"}}
+    assert validate_private_generation(folder) == receipt
+    assert prepare_private_report(root=root, window=window, read=lambda _: pytest.fail("frozen input reread"),
+        authorization_scope_id="scope-example", authorization_goal_ids=["encoding-goal"],
+        reporting="保留原出处。") == request
+    assert {name: (folder / name).read_bytes() for name in before} == before
+    bundle = json.loads((folder / "generation-bundle.json").read_text())
+    artifacts = {item["renderer_kind"]: item["content"] for item in bundle["artifacts"]}
+    assert (f"]({reference})" in artifacts["markdown"]) is not legacy
+    assert (f'href="{reference}"' in artifacts["html"]) is not legacy
+    snapshot = collect_manager_report_source(read, {"window_start": window["start_at"], "window_end": window["due_at"]})
+    assert not snapshot["coverage"]["referenced_artifacts_read"]
+    # A different audience cannot adopt the same frozen input.
+    with pytest.raises(ValueError, match="another scope"):
+        prepare_private_report(root=root, window=window, read=read,
+            authorization_scope_id="other-scope", authorization_goal_ids=["encoding-goal"], reporting="保留原出处。")
+
+
 @pytest.mark.parametrize("local", [False, True])
 @pytest.mark.parametrize("entrypoint", ["prepare", "freeze"])
 @pytest.mark.parametrize("substitution", ["url", "summary", "omission", "revision", "binding_removed"])

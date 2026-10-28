@@ -579,6 +579,27 @@ A dangling prepared effect remains owned by the existing provider
 readback protocol; the recovery decision only records that the readback is the
 next required check and does not claim general exactly-once execution.
 
+An `in_progress` Journal without a saved typed result may invoke Host only when
+its durable `host_attempt_count` is exactly zero. A positive, missing or invalid
+counter means `host_outcome_unknown`: recovery is blocked even with
+`--retry-failed-turn`. Reconcile the original execution and downstream effects;
+do not clear its journal or create a replacement settlement identity. New
+journals record zero before dispatch intent. Recovery also rechecks the current
+Goal lifetime for legacy registrations, without rerunning quota admission.
+Retired Goals are unsupported for executing recovery, including terminal receipt
+replay. Refusal preserves the original journal and any committed debit;
+read-only `inspect-journal` remains available. Active Goals retain original-receipt
+replay without another Host invocation or debit. This check does not provide
+continuous external-tool fencing.
+
+中文：`in_progress` 且未保存 typed result 时，只有持久化的 attempt 计数明确为零，
+才可调用 Host。正数、缺失或无效计数返回 `host_outcome_unknown`；显式重试也不能
+绕过。先核对原执行与下游结果，不清空 journal，也不另造结算身份。新 journal 在
+派发意图前保存零值。恢复旧格式 Goal 时也检查当前生命周期，但不重新准入额度。
+退役 Goal 不支持执行恢复，包括终态回执重放。拒绝时保留原 journal 与已提交扣费；
+仍可通过只读 `inspect-journal` 查看历史。有效 Goal 继续复用原回执，不重新调用 Host
+或扣费。此检查不提供外部工具的持续围栏。
+
 When an existing Journal is continued, `run-once` persists one bounded
 `loopx_turn_recovery_audit_v0` record. Its `planned` value is the adopted shared
 decision; its `actual` value distinguishes `started` from `finished` and records

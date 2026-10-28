@@ -21,8 +21,12 @@ try {
   await page.getByRole("button", {name: "开启 LoopX 模式", exact: true}).click();
   await page.getByLabel("已注册的协调身份").selectOption("lead");
   await page.getByLabel("协调员总 token 额度").fill("100000");
+  const configurationAccepted = page.waitForResponse(response => response.request().method() === "POST"
+    && response.request().postDataJSON()?.operation === "configure");
   await page.getByRole("button", {name: "保存设置", exact: true}).click();
+  assert.equal((await configurationAccepted).status(), 200);
   const configured = api.loopxModeRequests.findLast(row => row.operation === "configure");
+  assert.ok(configured, "The accepted configuration must have its original request");
   const mode = page.__loopxRuntime.loopxModes.get(configured.sessionId);
   Object.assign(mode, {enabled: true, paused: false, active_turn_id: "fixture-loopx-turn",
     native: {status: "active", tokenBudget: 100000}, fixtureCorrectionEpisode: true, fixtureAdoptionState: "current"});
@@ -143,7 +147,12 @@ try {
   const correction = evidence.getByRole("region", {name: "纠偏证据路径", exact: true});
   await correction.getByText("负责人指定的版本固定检查器", {exact: true}).waitFor();
   await verificationGap.waitFor();
-  await correction.getByText("检查在声明文件的隔离副本上执行；不代表远程复核者身份或异议已解决。", {exact: true}).waitFor();
+  const checkScope = correction.getByText("检查在声明文件的隔离副本上执行；不代表远程复核者身份或异议已解决。", {exact: true});
+  await checkScope.waitFor({state: "hidden"});
+  await correction.getByRole("button", {name: "独立检查范围", exact: true}).click();
+  await checkScope.waitFor();
+  await page.keyboard.press("Escape");
+  await checkScope.waitFor({state: "hidden"});
   await selectedOutput().waitFor();
   await verificationGap.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-local-checker-gap-desktop.png"), animations: "disabled"});

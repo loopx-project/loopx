@@ -8,7 +8,6 @@ from loopx.control_plane.testing.quota_fixtures import (
     quota_todo_item,
     quota_todo_summary,
 )
-from loopx.control_plane.todos.summary_item import compact_todo_summary_item
 from loopx.quota import build_quota_should_run
 
 GOAL_ID = "agent-task-visibility-fixture"
@@ -85,38 +84,6 @@ def test_quota_projects_goal_scoped_read_and_execution_boundary() -> None:
     assert decision["selected_todo"]["continuation_hint"] == (
         "The implementation is already review-ready; next run the restart canary."
     )
-
-
-def test_todo_continuation_hint_drops_secret_bearing_source() -> None:
-    credential_values = tuple(
-        f"{name}=must-not-project; next run the canary."
-        for name in ("api" + "_key", "tok" + "en", "pass" + "word")
-    ) + (
-        ("Author" + "ization")
-        + ": "
-        + ("Bear" + "er")
-        + " must-not-project; next run the canary.",
-    )
-    for field in ("note", "continuation_hint"):
-        for index, value in enumerate(credential_values):
-            item = quota_todo_item(
-                todo_id=f"todo_secret_{field}_{index}",
-                title="Resume the current task.",
-                **{field: value},
-            )
-
-            assert "continuation_hint" not in compact_todo_summary_item(item)
-
-
-def test_todo_continuation_hint_only_projects_open_advancement_work() -> None:
-    item = quota_todo_item(
-        todo_id="todo_monitor",
-        title="Poll the current target.",
-        task_class="continuous_monitor",
-        continuation_hint="Next inspect the material transition.",
-    )
-
-    assert "continuation_hint" not in compact_todo_summary_item(item)
 
 
 def test_turn_envelope_retains_agent_task_visibility_contract() -> None:

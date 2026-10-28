@@ -140,6 +140,12 @@ def test_public_quota_distinguishes_monitor_repair_from_generation_wait(
     assert (b"## Agent Todo" in before) == (provider is None)
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+    if provider is None:
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "goals/goal-a/runs").exists()
+        return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     condition = summary["resume_blocked_items"][0]["resume_condition"]
@@ -198,6 +204,12 @@ def test_public_quota_replans_completion_cycles_without_reassigning_work(
     before = state.read_bytes()
     code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
         "--include-detail", "agent-todos",  registry_path=registry, runtime_root=runtime)
+    if provider == "legacy":
+        assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+        assert packet["should_run"] is False
+        assert state.read_bytes() == before
+        assert not (runtime / "goals/goal-a/runs").exists()
+        return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
     blocked = next(row for row in summary["resume_blocked_items"] if row["todo_id"] == "todo_alpha")
@@ -271,6 +283,11 @@ def test_public_quota_capacity_wait_uses_provider_after_cutover_without_display_
             "quota", "should-run", "--goal-id", "goal-a", "--agent-id", "agent-a",
              *capabilities, registry_path=registry, runtime_root=runtime,
         )
+        if provider is None:
+            assert code == 1 and packet["error_code"] == "canonical_authority_required", packet
+            assert packet["should_run"] is False
+            assert state.read_bytes() == before
+            continue
         assert code == 0, packet
         assert packet["agent_todo_summary"]["current_agent_deferred_resume_count"] == count
         if count:

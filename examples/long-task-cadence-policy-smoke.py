@@ -232,6 +232,9 @@ def assert_status_and_quota_projection() -> None:
             encoding="utf-8",
         )
 
+        from loopx.control_plane.testing.canary_harness import import_fixture_authority
+        import_fixture_authority(registry, "cadence", provider="sqlite")
+
         status = subprocess.check_output(
             [
                 sys.executable,

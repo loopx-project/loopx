@@ -66,13 +66,16 @@ def test_status_automatically_rebuilds_stale_run_routing(tmp_path, monkeypatch, 
         registry, runtime, state = promoted_create_fixture(tmp_path, provider=provider)
     else:
         registry, runtime, state = tmp_path / "registry.json", tmp_path / "runtime", tmp_path / "state.md"
-        # Historical Markdown remains readable, but no longer accepts fresh writes.
+        # Capture historical unranked input once; ordinary reads use canonical authority.
         state.write_text("# Goal\n\n## Agent Todo\n\n"
             "- [ ] Verify the current deliverable\n"
             "  <!-- loopx:todo todo_id=historical-work status=open -->\n", encoding="utf-8")
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime),
             "goals": [{"id": "goal-a", "repo": str(tmp_path), "state_file": str(state),
                 "coordination": {"registered_agents": ["agent-a"]}}]}), encoding="utf-8")
+    if provider is None:
+        from canonical_authority_fixture import initialize_canonical_source_fixture
+        initialize_canonical_source_fixture(runtime, "goal-a", state_path=state, provider="sqlite")
     config = json.loads(registry.read_text(encoding="utf-8"))
     config["goals"][0]["adapter"] = {"kind": "read_only_project_map_v0", "status": "connected-read-only"}
     registry.write_text(json.dumps(config), encoding="utf-8")

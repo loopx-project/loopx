@@ -75,7 +75,7 @@ def register_todo_command(
     todo_parser.add_argument(
         "--claim-operation-id",
         help=(
-            "For todo claim on promoted canonical authority only, reuse this public-safe "
+            "For claim/update/complete on canonical authority, reuse this public-safe "
             "operation id across retries. Changed intent with the same id is rejected; "
             "receipt replay proves historical acceptance, not current lease ownership. "
             "Omit to retain a fresh operation id per invocation."

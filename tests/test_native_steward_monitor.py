@@ -374,6 +374,138 @@ def stopped_watch(steward, tmp_path, monkeypatch, provider, audience):
     return sid, actor, todo_id, original_turn
 
 
+def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
+    import loopx.chat_manager_context as context_owner
+    store, runtime, _, transport, *_ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    transport.reconcile()
+    scope_id = context_owner.manager_authorization_scope_id_for_registry
+
+    def changed_snapshot(*args, **kwargs):
+        # Exercise the production collector's refusal of a changed registry
+        # snapshot, then the real Chat worker and typed observation owner.
+        return None if kwargs.get("expected_inventory_revision") else scope_id(*args, **kwargs)
+
+    with monkeypatch.context() as changed:
+        changed.setattr(context_owner, "manager_authorization_scope_id_for_registry", changed_snapshot)
+        original_turn = pump_steward_monitors(runtime)[0]
+        failed = finish(runtime, original_turn)
+    assert failed["status"] == "failed"
+    assert failed["error"] == "the portfolio observation omitted authorized Goals"
+    return sid, actor, monitor.current(actor)["todo_id"], failed
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_scope_refusal_is_automatically_reobserved_once_after_host_reopen(steward, tmp_path, monkeypatch, provider):
+    import json
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    store, runtime, _, transport, _, capture, _ = steward
+    sid, actor, todo_id, failed = scope_refused_watch(steward, tmp_path, monkeypatch, provider)
+    retained = store._turn_path(sid, failed["turn_id"]).read_bytes()
+    before = local_watch_row(runtime, actor, todo_id)
+    calls, writes, used = capture.read_bytes(), list(steward[2].writes), spent_slots(StewardMonitor(runtime), actor)
+    runtime.close()
+    reopened = ChatRuntimeController(store=ChatSessionStore(store.root.parent), codex_bin=runtime.codex_bin,
+        registry_path=runtime.registry_path, project_contexts=runtime.project_contexts)
+    reopened.manager_scope_resolver = runtime.manager_scope_resolver
+    wake = DelegationWakeService(reopened, interval=.02).start()
+    try:
+        deadline = time.monotonic() + 15
+        while local_watch_row(reopened, actor, todo_id).get("last_checked_at") == before.get("last_checked_at"):
+            assert time.monotonic() < deadline, "the existing host must continue the refused observation"
+            time.sleep(.02)
+        after = local_watch_row(reopened, actor, todo_id)
+        wake.close()
+        turns = [json.loads(path.read_text()) for path in (reopened.store._session_dir(sid) / "turns").glob("*.json")]
+        turns = [row for row in turns if (row.get("loopx_request") or {}).get("monitor_restart_recovery")]
+        assert len(turns) == 1
+        done = finish(reopened, turns[0])
+        assert done["status"] == "completed" and done["response"]["native_loopx"]["status"] == "observed"
+        assert done["loopx_request"]["turn_instance_id"] == failed["loopx_request"]["turn_instance_id"]
+        assert done["loopx_request"]["monitor_deadline"] == before["next_due_at"]
+        assert after["next_due_at"] != before["next_due_at"] and after.get("result_hash")
+        assert reopened.store._turn_path(sid, failed["turn_id"]).read_bytes() == retained
+        reopened._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(reopened)
+        rows = [json.loads(line) for line in (reopened.coordination_runtime_root / "goals" / actor["goal_id"] / "runs" / "index.jsonl").read_text().splitlines()]
+        assert len([row for row in rows if row.get("classification") == "quota_monitor_poll"
+            and row.get("turn_instance_id") == failed["loopx_request"]["turn_instance_id"]]) == 1
+        assert capture.read_bytes() == calls and steward[2].writes == writes
+        assert spent_slots(StewardMonitor(reopened), actor) == used
+        wait_for_next_observation_tick(after)
+        edit_local_watch(reopened, actor, todo_id, "--next-due-at", (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat())
+        next_turns = pump_steward_monitors(reopened)
+        assert len(next_turns) == 1 and finish(reopened, next_turns[0])["status"] == "completed"
+        assert "monitor_restart_recovery" not in next_turns[0]["loopx_request"]
+        assert capture.read_bytes() == calls and spent_slots(StewardMonitor(reopened), actor) == used
+    finally:
+        wake.close()
+        reopened.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["missing_context", "different_context", "duplicate_context", "different_error",
+    "model_started", "poll_receipt", "broken_history", "worker_busy", "queued", "paused", "revoked", "retry_fails"])
+def test_scope_refusal_retains_unknown_effects_and_current_authority(steward, tmp_path, monkeypatch, provider, fault):
+    from contextlib import nullcontext
+    from loopx.control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
+    from loopx.file_lock import exclusive_file_lock
+    store, runtime, _, transport, binding, capture, _ = steward
+    sid, actor, todo_id, failed = scope_refused_watch(steward, tmp_path, monkeypatch, provider)
+    path = store._event_path(sid, failed["turn_id"])
+    if fault in {"missing_context", "different_context", "duplicate_context"}:
+        import json
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        context = next(row for row in rows if row["kind"] == "manager.context")
+        if fault == "missing_context":
+            rows.remove(context)
+        elif fault == "different_context":
+            context["payload"]["warnings"] = ["source_unavailable"]
+        else:
+            rows.append(context)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    elif fault in {"different_error", "model_started"}:
+        store.update_turn(sid, failed["turn_id"], **({"error": "Unknown observation failure."}
+            if fault == "different_error" else {"upstream_turn_id": "unknown-model-turn"}))
+    elif fault == "poll_receipt":
+        request = failed["loopx_request"]
+        effect = _monitor_poll_effect_id(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"],
+            agent_id=actor["agent_id"], turn_instance_id=request["turn_instance_id"], todo_id=todo_id,
+            target_key=None, goal_ref=None)
+        receipt = _monitor_poll_receipt_path(runtime.coordination_runtime_root, actor["goal_id"], effect)
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text('{"status":"provider_pending"}')
+    elif fault == "broken_history":
+        with path.open("ab") as output:
+            output.write(b'\n{"unknown":')
+    elif fault == "queued":
+        store.create_queued_turn(sid, client_turn_id="scope-refusal-user-priority", message="Do my current task first.", origin="web")
+    elif fault == "paused":
+        edit_local_watch(runtime, actor, todo_id, "--status", "blocked")
+    elif fault == "revoked":
+        transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+    elif fault == "retry_fails":
+        def unavailable(*_args, **_kwargs):
+            raise OSError("Source unavailable in the one continuation.")
+        monkeypatch.setattr(StewardMonitor, "_commit_poll", unavailable)
+    retained = store._turn_path(sid, failed["turn_id"]).read_bytes()
+    watch, calls, writes = local_watch_row(runtime, actor, todo_id), capture.read_bytes(), list(steward[2].writes)
+    runtime._steward_monitor_next_check.clear()
+    guard = exclusive_file_lock(store.turn_execution_lock_path(sid, failed["turn_id"]), timeout_seconds=0) if fault == "worker_busy" else nullcontext()
+    with guard:
+        resumed = pump_steward_monitors(runtime)
+    if fault == "retry_fails":
+        assert len(resumed) == 1 and finish(runtime, resumed[0])["status"] == "failed"
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+    else:
+        assert resumed == []
+    assert store._turn_path(sid, failed["turn_id"]).read_bytes() == retained
+    assert local_watch_row(runtime, actor, todo_id) == watch
+    assert capture.read_bytes() == calls and steward[2].writes == writes
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("released_original_lease", [False, True])
