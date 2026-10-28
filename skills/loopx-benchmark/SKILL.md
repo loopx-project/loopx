@@ -241,10 +241,13 @@ the observed reset/backoff and avoid repeated model probes.
   fetch, install, or launch. It blocks new admissions only.
 - `integrity-qualification` reduces private trajectory and runner isolation
   evidence to a compact public-safe receipt (hashes, counts, reason codes).
-- Scanner hits for restricted source access or host-boundary escape probes set
-  `restricted_access_review=suspected` while keeping the run score-eligible. Use
-  `--restricted-access-adjudication-json` for the post-run agent decision; only
-  confirmed disclosure plus causal use disqualifies the score.
+- Scanner hits for restricted source access, host-boundary escape, or credential
+  probes set `restricted_access_review=suspected` while keeping the run
+  score-eligible. Use `--restricted-access-adjudication-json` for the post-run
+  agent decision; only confirmed disclosure plus causal use disqualifies the
+  score. An observed credential value remains fail-closed. A broad shell probe
+  that bypasses an explicit typed task-environment contract is also a hard
+  policy violation rather than reviewable suspicion.
 - `classify-artifacts` classifies benchmark artifact paths without reading them;
   use it before reading or publishing any candidate artifact.
 - The solver lane must not read hidden tests, verifier sources or gold answers.
