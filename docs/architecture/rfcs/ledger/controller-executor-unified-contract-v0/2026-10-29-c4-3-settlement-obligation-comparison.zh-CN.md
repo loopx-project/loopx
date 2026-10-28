@@ -1,6 +1,6 @@
 # C4.3 结算义务对照
 
-- 上级：[controller/executor RFC，C4.3](../2026-10-27-refactor-handoff.zh-CN.md#c43--settlement-adapters-over-existing-primitives)。
+- 上级：[controller/executor RFC，C4.3](2026-10-27-refactor-handoff.zh-CN.md#c43--settlement-adapters-over-existing-primitives)。
 - 基线：`e19d94ca0`，2026-10-29。
 - 状态：只读对照。不删除代码，不改变运行时、schema、wire 或默认值。
 - [英文版](2026-10-29-c4-3-settlement-obligation-comparison.md)。

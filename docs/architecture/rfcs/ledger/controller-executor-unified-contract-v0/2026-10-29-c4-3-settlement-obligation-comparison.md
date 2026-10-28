@@ -1,6 +1,6 @@
 # C4.3 settlement obligation comparison
 
-- Parent: [controller/executor RFC, C4.3](../2026-10-27-refactor-handoff.md#c43--settlement-adapters-over-existing-primitives).
+- Parent: [controller/executor RFC, C4.3](2026-10-27-refactor-handoff.md#c43--settlement-adapters-over-existing-primitives).
 - Baseline: `e19d94ca0`, 2026-10-29.
 - Status: reading-only comparison. No deletion, runtime, schema, wire or default change.
 - [Chinese mirror](2026-10-29-c4-3-settlement-obligation-comparison.zh-CN.md).
