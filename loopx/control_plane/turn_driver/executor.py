@@ -57,12 +57,11 @@ from .journal_store import (
 from .lane_fence import single_executor_per_turn_lane
 from .recovery import (
     preview_turn_recovery, prepare_terminal_host_recovery, reset_failed_turn_for_retry,
-    recover_existing_turn, admit_unfinished_host,
-    assess_existing_turn_recovery,
+    recover_existing_turn, assess_existing_turn_recovery,
     build_turn_recovery_audit,
     require_turn_recovery_continuation,
 )
-from .post_settlement import PostSettlement, recover_post_settlement, run_post_settlement_callback
+from .post_settlement import PostSettlement, run_post_settlement_callback
 from ..capability_hooks import capability_result_fields, project_turn_context
 from ..reward_memory import reward_memory_automation_enabled
 from .session_recovery import (

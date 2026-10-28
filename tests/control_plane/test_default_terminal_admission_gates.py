@@ -1,18 +1,13 @@
 """Native terminal admission gates; all mutations target disposable fixture state."""
 from collections import Counter
 from copy import deepcopy
-import inspect
 import json
 from pathlib import Path
 import subprocess
 import sys
-from urllib.parse import quote
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT/'tests/control_plane'))
 
 from loopx.configure_goal import configure_goal
 from tests.control_plane.test_default_turn_recovery import (

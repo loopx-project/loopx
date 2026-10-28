@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from test_chat_loopx_mode import mode as mode, apply
 from test_chat_project_coordination import project as project
 import pytest
-from loopx.chat_coordinator_checkpoint import CoordinatorCheckpoints
+from loopx.hosts.chat_coordinator_checkpoint import CoordinatorCheckpoints
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
 from loopx.collaboration_mcp import _pinned_release_environment, _python_module_command
@@ -132,7 +132,7 @@ def test_chat_checkpoint_dispatch_keeps_pause_binding_and_member_namespace(
             return {"ok": True}
 
     monkeypatch.setattr(
-        "loopx.chat_coordinator_checkpoint.CoordinatorCheckpoints", Checkpoints
+        "loopx.hosts.chat_coordinator_checkpoint.CoordinatorCheckpoints", Checkpoints
     )
     adapter = SimpleNamespace(
         goal_driver=SimpleNamespace(stopped=Event()), session=SimpleNamespace()

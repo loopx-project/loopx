@@ -9,7 +9,7 @@ import sys
 import time
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, advance_canonical_fixture_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import EffectRuntimeConflict

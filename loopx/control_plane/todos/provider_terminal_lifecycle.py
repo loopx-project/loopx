@@ -39,7 +39,7 @@ from ..coordination.authority_source_capture import authority_registry_source
 from .path_resolution import resolve_todo_state_path
 from .provider_projection import projection_delivery_requires_ack, settle_canonical_todo_projection
 from .successor_derivation import build_successor_intents
-from .completion_result import read_completion_result, store_completion_result, resolve_terminal_result_descriptor
+from .completion_result import store_completion_result, resolve_terminal_result_descriptor
 
 _TERMINAL_REQUEST_SCHEMA = "loopx_local_coordination_todo_terminal_lifecycle_request_v3"
 _ARCHIVE_REQUEST_SCHEMA = "loopx_local_coordination_todo_archive_request_v0"

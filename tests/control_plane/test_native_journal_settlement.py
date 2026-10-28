@@ -11,7 +11,7 @@ from loopx.control_plane.turn_driver.journal_store import (
 from loopx.control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
-from loopx.chat_coordinator_checkpoint import CoordinatorCheckpoints
+from loopx.hosts.chat_coordinator_checkpoint import CoordinatorCheckpoints
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

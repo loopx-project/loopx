@@ -733,7 +733,8 @@ def fail_heartbeat_receipt(
 
 
 def _guard_source_digest(value):
-    import hashlib, json
+    import hashlib
+    import json
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
         separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -747,12 +748,13 @@ def guard_cadence(registry_path, runtime_root, goal_id):
 
 
 def bounded_guard_source(obligation, cadence):
-    import copy, json
+    import copy
+    import json
     from ..work_items.autonomous_replan_obligation import ensure_replan_novelty_policy
     if not isinstance(obligation, dict) or not obligation.get("obligation_id"):
         return None
     value = copy.deepcopy(obligation)
-    context = value.pop("replan_context", None)
+    value.pop("replan_context", None)
     # The current native history remains the novelty ledger. Receipt source
     # stores the complete obligation identity/triggers, not a partial ledger schema.
     if ensure_replan_novelty_policy(value)["obligation_id"] != value["obligation_id"]:
@@ -789,25 +791,39 @@ def guard_source_for_turn(runtime_root, *, goal_id, agent_id, turn_instance_id, 
 
 
 def store_guard_source_blob(runtime_root,goal_id,source):
-    import os,json,hashlib
+    import os
+    import json
+    import hashlib
     raw=json.dumps(source,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")
     digest=hashlib.sha256(raw).hexdigest()
     path=rollout_event_log_path(Path(runtime_root),goal_id).parent/"heartbeat-guard-sources"/(digest+".json")
     path.parent.mkdir(parents=True,exist_ok=True)
     try:
-        with path.open("xb") as f:f.write(raw);f.flush();os.fsync(f.fileno())
+        with path.open("xb") as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
     except FileExistsError:
-        if path.read_bytes()!=raw:raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: immutable blob conflict")
+        if path.read_bytes() != raw:
+            raise HeartbeatReceiptIdentityConflictError(
+                "guard_source_invalid: immutable blob conflict"
+            )
     return digest
 
 
 def read_guard_source_blob(runtime_root,goal_id,ref):
-    import re,json,hashlib
+    import re
+    import json
+    import hashlib
     if not isinstance(ref,str) or not re.fullmatch(r"[0-9a-f]{64}",ref):
         raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: malformed source ref")
     path=rollout_event_log_path(Path(runtime_root),goal_id).parent/"heartbeat-guard-sources"/(ref+".json")
-    try:raw=path.read_bytes()
-    except OSError:raise HeartbeatReceiptIdentityConflictError("guard_source_missing: immutable source blob unavailable") from None
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raise HeartbeatReceiptIdentityConflictError(
+            "guard_source_missing: immutable source blob unavailable"
+        ) from None
     if hashlib.sha256(raw).hexdigest()!=ref:
         raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: stored source bytes changed")
     return json.loads(raw)

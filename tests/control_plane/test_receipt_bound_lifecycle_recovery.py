@@ -25,22 +25,30 @@ def test_incomplete_lifecycle_candidate_cannot_replace_receipt_source(case):
     source = copy.deepcopy(SOURCE)
     context = {'replan_obligation': {'obligation_id': 'replan-fedcba9876543210'},
                'replan_transition_candidates': [candidate]}
-    if case == 'unsettled': candidate['lifecycle_settled'] = False
-    if case == 'non_boolean': candidate['lifecycle_settled'] = 'true'
-    if case == 'wrong_candidate': candidate['obligation']['obligation_id'] = 'replan-fedcba9876543210'
-    if case == 'no_candidate': context['replan_transition_candidates'] = []
-    if case == 'wrong_source': source['obligation_id'] = 'replan-fedcba9876543210'
-    if case == 'no_source': source = None
+    if case == "unsettled":
+        candidate["lifecycle_settled"] = False
+    if case == "non_boolean":
+        candidate["lifecycle_settled"] = "true"
+    if case == "wrong_candidate":
+        candidate["obligation"]["obligation_id"] = "replan-fedcba9876543210"
+    if case == "no_candidate":
+        context["replan_transition_candidates"] = []
+    if case == "wrong_source":
+        source["obligation_id"] = "replan-fedcba9876543210"
+    if case == "no_source":
+        source = None
     with patch.object(writer, 'build_goal_frontier_projection_context_from_status', return_value=context), \
          patch.object(writer, 'autonomous_replan_obligation_from_runs', return_value=None), \
          patch.object(writer, 'guarded_replan_transition_delta', return_value=None), \
          patch.object(writer, 'semantic_delta_from_writeback', return_value={'outcomes': []}):
-        call = lambda: writer.qualify_replan_writeback(newest_first_runs=[], state_text='',
-            agent_id='fixture-agent', goal_id='fixture-goal', todo_fields={},
-            guard_scoped=case != 'unguarded', guard_semantic_replan_obligation_id=OID,
-            receipt_bound_source=source)
+        def call():
+            return writer.qualify_replan_writeback(newest_first_runs=[], state_text='',
+                    agent_id='fixture-agent', goal_id='fixture-goal', todo_fields={},
+                    guard_scoped=case != 'unguarded', guard_semantic_replan_obligation_id=OID,
+                    receipt_bound_source=source)
         if case == 'wrong_source':
-            with pytest.raises(ValueError, match='source identity differs'): call()
+            with pytest.raises(ValueError, match="source identity differs"):
+                call()
             return
         chosen, _ = call()
     # A candidate's settled boolean is not native lifecycle proof. These
@@ -101,7 +109,8 @@ def test_native_lifecycle_writeback_and_replay(tmp_path, monkeypatch, provider):
             'observed_reality': 'Native original-identity terminal reentry is now proven.',
             'retained': ['Original acceptance and immutable admitted source.'],
             'evidence_refs': ['native:' + closed['completion_receipt_id']]}}
-    vp = tmp_path / 'vision173.json'; vp.write_text(json.dumps(vision), encoding='utf-8')
+    vp = tmp_path / "vision173.json"
+    vp.write_text(json.dumps(vision), encoding="utf-8")
     binding = [*base, '--turn-instance-id', turn, '--replan-obligation-id', oid]
     refresh = ['refresh-state', *binding, '--classification', 'receipt-bound-review',
         '--progress-scope', 'agent_lane', '--delivery-batch-scale', 'single_surface',
@@ -144,21 +153,30 @@ def test_original_source_cardinality(case):
     source = {**SOURCE, 'agent_id':'fixture-agent', 'trigger_count':5,
         'triggers':[{'kind':'completed_advancement_without_successor','agent_id':'fixture-agent',
                      'todo_id':f'todo_{i}','completion_turn_key':f'original-turn-{i}'} for i in range(3)]}
-    if case=='wrong_turn':source['triggers'][0]['completion_turn_key']='wrong'
-    if case=='wrong_actor':items[0]['last_actor_agent_id']='peer'
-    if case=='unsettled':items[0]['no_followup']=False
-    if case=='closed_before_guard':items[0]['updated_at']='2026-08-13T04:50:00Z'
-    if case=='wrong_todo':source['triggers'][0]['todo_id']='wrong'
+    if case == "wrong_turn":
+        source["triggers"][0]["completion_turn_key"] = "wrong"
+    if case == "wrong_actor":
+        items[0]["last_actor_agent_id"] = "peer"
+    if case == "unsettled":
+        items[0]["no_followup"] = False
+    if case == "closed_before_guard":
+        items[0]["updated_at"] = "2026-08-13T04:50:00Z"
+    if case == "wrong_todo":
+        source["triggers"][0]["todo_id"] = "wrong"
     with patch.object(writer,'build_goal_frontier_projection_context_from_status',return_value={}), \
          patch.object(writer,'autonomous_replan_obligation_from_runs',return_value=None), \
          patch.object(writer,'guarded_replan_transition_delta',return_value=None), \
          patch.object(writer,'select_planning_inventory_source_items',return_value=items), \
          patch.object(writer,'semantic_delta_from_writeback',return_value={'outcomes':[]}):
-        call=lambda: writer.qualify_replan_writeback(newest_first_runs=[],state_text='',agent_id='fixture-agent',
-            goal_id='fixture-goal',todo_fields={},guard_scoped=True,guard_semantic_replan_obligation_id=OID,
-            receipt_bound_guard_recorded_at='2026-08-13T05:00:00Z',receipt_bound_source=source)
+        def call():
+            return writer.qualify_replan_writeback(newest_first_runs=[],state_text='',agent_id='fixture-agent',
+                    goal_id='fixture-goal',todo_fields={},guard_scoped=True,guard_semantic_replan_obligation_id=OID,
+                    receipt_bound_guard_recorded_at='2026-08-13T05:00:00Z',receipt_bound_source=source)
         if case not in {'matching', 'unsettled'}:
-            with pytest.raises(EffectRuntimeRejected,match='lifecycle source does not match'):call()
+            with pytest.raises(
+                EffectRuntimeRejected, match="lifecycle source does not match"
+            ):
+                call()
             return
         chosen,_=call()
     assert chosen['obligation_id']==OID

@@ -1,7 +1,6 @@
 """Logical registry identities retain real native long-path IO semantics."""
 
 import json
-from pathlib import Path
 
 import pytest
 

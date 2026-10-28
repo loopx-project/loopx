@@ -5,10 +5,10 @@ import json
 import subprocess
 from pathlib import Path
 
-from .collaboration_mcp import _pinned_release_environment, _python_module_command
-from .goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
-from .agent_registry import load_goal_from_registry
-from .todos import list_goal_todos
+from loopx.collaboration_mcp import _pinned_release_environment, _python_module_command
+from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
+from loopx.agent_registry import load_goal_from_registry
+from loopx.todos import list_goal_todos
 
 
 class _CheckpointControlPlane(GoalModeMCPControlPlane):

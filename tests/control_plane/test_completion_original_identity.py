@@ -9,7 +9,7 @@ from loopx.control_plane.goals.checkpoint_context_io import (
     completion_identity_for_original_turn,
 )
 from loopx.control_plane.quota.settlement import SettlementIdentity
-from loopx.chat_coordinator_checkpoint import CoordinatorCheckpoints
+from loopx.hosts.chat_coordinator_checkpoint import CoordinatorCheckpoints
 from loopx.todos import add_goal_todo, list_goal_todos
 from tests.control_plane.test_default_checkpoint_continuation import _fixture
 from tests.test_goal_mode_mcp_settlement import GOAL_ID, AGENT_ID
@@ -128,7 +128,7 @@ def test_terminal_upgrade_cannot_remove_committed_successor(key_kind):
         _resolve(identity, todo, {"no_followup": True})
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("intent", ["generated", "linked", "terminal"])
 def test_coordinator_resumes_original_completion_intent(
     provider, intent, tmp_path, monkeypatch
@@ -153,6 +153,13 @@ def test_coordinator_resumes_original_completion_intent(
         validation_command_json=json.dumps([sys.executable, str(validator)]),
     )
     candidate.write_text("valid", encoding="utf-8")
+    control = CoordinatorCheckpoints(
+        registry, tmp_path / "runtime", GOAL_ID, AGENT_ID
+    ).control
+    guard = json.loads(control.should_run())
+    assert guard.get("delivery_result_context"), json.dumps(guard, indent=2)
+    assert guard["delivery_result_context"]["settlement_identity"]["todo_id"] == todo_id
+    original_guard_identity = guard["delivery_result_context"]["settlement_identity"]
     if intent == "linked":
         successor = add_goal_todo(
             registry_path=registry,
@@ -166,11 +173,10 @@ def test_coordinator_resumes_original_completion_intent(
         options = {"next_agent_todo": "Verify generated remaining work."}
     else:
         options = {"no_follow_up": True}
-    control = CoordinatorCheckpoints(
-        registry, tmp_path / "runtime", GOAL_ID, AGENT_ID
-    ).control
-    guard = json.loads(control.should_run(todo_id))
-    assert guard["delivery_result_context"]["settlement_identity"]["todo_id"] == todo_id
+    if intent == "linked":
+        guard = json.loads(control.should_run(todo_id))
+        assert guard.get("delivery_result_context"), json.dumps(guard, indent=2)
+        assert guard["delivery_result_context"]["settlement_identity"] == original_guard_identity
     first = json.loads(
         control.complete_task(todo_id, AGENT_ID, "Candidate verified.", **options)
     )

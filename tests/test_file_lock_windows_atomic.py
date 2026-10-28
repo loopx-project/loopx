@@ -60,7 +60,8 @@ def transient_reader(path, monkeypatch):
             assert not worker.is_alive()
 
 def test_transient_reader_allows_atomic_holder_replace(tmp_path,monkeypatch):
-    path=tmp_path/'holder.json';path.write_text(json.dumps({'sequence':0}))
+    path = tmp_path / "holder.json"
+    path.write_text(json.dumps({"sequence": 0}))
     with transient_reader(path,monkeypatch) as attempts:
         locks._write_holder_sidecar(path,{'sequence':1})
     assert len(attempts)>=2
@@ -69,35 +70,46 @@ def test_transient_reader_allows_atomic_holder_replace(tmp_path,monkeypatch):
 
 def test_transient_reader_preserves_real_kernel_lock_body(tmp_path,monkeypatch):
     target=tmp_path/'state.json'
-    with locks.exclusive_file_lock(target):pass
-    holder=locks.lock_holder_path(target);effects=[]
+    with locks.exclusive_file_lock(target):
+        pass
+    holder = locks.lock_holder_path(target)
+    effects = []
     with transient_reader(holder,monkeypatch):
         with locks.exclusive_file_lock(target,agent_id='writer',operation='atomic-publish'):
             effects.append('business')
     assert effects==['business']
     assert json.loads(holder.read_text())['released_at']
-    with locks.try_exclusive_file_lock(target) as acquired:assert acquired is not None
+    with locks.try_exclusive_file_lock(target) as acquired:
+        assert acquired is not None
+
 
 def test_persistent_reader_keeps_old_bytes_and_propagates_denial(tmp_path):
-    path=tmp_path/'holder.json';path.write_text(json.dumps({'sequence':0}));before=path.read_bytes()
+    path = tmp_path / "holder.json"
+    path.write_text(json.dumps({"sequence": 0}))
+    before = path.read_bytes()
     with reader_without_delete_share(path):
         start=time.monotonic()
-        with pytest.raises(OSError) as failure:locks._write_holder_sidecar(path,{'sequence':1})
+        with pytest.raises(OSError) as failure:
+            locks._write_holder_sidecar(path, {"sequence": 1})
         assert failure.value.winerror==5 and time.monotonic()-start<1.2
         assert path.read_bytes()==before
         assert not list(tmp_path.glob('*.tmp'))
 
 def test_failed_holder_publication_releases_kernel_without_business(tmp_path):
     target=tmp_path/'state.json'
-    with locks.exclusive_file_lock(target):pass
-    holder=locks.lock_holder_path(target);effects=[]
+    with locks.exclusive_file_lock(target):
+        pass
+    holder = locks.lock_holder_path(target)
+    effects = []
     with reader_without_delete_share(holder):
         start=time.monotonic()
         with pytest.raises(OSError) as failure:
-            with locks.exclusive_file_lock(target):effects.append('business')
+            with locks.exclusive_file_lock(target):
+                effects.append("business")
         assert failure.value.winerror==5 and time.monotonic()-start<2
         assert effects==[]
-    with locks.try_exclusive_file_lock(target) as acquired:assert acquired is not None
+    with locks.try_exclusive_file_lock(target) as acquired:
+        assert acquired is not None
     assert not list(tmp_path.glob('*.tmp'))
 
 def test_unrelated_error_has_no_retry_or_fallback(tmp_path,monkeypatch):
@@ -107,11 +119,13 @@ def test_unrelated_error_has_no_retry_or_fallback(tmp_path,monkeypatch):
         raise FileNotFoundError(errno.ENOENT,'unrelated source error')
     monkeypatch.setattr(locks.os,'replace',fail)
     monkeypatch.setattr(locks.time,'sleep',lambda _:pytest.fail('unrelated error slept'))
-    with pytest.raises(FileNotFoundError):locks._write_holder_sidecar(tmp_path/'holder.json',{'sequence':1})
+    with pytest.raises(FileNotFoundError):
+        locks._write_holder_sidecar(tmp_path / "holder.json", {"sequence": 1})
     assert attempts==[1] and not list(tmp_path.glob('*.tmp'))
 
 def test_successful_holder_publication_does_not_sleep(tmp_path,monkeypatch):
-    path=tmp_path/'holder.json';path.write_text(json.dumps({'sequence':0}))
+    path = tmp_path / "holder.json"
+    path.write_text(json.dumps({"sequence": 0}))
     monkeypatch.setattr(locks.time,'sleep',lambda _:pytest.fail('success slept'))
     locks._write_holder_sidecar(path,{'sequence':1})
     assert json.loads(path.read_text())=={'sequence':1}
@@ -120,9 +134,13 @@ def test_posix_adapter_permission_error_remains_immediate(tmp_path,monkeypatch):
     attempts=[]
     def fail(source,destination):
         attempts.append(1)
-        error=PermissionError(errno.EACCES,'denied');error.winerror=5;raise error
+        error = PermissionError(errno.EACCES, "denied")
+        error.winerror = 5
+        raise error
+
     adapter=SimpleNamespace(**{name:getattr(os,name) for name in ('fdopen','fsync')},name='posix',replace=fail)
     monkeypatch.setattr(locks,'os',adapter)
     monkeypatch.setattr(locks.time,'sleep',lambda _:pytest.fail('POSIX denial slept'))
-    with pytest.raises(PermissionError):locks._write_holder_sidecar(tmp_path/'holder.json',{'sequence':1})
+    with pytest.raises(PermissionError):
+        locks._write_holder_sidecar(tmp_path / "holder.json", {"sequence": 1})
     assert attempts==[1] and not list(tmp_path.glob('*.tmp'))

@@ -935,7 +935,7 @@ class ChatLoopXMode:
                     raise ValueError("invalid coordinator checkpoint arguments")
                 if service.path(operation_id).exists():
                     raise ValueError("a member operation cannot be reinterpreted as a coordinator checkpoint")
-                from .chat_coordinator_checkpoint import CoordinatorCheckpoints
+                from .hosts.chat_coordinator_checkpoint import CoordinatorCheckpoints
                 checkpoint = CoordinatorCheckpoints(self.controller.registry_path, self.controller.coordination_runtime_root,
                     session["goal_id"], settings["agent_id"])
                 return checkpoint.read(operation_id) if action == "read" else checkpoint.resume(operation_id, {k: v for k, v in brief.items() if k != "purpose"})

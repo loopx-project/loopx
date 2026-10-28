@@ -6,8 +6,6 @@ import sys
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT), str(ROOT / 'tests/control_plane')]
 from loopx.todos import add_goal_todo
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.status import parse_active_state_todos
