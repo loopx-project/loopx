@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
+import sys
 
 
 def protect_private_path(path: Path, *, directory: bool = False) -> None:
@@ -26,6 +27,8 @@ def protect_private_path(path: Path, *, directory: bool = False) -> None:
 def _protect_windows_path(path: Path, *, directory: bool) -> None:
     # Native APIs are loaded only on Windows. No subprocess, external package,
     # ambient inherited ACE or caller-supplied principal is trusted here.
+    if sys.platform != "win32":
+        raise OSError("Windows private IO requires a Windows host")
     import ctypes as ct
     from ctypes import wintypes as w
 
@@ -92,7 +95,7 @@ def require_private_path(path: Path, *, directory: bool = False, descriptor: int
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
             raise OSError("private IO path changed after open")
         info = opened
-    if os.name != "nt":
+    if sys.platform != "win32":
         if info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise OSError("private IO permissions are invalid")
         return
@@ -100,6 +103,8 @@ def require_private_path(path: Path, *, directory: bool = False, descriptor: int
 
 
 def _require_windows_private_path(path: Path, *, descriptor: int | None) -> None:
+    if sys.platform != "win32":
+        raise OSError("Windows private IO requires a Windows host")
     import ctypes as ct
     from ctypes import wintypes as w
     import msvcrt
@@ -124,7 +129,7 @@ def _require_windows_private_path(path: Path, *, descriptor: int | None) -> None
     adv.GetAce.argtypes = [pointer, w.DWORD, out]
     token, sd, owner, dacl = w.HANDLE(), pointer(), pointer(), pointer()
 
-    def sid_text(sid: pointer) -> str:
+    def sid_text(sid: ct.c_void_p | int | None) -> str:
         value = w.LPWSTR()
         if not sid or not adv.ConvertSidToStringSidW(sid, ct.byref(value)):
             raise OSError("private IO SID unavailable")
