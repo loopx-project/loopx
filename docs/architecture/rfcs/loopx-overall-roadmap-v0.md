@@ -204,10 +204,14 @@ input; new-admission cutover stays separate from historical receipt replay.
 
 The [packaged C1 heartbeat checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md)
 preserves required source and same-capture settlement semantics on isolated
-File/SQLite, but delivered bytes grow and all-peer expansion adds cost. Continue
-within C1 by converging diagnostic compaction in its shared typed owner, preserving
-unknowns and obligations, then repeat the quota-baseline comparison. This is no
-default promotion or positive complete-cost qualification.
+File/SQLite. Its diagnostic follow-through reuses one typed owner and removes the
+Python duplicates; [#7557](https://github.com/loopx-project/loopx/pull/7557) proposes
+the independently usable legacy-reader slice, shared unchanged by #7430. Repeated
+quota-baseline measurements reduce cold/recovery bytes but still grow warm input
+and add all-peer read cost; the integration's existing v4 budget failure remains.
+Continue C1 on warm composition cost and remaining real consumers with full
+unknown-field/obligation preservation. This is no default promotion or positive
+complete-cost qualification; controller-model and outcome acceptance stay open.
 
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,

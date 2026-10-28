@@ -156,9 +156,12 @@ C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-�
 最终输入；新准入切换与历史回执重放分别处理。
 
 [C1 打包 heartbeat 检查点](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.zh-CN.md)
-在隔离 File/SQLite 保留必读来源及同 capture 结算语义，但交付字节增加，全部 peer
-补读另增成本。继续在原 C1 的共享 typed owner 收敛诊断压缩，保留未知字段与义务，
-再做原 quota 基线对照；这不是默认提升或完整成本正向资格。
+在隔离 File/SQLite 保留必读来源及同 capture 结算语义。后续诊断投影复用同一 typed
+owner 并删除 Python 重复算法；[#7557](https://github.com/loopx-project/loopx/pull/7557)
+提案可独立使用的旧读取方切片，#7430 原样复用相同模块。重跑原 quota 基线对照后
+冷态／恢复字节下降，但温态输入仍增长，全部 peer 补读另增成本，集成原有 v4 预算
+失败仍保留。原 C1 继续诊断温态组合成本及剩余真实消费者，保留未知字段和完整义务；
+这不是默认提升或完整成本正向资格，controller 模型与成果验收保持开放。
 
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback

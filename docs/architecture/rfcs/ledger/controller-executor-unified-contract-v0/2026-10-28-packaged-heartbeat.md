@@ -81,7 +81,7 @@ candidate retains about 6.6 KB of repeated Todo diagnostic lanes and adds about
 the remaining savings. This is a composition/compaction gap, not evidence that
 peer scope itself lowers total cost.
 
-The next C1 slice must characterize necessary quota diagnostic compaction and
+That checkpoint selected a C1 slice to characterize necessary diagnostic compaction and
 move it into the existing shared typed composer, retiring the replaced Python
 caller algorithm. Preserve complete selected work, portfolio/horizon,
 claim/lease facts, global obligations, unknown fields, exact references and
@@ -103,3 +103,80 @@ missing-dependency, harness-carrier and outdated call-count failures are retaine
 as authoring/validation costs, not silently converted into product passes.
 No model, paid evaluation, managed benchmark, live install, release or merge was
 performed for this comparison.
+
+## Shared diagnostic owner follow-through
+
+The follow-through at `d33c1a19d91738c66073d9e71586f14466f36d89` replaces the
+Python Todo-list algorithms with `quota/diagnostic_projection.ts`. Existing
+`reference_context` callers share it for should-run and the whole status/plan row
+collection; scoped native composition reuses it inside its existing request.
+[#7557](https://github.com/loopx-project/loopx/pull/7557), at
+`5b5d9dd3b0a816aae9d5160b849cff4a3c38da13` on main
+`19c213324fbb5990288bd374c1b79096f22bb152`, proposes the independently usable
+legacy-reader slice as a normal PR. Its typed module is identical to the
+integration module. Neither proposal is merged or installed by this work.
+
+Only explicitly known diagnostic lanes with recognized canonical Todo records may be
+bounded. An unknown item field/version, a non-record item or complex nested
+content preserves that entire list. Unknown lists survive. Retained records stay
+complete; portfolio prose, capability candidates, planning horizon, selected
+work and existing succession IDs are not shortened or reconstructed. Original
+capture/recovery remains complete. Projection metadata points to the existing
+source capture instead of repeating long recovery commands in each lane.
+
+The same frozen packaged harness and original quota commit were rerun in one
+matched cohort, with the same path lengths, synthetic task and 24 clauses. The
+base wheel has 1,884 source-matching product members; the candidate has 1,885.
+These measurements belong to the recorded pre-rebase commit above. The later
+rebase onto `19c213324` adds the unrelated merged Lark-return change; it does not
+turn the frozen experiment into a measurement of that later head.
+
+| Backend / phase | Context bytes, original → candidate | Stdout bytes | Logical requests | Elapsed ms |
+| --- | ---: | ---: | ---: | ---: |
+| File / cold full | 75,648 → 70,388 | 95,004 → 89,875 | 103 → 102 | 4,959.03 → 6,475.69 |
+| File / warm delta | 41,252 → 44,029 | 58,401 → 61,183 | 99 → 98 | 3,465.08 → 4,538.62 |
+| File / loss recovery | 74,880 → 69,618 | 90,113 → 84,903 | 6 → 6 | 5,108.18 → 5,762.51 |
+| SQLite / cold full | 75,740 → 70,492 | 95,114 → 89,997 | 103 → 102 | 5,771.16 → 5,856.03 |
+| SQLite / warm delta | 41,346 → 44,133 | 58,509 → 61,301 | 99 → 98 | 3,772.95 → 3,794.99 |
+| SQLite / loss recovery | 74,974 → 69,722 | 90,217 → 85,017 | 6 → 6 | 4,226.47 → 5,113.92 |
+
+Both arms still use 13/9/13 CLI calls. Expanding all five peers still adds 13,940
+context bytes, 17,620 stdout bytes and 10 CLI/logical requests to each candidate
+phase; measured optional-read time is 4,107–4,875 ms. The original already has
+those bodies inline. The seven settlement/negative/readback calls still use 226
+logical requests with identical per-backend stdout; one effect/debit and the
+open task are preserved. Builds, setup, failed probes, two invalidation hooks
+and optional reads remain separate recorded costs.
+
+Cold/recovery context is about 5.3 KB smaller, but warm context is about 2.8 KB
+larger and all-peer consumption remains more expensive. Every observed candidate
+phase is slower in this cohort; with one observation and uncontrolled background
+load this is not a causal latency estimate. An intermediate version repeated
+capture commands and was larger still (File warm 45,187; SQLite 45,303 bytes);
+the metadata fix does not erase that experiment or establish net benefit.
+
+Four cold/warm File/SQLite presentations were independently compared with their
+original source captures for complete selected work, boundary, horizon,
+capability gate and portfolio. An intentionally mutated QA wheel that deletes
+the capability gate is rejected through the packaged guard/reader path. This
+checks oracle sensitivity, not model adherence. Source tampering, early spend,
+same-capture loss recovery and once-only settlement retain their negative and
+positive checks.
+
+The final affected integration selection passes 144 Python and 117 typed tests;
+an earlier broader selection had 533 passes and five optional skips, before the
+unknown-item fallback was strengthened. The independent #7557 slice passes 264
+Python/70 typed cases, including real File/SQLite status/plan/detail and canonical
+Todo readback, and all 14 selected premerge checks. Status/plan now pays one coarse
+typed request; explicit full Todo summaries skip it. A crowded diagnostic unit
+fixture grows to 43,862 characters because complete candidates are retained; this
+is an intentional information delta, not a speedup. The unchanged public v4
+multi-Agent budget probe passes on original quota but fails at 27,934 > 13,000
+characters on both the preceding and current integration wheels. That integration
+failure remains open; no public budget was raised.
+
+The next existing C1 work is to diagnose the warm reconstruction/metadata cost
+without losing obligations, then qualify remaining consumers and writer cutover.
+No positive complete-cost diff, default SQLite performance, installed App/model
+retention, token/cache/billing, accepted-outcome or long-horizon benefit is claimed.
+C1 and the separate C2/controller experiment remain open.

@@ -1602,11 +1602,18 @@ Python projection; this is not evidence of a positive full-path quota comparison
 
 The [packaged heartbeat comparison](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md)
 now exercises real isolated File/SQLite CLI cold, warm and same-capture recovery
-against original quota. Necessary source/replay checks pass, but default context
-and total stdout grow; expanding all peer outcomes adds reads and cost. No positive
-complete-cost diff or model benefit is qualified. The existing C1 continuation is
-shared typed diagnostic compaction with unknown-field and obligation preservation,
-followed by the same comparison. This does not promote the candidate by default.
+against original quota. The first result grew default context and stdout. The
+follow-through shares one typed diagnostic owner across legacy and scoped native
+callers and removes the replaced Python algorithms. Its independently usable
+legacy-reader slice is proposed in [#7557](https://github.com/loopx-project/loopx/pull/7557);
+the integration uses the identical module. Unknown fields/lists, complete retained
+records, candidates and portfolio remain intact. The repeated comparison reduces
+cold/recovery context by about 5.3 KB, but warm context still grows about 2.8 KB;
+all-peer expansion still adds 13,940 bytes and ten CLI calls. The public v4 budget
+probe still fails on both preceding and current integration wheels. No positive
+complete-cost diff, default performance or model benefit is qualified. Continue
+within C1 on warm reconstruction/metadata cost and remaining consumers; this does
+not promote the candidate by default or qualify the separate controller experiment.
 
 Report the field/clause diff and its decision consequence together with actual
 model input, cached/uncached tokens, added reads/round trips, reconstruction,

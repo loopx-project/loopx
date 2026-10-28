@@ -1178,9 +1178,14 @@ capture 前验证失败。工作契约形成前的错误则在两种 CLI flag �
 
 [打包 heartbeat 对照](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.zh-CN.md)
 已使用真实隔离 File/SQLite CLI，相对原 quota 核对冷态、温态和同 capture 恢复。
-必要来源／重放检查通过，但默认上下文及总 stdout 增加，展开全部 peer 成果另增补读
-和成本；完整成本正向 diff 及模型收益均未资格化。原 C1 继续由共享 typed owner 消除
-诊断重复，保留未知字段和义务，再跑相同对照；这不提升候选默认。
+首组默认上下文和 stdout 增长。后续让旧调用方和 scoped native 复用同一个 typed
+诊断 owner，删除对应 Python 算法；可独立使用的旧读取方切片已在
+[#7557](https://github.com/loopx-project/loopx/pull/7557) 提案，集成版本使用相同模块。
+未知字段／列表、完整保留条目、候选和 portfolio 不变。重跑后冷态／恢复约少 5.3 KB，
+温态仍多约 2.8 KB；全部 peer 补读仍增加 13,940 字节和十次 CLI。公开 v4 预算探针
+在前一版及当前集成 wheel 上仍失败。完整成本正向、默认性能及模型收益均未资格化。
+继续在原 C1 诊断温态重建／元数据成本及剩余消费者，不提升默认，也不验收独立的
+controller 实验。
 
 同时报告字段/条款 diff 及其决策后果、实际模型输入、cached/uncached tokens、追加
 读取/往返、重建、延迟、失败/重试、验证与人工介入。首包更小但总补读更多，可能是负向。
