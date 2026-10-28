@@ -297,9 +297,9 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
         f"counter = Path({str(native_starts)!r})\n"
         "counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
     )
-    executable.write_text(FAKE_SERVER.replace('thread = "owned-app-server-thread"',
-        startup_probe + 'thread = "owned-app-server-thread"'))
-    executable.chmod(0o700)
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    executable = write_python_host_fixture(executable, FAKE_SERVER.replace(
+        'thread = "owned-app-server-thread"', startup_probe + 'thread = "owned-app-server-thread"'))
     config = json.loads(runner.config.read_text())
     binding = config["bindings"][0]
     binding["host_args"] = ["--host", "codex-cli", "--codex-bin", str(executable),

@@ -368,6 +368,18 @@ raise SystemExit(main())
         assert guard.get("result_committed") is True and "delivery_result_context" not in guard, guard
     rc, resumed = _run_cli(registry, runtime, *args, "--resume-turn-key", failed["turn_key"],
                            "--retry-failed-turn", cwd=project)
+    if recovery_window == "input_persisted":
+        # Removing the prior result does not prove that its dispatched Host
+        # never ran. Keep main's ambiguous-attempt fence, even with a newer
+        # work input and the valid original candidate still on disk.
+        assert rc == 1, resumed
+        assert resumed["recovery_decision"]["reason"] == "host_outcome_unknown"
+        assert resumed["effects"]["host_invoked"] is None
+        assert (project / "candidate.txt").read_text() == "valid candidate"
+        assert not (project / "revalidation_started").exists()
+        assert _spend_run_count(runtime) == 0
+        assert json.loads(journal_path.read_text(encoding="utf-8")) == failed
+        return
     if recovery_window in {"terminal_validation_failed", "terminal_stop"}:
         assert rc == 1 and resumed["status"] == "failed", resumed
         pending = json.loads(journal_path.read_text(encoding="utf-8"))
