@@ -110,18 +110,22 @@ export function GoalResearchTimeline({timeline, zh, selectedIds, selectedEventId
     </button>;
   };
   return <div className="research-timeline">
-    <div className="research-timeline-guide"><span>{zh ? "记录时间" : "Record time"}</span><ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
-      <p>{copy.phaseNote}</p><p>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
+    <div className="research-timeline-summary">
+      <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
+      <div className="research-timeline-key">
+        <div className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}</div>
+        <ContextHelp label={zh ? "时间线读法" : "Reading the timeline"}>
+      <p>{copy.phaseNote}</p><p className="research-density-help"><i className="research-bar-key" aria-hidden/>{copy.densityHint}{zh ? "。" : ". "}{zh ? "无记录空档不代表研究停止。" : "A recording gap does not establish that research stopped."}</p>
+      <p>{findingCopy.meaning}</p>
       {!timeline.structuredCount ? <p>{copy.unstructuredHint}</p> : null}
       <p>{copy.routeHint}{zh ? "。" : ". "}{zh ? "相邻点合拢，数字为研究项数，一次展开原始时间与依据。" : "Nearby points group; the number counts research items. Select once for original times and sources."}</p>
       <p>{zh ? "未关联问题按首次记录 UTC 日期收纳，不推断路线或因果。决策轨迹按研究问题归组，组内保留各轮显式决策，最近记录在前；同名问题不会自动合并。" : "Unlinked questions group by first-record UTC date, without inferring a route or cause. Decision history groups explicit decisions by question, newest record first; matching titles do not merge questions."}</p>
       <dl className="research-phase-details">{timeline.phases.map(item => <div key={item.index}><dt>{phaseName(item)}</dt><dd>{phaseDescription(item)}</dd></div>)}</dl>
-    </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}</div>
-      <div className="research-phase-legend">{LABELS.map(key => <span key={key}><i className={tone(key)} aria-hidden="true"/>{label(key)}</span>)}<ContextHelp label={findingCopy.help}><p>{findingCopy.meaning}</p></ContextHelp></div>
-    <div className="research-phases" role="group" aria-label={copy.phaseNote}>{timeline.phases.map(phaseCard)}</div>
+        </ContextHelp>{phase !== null ? <button type="button" className="research-link" onClick={() => onPhase(null)}>{copy.all}</button> : null}
+      </div>
+    </div>
     <div className="research-timeline-grid">
       <div className="research-row-label"><strong>{copy.density}</strong><small>
-        <span><i className="research-bar-key" aria-hidden="true"/> {zh ? "柱高=事件数" : "Bar height = events"}</span>
         {hasRecordingGaps ? <span><i className="research-gap-key" aria-hidden="true"/> {zh ? "无记录" : "No records"}</span> : null}
         {decisionOutcomes.map(outcome => <span key={outcome}><i className={`research-tick-key is-${outcome}`}/> {label(outcome)}</span>)}
       </small></div>

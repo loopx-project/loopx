@@ -102,7 +102,7 @@ export const researchRouteReadingScenario = {
         assert.equal(await caption.count(), 3, "Every recorded route remains in the whole history");
         const legend = history.locator(".research-phase-legend");
         assert((await legend.innerText()).includes(language === "zh-CN" ? "暂定结论" : "Tentative"));
-        const findingHelp = legend.getByRole("button", {name: language === "zh-CN" ? "结论状态说明" : "About finding states", exact: true});
+        const findingHelp = history.getByRole("button", {name: language === "zh-CN" ? "时间线读法" : "Reading the timeline", exact: true});
         await findingHelp.focus();
         const explanation = page.locator(".context-help-popover:popover-open");
         await explanation.waitFor();

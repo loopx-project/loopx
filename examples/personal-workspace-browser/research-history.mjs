@@ -1123,22 +1123,30 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       assert.equal(await gapLegend.locator('i').evaluate(e => getComputedStyle(e).backgroundColor),
         await history.locator('.research-density .is-gap').first().evaluate(e => getComputedStyle(e).backgroundColor),
         'The visible key identifies the actual recording-gap marks');
-      const barLegend = history.getByText('柱高=事件数', {exact: true});
-      assert(await barLegend.isVisible(), 'The bar-height meaning must be visible without opening optional help');
+      const timelineHelp = history.getByRole('button', {name:'时间线读法', exact:true});
+      await timelineHelp.focus();
+      const barLegend = page.locator('.context-help-popover:popover-open .research-density-help');
+      await barLegend.waitFor();
+      assert.match(await barLegend.innerText(), /柱高为事件数/);
       assert.equal(await barLegend.locator('i').evaluate(e => getComputedStyle(e).borderTopColor),
         await history.locator('.research-density span:not(.is-gap)').first().evaluate(e => getComputedStyle(e).borderTopColor),
-        'The visible bar key matches the real density bars');
+        'The on-demand bar key matches the real density bars');
+      await page.keyboard.press('Escape');
+      assert(await timelineHelp.evaluate(e => e === document.activeElement));
       // The default reading must survive a locale switch, not only the zh copy.
       await page.evaluate(key => localStorage.setItem(key, 'en'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
       const englishHistory = page.getByRole('region', {name: 'Research history', exact: true});
-      await englishHistory.getByText('Bar height = events', {exact: true}).waitFor()
-        .catch(error => {throw new Error(`The English reading keeps the bar-height key: ${error.message}`);});
+      await englishHistory.getByRole('button', {name:'Reading the timeline', exact:true}).focus();
+      const englishBarLegend = page.locator('.context-help-popover:popover-open .research-density-help');
+      await englishBarLegend.waitFor();
+      assert.match(await englishBarLegend.innerText(), /Bar height is events/);
+      await page.keyboard.press('Escape');
       await englishHistory.getByText('No records', {exact: true}).waitFor()
         .catch(error => {throw new Error(`The English reading keeps the recording-gap key: ${error.message}`);});
       await page.evaluate(key => localStorage.setItem(key, 'zh-CN'), 'loopx-pw-locale');
       await page.reload({waitUntil: 'networkidle'});
-      await history.getByText('柱高=事件数', {exact: true}).waitFor();
+      await history.getByRole('button', {name:'时间线读法', exact:true}).waitFor();
       const target = await history.locator(".research-timeline-marker").first().evaluate(button => {
         const box = button.getBoundingClientRect(), dot = getComputedStyle(button, "::after");
         const count=button.querySelector('span');
@@ -1155,7 +1163,11 @@ Path(sys.argv[1]).write_text(json.dumps({'goal_id':goal,'display_name':'Syntheti
       for (const viewport of [{width: 1280, height: 900}, {width: 390, height: 844}]) {
         await page.setViewportSize(viewport);
         assert(await gapLegend.isVisible(), 'The recording-gap key remains visible on desktop and narrow layouts');
-        assert(await barLegend.isVisible(), 'The bar-height key remains visible on desktop and narrow layouts');
+        await timelineHelp.focus();
+        await barLegend.waitFor();
+        assert.match(await barLegend.innerText(), /柱高为事件数/);
+        await page.keyboard.press('Escape');
+        assert(await timelineHelp.evaluate(e => e === document.activeElement), 'On-demand reading help returns focus at both widths');
         const target = history.locator('.research-route-track [data-research-nodes~="hit-6"]');
         await target.scrollIntoViewIfNeeded();
         await page.screenshot({path: resolve(outputDir, `research-history-targets-${viewport.width}.png`), animations:'disabled'});

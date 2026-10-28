@@ -130,8 +130,9 @@
 .research-history-controls .research-lens button[aria-pressed="true"] { background: var(--pw-text); color: var(--pw-bg); }
 .research-history-canvas.is-timeline { max-height: none; overflow: visible; background: var(--pw-bg); padding: 24px; }
 .research-timeline { display: grid; gap: 20px; min-width: 0; }
-.research-timeline-guide { display: flex; align-items: center; gap: 4px; color: var(--pw-muted); font-size: var(--text-caption); }
-.research-timeline-guide > .research-link { margin-inline-start: auto; }
+.research-timeline-summary { display: grid; gap: 8px; min-width: 0; }
+.research-timeline-key { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.research-timeline-key > .research-link { margin-inline-start: auto; min-height: 44px; font-size: var(--text-body); }
 .research-phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .research-history .research-phase { display: flex; flex-direction: column; align-items: stretch; gap: 10px; min-width: 0; min-height: 44px; padding: 12px; border: 1px solid var(--pw-line); border-radius: 8px; background: var(--pw-bg); color: var(--pw-text); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard); }
 .research-history .research-phase:hover { border-color: var(--pw-line-strong); background: var(--pw-hover); }
@@ -144,7 +145,7 @@
 .research-phase-details dd { margin: 4px 0 0; }
 .research-phase-bar { display: flex; gap: 2px; height: 18px; border-radius: 4px; overflow: hidden; background: var(--pw-track); }
 .research-phase-bar span { display: flex; align-items: center; min-width: 4px; padding-inline: 6px; overflow: hidden; color: var(--pw-bg); font-size: var(--text-caption); font-weight: 600; white-space: nowrap; }
-.research-phase-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--text-caption); color: var(--pw-text); }
+.research-phase-legend { display: flex; flex: 1; flex-wrap: wrap; gap: 4px 12px; min-width: 0; font-size: var(--text-caption); color: var(--pw-text); }
 .research-phase-legend > span { display: inline-flex; align-items: center; gap: 4px; }
 .research-phase-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--research-tone); }
 .research-trail-list em, .research-finding-sections dt { font-style: normal; font-weight: 600; color: var(--pw-text); margin-right: 6px; }
@@ -166,7 +167,7 @@
 .research-density span.is-gap, .research-gap-key { background: var(--pw-red-bg); }
 .research-density span.is-gap { border-top: 0; }
 .research-gap-key { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--pw-red); border-radius: 2px; }
-.research-bar-key { display: inline-block; width: 10px; height: 10px; background: var(--pw-blue-soft); border-top: 2px solid var(--pw-blue); border-radius: 2px 2px 0 0; }
+.research-bar-key { display: inline-block; width: 10px; height: 10px; margin-inline-end: 4px; background: var(--pw-blue-soft); border-top: 2px solid var(--pw-blue); border-radius: 2px 2px 0 0; }
 .research-decision-ticks { position: relative; height: 12px; margin-top: 4px; }
 .research-decision-ticks span { position: absolute; top: 0; width: 3px; height: 10px; margin-left: -1px; border-radius: 1px; background: var(--pw-blue); }
 .research-decision-ticks span.is-replan, .research-tick-key.is-replan { background: var(--pw-orbit); }
