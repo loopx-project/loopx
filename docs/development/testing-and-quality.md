@@ -1580,6 +1580,26 @@ not a real model's adoption, benchmark improvement or additional execution quota
 载体从缺失到完整指引的首次变化给予 2400/3600/600 的有界额度；绝对上限、语义、
 规模及后续增长检查不变。原失败保留；不据此声称模型采用、实验增益或额外执行权限。
 
+The thin heartbeat's complete first-guard selection guidance also needs its
+supported 320-character authored scope. At immutable main `b47bbc6c9`, the
+unchanged public CLI fixture emits 4,243 JSON characters with the default scope
+and 4,532 with the full supported scope; the latter fails the old 4,500 regression
+ceiling. Keep that failure and all instruction text. Calibrate only this
+surface's JSON ceiling to 4,600, leaving 68 characters of headroom at the supported
+scope. The candidate must emit the same JSON and task body on that same fixture;
+this is a budget decision, not an output reduction. The presentation calculation
+remains 4,181 / 4,200 characters for that body (distinct from its raw 4,276-character
+string). Markdown, line, growth, semantic and frozen differential/promotion
+limits remain unchanged. No execution, spending, host loading or permission
+limit changes.
+
+thin 心跳保留完整的首次 guard 选择指引与受支持的 320 字符 scope。相同公开 CLI
+夹具在固定主干上分别输出 4,243 / 4,532 个 JSON 字符，后者仍记录为旧 4,500
+回归预算失败。仅将该 surface 的 JSON 预算校准为 4,600，留 68 字符余量；候选
+必须保持同一夹具的 JSON 与正文不变，不宣称压缩收益。正文展示口径仍为
+4,181 / 4,200，与 raw string 的 4,276 字符分列；Markdown、行数、增长、语义、
+冻结差分与晋级标准、执行额度和权限均保持原边界。
+
 The latest qualification pins true main `e47e4507a` and merged candidate
 `3955d1c8b` on the same public fixture, with explicit per-probe source imports.
 It retains 1/36/18 Todos, 1/12/12 history records, complete command routes,
