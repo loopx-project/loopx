@@ -98,3 +98,9 @@
   .goal-masthead-title > button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 2px; }
   .personal-channel-title .goal-masthead-context { white-space: nowrap; }
 }
+
+/* Unmeasured vitals are readable facts, not actionable values: muted text,
+   no hover affordance, and the en dash never replaces the explanation. */
+.goal-vital.is-empty { cursor: default; }
+.goal-vital.is-empty:hover { background: transparent; }
+.goal-vital.is-empty .goal-vital-value { color: var(--pw-faint); font-size: var(--text-body); font-weight: 500; letter-spacing: 0; }

@@ -91,6 +91,20 @@ checks around them. `driver.py::reconcile_failed_turn_session_request` and
   C1 and explicit migration/replay/rollback; never overwrite old native IDs or
   borrow continuity between hosts/roles. Read accepted receipts before reverting.
 
+### C3 implementation checkpoint — 2026-10-28 proposal
+
+Both operation adapters now use shared protocol IO in `managed_operation_host.py`
+and select/verify/store through the existing `codex_sessions.py` owner. Native
+acceptance, SDK pin/restore and resource cleanup remain transport-owned. Session
+paths, wire schemas, prompts and the typed collaboration/admission owners stay
+unchanged. A reproduced Codex initialization race is additionally fenced by
+comparing the selected document under the existing file lock before storing;
+a concurrent replacement survives and no prompt or operation tool is dispatched.
+DSH retains its existing initialization fence. Caller adoption, shared IO and
+the session boundary roll back together; no state migration is required. This
+single-session proposal does not qualify controller/executor roles, generations,
+live installation or long-horizon benefit; the original C3 acceptance remains.
+
 ## C4.1 — Typed receipt-to-continuation boundary
 
 **Remaining cross-language decision ownership.** `loop_controller.py` owns

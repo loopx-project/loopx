@@ -8,7 +8,7 @@ import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore} from "../coordination/authority_store.ts";
 import {FileAuthorityStore} from "../coordination/file_authority_store.ts";
 import {canonicalAuthorityBytes} from "../coordination/authority_store_codec.ts";
-import {requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
 
 type PreferenceSource = {
   key: string; source_kind: "user_instruction"; source_ref: string; source_quote: string;
@@ -20,6 +20,27 @@ type Preference = PreferenceSource & (
 );
 const SCHEMA = "agent_preferences_v1";
 const MAX_KEYS = 64;
+
+/** Exact prose/provenance reuse does not cache the current preference decision.
+ * Revision, membership, keys, state, expiry, operations and unknown fields stay
+ * current on every guard, including retirements and an empty replacement view. */
+export function agentPreferenceReusableContextPaths(content: JsonObject): (string | number)[][] {
+  const current = jsonObject(content.current);
+  if (content.ok !== true || content.status !== "read" || current?.schema_version !== SCHEMA
+      || current.authority !== "advisory_only" || typeof current.instructions !== "string"
+      || !Array.isArray(current.items) || current.items.length > MAX_KEYS) return [];
+  const paths: (string | number)[][] = [["current", "instructions"]], keys = new Set<string>();
+  for (const [index, raw] of current.items.entries()) {
+    const item = jsonObject(raw);
+    if (!item || typeof item.key !== "string" || !item.key || keys.has(item.key)
+        || !["active", "retired", "expired"].includes(String(item.state))) return [];
+    keys.add(item.key);
+    for (const field of ["statement", "source_ref", "source_quote"])
+      if (typeof item[field] === "string") paths.push(["current", "items", index, field]);
+  }
+  return paths;
+}
+
 const hash = (value: JsonObject) => createHash("sha256").update(canonicalAuthorityBytes(value)).digest("hex");
 function text(value: unknown, field: string, limit: number): string {
   const result = requireNonEmptyString(value, field);

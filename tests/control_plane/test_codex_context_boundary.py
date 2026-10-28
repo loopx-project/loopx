@@ -322,9 +322,22 @@ def test_native_shared_delta_with_small_compact_recovery_reference(tmp_path, hos
             "id": "outcome", "requirements": [{"id": "requirement", "status": "unverified",
                 "agent_review": {"conclusion": "uncertain", "evidence_refs": [
                     f"artifact:validation-{i:03d}" for i in range(60)]}}]}]}}}})
+    source["sources"].append({"source": "turn_start_capability_hook", "kind": "agent_preferences",
+        "hook_id": "semantic_preference.agent_context", "capability_id": "semantic-preference",
+        "content": {"ok": True, "status": "read", "current": {"schema_version": "agent_preferences_v1",
+            "revision": "preference-a", "authority": "advisory_only",
+            "instructions": "Use the current scoped view; retired or expired preferences are not actionable.",
+            "items": [{"key": "review", "state": "active", "statement": "Consult the designated reviewer.",
+                "source_ref": "owner:review", "source_quote": "Keep this explicit review instruction. " * 20,
+                "operation_id": "remember-review", "expires_at": "2030-01-02T00:00:00Z"}]}}})
     target_source = json.loads(json.dumps(source))
     target_source["sources"][0]["content"]["todo"]["note"] = "Stop before publishing or deploying."
-    target_source["sources"].reverse()
+    preference = target_source["sources"][-1]["content"]["current"]
+    preference["revision"] = "preference-b"
+    preference["items"][0].update(state="expired", statement=None)
+    # Move every source; reversing three would leave the structured acceptance
+    # evidence at its old index and stop exercising its relocated reference.
+    target_source["sources"] = target_source["sources"][1:] + target_source["sources"][:1]
     def projection(context):
         if surface == "quota_packet":
             return {"goal_id": "fixture", "agent_id": "agent", "should_run": True,

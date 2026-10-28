@@ -31,7 +31,8 @@ evidence belongs in a dated ledger when an implementation first produces it.
    against the original quota-packet path. Existing domain owners still decide
    their own facts.
 2. In the optional two-session profile, the **controller model session is the
-   sole model-facing Core client**. It reads the contract, reasons about work,
+   sole model-facing Core client and an intelligent mediator of control work**.
+   It reads the contract, reasons about work,
    talks to the executor and submits explicit typed Core operations. Core owns
    legal transitions and receipts; the controller is not a second authority.
 3. The executor receives a natural-language task conversation, original source
@@ -203,6 +204,56 @@ contain the digest of its own final bytes. Encoding, pagination, native resume
 and recovery derive from the saved instance without another guard. A legitimate
 new selection or authority check may produce a new capture; it must not rewrite
 an earlier observation or silently rebind an outstanding result.
+
+### Controller intelligence and semantic compression
+
+The controller session itself supplies intelligence. Its architectural role is
+to turn the control plane's complete facts and obligations into useful work for
+the executor, and interpret the executor's findings back into justified Core
+operations. “Intelligent compressor” describes this mediation of control work;
+fewer queries or shorter text alone do not implement it. The existing summary
+already assigns reading, reasoning and typed operations to the controller. The
+additional design choice here is **where decisions and attention are spent**:
+
+| Decision | Controller responsibility | Retained boundary |
+| --- | --- | --- |
+| What to do next | Compare the current Goal gap, evidence, viable work and complete costs; continue a useful route or change it when warranted | Core still decides legal admission, claims, leases, budgets and transitions; controller judgment grants no authority |
+| What to delegate together | Choose a coherent, verifiable task and decide which control concerns to absorb itself | The executor keeps local tool/step choice within scope; it does not request approval for each tool call or author Core bookkeeping |
+| What the executor must know | Deliver the task's full constraints, relevant contrary evidence, original materials and unresolved reads; explain the decision in task language | A summary is not an alternate contract or proof of source reading. Unknown relevance requires more material before dependent work |
+| What a result changes | Distinguish a finding, verified artifact, blocked attempt and accepted outcome; decide whether to continue, investigate or replan | Independent validation and current Core receipts, rather than either session's narrative, determine acceptance and settlement |
+
+Keep three operations separate. The deterministic composition owner combines
+domain facts without inventing policy; the existing codec encodes an exactly
+recoverable full/delta input; the controller performs task-dependent semantic
+selection and reasoning. A natural-language task can omit irrelevant control
+syntax and cannot promise bit-for-bit equivalence. Its adequacy is tested by
+preserved constraints, actual executor decisions and accepted outcomes, with
+the original authorized material reachable. Do not replace these operations
+with a second schema, model-authored state store or keyword-based relevance
+classifier. Controller notes are working context, not a new durable authority.
+
+For example, after an export repair produces a valid artifact but a packaging
+check fails, the controller can keep the useful repair, delegate the evidenced
+packaging correction and retain the original unsettled identity. It must not
+reduce the result to “done”, discard the failed check or ask the executor to
+learn writeback syntax. If the same evidence shows that the repair violates a
+shared requirement, it must revise the task and deliver that requirement before
+dependent work. This is a decision consequence, not a target compression ratio.
+
+Amortization is a hypothesis. A controller can absorb several control-heavy
+interactions while an executor continues ordinary authorized work, but every
+new selection, permission change, cancellation and closeout still follows its
+existing owner and freshness rules. Do not add a Core round trip or a new Turn
+for each local tool step; do not cache an old permission to avoid a required
+check. Small tasks, rapidly changing shared constraints and frequent controller
+recovery can make the extra session cost more than it saves.
+
+Controller failure must not make the executor a fallback Core client. Pause
+dependent dispatch, recover the original capture and session/attempt records,
+read current authority where required, and reconcile any already admitted
+result through the original identity. An executor summary cannot reconstruct
+missing control obligations. Conflicting or inaccessible required material
+holds dependent work; independent authorized work keeps its existing route.
 
 ### Review freshness and recovery
 
@@ -617,6 +668,7 @@ by this document alone.
 | Lossless context delivery | Full/delta/recovery equivalence, missing/late/truncated pages, role/session mismatch and real native compaction/resume | Include all read/recovery costs; no second admission or spend |
 | Role isolation and recovery | Controller/executor crash windows, duplicate dispatch, late result, revision change, lease expiry and stop under actual host tools | No executor Core access; no stale result adoption or hidden business executor |
 | Semantic adoption | Original requirements → controller decision → actual executor work → independent verification → accepted result and original-audience return | Read receipt, valid JSON or successful replan alone cannot pass |
+| Intelligent mediation | Coherent delegation, changed/contrary evidence and result interpretation across ordinary continuation, shared-constraint change, controller loss and a small-task counterexample | Explain the actual decision consequence and retained obligations; fewer queries or a shorter handoff cannot pass |
 | Shared production paths | Real CLI and supported File/SQLite paths; real isolated PostgreSQL suite when authority persistence changes; packaged App heartbeat and benchmark worker reuse | No live Goal corruption; unsupported/unrun hosts stay unqualified |
 | Outcome and cost benefit | Matched current single-session, unified single-session and unified two-session arms with fixed task/model/policy/budget/evaluator | Report uncertainty, failures and counterexamples; no claim from prompt bytes alone |
 
@@ -694,6 +746,17 @@ cost when an artifact is forwarded. Compare accepted outcomes under comparable
 budgets, not only replan counts or executor speed. Freeze criteria before any
 separately authorized experiment; this RFC specifies no automatic winner.
 
+For the later two-session comparison, attribute controller reasoning and all
+handoff/material, validation and recovery costs as well as executor work. The
+break-even question is whether those **added complete costs** are outweighed by
+avoided control/bookkeeping work, repeated execution or human intervention,
+while preserving comparable accepted outcomes. Account for actual repeated
+model consumption even when both sessions read the same artifact; forwarding
+one usage receipt must not double-count that receipt. Report workload-specific
+tradeoffs and unknown billing/cache coverage. No universal overhead threshold,
+compression ratio or per-message token ceiling is proposed. This comparison
+does not replace the prior original-quota versus unified single-session gate.
+
 ## 10. Operational contract
 
 Existing Goal Chat, settings and work readback must expose the selected profile,
@@ -735,8 +798,19 @@ Implementation PRs must name the replaced caller, remaining gap, actual tests
 and rollback. No full language migration or unrelated manager rewrite is a
 prerequisite. No task is complete merely because a new abstraction compiles.
 
-For C1, the first implementation slice pairs the complete field/clause migration
-with a real single-session producer and consumer replacement. Start at the
+C1 is one acceptance target, not one mandatory PR. Independently useful
+prerequisites may land first when existing callers adopt the shared owner, their
+entrypoint contracts are qualified, and rollback is local. For example, move
+exact context-reference composition and recovery into the existing TypeScript
+owner while the current quota and Turn entries keep their schemas. Name the
+remaining cutover consumer; do not add unused infrastructure or a second ledger.
+Separate shared-owner prerequisites, producer/capture cutover, reader recovery
+and retirement, and adoption/full-cost qualification where each boundary is
+independently reviewable. Record dependencies in the existing tasks and PRs.
+Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+The first **cutover** slice pairs the complete field/clause migration with a
+real single-session producer and consumer replacement. Start at the
 shared quota emission boundary and trace both attached heartbeat delivery and
 the Turn adapter; retain their actual host ownership. Do not build an unused
 third serializer while both active writers keep their own semantics. Existing

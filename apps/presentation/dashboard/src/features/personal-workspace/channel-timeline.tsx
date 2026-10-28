@@ -3,6 +3,7 @@ import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import {Fragment} from "react";
 import { CollaborationCard } from "./collaboration-card";
+import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
 
 import { AttentionRow } from "./cards/attention-row";
@@ -147,6 +148,7 @@ export function ChannelTimeline({
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
           {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <MarkdownText text={item.message.text} /> : null}
+          <ConversationReplyContext context={item.message.replyContext} zh={locale === "zh-CN"}/>
           {item.message.role === "assistant" && !item.message.pending && item.message.text.length >= MIN_SEPARATE_ANSWER_LENGTH
             && item.message.sourceSessionId && item.message.sourceMessageId
             ? <a className="personal-answer-link" href={answerLink(item.message.sourceSessionId, item.message.sourceMessageId)}

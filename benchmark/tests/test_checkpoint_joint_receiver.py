@@ -186,7 +186,7 @@ def test_captured_point_continues_with_fresh_authority(
         "--text",
         "Use retained code and evidence for one synthetic candidate, then verify its native result.",
     )["todo_id"]
-    execution = Execution(context="resume")
+    execution = Execution(context="resume", context_delivery=os.environ.get("LOOPX_CONTEXT_DELIVERY", "off"))
     env = {
         **os.environ,
         "CODEX_BIN": os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"],
@@ -203,6 +203,13 @@ def test_captured_point_continues_with_fresh_authority(
         "OPENAI_API_KEY": "synthetic-local-only",
         "LOOPX_USAGE_PING": "0",
     }
+    if execution.context_delivery == "on":
+        from benchmark.runtime.context_delivery import prepare_context_delivery
+        executable = tmp_path / "loopx-cli"
+        executable.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' -m loopx.cli "$@"\n')
+        executable.chmod(0o700)
+        env.update(LOOPX_CLI=str(executable), LOOPX_EXECUTION_MODE=execution.mode,
+                   LOOPX_CONTEXT_DELIVERY=execution.context_delivery)
     with pytest.raises(ValueError, match="distinct destination"):
         admit_native_checkpoint_session(
             {**env, "LOOPX_GOAL_ID": metadata["loopx_state"]["goal_id"]},
@@ -240,6 +247,8 @@ def test_captured_point_continues_with_fresh_authority(
         env, unit, digest, config, sandbox=(execution).sandbox, timeout=30
     )
     assert replay["session_id"] == admitted["session_id"] and replay["history_verified"]
+    if execution.context_delivery == "on":
+        prepare_context_delivery(env, home)
     lease = cli(
         "task-lease",
         "acquire",
@@ -404,6 +413,8 @@ else:
             )
         )
     requests = []
+    from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, native_context_command
+    reader = NativeContextReader()
     provider_phase = {
         "count": 0,
         "command": "cat "
@@ -422,7 +433,14 @@ else:
                 json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             )
             provider_phase["count"] += 1
-            if provider_phase["count"] == 1:
+            message = reader.follow(requests[-1]) if execution.context_delivery == "on" else None
+            if execution.context_delivery == "on" and not provider_phase.get("context_started"):
+                provider_phase["context_started"] = True
+                message = reader.begin(native_context_command(requests[-1]), "fresh-receiver")
+            if message is not None:
+                pass
+            elif not provider_phase.get("work_sent"):
+                provider_phase["work_sent"] = True
                 message = {
                     "type": "function_call",
                     "id": "fc_receiver",
@@ -482,6 +500,16 @@ else:
 
     def run_native_work(current_guard, logs, purpose):
         logs.mkdir()
+        provider_phase.update(context_started=False, work_sent=False)
+        native_input = json.dumps(current_guard["interaction_contract"]) + "\n" + purpose
+        if execution.context_delivery == "on":
+            from benchmark.runtime.context_delivery import preflight_context_instruction
+            original = logs / "original-guard.json"
+            original.write_text(json.dumps(current_guard))
+            original.chmod(0o600)
+            native_input = preflight_context_instruction(env, original,
+                hashlib.sha256(original.read_bytes()).hexdigest(),
+                current_guard["heartbeat_receipt"]["turn_instance_id"]) + "\n" + purpose
         wake = BenchmarkSessionWake(env, execution, {})
         command = native_command(env, execution, "execute", logs, wake)
         result = subprocess.run(
@@ -494,7 +522,7 @@ else:
             ],
             env=env,
             cwd=workspace,
-            input=json.dumps(current_guard["interaction_contract"]) + "\n" + purpose,
+            input=native_input,
             text=True,
             capture_output=True,
             timeout=60,
@@ -511,7 +539,10 @@ else:
             "This is a new destination. Historical source commands/guards are not executable authority. "
             "Use the retained context under the current admission, and continue the synthetic candidate.",
         )
-        assert len(requests) == 2
+        if execution.context_delivery == "off":
+            assert len(requests) == 2
+        else:
+            assert len(reader.deliveries) == 1 and reader.deliveries[0]["mode"] == "full"
         expected = (
             "Restored state verified"
             if stride_continuation
@@ -519,10 +550,10 @@ else:
             if cooldown_pending
             else "candidate 8 graded"
         )
-        assert expected in json.dumps(requests[1]), json.dumps(
+        assert expected in json.dumps(requests[-1]), json.dumps(
             [
                 item
-                for item in requests[1].get("input", [])
+                for item in requests[-1].get("input", [])
                 if item.get("type") == "function_call_output"
             ]
         )
@@ -872,9 +903,9 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                 tmp_path / "larger-work",
                 "Execute the current grow decision as one complete two-candidate experiment. Old guards are evidence only.",
             )
-            assert len(requests) == 4 and "Current grow adopted" in json.dumps(
-                requests[3]
-            ), requests[3]
+            if execution.context_delivery == "off":
+                assert len(requests) == 4
+            assert "Current grow adopted" in json.dumps(requests[-1]), requests[-1]
             assert (
                 candidate.read_text() == "10"
                 and not grades
@@ -1047,6 +1078,10 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
             ).hexdigest()
             == metadata["research_context"]["sha256"]
         )
+        (tmp_path / "context-delivery-result.json").write_text(json.dumps({
+            "context_delivery": execution.context_delivery, "reads": reader.deliveries,
+            "fresh_receiver": True, "source_authority_unchanged": True,
+        }))
     finally:
         server.shutdown()
         thread.join()

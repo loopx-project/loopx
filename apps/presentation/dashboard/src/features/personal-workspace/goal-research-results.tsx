@@ -19,6 +19,9 @@ export function GoalResearchResults({goalId, api, zh, hideEmpty = false}: {goalI
     void (async () => {
       try {
         const response = await fetch(api.indexUrl, {cache: "no-store"});
+        // This optional index may be absent. Keep the normal empty-state path;
+        // other HTTP and decoding failures must retain their error and retry.
+        if (response.status === 404 || response.status === 410) return;
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const collection = parsePresentationSurfaceCollectionResponse(await response.json());
         const surfaces = collection.items.filter(surface => surface.goal_id === goalId

@@ -453,6 +453,18 @@ function recoveryDecision(
   }
 
   const resumeFrom = recoveryResumePhase(journal, completedPhases, journalStatus);
+  // A durable dispatch intent without its result cannot prove non-execution.
+  if (journalStatus === "in_progress" && completedPhases.length < 2
+    && journal.host_attempt_count !== 0) {
+    return {
+      ...base,
+      action: "blocked",
+      can_continue: false,
+      resume_from: resumeFrom,
+      reinvoke_host: false,
+      reason: "host_outcome_unknown",
+    };
+  }
   if (journalStatus === "failed" && !retryFailed) {
     return {
       ...base,

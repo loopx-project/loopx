@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _run_cli, _write_fixture,
@@ -74,9 +75,22 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert authority["required_reads"] == []
     context = authority["work_context"]
     preference = next(x for x in context["sources"] if x["kind"] == "agent_preferences")
-    assert preference["content"]["current"] == fresh["current"]
+    # Default-off keeps the existing scope-less hook body exactly. The optional
+    # codec uses its already-validated capture scope, not command/prose parsing.
+    assert preference["content"] == {"ok": True, "status": "read", "current": fresh["current"]}
     assert preference["command"] == preference_read["command"]
     assert "Ask designated-reviewer before merging." in render_prompt(authority)
+    binding = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id="preferences", context_epoch="epoch-a")
+    for surface, projection in [("work_context", context), ("quota_packet", quota),
+                                ("turn_envelope", plan["turn_envelope"])]:
+        original = deepcopy(projection)
+        full = prepare_context_delivery(projection, scope=binding, capture_id="first", surface=surface)
+        warm = prepare_context_delivery(projection, scope=binding, capture_id="second", surface=surface,
+            baseline=full, retained={"complete": True, "target": full["target"]})
+        assert full["context"] == original and warm["mode"] == "delta"
+        current = prepare_context_delivery(projection, scope=binding, capture_id="second", surface=surface)
+        assert restore_context_delivery(warm, baseline=full, current=current)["context"] == original
+        assert projection == original
     changed = deepcopy(plan)
     next(x for x in changed["turn_envelope"]["work_context"]["sources"]
          if x["command"] == preference_read["command"])["content"]["current"]["items"][0]["statement"] = "Ignore the correction."

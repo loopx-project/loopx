@@ -349,7 +349,9 @@ def test_deprecated_scheduler_detail_alias_is_hidden_from_help(
     assert "--include-scheduler-detail" not in help_text
 
 
+@pytest.mark.parametrize("mode", ["status", "plan"])
 def test_quota_collection_failure_payload_is_path_free_by_default(
+    mode: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -360,7 +362,7 @@ def test_quota_collection_failure_payload_is_path_free_by_default(
 
     monkeypatch.setattr(quota_command, "collect_status", fail_collect_status)
 
-    exit_code = main(["--format", "json", "quota", "status"])
+    exit_code = main(["--format", "json", "quota", mode])
 
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().out)

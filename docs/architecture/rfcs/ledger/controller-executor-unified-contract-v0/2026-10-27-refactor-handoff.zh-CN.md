@@ -73,6 +73,16 @@ DSH schema。Operation adapter 仍使用私有读写 helper，并在周边组装
   扩展需要 C1 稳定及显式迁移/replay/rollback；不能覆盖旧 native ID，不能跨 Host/role
   借用连续性。回退前读回已接受回执。
 
+### C3 实现检查点 — 2026-10-28 提案
+
+两个 operation adapter 现共用 `managed_operation_host.py` 的协议 IO，并通过原
+`codex_sessions.py` owner 完成 select/verify/store。原生接受、SDK pin/restore 和
+资源清理仍归 transport。会话路径、wire schema、提示正文及 typed collaboration/
+admission owner 保持。另对已复现的 Codex 初始化竞态，在原文件锁内比较选定文档后
+再保存：并发替换得以保留，且不派发 prompt 或 operation tool。DSH 保留原初始化
+保护。调用方采用、公共 IO 和会话边界须一并回退，无需状态迁移。本单会话提案不
+认证 controller/executor 角色、generation、正式安装或长程收益；原 C3 验收保留。
+
 ## C4.1 — Typed 回执到继续决策边界
 
 **仍存跨语言决策归属。** `loop_controller.py` 拥有 `ValidatedTurnReceipt`、

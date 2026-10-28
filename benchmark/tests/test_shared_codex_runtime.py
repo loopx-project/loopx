@@ -1125,6 +1125,29 @@ def test_native_context_opt_in_is_only_a_heartbeat_treatment(mode):
         Execution(context_delivery="1")
 
 
+@pytest.mark.parametrize("declared_mode", [None, "heartbeat"])
+def test_context_preflight_accepts_the_resolved_heartbeat_mode(tmp_path, monkeypatch, declared_mode):
+    from benchmark.tests.test_resume_sessions import resume_env
+    from loopx.control_plane.turn_driver.codex_context import context_delivery_activation
+
+    env = resume_env(tmp_path, monkeypatch)
+    if declared_mode is None:
+        env.pop("LOOPX_EXECUTION_MODE")
+    env["LOOPX_CONTEXT_DELIVERY"] = "on"
+    monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", lambda *args: None)
+
+    def preflight(current, *_args, **_kwargs):
+        activation = context_delivery_activation("on", runtime_profile="generic_cli",
+            benchmark_mode=current.get("LOOPX_EXECUTION_MODE"))
+        assert activation["scenario"] == "codex_benchmark_heartbeat"
+        return "Current Todo input."
+
+    monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", preflight)
+    result = run_once(env)
+    assert result["ok"] and result["session"]["session_id"]
+    assert env.get("LOOPX_EXECUTION_MODE") == declared_mode
+
+
 def test_context_transport_unavailable_preserves_ordinary_worker(tmp_path, monkeypatch):
     from benchmark.tests.test_resume_sessions import resume_env
     env = resume_env(tmp_path, monkeypatch)

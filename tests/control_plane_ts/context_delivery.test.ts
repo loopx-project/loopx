@@ -73,6 +73,94 @@ function warm(value: JsonObject, baseline: JsonObject): JsonObject {
 const recover = (delivery: JsonObject, baseline: JsonObject, value: JsonObject): JsonObject =>
   restoreContextDelivery({delivery, baseline, current: full(value, "capture-2")});
 
+test("scoped preferences reuse complete prose while every current lifecycle fact stays inline", () => {
+  const preferences = {ok: true, status: "read", current: {schema_version: "agent_preferences_v1",
+    revision: "revision-a", authority: "advisory_only",
+    instructions: "Read the current scoped view; preferences never grant authority. ".repeat(15),
+    items: Array.from({length: 8}, (_, i) => ({key: `preference-${i}`, state: "active",
+      statement: "Keep the explicitly requested review constraint. ".repeat(20),
+      source_kind: "user_instruction", source_ref: "owner:explicit-message",
+      source_quote: "Keep my explicit instruction and its original scope. ".repeat(20),
+      operation_id: `remember-${i}`, supersedes_operation_id: null,
+      recorded_at: "2030-01-01T00:00:00Z", expires_at: "2030-01-02T00:00:00Z",
+      unknown_control: {must_read: true}}))}};
+  const work = {complete: true, sources: [{source: "turn_start_capability_hook",
+    hook_id: "semantic_preference.agent_context", capability_id: "semantic-preference", kind: "agent_preferences",
+    command: "read-current-preferences", content: preferences}]};
+  for (const surface of ["work_context", "quota_packet", "turn_envelope"]) {
+    const wrap = (value: unknown): JsonObject => surface === "quota_packet"
+      ? {interaction_contract: {agent_channel: {work_context: value}}}
+      : surface === "turn_envelope" ? {work_context: value} : value as JsonObject;
+    const root = surface === "quota_packet" ? ["interaction_contract", "agent_channel", "work_context"]
+      : surface === "turn_envelope" ? ["work_context"] : [];
+    const path = [...root, "sources", 0, "content", "current"];
+    const original = wrap(work), saved = structuredClone(original);
+    const baseline = prepareContextDelivery({context: original, scope, capture_id: "a", surface});
+    assert.deepEqual(baseline.context, original); // No producer or cold representation change.
+    const request = {context: original, scope, capture_id: "b", surface};
+    const delta = prepareContextDelivery({...request, baseline, retained: {complete: true, target: baseline.target}});
+    assert.equal(delta.mode, "delta");
+    assert.ok(JSON.stringify(delta).length < JSON.stringify(baseline).length / 2);
+    for (const key of ["schema_version", "revision", "authority"])
+      assert.deepEqual(inline(delta, [...path, key]), preferences.current[key as keyof typeof preferences.current]);
+    for (const [i, item] of preferences.current.items.entries()) {
+      for (const key of ["key", "state", "expires_at", "operation_id", "supersedes_operation_id", "recorded_at", "unknown_control"])
+        assert.deepEqual(inline(delta, [...path, "items", i, key]), item[key as keyof typeof item]);
+      for (const key of ["statement", "source_ref", "source_quote"])
+        assert.equal(inline(delta, [...path, "items", i, key]), undefined);
+    }
+    assert.equal(inline(delta, [...path, "instructions"]), undefined);
+    const changed = structuredClone(work);
+    changed.sources[0].content.current.revision = "revision-b";
+    changed.sources[0].content.current.items[0].statement = "Use the corrected constraint.";
+    changed.sources[0].content.current.items[0].source_quote = "The owner corrected the earlier instruction.";
+    const cases: JsonObject[] = [changed];
+    for (const state of ["retired", "expired"]) {
+      // Expiry can change the current view without a journal revision change.
+      const next = structuredClone(work) as JsonObject;
+      const current = source(next, 0).current as JsonObject;
+      (current.items as JsonObject[])[0] = {...(current.items as JsonObject[])[0], state, statement: null};
+      cases.push(next);
+    }
+    const reordered = structuredClone(work); reordered.sources[0].content.current.items.reverse(); cases.push(reordered);
+    const removed = structuredClone(work); removed.sources[0].content.current.items.splice(2, 1); cases.push(removed);
+    const empty = structuredClone(work); empty.sources[0].content.current.items = []; cases.push(empty);
+    for (const next of cases) {
+      const args = {...request, context: wrap(next)};
+      const wire = prepareContextDelivery({...args, baseline, retained: {complete: true, target: baseline.target}});
+      const capture = prepareContextDelivery(args);
+      assert.deepEqual(restoreContextDelivery({delivery: wire, baseline, current: capture}).context, wrap(next));
+      if (wire.mode === "delta") {
+        const view = source(next, 0).current as typeof preferences.current;
+        assert.equal(inline(wire, [...path, "revision"]), view.revision);
+        if (view.items.length) assert.equal(inline(wire, [...path, "items", 0, "state"]), view.items[0].state);
+        else assert.deepEqual(inline(wire, [...path, "items"]), []);
+      }
+    }
+    for (const field of ["goal_id", "agent_id", "context_epoch"]) {
+      assert.equal(prepareContextDelivery({...request, scope: {...scope, [field]: "different"}, baseline,
+        retained: {complete: true, target: baseline.target}}).mode, "full");
+    }
+    for (const field of ["hook_id", "capability_id", "kind"]) {
+      const unknown = structuredClone(work); (unknown.sources[0] as JsonObject)[field] = "unknown";
+      const wire = prepareContextDelivery({...request, context: wrap(unknown), baseline,
+        retained: {complete: true, target: baseline.target}});
+      assert.equal(wire.mode, "full");
+    }
+    for (const content of [{...preferences, ok: false}, {...preferences, status: "unavailable"},
+      {...preferences, goal_id: "other-goal"}, {...preferences, agent_id: "other-agent"},
+      {...preferences, current: {...preferences.current, schema_version: "unknown"}},
+      {...preferences, current: {...preferences.current, authority: "execution_grant"}},
+      {...preferences, current: {...preferences.current, items: [preferences.current.items[0], preferences.current.items[0]]}}]) {
+      const failed = structuredClone(work); failed.sources[0].content = content;
+      const wire = prepareContextDelivery({...request, context: wrap(failed), baseline,
+        retained: {complete: true, target: baseline.target}});
+      assert.equal(wire.mode, "full");
+    }
+    assert.deepEqual(original, saved);
+  }
+});
+
 // Read an inline value from the wire, without borrowing any baseline content.
 // Tests use this independent walker to verify controls really reach each input.
 function inline(delivery: JsonObject, path: (string | number)[]): unknown {

@@ -1,0 +1,16 @@
+# Python 3.11 qualification dependencies; product runtime has no Python dependencies.
+PyYAML==6.0.3
+Pygments==2.21.0
+attrs==25.4.0
+hypothesis==6.142.4
+iniconfig==2.3.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+packaging==26.0
+pluggy==1.6.0
+pytest==9.0.3
+referencing==0.37.0
+rpds-py==0.30.0
+setuptools==84.1.0
+sortedcontainers==2.4.0
+typing_extensions==4.15.0

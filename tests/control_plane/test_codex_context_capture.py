@@ -19,64 +19,14 @@ from canonical_authority_fixture import initialize_canonical_authority, isolate_
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
-from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+from tests.control_plane.codex_checkpoint_fixture import (
+    local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
+)
 from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
 
 pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"),
     reason="Explicit native Codex binary required; inference uses loopback only")
-
-
-def _delivered(request, digest):
-    # Independent byte-map oracle: recover every model-visible byte, including
-    # separate code-mode emissions and overlapping reads at smaller page sizes.
-    delivered = {}
-    for item in request["input"]:
-        output = item.get("output")
-        texts = ([part["text"] for part in output if part.get("type") == "input_text"]
-                 if item.get("type") == "custom_tool_call_output" and isinstance(output, list)
-                 else [output])
-        for output in texts:
-            if not isinstance(output, str):
-                continue
-            try:
-                page = json.loads(output.split("\nOutput:\n", 1)[-1])
-                if isinstance(page, dict) and page.get("exit_code") == 0 and isinstance(page.get("output"), str):
-                    page = json.loads(page["output"])
-            except (ValueError, TypeError):
-                continue
-            if not isinstance(page, dict) or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
-                continue
-            assert page["ok"]
-            data = page["content"].encode()
-            assert len(data) == (page["total_bytes"] if page["eof"] else page["next_offset"]) - page["offset"]
-            for offset, value in enumerate(data, page["offset"]):
-                assert offset not in delivered or delivered[offset] == value
-                delivered[offset] = value
-    if not delivered:
-        return ""
-    assert set(delivered) == set(range(len(delivered)))
-    raw = bytes(delivered[i] for i in range(len(delivered)))
-    assert hashlib.sha256(raw).hexdigest() == digest
-    return raw.decode().rstrip("\n")
-
-
-def _last_page(request):
-    for item in reversed(request["input"]):
-        output = item.get("output")
-        parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
-        for part in reversed(parts):
-            if not isinstance(part, str):
-                continue
-            try:
-                value = json.loads(part.split("\nOutput:\n", 1)[-1])
-                if isinstance(value, dict) and value.get("exit_code") == 0:
-                    value = json.loads(value["output"])
-                if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
-                    return value
-            except (ValueError, KeyError):
-                continue
-    return None
 
 
 @pytest.mark.parametrize("host,surface,failed_primary,resumed,adaptive", [

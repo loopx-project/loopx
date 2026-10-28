@@ -187,6 +187,17 @@ conclusion, basis currency, independent verification, revisions and unknown fiel
 remain literal current input. Changed, removed or reordered evidence reconstructs
 the complete current source; failed or incomplete sources retain full delivery.
 
+The registered preference owner permits exact reuse of its complete instructions,
+statements, source quotes and source references. Each read still supplies the
+current revision, membership, keys, lifecycle state, expiry, operation lineage
+and unknown fields literally; an empty view replaces earlier preferences.
+The existing scope-less preference hook uses the validated capture's exact
+Goal/Agent binding, without adding fields to ordinary/default-off producer output
+or parsing its read command. Explore retains its explicit scoped hook identity.
+Unknown, failed, incompatible or ambiguous hook views stay complete. A changed
+scope or lost baseline still selects full delivery; reuse never makes a retired
+or expired preference actionable or grants authority.
+
 Object edits may group complete current fields in `values`, alongside recursive
 `changed` edits and `removed` keys. Array edits use exact indices in `items` and
 `values`, with `length` for resizing. These literals are present in the current

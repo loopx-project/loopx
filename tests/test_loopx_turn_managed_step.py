@@ -475,7 +475,7 @@ def test_shared_decision_owner_binds_both_turn_owners_to_one_set_of_inputs(monke
         envelopes.append((decision, scheduler_execution_context))
         return {"schema_version": "loopx_turn_envelope_v0"}
 
-    monkeypatch.setattr(turn_decision, "fresh_turn_envelope", _record_envelope)
+    monkeypatch.setattr(turn_decision, "build_turn_controller_input", _record_envelope)
     turn_decision.build_fresh_envelope_for_managed_step(
         args,
         registry_path=registry_path,

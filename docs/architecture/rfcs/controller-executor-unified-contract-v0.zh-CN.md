@@ -25,7 +25,8 @@
    长期保留 quota/Turn 兼容视图不是目标。吸收 quota packet 的必要信息量优势与
    TurnEnvelope 的交付效率优势，一起替换二者，并相对原 quota packet 路径验收净变化。
    各 domain owner 仍决定自己拥有的事实。
-2. 在可选的双会话 profile 中，**controller 模型会话是唯一面向 Core 的模型客户端**。
+2. 在可选的双会话 profile 中，**controller 模型会话是唯一面向 Core 的模型客户端，
+   也是控制工作的智能中介**。
    它读契约、判断工作、与 executor 沟通并提交显式 typed Core 操作。Core 拥有合法迁移与
    回执；controller 不是第二个权威。
 3. Executor 接收自然语言任务对话、原始材料和普通宿主工具，返回发现、产物、证据与问题。
@@ -167,6 +168,42 @@ digest 保护传输，canonical hash 保护语义内容，既有 effect 身份�
 文档包含自身最终字节的 digest。编码、分页、native resume 与恢复都从已保存实例派生，
 不再执行 guard。合法的新选择或权限复核可以产生新 capture，但不能改写旧观察，或把
 未结算结果悄悄绑定到新观察。
+
+### Controller 的智能与语义压缩
+
+智能来自 controller 会话本身。它在架构上把控制面的完整事实与义务转化成 executor
+可执行的有用工作，再把 executor 的发现解释为有依据的 Core 操作。“智能压缩器”描述
+的是对控制工作的这种中介作用；少查几次或缩短文本本身不能实现它。既有摘要已把阅读、
+推理与 typed 操作交给 controller，这里补充的设计决定是**把判断与注意力放在哪里**：
+
+| 判断 | Controller 的职责 | 保留的边界 |
+| --- | --- | --- |
+| 下一步做什么 | 比较当前 Goal 缺口、证据、可行工作与完整成本；有依据地继续或换路 | 合法准入、claim、lease、预算和迁移仍由 Core 决定；controller 的判断不授予权限 |
+| 哪些工作一起交接 | 选择连贯、可验证的任务，决定自己吸收哪些控制事务 | Executor 在范围内自主选择局部工具与步骤，不逐次请示，也不编写 Core 记账 |
+| Executor 必须知道什么 | 交付任务完整约束、相关反证、原始材料和未完成必读，用任务语言解释判断 | 摘要不是另一份契约，也不证明读过来源；相关性未知时，依赖工作前须补足材料 |
+| 结果改变什么 | 区分发现、已验证产物、受阻尝试与已接受成果，判断继续、调查或 replan | 独立验证与当前 Core 回执决定验收和结算，不能由任一会话的叙述替代 |
+
+区分三种操作：确定性的 composition owner 组合 domain 事实，不另造 policy；既有
+codec 编码可精确恢复的 full/delta 输入；controller 按任务进行语义选择和推理。自然
+语言任务可以省去无关控制语法，不能承诺逐字节等价。其充分性要由约束保留、executor
+实际决策与验收成果检验，同时原始获授权材料仍可到达。不能用第二套 schema、模型编写的
+状态库或按关键词判断相关性的分类器替代这些操作。Controller 笔记是工作上下文，不是
+新的持久权威。
+
+例如导出修复已产出有效文件，但打包检查失败：controller 可以保留有用修复，交接有
+证据的打包纠正，并保留原未结算身份。它不能把结果缩成“完成”、丢掉失败检查，或要求
+executor 学习 writeback 格式。如果同一证据表明修复违反共同要求，则先修改任务并交付
+该要求，再继续依赖工作。这是实际判断后果，不是压缩比例目标。
+
+成本摊薄仍是假设。Executor 继续普通获授权工作时，controller 可以吸收多次控制密集
+交互，但每次新选择、权限变化、取消与收尾仍遵循既有 owner 和新鲜度规则。不要为每个
+局部工具步骤增加一次 Core 往返或新 Turn，也不能缓存旧权限来跳过必需复核。小任务、
+快速变化的共同约束和频繁 controller 恢复，都可能让额外会话的成本超过节省。
+
+Controller 失败不能让 executor 变成备用 Core 客户端。暂停依赖的 dispatch，恢复原
+capture 与 session/attempt 记录，在必要处读取当前权限，并按原身份对账已准入结果。
+Executor 摘要不能重建缺失的控制义务。必需材料矛盾或不可达时，依赖工作保持阻塞；
+独立获授权工作继续沿原路径推进。
 
 ### 评审新鲜度与恢复
 
@@ -466,6 +503,7 @@ reader。本文不单独授权破坏性迁移。
 | 无损上下文交付 | Full/delta/recovery 等价；缺页、迟到、截断、role/session 不符与真实原生压缩/续接 | 合计所有读取/恢复成本，不重新准入/扣额 |
 | 角色隔离与恢复 | 实际 host tools 下的 controller/executor 崩溃窗口、重复 dispatch、迟到结果、revision 变化、lease 到期、Stop | Executor 不能访问 Core，不能采用过时结果或隐藏第二个业务 executor |
 | 语义采用 | 原始要求 → controller 判断 → executor 实际工作 → 独立验证 → 接受结果并回原受众 | 读回执、合法 JSON 或 replan 成功不能单独通过 |
+| 智能中介 | 普通继续、共同约束变化、controller 丢失和小任务反例中的连贯交接、变化／反向证据及结果解释 | 说明真实判断后果与保留义务；少查询或短交接均不足 |
 | 共享生产路径 | 真实 CLI 与受支持 File/SQLite；涉及 authority 持久化变更时跑真实隔离 PostgreSQL；打包 App heartbeat 与 benchmark worker 复用 | 不破坏 live Goal；未支持/未运行 host 仍未合格 |
 | 成果与成本收益 | 当前单会话、统一契约单会话、统一契约双会话三组，固定 task/model/policy/budget/evaluator | 报告不确定性、失败与反例，不从 prompt bytes 单独宣称收益 |
 
@@ -525,6 +563,13 @@ serializer 或字节减少结清。
 产物时不重复计算成本。比较可比预算下的已接受成果，不能只看 replan 次数或 executor
 速度。另行授权实验前冻结标准，本文不预设胜出方案。
 
+在后续双会话对照中，除 executor 工作，还要归因 controller 推理及全部交接／材料、
+验证与恢复成本。收支平衡问题是：在保留可比验收成果时，这些**新增完整成本**能否被
+避免的控制／记账、重复执行或人工介入所抵消。即使两会话读同一产物，也按实际重复
+模型消费计量；转发同一用量回执不能把该回执重复计费。报告不同 workload 的取舍和
+账单／缓存覆盖未知。本文不规定通用开销阈值、压缩比例或每条消息 token 上限；此对照
+不替代前置的原 quota 与统一单会话验收。
+
 ## 10. 运行契约
 
 既有 Goal Chat、settings 与工作 readback 应呈现选定 profile、controller/executor
@@ -559,7 +604,15 @@ C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约�
 缺口、实际测试与回退。完整语言迁移或无关 manager 重写不是前置条件；新抽象能编译
 不能算任务完成。
 
-C1 首个实现片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
+C1 是一个验收目标，不要求放进一个 PR。独立有用的前置改动可以先落地，前提是现有
+调用方实际采用共享 owner、入口契约经过验证，且能局部回退。例如，在现有 quota 和
+Turn 入口保持各自 schema 时，将精确上下文引用组合与恢复收敛到既有 TypeScript
+owner。列明后续切换消费者；不能添加无人使用的基础设施或第二套台账。
+共享 owner 前置、producer/capture 切换、reader 恢复与退役、采用及完整成本验收，
+可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
+也不豁免第 9 节相对原 quota 基线的验证。
+
+首个**切换**片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
 从共享 quota emission 边界开始，同时追踪 attached heartbeat 交付与 Turn adapter，
 保留各自真实宿主归属。不能新增无人使用的第三个 serializer，而两个活跃 writer 继续
 各自拥有语义。既有 `test_quota_decision_capture.py` 与

@@ -16,6 +16,7 @@ attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
     --hash=sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32
     # via
+    #   hypothesis
     #   jsonschema
     #   referencing
 build==1.6.0 \
@@ -510,6 +511,10 @@ httpx-sse==0.4.3 \
     --hash=sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc \
     --hash=sha256:9b1ed0127459a66014aec3c56bebd93da3c1bc8bb6618c8082039a44889a755d
     # via mcp
+hypothesis==6.142.4 \
+    --hash=sha256:25eecc73fadecd8b491aed822204cfe4be9c98ff5c1e8e038d181136ffc54b5b \
+    --hash=sha256:b3e71a84708994aa910ea47f1483ad892a7c390839959d689b2a2b07ebfd160e
+    # via loopx (pyproject.toml)
 idna==3.19 \
     --hash=sha256:5e0811a4383b21dc5838069f801c4fb62113b7447663d2530d2bd6e77b49bf15 \
     --hash=sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4
@@ -1425,6 +1430,10 @@ setuptools==83.0.0 \
     --hash=sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef \
     --hash=sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
     # via -r tests/requirements-stage2c-tools.in
+sortedcontainers==2.4.0 \
+    --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
+    --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0
+    # via hypothesis
 sse-starlette==3.4.11 \
     --hash=sha256:1bae716c02f3e6f294be41ff333220692dae7c3cbab077c900f159676719dade \
     --hash=sha256:c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453

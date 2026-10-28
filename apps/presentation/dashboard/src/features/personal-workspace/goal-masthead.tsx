@@ -140,11 +140,11 @@ export type GoalVitalRegion = "overview" | "tasks" | "attention" | "usage";
 
 const ribbonOrder = ["done", "running_observed", "needs_you", "open", "waiting_dependency", "blocked", "deferred"] as const;
 
-function Vital({ children, extra, help, label, onClick, sub, tone, valueKey }: {
-  children: ReactNode; extra?: ReactNode; help?: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string; valueKey?: string;
+function Vital({ children, empty, extra, help, label, onClick, sub, tone, valueKey }: {
+  children: ReactNode; empty?: boolean; extra?: ReactNode; help?: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string; valueKey?: string;
 }) {
   return (
-    <div className="goal-vital-cell"><button className={`goal-vital${tone ? ` is-${tone}` : ""}`} onClick={onClick} type="button">
+    <div className="goal-vital-cell"><button aria-disabled={empty} className={`goal-vital${empty ? " is-empty" : ""}${tone ? ` is-${tone}` : ""}`} onClick={empty ? undefined : onClick} tabIndex={empty ? -1 : undefined} type="button">
       <span className="goal-vital-value goal-vital-swap" key={valueKey}>{children}</span>
       <span className="goal-vital-meta">
         <span className="goal-vital-label">{label}</span>
@@ -190,6 +190,8 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos, digest: shar
 
   const windowLabel = digest.usage.window === "7d" ? t("vitals.window7d") : digest.usage.window === "24h" ? t("vitals.window24h") : t("vitals.notMeasured");
   const needs = digest.needsYou;
+  const needsEmpty = needs.availability === "ok" && needs.coverage === "complete"
+    && needs.blocking === 0 && needs.optional === 0;
   const last = digest.lastActivity;
   const lastTime = last ? relativeTime(last.at, locale) : null;
   const stateLabel = finishing ? t("vitals.stopping") : t(activity.labelKey as WorkspaceMessageKey);
@@ -215,30 +217,33 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos, digest: shar
         </>}>
         {work.total === null ? work.open : <span>{work.done}<small>/{work.total}</small></span>}
       </Vital>
-      <Vital label={t("vitals.needsYou")} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}
+      <Vital label={t("vitals.needsYou")} empty={needsEmpty} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}
         tone={needs.availability === "ok" && needs.blocking !== null && needs.blocking > 0 ? "danger" : needs.availability === "ok" ? "recede" : undefined}
         help={needs.availability !== "ok" || needs.coverage !== "complete" ? <ContextHelp icon={CircleHelp} label={`${t("vitals.needsYou")} · ${needs.availability !== "ok" ? t("vitals.unavailable") : (locale === "zh-CN" ? "部分记录" : "Partial records")}`}><p>{needs.availability === "ok" ? t("vitals.needsYouPartial", {count: needs.listed}) : t("vitals.unavailable")}</p></ContextHelp> : undefined}
         sub={needs.availability !== "ok" ? null : [
           needs.oldestWaitingSince ? t("vitals.needsYouOldest", { time: relativeTime(needs.oldestWaitingSince, locale) ?? "" }) : null,
           needs.optional ? t("vitals.needsYouOptional", { count: needs.optional }) : null,
         ].filter(Boolean).join(" · ")}>
-        {needs.availability !== "ok" ? t("vitals.unavailable") : needs.blocking === null ? "—"
+        {needs.availability !== "ok" ? t("vitals.unavailable") : needs.blocking === null ? "—" : needsEmpty ? t("vitals.needsYouNone")
           : <>{needs.blocking > 0 ? <AlertCircle aria-hidden size={15} /> : null}{needs.blocking}</>}
       </Vital>
       <Vital label={t("vitals.agentTime")} onClick={() => onFocusRegion("usage")} sub={digest.usage.agentTimeMs === null ? undefined : windowLabel}
         help={digest.usage.agentTimeMs === null ? <ContextHelp icon={Clock3} label={`${t("vitals.agentTime")} · ${t("vitals.notMeasured")}`}><p>{t("vitals.notMeasured")}</p></ContextHelp> : undefined}
-        tone={digest.usage.agentTimeMs === null ? "recede" : undefined} valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.agentTimeMs}`}>
-        {digest.usage.agentTimeMs === null ? "—" : formatDurationMs(digest.usage.agentTimeMs)}
+        empty={digest.usage.agentTimeMs === null}
+        valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.agentTimeMs}`}>
+        {digest.usage.agentTimeMs === null ? t("vitals.notMeasured") : formatDurationMs(digest.usage.agentTimeMs)}
       </Vital>
       <Vital label={t("vitals.cost")} onClick={() => onFocusRegion("usage")} sub={digest.usage.costUsd === null ? undefined : windowLabel}
         help={digest.usage.costUsd === null ? <ContextHelp icon={CircleHelp} label={`${t("vitals.cost")} · ${t("vitals.notMeasured")}`}><p>{t("vitals.notMeasured")}</p></ContextHelp> : undefined}
-        tone={digest.usage.costUsd === null ? "recede" : undefined} valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.costUsd}`}>
-        {digest.usage.costUsd === null ? "—" : formatCostUsd(digest.usage.costUsd)}
+        empty={digest.usage.costUsd === null}
+        valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.costUsd}`}>
+        {digest.usage.costUsd === null ? t("vitals.notMeasured") : formatCostUsd(digest.usage.costUsd)}
       </Vital>
       <Vital label={t("vitals.lastActivity")} onClick={() => onFocusRegion("overview")}
         sub={last ? last.actor || t("vitals.turn") : undefined}
-        help={!last ? <ContextHelp icon={Clock3} label={t("vitals.noActivity")}><p>{t("vitals.noActivity")}</p></ContextHelp> : undefined} tone={last ? undefined : "recede"}>
-        {last && lastTime ? lastTime : "—"}
+        help={!last ? <ContextHelp icon={Clock3} label={t("vitals.noActivity")}><p>{t("vitals.noActivity")}</p></ContextHelp> : undefined} empty={!last}
+        tone={last ? undefined : "recede"}>
+        {last && lastTime ? lastTime : t("vitals.noActivity")}
       </Vital>
     </section>
   );

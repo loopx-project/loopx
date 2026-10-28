@@ -4,7 +4,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {canonicalAuthorityJson, canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
-import {reusableTurnContextPaths} from "../capability_hooks.ts";
+import {reusableTurnContext} from "../capability_hooks.ts";
 import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
 
 const VERSION = "context_delivery_v1";
@@ -53,7 +53,7 @@ function parentAt(root: JsonObject, path: Path): Record<string | number, unknown
 /** Registered requirement fields and capability evidence subtrees are reusable. Revisions, source
  * failures, claims, review conclusions, grants, current gates and unknown fields stay fresh.
  * Source-array order is transport layout, never the identity of a requirement. */
-function splitContext(context: JsonObject): Split {
+function splitContext(context: JsonObject, binding: JsonObject): Split {
   const fresh = clone(context), identities = new Set<string>();
   let valid = context.complete === true;
   const add = (identity: string, path: Path, structured = false) => {
@@ -76,7 +76,8 @@ function splitContext(context: JsonObject): Split {
     if (!source || !content || content.ok === false || content.read_complete === false) continue;
     const prefix: Path = ["sources", i, "content"];
     const kind = source.source;
-    const known = ["goal_state", "selected_todo", "goal_acceptance"].includes(String(kind)) || reusableTurnContextPaths(source).length > 0;
+    const reuse = reusableTurnContext(source, binding);
+    const known = ["goal_state", "selected_todo", "goal_acceptance"].includes(String(kind)) || reuse !== null;
     if (known && typeof source.reason === "string") add(`source_reason:${i}`, ["sources", i, "reason"]);
     const readModel = jsonObject(jsonObject(content.authority_read)?.todo_read_model);
     if (kind === "selected_todo" && Array.isArray(readModel?.contract_fields)
@@ -143,10 +144,8 @@ function splitContext(context: JsonObject): Split {
         }
       }
     } else {
-      const paths = reusableTurnContextPaths(source);
-      if (!paths.length) continue;
-      if (content.ok !== true || typeof content.goal_id !== "string" || typeof content.agent_id !== "string") continue;
-      const identity = [kind, source.hook_id, source.capability_id, content.goal_id, content.agent_id, content.todo_id ?? null];
+      if (!reuse) continue;
+      const {identity, paths} = reuse;
       const id = JSON.stringify(identity);
       if (sourceIds.has(id)) { valid = false; continue; }
       sourceIds.add(id);
@@ -189,7 +188,7 @@ const REUSABLE_PACKET_FIELDS = new Set([
 /** Current controls are forced into the change tree even when equal. This avoids
  * duplicating them in both a fresh frame and a patch. Static authoring guidance
  * remains binding via exact reuse; commands, conditions and identity stay fresh. */
-function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[]): {paths: Path[]; valid: boolean} {
+function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[], binding: JsonObject): {paths: Path[]; valid: boolean} {
   const paths: Path[] = [];
   let valid = true;
   const leaves = (value: unknown, path: Path) => {
@@ -201,7 +200,7 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
   const work = (value: unknown, path: Path) => {
     const source = jsonObject(value);
     if (!source) { paths.push(path); return; }
-    const split = splitContext(source); valid &&= split.valid;
+    const split = splitContext(source, binding); valid &&= split.valid;
     leaves(split.fresh, path);
   };
   const vision = (value: unknown, path: Path) => {
@@ -507,7 +506,7 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
       || binding.context_digest !== digest(prior)) return full("baseline_unavailable");
   const depth = baseline?.ancestry;
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return full("full_refresh_due");
-  const before = freshPaths(prior, surface, legacyQuotaFields), after = freshPaths(context, surface, legacyQuotaFields);
+  const before = freshPaths(prior, surface, legacyQuotaFields, binding), after = freshPaths(context, surface, legacyQuotaFields, target);
   if (!before.valid || !after.valid) return full("source_not_reusable");
   const changes = changeTree(prior, context, after.paths);
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
@@ -551,7 +550,7 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
         || !equal(delivery.base, base) || !compatible(base, target) || base.context_digest !== digest(context)
         || !Number.isSafeInteger(baseline.ancestry) || Number(baseline.ancestry) < 0
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
-    const before = freshPaths(context, surface, legacyQuotaFields), after = freshPaths(currentContext, surface, legacyQuotaFields);
+    const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
     if (!before.valid || !after.valid) return fallback();
     const expected = changeTree(context, currentContext, after.paths);
     // Also rejects omitted unchanged controls, redundant/conflicting edits,

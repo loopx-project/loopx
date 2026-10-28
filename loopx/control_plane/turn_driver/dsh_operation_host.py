@@ -8,6 +8,7 @@ SDK stdio ownership and delegates all operation decisions to the existing owner.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from contextlib import ExitStack
 import importlib.metadata
 import json
@@ -17,8 +18,6 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from ...chat_action_store import ChatActionStore
-from ...file_lock import exclusive_file_lock
 from ...dsh_goal_mode.turn_host_adapter import (
     build_result,
     build_sdk_config,
@@ -29,22 +28,10 @@ from ...dsh_goal_mode.turn_host_adapter import (
     terminal_error_reason,
     terminal_output_budget_state,
 )
-from ..collaboration.goal_instance_scope import collaboration_goal_scope
-from ..collaboration.operation_handoff import (
-    agent_operation_action,
-    managed_operation_binding_current,
-    pending_operation_handoffs,
-)
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
-from .codex_operation_host import operation_tool_handler
+from . import managed_operation_host as operations
 from .operation_requests import operation_request_source, request_reference_instruction
-from .codex_sessions import (
-    _lineage,
-    _read_codex_cli_session_document,
-    _session_path,
-    _write_codex_cli_session,
-    select_codex_cli_session,
-)
+from .codex_sessions import _lineage, select_managed_operation_session
 from .dsh_operation_connection import DshOperationConnection
 from .executor import LOOPX_TURN_HOST_REQUEST_SCHEMA_VERSION
 from .host_failure import BuiltInHostError
@@ -86,7 +73,7 @@ def _sdk_runtime_pin(runtime_bin: Path | None = None) -> dict[str, Any]:
                 "@deepseek-ai/dsh": manifest["version"],
             },
             "sdk_files": {
-                str(path): _digest(Path(sdk.locate_file(path)))
+                str(path): _digest(Path(str(sdk.locate_file(path))))
                 for path in sdk.files or ()
                 if str(path).startswith("deepseek_harness/")
                 and str(path).endswith(".py")
@@ -97,7 +84,9 @@ def _sdk_runtime_pin(runtime_bin: Path | None = None) -> dict[str, Any]:
             },
             "npm_closure_sha256": closure.hexdigest(),
         }
-    from deepseek_harness_runtime import resolve_bundled_launch_args
+    # Optional SDK distributions are untyped; their executable/files are pinned
+    # below and exercised through the real native transport qualification.
+    from deepseek_harness_runtime import resolve_bundled_launch_args  # type: ignore
 
     versions = {
         name: importlib.metadata.version(name)
@@ -184,13 +173,13 @@ def _run_dsh_operation_host(
         or not 0 < timeout_seconds <= 600
     ):
         raise ValueError("DSH operation run requires bounded token and time budgets")
-    from deepseek_harness import DeepSeekHarness, DeepSeekHarnessConfig
+    from deepseek_harness import DeepSeekHarness, DeepSeekHarnessConfig  # type: ignore
 
     lineage = _lineage(request)
     module = operation_module.resolve(strict=True)
     patch = cordis.resolve(strict=True) if cordis else None
     request_source = operation_request_source(operation_request_file, operation_request_sha256)
-    profile = {
+    profile: dict[str, Any] = {
         "transport": DSH_OPERATION_TRANSPORT,
         "provider": provider,
         "model": model,
@@ -221,30 +210,12 @@ def _run_dsh_operation_host(
     profile_digest = hashlib.sha256(
         json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    original = _read_codex_cli_session_document(runtime_root, lineage=lineage)
-    binding = select_codex_cli_session(
-        runtime_root, lineage=lineage, host="dsh", goal_admission=goal_admission
+    selection = select_managed_operation_session(
+        runtime_root, request=request, lineage=lineage, host="dsh",
+        transport=DSH_OPERATION_TRANSPORT, profile_digest=profile_digest, model=model,
+        reasoning_effort=reasoning_effort, goal_admission=goal_admission,
     )
-    session_plan = request.get("session") or {}
-    fresh = (session_plan.get("context_policy") or {}).get("mode") == "fresh"
-    if fresh:
-        binding = None
-    elif original is not None and binding is None:
-        raise ValueError(
-            "existing session is not a qualified DSH operation binding; select fresh explicitly"
-        )
-    action = session_plan.get("action")
-    if action not in {"start_new", "resume"} or (action == "resume") != (
-        binding is not None
-    ):
-        raise ValueError("managed DSH session changed after Turn planning")
-    if binding and (
-        binding.get("operation_transport") != DSH_OPERATION_TRANSPORT
-        or binding.get("operation_profile_digest") != profile_digest
-    ):
-        raise ValueError(
-            "DSH operation profile changed; select fresh and obtain fresh approval"
-        )
+    binding = selection.binding
     can_restore = profile["runtime"]["versions"]["deepseek-harness-sdk"] == "0.2.1a3"
     if binding and owner.session_id is None and not can_restore:
         raise ValueError(
@@ -253,55 +224,24 @@ def _run_dsh_operation_host(
     session_id = binding["session_id"] if binding else "loopx-dsh-" + uuid.uuid4().hex
     if owner.session_id is not None and owner.session_id != session_id:
         raise ValueError("an owned DSH connection cannot switch session identity")
-    route = {
-        **lineage,
-        "host_surface": "loopx-managed-dsh",
-        "thread_id": session_id,
-        "profile_digest": profile_digest,
-    }
-    store = ChatActionStore(runtime_root / "chat" / "actions")
-    if confirmed_operation_id is not None:
-        from ..collaboration.operation_wake import require_current_operation_scope
-
-        proposal = store.load(confirmed_operation_id)
-        if proposal is None or binding is None or action != "resume":
-            raise ValueError("confirmed operation requires the original DSH session")
-        parameters = proposal["normalized_parameters"]
-        require_current_operation_scope(registry_path, parameters)
-        store._agent_operation_plan(
-            proposal,
-            action="wake",
-            binding_current=managed_operation_binding_current(runtime_root, parameters),
-            launch_context={
-                "host": "dsh",
-                "operation_tools": True,
-                "iteration_context": (session_plan.get("context_policy") or {}).get(
-                    "mode"
-                ),
-            },
-            executor_route={
-                **route,
-                "model": model,
-                "reasoning_effort": reasoning_effort,
-            },
-        )
+    route = operations.operation_executor_route(
+        lineage, host="dsh", session_id=session_id, profile_digest=profile_digest,
+    )
+    operations.require_confirmed_operation_resume(
+        runtime_root=runtime_root, registry_path=registry_path, request=request,
+        lineage=lineage, binding=binding, host="dsh", profile_digest=profile_digest,
+        model=model, reasoning_effort=reasoning_effort,
+        confirmed_operation_id=confirmed_operation_id,
+    )
     continuations: list[dict[str, Any]] = []
 
     def native_start(host_turn_id: str) -> None:
-        for locator in continuations:
-            agent_operation_action(
-                runtime_root,
-                registry_path,
-                proposal_id=locator["operation_id"],
-                actor={
-                    **route,
-                    "model": model,
-                    "reasoning_effort": reasoning_effort,
-                    "host_turn_id": host_turn_id,
-                },
-                action="observe_host_start",
-                turn_key=request["turn_key"],
-            )
+        operations.record_operation_start(
+            runtime_root=runtime_root, registry_path=registry_path,
+            continuations=continuations, route=route, model=model,
+            reasoning_effort=reasoning_effort, host_turn_id=host_turn_id,
+            turn_key=request["turn_key"],
+        )
 
     native_profile = {
         "provider": provider,
@@ -351,7 +291,7 @@ def _run_dsh_operation_host(
     process = getattr(harness.client, "_proc", None)
     if process is None or process.poll() is not None:
         raise ValueError("SDK owned process handle is unavailable")
-    handler = operation_tool_handler(
+    handler = operations.operation_tool_handler(
         runtime_root=runtime_root,
         registry_path=registry_path,
         lineage=lineage,
@@ -367,60 +307,12 @@ def _run_dsh_operation_host(
             if request_source is not None else None),
     )
 
-    def store_binding() -> None:
-        with exclusive_file_lock(_session_path(runtime_root, lineage)):
-            if (
-                _read_codex_cli_session_document(runtime_root, lineage=lineage)
-                != original
-            ):
-                raise ValueError("DSH binding changed during SDK initialization")
-            _write_codex_cli_session(
-                runtime_root,
-                lineage=lineage,
-                host="dsh",
-                session_id=session_id,
-                goal_ref=request.get("goal_ref"),
-                operation_profile_digest=profile_digest,
-                operation_model=model,
-                operation_reasoning_effort=reasoning_effort,
-            )
-
-    if goal_admission is None:
-        store_binding()
-    else:
-        goal_admission.accept_result(store_binding)
+    selection.store(session_id)
     owner.handler = handler
-    with collaboration_goal_scope(
-        registry_path,
-        goal_id=lineage["goal_id"],
-        agents=(lineage["agent_id"],),
-        caller_goal_ref=request.get("goal_ref"),
-        require_active=True,
-    ) as scope:
-        pending = pending_operation_handoffs(
-            runtime_root,
-            lineage["goal_id"],
-            lineage["agent_id"],
-            registry_path=registry_path,
-            scope=scope,
-            executor_route=route,
-            cursor_scope=hashlib.sha256(
-                json.dumps(route, sort_keys=True).encode()
-            ).hexdigest(),
-        )
-    continuations.extend(
-        {
-            key: item[key]
-            for key in (
-                "operation_id",
-                "payload_digest",
-                "confirmation_digest",
-                "claim_id",
-            )
-        }
-        for item in pending["items"]
-        if item["status"] == "authorized_pending"
-    )
+    continuations.extend(operations.operation_continuations(
+        runtime_root=runtime_root, registry_path=registry_path, lineage=lineage,
+        route=route, goal_ref=request.get("goal_ref"),
+    ))
 
     def observe(notification: Any) -> None:
         connection.observe(notification)
@@ -470,7 +362,7 @@ class OwnedDshOperationHost:
         self.connection: DshOperationConnection | None = None
         self.harness: Any = None
         self.session_id: str | None = None
-        self.handler: Any = None
+        self.handler: Callable[[str, Any, dict[str, Any]], dict[str, Any]] | None = None
         self.on_start: Any = None
         self._entered = False
         self._lock = threading.Lock()

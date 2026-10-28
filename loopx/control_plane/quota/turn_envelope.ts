@@ -1,4 +1,5 @@
-import { EffectiveAction } from "./effective_action.generated.ts";
+import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
+import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
@@ -219,6 +220,92 @@ function canonicalHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(canonicalValue(value)), "utf8").digest("hex")}`;
 }
 
+function resolveExploreGuidance(payload: JsonObject, context: JsonObject): JsonObject {
+  if (!Array.isArray(context.sources)) return context;
+  const steps = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).ordered_steps;
+  return {...context, sources: context.sources.map(value => {
+    const source = object(value), content = object(source.content), graph = object(content.graph);
+    if (source.kind !== "explore_turn_context" || !Object.hasOwn(graph, "result_writeback_guidance_ref")) return value;
+    const reference = graph.result_writeback_guidance_ref;
+    const match = typeof reference === "string"
+      ? /^\$\.interaction_contract\.cli_channel\.settlement_plan\.ordered_steps\[(0|[1-9]\d*)\]\.optional_attachments\[(0|[1-9]\d*)\]\.guidance$/.exec(reference) : null;
+    const step = object(match && Array.isArray(steps) ? steps[Number(match[1])] : null);
+    const attachment = object(match && Array.isArray(step.optional_attachments)
+      ? step.optional_attachments[Number(match[2])] : null);
+    if (Object.hasOwn(graph, "result_writeback_guidance") || step.kind !== "durable_writeback" ||
+        attachment.capability_id !== "explore" || Object.hasOwn(attachment, "guidance_ref") ||
+        typeof attachment.guidance !== "string" || !attachment.guidance) {
+      throw new EffectRuntimeRequestError("Explore guidance reference must resolve to one inline durable-writeback Explore attachment");
+    }
+    delete graph.result_writeback_guidance_ref;
+    return {...source, content: {...content, graph: {...graph, result_writeback_guidance: attachment.guidance}}};
+  })};
+}
+
+function referenceExploreGuidance(payload: JsonObject): JsonObject {
+  const interaction = object(payload.interaction_contract), agent = object(interaction.agent_channel);
+  const context = object(agent.work_context);
+  resolveExploreGuidance(payload, context); // Validate existing references, including idempotent reads.
+  if (!Array.isArray(context.sources)) return payload;
+  const steps = object(object(interaction.cli_channel).settlement_plan).ordered_steps;
+  if (!Array.isArray(steps)) return payload;
+  const owners = new Map<string, string>();
+  steps.forEach((value, stepIndex) => {
+    const step = object(value);
+    if (step.kind !== "durable_writeback" || !Array.isArray(step.optional_attachments)) return;
+    step.optional_attachments.forEach((value, attachmentIndex) => {
+      const attachment = object(value), guidance = attachment.guidance;
+      if (attachment.capability_id !== "explore" || Object.hasOwn(attachment, "guidance_ref") ||
+          typeof guidance !== "string" || !guidance || owners.has(guidance)) return;
+      owners.set(guidance, `$.interaction_contract.cli_channel.settlement_plan.ordered_steps[${stepIndex}].optional_attachments[${attachmentIndex}].guidance`);
+    });
+  });
+  const sources = context.sources.map(value => {
+    const source = object(value), content = object(source.content), graph = object(content.graph);
+    const guidance = graph.result_writeback_guidance;
+    const reference = typeof guidance === "string" ? owners.get(guidance) : undefined;
+    if (source.kind !== "explore_turn_context" || typeof guidance !== "string" || !reference ||
+        Buffer.byteLength(JSON.stringify(guidance), "utf8") <= Buffer.byteLength(reference, "utf8") + 8) return value;
+    delete graph.result_writeback_guidance;
+    return {...source, content: {...content, graph: {...graph, result_writeback_guidance_ref: reference}}};
+  });
+  return {...payload, interaction_contract: {...interaction, agent_channel: {...agent,
+    work_context: {...context, sources}}}};
+}
+
+function currentTaskTitleOwner(payload: JsonObject): {index: number; todo: JsonObject} | null {
+  const lane = object(payload.agent_lane_next_action), selected = object(payload.selected_todo);
+  const context = object(object(object(payload.interaction_contract).agent_channel).work_context);
+  if (context.complete !== true || context.selected_todo_text_verified !== true ||
+      typeof lane.todo_id !== "string" || !lane.todo_id || selected.todo_id !== lane.todo_id ||
+      !Array.isArray(context.sources)) return null;
+  const matches = context.sources.map((value, index) => ({source: object(value), index}))
+    .filter(({source}) => source.source === "selected_todo");
+  if (matches.length !== 1) return null;
+  const {source, index} = matches[0], content = object(source.content), todo = object(content.todo);
+  if (content.ok !== true || content.matched !== true || content.ambiguous === true ||
+      content.read_complete === false || typeof todo.text !== "string" ||
+      todo.archive_state === "archive" || todo.status === "done" || todo.todo_id !== lane.todo_id) return null;
+  return {index, todo};
+}
+
+function referenceCurrentTaskTitle(payload: JsonObject): JsonObject {
+  const lane = object(payload.agent_lane_next_action), title = lane.title;
+  // Preserve historical caller-owned references; complete readers validate them
+  // separately. Display-only omission of a title already in a label stays local.
+  if (typeof title !== "string" || Object.hasOwn(lane, "title_ref")) return payload;
+  const owner = currentTaskTitleOwner(payload);
+  if (!owner) return payload;
+  for (const field of ["text", "title"]) {
+    if (owner.todo[field] !== title || Object.hasOwn(owner.todo, `${field}_ref`)) continue;
+    const reference = `$.interaction_contract.agent_channel.work_context.sources[${owner.index}].content.todo.${field}`;
+    if (Array.from(JSON.stringify(title)).length <= reference.length + 8) return payload;
+    delete lane.title;
+    return {...payload, agent_lane_next_action: {...lane, title_ref: reference}};
+  }
+  return payload;
+}
+
 function compactFields(
   value: unknown,
   fields: readonly string[],
@@ -355,6 +442,7 @@ function replanGoalContext(payload: JsonObject, reads: JsonObject | null, coreRe
  * Different revisions, other source fields and unavailable context stay intact.
  */
 function replanWorkContext(payload: JsonObject, context: JsonObject): JsonObject {
+  context = resolveExploreGuidance(payload, context);
   const reads = replanReadCommands(payload);
   const core = object(object(object(payload.autonomous_replan_obligation).replan_context).core_goal);
   const acceptance = object(core.acceptance_contract);
@@ -1232,6 +1320,88 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   return bound;
 }
 
+// Explicit coverage of the registered decision/frontier union. New actions
+// require a deliberate classification; unknown historical values retain Host routing.
+export const TURN_ACTION_ROUTES = {
+  [EffectiveAction.AGENT_WORKSPACE_REPAIR]: "repair_required",
+  [EffectiveAction.BOUNDARY_PROJECTION_REPAIR]: "repair_required",
+  [EffectiveAction.CAPABILITY_BRIDGE_REPAIR]: "repair_required",
+  [EffectiveAction.CONTROL_PLANE_HEALTH_REPAIR]: "repair_required",
+  [EffectiveAction.CONTROL_PLANE_PROJECTION_REPAIR]: "repair_required",
+  [EffectiveAction.CONTROL_PLANE_REPAIR]: "repair_required",
+  [EffectiveAction.RUNTIME_USER_GATE_PROJECTION_REPAIR]: "repair_required",
+  [EffectiveAction.STATE_PROJECTION_GAP_REPAIR]: "repair_required",
+  [EffectiveAction.TODO_DECISION_SCOPE_PROJECTION_REPAIR]: "repair_required",
+  [EffectiveAction.AGENT_MONITOR_ONLY]: "ready_for_host",
+  [EffectiveAction.AUTOMATION_PROMPT_UPGRADE_REQUIRED]: "ready_for_host",
+  [EffectiveAction.BLOCKED_HEALTH]: "ready_for_host",
+  [EffectiveAction.BLOCKED_WAIT]: "ready_for_host",
+  [EffectiveAction.COORDINATE_TASK_BUNDLE]: "ready_for_host",
+  [EffectiveAction.EXTERNAL_EVIDENCE_OBSERVE]: "ready_for_host",
+  [EffectiveAction.HEARTBEAT_RECEIPT_WRITE_FAILED]: "ready_for_host",
+  [EffectiveAction.HEARTBEAT_SETTLED_SKIP]: "ready_for_host",
+  [EffectiveAction.LARK_INBOX_REPLY_DUE]: "ready_for_host",
+  [EffectiveAction.MONITOR_DUE]: "ready_for_host",
+  [EffectiveAction.MONITOR_QUIET_SKIP]: "ready_for_host",
+  [EffectiveAction.NORMAL_RUN]: "ready_for_host",
+  [EffectiveAction.OPERATOR_GATE_NOTIFY]: "ready_for_host",
+  [EffectiveAction.OPERATOR_INBOX_MATERIAL_REVIEW_DUE]: "ready_for_host",
+  [EffectiveAction.OUTCOME_FLOOR_RECOVERY]: "ready_for_host",
+  [EffectiveAction.PEER_COORDINATION_BLOCKED]: "ready_for_host",
+  [EffectiveAction.QUOTA_SKIP]: "ready_for_host",
+  [EffectiveAction.SCOPED_USER_GATE_FALLBACK]: "ready_for_host",
+  [EffectiveAction.TERMINAL_NO_FOLLOWUP]: "ready_for_host",
+  [EffectiveAction.THROTTLED_SKIP]: "ready_for_host",
+  [EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY]: "ready_for_host",
+  [EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED]: "replan_required",
+  [EffectiveAction.GOVERNED_CAPABILITY_INTENT]: "capability_action_required",
+  agent_scope_exhausted: "ready_for_host",
+  agent_scope_wait: "ready_for_host",
+  reassignment_required: "ready_for_host",
+  autonomous_replan: "replan_required",
+  successor_replan_required: "replan_required",
+} satisfies Record<QuotaEffectiveActionValue | "autonomous_replan" | "successor_replan_required", LoopXTurnRouteValue>;
+
+/** Route one admitted input, independent of controller continuation/budget policy. */
+export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObject): LoopXTurnRouteValue {
+  const signature = object(envelope.action_signature);
+  // The historical Python reader treats false/zero/null as an empty hash and
+  // renders scalar booleans with Python spelling. Valid hashes remain strings.
+  const sourceHash = scalarString(historicalText ? historicalText.source_hash : signature.source_hash || "", "route source hash");
+  const envelopeHash = scalarString(historicalText ? historicalText.envelope_hash : signature.envelope_hash || "", "route envelope hash");
+  if (signature.matches !== true || !sourceHash || sourceHash !== envelopeHash) return "contract_error";
+  // Size diagnostics grant no authority and do not veto a valid contract.
+  const action = object(envelope.action);
+  if (envelope.should_run === true) {
+    if (action.must_attempt !== true) return "blocked";
+    const name = scalarString(historicalText ? historicalText.effective_action : envelope.effective_action || "", "route effective action");
+    const route = Object.hasOwn(TURN_ACTION_ROUTES, name)
+      ? TURN_ACTION_ROUTES[name as keyof typeof TURN_ACTION_ROUTES] : "ready_for_host";
+    if (route === "replan_required") {
+      try { turnEnvelopeReplanSettlementIdentity(envelope); }
+      catch (error) {
+        if (!(error instanceof EffectRuntimeRequestError)) throw error;
+        return "contract_error";
+      }
+      return "replan_required";
+    }
+    if (action.delivery_allowed !== true) return "blocked";
+    if (route === "capability_action_required") {
+      const intent = object(action.capability_intent), command = intent.command;
+      // Preserve empty-container falsiness from historical Python inputs.
+      const hasCommand = Array.isArray(command) ? command.length > 0
+        : command !== null && typeof command === "object" ? Object.keys(command).length > 0 : Boolean(command);
+      if (intent.schema_version !== "pending_capability_intent_projection_v0"
+          || (intent.goal_id ?? null) !== (envelope.goal_id ?? null)
+          || (intent.agent_id ?? null) !== (envelope.agent_id ?? null) || !hasCommand) return "contract_error";
+      return "capability_action_required";
+    }
+    return route === "repair_required" ? "repair_required" : "ready_for_host";
+  }
+  if (object(envelope.user).action_required === true) return "user_action_required";
+  return action.quiet_noop_allowed === true ? "wait" : "blocked";
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
@@ -1268,9 +1438,27 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
   }
+  if (operation === "driver_route") return {route: turnEnvelopeRoute(requireJsonObject(request.envelope, "Turn route envelope"),
+    request.historical_route_text === undefined ? undefined : requireJsonObject(request.historical_route_text, "historical route text"))};
+  if (operation === "driver_lineage") {
+    const envelope = requireJsonObject(request.envelope, "Turn driver envelope");
+    return {route: turnEnvelopeRoute(envelope, request.historical_route_text === undefined
+      ? undefined : requireJsonObject(request.historical_route_text, "historical route text")),
+      action_signature: turnEnvelopeActionSignatureDocument(envelope)};
+  }
+  if (operation === "build_controller_input") {
+    const envelope = buildTurnEnvelope(request);
+    return {envelope, route: turnEnvelopeRoute(envelope)};
+  }
   if (operation === "consumer_version") {
     assertTurnEnvelopeConsumerVersion(requireJsonObject(request.envelope, "turn_envelope"));
     return {ok: true};
+  }
+  if (operation === "reference_context") {
+    let payload = requireJsonObject(request.payload, "quota decision");
+    if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
+    if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
+    return payload;
   }
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

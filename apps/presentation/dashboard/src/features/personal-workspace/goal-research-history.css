@@ -276,8 +276,11 @@
 .research-reading-order { display: flex; align-items: center; gap: 12px; border-block-end: 1px solid var(--pw-line); padding-block: 0 8px; margin-block-end: 8px; }
 .research-reading-order button { min-height: 44px; padding: 6px 0; background: none; border: 0; color: var(--pw-text); font: inherit; font-size: var(--text-body); cursor: pointer; }
 .research-reading-order > span { color: var(--pw-muted); }
+.research-reading-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); align-items: start; gap: 24px 40px; margin-block: 16px 32px; }
+.research-reading-overview.is-expanded { grid-template-columns: minmax(0, 1fr); }
 .research-reading-layer { min-width: 0; scroll-margin-block-start: 16px; }
-.research-reading-layer .research-synthesis:not(.research-synthesis-detail) { margin-block: 24px 32px; }
+.research-reading-overview .research-synthesis:not(.research-synthesis-detail), .research-reading-overview .research-progress { margin-block: 0; }
+.research-reading-overview .research-progress { padding-block-start: 0; }
 .research-reading-layer:focus, .research-history-heading:focus { outline: none; }
 
 @media (max-width: 640px) {
