@@ -2375,6 +2375,25 @@ validation still belongs to the later Todo completion. A settled Turn for a sele
 planning obligation cannot compete with its later work admission. Ordinary
 progress and completed Todos retain their original-Turn recovery paths.
 
+Checkpoint artifact paths may use an alias of the same physical runtime
+directory. New records use physical paths before their record/index projections
+are constructed; replay verifies historical aliases without rewriting their
+stored paths or fingerprints. The owner resolves the parent directory only,
+rejects symbolic-link artifact leaves and external directories, and retains the original
+identity, lock witnesses and provider fence. A replaced directory cannot supply
+the admitted append merely by containing identical bytes.
+
+A required direction checkpoint and a selected semantic-replan obligation are
+separate conditions. A current evidence-backed Vision can support a freshly
+judged unchanged decision; it cannot discharge a pending selected replan without
+the existing typed semantic evidence. Once that obligation is accepted and
+settled, a later work Turn does not inherit it. Todo validation and whole-Goal
+terminal checks still apply independently.
+
+An explicit retained-candidate reread through MCP restores the admitted original
+Turn before running its guard. A missing original admission cannot be repaired
+by starting another work identity.
+
 ### 中文：方向停止与原 Turn 显式恢复
 
 方向 Host 返回 `wait`、`user_action_required` 或 `iteration_failed` 后，保留成果，
@@ -2389,3 +2408,16 @@ progress and completed Todos retain their original-Turn recovery paths.
 待补的 checkpoint 不等于语义 delta 已接受，也不允许提前扣额；新补充判断仍须
 验收原义务。新 Todo 的完成验证仍在其原有完成门执行。已结算且已验收所选规划义务的 Turn
 不再与后续实际工作竞争；普通进度和已完成 Todo 仍保留原 Turn 恢复路径。
+
+checkpoint 工件允许使用同一物理 runtime 目录的别名。新记录在构造 record/index
+前生成物理路径；历史重放只验证别名，不改写原路径或摘要。owner 只解析父目录，
+继续拒绝工件叶子的符号链接和外部目录，保留原身份、锁见证和 provider fence；目录被
+替换后，即使字节相同，也不能冒充原先准入的追加目标。
+
+必需方向 checkpoint 与当前 Turn 选中的语义重规划义务分别判断。当前且关联证据的
+Vision 可以支持新读取后的 unchanged 判断，但不能替代 pending 重规划义务需要的
+typed semantic evidence。该义务验收并结算后，不会被自动施加给后续工作 Turn；
+Todo 验证和全 Goal 终态检查仍各自执行。
+
+MCP 显式重读保留候选时，先恢复已准入的原 Turn，再执行 guard；缺失的原准入
+不能通过新建另一工作身份补齐。
