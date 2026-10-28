@@ -156,7 +156,11 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
             "crowded": {"json": 42_000, "markdown": 10_500},
             # Matched canonical base/head both emit 24,820 JSON characters.
-            "multi_agent": {"json": 25_500, "markdown": 7_000},
+            # Re-measured on the same fixture after #7557 preserved capability
+            # candidates on the hot path: 24,925 -> 25,836 JSON characters
+            # (+911). Markdown is unchanged at 6,439. Raise only this ceiling;
+            # per-Todo/fixed growth and every other surface stay unchanged.
+            "multi_agent": {"json": 27_000, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 190},
