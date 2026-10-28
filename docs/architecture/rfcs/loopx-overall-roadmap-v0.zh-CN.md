@@ -155,6 +155,11 @@ C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-�
 共享 capture 不表示这些消费者已统一。资格检查须追踪来源义务经过组合、重建到实际
 最终输入；新准入切换与历史回执重放分别处理。
 
+[C1 打包 heartbeat 检查点](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.zh-CN.md)
+在隔离 File/SQLite 保留必读来源及同 capture 结算语义，但交付字节增加，全部 peer
+补读另增成本。继续在原 C1 的共享 typed owner 收敛诊断压缩，保留未知字段与义务，
+再做原 quota 基线对照；这不是默认提升或完整成本正向资格。
+
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback
 及退役。App heartbeat 流程和实际 benchmark 消费者分别验收；managed Codex 可以作为

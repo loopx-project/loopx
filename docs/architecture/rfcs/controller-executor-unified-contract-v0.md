@@ -1590,7 +1590,7 @@ For an unhealthy-paused synthetic source, the original CLI projection frozen at
 win. Tokens/cache, latency, extra reads, framing and accepted outcomes remain
 unmeasured for this case. No live model experiment is implied by these checks.
 
-The shared-owner prerequisite is independently reviewable in #7457. Its
+The shared reference owner is merged in #7457. Its
 Task-title and Explore operations use one coarse legacy projection call; complete
 composition reuses those same functions inside its existing call. The integration
 branch absorbs the prerequisite commits rather than carrying a copied owner.
@@ -1599,6 +1599,14 @@ predecision diagnostic only; it no longer falls back to legacy packet/envelope
 projection. Historical capture recovery remains explicit. Component measurements
 show reduced bridge cost versus two calls, but higher cost than the original
 Python projection; this is not evidence of a positive full-path quota comparison.
+
+The [packaged heartbeat comparison](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md)
+now exercises real isolated File/SQLite CLI cold, warm and same-capture recovery
+against original quota. Necessary source/replay checks pass, but default context
+and total stdout grow; expanding all peer outcomes adds reads and cost. No positive
+complete-cost diff or model benefit is qualified. The existing C1 continuation is
+shared typed diagnostic compaction with unknown-field and obligation preservation,
+followed by the same comparison. This does not promote the candidate by default.
 
 Report the field/clause diff and its decision consequence together with actual
 model input, cached/uncached tokens, added reads/round trips, reconstruction,

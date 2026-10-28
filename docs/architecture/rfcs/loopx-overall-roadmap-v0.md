@@ -202,6 +202,13 @@ host prompts. A common capture does not unify those consumers. Qualification
 checks source obligations through composition, reconstruction and actual final
 input; new-admission cutover stays separate from historical receipt replay.
 
+The [packaged C1 heartbeat checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md)
+preserves required source and same-capture settlement semantics on isolated
+File/SQLite, but delivered bytes grow and all-peer expansion adds cost. Continue
+within C1 by converging diagnostic compaction in its shared typed owner, preserving
+unknowns and obligations, then repeat the quota-baseline comparison. This is no
+default promotion or positive complete-cost qualification.
+
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,
 replan/result authoring, executor exchange, benchmark reuse, packaged App
