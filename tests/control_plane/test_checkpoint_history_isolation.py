@@ -18,6 +18,76 @@ from tests.test_goal_mode_mcp_settlement import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_growing_settled_backend_history_uses_one_observation_batch(provider, tmp_path, monkeypatch):
+    import tempfile
+    from loopx.control_plane.goals import checkpoint_context_io as io
+
+    # A distinct real Effect process inherits this test-only IO probe before
+    # any production handler is imported. It never touches an active Goal.
+    transport = tmp_path / "observation-transport"
+    transport.mkdir()
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(key, str(transport))
+    monkeypatch.setattr(tempfile, "tempdir", str(transport))
+    probe = Path(__file__).resolve().parents[1] / "control_plane_ts/first_delivery_observation_probe.mjs"
+    sink = tmp_path / "observed-reads.txt"
+    monkeypatch.setenv("NODE_OPTIONS", "--import=" + probe.as_uri())
+    monkeypatch.setenv("LOOPX_OBSERVATION_TEST_READS", str(sink))
+    monkeypatch.setenv("LOOPX_OBSERVATION_TEST_GOAL", GOAL_ID)
+    registry, _, first_todo = _fixture(provider, tmp_path, monkeypatch)
+    for count in range(1, 6):
+        peer = AGENT_ID if count == 1 else f"history-peer-{count}"
+        if count == 1:
+            control = _control(registry)
+            todo_id = first_todo
+        else:
+            registration = json.loads(registry.read_text(encoding="utf-8"))
+            registration["goals"][0]["coordination"]["registered_agents"].append(peer)
+            registry.write_text(json.dumps(registration), encoding="utf-8")
+            todo_id = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent", claimed_by=peer,
+                text="Verify an independent retained candidate.", task_class="advancement_task",
+                continuation_policy="same_agent_non_delivery")["todo_id"]
+            rc, baseline = _run_cli(registry, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", peer,
+                "--vision-summary", "Verify the independent route.", "--vision-acceptance", "Verified candidate.",
+                "--no-global-sync", "--suppress-external-sinks")
+            assert rc == 0, baseline
+            control = GoalModeMCPControlPlane(GoalModeMCPConfig(server_name="history-probe",
+                runtime_profile="claude_code", legacy_host_surface="claude_code"),
+                lambda: {"goal_id": GOAL_ID, "registry": str(registry), "agent_id": peer})
+            control.command_prefix = lambda: [sys.executable, "-m", "loopx.cli"]
+        args = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", peer,
+            "--todo-id", todo_id, "--runtime-profile", "claude_code",
+            "--turn-instance-id", f"history-original-turn-{count}")
+        rc, guard = _run_cli(registry, *args)
+        assert rc == 0 and "delivery_result_context" in guard, {key: guard.get(key) for key in
+            ("ok", "error", "effective_action", "should_run", "selected_todo")}
+        rc, selected = _run_cli(registry, *args)
+        assert rc == 0 and selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True, selected
+        identity = guard["delivery_result_context"]["settlement_identity"]
+        completed = json.loads(_complete_default_task(control, identity["todo_id"], peer,
+            "Synthetic candidate independently verified.", next_agent_todo=f"Verify the next candidate after delivery {count}."))
+        assert completed.get("settlement_complete") is True, completed
+        if count not in (1, 3, 5):
+            continue
+        calls = []
+        effect = io._checkpoint_effect
+
+        def observe(method, request):
+            calls.append(method)
+            return effect(method, request)
+
+        sink.write_text("")
+        with monkeypatch.context() as patch:
+            patch.setattr(io, "_checkpoint_effect", observe)
+            assert pending_first_delivery_progress(tmp_path / "runtime", GOAL_ID,
+                registry_path=registry) is None
+        assert calls == ["turn.first_delivery.observe"]
+        reads = sink.read_text().splitlines()
+        assert reads.count("index") == 2
+        assert reads.count("rollout") == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("purpose", ["first_delivery", "delivery_result"])
 def test_settled_peer_read_damage_preserves_independent_delivery(provider, purpose, tmp_path, monkeypatch):
     registry, _, first_todo = _fixture(provider, tmp_path, monkeypatch)

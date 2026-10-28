@@ -90,7 +90,7 @@ elif FAULT=='dispatch':
 elif FAULT in {'response','bound_response'}:
     original=cp._checkpoint_effect
     def lose(method,params):
-        response=params.get('phase')=='direction_response'
+        response=params.get('phase')=='direction_return'
         if response and FAULT=='response': os._exit(97)
         value=original(method,params)
         if response and value.get('ok') and FAULT=='bound_response': os._exit(97)
