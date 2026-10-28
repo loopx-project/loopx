@@ -1434,7 +1434,6 @@ def _typed_settlement_stage(
     )
 
 
-@single_executor_per_turn_lane(execution_payload)
 def _prepare_host_invocation(
     plan: Mapping[str, Any], *, host_argv: Sequence[str] | None,
     host_runner: HostRunner | None,
@@ -1449,6 +1448,7 @@ def _prepare_host_invocation(
     return None, {"executable": "built-in", "kind": str(planned_host.get("kind") or "codex-cli")}
 
 
+@single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
     *,
