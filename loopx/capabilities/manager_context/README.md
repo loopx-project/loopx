@@ -182,10 +182,19 @@ Goal visibility are checked before and after reading. Original-Chat delivery
 and explicit peer-return consumption remain different receipt paths. The list
 does not mark reads, accept work, start an Agent or certify an overall outcome.
 Unreadable/missing sources and incomplete scans keep counts visibly partial.
+When the typed lifecycle proves a matching original source/route but finds a
+conflicting handoff receipt, coverage includes at most 12 diagnostic
+request/Goal/Agent identities. This is a refusal readback, not a readable brief,
+cancellation or completion. The App's warning glyph exposes that cause on demand;
+other unreadable sources remain unknown. Refresh rechecks the original owners;
+the read neither repairs historical receipts nor grants execution/return authority.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
+具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
+核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current

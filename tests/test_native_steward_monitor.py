@@ -395,13 +395,42 @@ def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
     return sid, actor, monitor.current(actor)["todo_id"], failed
 
 
+def identity_refused_watch(steward, tmp_path, monkeypatch, provider):
+    import loopx.chat_manager_context as context_owner
+    store, runtime, source, transport, *_ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    transport.reconcile()
+    collect = context_owner.collect_manager_turn_context
+
+    def fail_during_collection(*args, **kwargs):
+        # Admission and scope collection verify the provider. Fail the later
+        # commission-evidence read before the host publishes its context.
+        context = collect(*args, **kwargs)
+        source.bot_ready = False
+        return context
+
+    try:
+        with monkeypatch.context() as changed:
+            changed.setattr(context_owner, "collect_manager_turn_context", fail_during_collection)
+            failed = finish(runtime, pump_steward_monitors(runtime)[0])
+    finally:
+        source.bot_ready = True
+    assert failed["status"] == "failed"
+    assert failed["error"] == "the selected App identity could not be verified"
+    events = store.events_after(sid, failed["turn_id"], None)
+    assert [row["kind"] for row in events] == ["turn.queued", "agent.phase", "turn.failed"]
+    return sid, actor, monitor.current(actor)["todo_id"], failed
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_scope_refusal_is_automatically_reobserved_once_after_host_reopen(steward, tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("failure", ["authorization", "identity"])
+def test_refused_watch_is_automatically_reobserved_once_after_host_reopen(steward, tmp_path, monkeypatch, provider, failure):
     import json
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore
     store, runtime, _, transport, _, capture, _ = steward
-    sid, actor, todo_id, failed = scope_refused_watch(steward, tmp_path, monkeypatch, provider)
+    refused = scope_refused_watch if failure == "authorization" else identity_refused_watch
+    sid, actor, todo_id, failed = refused(steward, tmp_path, monkeypatch, provider)
     retained = store._turn_path(sid, failed["turn_id"]).read_bytes()
     before = local_watch_row(runtime, actor, todo_id)
     calls, writes, used = capture.read_bytes(), list(steward[2].writes), spent_slots(StewardMonitor(runtime), actor)
@@ -442,6 +471,49 @@ def test_scope_refusal_is_automatically_reobserved_once_after_host_reopen(stewar
     finally:
         wake.close()
         reopened.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["missing_phase", "different_phase", "duplicate_phase", "context_present",
+    "different_error", "provider_unavailable", "retry_fails"])
+def test_identity_refusal_requires_original_collector_evidence_and_current_provider(steward, tmp_path, monkeypatch, provider, fault):
+    import json
+    store, runtime, source, _, _, capture, _ = steward
+    sid, actor, todo_id, failed = identity_refused_watch(steward, tmp_path, monkeypatch, provider)
+    path = store._event_path(sid, failed["turn_id"])
+    if fault in {"missing_phase", "different_phase", "duplicate_phase"}:
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        phase = next(row for row in rows if row["kind"] == "agent.phase")
+        if fault == "missing_phase":
+            rows.remove(phase)
+        elif fault == "different_phase":
+            phase["payload"]["phase"] = "model_start"
+        else:
+            rows.append(phase)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    elif fault == "context_present":
+        store.append_event(sid, failed["turn_id"], kind="manager.context", payload={"unknown": True})
+    elif fault == "different_error":
+        store.update_turn(sid, failed["turn_id"], error="Unknown failure before context.")
+    elif fault == "provider_unavailable":
+        source.bot_ready = False
+    elif fault == "retry_fails":
+        def unavailable(*_args, **_kwargs):
+            raise OSError("Source unavailable in the one continuation.")
+        monkeypatch.setattr(StewardMonitor, "_commit_poll", unavailable)
+    retained = store._turn_path(sid, failed["turn_id"]).read_bytes()
+    watch, calls, writes = local_watch_row(runtime, actor, todo_id), capture.read_bytes(), list(source.writes)
+    runtime._steward_monitor_next_check.clear()
+    continued = pump_steward_monitors(runtime)
+    if fault == "retry_fails":
+        assert len(continued) == 1 and finish(runtime, continued[0])["status"] == "failed"
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+    else:
+        assert continued == []
+    assert store._turn_path(sid, failed["turn_id"]).read_bytes() == retained
+    assert local_watch_row(runtime, actor, todo_id) == watch
+    assert capture.read_bytes() == calls and source.writes == writes
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

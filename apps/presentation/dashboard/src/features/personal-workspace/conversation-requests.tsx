@@ -348,7 +348,16 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
           ? `已显示 ${rows.length} / ${page.matched}${unknown ? "+" : ""}`
           : `${rows.length} / ${page.matched}${unknown ? "+" : ""} shown`}</span>
           {unknown ? <ContextHelp icon={CircleAlert} label={zh ? "部分委派无法核验" : "Some delegations cannot be verified"}>
-            <p>{zh ? "部分记录无法核验，实际数量可能更多。" : "Some records cannot be verified. The actual total may be higher."}</p>
+            <p>{page.coverage.unreadable > 0 ? (zh ? `${page.coverage.unreadable} 条记录未能核验。` : `Unverified records: ${page.coverage.unreadable}. `) : ""}
+              {zh ? "数量与列表仍不完整。" : "Counts and list remain incomplete."}
+              {!page.coverage.scan_complete ? (zh ? " 历史扫描尚未完整。" : " The history scan is incomplete.") : ""}</p>
+            {page.coverage.diagnostics.length ? <>
+              <p>{zh ? "原委派记录与来源对话回执指向不同委派；原记录已保留，尚不能判定取消或完成。" : "The source conversation's receipt points to a different delegation. The original records are retained; cancellation or completion cannot be established."}</p>
+              <ul>{page.coverage.diagnostics.map(item => <li key={item.request_id}>
+                {item.agent_id} · {item.goal_id}<br/><code>{item.request_id}</code>
+              </li>)}</ul>
+            </> : null}
+            {page.coverage.unreadable > page.coverage.diagnostics.length ? <p>{zh ? "其它读取缺口未在此列出。" : "Other read gaps are not listed here."}</p> : null}
           </ContextHelp> : null}
         </div>
         {last?.next_offset !== null && last?.next_offset !== undefined ? <button ref={moreButton} type="button" aria-disabled={busy} onClick={event => {if (!busy) {restorePagingFocus.current = document.activeElement === event.currentTarget; void load(last.next_offset!);}}}>{zh ? "更多记录" : "More records"}</button> : null}

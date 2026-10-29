@@ -48,6 +48,39 @@ test("only the canonical open watch can run without a model, and it cannot reuse
     turn: {...input.turn, loopx_request: modelRequest}}));
 });
 
+test("identity-refused watches need independent collector evidence and retain current admission", () => {
+  const {params, goal} = fixture();
+  const actor = bindStewardManagedActor({...params, goal});
+  const prior = {operation: "native_turn", host: "codex-app-server", actor,
+    work_kind: "monitor", turn_instance_id: "monitor.original", todo_id: "todo_watch", validation_command: null,
+    monitor_deadline: "2026-10-23T10:00:00Z", monitor_lease_version: 0};
+  const original = {turn_id: "1".repeat(32), session_id: params.session.session_id,
+    status: "failed", error_code: "runtime_error", error: "the selected App identity could not be verified",
+    origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+    delta_count: 0, loopx_request: prior};
+  const basis = {original, contexts: [], phases: [{phase: "manager_context"}],
+    event_kinds: ["turn.queued", "agent.phase", "turn.failed"],
+    poll_absent: true, old_worker_excluded: true, lease_available: true};
+  const monitor = {todo_id: "todo_watch", task_class: "continuous_monitor", target_key: "steward-portfolio-watch",
+    watch_only: true, claimed_by: "steward", status: "open", next_due_at: prior.monitor_deadline};
+  const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+    request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+    monitor_todo: monitor, monitor_restart_basis: basis};
+  assert.equal(admitStewardManagedTurn(input).observation_only, true);
+  for (const changed of [
+    {phases: []}, {phases: [{phase: "model_start"}]}, {phases: [{phase: "manager_context"}, {phase: "manager_context"}]},
+    {contexts: [{}]}, {event_kinds: ["turn.queued", "turn.failed"]},
+    {event_kinds: [...basis.event_kinds, "agent.phase"]},
+    {poll_absent: false}, {old_worker_excluded: false}, {lease_available: false},
+    {original: {...original, error: "Unknown identity failure"}},
+    {original: {...original, upstream_turn_id: "unknown-model-turn"}},
+  ]) assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...changed}}));
+  for (const changed of [{queued_turn_count: 1}, {goal_active: false},
+    {monitor_todo: {...monitor, status: "blocked"}}, {observation: {...params.observation, verified: false}}]) {
+    assert.throws(() => admitStewardManagedTurn({...input, ...changed}));
+  }
+});
+
 test("monitor configuration retains the original actor and native Todo authority", () => {
   const {params, goal} = fixture();
   const actor = bindStewardManagedActor({...params, goal});
