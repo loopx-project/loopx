@@ -10,7 +10,7 @@ import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.turn_driver import codex_context as context
-from test_codex_context_lifecycle import setup, project, deliver, read_pages
+from test_codex_context_lifecycle import setup, project, deliver, read_pages, capture_pages
 from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from test_quota_settlement_cli import _run_cli
 
@@ -38,8 +38,11 @@ def required_view(original, directory, *, surface):
     from loopx.control_plane.turn_driver.decision_capture import capture_context_projection
 
     archive = capture_context_projection(original, directory=directory)
-    plan = _turn_envelope_result("progressive_context_plan", payload=original, surface=surface)
-    return context._capture_required_context(original, directory=directory, archive=archive, plan=plan)
+    prepared = _turn_envelope_result("native_context_delivery", payload=original, surface=surface,
+        source_capture={key: archive[key] for key in ("path", "sha256")})
+    plan = prepared.get("required_context_plan")
+    return (original, archive) if plan is None else context._capture_required_context(
+        original, directory=directory, archive=archive, plan=plan)
 
 
 def test_cold_warm_and_repeated_compaction_keep_requirements_without_replaying_material(tmp_path, monkeypatch):
@@ -203,6 +206,18 @@ def test_projection_preserves_numbers_and_original_values(tmp_path, monkeypatch)
     assert original == before and required["opaque_counter"] == before["opaque_counter"]
 
 
+def test_reference_plan_preserves_original_python_numeric_types(tmp_path):
+    row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Preserve this constraint. " * 40,
+        "resume_monitor_generation": 1}
+    original = {"ok": True, "agent_todo_summary": {"schema_version": "todo_summary_v0",
+        "first_open_items": [row], "backlog_items": [{**row, "resume_monitor_generation": 1.0}]}}
+    required, _ = required_view(original, tmp_path, surface="quota_packet")
+    # JavaScript sees equal numeric values. That cannot attest exact source
+    # equality or silently replace the caller's integral float with an integer.
+    assert required is original
+    assert isinstance(required["agent_todo_summary"]["backlog_items"][0]["resume_monitor_generation"], float)
+
+
 def test_saved_cli_references_keep_tail_constraints_and_recover_without_detail_reads(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     row = {"schema_version": "todo_item_v0", "todo_id": "task", "text": "Identical title",
@@ -340,22 +355,22 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     assert code == 0, {key: packet.get(key) for key in ("error", "error_code", "error_detail", "reason", "reason_code")}
     recovery = context._state(lifecycle)["recovery"]
     required = json.loads(Path(recovery["path"]).read_bytes())
-    entries = required["interaction_contract"]["agent_channel"]["work_context"]["sources"]
-    index, source = next((i, row) for i, row in enumerate(entries) if row["source"] == "goal_acceptance")
+    assert required["schema_version"] == "outcome_context_projection_v0"
+    entries = required["context"]["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    source = next(row for row in entries if row["source"] == "goal_acceptance")
     shown = source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
     assert [row["description"] for row in shown["requirements"]] == [row["description"] for row in original["requirements"]]
-    if required.get("schema_version") == "loopx_turn_envelope_v1":
-        # Signed-complete material staging remains explicitly unqualified.
-        # Its supported fallback keeps every original source and obligation.
-        assert Path(recovery["path"]).name == "projection.json"
-        assert shown["sources"] == sources and "context_details" not in required
-        details = recovery
-        pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/goal_acceptance_contract/outcome_requirements/outcomes/0"
-    else:
-        assert Path(recovery["path"]).name == "required-context.json"
-        assert "sources" not in shown and "on demand" in source["reason"]
-        details = required["context_details"]
-        pointer = shown["supporting_material_pointer"]
+    assert Path(recovery["path"]).name == "required-context.json"
+    assert "sources" not in shown and "on demand" in source["reason"]
+    details = required["context_details"]
+    pointer = shown["supporting_material_pointer"]
+    canonical = json.loads(Path(details["path"]).read_bytes())
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+    assert canonical["schema_version"] == "loopx_turn_envelope_v1"
+    assert _turn_envelope_result("complete_consumer", payload=canonical)["ok"]
+    assert required["context"]["contract_binding"] == canonical["contract_binding"]
+    assert required["context"]["heartbeat_receipt"] == canonical["heartbeat_receipt"]
+    assert required["context"]["interaction_contract"]["cli_channel"] == canonical["interaction_contract"]["cli_channel"]
     code, page = run("quota", "context-read", "--capture-file", details["path"],
         "--capture-sha256", details["sha256"], "--select", pointer + "/sources",
         "--page-bytes", "16000", "--max-page-output-bytes", "20000")
@@ -363,4 +378,38 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
     recovered = json.loads(page["content"])["selections"][0]["value"]
     assert recovered == sources
     assert "candidate" not in context._state(lifecycle)
+    event = {"session_id": "session", "cwd": str(lifecycle)}
+    pages = capture_pages(recovery["path"], recovery["sha256"], size=1400)
+    assert len(pages) > 1
+    # A parseable outer tool result can contain an incomplete inner page.
+    # Neither its EOF nor the optional evidence read establishes retention.
+    nested = {"exit_code": 0, "output": json.dumps({**pages[0],
+        "content": pages[0]["content"][:-1], "eof": True})}
+    context.codex_context_hook(str(lifecycle), {**event, "hook_event_name": "PostToolUse",
+        "tool_response": nested})
+    assert "candidate" not in context._state(lifecycle)
+    deliver(lifecycle, event, pages[:1])
+    assert "candidate" not in context._state(lifecycle)
+    deliver(lifecycle, event, pages[1:])
+    assert context._state(lifecycle)["candidate"]["capture_file"] == recovery["path"]
+    source_bytes = Path(details["path"]).read_bytes()
+    required_bytes = Path(recovery["path"]).read_bytes()
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+    scope = {"goal_id": "goal-acceptance", "agent_id": "agent-a", "session_id": "session", "context_epoch": "fixture-epoch"}
+    baseline = prepare_context_delivery(required, scope=scope, surface="complete_turn", capture_id="before")
+    warm = prepare_context_delivery(required, scope=scope, surface="complete_turn", capture_id="after", baseline=baseline,
+        retained={"complete": True, "target": baseline["target"]})
+    assert warm["mode"] == "delta"
+    current = prepare_context_delivery(required, scope=scope, surface="complete_turn", capture_id="after")
+    assert restore_context_delivery(warm, baseline=baseline, current=current)["context"] == required
+    assert restore_context_delivery(warm, baseline=None, current=current)["context"] == required
+    for _ in range(2):
+        context.codex_context_hook(str(lifecycle), {**event, "hook_event_name": "PreCompact"})
+        assert "candidate" not in context._state(lifecycle)
+        # Recover the exact current presentation, without a new admission or
+        # requiring the now-unusable differential patch to be finished first.
+        assert json.loads(b"".join(page["content"].encode() for page in pages)) == required
+        deliver(lifecycle, event, pages)
+    assert Path(recovery["path"]).read_bytes() == required_bytes
+    assert Path(details["path"]).read_bytes() == source_bytes
     assert cli("inspect")[1] == before, "presentation must not rewrite canonical acceptance"

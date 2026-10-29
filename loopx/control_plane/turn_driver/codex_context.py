@@ -9,7 +9,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from collections.abc import Iterator
 from typing import Any
-import copy
 import json
 import os
 from pathlib import Path
@@ -478,53 +477,40 @@ def _capture_required_context(payload: dict[str, Any], *, directory: Path,
     Only the required view may become a full/delta baseline. Detail pointers
     always address the immutable archive, never a later canonical-state read.
     """
-    if not plan["deferred"] and not plan.get("references"):
-        return payload, archive
-    projected = copy.deepcopy(payload)
+    from ..quota.cli_projection import _apply_context_projection_changes
 
-    def at(path):
-        row = projected
+    def original_value(path: list[str | int]) -> Any:
+        value: Any = payload
         for key in path:
-            row = row[key]
-        return row
+            value = value[key]
+        return value
 
-    for edit in plan.get("references", []):
-        # Compare original Python values as well: the typed bridge must never
-        # equate distinct integers or change the source record's numeric types.
-        value, target = at(edit["path"]), at(edit["from"])
-        if json.dumps(value, sort_keys=True) != json.dumps(target, sort_keys=True):
+    # The bridge cannot distinguish an integral float from an integer. Verify
+    # exact reference equality on the IO side before replacing either record.
+    for check in plan.get("reference_checks", []):
+        if json.dumps(original_value(check["path"]), sort_keys=True) != json.dumps(
+            original_value(check["from"]), sort_keys=True
+        ):
             return payload, archive
-        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
-    for edit in plan["deferred"]:
-        path, parent = edit["path"], edit["parent"]
-        del at(path[:-1])[path[-1]]
-        at(parent)[edit["index_key"]] = "/" + "/".join(
-            str(key).replace("~", "~0").replace("/", "~1") for key in parent)
-    for edit in plan["instructions"]:
-        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
-    page_bytes, output_bytes = native_context_page_budget()
-    details = {
-        "path": archive["path"], "sha256": archive["sha256"],
-        "command_template": context_capture_read_command(Path(archive["path"]), archive["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes) + " --select '<supporting_material_pointer>/sources'",
-        "instruction": "This view retains complete requirements and current review/check states. "
-            "Source history, review reasoning and evidence references are supporting material. "
-            "Read them from this same immutable capture when a decision, verification or review depends on them. "
-            "For source history use supporting_material_pointer plus /sources. For review detail append "
-            "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. "
-            "Repeat --select to batch needed fields without replaying the outcome's requirements. "
-            "Detail reads never establish a full baseline. "
-            "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance.",
-    }
-    if plan["deferred"]:
-        projected["context_details"] = details
+    projected = payload
+    try:
+        for stage in plan["stages"]:
+            projected = _apply_context_projection_changes(projected, stage)
+    except RuntimeError as error:
+        raise ValueError("Invalid required-context presentation plan") from error
+    presentation = plan.get("presentation")
+    if isinstance(presentation, dict):
+        projected = {**presentation, "context": projected}
     # These are transport bytes, not a semantic relevance heuristic or a model
     # token estimate. Small material is cheaper inline than an index plus IO.
     required_bytes = len((json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))
     if required_bytes >= Path(archive["path"]).stat().st_size:
         return payload, archive
-    return projected, capture_context_projection(projected, directory=directory,
+    recovery = capture_context_projection(projected, directory=directory,
         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+    if projected.get("schema_version") == "outcome_context_projection_v0":
+        recovery["presentation_schema"] = projected["schema_version"]
+    return projected, recovery
 
 
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
@@ -612,7 +598,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     result = project_captured_context(required, directory=capture_directory,
                         request=request, captured_recovery=recovery,
                         goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
-                if projected.get("schema_version") == "outcome_context_projection_v0":
+                if projected.get("schema_version") == "outcome_context_projection_v0" and projected is not required:
                     payload = projected
                     recovery = capture_context_projection(payload, directory=capture_directory,
                         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)

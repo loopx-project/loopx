@@ -107,10 +107,16 @@ The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge the required
 view, establish a full baseline or prove that other hidden details were read.
-The adapter edits paths selected by the typed owner without round-tripping the
-original JSON values through JavaScript. Unknown outcome fields, unknown source
-read obligations, unsupported schemas, signed envelopes and unavailable planning
-retain their original full content. Context delivery off remains unchanged.
+The adapter applies the existing typed edit plans without round-tripping the
+original JSON values through JavaScript. Validated signed complete inputs use
+the same scope and material owners, within `outcome_context_projection_v0`;
+the canonical decision is neither edited nor re-signed. Scope filtering and
+material edits apply in sequence, so a retained outcome that moves in an array
+still references its original capture position and retains its exact values.
+Historical scope-only presentations remain readable through their original
+decoder. Unknown outcome fields, unknown source read obligations, unsupported
+or invalid signatures and unavailable planning retain their original full
+content. Context delivery off remains unchanged.
 If the required view and its index are not smaller in serialized UTF-8 bytes,
 delivery retains the original full view and read obligations; small material
 does not need a more expensive detail round trip. This is a transport-size
@@ -130,9 +136,10 @@ The reader must recover a missing target from this same capture before dependent
 work; it does not need a new detail read when the complete target is present.
 This is exact reuse, not candidate relevance or selection. It changes no
 canonical record or authority, and does not permit skipping other candidates.
-Signed envelopes, disabled native delivery and historical captures keep their
-existing behavior. The existing size comparison retains a full view when the
-reference guidance would cost more than the duplicate rows.
+Validated signed native inputs reuse the same reference owner. Disabled native
+delivery and historical captures keep their existing behavior. The existing
+size comparison retains a full view when the reference guidance would cost more
+than the duplicate rows.
 
 A context epoch is not a work Turn. Compaction or a failed native hook invalidates
 delta reuse; it does not require another admission or unconditional replay of the

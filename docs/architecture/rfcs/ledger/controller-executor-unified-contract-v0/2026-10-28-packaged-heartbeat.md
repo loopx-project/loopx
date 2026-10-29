@@ -518,3 +518,63 @@ original revisions and status; no threshold is raised and no latest complete-cos
 result is inferred. Caller/writer migration, historical-reader retirement and
 actual single-session decisions, accepted outcomes and complete costs remain C1
 work; the proposal stays unfinished.
+
+## Signed complete material staging
+
+The next integration adopts main `b47bbc6c9`, including first-call selection and
+original captured-failure recovery. The actual native caller supplies
+`complete_turn`, rather than the legacy `quota_packet` surface. After validating
+the complete decision, that caller now uses the same outcome-scope, progressive
+material and exact-record owners. The canonical signed capture is not edited,
+re-signed or treated as a new observation. An existing
+`outcome_context_projection_v0` presentation carries the original capture
+reference; it is also used when material staging alone is worthwhile. Unknown
+fields, unsupported obligations, unavailable planning and small material keep
+the original full fallback. Delivery disabled remains unchanged.
+
+Scope filtering can move an outcome to a different array position. The planner
+therefore retains original row identity and source positions, then emits two
+existing transport-edit stages: scope, followed by material edits. The Python
+adapter applies those plans to its original JSON values. There is no second
+Python material policy or new public work contract. The shared source-owned
+guidance retains cumulative requirements, work links, current review/check
+states, permissions and stop conditions; only supporting history, review
+reasoning and evidence references become same-capture detail. Historical
+scope-only presentations retain their original decoder.
+Exact-reference equality still checks the original Python JSON types: a new
+negative oracle caught integral floats being equated with integers by the
+JavaScript bridge, so that existing IO-side safeguard is retained before edits.
+
+The independent public-entry oracle requires real File/SQLite `quota should-run`
+to deliver the signed staged presentation and recover the exact original source
+history through `context-read --select`. It also checks unchanged binding,
+original Turn receipt and CLI settlement channel. The scoped fixture deliberately
+places the current Agent's outcome after a peer's outcome in the original array,
+so a pointer into the filtered position cannot pass as the original evidence.
+Existing full-source, disabled-delivery, missing-source, unknown-field,
+small-material, pending-read and tampered-hash cases remain.
+
+The native lifecycle cases distinguish complete required-view coverage from
+optional selected evidence, a partial prefix and a truncated inner page inside
+valid tool-result JSON. Partial reads never establish a full native baseline.
+Repeated compaction recovers the same current presentation and original source;
+it does not require finishing an unusable delta or admitting work again.
+These are hook/transport checks, not proof of model retention. Default file
+navigation and file-version differences are a separate active caller change;
+this slice neither defines that reading policy nor adds a necessary-facts index.
+
+Initial follow-through runs remain failed observations: the real signed caller
+first exposed the unsupported `complete_turn` surface, and the historical wrapper
+reader exposed a local variable-shadowing error. Author fixtures also exceeded
+the existing source-summary limit and requested oversized pages without an
+explicit output budget; the fixtures were corrected within the original limits.
+No acceptance, page-size or cost ceiling was raised. Final validation and frozen
+source sensitivity are recorded on the proposal at their tested revision.
+
+This removes a demonstrated consumer integration gap, not the remaining C1
+cutover. Earlier **25,862 > 13,000**, failed/interrupted cohorts and complete-cost
+tables keep their original status. Installed adoption, model inputs/retention,
+tokens/cache/billing, accepted outcomes and total latency/cost are unqualified.
+Caller/writer replacement, historical-reader retirement and the original quota
+single-session outcome comparison remain open; the two-session controller study
+remains separate.

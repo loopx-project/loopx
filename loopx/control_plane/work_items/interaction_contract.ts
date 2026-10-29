@@ -780,8 +780,13 @@ export function selectedWorkTodoId(packet: JsonObject): string | null {
 }
 
 const OBJECTIVE_READ_GUIDANCE = "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.";
-function outcomeReadGuidance(scoped = false): string {
-  return (scoped
+function outcomeReadGuidance(scoped = false, progressive = false): string {
+  return (progressive
+    ? (scoped
+      ? "Read the complete global acceptance basis and every outcome required by this capture's read_scope, including cumulative requirements, work links and current review/check states. Other outcomes retain current index facts and exact original-capture references; read their complete bodies before reliance. Unknown relevance or Goal-wide acceptance requires the complete original source. "
+      : "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. ") +
+      "Supporting source history, review reasoning and evidence references are available on demand from the same capture; read them when the next decision, verification or review depends on them. "
+    : scoped
     ? "Read the full global acceptance basis and every outcome required by this capture's read_scope, including cumulative requirements, work links and sources. Other outcomes retain current index facts and exact original-capture references; read their complete bodies before reliance. Unknown relevance or Goal-wide acceptance requires the complete original source. "
     : "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. ") +
     "Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
@@ -813,8 +818,10 @@ export function scopeInteractionOutcomeReadGuidance(channel: JsonObject): boolea
 
 // These are source-owned obligations; native material projection replaces only
 // this exact generated clause, preserving other independently applicable reads.
-export const FULL_OUTCOME_READ_GUIDANCE = "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
-export const PROGRESSIVE_OUTCOME_READ_GUIDANCE = "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. Supporting source history, review reasoning and evidence references are available on demand from the same capture; read them when the next decision, verification or review depends on them. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+export const FULL_OUTCOME_READ_GUIDANCE = outcomeReadGuidance();
+export const PROGRESSIVE_OUTCOME_READ_GUIDANCE = outcomeReadGuidance(false, true);
+export const SCOPED_OUTCOME_READ_GUIDANCE = outcomeReadGuidance(true);
+export const PROGRESSIVE_SCOPED_OUTCOME_READ_GUIDANCE = outcomeReadGuidance(true, true);
 
 /** Generate the shared pre-work reads after final admission. Hosts consume this
  * list; transport projections must not independently infer requirements.

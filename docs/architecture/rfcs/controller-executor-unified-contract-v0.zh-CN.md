@@ -1262,7 +1262,10 @@ controller 实验。
 
 上述成本与预算结果仍绑定各自 ledger 版本。[后续主线集成](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.zh-CN.md#主线集成与不可变-reader-身份)
 修复原生投影及原 capture reader 的接线，未重跑或认证那些模型／完整成本对照。
-尤其是已签名完整输入的材料分阶段消费者仍待迁移，当前继续保留完整材料回退。
+后续[签名完整输入材料分阶段检查点](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.zh-CN.md#签名完整输入的材料分阶段)
+让已验证完整输入复用相同材料 owner，并在范围筛选后保留材料的原始位置。
+当分阶段呈现的传输字节更少时，该消费者不再回退完整材料。这不改变 Host 默认阅读
+策略，也不认证模型保留、完整成本、剩余调用方／writer 迁移或历史 reader 退役。
 C1 及相对原 quota 基线的验收保持开放。
 
 同时报告字段/条款 diff 及其决策后果、实际模型输入、cached/uncached tokens、追加

@@ -386,3 +386,42 @@ oracle 在冻结 `fc4763098` 失败，修正后通过，同时核对 busy-reques
 仍保留原失败观察。既有成本表及 **25,862 > 13,000** 仍绑定原版本与状态；未提高上限，
 不推断最新版完整成本收益。调用方／writer 迁移、历史 reader 退役及实际单会话决策、
 验收成果和完整成本仍属 C1 工作，提案保持未完成。
+
+## 签名完整输入的材料分阶段
+
+后续集成采用 main `b47bbc6c9`，包括首次选择及原 capture 失败恢复。真实 native
+调用方使用 `complete_turn`，而非旧 `quota_packet` surface。完整决策验证通过后，
+该调用方现在复用相同 outcome scope、渐进材料及精确记录 owner。canonical 签名
+capture 不被编辑、重新签名或当成新观察。既有 `outcome_context_projection_v0`
+呈现携带原 capture 引用；只有材料分阶段值得采用时，也使用这个呈现。未知字段、
+不支持的义务、不可用规划和小材料仍保留原完整回退；关闭交付时行为不变。
+
+范围筛选可能改变 outcome 的数组位置。因此 planner 保留原始条目身份和来源位置，
+依次输出两个既有传输编辑阶段：先 scope，再材料编辑。Python adapter 将这些计划
+应用于原始 JSON 值，不新增 Python 材料决策或公开工作契约。共享来源 owner 的指引
+保留累积要求、工作关联、当前 review／check 状态、权限与停止条件；只有支持性历史、
+review 原因及证据引用改为同 capture 选读。历史 scope-only 呈现保留原 decoder。
+精确引用相等性仍核对原 Python JSON 类型：新增反例捕获 JavaScript 桥接把整数值
+浮点数与整数混同，因此在编辑前继续保留既有 IO 侧校验。
+
+独立公共入口 oracle 要求真实 File／SQLite `quota should-run` 交付签名分阶段
+呈现，并用 `context-read --select` 精确恢复原 source history；同时核对 binding、
+原 Turn 回执和 CLI 结算 channel 不变。范围 fixture 故意把当前 Agent 的 outcome
+放在原数组的 peer 之后，避免误用筛选后的位置也能通过证据校验。既有完整来源、
+关闭交付、缺失来源、未知字段、小材料、pending read 及 hash 篡改用例继续保留。
+
+native 生命周期用例区分完整 required-view 覆盖与可选证据、未完成前缀，以及外层
+工具 JSON 有效但内层 page 被截断。部分读取不建立完整 native baseline。重复
+compaction 仍恢复相同当前呈现及原来源，不要求先读完已不可用的 delta，也不重新
+准入。这些是 hook／传输校验，不证明模型保留。默认文件导航及文件版本差分属于另一个
+进行中的 caller 改动；本切片不定义该阅读策略，也不新增必要事实索引。
+
+初次后续运行保留失败观察：真实签名调用方首先暴露不支持 `complete_turn` surface，
+历史 wrapper reader 暴露局部变量遮蔽错误。作者 fixture 还曾超过既有 source-summary
+上限，并在未声明输出预算时请求过大 page；随后在原限制内修正。未提高验收、page
+或成本上限。最终验证及冻结源码敏感性在提案中绑定实测版本记录。
+
+这移除了已证实的消费者接线缺口，不代表剩余 C1 切换完成。此前 **25,862 > 13,000**、
+失败／中断 cohort 及完整成本表均保留原状态。安装采用、实际模型输入／保留、
+tokens／cache／账单、验收成果与总延迟／成本仍未资格化。调用方／writer 替换、历史
+reader 退役及相对原 quota 的单会话成果对照保持开放；双会话 controller 研究另行进行。

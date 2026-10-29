@@ -34,8 +34,9 @@ def _recording_host(tmp_path):
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("checks", [False, True])
+@pytest.mark.parametrize("material", [False, True])
 def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
-    tmp_path, monkeypatch, provider, checks,
+    tmp_path, monkeypatch, provider, checks, material,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     goal, selected = "acceptance-context", "todo_selected"
@@ -63,17 +64,23 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
 
     # Two owners' cumulative outcomes remain Goal requirements. Selection must
     # not silently narrow those requirements or their work/evidence references.
-    for agent, todo in (("agent-a", selected), ("agent-b", "todo_peer_0")):
+    owners = [("agent-a", selected), ("agent-b", "todo_peer_0")]
+    for agent, todo in reversed(owners) if material else owners:
         document = tmp_path / f"{agent}.json"
-        document.write_text(json.dumps({"outcome_id": f"export-{agent}", "owner_agent_id": agent,
+        declaration = {"outcome_id": f"export-{agent}", "owner_agent_id": agent,
             "objective": f"Deliver the accepted {agent} export.", "todo_ids": [todo],
             "requirements": [{"id": "content", "description": "Retain the complete export content."},
                 {"id": "recovery", "description": "Retain cancellation and recovery at the requirement tail."}],
-            "source": {"ref": f"message:{agent}", "summary": "The owner requested a compatible export."}}))
-        before = cli("goal-acceptance", "inspect", "--goal-id", goal)
-        cli("goal-acceptance", "refine", "--goal-id", goal, "--agent-id", agent,
-            "--document", str(document), "--expected-provider-revision", before["provider_revision"],
-            "--operation-id", f"outcome-{agent}", "--execute")
+            "source": {"ref": f"message:{agent}", "summary": "The owner requested a compatible export."}}
+        for revision in range(8 if material else 1):
+            declaration["source"] = {"ref": f"message:{agent}:{revision}", "summary":
+                "The owner requested a compatible export." +
+                (" Preserve this historical supporting evidence." * 9 if material else "")}
+            document.write_text(json.dumps(declaration))
+            before = cli("goal-acceptance", "inspect", "--goal-id", goal)
+            cli("goal-acceptance", "refine", "--goal-id", goal, "--agent-id", agent,
+                "--document", str(document), "--expected-provider-revision", before["provider_revision"],
+                "--operation-id", f"outcome-{agent}-{revision}", "--execute")
     if checks:
         document = tmp_path / "checks.json"
         document.write_text(json.dumps({"scope": {"kind": "selected_work", "todo_ids": [selected]},
@@ -135,7 +142,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id=selected, agent_id="not-registered")
     assert unknown["status"] == "loaded" and unknown["goal_acceptance_contract"] == exact["goal_acceptance_contract"]
     assert unknown["outcome_context"]["complete"] is False
-    assert unknown["outcome_context"]["required_outcome_ids"] == ["export-agent-a", "export-agent-b"]
+    assert set(unknown["outcome_context"]["required_outcome_ids"]) == {"export-agent-a", "export-agent-b"}
     with pytest.raises(ValueError, match="registered Agent"):
         inspect_goal_acceptance(registry_path=registry, runtime_root=str(runtime),
             goal_id=goal, agent_id="not-registered", todo_id=selected, include_work_details=False)
@@ -214,6 +221,18 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert "complete bodies before reliance" in reason
         assert "Preserve the original Goal and earlier requirements" in reason
         assert [row["id"] for row in basis["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]] == ["export-agent-a"]
+        own = basis["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+        if material:
+            assert "sources" not in own and "on demand" in reason
+            material_ref = delivered["context_details"]
+            detail = cli("quota", "context-read", "--capture-file", material_ref["path"],
+                "--capture-sha256", material_ref["sha256"], "--select", own["supporting_material_pointer"] + "/sources",
+                "--page-bytes", "16000", "--max-page-output-bytes", "20000")
+            assert json.loads(detail["content"])["selections"][0]["value"] == next(
+                row for row in observed["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+                if row["id"] == "export-agent-a")["sources"]
+        else:
+            assert "sources" in own and "context_details" not in delivered
         assert json.loads(Path(delivered["source_capture"]["path"]).read_bytes()) == packet
         # Bounded diagnostics reference the original immutable decision, never
         # a new guard. Read every byte through the public recovery command.

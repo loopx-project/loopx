@@ -1720,9 +1720,14 @@ redundancy without establishing a positive full-cycle or outcome result.
 These cost and budget results remain pinned to their ledger revisions. The
 [later mainline integration](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md#mainline-integration-and-immutable-reader-identity)
 repairs native projection and original-capture reader wiring; it does not rerun
-or qualify those model/full-cost comparisons. In particular, signed complete
-inputs still retain their full material fallback while their staged-material
-consumer remains to migrate. C1 and its original quota-baseline gate stay open.
+or qualify those model/full-cost comparisons. The subsequent
+[signed-material checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md#signed-complete-material-staging)
+extends the same material owner to validated complete inputs and preserves
+original detail positions through scope filtering. This removes that consumer's
+full-material fallback when staging earns its transport bytes. It does not
+change the Host's default reading policy or qualify model retention, full costs,
+remaining caller/writer migration or historical-reader retirement. C1 and its
+original quota-baseline gate stay open.
 
 Report the field/clause diff and its decision consequence together with actual
 model input, cached/uncached tokens, added reads/round trips, reconstruction,
