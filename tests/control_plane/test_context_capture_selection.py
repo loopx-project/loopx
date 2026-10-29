@@ -6,9 +6,26 @@ import shlex
 
 import pytest
 
+from tests.control_plane.codex_checkpoint_fixture import last_context_page
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.turn_driver.decision_capture import capture_page_range
 from test_quota_settlement_cli import _run_cli
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_saved_reference_is_not_reader_coverage(wrapped):
+    reference = {"ok": True, "mode": "full", "path": "saved.json", "sha256": "digest",
+                 "command": "read saved.json", "target": {}, "recovery": {}}
+    output = json.dumps(reference)
+    if wrapped:
+        output = [{"type": "input_text", "text": json.dumps({"exit_code": 0, "output": output})}]
+    item = {"type": "custom_tool_call_output" if wrapped else "function_call_output", "output": output}
+    request = {"input": [item]}
+    assert last_context_page(request) is None
+    assert last_context_page(request, allow_reference=True) == reference
+    # A damaged current response cannot borrow the earlier complete reference.
+    request["input"].append({"type": "function_call_output", "output": '{"ok":true'})
+    assert last_context_page(request, allow_reference=True) is None
 
 
 def fixture_capture(tmp_path):

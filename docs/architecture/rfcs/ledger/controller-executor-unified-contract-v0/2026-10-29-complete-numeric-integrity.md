@@ -5,7 +5,7 @@
 This is proposed C1 integration in [#7430](https://github.com/loopx-project/loopx/pull/7430),
 not a mainline or installed cutover. The comparison starts at
 `4173cc2ee7ef94de00ca777ff8600455c080c29f`, after integrating main
-`e28926b9a` and the preceding source-comparison ledger. Numeric binding is
+`33d9ecd9fd29bce4986da6c9e9a6b758a24f91b3` and the preceding source-comparison ledger. Numeric binding is
 implemented at `974cd09ef7cb12832911ee58880aaf25e86fb2b2`; the final runtime
 `e18d46db51c58ee17c770d7bba915f0133cf9f78` also retires the unused source echo.
 

@@ -4,7 +4,7 @@ English mirror: [the same checkpoint](2026-10-29-complete-numeric-integrity.md).
 
 这是 [#7430](https://github.com/loopx-project/loopx/pull/7430) 中提议的 C1 集成，
 尚未切换 mainline 或安装入口。对照基线为
-`4173cc2ee7ef94de00ca777ff8600455c080c29f`，已集成 main `e28926b9a` 和前一份
+`4173cc2ee7ef94de00ca777ff8600455c080c29f`，已集成 main `33d9ecd9fd29bce4986da6c9e9a6b758a24f91b3` 和前一份
 来源对照 ledger。数值 binding 实现在 `974cd09ef7cb12832911ee58880aaf25e86fb2b2`；
 最终 runtime `e18d46db51c58ee17c770d7bba915f0133cf9f78` 同时退役无用的来源 echo。
 
