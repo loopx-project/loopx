@@ -22,11 +22,14 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--baseline-assets-dir", type=Path)
     parser.add_argument("--invalid-editorial", action="store_true", help="Return a known invalid synthetic report to inspect owner cancellation and retained failure.")
+    parser.add_argument("--host-failure", action="store_true", help="Fail the synthetic native model before an editorial result; retain the original window without retry authority.")
     parser.add_argument("--managed-session", action="store_true", help="Exercise ordinary Goal Session native work with the existing task validator, instead of a scheduled report.")
     parser.add_argument("--managed-report", action="store_true", help="Configure a calendar report for an existing local Agent Session through the packaged Goal settings.")
     args = parser.parse_args()
     if args.managed_session and args.managed_report:
         parser.error("select one managed Session fixture journey")
+    if args.host_failure and (args.invalid_editorial or args.managed_session):
+        parser.error("select the pre-editorial report failure journey alone")
     repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(repo), str(repo / "tests")]
     from test_native_steward_private import steward
@@ -74,6 +77,15 @@ def main() -> None:
                 expected_plan_id=plan["plan_id"])["actor"]
             install_model(data, root, sid)
         transport.reconcile()
+        if args.host_failure:
+            from loopx.chat_agent import CodexChatAgentError
+            from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+            def fail_report(_adapter, _prompt, event_sink):
+                event_sink("turn.started", {"upstream_turn_id": "synthetic-unknown-report"})
+                raise CodexChatAgentError("Synthetic report host failure.")
+
+            CodexAppServerAdapter.start_turn = fail_report
         if args.invalid_editorial:
             helper = root / "report_model.py"
             helper.write_text(helper.read_text().replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))

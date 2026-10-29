@@ -551,6 +551,24 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     journal_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
     frozen = original_path.read_bytes(), journal_path.read_bytes()
     _, window = reports.current_window(owner)
+    failed_health = reports.health(owner)
+    assert failed_health["execution_failed"] and not failed_health["publication_verified"]
+    assert reports._known_generation_failure(actor, window) is None
+    if not local_session:
+        assert failed_health["delivery_status"] == "not_generated"
+    # Failure visibility must stay bound to this exact actor/window, including
+    # when the original Chat envelope itself says completed.
+    import copy
+    from loopx.capabilities.native_chat import steward_turn
+    for field, value in [("actor", {**actor, "agent_id": "another-agent"}),
+            ("work_kind", "monitor"), ("report_window_id", "another-window"),
+            ("report_subscription_revision", "another-revision")]:
+        foreign = copy.deepcopy(original)
+        foreign["loopx_request"][field] = value
+        with monkeypatch.context() as changed:
+            changed.setattr(steward_turn, "report_turn", lambda *_: foreign)
+            assert not reports.health(owner)["execution_failed"]
+    assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
     observations = []
     proof = {"thread_id": store.load_session(sid)["upstream_thread_id"],
         "turn_id": original["upstream_turn_id"], "only_original_user_item": True,
@@ -584,6 +602,7 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     assert request["actor"] == original["loopx_request"]["actor"]
     assert request["turn_instance_id"] == original["loopx_request"]["turn_instance_id"] + ".quota-recovery"
     assert result["response"]["native_loopx"]["status"] == ("committed" if recovery_succeeds else "failed"), result
+    assert reports.health(owner)["execution_failed"] is not recovery_succeeds
     assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
     assert observations and all(x["turn_id"] == original["upstream_turn_id"] for x in observations)
     assert all(x["thread_ids"] == [proof["thread_id"]] for x in observations)
