@@ -15,6 +15,7 @@ import test_quota_authority_settlement_journey as journey
 from loopx.heartbeat_prompt import build_heartbeat_prompt, build_heartbeat_prompt_error_payload
 from loopx.control_plane.heartbeat.budget import build_interface_budget
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+from loopx import project_prompt
 
 
 def _route(command: str, registry: Path, runtime: Path) -> None:
@@ -35,6 +36,46 @@ def test_budget_normalizes_shell_quoted_registry_before_goal_substrings():
     expected = "loopx --registry <REGISTRY_PATH> quota should-run --goal-id <GOAL_ID>"
     assert budget["budget_char_count"] == len(expected)
     assert budget["within_budget"] is True
+
+
+@pytest.mark.parametrize("windows_shell", [False, True])
+def test_budget_normalizes_complete_nested_routes_before_goal_substrings(monkeypatch, windows_shell):
+    monkeypatch.setattr(project_prompt, "_is_windows_host", lambda: windows_shell)
+    runtime = "/fixture/route-fixture's runtime/" + "long-directory/" * 300
+    registry = runtime + "registry.json"
+    active_state = runtime + "goals/route-fixture/ACTIVE_GOAL_STATE.md"
+    body = " ".join((
+        "loopx --runtime-root", project_prompt.shell_arg_for_host(runtime),
+        "--registry", project_prompt.shell_arg_for_host(registry),
+        "heartbeat-prompt --active-state", project_prompt.shell_arg_for_host(active_state),
+        "--goal-id route-fixture",
+    ))
+    budget = build_interface_budget(
+        task_body=body, goal_id="route-fixture", active_state=active_state,
+        registry_path=registry, runtime_root=runtime, thin=True,
+    )
+    expected = ("loopx --runtime-root <RUNTIME_ROOT> --registry <REGISTRY_PATH> "
+                "heartbeat-prompt --active-state <ACTIVE_STATE> --goal-id <GOAL_ID>")
+    assert budget["budget_char_count"] == len(expected)
+    assert budget["char_count"] == len(body) > budget["max_chars"]
+    assert budget["within_budget"] is True
+    # Unknown paths and authored text still count; no generic path scrubber.
+    undeclared = build_interface_budget(
+        task_body=body, goal_id="route-fixture", active_state="/other/state.md",
+        registry_path="/other/registry.json", runtime_root="/other/runtime", thin=True,
+    )
+    assert undeclared["budget_char_count"] > undeclared["max_chars"]
+    assert undeclared["within_budget"] is False
+
+
+def test_long_selected_routes_cannot_waive_native_goal_host_transport_limit():
+    runtime = "/fixture/" + "long-directory/" * 100
+    with pytest.raises(ValueError, match="4000"):
+        build_heartbeat_prompt(
+            goal_id="route-fixture", runtime_root=runtime,
+            registry_path=runtime + "registry.json", thin=True,
+            runtime_profile="codex_app_ssh_goal", reward_memory_enabled=False,
+        )
 
 
 @pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
@@ -83,6 +124,39 @@ def _execute(argv: list[str], cwd: Path):
                             cwd=cwd, env=env, text=True, capture_output=True, check=False)
     assert result.stdout, result.stderr
     return result.returncode, json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_cli_prompt_and_bootstrap_measure_the_selected_routes(tmp_path, provider):
+    measured = {}
+    for name in ("public-route", "public-route-" + "x" * 120):
+        project, runtime, registry, state, _ = journey._source(tmp_path / name, provider=provider)
+        for bootstrap in (False, True):
+            code, prompt = _execute([
+                "--registry", str(registry), "--runtime-root", str(runtime), "heartbeat-prompt",
+                "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+                "--active-state", str(state), "--codex-app", "--brief",
+                *(["--bootstrap"] if bootstrap else []),
+            ], project)
+            assert code == 0 and prompt["ok"], prompt
+            budget = prompt["interface_budget"]
+            body = prompt["task_body"]
+            assert budget["char_count"] == len(body)
+            assert budget["within_budget"] is True
+            measured[name, bootstrap] = budget
+            if bootstrap:
+                command = shlex.split(body.split("```sh\n", 1)[1].split("\n```", 1)[0])
+                assert "--bootstrap" not in command
+                _route(shlex.join(command), registry, runtime)
+            else:
+                _route(prompt["quota_guard_command"], registry, runtime)
+        assert cli._spend_run_count(runtime) == 0
+    for bootstrap in (False, True):
+        short, long = (measured[name, bootstrap] for name in (
+            "public-route", "public-route-" + "x" * 120,
+        ))
+        assert short["budget_char_count"] == long["budget_char_count"]
+        assert short["char_count"] < long["char_count"]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

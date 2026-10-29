@@ -431,6 +431,9 @@ def handle_support_control_command(
                 payload["interface_budget"] = build_interface_budget(
                     task_body=body, goal_id=args.goal_id,
                     active_state=str(payload.get("active_state") or ""), thin=True,
+                    registry_path=str(agent_registry_path.resolve()),
+                    runtime_root=(str(Path(args.runtime_root).expanduser().resolve())
+                                  if args.runtime_root else None),
                 )
                 if not payload["interface_budget"]["within_budget"]:
                     raise ValueError("bootstrap exceeds the thin budget; move lengthy policy into registered state")

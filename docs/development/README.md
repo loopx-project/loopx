@@ -237,8 +237,12 @@ relevant changes and unresolved gaps. Keep it sufficient to act correctly. Prese
 complete source material durably without equating storage completeness with a
 requirement to load every historical record into every model input.
 
-Start discovery with the existing index, heading tree, bounded search or exact
-record selector. Then read the sections or records needed for the actual decision.
+Read known paths or record IDs directly, batching independent required reads
+within the combined output budget. When a location is unknown, use the existing
+index, heading tree or bounded search to discover the relevant parent, then read
+the sections or records needed for the actual decision. Keep dependent reads and
+mutations ordered; reuse an applicable captured response instead of rerunning its
+producer, and refresh authoritative facts after relevant state changes.
 A summary must not silently replace a requirement or conceal an exception. Retain
 source identity, revision and a reachable detail route; expose omissions and unknown
 coverage. Ownership alone does not establish irrelevance: shared constraints,

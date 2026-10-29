@@ -188,7 +188,7 @@ def test_native_worker_inherits_loaded_core_outside_checkout(native, monkeypatch
 import json, os, sys
 from pathlib import Path
 import loopx
-from loopx.runtime_activation import managed_chat_activation_guard
+from loopx.extensions.chat_service_guard import managed_chat_activation_guard
 packet = {"ok": True, "result": {"core": str(Path(loopx.__file__).resolve()),
                                "guard": callable(managed_chat_activation_guard)}}
 if len(sys.argv) == 3 and sys.argv[1] == "--result-file":

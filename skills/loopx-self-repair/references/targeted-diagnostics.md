@@ -30,6 +30,27 @@ recovery of the original operation.
 
 ## Read one response more than once, not one command
 
+When paths or record IDs are already known, read them directly. Batch independent
+required reads through an existing multi-selector API; otherwise group independent
+read-only calls when the tool supports it. If a location is unknown, discover the
+nearest relevant parent once, then read the needed values. An index describes
+available content; it does not prove that content was read. Avoid selecting both
+a parent and its children, which repeats the same evidence.
+
+For captured LoopX context, repeat `--select` on the original capture/hash.
+Use `--list` only for unknown pointers and `--list-depth 2` for useful nested
+discovery. A missing pointer rejects the entire selection: inspect its parent in
+that same capture before retrying, rather than guessing another batch or rerunning
+admission. For large arrays, prefer the known record selector or a focused item
+over recursively listing every record.
+
+Size a batch against the combined tool-result and retained-history limits, not
+only each child call's limit. Inspect every result, retain errors and running
+process handles, and reduce the batch or page size after truncation. Keep reads
+that depend on earlier results, writes, approvals and uncertain-effect recovery
+sequential. Batching is an efficiency choice, not permission to omit required
+evidence, reuse stale authority or parallelize effects.
+
 When JSON may exceed the tool output budget, capture it once in an ignored
 private file with restricted permissions, or in the tool runtime's value store.
 Keep the command exit status and validate that the capture is complete JSON.

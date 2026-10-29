@@ -234,6 +234,9 @@ def register_quota_command(
     quota_parser.add_argument("--list", dest="list_fields", action="store_true",
         help="For context-read: list immediate fields at the selected pointers (root by default), "
              "with exact pointers, types and sizes. Does not read bodies or establish a delta baseline.")
+    quota_parser.add_argument("--list-depth", type=int,
+        help="For context-read --list: expand 1 to 8 levels in one index (default: 1). "
+             "Select the nearest useful parent to avoid unrelated fields; known pointers can be read directly with repeated --select.")
     quota_parser.add_argument("--selection-sha256",
         help="For selected context-read continuations: exact derived-view digest from the preceding page.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")

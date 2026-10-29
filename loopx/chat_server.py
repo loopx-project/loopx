@@ -1921,7 +1921,8 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
-    from .presentation.request_control_api import bound_steward_inventory_scope, manager_source_scope_resolver
+    from .presentation.request_control_api import bound_steward_inventory_scope
+    from .chat_lark_api import manager_source_scope_resolver
     manager_scope = manager_source_scope_resolver(server,
         registry_path=resolved_registry_path, executor_runtime_root=runtime_root)
 

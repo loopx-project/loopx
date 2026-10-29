@@ -974,6 +974,16 @@ this slice reduces semantic owners, not crossing count. Native transactions stay
 in-process. Fold the remaining crossings into that complete transaction rather
 than extending these adapters field by field.
 
+The automatic-wait read model now qualifies all canonical witnesses before
+display compaction. `pending_resume_count` extends the existing quiet path only
+when it covers every waiting successor; clock-only frontiers use the earliest
+deadline. The interaction adapter reuses the scoped notice-only classifier so
+an optional user action does not replace that proven wait. Actual gates,
+unknown sources, Turn bindings and strict monitor-poll identity checks remain.
+File/SQLite CLI initial/replay, preserved state and no-debit checks qualify
+this source slice; installed adoption and long-running Host behavior remain
+separate acceptance.
+
 The waiting/resume planning slice now uses `todos/resume_planning.ts` for the
 complete deferred, resume-blocked, monitor-repair and blocked-successor selection.
 Quota composes capacity evaluation with these lanes in one request per source summary, reusing the

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import Any
+
+from ...project_prompt import shell_arg_for_host
 
 
 # Presentation regression budgets, not external transport or execution limits.
@@ -57,14 +60,23 @@ def heartbeat_prompt_mode(
 def prompt_budget_text(
     text: str, *, goal_id: str, active_state: str,
     registry_path: str | None = None,
+    runtime_root: str | Path | None = None,
 ) -> str:
     normalized = text
     # Compare authored guidance independently of the host's selected path length.
     # char_count below still reports the actual transport/body size.
-    if registry_path:
-        normalized = normalized.replace(shlex.quote(registry_path), "<REGISTRY_PATH>")
-        normalized = normalized.replace(registry_path, "<REGISTRY_PATH>")
-    return normalized.replace(goal_id, "<GOAL_ID>").replace(active_state, "<ACTIVE_STATE>")
+    routes = (
+        (registry_path, "<REGISTRY_PATH>"), (active_state, "<ACTIVE_STATE>"),
+        (str(runtime_root) if runtime_root is not None else None, "<RUNTIME_ROOT>"),
+    )
+    # A route may contain the goal id or live below another selected route.
+    # Normalize complete, shell-quoted paths before their substrings. Bootstrap
+    # loaders use POSIX quoting even when host commands use PowerShell quoting.
+    for route, marker in sorted(routes, key=lambda pair: len(pair[0] or ""), reverse=True):
+        if route:
+            for spelling in dict.fromkeys((shell_arg_for_host(route), shlex.quote(route), route)):
+                normalized = normalized.replace(spelling, marker)
+    return normalized.replace(goal_id, "<GOAL_ID>")
 
 
 def build_interface_budget(
@@ -73,6 +85,7 @@ def build_interface_budget(
     goal_id: str,
     active_state: str,
     registry_path: str | None = None,
+    runtime_root: str | Path | None = None,
     full: bool = False,
     compact: bool = False,
     brief: bool = False,
@@ -86,7 +99,8 @@ def build_interface_budget(
         else heartbeat_prompt_mode(full=full, compact=compact, brief=brief, thin=thin)
     )
     budget_text = prompt_budget_text(
-        task_body, goal_id=goal_id, active_state=active_state, registry_path=registry_path,
+        task_body, goal_id=goal_id, active_state=active_state,
+        registry_path=registry_path, runtime_root=runtime_root,
     )
     budget_chars = len(budget_text)
     reward_memory_headroom = (

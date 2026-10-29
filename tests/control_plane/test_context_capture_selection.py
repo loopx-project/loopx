@@ -214,3 +214,52 @@ def test_cli_index_defaults_to_root_without_registry_or_runtime(tmp_path):
     assert code == 0 and page["eof"], page
     assert page["selected_pointers"] == [""]
     assert not registry.exists() and not runtime.exists()
+
+
+def test_cli_nested_index_preserves_depth_and_digest_across_pages(tmp_path):
+    path, raw, original = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--list", "--list-depth", "3",
+        "--page-bytes", "256", "--max-page-output-bytes", "2000"]
+    combined, first, offset = b"", None, 0
+    while True:
+        code, page = _run_cli(registry, runtime, *command, cwd=tmp_path)
+        assert code == 0 and page["ok"], page
+        assert page["offset"] == offset
+        assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 2000
+        assert capture_page_range(page, raw=raw, digest=page["sha256"]) is None
+        first = first or page
+        assert first["selection_sha256"] == page["selection_sha256"]
+        combined += page["content"].encode()
+        offset = len(combined)
+        if page["eof"]:
+            assert offset == page["total_bytes"]
+            break
+        command = shlex.split(page["next_command"])[3:]
+        assert command[command.index("--list-depth") + 1] == "3"
+    fields = {item["pointer"]: item for item in json.loads(combined)["selections"][0]["fields"]}
+    assert fields["/rows/0/tail"]["type"] == "string"
+    assert fields["/a~1b/~0"]["type"] == "null"
+    assert original["rows"][0]["tail"] not in combined.decode()
+    assert hashlib.sha256(combined).hexdigest() == first["selection_sha256"]
+    # Changing traversal depth cannot reuse the prior view's continuation.
+    request = args(path, raw)
+    request.select, request.list_fields, request.list_depth = [""], True, 1
+    request.offset, request.selection_sha256 = first["next_offset"], first["selection_sha256"]
+    assert read_context_capture(request)["ok"] is False
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("options", [
+    ["context-read", "--list-depth", "2"],
+    ["context-read", "--list", "--list-depth", "0"],
+    ["context-read", "--list", "--list-depth", "9"],
+    ["should-run", "--list-depth", "2"],
+])
+def test_cli_rejects_invalid_depth_before_authority(tmp_path, options):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    code, page = _run_cli(registry, runtime, "quota", *options, cwd=tmp_path)
+    assert code != 0 and page["ok"] is False
+    assert "list-depth" in page["reason"]
+    assert not registry.exists() and not runtime.exists()

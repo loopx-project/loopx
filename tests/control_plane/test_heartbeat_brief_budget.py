@@ -87,6 +87,7 @@ def _assert_routes(payload: dict[str, Any], expected_commands: set[str]) -> None
 def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     payload = _prompt()
     _assert_routes(payload, _BRIEF_COMMANDS)
+    assert payload["interface_budget"]["within_budget"] is True
     encoded = _render(payload, "json")
     markdown = _render(payload, "markdown")
     assert json.loads(encoded) == payload
@@ -131,6 +132,13 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     old_shape = {**payload, "pr_review_pre_quota_command": None}
     assert len(_render(old_shape, "json")) - len(encoded) == 35
     assert _render(old_shape, "markdown") == markdown
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])
+def test_authored_body_budget_does_not_depend_on_selected_windows_routes(mode: str) -> None:
+    payload = _prompt(mode=mode)
+    assert payload["interface_budget"]["char_count"] == len(payload["task_body"])
+    assert payload["interface_budget"]["within_budget"] is True
 
 
 def test_brief_external_evidence_poll_keeps_complete_prequota_command() -> None:

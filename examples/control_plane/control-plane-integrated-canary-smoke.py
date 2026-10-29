@@ -188,10 +188,9 @@ def assert_selected_agent_todo(
         assert summary["payload_compaction"]["schema_version"] == (
             "quota_cli_todo_summary_compaction_v0"
         ), summary
-        assert "title" not in item, summary
         assert item["text"] == f"[P1] {CANARY_TODO_TITLE}", summary
-    else:
-        assert item["title"] == CANARY_TODO_TITLE, summary
+    # The shared diagnostic projection retains each visible record in full.
+    assert item["title"] == CANARY_TODO_TITLE, summary
     assert item["claimed_by"] == AGENT_ID, summary
     assert item["task_class"] == "advancement_task", summary
     assert "todo_markdown_fallback" not in json.dumps(summary, sort_keys=True), summary

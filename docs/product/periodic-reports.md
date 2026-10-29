@@ -1011,14 +1011,46 @@ The existing Goal capability configuration transaction accepts:
 Replace the example with the actual existing identities and requested time.
 Prepare through `/api/chat/goal-configuration/preview`, then apply the same
 body and its `expected_plan_revision` through
-`/api/chat/goal-configuration/apply`. The existing Goal settings JSON editor
-uses this transaction; read back the saved configuration and the managed
-Session's `scheduled_task` inspection. A stale preview or changed identity is
+`/api/chat/goal-configuration/apply`. Read back the saved configuration and the
+managed Session's `scheduled_task` inspection. A stale preview or changed identity is
 rejected. This is an explicit Goal override: a machine default cannot enroll
 another conversation. `session-task` is a calendar execution mode, not a report
 renderer preset; it does not invoke the progress-report source or editorial
 format. Task descriptions, scripts and validation argv cannot be supplied in
 this configuration.
+
+The current generic Goal editor does **not** register the `task` field. Its
+form drops that source from the draft, and its JSON editor rejects unregistered
+fields. It therefore cannot yet configure or edit this Task mode end to end;
+the HTTP contract above and the read-only source catalog are partial product
+delivery. Do not mistake a preconfigured fixture for a completed Task picker or
+natural-language journey. Missing, empty, non-object or command-bearing Task
+input is rejected as HTTP 400 before Session source inspection, without changing
+the subscription, creating a window or invoking work. It does not infer a source
+from an older configuration.
+
+当前通用 Goal 编辑器尚未登记 `task` 字段：表单会在草稿中丢失原来源，JSON 编辑器也
+拒绝未登记字段，因此完整任务配置界面仍未交付。上述 HTTP 合同和只读来源目录只是
+阶段能力，预配置的合成场景不代表已完成 Task 选择器或自然语言旅程。缺失、空值、
+非对象或夹带命令的 Task 输入在读取 Session 来源前即以 HTTP 400 拒绝，不改订阅、
+不创建窗口、不执行业务，也不从旧配置推断来源。
+
+For reproducible packaged checks, run the existing disposable browser fixture:
+
+```sh
+uv run --extra test python examples/personal-workspace-browser/steward_report_fixture.py \
+  --managed-calendar-task sqlite --output-dir /tmp/loopx-calendar-task-qa
+```
+
+Use `file` instead of `sqlite` for the other native backend. `ready.json` names
+the isolated HTTP URL, original Session, completed source and future disabled
+configuration. The model computes an independently validated synthetic sum;
+no real identity or private provider is attached. The `start-existing-owners`
+control starts the real idle wake owner. `stop-existing-wake` stops only that
+owner; removing it resumes the same stored state through a new wake-service
+instance. `observed.json` records artifact, completion, retained history and
+actual post-setup model calls. This qualifies neither live-model understanding,
+complete Chat-process restart nor production delivery.
 
 Callers can discover eligible references on demand with
 `GET /api/chat/sessions/<original-session-id>/native-turn?calendar_task_sources=true`.

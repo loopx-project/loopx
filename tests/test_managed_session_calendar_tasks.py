@@ -351,6 +351,31 @@ def test_task_declarations_never_enroll_other_routes_or_implicit_commands(fault)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["missing-task", "empty-task", "array-task", "injected-command"])
+def test_settings_reject_invalid_task_input_without_execution_or_config_write(steward, tmp_path, monkeypatch, provider, fault):
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    if fault == "missing-task":
+        config.pop("task")
+    elif fault == "empty-task":
+        config["task"] = {}
+    elif fault == "array-task":
+        config["task"] = []
+    else:
+        config["task"]["validation_command"] = ["untrusted-command"]
+    before = runtime.registry_path.read_bytes(), capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+    with settings_server(steward) as request:
+        body = {"goal_id": actor["goal_id"], "capability_id": "periodic_report", "configuration": config}
+        for path, payload in (("preview", body), ("apply", {**body, "expected_plan_revision": "not-a-plan"})):
+            status, rejected = request("/api/chat/goal-configuration/" + path, payload)
+            assert status == 400, rejected
+            assert rejected["error_code"] == "invalid_goal_configuration"
+            assert "session task requires one existing source_todo_id" in rejected["error"]
+    assert (runtime.registry_path.read_bytes(), capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)) == before
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_known_failed_repeat_is_retained_without_replay_then_explicitly_cancelled(steward, tmp_path, monkeypatch, provider):
     session, actor, _, capture, workspace, config = setup_task(steward, tmp_path, monkeypatch, provider)
     point = fixed_clock(monkeypatch)
