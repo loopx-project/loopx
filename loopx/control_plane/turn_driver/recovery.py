@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from .dual_session import (
+    ControllerSession,
+    ReconciliationDecision,
+    load_controller_session,
+    save_controller_session,
+)
 from .session_recovery import (
     SessionBindingResolver,
     assess_failed_turn_retry_request,
@@ -85,16 +92,49 @@ def assess_existing_turn_recovery(
 
 def require_turn_recovery_continuation(
     assessment: TurnRecoveryAssessment,
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    todo_id: str,
 ) -> dict[str, Any]:
     """Return the reconciled request or raise the decision-bearing refusal."""
 
     if assessment.decision.get("action") == "continue":
         return dict(assessment.request)
+
+    # Load controller session and decide reconciliation
+    controller = load_controller_session(runtime_root, goal_id, agent_id, todo_id)
+
+    if controller is None:
+        # No controller session exists - treat as blocked
+        message = (
+            str(assessment.error)
+            if assessment.error is not None
+            else "LoopX Turn journal recovery is blocked"
+        )
+        raise TurnRecoveryBlockedError(assessment.decision, message)
+
+    decision = controller.decide_reconciliation()
+
+    if decision == ReconciliationDecision.AUTOMATIC_RETRY:
+        # Increment generation and allow retry
+        controller.increment_generation(runtime_root)
+        save_controller_session(controller, runtime_root)
+        return dict(assessment.request)
+
+    # BLOCKED_UNKNOWN_OUTCOME or COMMITTED - raise error with attempt history context
+    attempt_summary = [
+        f"gen{attempt.generation}:{attempt.outcome.value}"
+        for attempt in controller.observing_attempts
+    ]
     message = (
-        str(assessment.error)
-        if assessment.error is not None
-        else "LoopX Turn journal recovery is blocked"
+        f"LoopX Turn recovery blocked: {decision.value}. "
+        f"Attempt history: {', '.join(attempt_summary) if attempt_summary else 'none'}"
     )
+    if assessment.error is not None:
+        message = f"{assessment.error}. {message}"
+
     raise TurnRecoveryBlockedError(assessment.decision, message)
 
 
