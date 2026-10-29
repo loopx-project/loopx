@@ -952,7 +952,6 @@ class ChatRequestHandler(
     def _managed_native_turn(self, session_id: str, *, execute: bool = False) -> None:
         from .capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
         service = ManagedSessionTurn(self.server.runtime_controller)
-        include_sources = False
         try:
             if execute:
                 body = self._read_json()
@@ -974,11 +973,6 @@ class ChatRequestHandler(
             self._send_error("chat session was not found", status=404)
         except (TypeError, ValueError, RuntimeError) as exc:
             self._send_error(str(exc), status=409, error_code="managed_turn_unavailable")
-        except OSError:
-            if not include_sources:
-                raise
-            self._send_error("Original managed Task sources are temporarily unreadable", status=503,
-                error_code="managed_task_sources_unavailable")
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)

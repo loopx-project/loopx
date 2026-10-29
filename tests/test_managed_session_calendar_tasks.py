@@ -211,8 +211,7 @@ def test_calendar_task_discovery_retains_unreadable_validator_and_recovers_witho
         with settings_server(steward) as request:
             url = f"/api/chat/sessions/{session['session_id']}/native-turn?calendar_task_sources=true"
             status, failed = request(url, None, method="GET")
-            assert status == (503 if fault == "directory" else 409), failed
-            assert failed["error_code"] == ("managed_task_sources_unavailable" if fault == "directory" else "managed_turn_unavailable")
+            assert status == 409 and failed["error_code"] == "managed_turn_unavailable", failed
             assert "calendar_task_sources" not in failed
             with pytest.raises(OSError if fault == "directory" else ValueError):
                 service.source_task(actor, config["task"])

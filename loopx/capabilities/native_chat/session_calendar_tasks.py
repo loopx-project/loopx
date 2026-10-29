@@ -111,23 +111,26 @@ class SessionCalendarTasks(ManagedSessionReports):
         no hot-list limit or private second index determines membership here.
         """
         from ...control_plane.todos.list_readback import list_goal_todos
-        actor = self.selected(session_id)["actor"]
-        snapshot = list_goal_todos(registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
-            runtime_root_arg=str(self.root), role="agent", status="done", read_scope="completed_history", limit=None)
-        sources = []
-        for row in snapshot["todos"]:
-            if not self._source_candidate(actor, row):
-                continue
-            # An unreadable or changed declaration must fail the read instead
-            # of turning a source-coverage failure into an empty valid catalog.
-            validation = self._source_validation(actor, row)
-            sources.append({"source_todo_id": row["todo_id"], "title": row.get("title") or row["text"],
-                "completion_validation_sha256": row["completion_validation_sha256"],
-                "validation_label": validation.get("validation_label"),
-                "archived": row.get("archive_state") == "archive"})
-        return {"schema_version": "managed_session_task_sources_v0", "session_id": session_id,
-            "goal_id": actor["goal_id"], "agent_id": actor["agent_id"], "read_only": True,
-            "sources": sources, "authority_read": snapshot["authority_read"]}
+        try:
+            actor = self.selected(session_id)["actor"]
+            snapshot = list_goal_todos(registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                runtime_root_arg=str(self.root), role="agent", status="done", read_scope="completed_history", limit=None)
+            sources = []
+            for row in snapshot["todos"]:
+                if not self._source_candidate(actor, row):
+                    continue
+                # An unreadable or changed declaration must fail the read instead
+                # of turning a source-coverage failure into an empty valid catalog.
+                validation = self._source_validation(actor, row)
+                sources.append({"source_todo_id": row["todo_id"], "title": row.get("title") or row["text"],
+                    "completion_validation_sha256": row["completion_validation_sha256"],
+                    "validation_label": validation.get("validation_label"),
+                    "archived": row.get("archive_state") == "archive"})
+            return {"schema_version": "managed_session_task_sources_v0", "session_id": session_id,
+                "goal_id": actor["goal_id"], "agent_id": actor["agent_id"], "read_only": True,
+                "sources": sources, "authority_read": snapshot["authority_read"]}
+        except OSError as exc:
+            raise RuntimeError("Original managed Task sources are temporarily unreadable") from exc
 
     def admission(self, request):
         actor = request["actor"]
