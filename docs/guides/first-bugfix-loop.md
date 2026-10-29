@@ -2,9 +2,12 @@
 
 [中文](first-bugfix-loop.zh-CN.md)
 
-Start with a tiny checkout-pricing bug. See a test fail, let an agent repair
-it through LoopX, rerun the tests, and inspect a local commit. Then reuse the
-same workflow for a recurring bug hunt in your own repository.
+Fix a tiny checkout-pricing project with an agent you already use. You will
+reproduce two failing checks, ask the agent to repair the code through LoopX,
+inspect the patch, and make a local commit. No remote repository is required.
+
+**Finish steps 1–4 first.** Step 5 is an optional extension for recurring work
+in your own repository; you do not need a recurring bug hunt to complete this exercise.
 
 You need Python 3.11+ for the exercise. To use LoopX, also install Node.js
 22.22.3+ (24 LTS recommended), LoopX, and an agent host you already use. The
@@ -32,6 +35,10 @@ Prices are integer cents. An empty cart costs zero. Orders totaling at least
 10,000 cents ship free; other nonempty carts add 500 cents. Negative prices
 are rejected and inputs must not be modified. The two initial bugs violate
 the empty-cart and exact-threshold rules.
+
+For example, `[]` should return `0`, but initially returns `500`.
+`[6_000, 4_000]` should return `10_000`, but initially returns `10_500`.
+These are logic failures to repair, not signs that LoopX is installed incorrectly.
 
 Initialize the copied project and record the intentionally broken baseline:
 
@@ -94,7 +101,7 @@ guided setup for this actual host, with its registered Agent and useful Todos.
 Confirm the host's continuation mechanism is active; initialization alone
 is not completion. Follow LoopX's current quota and stop conditions.
 Run all six checks after the change and show the actual diff and results.
-Leave the patch uncommitted so I can inspect and commit it in step 5.
+Leave the patch uncommitted so I can inspect and commit it in step 4.
 Do not push, create a remote repository, merge, or call additional external services.
 Stop when these requirements are verified, or explain a concrete blocker.
 ```
@@ -102,6 +109,10 @@ Stop when these requirements are verified, or explain a concrete blocker.
 You should see a failure reproduction, a small patch, and a final test result.
 The exercise ends when the six checks pass and the diff preserves the
 requirements. It does not need to run forever.
+
+Keep the two input surfaces separate: run `python3 checks.py` and Git commands
+in the **project terminal**; send `$loopx …` in the **agent conversation**.
+An Agent's explanation is useful context, but the next step checks its actual patch.
 
 ### Confirm that it actually started
 
@@ -122,38 +133,18 @@ activation gap rather than say that autonomous execution is ready.
 Both paths require their host to remain available. Installing LoopX does not
 keep a closed terminal or unavailable App running.
 
-## 4. Turn the workflow into a recurring bug hunt
+If you get stuck:
 
-Use this on a real project after completing the small exercise. Replace the
-scope and test command with your project's actual ones:
+| What you see | What to check next |
+| --- | --- |
+| `$loopx` is unavailable | Refresh the skill with `loopx workflow-skills --install` in the installation used by this host; then reopen the host if needed |
+| A setup packet, but no repair | Complete activation in the same host as above; then ask it to resume this task, without creating another Goal |
+| Python/import errors | Repair the local Python environment before diagnosing the cart logic |
+| The agent says “done” | Run the checks and inspect the diff in step 4 before accepting the repair |
 
-```text
-$loopx Keep checking <owned module or directory> for reproducible bugs.
-Start by reading repository instructions and identifying the relevant test
-command, scope, and existing budget. Work in the repository's isolated branch
-or worktree. For each real bug: reproduce it, add a failing regression, make
-the smallest coherent repair, rerun that regression and the affected suite,
-then prepare a signed-off commit and reviewable PR under repository rules.
-Record the result and next action in the existing LoopX work.
-If no new evidence justifies work, wait according to LoopX's scheduler and
-record the next meaningful trigger instead of repeating the same empty scan.
-Honor the current quota and spending boundary. Report environmental failures
-and unresolved tests honestly. Keep merge and release for my explicit decision.
-```
+<a id="5-test-inspect-commit-then-request-review"></a>
 
-Here, “infinite loop” means authorized work can continue or resume. Each repair
-still has a finish line. Quiet monitoring should wait for a meaningful event
-or its scheduled check; a higher wake frequency does not prove useful progress.
-Start with one module, a known test command, and a spending boundary you accept.
-
-To pause, ask the agent to pause this LoopX goal and its corresponding driver,
-then read back both states. In CLI you can first use `/goal pause`; in App pause
-the matching automation. Pausing the host driver and pausing the LoopX goal are
-separate state changes. Do not delete project state to stop a loop. To resume,
-open the same project, explicitly resume the same Agent lane, read its existing
-state and last evidence, and reactivate the appropriate host driver.
-
-## 5. Test, inspect, commit, then request review
+## 4. Test, inspect, commit, then request review
 
 For the local exercise, run these yourself after the agent finishes:
 
@@ -187,6 +178,39 @@ authorization, and create a PR with the actual cause, behavior change and test
 results. Read back its head and checks. A local commit, a pushed branch, an open
 PR and a merged PR are different outcomes; CI or review feedback may require
 another repair. Creation of a PR does not authorize merging it.
+
+<a id="4-turn-the-workflow-into-a-recurring-bug-hunt"></a>
+
+## 5. Turn the workflow into a recurring bug hunt
+
+Use this on a real project after completing the small exercise. Replace the
+scope and test command with your project's actual ones:
+
+```text
+$loopx Keep checking <owned module or directory> for reproducible bugs.
+Start by reading repository instructions and identifying the relevant test
+command, scope, and existing budget. Work in the repository's isolated branch
+or worktree. For each real bug: reproduce it, add a failing regression, make
+the smallest coherent repair, rerun that regression and the affected suite,
+then prepare a signed-off commit and reviewable PR under repository rules.
+Record the result and next action in the existing LoopX work.
+If no new evidence justifies work, wait according to LoopX's scheduler and
+record the next meaningful trigger instead of repeating the same empty scan.
+Honor the current quota and spending boundary. Report environmental failures
+and unresolved tests honestly. Keep merge and release for my explicit decision.
+```
+
+Here, “infinite loop” means authorized work can continue or resume. Each repair
+still has a finish line. Quiet monitoring should wait for a meaningful event
+or its scheduled check; a higher wake frequency does not prove useful progress.
+Start with one module, a known test command, and a spending boundary you accept.
+
+To pause, ask the agent to pause this LoopX goal and its corresponding driver,
+then read back both states. In CLI you can first use `/goal pause`; in App pause
+the matching automation. Pausing the host driver and pausing the LoopX goal are
+separate state changes. Do not delete project state to stop a loop. To resume,
+open the same project, explicitly resume the same Agent lane, read its existing
+state and last evidence, and reactivate the appropriate host driver.
 
 ## Setup effort, ongoing cost, and limits
 
