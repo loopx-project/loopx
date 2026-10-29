@@ -815,7 +815,6 @@ def _request_with_info(
     }
     with ExitStack() as stack:
         response_sink: Path | None = None
-        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if large_local_snapshot:
             if method not in LOCAL_SNAPSHOT_METHODS:
                 raise EffectRuntimeRejected(
@@ -846,6 +845,8 @@ def _request_with_info(
                     "sha256": hashlib.sha256(params_bytes).hexdigest(),
                 }
                 encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        else:
+            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if len(encoded) > MAX_REQUEST_BYTES:
             raise EffectRuntimeRejected(
                 "TypeScript Effect runtime request is oversized",

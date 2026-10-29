@@ -58,15 +58,16 @@ def ids(items: list[dict]) -> list[str]:
     return [item["todo_id"] for item in items]
 
 
-def test_referenced_request_deduplicates_lanes_without_pruning_payload_facts() -> None:
+@pytest.mark.parametrize("copy_rows", [False, True], ids=["shared-object", "equal-copies"])
+def test_referenced_request_deduplicates_lanes_without_pruning_payload_facts(copy_rows) -> None:
     row = waiting(
         "todo_shared",
         content_revision="sha256:synthetic-full-projection",
     )
     request = build_referenced_todo_resume_planning_request({
         "items": [row],
-        "first_open_items": [row],
-        "deferred_items": [row],
+        "first_open_items": [deepcopy(row) if copy_rows else row],
+        "deferred_items": [deepcopy(row) if copy_rows else row],
     })
 
     assert request["schema_version"] == "todo_resume_planning_request_v1"
