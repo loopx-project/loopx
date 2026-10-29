@@ -1404,6 +1404,22 @@ a sustained performance result nor evidence of model-token savings.
 含义、诊断区/scope引用、新旧块歧义、其他表面及已存在条款均不适用。这只扩展本地输出验证回执，
 不改变运行时状态或权限。顺序单次139.9 / 290.2秒不证明持续性能或模型token收益。
 
+Default freshness also adds the original read basis as a self-contained Host
+input. Its Todo text/title can equal the current work view while retaining a
+different provenance and integrity contract. The older whole-packet string
+count must not delete or alias that basis into a current snapshot. Keep the
+current work view's one-body assertion; independently compare the original
+context with its stored token's complete readback, including both text and
+title. Receipt-off packets retain the whole-packet assertion. This separates
+required snapshot cost from accidental display copies without a blanket
+three-copy allowance or a new projection protocol.
+
+默认freshness还交付独立、自包含的原始读依据；其Todo正文/标题可与当前工作视图
+相同，但来源与完整性契约不同。旧“整包字符串只出现一次”断言不能据此删除原依据
+或引用当前快照替代。保留当前工作视图正文一次的断言，另以原token的完整存储读回
+核对原依据（含正文与标题）；无receipt时仍检查整包。该调整区分必要快照成本与
+意外显示副本，不是统一允许三份，也不新增投影协议。
+
 The native first-admission qualification at `ff1c8a947` uses the same public
 fixture populations, interpreter, Node version, physical path layout and shared
 probe on target main `8caaf678e` and head. The three quota JSON outputs measure

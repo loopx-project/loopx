@@ -145,7 +145,27 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
     lane = full["agent_lane_next_action"]
     assert lane["todo_id"] == TODO_ID and "title" not in lane
     assert lane["title_ref"] == f"$.interaction_contract.agent_channel.work_context.sources[{index}].content.todo.text"
-    assert json.dumps(full, ensure_ascii=False).count(json.dumps(body, ensure_ascii=False)) == 1
+    work_view = dict(full)
+    if (full.get("heartbeat_receipt") or {}).get("result_freshness") == "turn_result_freshness_required_v1":
+        from loopx.control_plane.goals.checkpoint_context_io import result_work_context
+        from loopx.control_plane.quota.settlement import SettlementIdentity
+
+        # The original read basis is a separate, self-contained Host input.
+        # Restore its existing token, never mint a new read or substitute the
+        # current work view merely because their text happens to match.
+        original = full["delivery_result_context"]
+        identity = SettlementIdentity.from_runtime_payload(original["settlement_identity"])
+        assert identity.todo_id == TODO_ID and identity.agent_id == AGENT_ID
+        assert identity.goal_id == GOAL_ID
+        stored = result_work_context(registry_path=registry, runtime_root=runtime, identity=identity)
+        assert json.dumps(original, sort_keys=True, allow_nan=False) == json.dumps(
+            stored, sort_keys=True, allow_nan=False)
+        assert original["basis"]["todo"]["text"] == body
+        assert original["basis"]["todo"]["title"] == body
+        work_view.pop("delivery_result_context")
+    # Preserve the old current-view oracle, including receipt-off behavior.
+    # This is not permission for an arbitrary number of duplicate carriers.
+    assert json.dumps(work_view, ensure_ascii=False).count(json.dumps(body, ensure_ascii=False)) == 1
     assert "context_delivery" not in full
     assert not list(project.rglob("presentation.json"))
     assert state.read_bytes() == original_state
