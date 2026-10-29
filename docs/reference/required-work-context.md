@@ -210,6 +210,24 @@ retains its complete body and declaration. Todo-less reads and the explicit
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
 
+For enabled native quota with selected work, the same acceptance snapshot may
+include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
+connected through registered Todo relations, shared acceptance/source/evidence
+references, or failed/stale observations. An Agent owning two outcomes does not
+by itself connect their work. `coverage_complete` describes coverage of the
+registered relationship graph, not completeness of model understanding or proof
+that other outcomes are irrelevant. Missing relationships, unbound work or global
+acceptance widen suggestions and expose `limitations`.
+
+This is advisory reading order. It neither filters outcomes nor adds a full-read
+obligation, admission rule, approval or completion proof. The complete contract
+stays in the existing capture; use generic `quota context-read --select` to open
+needed sections, with `--list` where the installed reader supports discovery.
+No outcome-specific reader or pagination protocol is introduced. The suggestion
+is bound to the exact acceptance digest and provider revision; host oracle
+readback that changes the source drops that stale advice. Disabled delivery,
+explicit inventory inspection and signed TurnEnvelope retain their prior shapes.
+
 For an exact Todo, the existing command now returns one complete record:
 
 ```sh

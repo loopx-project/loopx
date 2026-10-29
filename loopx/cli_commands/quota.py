@@ -654,6 +654,10 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                context_navigation=(
+                    native_context_activation(args)["enabled"]
+                    and not bool(getattr(args, "turn_envelope", False))
+                ),
                 goal_ref=goal_ref,
             )
             _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)
