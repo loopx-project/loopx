@@ -9,8 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 import loopx.chat_store as chat_store
+import loopx.file_lock as file_lock
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.runtime.file_paths import windows_extended_path
 from test_chat_loopx_mode import mode, project  # noqa: F401
 from test_file_lock_windows_atomic import reader_without_delete_share
 
@@ -38,7 +40,7 @@ def transient_reader(path, monkeypatch):
     attempts = []
 
     def observed_replace(src, dst):
-        if Path(dst) == path:
+        if windows_extended_path(Path(dst)) == windows_extended_path(path):
             attempts.append(1)
             observed.set()
         return replace(src, dst)
@@ -50,7 +52,7 @@ def transient_reader(path, monkeypatch):
             close()
         worker = threading.Thread(target=release)
         worker.start()
-        monkeypatch.setattr(chat_store.os, "replace", observed_replace)
+        monkeypatch.setattr(file_lock.os, "replace", observed_replace)
         try:
             yield attempts
         finally:
@@ -88,7 +90,7 @@ def test_unrelated_replace_failure_propagates_without_retry(tmp_path, monkeypatc
     def fail(src, dst):
         attempts.append(1)
         raise FileNotFoundError(errno.ENOENT, "missing source")
-    monkeypatch.setattr(chat_store.os, "replace", fail)
+    monkeypatch.setattr(file_lock.os, "replace", fail)
     with pytest.raises(FileNotFoundError):
         chat_store._atomic_write_json(tmp_path / "turn.json", {"status": "queued"})
     assert attempts == [1] and not list(tmp_path.glob("*.tmp"))
@@ -101,7 +103,7 @@ def test_posix_permission_error_is_not_a_windows_retry(tmp_path, monkeypatch):
         error = PermissionError(errno.EACCES, "denied")
         error.winerror = 5
         raise error
-    monkeypatch.setattr(chat_store, "os", SimpleNamespace(name="posix", fsync=os.fsync, chmod=os.chmod, replace=fail))
+    monkeypatch.setattr(file_lock, "os", SimpleNamespace(**{**vars(os), "name": "posix", "replace": fail}))
     with pytest.raises(PermissionError):
         chat_store._atomic_write_json(tmp_path / "turn.json", {"status": "queued"})
     assert attempts == [1] and not list(tmp_path.glob("*.tmp"))
@@ -135,7 +137,6 @@ def test_original_operation_recovers_queued_after_failed_start_fact(mode, monkey
     controller = service.controller
     # Persist the real request capsule/display message; hold only scheduling.
     monkeypatch.setattr(controller, "submit_turn", ChatRuntimeController.submit_turn.__get__(controller))
-    monkeypatch.setattr(controller, "_check_codex_home", lambda _: None)
     monkeypatch.setattr(controller, "_ensure_adapter_locked", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(controller, "_start_accepted_turn_worker", lambda **k: False)
     if operation == "resume":
@@ -161,7 +162,6 @@ def test_original_operation_recovers_queued_after_failed_start_fact(mode, monkey
         service = controller.loopx_mode
         store = service.store
     monkeypatch.setattr(controller, "submit_turn", ChatRuntimeController.submit_turn.__get__(controller))
-    monkeypatch.setattr(controller, "_check_codex_home", lambda _: None)
     monkeypatch.setattr(controller, "_ensure_adapter_locked", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(controller, "_start_accepted_turn_worker", ChatRuntimeController._start_accepted_turn_worker.__get__(controller))
     dispatches = []

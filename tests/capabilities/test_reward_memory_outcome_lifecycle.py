@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -161,9 +162,11 @@ def _settlement_evidence(reflection_json: str | None = None):
     }
 
 
+@pytest.mark.parametrize("long_path", [False, True], ids=["ordinary-path", "long-path"])
 def test_validated_turn_reflection_writes_reads_back_and_replays(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    long_path: bool,
 ) -> None:
     config = _config(tmp_path)
     provider = OutcomeProvider()
@@ -172,7 +175,8 @@ def test_validated_turn_reflection_writes_reads_back_and_replays(
         "resolve_reward_memory_experiment",
         lambda **_kwargs: (_status(), config),
     )
-    monkeypatch.setattr(outcome_lifecycle, "_goal_repo", lambda *_args: tmp_path)
+    repo = tmp_path / ("bounded-project-" + "x" * 100) if long_path else tmp_path
+    monkeypatch.setattr(outcome_lifecycle, "_goal_repo", lambda *_args: repo)
     monkeypatch.setattr(
         recall_runtime,
         "resolve_reward_memory_experiment",
@@ -413,9 +417,11 @@ def test_sibling_agent_scope_is_rejected_before_provider(
     assert provider.retrieve_calls == 0
 
 
+@pytest.mark.parametrize("long_path", [False, True], ids=["ordinary-path", "long-path"])
 def test_ambiguous_write_reconciles_same_event_on_next_turn_without_duplication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    long_path: bool,
 ) -> None:
     config = _config(tmp_path)
     provider = AmbiguousOnceProvider()
@@ -424,7 +430,8 @@ def test_ambiguous_write_reconciles_same_event_on_next_turn_without_duplication(
         "resolve_reward_memory_experiment",
         lambda **_kwargs: (_status(), config),
     )
-    monkeypatch.setattr(outcome_lifecycle, "_goal_repo", lambda *_args: tmp_path)
+    repo = tmp_path / ("bounded-project-" + "x" * 100) if long_path else tmp_path
+    monkeypatch.setattr(outcome_lifecycle, "_goal_repo", lambda *_args: repo)
     request = {
         "registry_path": tmp_path / "registry.json",
         "goal_id": "goal",
@@ -475,12 +482,14 @@ def test_ambiguous_write_reconciles_same_event_on_next_turn_without_duplication(
     assert provider.sync_calls == 2
 
     path = turn_outcome_ingest_sidecar_path(
-        tmp_path,
+        repo,
         goal_id="goal",
         agent_id="pilot",
         source_event_id=first["source_event_id"],
     )
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        # Windows chmod does not express POSIX owner/group access bits.
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_pending_outcome_direct_retry_reuses_stored_settlement_evidence(

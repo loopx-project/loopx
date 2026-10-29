@@ -1291,9 +1291,9 @@ def test_turn_plan_rejects_contradictory_scheduler_owner() -> None:
 
 @pytest.mark.parametrize(
     "effective_action",
-    ["autonomous_replan", "autonomous_replan_required", "successor_replan_required"],
+    ["normal_run", "autonomous_replan", "autonomous_replan_required", "successor_replan_required"],
 )
-def test_turn_plan_keeps_todoless_replan_for_controller(effective_action: str) -> None:
+def test_turn_plan_keeps_unbound_todoless_work_for_controller(effective_action: str) -> None:
     envelope = _envelope(effective_action=effective_action)
     envelope["action"]["selected_todo"] = None
     payload = build_loopx_turn_plan(
@@ -1353,6 +1353,8 @@ def test_turn_plan_without_todo_requires_signature_and_scoped_binding(
     envelope["action"]["selected_todo"] = None
     if invalid_signature:
         envelope["action_signature"]["matches"] = False
+    else:
+        envelope["schema_version"] = "unsupported_turn_envelope"
     payload = build_loopx_turn_plan(
         envelope, host="generic-cli", execution_mode="isolated-headless",
     )
