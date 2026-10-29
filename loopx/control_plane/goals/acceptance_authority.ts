@@ -1,4 +1,5 @@
-import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome} from "./outcome_requirements.ts";
+import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
+  outcomeContextNavigation} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
@@ -561,6 +562,7 @@ export async function inspectGoalAcceptance(
   includeWorkDetails = true,
   agentId?: string,
   registeredAgents?: unknown,
+  contextAgentId?: string,
 ): Promise<JsonObject> {
   const head = await store.loadAuthority();
   if (head.status !== "loaded") return source(store, {...head});
@@ -582,6 +584,14 @@ export async function inspectGoalAcceptance(
     ...(state ? acceptanceTask(key, todo, state)
       : {todo_id: key, state: "unbound", criterion_ids: [], applicable: false}),
   }));
+  const contract = projectGoalAcceptance(head.head, goalId, registeredAgents);
+  const context = !includeWorkDetails && contextAgentId !== undefined && todoId !== undefined
+    ? outcomeContextNavigation(head.head, goalId, contextAgentId, todoId, contract) : null;
+  if (context && (!Array.isArray(registeredAgents) || !registeredAgents.includes(contextAgentId))) {
+    context.coverage_complete = false;
+    context.limitations = [...context.limitations as string[], "context_agent_unavailable"];
+    context.suggested_outcome_ids = ((contract.outcome_requirements as JsonObject).outcomes as JsonObject[]).map(o => o.id);
+  }
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
     contract: state ? state.document : null, tasks,
@@ -589,7 +599,8 @@ export async function inspectGoalAcceptance(
       completion_requirements: acceptanceCompletionRequirements(head.head, goalId, todoId)}),
     ...(agentId === undefined || currentGoalObjective(head.head) === null ? {} : {objective_work_digest: goalObjectiveWorkDigest(head.head, agentId),
       goal_objective_guard: goalObjectiveWorkGuard(head.head, agentId)}),
-    goal_acceptance_contract: projectGoalAcceptance(head.head, goalId, registeredAgents)});
+    ...(context === null ? {} : {outcome_context: {...context, provider_revision: head.provider_revision}}),
+    goal_acceptance_contract: contract});
 }
 
 async function local(value: unknown, kind: "inspect" | "configure" | "verify" | "lifecycle" | "refine" | "objective"): Promise<JsonObject> {
@@ -609,7 +620,8 @@ async function local(value: unknown, kind: "inspect" | "configure" | "verify" | 
           request.goal_ref === undefined ? undefined : parseWireExactGoalRef(request.goal_ref, "acceptance request goal_ref"),
           request.include_work_details !== false,
           request.agent_id === undefined ? undefined : requireAuthorityStoreId(request.agent_id, "agent_id"),
-          request.registered_agents);
+          request.registered_agents,
+          request.context_agent_id === undefined ? undefined : requireAuthorityStoreId(request.context_agent_id, "context_agent_id"));
       }
       if (kind === "configure") return configureGoalAcceptance(store, request);
       if (kind === "refine") return refineGoalAcceptanceOutcome(store, request);

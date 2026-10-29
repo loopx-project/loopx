@@ -195,7 +195,7 @@ def test_controller_and_projection_witnesses_cover_live_dispositions():
 
 @pytest.mark.parametrize(
     "defect",
-    ["missing_rule", "unregistered_output", "disconnected_table", "constant_emitter"],
+    ["missing_rule", "unregistered_output", "constant_emitter"],
 )
 def test_controller_production_rejects_contract_or_wiring_regressions(
     monkeypatch, defect
@@ -203,7 +203,8 @@ def test_controller_production_rejects_contract_or_wiring_regressions(
     from loopx.control_plane.turn_driver import loop_controller as c
     from loopx.semantics.turn_contract_witness import probe_controller_production
 
-    table = deepcopy(c._LOOP_CONTROLLER_CONTRACT)
+    from loopx.control_plane.turn_driver import turn_contract_generated as shared
+    table = deepcopy(shared.TURN_CONTROLLER_CONTRACT)
     if defect == "missing_rule":
         table["rules"] = [
             r for r in table["rules"] if r["id"] != "receipt_iteration_failed"
@@ -215,7 +216,7 @@ def test_controller_production_rejects_contract_or_wiring_regressions(
             c, "decide_loop_disposition", lambda **kw: {"disposition": "run_now"}
         )
     else:
-        monkeypatch.setattr(c, "_LOOP_CONTROLLER_CONTRACT", table)
+        monkeypatch.setattr(shared, "TURN_CONTROLLER_CONTRACT", table)
     with pytest.raises(ValueError):
         probe_controller_production()
 
@@ -231,31 +232,9 @@ def test_generated_provenance_is_not_a_filename_exception(tmp_path, monkeypatch)
         generator.verified_generated_paths()
 
 
-@pytest.mark.parametrize("defect", ["remove_stop", "terminal_becomes_repair"])
-def test_live_witness_fails_even_if_changed_table_is_freshly_generated(
-    monkeypatch, defect
-):
-    from loopx.control_plane.turn_driver import turn_contract_generated as shared
-    from loopx.semantics.turn_contract_witness import probe_controller_production
-
-    rules = deepcopy(shared.TURN_CONTROLLER_CONTRACT["rules"])
-    if defect == "remove_stop":
-        rules = [row for row in rules if row["id"] != "receipt_iteration_failed"]
-    else:
-        next(row for row in rules if row["id"] == "initial_terminal")["disposition"] = (
-            "repair"
-        )
-    monkeypatch.setitem(shared.TURN_CONTROLLER_CONTRACT, "rules", rules)
-    # Isolate the liveness obligation from the separately tested byte-provenance
-    # gate: model a freshly regenerated but semantically wrong contract. The
-    # real controller still interprets the changed rules and the oracle stays
-    # the independent input/output cases, not the changed data.
-    monkeypatch.setattr(generator, "verified_generated_paths", lambda: frozenset())
-    monkeypatch.setattr(
-        generator, "read_contract", lambda: shared.TURN_CONTROLLER_CONTRACT
-    )
-    with pytest.raises(ValueError):
-        probe_controller_production()
+# Live rule mutations run against the actual TS owner in
+# tests/control_plane_ts/turn_loop_controller.test.ts. Changing a Python cache
+# cannot reprogram that owner after this migration.
 
 
 def test_new_independent_twin_cannot_hide_behind_generated_pair(monkeypatch):

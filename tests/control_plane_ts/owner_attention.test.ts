@@ -194,3 +194,43 @@ test("partial coverage must exhaustively partition a complete authorized scope",
   assert.throws(() => ownerAttentionHealth({state: {...state,
     source_coverage: {goal_count: 2, read_goal_count: 2, unavailable_goal_count: 1}}}));
 });
+
+test("source diagnostics identify the unavailable Goal and retain no raw error details", () => {
+  const base = snapshot(empty(), [goal("alpha", []), goal("beta", [])], []);
+  const input = {state: base, goals: [goal("alpha", [task])], scope_goal_ids: ["alpha", "beta"],
+    unavailable_goal_ids: ["beta"], source_complete: false,
+    source_failures: [{goal_id: "beta", error_code: "canonical_authority_required", error: "private path"}]};
+  const missing = planOwnerAttention(input);
+  const health = ownerAttentionHealth({state: JSON.parse(JSON.stringify(missing))});
+  assert.deepEqual(health.source_failures, [{goal_id: "beta", error_code: "canonical_authority_required"}]);
+  assert.ok(!JSON.stringify(health).includes("private path"));
+  assert.equal(rows(missing).length, 1);
+  assert.equal(rows(missing)[0].source_current, true, "diagnostics do not hold healthy delivery");
+  const restored = snapshot(missing, [goal("alpha", [task]), goal("beta", [])], []);
+  assert.deepEqual(ownerAttentionHealth({state: restored}).source_failures, []);
+  assert.equal(rows(restored).length, 1, "changing diagnostics cannot create another notice");
+  // Journals written before this optional field remain readable. The next
+  // full snapshot supplies the missing Goal identity without guessing a cause.
+  const {source_failures: _oldField, ...legacy} = missing;
+  assert.deepEqual(ownerAttentionHealth({state: legacy}).source_failures, []);
+  assert.deepEqual(snapshot(legacy, [goal("alpha", [task])], ["beta"]).source_failures,
+    [{goal_id: "beta", error_code: "source_unavailable"}]);
+  for (const source_failures of [[],
+    [{goal_id: "alpha", error_code: "source_unavailable"}],
+    [{goal_id: "foreign", error_code: "source_unavailable"}],
+    [{goal_id: "beta", error_code: "unknown"}],
+    [{goal_id: "beta", error_code: "source_unavailable"}, {goal_id: "beta", error_code: "source_unavailable"}]])
+    assert.throws(() => planOwnerAttention({...input, source_failures}));
+  assert.deepEqual(ownerAttentionHealth({state: {...missing, source_failures: []}}).source_failures, []);
+  for (const source_failures of [null, [{goal_id: "beta", error_code: "private path"}]]) {
+    const retained = {...missing, source_failures};
+    assert.equal(ownerAttentionHealth({state: retained}).available, true);
+    assert.deepEqual(ownerAttentionHealth({state: retained}).source_failures, []);
+    assert.equal(rows(snapshot(retained, [goal("alpha", [task])], ["beta"])).length, 1);
+  }
+  const oldWriter = {...missing, source_coverage: {goal_count: 2, read_goal_count: 2, unavailable_goal_count: 0}};
+  assert.deepEqual(ownerAttentionHealth({state: oldWriter}).source_failures, [], "ignore stale optional diagnosis");
+  const current = snapshot(oldWriter, [goal("alpha", [task]), goal("beta", [])], []);
+  assert.deepEqual(current.source_failures, []);
+  assert.equal(rows(current).length, 1, "old-writer metadata cannot retire or duplicate the original notice");
+});

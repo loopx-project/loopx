@@ -39,6 +39,16 @@ reader. The six source links retain the recorded Task address in both formats.
 The fixed synthetic prose qualifies transport and reading mechanics, not live
 editorial quality or the address's availability. No layout or editor changed.
 
+The public browser fixture also keeps the original private outbound owner
+running through its periodic source-history check. Its shared synthetic
+provider returns the stored messages with source-bound pagination and time
+windows; it does not replace history with an empty successful response.
+The observation includes worker liveness, history-page count and ingress
+coverage so a background exception cannot be mistaken for a completed journey.
+File and SQLite regressions retain all 55 synthetic uncaptured sources without
+admitting or replying to them. These qualify test mechanics; live delivery,
+account switching and an unknown-effect failed production window remain separate.
+
 | Packaged answer reader | Narrow answer reader |
 | --- | --- |
 | ![A recorded Task address in the full report](../assets/personal-workspace/steward-reports/local-citations/packaged-reader-desktop.png) | ![The same source link and report at 390 pixels](../assets/personal-workspace/steward-reports/local-citations/packaged-reader-narrow.png) |
@@ -275,8 +285,12 @@ idle pump can create one separately correlated Chat continuation. It preserves
 the failed request and uses the same native observation identity and deadline.
 For a bound steward, this also covers a portfolio read explicitly refused
 because its authorization snapshot changed. The exact original failure and a
-single empty `external_authorization_changed` context must both be present;
-other runtime errors or missing, conflicting or unreadable context do not qualify.
+single empty `external_authorization_changed` context must both be present.
+An App identity read that fails before context publication can also qualify,
+but only with its exact original error, one recorded `manager_context` phase,
+no published context and the independent no-effect checks below. The current
+provider must verify successfully before acceptance; a matching error alone,
+other runtime errors or missing, conflicting or unreadable evidence do not qualify.
 The shared typed admission requires an untouched observation-only request, an
 available original worker lock, complete event/history reads and no pending or
 committed native poll receipt. It rechecks current authority, lease generation
@@ -366,6 +380,17 @@ burst. Later changes and newly registered Goals retain ordinary discovery.
 Failure to enumerate scope or verify the original owner, App, grant or route
 still pauses delivery. The panel distinguishes a fresh partial-source check
 from a stale worker or a delivery error; unknown receipts remain visible.
+
+Expand **View unavailable Goals** in that setting to identify each missing
+source. A native `canonical_authority_required` result asks the project's
+maintainer to back up and migrate its Todo authority; other read failures stay
+generic and are checked again. Only the Goal identity and an allowlisted error
+code enter this health view. Private exception text and paths are not displayed.
+This diagnosis never migrates a Goal, changes its grant, or resends a notice.
+
+在同一设置中展开“查看不可读的 Goal”，可逐项定位缺失来源。原生待办尚未迁移时，
+需由该项目维护者先备份并迁移；其他读取失败只提示暂不可读，服务会继续检查。
+页面不显示原始异常或私有路径，也不会据此迁移项目、扩权或重发通知。
 
 The packaged fixture
 `apps/presentation/dashboard/smoke/owner-attention-source-fixture.py` uses real
@@ -616,6 +641,14 @@ records retirement separately from publication. Restoring the same plan does
 not replay the failed attempt; a later due window can progress. A changed future
 plan is also allowed after retirement. Unknown model outcomes and partial or
 unknown sends cannot take this exit; they keep the original recovery boundary.
+
+Execution failure is visible even when it happens before an editorial response:
+the original steward and managed Session health expose `execution_failed` for
+the exact current actor, window and subscription revision. The steward settings
+show the retained failed execution instead of “Not generated”; the next calendar
+deadline is not a promise that the held window can run. This observation grants
+no cancellation, retirement or retry. A correlated quota continuation that
+succeeds clears the current failure projection while retaining its failed predecessor.
 
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |

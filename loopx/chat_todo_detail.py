@@ -3,6 +3,7 @@
 import hashlib
 from urllib.parse import parse_qs, urlparse
 
+from .chat_status_api import goal_read_runtime_root
 from .status_server import is_loopback_host
 from .control_plane.todos.list_readback import list_goal_todos
 
@@ -27,7 +28,7 @@ class TodoDetailRequestMixin:
             payload = list_goal_todos(
                 registry_path=self.server.registry_path, goal_id=goal_id,
                 role="agent", todo_id=todo_id,
-                runtime_root_arg=self.server.runtime_root_override,
+                runtime_root_arg=goal_read_runtime_root(self.server),
             )
             if payload.get("ambiguous"):
                 self._send_error("The Task source is ambiguous. Refresh its Goal.", status=409)

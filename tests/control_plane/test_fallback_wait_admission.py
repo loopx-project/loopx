@@ -190,12 +190,13 @@ def test_real_cli_wait_admission_is_stable_across_compact_lane_capacity(
     assert result["execution_obligation"]["must_attempt_work"] is False
     assert "fallback_gaps" not in result["goal_frontier_projection"]
     if unrelated_deferred_count:
-        assert (
-            result["agent_todo_summary"]["payload_compaction"]["omitted_lanes"][
-                "deferred_items"
-            ]
-            > 0
-        )
+        summary = result["agent_todo_summary"]
+        visible_ids = {item["todo_id"] for item in summary["deferred_items"]}
+        # Exercise a fallback outside the display window, independent of which
+        # projection layer bounds the lane or reports its omitted rows.
+        assert summary["deferred_count"] == unrelated_deferred_count + 2
+        assert len(visible_ids) < summary["deferred_count"]
+        assert FALLBACK_TODO_ID not in visible_ids
     assert (
         result["scheduler_hint"]["goal_runtime_continuation"]["disposition"]
         == "defer"

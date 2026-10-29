@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import io
 import json
 import shlex
@@ -93,26 +92,27 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
     assert json.loads(encoded) == payload
     root, _, _, _ = _windows_routes()
     assert encoded.count(json.dumps(root)[1:-1]) == 20
-    # The unchanged fixture on main b5a1a816a measures 10,522 JSON chars and
-    # 8,579 Markdown. The complete outcome paragraph adds 523 body/Markdown
-    # chars; omitting absent brief metadata saves 35 JSON chars: 11,010/9,102.
-    # The later diagnostic-only renderer change retains that full body and JSON,
-    # prints an identical active/resolved path once and omits absent pre-quota
-    # metadata: Markdown is 8,867 chars. The expected output was derived from
-    # b16aeb3's frozen 9,102-char rendering using only those two substitutions.
-    # These hashes retain every prior clause and route, plus the reviewed
-    # instruction transition. This is a synthetic spelling, not a Windows run.
-    assert hashlib.sha256(payload["task_body"].encode()).hexdigest() == (
-        "cfc65091d2710ef298174e6a5280edf55f6cc7acdce8e5688a2ae213b5f4b4ac"
-    )
-    assert hashlib.sha256(markdown.encode()).hexdigest() == (
-        "e5c10d37ed7cef08e8fa56a450f3c119de92d1ef99e3516ff6b106a8853c8186"
-    )
-    # fd1b23b59 raised the existing body allowance, preserving every clause.
-    # Only that diagnostic number differs from the earlier frozen rendering.
-    assert hashlib.sha256(markdown.replace("max_chars=`5400`", "max_chars=`4800`").encode()).hexdigest() == (
-        "29604e41d97963976ab8911e69c6328421aeaf63053cdb12c197dbe9b5291b9b"
-    )
+    # Assert the decision obligations rather than a hash of dated prose.
+    # The full body must reach Markdown, with its executable guard only once.
+    body = payload["task_body"]
+    assert body in markdown
+    assert markdown.count(payload["quota_guard_command"]) == 1
+    for obligation in (
+        "true=work+writeback; only false permits no-op",
+        "Read agent_channel.work_context and required_reads (or envelope) before work",
+        "retain original and cumulative outcome requirements",
+        "reuse inline goal_acceptance, inspect only if absent, then refine",
+        "Known new-Turn choice: add `--todo-id <id>` to first guard; otherwise",
+        "use selection_command when required; re-enter as instructed, do/verify authorized work",
+        "Settle with current settlement_plan.ordered_steps, else next_cli_actions",
+        "preserve exact identities/effect ids and actual outcomes",
+        "Never reconstruct static refresh/spend; ambiguous effects need readback/recovery, not blind retry",
+        "Todo done≠Turn settled; no invented successor/--no-follow-up",
+        "No wait spend",
+        "Finish Goal only on terminal no-follow-up",
+        "Destructive Git/production requires explicit authorization",
+    ):
+        assert obligation in body, obligation
     spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["heartbeat_prompt_brief"]
     assert spec.max_chars == {"json": 11_400, "markdown": 9_600}
     for output_format, text in (("json", encoded), ("markdown", markdown)):

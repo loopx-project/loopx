@@ -28,3 +28,14 @@ test("literal prototype-like keys are addressable only as own JSON properties", 
     {selections: [{pointer: "/__proto__/constructor", path: ["__proto__", "constructor"]}]});
   assert.throws(() => select({}, ["/__proto__"]));
 });
+
+test("discovery lists exact child addresses without materializing values", () => {
+  const context = {"a/b": {"~": ["private-body", null]}, n: 3};
+  const result = evaluateTurnEnvelope({operation: "context_select", context,
+    select: ["/a~1b", "/a~1b/~0", "/n"], list_fields: true});
+  assert.deepEqual(result, {selections: [
+    {pointer: "/a~1b", path: ["a/b"], children: [{pointer: "/a~1b/~0", path: ["a/b", "~"]}]},
+    {pointer: "/a~1b/~0", path: ["a/b", "~"], children: [
+      {pointer: "/a~1b/~0/0", path: ["a/b", "~", 0]}, {pointer: "/a~1b/~0/1", path: ["a/b", "~", 1]}]},
+    {pointer: "/n", path: ["n"], children: []}]});
+});

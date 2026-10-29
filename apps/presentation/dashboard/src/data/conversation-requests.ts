@@ -15,7 +15,9 @@ const inventorySchema = z.object({ok: z.literal(true), session_id: z.string(), r
   snapshot_digest: z.string().regex(/^[a-f0-9]{64}$/),
   pending_count: z.number().int().nonnegative(), matched: z.number().int().nonnegative(),
   next_offset: z.number().int().nonnegative().nullable(), observed_at: z.string(),
-  coverage: z.object({scan_complete: z.boolean(), unreadable: z.number().int().nonnegative()})});
+  coverage: z.object({scan_complete: z.boolean(), unreadable: z.number().int().nonnegative(),
+    diagnostics: z.array(z.object({request_id: z.string().regex(/^[a-f0-9]{64}$/), goal_id: z.string(), agent_id: z.string(),
+      code: z.literal("initial_delivery_unproved"), reason: z.literal("handoff_receipt_conflict")})).max(12).default([])})});
 export type ConversationRequest = z.infer<typeof rowSchema>;
 export type ConversationRequestInventory = z.infer<typeof inventorySchema>;
 

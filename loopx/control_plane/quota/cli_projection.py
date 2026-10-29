@@ -558,8 +558,7 @@ def _reference_context(
     result = _turn_envelope_result("reference_context", payload=payload,
         task_title=task_title, explore_guidance=explore_guidance,
         **({"diagnostics": diagnostics} if diagnostics is not None else {}))
-    # Existing reference-only callers keep their historical wire contract.
-    return result if diagnostics is None else _apply_context_projection_changes(payload, result)
+    return _apply_context_projection_changes(payload, result)
 
 
 def _apply_context_projection_changes(

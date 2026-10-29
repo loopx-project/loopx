@@ -10,7 +10,7 @@ from tests.test_loopx_turn_managed_step import (
 
 
 @pytest.mark.parametrize("user_action_required", [False, True])
-def test_managed_projection_reuses_route_without_trusting_a_mutable_wire(
+def test_managed_projection_uses_one_controller_call_without_trusting_a_mutable_wire(
     monkeypatch, user_action_required,
 ) -> None:
     from dataclasses import FrozenInstanceError, replace
@@ -57,15 +57,23 @@ def test_managed_projection_reuses_route_without_trusting_a_mutable_wire(
     expected = _decide(journal, envelope=expected_envelope)
     assert expected["disposition"] == ("user_action_required" if user_action_required else "wait")
     calls.clear()
-    with monkeypatch.context() as patch:
-        patch.setattr(loop_controller, "_typed_route", lambda *_: pytest.fail("redundant route RPC"))
-        actual = decide_managed_step(journal, current, goal_id=GOAL_ID,
-            agent_id=AGENT_ID, turn_key=journal["turn_key"])
+    controller_calls = []
+    original_runtime = loop_controller.effect_runtime_result
+
+    def record_runtime(method, params, **options):
+        controller_calls.append((method, params["operation"]))
+        return original_runtime(method, params, **options)
+
+    monkeypatch.setattr(loop_controller, "effect_runtime_result", record_runtime)
+    actual = decide_managed_step(journal, current, goal_id=GOAL_ID,
+        agent_id=AGENT_ID, turn_key=journal["turn_key"])
     assert actual == expected
     assert calls == []
+    assert controller_calls == [("turn.controller", "managed")]
     with pytest.raises(ValueError, match="shared envelope contract"):
         _decide(journal, envelope=changed)
-    assert calls == ["driver_route"]
+    assert calls == []
+    assert controller_calls == [("turn.controller", "managed")] * 2
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

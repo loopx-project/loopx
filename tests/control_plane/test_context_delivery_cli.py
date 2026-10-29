@@ -438,7 +438,7 @@ def test_optional_capture_projection_failure_falls_back_without_hiding_source(tm
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("output_limit", [None, 7900])
-def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(tmp_path, monkeypatch, provider, output_limit):
+def test_native_context_cli_without_retention_exposes_files_and_preserves_receipt(tmp_path, monkeypatch, provider, output_limit):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
     from test_quota_settlement_cli import _heartbeat_receipt_count
 
@@ -476,33 +476,32 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
             page = read_context_capture(args)
             assert page["ok"]
 
-    for _ in range(2):
+    for attempt in range(2):
         rc, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
             "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root),
             *([] if output_limit is None else ["--max-page-output-bytes", str(output_limit)]), cwd=project)
-        assert rc == 0 and wire["mode"] == "full", wire
-        assert "Native input observation independently verifies" not in wire["instruction"]
-        assert "Native input observation independently verifies" not in wire["recovery"]["instruction"]
-        # Consume the advertised first page and continuation, not another guard.
-        observed = consume(wire)
-        assert hashlib.sha256(observed).hexdigest() == wire["sha256"]
-        assert json.loads(observed) == json.loads(Path(wire["recovery"]["path"]).read_text())
+        assert rc == 0 and wire["ok"], wire
+        assert len(json.dumps(wire, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+        assert "content" not in wire and "eof" not in wire and "context" not in wire
+        if attempt == 0:
+            assert wire["mode"] == "full"
+        # Autonomous readers can choose the current full file directly, whether
+        # the advertised transport is full or delta. No hook/read ACK is needed.
+        args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
+        assert args.max_page_output_bytes == limit
+        observed = consume(read_context_capture(args))
+        assert hashlib.sha256(observed).hexdigest() == wire["recovery"]["sha256"]
         assert json.loads(observed)["heartbeat_receipt"]["turn_instance_id"] == "native-full"
-        assert "context" not in wire
-        if output_limit is None:
-            assert wire["eof"] and wire["content"].encode() == observed
-        else:
-            assert not wire["eof"]
-            recovery_args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
-            assert recovery_args.max_page_output_bytes == limit
+        if output_limit is not None:
             rc, projected = _run_cli(registry, runtime, "quota", "context-project", "--codex-app",
                 "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "native-full",
                 "--capture-file", wire["recovery"]["path"], "--capture-sha256", wire["recovery"]["sha256"],
                 "--decision-output-root", str(projection_root), "--context-delivery", "on",
                 "--codex-context-dir", str(root), "--max-page-output-bytes", str(limit), cwd=project)
-            assert rc == 0 and projected["mode"] == "full", projected
-            assert consume(projected) == observed
+            assert rc == 0 and projected["ok"], projected
+            args = build_parser().parse_args(shlex.split(projected["recovery"]["command"])[1:])
+            assert consume(read_context_capture(args)) == observed
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original
 
@@ -539,7 +538,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         return view
 
     def consume(view):
-        page, observed = view, b""
+        page = read_context_capture(build_parser().parse_args(shlex.split(view["recovery"]["command"])[1:]))
+        observed = b""
         while True:
             assert page["offset"] == len(observed)
             observed += page["content"].encode()
@@ -548,7 +548,7 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
             if page["eof"]:
                 break
             page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
-        assert hashlib.sha256(observed).hexdigest() == view["sha256"]
+        assert hashlib.sha256(observed).hexdigest() == view["recovery"]["sha256"]
         return json.loads(observed)
 
     first = guard("native-work-first")
@@ -568,7 +568,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         "--source", "heartbeat", "--execute", cwd=project)
     assert rc == 0 and spent["ok"], spent
     original = Path(first["recovery"]["path"]).read_bytes()
-    context.codex_context_hook(str(root), {**event, "source": "resume"})
+    context.codex_context_hook(str(root), {**event, "hook_event_name": "PreCompact"})
+    context.codex_context_hook(str(root), {**event, "source": "compact"})
     assert "candidate" not in context._state(root)
 
     current = guard("native-work-next")
@@ -628,8 +629,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert printed[0]["heartbeat_receipt"] == original["heartbeat_receipt"]
         assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
     else:
-        assert len(printed) == 1 and printed[0]["eof"] is True
-        assert json.loads(printed[0]["content"]) == {"native_projection": original}
+        assert len(printed) == 1 and "content" not in printed[0]
+        assert json.loads(Path(printed[0]["path"]).read_text()) == {"native_projection": original}
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 
@@ -742,6 +743,9 @@ def test_native_large_pages_do_not_depend_on_shell_environment(tmp_path, monkeyp
     page = native_context_capture_view({"requirements": '汉🙂"\\\t\n' * 12000,
         "last": "Stop before publication."}, tmp_path)
     original = Path(page["path"]).read_bytes()
+    assert "content" not in page
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+    page = read_context_capture(build_parser().parse_args(shlex.split(page["command"])[1:]))
     limit = 64000
     assert len(page["content"].encode()) > 32000
     assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit

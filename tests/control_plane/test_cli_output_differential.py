@@ -162,6 +162,7 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
     monkeypatch.setitem(namespace, "_run", git_transport)
     monkeypatch.setitem(namespace, "_run_probe", probe_transport)
     monkeypatch.setitem(namespace, "_is_ancestor", lambda *_: True)
+    monkeypatch.setitem(namespace, "_pin_probe_base_ref", lambda ref, **_: ref)
     monkeypatch.setattr(sys, "argv", ["probe", "--base-ref", "synthetic-base"])
     with pytest.raises(AssertionError, match="baseline ceiling"):
         main()
@@ -475,6 +476,130 @@ def test_sync_commit_uses_main_as_cli_output_base() -> None:
     )
 
     assert selected == "origin/main"
+
+
+@pytest.mark.parametrize("growth,explicit_base,advance_main", [
+    (0, False, False), (0, False, True), (1000, False, True), (0, True, True),
+])
+def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
+    tmp_path, monkeypatch, growth, explicit_base, advance_main,
+):
+    import os
+    import runpy
+    import subprocess
+    from pathlib import Path
+
+    from loopx.control_plane.testing.cli_output_budget import (
+        CLI_OUTPUT_BUDGET_BY_ID, assert_cli_output_baseline,
+    )
+
+    source = Path(__file__).resolve().parents[2]
+    smoke = runpy.run_path(str(
+        source / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))
+    main = smoke["main"]
+    namespace = main.__globals__
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false",
+             *args], cwd=repo, check=True, text=True, encoding="utf-8",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ).stdout.strip()
+
+    git("init", "-b", "main")
+    packet = repo / "packet.json"
+    common_payload = {
+        "interaction_contract": {}, "scheduler_hint": {}, "selected_todo": {},
+        "note": "x" * 4000,
+    }
+    packet.write_text(json.dumps(common_payload), encoding="utf-8")
+    probe_test = repo / "tests" / "probe.py"
+    probe_test.parent.mkdir()
+    probe_test.write_text("# Public synthetic probe\n", encoding="utf-8")
+    git("add", "packet.json", "tests/probe.py")
+    git("commit", "-m", "common baseline")
+    common = git("rev-parse", "HEAD")
+    git("checkout", "-b", "candidate")
+    packet.write_text(json.dumps({**common_payload, "note": "x" * (4000 + growth)}), encoding="utf-8")
+    git("add", "packet.json")
+    git("commit", "--allow-empty", "-m", "candidate")
+    candidate = git("rev-parse", "HEAD")
+    git("checkout", "main")
+    if advance_main:
+        packet.write_text(json.dumps({**common_payload, "note": "short"}), encoding="utf-8")
+        git("add", "packet.json")
+        git("commit", "-m", "later upstream compaction")
+    upstream = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", upstream)
+    git("checkout", "candidate")
+    probes = []
+    pinned = []
+    run = namespace["_run"]
+
+    def git_transport(command, **kwargs):
+        if "worktree" in command and "add" in command:
+            pinned.append(command[-1])
+            # Advance the ref again after selection but before checkout.
+            git("update-ref", "refs/remotes/origin/main", candidate)
+        run(command, **kwargs)
+
+    def probe_transport(**kwargs):
+        text = (kwargs["source_root"] / "packet.json").read_text(encoding="utf-8")
+        measured = measure_cli_output(text, output_format="json")
+        row = _row(
+            row_id="surface/quota_should_run/crowded/json",
+            surface_id="quota_should_run", scenario="crowded",
+            **{key: measured[key] for key in (
+                "chars", "utf8_bytes", "lines", "compact_payload_chars",
+            )},
+        )
+        if kwargs["enforce_budget"]:
+            assert_cli_output_baseline(
+                CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], scenario="crowded",
+                output_format="json", text=text, measurement=measured,
+            )
+        probes.append(kwargs["enforce_budget"])
+        kwargs["receipt_path"].write_text(json.dumps(_receipt(row)), encoding="utf-8")
+
+    monkeypatch.setitem(namespace, "REPO_ROOT", repo)
+    monkeypatch.setitem(namespace, "PROBE_TEST", probe_test)
+    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_run_probe", probe_transport)
+    # An explicit historical commit remains authoritative even off this branch.
+    args = ["probe", "--base-ref", upstream] if explicit_base else ["probe"]
+    monkeypatch.setattr(sys, "argv", args)
+    if growth or explicit_base:
+        delta = 3995 if explicit_base else growth
+        with pytest.raises(AssertionError, match=f"chars grew by {delta}") as error:
+            main()
+        assert f"base_ref={upstream if explicit_base else common}" in str(error.value)
+    else:
+        assert main() == 0
+    assert probes == [False, True]
+    assert pinned == [upstream if explicit_base else common]
+    assert git("worktree", "list", "--porcelain").count("worktree ") == 1
+    assert git("rev-parse", "HEAD") == candidate
+    assert git("show", f"{common}:packet.json") == json.dumps(common_payload)
+
+
+@pytest.mark.parametrize("base_ref", ["origin/main", "missing-base"])
+def test_probe_rejects_an_unresolvable_base(tmp_path, monkeypatch, base_ref):
+    import runpy
+    import subprocess
+    from pathlib import Path
+
+    pin = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))["_pin_probe_base_ref"]
+    subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
+    monkeypatch.setitem(pin.__globals__, "REPO_ROOT", tmp_path)
+    with pytest.raises(RuntimeError, match="select an explicit --base-ref commit"):
+        pin(base_ref, main_ref="origin/main")
 
 
 @pytest.mark.parametrize("row_kind", ["surface", "variant"])

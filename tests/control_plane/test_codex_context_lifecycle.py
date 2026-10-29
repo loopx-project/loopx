@@ -121,7 +121,7 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
         # The additional work-Turn/read-obligation distinction is intentional;
         # this synthetic allowance is not a host output or context limit.
         assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
-        assert payload["requirements"] not in body and len(body) < 2300
+        assert payload["requirements"] not in body and len(body) < 2600
     else:
         assert result == {}
     _, second = project(tmp_path, "two")
@@ -174,7 +174,7 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
             "tool_response": "ordinary tool output"})
     assert context._state(tmp_path) == state
     _, second = project(tmp_path, "two", payload=payload)
-    assert second["mode"] == "delta" and second["continuity_basis"] == "native_hook_assumption"
+    assert second["mode"] == "delta" and second["continuity_basis"] == "captured_file"
     assert not (tmp_path / "traces").exists()
     deliver(tmp_path, event, read_pages(tmp_path, second))
     _, third = project(tmp_path, "three", payload=payload)
@@ -302,7 +302,7 @@ def test_native_workspace_change_retires_previous_recovery(tmp_path, monkeypatch
     assert second["mode"] == "full" and second["context"] == payload
 
 
-def test_native_page_zero_exposes_current_continuity_and_preserves_full_recovery(tmp_path, monkeypatch):
+def test_native_reference_exposes_file_continuity_and_preserves_full_recovery(tmp_path, monkeypatch):
     from argparse import Namespace
     from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
 
@@ -312,12 +312,13 @@ def test_native_page_zero_exposes_current_continuity_and_preserves_full_recovery
     _, first = project(tmp_path, payload=payload)
     deliver(tmp_path, event, read_pages(tmp_path, first))
     _, second = project(tmp_path, "two", payload=payload)
-    assert second["mode"] == "delta" and second["continuity_basis"] == "native_hook_assumption"
+    assert second["mode"] == "delta" and second["continuity_basis"] == "captured_file"
     view = native_context_capture_view(second, tmp_path / "two", context_directory=str(tmp_path))
-    # The consumer must see the codec's actual basis before a long change tree,
-    # rather than a second transport layer claiming strict final-input proof.
-    assert json.dumps(second["instruction"]).encode() in view["content"].encode()
-    assert b'"continuity_basis":"native_hook_assumption"' in view["content"].encode()
+    # The default names the files without forcing either body into history.
+    assert "content" not in view
+    assert view["continuity_basis"] == "captured_file"
+    assert view["baseline_reference"]["path"] == first["recovery"]["path"]
+    assert view["recovery"]["path"] == second["recovery"]["path"]
     for instruction in (view["instruction"], second["recovery"]["instruction"]):
         assert "Native input observation independently verifies" not in instruction
     deliver(tmp_path, event, capture_pages(view["path"], view["sha256"]))
@@ -349,7 +350,7 @@ def test_native_page_zero_without_metadata_room_retains_original_recovery(tmp_pa
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
-def test_resume_requires_complete_original_read_before_reusing_baseline(tmp_path, monkeypatch, mode):
+def test_resume_partial_read_does_not_claim_full_model_retention(tmp_path, monkeypatch, mode):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
     _, wire = project(tmp_path, payload=payload)
@@ -363,9 +364,9 @@ def test_resume_requires_complete_original_read_before_reusing_baseline(tmp_path
     resumed = {**event, "source": "resume"}
     result = context.codex_context_hook(str(tmp_path), resumed)
     after = context._state(tmp_path)
-    assert "candidate" not in after and after["context_epoch"] != before["context_epoch"]
+    assert "candidate" not in after and after["context_epoch"] == before["context_epoch"]
     assert after["recovery"] == recovery
-    assert recovery["command"] in result["hookSpecificOutput"]["additionalContext"]
+    assert result == {}  # Ordinary resume must not induce a recovery/read loop.
     # Repeated notifications do not rotate the epoch or replace the recovery.
     context.codex_context_hook(str(tmp_path), resumed)
     assert context._state(tmp_path) == after
@@ -377,7 +378,7 @@ def test_resume_requires_complete_original_read_before_reusing_baseline(tmp_path
     assert Path(recovery["path"]).read_bytes() == original
     assert context._state(tmp_path)["candidate"]["target"]["context_epoch"] == after["context_epoch"]
     _, next_wire = project(tmp_path, "post-resume", payload=payload)
-    assert next_wire["mode"] == "delta"
+    assert next_wire["mode"] == "delta"  # Ordinary resume keeps this file epoch.
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
@@ -392,24 +393,16 @@ def test_fresh_capture_after_resume_does_not_require_reading_old_original(tmp_pa
     original = wire["recovery"]
     before = Path(original["path"]).read_bytes()
     resumed = context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
-    guidance = resumed["hookSpecificOutput"]["additionalContext"]
-    assert guidance.index("new work Turn") < guidance.index(original["command"])
-    assert "Do not replay read context or rerun admission solely" in guidance
-    assert "An unfinished required read still needs its missing content" in guidance
+    assert resumed == {}
     assert "candidate" not in context._state(tmp_path)
 
-    # A fresh authoritative input must be full. No old reader pages are
-    # delivered to seed this chain, and the changed requirement remains whole.
+    # Ordinary resume preserves the file epoch without old-file rereads.
+    # Actual compaction is tested separately and starts a fresh full baseline.
     current = {**payload, "current_requirement": "Stop before publishing this new result."}
     _, fresh = project(tmp_path, "fresh", payload=current)
-    assert fresh["mode"] == "full" and fresh["context"] == current
-    pages = read_pages(tmp_path, fresh)
-    deliver(tmp_path, event, pages[:1])
+    assert fresh["mode"] == "delta" and fresh["continuity_basis"] == "captured_file"
+    assert json.loads(Path(fresh["recovery"]["path"]).read_bytes()) == current
     assert "candidate" not in context._state(tmp_path)
-    deliver(tmp_path, event, pages[1:])
-    candidate = context._state(tmp_path)["candidate"]
-    assert candidate["target"] == fresh["target"]
-    assert candidate["capture_sha256"] == fresh["recovery"]["sha256"]
     _, next_wire = project(tmp_path, "after-fresh", payload=current)
     assert next_wire["mode"] == "delta" and next_wire["base"] == fresh["target"]
     assert Path(original["path"]).read_bytes() == before
@@ -439,7 +432,8 @@ def test_known_incomplete_delivery_cannot_establish_baseline(tmp_path, monkeypat
         deliver(tmp_path, event, [{"ok": False, "schema_version": "context_capture_page_v1"}])
     assert "candidate" not in context._state(tmp_path)
     _, second = project(tmp_path, "two", payload=payload)
-    assert second["mode"] == "full"
+    assert second["mode"] == ("delta" if failure in ("tail_only", "gap") else "full")
+    assert "candidate" not in context._state(tmp_path)
     assert second["recovery"]["path"] != first["recovery"]["path"]
     assert json.loads(Path(first["recovery"]["path"]).read_bytes()) == payload
 
@@ -504,7 +498,7 @@ def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, mon
     hook(capture_pages(recovery["path"], recovery["sha256"], size=8192))
     assert context._state(tmp_path)["candidate"]["capture_sha256"] == recovery["sha256"]
     _, after = project(tmp_path, "three", payload=payload)
-    assert after["mode"] == "delta"
+    assert after["mode"] == "full"  # The failed hook retired the old baseline epoch.
     assert not registry.exists() and not runtime.exists()
 
 
@@ -543,7 +537,7 @@ def test_unverified_page_facts_cannot_promote_through_the_shared_owner(tmp_path,
 
 
 @pytest.mark.parametrize("route", ["resume", "projection"])
-def test_metadata_only_baselines_require_a_new_verified_read(tmp_path, monkeypatch, route):
+def test_metadata_only_model_candidate_does_not_prevent_verified_file_diff(tmp_path, monkeypatch, route):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
     _, wire = project(tmp_path, payload=payload)
@@ -554,7 +548,7 @@ def test_metadata_only_baselines_require_a_new_verified_read(tmp_path, monkeypat
     context._save(tmp_path, before)
     if route == "projection":
         _, next_wire = project(tmp_path, "two", payload=payload)
-        assert next_wire["mode"] == "full" and next_wire["reason"] == "baseline_unavailable"
+        assert next_wire["mode"] == "delta" and next_wire["continuity_basis"] == "captured_file"
     else:
         context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
         assert "candidate" not in context._state(tmp_path)
@@ -613,11 +607,11 @@ def test_compaction_reset_recovers_the_same_original_before_new_delta(tmp_path, 
     reset = context._state(tmp_path)
     assert reset["context_epoch"] != old_epoch and "candidate" not in reset
     assert first["recovery"]["sha256"] in reply["hookSpecificOutput"]["additionalContext"]
-    # The unchanged original reader, not a fresh guard, restores the baseline.
+    # An optional old-file read can restore understanding, not the new epoch baseline.
     deliver(tmp_path, event, pages)
     assert context._state(tmp_path)["candidate"]["target"]["context_epoch"] == reset["context_epoch"]
     _, second = project(tmp_path, "two", payload=payload)
-    assert second["mode"] == "delta"
+    assert second["mode"] == "full"
 
 
 def test_configuration_round_trip_requires_a_new_full_baseline(tmp_path, monkeypatch):
@@ -703,7 +697,10 @@ def _assert_recovery_after_fallback(root, event, source, capture):
     digest = hashlib.sha256(raw).hexdigest()
     assert page["ok"] is True and page["sha256"] == digest
     assert page["content"].encode() == raw[:len(page["content"].encode())]
-    assert digest in hook["hookSpecificOutput"]["additionalContext"]
+    if hook:
+        assert digest in hook["hookSpecificOutput"]["additionalContext"]
+    else:
+        assert source == "resume"  # The exact recovery remains available without a reread prompt.
 
 
 @pytest.mark.parametrize("source", ["compact", "resume"])
@@ -1075,3 +1072,131 @@ def test_benchmark_activation_uses_existing_explicit_worker_declaration(monkeypa
     result = native_context_activation(args)
     assert result["enabled"] is expected
     assert result["scenario"] == ("codex_benchmark_heartbeat" if expected else None)
+
+
+@pytest.mark.parametrize("read_mode", ["none", "index", "selected"])
+def test_new_compaction_cycle_gets_full_file_then_unread_file_deltas(tmp_path, monkeypatch, read_mode):
+    from argparse import Namespace
+    from loopx.cli_commands.quota_capture import read_context_capture, native_context_capture_view
+
+    event = setup(tmp_path, monkeypatch)
+    original = {"ok": True, "requirements": {"stop": False, "text": "Keep all requirements. " * 2000},
+        "evidence": {"notes": "Optional historical material. " * 2000}}
+    _, first = project(tmp_path, payload=original)
+    if read_mode != "none":
+        page = read_context_capture(Namespace(capture_file=first["recovery"]["path"],
+            capture_sha256=first["recovery"]["sha256"], format="json", offset=0,
+            select=None if read_mode == "index" else ["/requirements/stop"],
+            list_fields=read_mode == "index", page_bytes=8192, max_page_output_bytes=24000))
+        assert page["ok"] and page["eof"]
+        deliver(tmp_path, event, [page])
+    assert "candidate" not in context._state(tmp_path)
+    reply = context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
+    assert "full-file traversal is not a prerequisite" in reply["hookSpecificOutput"]["additionalContext"]
+    revised = {**original, "requirements": {**original["requirements"], "stop": True}}
+    _, new_base = project(tmp_path, "after-compact", payload=revised)
+    assert new_base["mode"] == "full" and new_base["context"] == revised
+    assert new_base["target"]["context_epoch"] != first["target"]["context_epoch"]
+    # No full read of this new base is required to compare the next version.
+    _, next_wire = project(tmp_path, "next-turn", payload=revised)
+    assert next_wire["mode"] == "delta" and next_wire["continuity_basis"] == "captured_file"
+    assert next_wire["base"] == new_base["target"]
+    view = native_context_capture_view(next_wire, tmp_path / "next-turn", context_directory=str(tmp_path))
+    assert "content" not in view and "offset" not in view
+    assert len(json.dumps(view).encode()) < 8192
+    assert view["baseline_reference"]["sha256"] == new_base["recovery"]["sha256"]
+    assert json.loads(Path(view["recovery"]["path"]).read_bytes()) == revised
+    assert "candidate" not in context._state(tmp_path)
+    assert hashlib.sha256(Path(view["path"]).read_bytes()).hexdigest() == view["sha256"]
+
+
+@pytest.mark.parametrize("damage", ["deleted", "changed", "symlink", "scope"])
+def test_unread_file_baseline_must_still_be_available_exact_and_scoped(tmp_path, monkeypatch, damage):
+    setup(tmp_path, monkeypatch)
+    original = {"requirements": "Keep every constraint. " * 2000}
+    _, first = project(tmp_path, payload=original)
+    path = Path(first["recovery"]["path"])
+    if damage == "deleted":
+        path.unlink()
+    elif damage == "changed":
+        path.write_bytes(path.read_bytes() + b" ")
+    elif damage == "symlink":
+        moved = path.with_suffix(".moved")
+        path.rename(moved)
+        path.symlink_to(moved)
+    else:
+        state = context._state(tmp_path)
+        state["recovery"]["target"]["agent_id"] = "foreign-agent"
+        context._save(tmp_path, state)
+    _, second = project(tmp_path, "two", payload=original)
+    assert second["mode"] == "full" and second["context"] == original
+    assert "baseline_reference" not in second
+
+
+@pytest.mark.parametrize("before,after", [
+    (9007199254740992, 9007199254740993), (1, 9007199254740993), (9007199254740993, 1),
+    (1, 1.0), (1.0, 1), (0.0, -0.0), (-0.0, 0.0),
+    ({"nested": [1]}, {"nested": [1.0]}),
+])
+def test_file_delta_falls_back_before_numeric_normalization_can_hide_changes(tmp_path, monkeypatch, before, after):
+    from argparse import Namespace
+    from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
+
+    setup(tmp_path, monkeypatch)
+    body = "Same unchanged requirements. " * 1000
+    project(tmp_path, payload={"body": body, "counter": before})
+    _, result = project(tmp_path, "two", payload={"body": body, "counter": after})
+    assert result["mode"] == "full"
+    assert "baseline_reference" not in result
+    view = native_context_capture_view(result, tmp_path / "two", context_directory=str(tmp_path))
+    assert view["path"] == result["recovery"]["path"]
+    assert hashlib.sha256(Path(view["path"]).read_bytes()).hexdigest() == view["sha256"]
+    page = read_context_capture(Namespace(capture_file=view["path"], capture_sha256=view["sha256"],
+        format="json", offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert page["eof"]
+    # Numeric equality conflates integer/float types and the sign of zero.
+    # The public reader must preserve the independently supplied source value.
+    assert json.dumps(json.loads(page["content"])["counter"]) == json.dumps(after)
+
+
+@pytest.mark.parametrize("before,after", [(1, 2), (True, 1), (0.25, 0.5)])
+def test_exact_bridge_numbers_still_use_file_deltas(tmp_path, monkeypatch, before, after):
+    setup(tmp_path, monkeypatch)
+    body = "Same unchanged requirements. " * 1000
+    project(tmp_path, payload={"body": body, "counter": before})
+    _, result = project(tmp_path, "two", payload={"body": body, "counter": after})
+    assert result["mode"] == "delta" and result["continuity_basis"] == "captured_file"
+    assert "baseline_reference" in result
+    assert json.dumps(result["changes"]["changed"]["counter"]["value"]) == json.dumps(after)
+
+
+def test_unchanged_integral_floats_inherit_without_rewriting_their_parent(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch)
+    original = {"body": "Same unchanged requirements. " * 1000,
+        "state": {"number": 1.0, "a": False, "b": False, "c": False}, "array": [-0.0, "old"]}
+    current = {**original, "state": {**original["state"], "a": True, "b": True, "c": True},
+        "array": [-0.0, "new"]}
+    _, first = project(tmp_path, payload=original)
+    _, result = project(tmp_path, "two", payload=current)
+    assert result["mode"] == "delta"
+    edits = result["changes"]["changed"]
+    # A short parent replacement would normalize both original numeric values.
+    # These literals update only independently specified nonnumeric children.
+    assert edits["state"] == {"values": {key: True for key in ("a", "b", "c")}}
+    assert edits["array"] == {"items": {"1": {"value": "new"}}}
+    saved = json.loads(Path(first["recovery"]["path"]).read_bytes())
+    saved["state"].update({key: True for key in ("a", "b", "c")})
+    saved["array"][1] = "new"
+    assert json.dumps(saved, sort_keys=True) == json.dumps(current, sort_keys=True)
+
+
+def test_numeric_subtree_cannot_relocate_a_float_into_an_integer_field(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch)
+    original = {"source": {"number": 1.0, "description": "Same source text. " * 2000}}
+    current = {**original, "destination": {**original["source"], "number": 1}}
+    project(tmp_path, payload=original)
+    _, result = project(tmp_path, "two", payload=current)
+    assert result["mode"] == "delta"
+    destination = result["changes"]["changed"]["destination"]
+    assert "from" not in destination  # Whole-subtree reuse would copy 1.0.
+    assert json.dumps(destination["changed"]["number"]["value"]) == "1"

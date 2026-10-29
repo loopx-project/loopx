@@ -188,6 +188,21 @@ source/Turn read, grant and typed receipt/lifecycle checks; each new batch
 observes the current Goal lifetime. Core linked-work IO runs after those guards
 are released. This reduces repeated fence IO without caching authorization
 between requests or pages; pagination and search still scan the bounded history.
+The pure conversation-identity projection is reused only while the complete
+host Session facts are identical within that read. Changed facts are classified
+again; live provider, grant, receipt and closing-source checks are not cached.
+
+When the typed lifecycle proves a matching original source/route but finds a
+conflicting handoff receipt, coverage includes at most 12 diagnostic
+request/Goal/Agent identities. This is a refusal readback, not a readable brief,
+cancellation or completion. The App's warning glyph exposes that cause on demand;
+other unreadable sources remain unknown. Refresh rechecks the original owners;
+the read neither repairs historical receipts nor grants execution/return authority.
+
+For native-bound steward inventory, one fresh provider selection supplies both
+Session validation and Goal visibility at each opening/closing check. The read
+still revalidates before returning content; no observation is cached between
+checks or requests. Custom scope resolvers keep their existing validation path.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
@@ -195,6 +210,16 @@ between requests or pages; pagination and search still scan the bounded history.
 同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
 来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
 在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
+同一次读取中，完整宿主 Session 字段相同时复用纯身份分类；字段变化即重新分类，
+provider、授权、回执及结束时的来源检查仍实时执行。
+
+来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
+具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
+核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
+
+原生绑定管家的每次读取，在开始和结束时各验证一次 provider 身份，同一检查点的
+会话和 Goal 范围复用该次选择；检查点及请求之间不缓存权限。自定义范围解析器沿用
+原验证路径。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current

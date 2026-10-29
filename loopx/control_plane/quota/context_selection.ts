@@ -28,6 +28,13 @@ export function capturedContextSelection(request: JsonObject): JsonObject {
     }
     // Return the verified address, not a JS-number-coerced copy of the value.
     // The file adapter retains original JSON values and owns byte serialization.
+    if (request.list_fields === true) {
+      const children = value !== null && typeof value === "object" ? Object.keys(value).map(key => ({
+        pointer: pointer + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1"),
+        path: [...path, Array.isArray(value) ? Number(key) : key],
+      })) : [];
+      return {pointer, path, children};
+    }
     return {pointer, path};
   });
   return {selections};

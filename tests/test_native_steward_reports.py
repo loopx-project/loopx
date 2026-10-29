@@ -551,6 +551,24 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     journal_path = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
     frozen = original_path.read_bytes(), journal_path.read_bytes()
     _, window = reports.current_window(owner)
+    failed_health = reports.health(owner)
+    assert failed_health["execution_failed"] and not failed_health["publication_verified"]
+    assert reports._known_generation_failure(actor, window) is None
+    if not local_session:
+        assert failed_health["delivery_status"] == "not_generated"
+    # Failure visibility must stay bound to this exact actor/window, including
+    # when the original Chat envelope itself says completed.
+    import copy
+    from loopx.capabilities.native_chat import steward_turn
+    for field, value in [("actor", {**actor, "agent_id": "another-agent"}),
+            ("work_kind", "monitor"), ("report_window_id", "another-window"),
+            ("report_subscription_revision", "another-revision")]:
+        foreign = copy.deepcopy(original)
+        foreign["loopx_request"][field] = value
+        with monkeypatch.context() as changed:
+            changed.setattr(steward_turn, "report_turn", lambda *_: foreign)
+            assert not reports.health(owner)["execution_failed"]
+    assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
     observations = []
     proof = {"thread_id": store.load_session(sid)["upstream_thread_id"],
         "turn_id": original["upstream_turn_id"], "only_original_user_item": True,
@@ -584,6 +602,7 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
     assert request["actor"] == original["loopx_request"]["actor"]
     assert request["turn_instance_id"] == original["loopx_request"]["turn_instance_id"] + ".quota-recovery"
     assert result["response"]["native_loopx"]["status"] == ("committed" if recovery_succeeds else "failed"), result
+    assert reports.health(owner)["execution_failed"] is not recovery_succeeds
     assert frozen == (original_path.read_bytes(), journal_path.read_bytes())
     assert observations and all(x["turn_id"] == original["upstream_turn_id"] for x in observations)
     assert all(x["thread_ids"] == [proof["thread_id"]] for x in observations)
@@ -1004,6 +1023,9 @@ def test_original_due_report_freezes_once_and_returns_full_body_after_native_set
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
     install_model(steward, tmp_path, sid, result_kind=result_kind)
     calls, writes, history = capture.read_bytes(), list(bot.writes), store.messages(sid)
+    assert transport.ingress.observe() == []
+    assert transport.ingress.health(binding["binding_id"])["status"] == "verified"
+    assert (capture.read_bytes(), bot.writes) == (calls, writes)
     thread = store.load_session(sid)["upstream_thread_id"]
     turns = pump_steward_monitors(runtime)
     assert len(turns) == 1 and turns[0]["session_id"] == sid
@@ -1039,10 +1061,34 @@ def test_original_due_report_freezes_once_and_returns_full_body_after_native_set
     assert proof["verified"] and proof["text"] == body.strip()
     assert len(body.encode()) > 40000  # Exercise the original multipart full-body sender.
     after = capture.read_bytes(), list(bot.writes)
+    assert transport.ingress.observe() == []
+    assert transport.ingress.health(binding["binding_id"])["status"] == "verified"
     runtime._steward_monitor_next_check.clear()
     assert not pump_steward_monitors(runtime)
     assert transport.steward_reports.reconcile() == 0
     assert after == (capture.read_bytes(), bot.writes)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_report_fixture_ingress_reads_all_pages_without_admitting_missed_business(
+        steward, tmp_path, monkeypatch, provider):
+    import time
+
+    store, runtime, bot, transport, binding, capture, _ = steward
+    sid, _, _, _ = configured(steward, tmp_path, monkeypatch, provider)
+    for index in range(55):
+        event = bot.event("steward-app", f"missed-{index}", f"Uncaptured private source {index}")
+        bot.messages[event["message_id"]]["create_time"] = str(int((time.time() - 30) * 1000))
+    before = store.messages(sid), capture.read_bytes(), list(bot.writes)
+    assert transport.ingress.observe() == ["steward-app"]
+    health = transport.ingress.health(binding["binding_id"])
+    assert health["status"] == "gap" and health["source_gap_count"] == health["without_reply_count"] == 55
+    assert transport.ingress.observe() == []  # Observation does not replay an effect or reconnect twice.
+    assert before == (store.messages(sid), capture.read_bytes(), bot.writes)
+    pages = [args for args in bot.calls if "+chat-messages-list" in args]
+    assert any("--page-token" in args for args in pages)
+    receipt = transport.ingress._path(binding["binding_id"]).read_text()
+    assert "Uncaptured private source" not in receipt
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

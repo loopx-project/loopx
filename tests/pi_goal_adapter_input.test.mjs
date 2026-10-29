@@ -117,7 +117,6 @@ for (const source of ["interactive", "rpc"]) {
       assert.equal(h.probes(), probes);
       assert.equal(h.outgoing.length, 0);
       await h.command("resume");
-      await h.settle();
       assert.equal(h.probes(), probes + 1);
       assert.equal(h.outgoing.length, 1);
     });
@@ -184,6 +183,31 @@ test("an input observed after abort preserves the existing pause reason", async 
   assert.equal((await h.read()).generation, aborted.generation);
 });
 
+test("idle resume after a persisted abort dispatches without an agent_settled event", async t => {
+  const h = await harness(t);
+  await h.emit("agent_end", {messages: [{role: "assistant", stopReason: "aborted"}]});
+  await h.restart();
+  const probes = h.probes();
+  await h.command("resume");
+  assert.equal(h.probes(), probes + 1);
+  assert.deepEqual(h.outgoing, ["Synthetic task body"]);
+  assert.equal((await h.read()).pauseReason, "");
+});
+
+test("busy resume waits for agent_settled before dispatching", async t => {
+  const h = await harness(t);
+  h.busy();
+  await h.emit("input", {source: "rpc", text: "Inspect the result"});
+  const probes = h.probes();
+  await h.command("resume");
+  assert.equal(h.probes(), probes);
+  assert.equal(h.outgoing.length, 0);
+  assert.equal((await h.read()).autoResume, true);
+  await h.settle();
+  assert.equal(h.probes(), probes + 1);
+  assert.deepEqual(h.outgoing, ["Synthetic task body"]);
+});
+
 for (const kind of ["foreign extension", "own extension", "interactive", "rpc"]) {
   test(kind + " start during a pending resume survives adapter restart", async t => {
     const h = await harness(t);
@@ -232,7 +256,6 @@ for (const kind of ["foreign extension", "own extension", "interactive", "rpc"])
     if (!own) {
       const probes = h.probes(), messages = h.outgoing.length;
       await h.command("resume");
-      await h.settle();
       assert.equal(h.probes() - probes, 1, "later explicit resume obtains fresh admission");
       assert.equal(h.outgoing.length - messages, 1);
     }

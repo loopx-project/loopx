@@ -4,7 +4,7 @@
 - **Supersedes / closes:** [Personal Follow-through independent proposal](personal-follow-through-v0.md)
 - **Delivery maturity:** Partial; private runtime profile, team-plan confirmation and Todo materialization shipped; complete M1–M4 remain unqualified.
 - **Authors / owners:** LoopX maintainers; manager engineering owner
-- **Created / last normative revision:** 2026-09-13 / 2026-10-28
+- **Created / last normative revision:** 2026-09-13 / 2026-10-29
 - **Implementation baseline:** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **Language mirror:** [中文版](capable-manager-semantic-handoff-v0.zh-CN.md)
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Manager continuity](../../reference/protocols/manager-evidence-and-continuity-v0.md), [Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md), [Desktop frontends](desktop-execution-frontends-v0.md), [Shared authority](shared-goal-authority-state-provider-v0.md), [Shared Goal alignment/amendment](shared-goal-alignment-and-governed-amendment-v0.md), [TS migration](typescript-control-plane-migration-v0.md)
@@ -195,6 +195,17 @@ authorized materials and returns artifacts/evidence, not a specialized Core
 packet view. Runtime-owned routing/revision/attempt metadata reuses these request
 records; it is not another authority or handoff ledger. This does not restrict
 independent peer Agents, which retain their own scoped Core relationships.
+
+That profile's C6/C8 [human interaction journey](controller-executor-unified-contract-v0.md#human-interaction-during-execution)
+extends semantic return beyond the final answer: converse while work runs,
+proactively report meaningful evidence-backed changes and use task-appropriate
+rich presentations to help the user judge and correct the work. Reuse existing
+request/revision, artifact, audience and delivery owners; preserve quiet and
+deduplicated reporting, accessible text and source/version readback. Receipt,
+handling and actual feedback adoption remain separate: subsequent work and
+artifacts must show adopted revisions, including after reconnect or late results.
+No new manager ledger, sending authority or C1 prerequisite follows. Current
+progress/steering primitives do not by themselves qualify that concurrent journey.
 
 Prefer one cohesive replacement to compatibility wrappers that preserve duplicate decisions. Inventory every existing producer/reader, migrate with lossless mappings, switch one writer and delete the replaced rules. Reusing contracts and data is required; reusing every current class, JSON directory and prompt is not.
 

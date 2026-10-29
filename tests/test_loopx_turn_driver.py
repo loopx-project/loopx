@@ -1327,7 +1327,7 @@ def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
 
 
 @pytest.mark.parametrize("invalid_signature", [False, True])
-def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
+def test_turn_plan_without_todo_requires_signature_and_scoped_binding(
     invalid_signature: bool,
 ) -> None:
     envelope = _envelope(
@@ -1340,9 +1340,13 @@ def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
         envelope, host="generic-cli", execution_mode="isolated-headless",
     )
 
-    assert payload["ok"] is False
-    assert payload["route"]["kind"] == "contract_error"
+    assert payload["ok"] is (not invalid_signature)
+    assert payload["route"]["kind"] == ("contract_error" if invalid_signature else "blocked")
     assert payload["route"]["would_invoke_host"] is False
+    assert payload["route"]["host_invocation_allowed"] is False
+    assert payload["session"]["action"] == "none"
+    assert payload["transaction"]["status"] == "not_applicable"
+    assert not any(payload["effects"].values())
 
 
 def test_turn_plan_preserves_safe_bypass_when_user_action_is_visible() -> None:

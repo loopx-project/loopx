@@ -322,6 +322,99 @@ def test_no_receipt_with_delivery_decision_runs_now() -> None:
     _assert_markers(payload, "run_now")
 
 
+@pytest.mark.parametrize("qualified", [False, True], ids=["mapping", "producer"])
+@pytest.mark.parametrize("unit,repeats", [("G", 128), ("G", 2_420_000), ("界😀", 180_000)],
+                         ids=["small", "large", "escaped-unicode"])
+def test_controller_preserves_complete_goal_over_the_real_transport(
+    qualified, unit, repeats,
+) -> None:
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
+    from loopx.control_plane.turn_driver import build_loopx_turn_plan
+    from tests.test_turn_envelope import _full_decision
+
+    source = _full_decision()
+    snapshot_root = Path(tempfile.gettempdir())
+    original_text = unit * repeats
+    source["interaction_contract"]["agent_channel"]["work_context"] = {
+        "complete": True,
+        "sources": [{"source": "goal_state", "content": {"text": original_text}}],
+    }
+    current = build_turn_controller_input(source)
+    envelope = current.envelope()
+    before = set(snapshot_root.glob("loopx-effect-*"))
+    assert envelope["work_context"]["sources"][0]["content"]["text"] == original_text
+    assert envelope["action_signature"]["matches"] is True
+    assert (len(json.dumps(envelope).encode()) > 2 * 1024 * 1024) == (repeats > 128)
+    if unit != "G":
+        assert len(current.envelope_json.encode()) < 2 * 1024 * 1024
+    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    assert plan["route"]["kind"] == "ready_for_host"
+    result = _decide_loop_disposition(
+        turn_receipt=None, quota_decision=current if qualified else envelope,
+    )
+    _assert_markers(result, "run_now")
+    assert current.envelope() == envelope
+    assert set(snapshot_root.glob("loopx-effect-*")) == before
+
+
+def test_large_controller_decision_keeps_signature_rejection() -> None:
+    envelope = _envelope(should_run=True, signature_matches=False)
+    envelope["work_context"] = {"text": "G" * 2_420_000}
+    with pytest.raises(ValueError, match="envelope contract"):
+        _decide_loop_disposition(turn_receipt=None, quota_decision=envelope)
+
+
+@pytest.mark.parametrize("qualified", [False, True], ids=["mapping", "producer"])
+def test_controller_snapshot_limit_rejects_before_sending(monkeypatch, qualified) -> None:
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.quota.turn_envelope import build_turn_controller_input
+    from tests.test_turn_envelope import _full_decision
+
+    effect_runtime.effect_runtime_result("runtime.ping", {})
+    # Exercise the actual 64 MiB bound, including JSON overhead, without
+    # admitting a Host, changing a Goal or dispatching an oversized request.
+    text = "G" * effect_runtime.MAX_LOCAL_SNAPSHOT_BYTES
+    with monkeypatch.context() as patch:
+        patch.setattr(effect_runtime.socket, "create_connection",
+                      lambda *_args, **_kwargs: pytest.fail("oversized request was sent"))
+        with pytest.raises(effect_runtime.EffectRuntimeRejected) as error:
+            if qualified:
+                source = _full_decision()
+                source["interaction_contract"]["agent_channel"]["work_context"] = {
+                    "complete": True, "sources": [{"source": "goal_state", "content": {"text": text}}],
+                }
+                decision = build_turn_controller_input(source)
+            else:
+                decision = _envelope(should_run=True)
+                decision["work_context"] = {"text": text}
+            _decide_loop_disposition(turn_receipt=None, quota_decision=decision)
+    assert error.value.diagnostic_code == "request_too_large"
+
+
+@pytest.mark.parametrize("rejection", ["invalid_request", "ambiguous"])
+def test_controller_does_not_retry_other_transport_failures(monkeypatch, rejection) -> None:
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.turn_driver import loop_controller
+
+    failure = (effect_runtime.EffectRuntimeResponseAmbiguous("turn.controller", timeout=1)
+               if rejection == "ambiguous" else effect_runtime.EffectRuntimeRejected("rejected"))
+    calls = []
+
+    def reject(method, params, **kwargs):
+        calls.append((method, kwargs))
+        raise failure
+
+    monkeypatch.setattr(loop_controller, "effect_runtime_result", reject)
+    with pytest.raises(type(failure)) as error:
+        _decide_loop_disposition(turn_receipt=None, quota_decision=_envelope(should_run=True))
+    assert error.value is failure
+    assert calls == [("turn.controller", {})]
+
+
 def test_no_receipt_with_quiet_decision_waits_no_spend() -> None:
     payload = decide_loop_disposition(
         turn_receipt=None,
@@ -1352,3 +1445,41 @@ def test_committed_replay_requires_original_complete_settlement_receipts():
             invalid["quota_slot_spend_count"] = 0
         with pytest.raises((ValueError, TypeError)):
             ValidatedTurnReceipt.from_execution(invalid)
+
+
+def test_request_receipt_keeps_its_exact_subject_without_granting_todo_lineage():
+    import copy
+
+    from loopx.control_plane.effect_program import SettlementIdentity
+
+    identity = SettlementIdentity(goal_id="request-goal", agent_id="request-agent", todo_id=None,
+        turn_instance_id="request-turn", request_subject={"request_id": "a" * 64,
+            "request_revision": 1, "request_digest": "b" * 64, "execution_scope_sha256": "c" * 64})
+    execution = _execution()
+    expected = {"goal_id": "request-goal", "agent_id": "request-agent", "todo_id": "",
+                "request_binding_id": identity.binding_id}
+    execution["receipt"]["lineage"] = expected
+    execution["receipt"]["settlement_effect_id"] = identity.effect_id
+    for receipt in execution["settlement_result"]["receipts"]:
+        receipt["effect_id"] = identity.effect_id
+
+    with pytest.raises(ValueError, match="goal/agent/todo lineage"):
+        ValidatedTurnReceipt.from_execution(execution)
+    assert ValidatedTurnReceipt.from_execution(execution, request_identity=identity).to_mapping()["lineage"] == expected
+    for field in ["goal_id", "agent_id", "todo_id", "request_binding_id", "extra"]:
+        invalid = copy.deepcopy(execution)
+        invalid["receipt"]["lineage"][field] = "foreign"
+        with pytest.raises(ValueError, match="original request identity"):
+            ValidatedTurnReceipt.from_execution(invalid, request_identity=identity)
+    invalid = copy.deepcopy(execution)
+    invalid["receipt"]["settlement_effect_id"] = "foreign"
+    with pytest.raises(ValueError, match="original request identity"):
+        ValidatedTurnReceipt.from_execution(invalid, request_identity=identity)
+    invalid = copy.deepcopy(execution)
+    invalid["settlement_result"]["receipts"].pop()
+    with pytest.raises((ValueError, TypeError), match="ordered validation/writeback/spend"):
+        ValidatedTurnReceipt.from_execution(invalid, request_identity=identity)
+    todo_identity = SettlementIdentity(goal_id="request-goal", agent_id="request-agent",
+        todo_id="todo-existing", turn_instance_id="request-turn")
+    with pytest.raises(ValueError, match="original request identity"):
+        ValidatedTurnReceipt.from_execution(execution, request_identity=todo_identity)

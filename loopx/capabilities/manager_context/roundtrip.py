@@ -237,8 +237,10 @@ def report(
     }
 
 
-def project_chat_return_deliveries(root, session_id, messages):
+def project_chat_return_deliveries(root, session_id, messages, *, source_store=None):
     """Attach public-safe delivery readback to returned Chat transcript rows."""
+
+    from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
 
     pending_message_ids = {
         message_id
@@ -254,7 +256,8 @@ def project_chat_return_deliveries(root, session_id, messages):
     for path in paths:
         try:
             route = _read(path)
-            if route.get("session_id") != session_id:
+            if (route.get("session_id") != session_id
+                    or (source_store is not None and not is_source_chat_host(root, route, source_store))):
                 continue
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
@@ -296,7 +299,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         context_messages = context_messages[:page["message_page"]["total"]]
         snapshot["messages"] = page["messages"]
     snapshot["messages"] = project_chat_return_deliveries(
-        root, session_id, snapshot["messages"]
+        root, session_id, snapshot["messages"], source_store=store
     )
     from .presentation import project_collaboration
     # Use the frozen context to choose the carrier, projecting only this page.
@@ -304,8 +307,8 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     # or re-reading every off-page Turn for each page.
     snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
-    from ...extensions.lark.private_conversations import project_private_reply_history
-    snapshot["messages"] = project_private_reply_history(store, store.load_session(session_id) or {}, snapshot["messages"])
+    # Provider-owned history joins the selected page at the composition root.
+    # Core capabilities never import an extension projection sink.
     if page is not None:
         snapshot["message_page"] = page["message_page"]
     return snapshot

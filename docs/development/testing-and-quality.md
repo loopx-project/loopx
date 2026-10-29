@@ -431,6 +431,18 @@ it differs from the live server before dispatching expensive work. Stop only
 that isolated runtime after its requests settle, retaining the same temporary
 environment for shutdown; never restart a live server as test cleanup.
 
+For namespace disposal, call `restart_effect_runtime(wait_for_exit=True)` and
+require `stopped` before removing files. A closed listener or a zombie process
+group leader does not prove that all runtime threads have exited. A PID that is
+still present returns `shutdown_pending`; retain the namespace and retry after
+the process exits and its parent reaps it. The ordinary restart action still
+uses serving-locator retirement.
+
+删除隔离目录前，调用 `restart_effect_runtime(wait_for_exit=True)` 并确认返回
+`stopped`。端口关闭或进程组长成为僵尸进程，都不能证明其他线程已经退出。
+PID 仍存在时返回 `shutdown_pending`；保留目录，等进程退出并由父进程回收后再试。
+普通重启操作仍按服务 locator 的退役状态判断。
+
 Automatic test cleanup must verify namespace ownership as well as PID/token
 identity. An ordinary copy of a valid locator inside a test directory is not
 permission to stop its original server. The private authenticated `runtime.ping`
@@ -1300,6 +1312,24 @@ fields; this does not introduce a new telemetry system or receipt gate.
 循环得到解决，恢复后实际继续完成有用操作才支持接续收益判断。
 
 ### Budget Failure Decisions
+
+The fixed visible-Goal host fixture's 3,200-character regression guard predates
+`1d5d2d0f6`, which adds the known Todo choice to the first current guard. On the
+same four host inputs at `b201da8ba`, substituting only the pre-change dispatch
+rule gives 3,199 / 3,177 / 2,966 / 2,895 normalized body characters; the complete
+current rule gives 3,262 / 3,240 / 3,029 / 2,958. The 63-character increase teaches
+an already-known choice before admission, while retaining selection/reentry,
+ordered settlement, exact identities, actual outcomes and ambiguous-effect
+recovery. Preserve the original 3,200-ceiling failure; calibrate only this test's
+regression allowance to 3,300, leaving 38 characters above the largest fixed
+input. Production prompt bytes, the 4,000-character host limit, longer-route
+checks, execution authority and frozen qualification results remain unchanged.
+This is no output reduction or model-compliance qualification.
+
+相同四个宿主输入中，首次 guard 的已知 Todo 选择指引增加 63 个归一化字符，
+最大值从 3,199 变为 3,262。保留原 3,200 超限失败，仅将该固定测试的回归预算
+校准为 3,300，留 38 字符余量；不删指令，不改生产正文、4,000 宿主硬边界、
+长路径检查、执行权限或冻结资格结果，也不据此声称输出节省或模型遵从。
 
 The actual-default model portfolio retains the complete capability candidate
 context required by the shared diagnostic projection. On the unchanged three

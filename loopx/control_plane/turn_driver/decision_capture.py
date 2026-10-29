@@ -150,6 +150,20 @@ _CONTEXT_CAPTURE_PAGE_END = (
     "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
+# A durable capture is a source library, not an instruction to import it all.
+CONTEXT_CAPTURE_NAVIGATION_GUIDANCE = (
+    "The complete decision is saved locally. Choose the sections needed for the current decision; "
+    "you do not need to read the whole file or drain all pages before working. "
+    "Use index_command to discover exact pointers, then repeat --select to batch relevant fields. "
+    "Read applicable goals, acceptance criteria, constraints and stop conditions before dependent work; "
+    "read the current operation/settlement contract before effects, and supporting evidence when verification needs it. "
+    "An index is navigation, not evidence of reading or fresh authority. "
+    "Keep the original Turn/capture/effect identities. After compaction recover only missing necessary facts "
+    "from this capture; never rerun admission or repeat effects just to recover context. "
+    "Saved-file deltas may use unread baseline files; this is not a claim of retained model input. "
+    "Selected/index reads never establish full model-context retention. "
+)
+
 # Native paging verifies capture bytes; the existing codec separately declares
 # its continuity basis. Generic/off readers retain their original obligations
 # without claiming that a native input observer exists.
@@ -187,7 +201,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  page_bytes: int | None = None,
                                  max_page_output_bytes: int | None = None,
                                  select: list[str] | None = None,
-                                 selection_sha256: str | None = None) -> str:
+                                 selection_sha256: str | None = None,
+                                 list_fields: bool = False) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -197,6 +212,7 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--list"] if list_fields else []),
         *(argument for pointer in select or [] for argument in ("--select", pointer)),
         *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
         *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])

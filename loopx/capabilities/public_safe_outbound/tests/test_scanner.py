@@ -321,6 +321,101 @@ def _assert_receipt_withholds(result, *fragments: str) -> None:
         assert hit["sample_masked"] == "***"
 
 
+def test_a_provider_token_with_no_label_is_not_certified_clean() -> None:
+    """A token's own prefix identifies it; the scan must not need a label.
+
+    The rule table recognized an Ark key, a `sk-`/`Bearer` value and an `AKLT`
+    value, so every other provider credential arrived with no label this scan
+    could match and the caller got `ok: true` for content that was about to be
+    published. Each shape below is real provider syntax assembled at runtime.
+    """
+    shapes = {
+        "github_pat_classic": "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8",
+        "github_pat_fine_grained": "github_pat" + "_" + "11ABCDEFG0" + "x" * 40,
+        "aws_access_key_id": "AKIA" + "7Q2Z3XJ5V6N8W1PL",
+        "aws_session_key_id": "ASIA" + "7Q2Z3XJ5V6N8W1PL",
+        "slack_bot": "xoxb" + "-" + "123456789012-AbCdEfGhIjKlMnOpQrStUvWx",
+        "google_api": "AIza" + "SyA1234567890abcdefghijklmnopqrs",
+        "stripe_live": "sk" + "_live_" + "51H8abcdefghijklmnopqrstuv",
+        "npm_token": "npm" + "_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8",
+        "pypi_token": "pypi" + "-" + "AgEIcHlwaS5vcmcCJDkwNzE5MTIzNDU2Nzg5",
+        "jwt": "eyJhbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0" + "."
+        + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    }
+    for label, value in shapes.items():
+        res = scan_texts({"candidate": value})
+        assert res.ok is False, label
+        assert [hit.rule_id for hit in res.hits] == ["provider_token"], label
+        _assert_receipt_withholds(res, value, value[4:])
+
+
+def test_provider_token_in_an_env_file_on_disk_fails_the_whole_scan(tmp_path: Path) -> None:
+    """The documented `--scan-root` route must reject a credential file.
+
+    `.env` is exactly the extension-less, credential-named file the scan's
+    deny-list selection promises to review, so the end-to-end path -- not only
+    the rule -- is what this pins.
+    """
+    candidate = tmp_path / ".env"
+    candidate.write_text(
+        "GITHUB_TOKEN=" + "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" + "\n",
+        encoding="utf-8",
+    )
+    res = scan_paths([candidate], root=tmp_path)
+    assert res.ok is False
+    assert res.unscanned == []
+    assert [(hit.rule_id, hit.location, hit.line) for hit in res.hits] == [
+        ("provider_token", ".env", 1)
+    ]
+    assert str(tmp_path) not in compact_json(res)
+
+
+def test_provider_shape_does_not_flag_the_prose_and_labels_it_must_pass() -> None:
+    """Ordinary documentation and config references stay clean.
+
+    A publication gate that reports clean prose as a credential is switched off
+    by its operators, so the passing edge is part of the rule's contract. The
+    documented over-match is pinned in the second half rather than left implicit:
+    a hyphenated package slug that happens to start with an issuer prefix is
+    reported, because no rule set can tell such a slug from a token by shape
+    alone. That direction is the capability's documented "prefer a false hit
+    over a miss" boundary, not an accident.
+    """
+    clean = {
+        "prose": "rotate the api key and the " + "bear" + "er credential for the npm registry",
+        "placeholder": "GITHUB_TOKEN=<your-token>",
+        "reference": "token = os.environ['GITHUB_TOKEN']",
+        "identifier": "npm_packages and pypi_index are directory names",
+        "ark_prefix_prose": "the sk learn pipeline and the ak sk handshake",
+    }
+    for label, text in clean.items():
+        res = scan_texts({"candidate": text})
+        assert res.ok is True, (label, [(h.rule_id, h.line) for h in res.hits])
+
+    for label, text in {
+        "hyphenated_package": "install " + "pypi" + "-django-rest-framework first",
+        "dashed_slug": "the " + "xoxb" + "-slack-app-configuration page",
+    }.items():
+        res = scan_texts({"candidate": text})
+        assert [hit.rule_id for hit in res.hits] == ["provider_token"], label
+
+
+def test_a_labelled_provider_token_still_fails_closed() -> None:
+    """A labelled credential can match two rules; the verdict must not change.
+
+    Each rule reports at most one hit and the scan collects every matching rule,
+    so a quoted credential assignment whose value is also a provider token yields
+    both `provider_token` and the assignment rule. `hit_count` is therefore not a
+    per-credential count, and no caller in the tree reads it as one; the contract
+    this pins is the verdict and the content-free receipt.
+    """
+    text = "api" + "_key = '" + "ghp" + "_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8" + "'"
+    res = scan_texts({"candidate": text})
+    assert res.ok is False
+    assert {hit.rule_id for hit in res.hits} == {"provider_token", "api_key_assignment"}
+    _assert_receipt_withholds(res, "ghp_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8")
+
+
 def test_hit_is_located_by_line_and_carries_no_file_content() -> None:
     """The receipt locates a match by line instead of echoing any bytes."""
     opening = "OPENING-MARKER the very first line of the file\n"

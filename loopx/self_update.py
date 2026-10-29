@@ -94,10 +94,14 @@ def _source_config(
     repo: str | None,
     ref: str | None,
     archive_url: str | None,
+    installed: dict[str, Any] | None = None,
+    build_from_source: bool = False,
 ) -> dict[str, Any]:
-    selected_repo = repo or os.environ.get("LOOPX_REPO") or DEFAULT_UPDATE_REPO
+    installed = installed or {}
+    selected_repo = repo or os.environ.get("LOOPX_REPO") or installed.get("manifest_source_repo") or DEFAULT_UPDATE_REPO
     ref_override = ref or os.environ.get("LOOPX_REF")
-    selected_ref = ref_override or DEFAULT_UPDATE_REF
+    inherited_ref = installed.get("manifest_source_ref")
+    selected_ref = ref_override or inherited_ref or DEFAULT_UPDATE_REF
     archive_url_override = archive_url or os.environ.get("LOOPX_ARCHIVE_URL")
     selected_archive_url = archive_url_override
     if not selected_archive_url:
@@ -114,9 +118,11 @@ def _source_config(
         "channel": channel,
         "repo": selected_repo,
         "ref": selected_ref,
-        "ref_source": "default_stable" if not ref_override else "override",
+        "ref_source": "override" if ref_override else "installed_manifest" if inherited_ref else "default_stable",
         "archive_url": selected_archive_url,
         "installer_url": NO_CLONE_INSTALL_URL,
+        "distribution": "source" if build_from_source or archive_url_override else "runtime",
+        "explicit_archive": bool(archive_url_override),
     }
 
 
@@ -153,7 +159,10 @@ def _installer_env_for_source(
             )
         env["LOOPX_PYTHON"] = persisted_python
     env["LOOPX_REPO"] = str(source.get("repo") or DEFAULT_UPDATE_REPO)
-    env["LOOPX_REF"] = str(source.get("ref") or DEFAULT_UPDATE_REF)
+    env["LOOPX_REF"] = str(source.get("resolved_revision") or source.get("ref") or DEFAULT_UPDATE_REF)
+    env["LOOPX_UPDATE_CHANNEL"] = str(source.get("ref") or DEFAULT_UPDATE_REF)
+    env["LOOPX_BUILD_FROM_SOURCE"] = "1" if source.get("distribution", "source") == "source" else "0"
+    env["LOOPX_UPDATE_EVENTS"] = "1"
     if source.get("channel") == "github_archive_url_override" and source.get(
         "archive_url"
     ):
@@ -472,6 +481,10 @@ def _update_action_command(action: UpdateAction, source: dict[str, Any]) -> str:
         parts.extend(["--ref", str(source.get("ref") or DEFAULT_UPDATE_REF)])
         if source.get("channel") == "github_archive_url_override":
             parts.extend(["--archive-url", str(source.get("archive_url") or "")])
+    if source.get("distribution") == "source" and not source.get("explicit_archive"):
+        parts.append("--source")
+    if source.get("allow_downgrade"):
+        parts.append("--allow-downgrade")
     return shlex.join(parts)
 
 
@@ -640,6 +653,9 @@ def build_update_plan(
     doctor_payload: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     runtime_root: str | None = None,
+    build_from_source: bool = False,
+    allow_downgrade: bool = False,
+    resolve_remote: bool | None = None,
 ) -> dict[str, Any]:
     requested_action = resolve_update_action(
         action,
@@ -667,8 +683,12 @@ def build_update_plan(
         if isinstance(release_manifest.get("manifest"), dict)
         else {}
     )
-    source = _source_config(repo=repo, ref=ref, archive_url=archive_url)
     lifecycle = _install_lifecycle(doctor)
+    source = _source_config(repo=repo, ref=ref, archive_url=archive_url,
+        installed=install_freshness if lifecycle["owner"] == "loopx_release_snapshot" else None,
+        build_from_source=build_from_source)
+    source["allow_downgrade"] = allow_downgrade
+    remote = doctor_payload is None if resolve_remote is None else resolve_remote
     archive_install_command = _command_for_source(source)
     dry_run = not execute
     path = doctor.get("path") if isinstance(doctor.get("path"), dict) else {}
@@ -676,7 +696,7 @@ def build_update_plan(
     current_version = install_freshness.get("current_version")
     source_version_check = (
         _source_version_check(source)
-        if check_only and lifecycle["owner"] == "loopx_release_snapshot"
+        if check_only and lifecycle["owner"] == "loopx_release_snapshot" and source["distribution"] == "source"
         else {
             "schema_version": SOURCE_VERSION_CHECK_SCHEMA_VERSION,
             "attempted": False,
@@ -707,9 +727,9 @@ def build_update_plan(
         _source_commit_check(
             source,
             installed_commit=install_freshness.get("manifest_source_git_commit"),
-            allow_remote=doctor_payload is None,
+            allow_remote=remote,
         )
-        if not execute and lifecycle["owner"] == "loopx_release_snapshot"
+        if lifecycle["owner"] == "loopx_release_snapshot" and source["distribution"] == "source"
         else {"schema_version": SOURCE_COMMIT_CHECK_SCHEMA_VERSION,
               "attempted": False, "status": "not_requested",
               "installed_commit": install_freshness.get("manifest_source_git_commit"),
@@ -943,6 +963,13 @@ def build_update_plan(
         ),
         "recommended_action": recommended_action,
     }
+    from .cli_commands.update_source import prepare_target
+    payload = prepare_target(payload, freshness=install_freshness,
+        resolve_remote=remote, allow_downgrade=allow_downgrade)
+    if lifecycle["owner"] == "python_package_manager" and (ref or build_from_source or archive_url):
+        reason = "The Python package manager owns this installation; choose main/source in a separate snapshot installation"
+        payload.update(ok=not execute, error=reason, recommended_action=reason)
+        payload["plan"].update(apply_supported=False, blocked_reason=reason, mutates_release_install=False)
     return (_windows_console_update_refusal(payload) if execute else None) or payload
 
 
@@ -1152,6 +1179,8 @@ def execute_update_plan(
     registry_path: Path | None = None, runtime_root: str | None = None,
     progress: Callable[[str], None] = lambda _stage: None,
 ) -> dict[str, Any]:
+    if not payload.get("plan", {}).get("apply_supported", True):
+        return dict(payload, ok=False, changes_applied=False)
     route_arguments = []
     if registry_path is not None:
         route_arguments += ["--registry", str(registry_path.resolve())]
@@ -1211,12 +1240,16 @@ def execute_update_plan(
         env["LOOPX_REGISTRY"] = str(registry_path.resolve())
     if runtime_root is not None:
         env["LOOPX_RUNTIME_ROOT"] = runtime_root
-    install_result, download_observation = run_archive_installer(
-        installer_url,
-        env=env,
-        timeout_seconds=timeout_seconds,
-        progress=progress,
-    )
+    if source.get("distribution") == "runtime":
+        from .cli_commands.update_artifact import install_artifact
+        if not source.get("artifact"):
+            return dict(payload, ok=False, changes_applied=False,
+                error="No resolved runtime artifact; rebuild the update plan online before applying")
+        install_result, download_observation = install_artifact(source["artifact"], env=env,
+            timeout_seconds=timeout_seconds, progress=progress)
+    else:
+        install_result, download_observation = run_archive_installer(
+            installer_url, env=env, timeout_seconds=timeout_seconds, progress=progress)
     # Match install-local.sh's LOOPX_BIN_DIR override, including its empty-value
     # default. Read back the installation that this update actually replaced.
     loopx_bin = Path(env.get("LOOPX_BIN_DIR") or _user_loopx_bin().parent) / "loopx"
@@ -1238,8 +1271,21 @@ def execute_update_plan(
         "doctor_stderr_tail": doctor_result.stderr[-2000:],
         "installed_runtime_identity": _installed_readback(doctor_result) if doctor_result.returncode == 0 else {},
     }
+    try:
+        installed_freshness = json.loads(doctor_result.stdout).get("install_freshness", {})
+    except (ValueError, AttributeError):
+        installed_freshness = {}
+    if not isinstance(installed_freshness, dict):
+        installed_freshness = {}
+    # A host-material step can fail after a healthy candidate became active.
+    # Do not report "nothing changed" merely from the installer's exit code.
+    activation_observed = bool(doctor_result.returncode == 0 and source.get("resolved_revision")
+        and installed_freshness.get("manifest_source_git_commit") == source["resolved_revision"]
+        and installed_freshness.get("release_id")
+        and installed_freshness["release_id"] != payload.get("current", {}).get("release_id"))
+    execution["activation_observed"] = activation_observed
     extension_doctor_result = None
-    if install_result.returncode == 0 and doctor_result.returncode == 0:
+    if (install_result.returncode == 0 or activation_observed) and doctor_result.returncode == 0:
         progress("Validating enabled extensions")
         extension_doctor_result = subprocess.run(
             [
@@ -1266,15 +1312,15 @@ def execute_update_plan(
         )
     else:
         execution["extension_doctor_status"] = "skipped_release_update_failed"
-    runtime_ready = install_result.returncode == 0 and doctor_result.returncode == 0
+    runtime_ready = (install_result.returncode == 0 or activation_observed) and doctor_result.returncode == 0
     updated = dict(payload)
     updated["execution"] = execution
     updated["ok"] = (
-        runtime_ready
+        install_result.returncode == 0 and runtime_ready
         and extension_doctor_result is not None
         and extension_doctor_result.returncode == 0
     )
-    updated["changes_applied"] = install_result.returncode == 0
+    updated["changes_applied"] = install_result.returncode == 0 or activation_observed
     execution.update(
         restart_services_for_runtime_activation(
             changes_applied=updated["changes_applied"],

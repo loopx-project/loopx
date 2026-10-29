@@ -162,6 +162,7 @@ class StewardTurnHost:
             return {"monitor_restart_basis": {"original": original,
                 "event_kinds": [row["kind"] for row in events], "poll_absent": not present,
                 "contexts": [row["payload"] for row in events if row["kind"] == "manager.context"],
+                "phases": [row["payload"] for row in events if row["kind"] == "agent.phase"],
                 "old_worker_excluded": True, "lease_available": available}}
 
     @staticmethod

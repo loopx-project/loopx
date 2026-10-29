@@ -231,6 +231,9 @@ def register_quota_command(
     quota_parser.add_argument("--select", action="append",
         help="For context-read: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
              "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
+    quota_parser.add_argument("--list", dest="list_fields", action="store_true",
+        help="For context-read: list immediate fields at the selected pointers (root by default), "
+             "with exact pointers, types and sizes. Does not read bodies or establish a delta baseline.")
     quota_parser.add_argument("--selection-sha256",
         help="For selected context-read continuations: exact derived-view digest from the preceding page.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")

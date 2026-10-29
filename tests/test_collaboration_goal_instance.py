@@ -125,6 +125,7 @@ def _http_snapshot(root, registry, session_id):
     # These fixtures script Host liveness; the real HTTP/store projection below
     # tests collaboration lifetime and receipts, not exited-process recovery.
     server.runtime_controller = SimpleNamespace(
+        coordination_runtime_root=root,
         recover_exited_turn=lambda _session_id: None, close=lambda: None,
     )
     worker = threading.Thread(target=server.serve_forever, daemon=True)

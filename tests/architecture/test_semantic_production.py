@@ -153,7 +153,7 @@ def test_declared_return_is_scanned_in_real_python_syntax():
 
 
 @pytest.mark.parametrize('vocabulary_name, module, original', [
-    ('turn_route', 'loopx/control_plane/turn_driver/driver.py', 'return LoopXTurnRoute.CONTRACT_ERROR'),
+    ('turn_route', 'loopx/control_plane/quota/turn_envelope.ts', 'return "user_action_required";'),
     ('loop_disposition', 'loopx/control_plane/turn_driver/turn_contract_generated.py', 'return LoopDisposition(value)'),
 ])
 def test_real_return_producer_rejects_an_unregistered_result(vocabulary_name, module, original):
@@ -291,11 +291,11 @@ def test_registered_consumer_cannot_replace_a_removed_writer():
 def test_real_reexported_turn_owner_is_attributed_through_one_hop():
     import json
     from loopx.semantics.inventory import load_sources
-    # loop_controller imports LoopXTurnRoute from driver, which re-exports the
-    # generated owner; the registered return producer must still resolve.
+    # driver imports LoopXTurnRoute from the generated owner and re-exports it;
+    # the registered return producer must still resolve through that one hop.
     v = json.loads((ROOT / 'loopx/semantics/vocabulary_v0.json').read_text(encoding='utf-8'))['vocabularies']['turn_route']
     rows = collect_production(ROOT, v, load_sources(ROOT))
-    site = 'loopx/control_plane/turn_driver/loop_controller.py::_envelope_route'
+    site = 'loopx/control_plane/turn_driver/driver.py::_typed_route'
     resolved = {value for r in rows if r.site == site and not r.unresolved for value in r.values}
     assert 'user_action_required' in resolved
 
