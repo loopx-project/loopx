@@ -589,7 +589,9 @@ delivery before optional material planning. A real saved-context CLI process
 exit reproduces stale predecessor recovery on main `ce4c78088` in both resume
 and compaction; the same assertions pass on the proposal. Its affected cohort
 has 199 passed and five existing explicit-native opt-in skips; standard premerge
-passes. It remains proposed, without merge or installed-adoption qualification.
+passes at the proposal head. It was merged as
+`75034bfa99d39aa949d7bb0fed33913034ce7eca` on 2026-10-29; installed adoption
+remains unqualified. The proposal's cohort is not a new whole-main validation.
 
 Matched project-call observations keep off/plain capture and typed-request counts
 unchanged. Material staging adds one journal publication, from two to three;

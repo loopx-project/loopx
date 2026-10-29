@@ -433,8 +433,9 @@ C1 切换推进。该提案 `6743ce72593121b2e15a9f8ef84355c31c94e46c` 直接面
 不依赖未合 C1。既有 native adapter 在可选材料规划前，先发布当前原始来源的 recovery
 及 pending delivery。真实 saved-context CLI 进程退出反例在 main `ce4c78088` 的
 resume／compaction 均复现恢复前一份来源，提案通过相同断言。受影响 cohort 为
-199 项通过、五项既有显式 native opt-in 跳过；标准 premerge 通过。仍为提案，未认证
-合入或安装采用。
+199 项通过、五项既有显式 native opt-in 跳过；提案 head 的标准 premerge 通过。
+2026-10-29 已合入为 `75034bfa99d39aa949d7bb0fed33913034ce7eca`；安装采用仍未资格化，
+提案 cohort 不冒充新的完整主线验证。
 
 相同 project 调用的关闭态／普通态 capture 及 typed 请求数不变。材料分阶段多一次
 journal 发布，从两次增至三次；capture 文件及 typed 请求仍各两份／次。这换取当前
