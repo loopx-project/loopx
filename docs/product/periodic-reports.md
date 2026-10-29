@@ -1052,6 +1052,24 @@ instance. `observed.json` records artifact, completion, retained history and
 actual post-setup model calls. This qualifies neither live-model understanding,
 complete Chat-process restart nor production delivery.
 
+For a controller-restart check, stop that wake owner, await accepted work, then
+write a unique operation token to `restart-runtime` in the same output directory.
+The fixture closes the old controller and reconstructs the normal controller,
+Chat store and transport over the original physical state, keeping its HTTP URL.
+`restart-readback.json` verifies the original Session, actor and message history
+and that restarting itself added no model or delivery effect. The wake owner
+remains stopped until `stop-existing-wake` is removed. Reusing a token within
+that fixture lifetime does not restart again. Missing stop or pending original
+work writes `restart-rejected.json` and leaves the controller running; that
+token cannot apply later after the condition changes. This is an isolated controller
+restart inside the fixture process, not an OS-process or installed-service test.
+
+`test_same_calendar_task_lifecycle_retains_results_and_rejects_late_dispatch`
+joins settings changes, pause/cancel, restart, original result readback,
+withdrawn Agent registration, late dispatch and three distinct calendar windows
+in one File/SQLite journey. Paused and withdrawn stages must add no model call
+or reply; each admitted window must have exactly one original Core result.
+
 Callers can discover eligible references on demand with
 `GET /api/chat/sessions/<original-session-id>/native-turn?calendar_task_sources=true`.
 The `calendar_task_sources` view reads the original Goal's canonical completed
