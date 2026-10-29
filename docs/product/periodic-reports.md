@@ -1020,6 +1020,29 @@ renderer preset; it does not invoke the progress-report source or editorial
 format. Task descriptions, scripts and validation argv cannot be supplied in
 this configuration.
 
+Callers can discover eligible references on demand with
+`GET /api/chat/sessions/<original-session-id>/native-turn?calendar_task_sources=true`.
+The `calendar_task_sources` view reads the original Goal's canonical completed
+history, including archived Tasks, and applies the same original Agent and
+independent argv-declaration checks used when configuring execution. It returns
+Task references, display titles, validation digests and archive state, without
+installing commands or copying validators into the configuration. Open work,
+other Agents' work, report generation and generated calendar periods are not
+offered as repeating sources. A missing, changed or unreadable declaration
+fails this read visibly; it is not represented as an empty valid list.
+Ordinary inspection omits this optional catalog. Repeated discovery does not
+configure a subscription, wake an Agent, create a Task, invoke a model, spend
+quota or send a message. Configuration and every due execution still recheck
+the original source; a displayed reference grants no launch authority.
+
+调用方可在原会话的 `native-turn` 读取中显式加入
+`calendar_task_sources=true`，发现同一 Agent 可重复执行的已完成 Task，包含已归档项。
+此只读视图复用原生已完成历史和执行入口的验收声明检查；返回原引用、显示标题、
+验收摘要和归档状态，不传入新命令。未完成任务、其它 Agent 的任务、报告生成和
+已生成的日历窗口不会成为候选。声明缺失、变化或不可读时明确失败，不伪装为空列表。
+普通状态读取不加载此目录；重复发现不会启用计划、唤醒 Agent、创建 Task、调用模型、
+扣额或发消息。保存配置和每次到期执行仍重新核验原来源。
+
 At the first due boundary, the original idle Chat pump freezes the source
 Task's declaration into the existing cadence attempt. It creates one finite
 native Task for that window, inheriting the source Task's scope, repository,

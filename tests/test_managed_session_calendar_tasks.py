@@ -141,6 +141,95 @@ def fixed_clock(monkeypatch):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_session_discovers_repeatable_tasks_without_enrolling_or_replaying(steward, tmp_path, monkeypatch, provider):
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    session, actor, unrelated, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    sid = session["session_id"]
+    fixed_clock(monkeypatch)
+    calls, history, writes = capture.read_bytes(), store.messages(sid), list(bot.writes)
+    before = load_goal_from_registry(runtime.registry_path, actor["goal_id"])
+    with settings_server(steward) as request:
+        url = f"/api/chat/sessions/{sid}/native-turn"
+        status, plain = request(url, None, method="GET")
+        assert status == 200 and "calendar_task_sources" not in plain
+        status, view = request(url + "?calendar_task_sources=true", None, method="GET")
+        assert status == 200, view
+        options = view["calendar_task_sources"]
+        assert options["session_id"] == sid and options["goal_id"] == actor["goal_id"]
+        assert options["agent_id"] == actor["agent_id"] and options["read_only"]
+        assert options["authority_read"]["source_authority"] == ("file_v0" if provider == "file" else "sqlite_v0")
+        assert [row["source_todo_id"] for row in options["sources"]] == [config["task"]["source_todo_id"]]
+        chosen = options["sources"][0]
+        assert chosen["title"] and len(chosen["completion_validation_sha256"]) == 64
+        assert not chosen["archived"] and "validation_command_argv" not in json.dumps(options)
+        for selector in ("yes", "true&calendar_task_sources=false", f"true&agent_id={actor['agent_id']}-other",
+                f"true&agent_id={actor['agent_id']}&agent_id=other", "true&goal_id=other"):
+            status, rejected = request(url + "?calendar_task_sources=" + selector, None, method="GET")
+            assert status == 409 and rejected["ok"] is False
+        # Discovery is opt-in and has not changed the original Goal, Task,
+        # model calls, original messages, or private provider delivery.
+        assert load_goal_from_registry(runtime.registry_path, actor["goal_id"]) == before
+        assert capture.read_bytes() == calls and store.messages(sid) == history and bot.writes == writes
+        assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+        apply_configuration(request, actor["goal_id"], {**config, "task": {"source_todo_id": chosen["source_todo_id"]}})
+        completed = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert completed["response"]["native_loopx"]["status"] == "committed"
+        # A completed generated period cannot become another repeating source.
+        assert [row["source_todo_id"] for row in ManagedSessionTurn(runtime).inspect(
+            sid, include_calendar_task_sources=True)["calendar_task_sources"]["sources"]] == [chosen["source_todo_id"]]
+        cli(runtime, "todo", "archive-completed", "--goal-id", actor["goal_id"], "--role", "agent",
+            "--max-active-done", "0", "--execute")
+        calls = capture.read_bytes()
+        status, archived = request(url + "?calendar_task_sources=true", None, method="GET")
+        assert status == 200, archived
+        assert archived["calendar_task_sources"]["sources"] == [{**chosen, "archived": True}]
+        assert archived["scheduled_task"]["completion_verified"] and capture.read_bytes() == calls
+        assert next(row for row in StewardMonitor(runtime).todos(actor) if row["todo_id"] == unrelated)["status"] == "open"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("fault", ["malformed", "directory"])
+def test_calendar_task_discovery_retains_unreadable_validator_and_recovers_without_work(steward, tmp_path, monkeypatch, provider, fault):
+    from loopx.control_plane.todos.completion_validation_store import completion_validation_declaration_path
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, *_ = steward
+    service = SessionCalendarTasks(runtime)
+    options = service.source_options(session["session_id"])
+    source = options["sources"][0]
+    path = completion_validation_declaration_path(runtime_root=runtime.coordination_runtime_root,
+        goal_id=actor["goal_id"], todo_id=source["source_todo_id"]).parent / "blobs" / (source["completion_validation_sha256"] + ".json")
+    original = path.read_bytes()
+    calls, history, writes = capture.read_bytes(), store.messages(session["session_id"]), list(bot.writes)
+    path.unlink()
+    if fault == "directory":
+        path.mkdir()
+    else:
+        path.write_text("{}")
+    try:
+        with settings_server(steward) as request:
+            url = f"/api/chat/sessions/{session['session_id']}/native-turn?calendar_task_sources=true"
+            status, failed = request(url, None, method="GET")
+            assert status == (503 if fault == "directory" else 409), failed
+            assert failed["error_code"] == ("managed_task_sources_unavailable" if fault == "directory" else "managed_turn_unavailable")
+            assert "calendar_task_sources" not in failed
+            with pytest.raises(OSError if fault == "directory" else ValueError):
+                service.source_task(actor, config["task"])
+            if path.is_dir():
+                path.rmdir()
+            path.write_bytes(original)
+            status, recovered = request(url, None, method="GET")
+            assert status == 200 and recovered["calendar_task_sources"]["sources"] == options["sources"]
+    finally:
+        if path.is_dir():
+            path.rmdir()
+        path.write_bytes(original)
+    assert capture.read_bytes() == calls and store.messages(session["session_id"]) == history and bot.writes == writes
+    assert read_cadence_journal(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"]) is None
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_calendar_preserves_canonical_decision_scopes_through_original_return(steward, tmp_path, monkeypatch, provider):
     from loopx.control_plane.todos.contract import normalize_todo_required_decision_scopes
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
