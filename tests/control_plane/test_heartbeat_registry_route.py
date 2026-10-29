@@ -121,7 +121,7 @@ def test_external_poll_opt_out_keeps_prequota_out_of_every_host_prompt(tmp_path,
 
 def _execute(argv: list[str], cwd: Path):
     env = dict(os.environ, PYTHONPATH=str(cli.REPO_ROOT))
-    result = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json", *argv],
+    result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", *argv],
                             cwd=cwd, env=env, text=True, capture_output=True, check=False)
     assert result.stdout, result.stderr
     return result.returncode, json.loads(result.stdout)

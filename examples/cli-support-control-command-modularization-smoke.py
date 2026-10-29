@@ -9,12 +9,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "loopx" / "cli.py"
 MODULE = ROOT / "loopx" / "cli_commands" / "support_control.py"
+HEARTBEAT = MODULE.with_name("support_control_heartbeat.py")
 INIT = ROOT / "loopx" / "cli_commands" / "__init__.py"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "loopx.cli", *args],
+        [sys.executable, "-m", "loopx.entrypoint", *args],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -77,10 +78,8 @@ def main() -> None:
         "SUPPORT_CONTROL_COMMANDS",
         "register_support_control_commands",
         "handle_support_control_command",
-        "resolve_heartbeat_active_state",
         "backup-state",
         "chat",
-        "heartbeat-prompt",
         "promotion-gate",
         "upgrade-plan",
         "update",
@@ -92,6 +91,10 @@ def main() -> None:
     require("handle_support_control_command" in cli_source, "cli.py did not dispatch support/control commands")
     require("register_support_control_commands" in init_source, "__init__ omitted support/control registration")
     require("handle_support_control_command" in init_source, "__init__ omitted support/control handler")
+    heartbeat_source = HEARTBEAT.read_text(encoding="utf-8")
+    require("build_heartbeat_prompt(" not in module_source, "support/control retained duplicate heartbeat dispatch")
+    for marker in ("handle_heartbeat_prompt_command", "resolve_heartbeat_active_state", "build_heartbeat_prompt("):
+        require(marker in heartbeat_source, f"heartbeat handler missing {marker}")
 
     for command, options in {
         "backup-state": (
