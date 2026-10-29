@@ -27,6 +27,19 @@ TURN_A = f"sha256:{'a' * 64}"
 TURN_B = f"sha256:{'b' * 64}"
 
 
+@pytest.mark.parametrize("number", [1, 1.0, -0.0, 2**60 + 1, float(2**60), 1e-7])
+def test_journal_retains_original_numbers_through_native_commit_and_replay(tmp_path, number):
+    journal = _journal(None, TURN_A)
+    journal["plan"]["original_evidence"] = {"values": [number, {"number": number}], "text": "1.0"}
+    path = tmp_path / "turn.json"
+    write_turn_journal_checkpoint(path, journal)
+    expected = json.dumps(journal["plan"]["original_evidence"], sort_keys=True)
+    assert json.dumps(json.loads(path.read_text())["plan"]["original_evidence"], sort_keys=True) == expected
+    original = path.read_bytes()
+    write_turn_journal_checkpoint(path, journal)
+    assert path.read_bytes() == original
+
+
 def _registry_payload(path: Path, instance_id: str) -> dict[str, Any]:
     return {
         "schema_version": "0.2",
