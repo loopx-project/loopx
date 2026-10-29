@@ -124,6 +124,49 @@ Use the [DeepSeek Harness SDK connector](../integrations/deepseek-harness-connec
 when an outer supervisor needs bounded headless turns instead. It is a
 different integration from the native Web plugin.
 
+## Example: keep improving repository quality
+
+Continuous work can improve maintainability as well as fix bugs. Choose a
+repository or module you own, with a real maintenance problem and checks that
+can detect behavior changes. Use this task in Codex; Claude Code uses `/loopx`
+instead of `$loopx`:
+
+```text
+$loopx Continuously refactor <owned repository or module> to improve
+maintainability. Read repository instructions and reuse the existing Goal,
+work ownership and pending PRs. Establish the write scope, actual test commands,
+current quota and stopping rule. Use code and maintenance evidence to choose
+the next refactoring; explain the problem, expected benefit and tradeoffs.
+Prefer duplicated rules, mixed responsibilities or hard-to-test boundaries.
+Deliver one coherent, independently reviewable improvement at a time in the
+required branch or worktree. Preserve external behavior, public APIs, error
+semantics, configuration compatibility, and permission/privacy boundaries.
+If a contract must change, explain it and follow the existing change process
+rather than hiding it in a refactoring. Run relevant tests and boundary
+regressions. Show the before/after structure, actual diff and check results;
+prepare commits and PRs under repository rules. Address review feedback in its
+existing PR and retain adopted feedback, results and the next action in this Goal.
+Judge quality by the maintenance problem resolved, not renames, formatting,
+file counts or lines of code. Continue from new evidence within current
+authority and budget; wait under the existing scheduler when dependencies
+are unmet. Stop and report when no worthwhile improvement remains, the budget
+is exhausted or the stopping condition is reached. Do not merge or release.
+```
+
+For example, two import paths may duplicate field validation. A useful
+refactoring could consolidate the shared rules while retaining each entry's
+defaults, accepted input and error behavior. Compare where a rule change must
+be made before and after, and test both real entry points, including invalid
+input. Reject the abstraction if it makes the callers harder to understand.
+This is an illustrative target, not a finding about your repository.
+
+Keep each result in its original Goal and PR so review feedback can change the
+next decision. A passing suite alone does not establish improved maintainability;
+explain the structural benefit and its costs. If later work requires a pending
+review, use the existing wait rather than starting overlapping changes.
+The [Chinese walkthrough](first-bugfix-loop.zh-CN.md#6-持续重构仓库提升代码质量)
+contains the same task in Chinese.
+
 ## Resume after an interruption
 
 Open the same project and read `loopx status` before issuing another task.

@@ -6,8 +6,8 @@ Fix a tiny checkout-pricing project with an agent you already use. You will
 reproduce two failing checks, ask the agent to repair the code through LoopX,
 inspect the patch, and make a local commit. No remote repository is required.
 
-**Finish steps 1–4 first.** Step 5 is an optional extension for recurring work
-in your own repository; you do not need a recurring bug hunt to complete this exercise.
+**Finish steps 1–4 first.** Steps 5–6 are optional extensions for recurring
+bug fixes or refactoring in your own repository.
 
 You need Python 3.11+ for the exercise. To use LoopX, also install Node.js
 22.22.3+ (24 LTS recommended), LoopX, and an agent host you already use. The
@@ -211,6 +211,18 @@ the matching automation. Pausing the host driver and pausing the LoopX goal are
 separate state changes. Do not delete project state to stop a loop. To resume,
 open the same project, explicitly resume the same Agent lane, read its existing
 state and last evidence, and reactivate the appropriate host driver.
+
+## 6. Keep improving repository quality
+
+The same loop can address maintenance work before it causes a bug: duplicated
+rules that drift, tangled module dependencies, or a routine change that requires
+editing several unrelated places. Start with evidence from a module you own,
+keep existing behavior and permission boundaries, and verify each useful change.
+
+The [continuous-refactoring example](long-running-coding-agents.md#example-keep-improving-repository-quality)
+provides a complete task prompt and an example of what to compare before and
+after. Continue from the same Goal and its recorded evidence; each refactoring
+still needs a reviewable result and a stopping rule.
 
 ## Setup effort, ongoing cost, and limits
 
