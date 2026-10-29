@@ -322,6 +322,9 @@ C2 须在相同冷态、已保留温态及上下文丢失来源上验证：默�
 为准。
 
 当前集成证据：[导航收敛检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.zh-CN.md)。
+[Journal 来源保真检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.zh-CN.md)
+将可独立评审的持久化修复与尚未完成的数值 hash／上下文 codec 资格分开记录；既有
+hash 语义保持不变。
 
 当前 C1 分支复用已合入 #7560 的 `outcome_context_navigation_v1` 和通用同 capture
 `context-read --select`。注册关系建议读取顺序；归属不证明独立性，覆盖限制也不

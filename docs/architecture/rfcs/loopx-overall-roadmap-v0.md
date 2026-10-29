@@ -227,6 +227,9 @@ keeps signed contracts complete and main's recovery-before-planning ordering;
 #7627's merged file-first delivery is adopted through that existing owner. The old
 fused native-call saving does not apply to this integration. Numeric hash identity,
 writer/caller retirement and original-quota outcomes/full cost remain open.
+The [journal source-fidelity prerequisite](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.md)
+is split into normal #7657 and reused by C1. Its original-number preservation
+does not qualify a new hash codec or a positive full-cost comparison.
 
 The same integration codec now adopts merged [#7528](https://github.com/loopx-project/loopx/pull/7528)
 for exact relocated evidence with literal current overrides, including scoped

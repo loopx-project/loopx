@@ -173,6 +173,9 @@ C1 现退役其未发布的强制成果阅读计划和 scoped wrapper，复用�
 保留签名契约全文与主干先恢复后规划的顺序；#7627 已合入的文件优先交付经同一 owner 采用。
 旧 native 融合调用节省不适用于本次集成。数值 hash 身份、writer/caller 退役及原
 quota 成果/完整成本仍未闭合。
+[Journal 来源保真前置切片](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.zh-CN.md)
+独立为普通 PR #7657，C1 复用同一实现。保留原始数值不等于新 hash codec 已合格，
+也不证明完整成本对照正向。
 
 
 同一集成 codec 现采用已合入的 [#7528](https://github.com/loopx-project/loopx/pull/7528)，在精确

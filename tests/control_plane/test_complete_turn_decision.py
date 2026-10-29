@@ -571,6 +571,11 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
     assert len(saved) == 1
     saved_bytes = saved[0].read_bytes()
     assert json.loads(saved_bytes) == observed["work_contract"]
+    journal = json.loads((saved[0].parent.parent / saved[0].name).read_text())
+    # Native journal persistence must preserve the captured source's number
+    # types and precision, not merely Python's permissive 1 == 1.0 equality.
+    assert json.dumps(journal["plan"]["work_contract"], sort_keys=True) == json.dumps(
+        observed["work_contract"], sort_keys=True)
     replay_args = list(run_args)
     index = replay_args.index("--turn-instance-id")
     del replay_args[index:index + 2]
