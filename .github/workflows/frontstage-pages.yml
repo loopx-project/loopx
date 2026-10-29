@@ -48,6 +48,7 @@ on:
       - "scripts/render-star-history.py"
       - "scripts/fetch-github-stargazers.sh"
       - "scripts/install-from-github.sh"
+      - "loopx/cli_commands/update_artifact.py"
   push:
     branches:
       - main
@@ -91,6 +92,7 @@ on:
       - "scripts/render-star-history.py"
       - "scripts/fetch-github-stargazers.sh"
       - "scripts/install-from-github.sh"
+      - "loopx/cli_commands/update_artifact.py"
 
 permissions:
   actions: read
@@ -192,6 +194,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           LOOPX_SITE_RESOLVE_DESKTOP_RELEASE: "1"
         run: npm run export:frontstage-share -- --base /loopx/ --out-dir ../../../output/frontstage-pages
+
+      - name: Require stable runtime before publishing its bootstrap
+        if: github.event_name != 'pull_request'
+        run: |
+          python - <<'PY'
+          from loopx.cli_commands.update_artifact import resolve_artifact
+          resolve_artifact("loopx-project/loopx", "stable")
+          PY
 
       - name: Fetch complete GitHub stargazer history
         if: github.event_name != 'pull_request'

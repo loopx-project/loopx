@@ -72,11 +72,54 @@ def frozen_private_reply(tmp_path):
     return store, session, turn, request, native, record, source_text, parent
 
 
-def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path):
+@pytest.fixture
+def private_snapshot(frozen_private_reply, tmp_path):
+    """Exercise provider history at its shipped HTTP composition boundary."""
+    import http.client
+    from types import SimpleNamespace
+    from urllib.parse import urlencode
+
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    store, session, *_ = frozen_private_reply
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.verbose = store, False
+    server.registry_path, server.runtime_root = tmp_path / "absent.json", tmp_path
+    server.runtime_controller = SimpleNamespace(
+        recover_exited_turn=lambda _: None, close=lambda: None,
+        # Chat keeps its own storage when no registry names another root.
+        coordination_runtime_root=store.root.parent,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def read(**query):
+        connection = http.client.HTTPConnection(*server.server_address, timeout=15)
+        try:
+            connection.request("GET", f"/api/chat/sessions/{session['session_id']}?{urlencode(query)}")
+            response = connection.getresponse()
+            payload = json.loads(response.read())
+            assert response.status == 200, payload
+            return payload
+        finally:
+            connection.close()
+
+    try:
+        yield read
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path, private_snapshot):
     store, session, turn, _, _, _, source_text, parent = frozen_private_reply
     before = {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
-    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json",
+    # The core projection carries no provider history; the composition root joins it.
+    generic = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json",
                                           message_limit=1)
+    assert "reply_context" not in generic["messages"][0]
+    snapshot = private_snapshot(message_limit=1)
     message = snapshot["messages"][0]
     assert message["text"] == turn["message"]
     assert message["reply_context"]["source_text"] == source_text
@@ -86,7 +129,7 @@ def test_frozen_private_reply_projects_original_text_without_mutating_model_inpu
     assert {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()} == before
 
 
-def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private_reply, tmp_path):
+def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private_reply, tmp_path, private_snapshot):
     store, session, original, request, native, record, source_text, _ = frozen_private_reply
     client = f"external-{request}-recovery-21-quota-1"
     store.update_turn(session["session_id"], original["turn_id"], status="failed", error_code="synthetic_upstream_failure")
@@ -96,19 +139,19 @@ def test_reply_history_keeps_failed_and_recorded_recovery_context(frozen_private
     record["turn_id"] = recovery["turn_id"]
     for directory, row in (("external-requests", native), ("lark-private-deliveries", record)):
         _write(store.root / directory / f"{request}.json", row)
-    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json")
+    snapshot = private_snapshot()
     assert [m["reply_context"]["source_text"] for m in snapshot["messages"]] == [source_text, source_text]
     # A plausible-looking suffix without its original native receipt is not a source.
     store.update_turn(session["session_id"], recovery["turn_id"], status="completed")
     store.release_active_turn(session["session_id"], recovery["turn_id"])
     store.create_turn(session["session_id"], client_turn_id=f"external-{request}-recovery-999", message=original["message"], origin="lark")
-    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json")
+    snapshot = private_snapshot()
     assert "reply_context" not in snapshot["messages"][-1]
 
 
 @pytest.mark.parametrize("drift", ["session", "turn", "binding", "source", "native_message", "frozen_message",
                                   "parent", "thread", "order", "timestamp", "sender", "event_shape", "missing", "user_spoof", "foreign_origin"])
-def test_private_reply_view_requires_exact_frozen_source(frozen_private_reply, tmp_path, drift):
+def test_private_reply_view_requires_exact_frozen_source(frozen_private_reply, tmp_path, drift, private_snapshot):
     store, session, turn, request, native, record, _, _ = frozen_private_reply
     path = store.root / "lark-private-deliveries" / f"{request}.json"
     if drift in {"session", "turn", "binding"}:
@@ -139,7 +182,7 @@ def test_private_reply_view_requires_exact_frozen_source(frozen_private_reply, t
         path.unlink()
     if drift == "foreign_origin":
         store.append_message(session["session_id"], role="user", text=turn["message"], turn_id=turn["turn_id"], origin="peer")
-    snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json")
+    snapshot = private_snapshot()
     message = snapshot["messages"][-1]
     assert "reply_context" not in message
     assert message["text"] in {turn["message"], record["reply_context_message"]}

@@ -41,13 +41,10 @@
     "loopx/chat_server.py": {
       "any_count": 25,
       "dict_any_count": 0,
-      "lines": 2020
+      "lines": 2026
     },
     "loopx/chat_store.py": {
       "lines": 2066
-    },
-    "loopx/collaboration_mcp.py": {
-      "lines": 2058
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,

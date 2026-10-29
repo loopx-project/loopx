@@ -189,12 +189,21 @@ cancellation or completion. The App's warning glyph exposes that cause on demand
 other unreadable sources remain unknown. Refresh rechecks the original owners;
 the read neither repairs historical receipts nor grants execution/return authority.
 
+For native-bound steward inventory, one fresh provider selection supplies both
+Session validation and Goal visibility at each opening/closing check. The read
+still revalidates before returning content; no observation is cached between
+checks or requests. Custom scope resolvers keep their existing validation path.
+
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
 来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
 具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
 核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
+
+原生绑定管家的每次读取，在开始和结束时各验证一次 provider 身份，同一检查点的
+会话和 Goal 范围复用该次选择；检查点及请求之间不缓存权限。自定义范围解析器沿用
+原验证路径。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current

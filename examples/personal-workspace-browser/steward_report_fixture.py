@@ -139,6 +139,9 @@ def main() -> None:
                     "model_call_count": sum(json.loads(line).get("method") == "turn/start"
                         for line in capture.read_bytes()[len(before_calls):].splitlines()),
                     "provider_writes": len(provider.writes),
+                    "private_outbound_alive": delivery.is_alive() if delivery else None,
+                    "private_ingress": transport.ingress.health(binding["binding_id"]),
+                    "provider_history_pages": sum("+chat-messages-list" in call for call in provider.calls),
                     **({"managed_source_present": artifact.exists(),
                         "managed_session": store.load_session(managed_session["session_id"])} if args.managed_session else {}),
                     **({"managed_report": True,

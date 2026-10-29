@@ -5,7 +5,7 @@
 - **交付成熟度：** Proposal；本文不交付新运行时、schema 或默认行为。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-10-28
+- **最近规范性修订：** 2026-10-29
 - **实现基线：** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
@@ -36,6 +36,9 @@
    分别证明各自上下文连续性，不能借用对方的基线。
 5. 先在现有单会话路径验收契约统一；双会话保持 opt-in，直至可比成果与完整成本证据支持
    采用。本文不启动 benchmark 或特权操作。
+6. Executor 工作期间，controller 仍应面向用户保持可交互：回答问题、主动解释有意义
+   变化、展现有用产物，并把反馈落实到后续工作。由 C6/C8 验收这条旅程；会话分离
+   本身不能证明已经交付。
 
 ## 2. 问题与动机
 
@@ -47,6 +50,11 @@
 不需要学习如何编码 Vision delta 或扣除 LoopX Turn。分离这些工作可能减少干扰与重复
 协议输入，但额外 controller 也可能丢约束、增加延迟或过度指挥。这些是待验证假设，
 不能从会话拆分直接推出收益。
+
+长程工作还需要持续的人机对话。执行继续时，用户应能了解进展、检查成果和修正方向，
+无需反复追问状态。只转发最终答案的 controller 没有满足这项产品目标。汇报与展现须
+帮助用户判断工作，反馈须进入真实后续决策和产物；可联系、消息已收到或预览好看，
+都不能单独证明闭环成立。
 
 ### 不变量
 
@@ -204,6 +212,37 @@ Controller 失败不能让 executor 变成备用 Core 客户端。暂停依赖�
 capture 与 session/attempt 记录，在必要处读取当前权限，并按原身份对账已准入结果。
 Executor 摘要不能重建缺失的控制义务。必需材料矛盾或不可达时，依赖工作保持阻塞；
 独立获授权工作继续沿原路径推进。
+
+<a id="human-interaction-during-execution"></a>
+
+### 执行期间的人机交互
+
+在受支持的双会话 profile 中，executor 活动不能阻塞 controller 面向用户的对话。
+复用既有按角色绑定的有序队列、版本化请求、host 观察和原受众返回路径。询问或汇报
+不启动第二个业务 executor，不无故中断已授权 attempt，也不产生另一次 Turn 扣额。
+
+| 用户结果 | 必需行为与证据 |
+| --- | --- |
+| 执行中可交流 | Executor 忙时仍能回答问题、提供已保存产物。区分最近实测状态、来源/版本和活动未知；不猜测进度百分比，不从模型宣告完成推断验收通过。 |
+| 主动获知有用变化 | 重要进展、新产物、风险、有证据的停滞和需用户决策的变化应主动汇报，说明依据、影响及有用的反馈请求。复用已配置的事件/投递 owner，合并重复，无实质变化保持安静；不新增模型空轮询或固定汇报周期。 |
+| 理解并比较工作 | 按任务选择图表、关系图、时间线、方案对比、截图或产物预览。简明概览可达原始证据/版本，保留不确定性、可访问文本及媒体不可用时的可读降级；不要求每次生成全部形式。 |
+| 看到反馈进入执行 | 既有请求 owner 保留原反馈和有序 revision。分别回读收到、排队或待澄清、附理由拒绝，以及实际采用；把已采用变化关联到后续决策、工作和产物。ACK 或修改后的 brief 不能证明实际采用。 |
+
+Controller 区分已准入范围内的纠偏，以及需要新准入或缺少权限的范围变化。依赖的
+dispatch 或验收前，经当前 owner 应用修订，保留此前要求和未解决的冲突反馈；不能
+静默把最新消息视为取消旧承诺。当前 attempt 无法安全消费纠偏时，展示待处理 revision
+及其真实消费边界；替换 attempt 前仍满足 host 的 Stop/fencing 契约。迟到结果保留
+原 revision 与证据，但不能覆盖当前要求或结算不同工作。
+
+仅使用已授权会话与受众；展现不授予新渠道、收件人或公开披露权限。重连/重启后先
+恢复待处理反馈、attempt 和投递回执再重试；报告投递丢失或用户询问不引发重新派工。
+Stop 确认、host 中断及实际终止分别可观察。Controller 不可用时，既有 host/Core
+停止机制仍有效。
+
+这是 C6/C8 产品目标，不声称现有会话或进度原语已使旅程合格，也不新增独立 C1 切片
+的前置条件。后续 opt-in 双会话评估将汇报、展现生成/投递、两个会话全部调用及
+cached/uncached 输入、补读、恢复、时延和人工注意力计入完整成本；不预设响应 SLA
+或效率收益。
 
 ### 评审新鲜度与恢复
 
@@ -568,6 +607,7 @@ reader。本文不单独授权破坏性迁移。
 | 角色隔离与恢复 | 实际 host tools 下的 controller/executor 崩溃窗口、重复 dispatch、迟到结果、revision 变化、lease 到期、Stop | Executor 不能访问 Core，不能采用过时结果或隐藏第二个业务 executor |
 | 语义采用 | 原始要求 → controller 判断 → executor 实际工作 → 独立验证 → 接受结果并回原受众 | 读回执、合法 JSON 或 replan 成功不能单独通过 |
 | 智能中介 | 普通继续、共同约束变化、controller 丢失和小任务反例中的连贯交接、变化／反向证据及结果解释 | 说明真实判断后果与保留义务；少查询或短交接均不足 |
+| 执行期间的人机交互 | 下表 C6/C8 旅程经真实受支持 host 和打包对话验证 | Controller 响应、主动投递和反馈采用分别需要证据；不能从路由 ACK 或预览推断 |
 | 共享生产路径 | 真实 CLI 与受支持 File/SQLite；涉及 authority 持久化变更时跑真实隔离 PostgreSQL；打包 App heartbeat 与 benchmark worker 复用 | 不破坏 live Goal；未支持/未运行 host 仍未合格 |
 | 成果与成本收益 | 当前单会话、统一契约单会话、统一契约双会话三组，固定 task/model/policy/budget/evaluator | 报告不确定性、失败与反例，不从 prompt bytes 单独宣称收益 |
 
@@ -577,6 +617,22 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 可以作为诊断参考组，不成为永久第二目标。新契约 full 与 delta 编码分别比较，避免
 传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
 抵消 C1 回归。
+
+在同一长程工作上验收[执行期间的人机交互](#human-interaction-during-execution)，
+不能用脱离工作的独立聊天演示代替：
+
+| 场景 | 决定性观察 |
+| --- | --- |
+| Executor 忙；用户询问或查看产物 | 整项工作完成前，controller 根据当前实测证据回应、提供已保存产物；不产生第二个 executor 或无必要中断。 |
+| 有实质变化，随后无变化及重复事件 | 无需用户反复追问，有用汇报到达已授权受众；不因无变化/重复观察而重复汇报。记录真实投递和成本，不承诺固定周期。 |
+| 连续或冲突反馈 | 每个 revision 及其处理均可归因，后续工作/产物证明实际采用内容；待处理、拒绝、冲突和依赖权限的变化保持明确。 |
+| Stop 与纠偏或结果竞态 | 当前 revision 和范围决定验收；确认与 host 实际终止分开，未知/在途效果仍可见。 |
+| 断线、重启、丢回复或迟到/重复结果 | 恢复原队列、revision 和回执，不丢纠偏、不重复 dispatch/扣额、不被旧结果覆盖；仅重试未解决的投递/效果。 |
+| 丰富展现、媒体缺失、证据过期或受众错误 | 适合任务的对比/预览支持用户判断和反馈；来源/版本、未知可读，可访问文本仍可用，拒绝未授权投递。 |
+
+受支持的 managed 与 attached App heartbeat 旅程分别验证，不支持的 host 明示；
+安装行为与打包 fixture 分开验收。保留原 quota 单会话门，随后在可选双会话组中测量
+新增交互和展现成本。
 
 ### C1 基线边界与复用盘点
 
@@ -641,6 +697,11 @@ serializer 或字节减少结清。
 选择变成用户任务。复用共享 typed 投影与配置优先级，不建独立 controller console 或
 重复 provider/model 设置。
 
+C6/C8 拥有[执行期间的对话与汇报旅程](#human-interaction-during-execution)。在每个
+受支持受众范围内，复用既有 Chat/Lark 的产物、活动、反馈和投递投影；这些 sink 不成为
+工作权威。Readback 区分汇报投递、反馈处理、实际采用及独立验收；报告失败可恢复，
+不能因此重放底层工作。
+
 既有诊断记录 capture、request/attempt/role/generation、当前 revision、effect 回执
 和成本覆盖；提供可操作恢复，不暴露私有原始对话。通知与工作延续分离；事件/时间等待及
 backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新的 recurring automation。
@@ -658,9 +719,9 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 | **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
 | **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
 | **C5 — Replan 与结果编写边界；C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |
-| **C6 — Controller/executor 交流；C2–C5** | Manager/request + host owner：复用版本化语义请求与结果返回，用自然语言工作/材料交流替换 executor 的 schema 约束任务 | 完整来源交付、executor 局部自主、强制 Core 隔离、纠偏往返与独立验收结果；回退后新工作使用合格单会话 profile |
+| **C6 — Controller/executor 交流；C2–C5** | Manager/request + host owner：复用版本化语义请求与结果返回，用自然语言工作/材料交流替换 executor 的 schema 约束任务；执行时用户仍可交互 | 完整来源、局部自主、Core 隔离、纠偏往返、有序 revision 下的反馈实际采用及独立验收结果；第 9 节忙碌、冲突、Stop 和迟到结果场景；回退后新工作使用合格单会话 profile |
 | **C7 — Benchmark 复用与完整成本归因；C4/C6** | Benchmark toolkit/execution owner：薄 adapter 选择相同产品 profile；合并重复 launch/session 配置，跟踪两个会话，不改冻结 trial | Native/plain 对照不变，可比组配置/replay 与完整成本覆盖；合并 helper 不启动 job |
-| **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、Stop 和产物返回 | 打包 managed 及受支持 attached heartbeat 流程，包括 host 不可用和结果迟到；安装资格另验；不新增 packet 格式开关 |
+| **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、主动循证汇报、适合任务的丰富展现、反馈/readback、Stop 和产物返回 | 第 9 节打包 managed 及受支持 attached heartbeat 旅程，包括 host 不可用、迟到结果、安静/去重汇报、可访问降级、受众拒绝和恢复；安装资格另验；不新增 packet 格式开关 |
 | **C9 — 旧路径退役与采用资格；C1–C8** | Contract/runtime 维护者：删除被替代 producer、格式开关、重复提示/测试，更新 protocol、guide 和 RFC 交付事实 | 调用方/字段/decoder 退役清单、历史 replay 与回退证据；App + benchmark 验收及可比收益成立后再决定默认提升 |
 
 现有原生上下文入口增加一个有界 C2 前置改进：完整捕获保存在磁盘，常规响应提供

@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
+import zipimport
 from collections.abc import Callable
 from pathlib import Path
 from functools import partial
@@ -65,7 +68,7 @@ def register_update_command(
     update_parser.add_argument(
         "update_action",
         nargs="?",
-        choices=tuple(action.value for action in UpdateAction),
+        choices=(*tuple(action.value for action in UpdateAction), "status"),
         help="Explicit intent: check (read only), plan (read only), or apply (mutating).",
     )
     update_mode = update_parser.add_mutually_exclusive_group()
@@ -95,8 +98,12 @@ def register_update_command(
     )
     update_parser.add_argument(
         "--ref",
-        help="Git ref used by the installer archive. Defaults to LOOPX_REF or stable.",
+        help="Update channel/tag/SHA. Inherits the installed snapshot's choice; new installs use stable.",
     )
+    update_parser.add_argument("--source", action="store_true", help="Explicitly download and build a source snapshot instead of a prebuilt runtime.")
+    update_parser.add_argument("--allow-downgrade", action="store_true", help="Explicitly accept an older, diverged or unverified snapshot target.")
+    update_parser.add_argument("--background", action="store_true", help="Start or observe one durable update and return its operation id immediately.")
+    update_parser.add_argument("--operation-id", help="Read a previous update with `update status --operation-id ID`.")
     update_parser.add_argument(
         "--archive-url",
         help="Explicit tarball URL passed to the installer as LOOPX_ARCHIVE_URL.",
@@ -131,8 +138,16 @@ def handle_update_command(
     upgrade = args.command == "upgrade"
     from .support_control_update_progress import UpdateProgress
 
-    progress = UpdateProgress(output_format(args) != "json")
+    progress = UpdateProgress(json_output=output_format(args) == "json", pending=os.environ.get("LOOPX_UPDATE_WORKER") != "1")
     try:
+        if args.update_action == "status":
+            if any((args.check, args.dry_run, args.execute, args.rollback, args.repo, args.ref, args.archive_url,
+                    getattr(args, "source", False), getattr(args, "allow_downgrade", False), getattr(args, "background", False))):
+                raise ValueError("update status is read only; use only --operation-id to select an operation")
+            from .update_operation import read_operation
+            payload = read_operation(getattr(args, "operation_id", None))
+            print_payload(payload, output_format(args), lambda value: f"Update {value.get('operation_id') or '—'}: {value['status']}")
+            return 0 if payload.get("ok") else 1
         update_action = resolve_update_action(
             args.update_action,
             check=args.check,
@@ -145,6 +160,10 @@ def handle_update_command(
             progress.report("Checking installation owner and update source")
         if args.timeout_seconds <= 0:
             raise ValueError("--timeout-seconds must be positive")
+        if getattr(args, "operation_id", None):
+            raise ValueError("--operation-id requires `update status`")
+        if getattr(args, "background", False) and update_action is not UpdateAction.APPLY:
+            raise ValueError("--background requires update apply or upgrade")
         if upgrade and args.rollback:
             raise ValueError("CLI rollback uses `loopx update --rollback`; App rollback uses Recovery & updates")
         if args.rollback and args.update_action:
@@ -153,6 +172,28 @@ def handle_update_command(
             )
         if args.installed_doctor_json and update_action is not UpdateAction.CHECK:
             raise ValueError("--installed-doctor-json requires `loopx update check`")
+        # Keep the original console's owning-entry refusal visible. Moving it
+        # to python first would hide the still-running Windows .exe from that
+        # guard and let pip uninstall the observer's locked launcher.
+        windows_console = sys.platform == "win32" and isinstance(
+            getattr(sys.modules["__main__"], "__loader__", None), zipimport.zipimporter)
+        if update_action is UpdateAction.APPLY and not args.rollback and os.environ.get("LOOPX_UPDATE_WORKER") != "1" and not windows_console:
+            from .update_operation import start_or_observe, observe
+            progress.report("Starting or reconnecting to update")
+            operation = start_or_observe(args, registry_path, registry_was_supplied=registry_was_supplied)
+            progress.operation_id = operation["operation_id"]
+            progress.stop()
+            payload = operation if getattr(args, "background", False) else observe(
+                operation["operation_id"], json_output=output_format(args) == "json")
+            if getattr(args, "background", False):
+                renderer = lambda value: f"Update {value['operation_id']}: {value['status']}\nRead back with loopx update status --operation-id {value['operation_id']}"
+            elif upgrade:
+                from .support_control_upgrade import render_upgrade_markdown
+                renderer = render_upgrade_markdown
+            else:
+                renderer = render_update_plan_markdown
+            print_payload(payload, output_format(args), renderer)
+            return 0 if payload.get("ok") else 1
         if args.rollback:
             payload = build_rollback_plan(release_id=args.rollback)
             payload = execute_rollback_plan(
@@ -175,6 +216,8 @@ def handle_update_command(
                     repo=args.repo, ref=args.ref, archive_url=args.archive_url,
                     action=update_action, doctor_payload=doctor_payload,
                     registry_path=registry_path, runtime_root=args.runtime_root,
+                    build_from_source=getattr(args, "source", False),
+                    allow_downgrade=getattr(args, "allow_downgrade", False),
                 )
             else:
                 payload = build_update_plan(
@@ -185,10 +228,24 @@ def handle_update_command(
                     doctor_payload=doctor_payload,
                     registry_path=registry_path,
                     runtime_root=args.runtime_root,
+                    build_from_source=getattr(args, "source", False),
+                    allow_downgrade=getattr(args, "allow_downgrade", False),
                 )
             payload["installed_doctor_source"] = (
                 "explicit_json" if doctor_payload is not None else "current_runtime"
             )
+            if update_action is UpdateAction.APPLY:
+                selected = payload.get("source", {})
+                lifecycle = payload.get("install_lifecycle", {})
+                target = {
+                    "channel": selected.get("ref"), "revision": selected.get("resolved_revision"),
+                    "version": selected.get("artifact", {}).get("package_version"),
+                    "distribution": selected.get("distribution"),
+                } if lifecycle.get("owner") == "loopx_release_snapshot" else {
+                    "owner": lifecycle.get("owner"), "driver": lifecycle.get("execution_driver"),
+                    "resolution": "installation_owner",
+                }
+                progress.report({"stage": "target", "target": target})
             if update_action is UpdateAction.APPLY and payload.get("plan", {}).get(
                 "apply_supported"
             ):
@@ -229,6 +286,8 @@ def handle_update_command(
         }
     finally:
         progress.stop()
+    if update_action is UpdateAction.APPLY:
+        payload["update_progress"] = dict(progress.snapshot(), status="succeeded" if payload.get("ok") else "failed")
     renderer = render_update_plan_markdown
     if upgrade:
         from .support_control_upgrade import render_upgrade_markdown

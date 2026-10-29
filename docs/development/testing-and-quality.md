@@ -1313,6 +1313,24 @@ fields; this does not introduce a new telemetry system or receipt gate.
 
 ### Budget Failure Decisions
 
+The fixed visible-Goal host fixture's 3,200-character regression guard predates
+`1d5d2d0f6`, which adds the known Todo choice to the first current guard. On the
+same four host inputs at `b201da8ba`, substituting only the pre-change dispatch
+rule gives 3,199 / 3,177 / 2,966 / 2,895 normalized body characters; the complete
+current rule gives 3,262 / 3,240 / 3,029 / 2,958. The 63-character increase teaches
+an already-known choice before admission, while retaining selection/reentry,
+ordered settlement, exact identities, actual outcomes and ambiguous-effect
+recovery. Preserve the original 3,200-ceiling failure; calibrate only this test's
+regression allowance to 3,300, leaving 38 characters above the largest fixed
+input. Production prompt bytes, the 4,000-character host limit, longer-route
+checks, execution authority and frozen qualification results remain unchanged.
+This is no output reduction or model-compliance qualification.
+
+相同四个宿主输入中，首次 guard 的已知 Todo 选择指引增加 63 个归一化字符，
+最大值从 3,199 变为 3,262。保留原 3,200 超限失败，仅将该固定测试的回归预算
+校准为 3,300，留 38 字符余量；不删指令，不改生产正文、4,000 宿主硬边界、
+长路径检查、执行权限或冻结资格结果，也不据此声称输出节省或模型遵从。
+
 The actual-default model portfolio retains the complete capability candidate
 context required by the shared diagnostic projection. On the unchanged three
 noisy fixtures, `74b3d526ab1c1fd3d5f96308bef2482fcad7e636` emitted 4,944 /

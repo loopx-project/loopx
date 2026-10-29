@@ -1261,6 +1261,11 @@ export function createGoalLoop(options) {
       inputFence.blocked = false
       cancelScheduled(key)
       services.notify(`LoopX goal ${binding.goalId} auto-continuation resumed.`, "info")
+      // An idle command has no subsequent agent_settled event to wake the loop.
+      // The old evaluation is fenced by this re-arm; do not coalesce fresh
+      // admission into its pending probe. Busy hosts wait for their next settle.
+      evaluations.delete(key)
+      await evaluateIdle(key)
       return binding
     },
     // Session shutdown / session replacement: atomically invalidate this

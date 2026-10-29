@@ -39,6 +39,16 @@ reader. The six source links retain the recorded Task address in both formats.
 The fixed synthetic prose qualifies transport and reading mechanics, not live
 editorial quality or the address's availability. No layout or editor changed.
 
+The public browser fixture also keeps the original private outbound owner
+running through its periodic source-history check. Its shared synthetic
+provider returns the stored messages with source-bound pagination and time
+windows; it does not replace history with an empty successful response.
+The observation includes worker liveness, history-page count and ingress
+coverage so a background exception cannot be mistaken for a completed journey.
+File and SQLite regressions retain all 55 synthetic uncaptured sources without
+admitting or replying to them. These qualify test mechanics; live delivery,
+account switching and an unknown-effect failed production window remain separate.
+
 | Packaged answer reader | Narrow answer reader |
 | --- | --- |
 | ![A recorded Task address in the full report](../assets/personal-workspace/steward-reports/local-citations/packaged-reader-desktop.png) | ![The same source link and report at 390 pixels](../assets/personal-workspace/steward-reports/local-citations/packaged-reader-narrow.png) |
