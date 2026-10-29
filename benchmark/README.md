@@ -813,12 +813,24 @@ docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
 # Set these to the explicitly prepared Linux amd64 binaries.
 CKPT_GUEST_CODEX=/absolute/path/to/codex
 CKPT_GUEST_NODE=/absolute/path/to/node
+# Freeze this explicit pin in the qualification plan before invocation.
+CKPT_LOOPX_REVISION=$(git rev-parse HEAD)
 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m benchmark.tests.qualify_checkpoint_joint \
+  --source-revision "$CKPT_LOOPX_REVISION" \
   --provider-source "$CKPT_PROVIDER_ROOT/provider" \
   --native-binary "$CKPT_GUEST_CODEX" --guest-node "$CKPT_GUEST_NODE" \
   --guest-dependencies "$CKPT_PROVIDER_ROOT/guest-deps" \
   --output "$CKPT_PROVIDER_ROOT/joint-result"
 ```
+
+The command requires the caller's full LoopX commit SHA and verifies the actual
+import origins of LoopX, benchmark and test modules before creating output or
+contacting Docker, and again before writing a passing result. Run from the
+intended checkout: setting `PYTHONPATH` alone cannot override Python's current
+working directory or replace modules already loaded from another worktree.
+A rejected pin, dirty tree or mixed import is an unqualified attempt; it must
+not be attributed to the intended revision. These checks do not qualify the
+native provider, receiver behavior or scientific outcomes by themselves.
 
 Pass `--context-delivery on` with a supported native hook host (Codex CLI
 `0.162.1`) to qualify the opt-in transport in the same joint path. The source
