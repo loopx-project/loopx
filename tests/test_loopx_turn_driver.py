@@ -1327,9 +1327,17 @@ def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
 
 
 @pytest.mark.parametrize("invalid_signature", [False, True])
-def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
+def test_turn_plan_missing_todo_never_becomes_a_host_invocation(
     invalid_signature: bool,
 ) -> None:
+    """A missing Todo holds the Turn; it never spends, writes or invokes a Host.
+
+    The route owner resolves the settlement identity by scope, so an ordinary
+    request no longer needs a pre-selected Todo. A missing Todo with a valid
+    signature is therefore a hold: the driver resolves no scoped binding and
+    reports `blocked`. A broken signature stays a contract error. Neither may
+    reach the Host, write state or spend quota.
+    """
     envelope = _envelope(
         effective_action="autonomous_replan_required" if invalid_signature else "normal_run",
     )
@@ -1340,9 +1348,14 @@ def test_turn_plan_missing_todo_does_not_bypass_contract_errors(
         envelope, host="generic-cli", execution_mode="isolated-headless",
     )
 
-    assert payload["ok"] is False
-    assert payload["route"]["kind"] == "contract_error"
+    if invalid_signature:
+        assert payload["ok"] is False
+        assert payload["route"]["kind"] == "contract_error"
+    else:
+        assert payload["ok"] is True
+        assert payload["route"]["kind"] == "blocked"
     assert payload["route"]["would_invoke_host"] is False
+    assert not any(payload["effects"].values())
 
 
 def test_turn_plan_preserves_safe_bypass_when_user_action_is_visible() -> None:
