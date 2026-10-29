@@ -164,7 +164,7 @@ Keep each result in its original Goal and PR so review feedback can change the
 next decision. A passing suite alone does not establish improved maintainability;
 explain the structural benefit and its costs. If later work requires a pending
 review, use the existing wait rather than starting overlapping changes.
-The [Chinese walkthrough](first-bugfix-loop.zh-CN.md#6-持续重构仓库提升代码质量)
+The [Chinese walkthrough](first-bugfix-loop.zh-CN.md#continuous-refactoring)
 contains the same task in Chinese.
 
 ## Resume after an interruption
