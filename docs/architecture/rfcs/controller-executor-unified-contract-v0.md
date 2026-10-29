@@ -137,6 +137,11 @@ On a matched 107,289-byte synthetic source, capture writes fall from 216,754 to
 107,289 bytes; full reader bytes and the 3,937-byte warm delta are unchanged.
 This qualifies only duplicate capture IO removal, not model-input reduction,
 complete cost, accepted outcomes or C1 writer/consumer cutover.
+For a small explicit output ceiling, native presentation can also omit repeated
+directory/selection commands while retaining the complete recovery command:
+append `--list` or `--select` to discover/read current facts without a baseline.
+The original 4,000-byte cold/warm/compaction cases retain their requirements,
+Stop, original identity and full recovery; this is transport qualification.
 
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |

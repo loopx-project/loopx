@@ -269,7 +269,7 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     result["instruction"] = CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
     if mode != "full":
         result["instruction"] += (" command reads the delta; baseline_reference identifies its exact saved base when file-backed. "
-            "index_command/select_command read current facts directly without that baseline.")
+            "recovery.command reads current facts directly without that baseline.")
     # The reference must fit even under an explicit small caller ceiling.
     def fits():
         return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
@@ -279,6 +279,9 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
         result.pop("select_command")  # --select also works on the current recovery command.
     if not fits() and "baseline_reference" in result:
         result["baseline_reference"].pop("command", None)  # Exact path/hash remain usable.
+    if not fits():
+        result.pop("index_command")
+        result["instruction"] += " Append --list or --select to recovery.command to discover or read current fields."
     if not fits():
         raise QuotaDecisionTransportError("Native context reference exceeds the output limit; "
             "read the saved original decision and receipt without rerunning admission.")

@@ -147,7 +147,17 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
             key: journal[key] for key in ("path", "sha256")}
         argv = shlex.split(view["recovery"]["command"])
         if output_limit is not None:
+            assert len((json.dumps(view, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
             assert int(argv[argv.index("--max-page-output-bytes") + 1]) <= output_limit
+            # Discovery and selection remain usable from the complete current
+            # recovery, independently of optional shortcut command fields.
+            code, index = _run_cli(registry, runtime, *argv[argv.index("quota"):], "--list", cwd=tmp_path)
+            assert code == 0 and index["ok"], index
+            fields = json.loads(index["content"])["selections"][0]["fields"]
+            assert {"/stop", "/heartbeat_receipt"} <= {field["pointer"] for field in fields}
+            code, selected = _run_cli(registry, runtime, *argv[argv.index("quota"):], "--select", "/stop", cwd=tmp_path)
+            assert code == 0 and selected["ok"], selected
+            assert json.loads(selected["content"])["selections"][0]["value"] == original["stop"]
         pages, combined = [], b""
         while True:
             code, recovered = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
