@@ -302,6 +302,17 @@ records both edges. Existing Ark/JEV private edges remain migration debt and
 receive no new exemption. The facade forwards existing behavior; it must not
 copy candidate, acceptance, process-lifetime or locking decisions.
 
+One more public module joins that seam. `loopx.runtime_activation` owns the
+transition of services that are already installed, and its
+`managed_chat_activation_guard` holds the accepted-Chat-work fence and the
+ingress lock while a managed client restarts. `loopx-codex-provider-routing`
+uses that guard, and no other entry point of that module, to fence accepted Chat
+work before it restarts the Chat services it manages. The guard grants no work
+authority: it takes the ingress lock and refuses to continue while accepted
+work or ingress is pending. The import ratchet records that edge as well. This
+is a third public module in the seam and does not widen it: a package still may
+not import the executor or another kernel-private module.
+
 The stdio relay cancels its owned process group on parent EOF, SIGTERM or
 SIGINT and waits for the existing supervisor's cleanup before exiting. POSIX
 process-group behavior and Windows best-effort tree cleanup retain their
@@ -696,11 +707,34 @@ Approval needs a reviewed decision, not implementation progress or silence.
 - **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
   is not closed; D1–D4 stay open. No packaging or authority decision changes.
 
+### 2026-10-29 — Codex provider-routing activation seam
+
+- **Baseline:** `5d7f0a61b`.
+- **Delivered:** the supported host integration seam in Section 5 names one more
+  public module. `loopx.runtime_activation` owns the transition of services that
+  are already installed, and `loopx-codex-provider-routing` uses its
+  `managed_chat_activation_guard` to hold the accepted-Chat-work fence and the
+  ingress lock while it restarts the Chat services it manages. The import
+  ratchet records that edge.
+- **Boundary repair:** the guard grants no work authority — it takes the ingress
+  lock and refuses to continue while accepted work or ingress is pending — and
+  the package uses no other entry point of that module. The seam stays closed: a
+  package still may not import the executor or another kernel-private module,
+  and the pinned Ark/JEV edges remain migration debt.
+- **Evidence:** the import ratchet pins the edge instead of leaving it
+  unrecorded, and the Codex provider-routing native host smoke exercises the
+  guarded restart path.
+- **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
+  is not closed; D1–D4 stay open. The seam records one module for one caller,
+  not a general package-to-kernel permission.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |
 | --- | --- | --- | --- | --- |
-| — | — | — | — | — |
+| 2026-10-29 | `loopx.runtime_activation` joins the supported host integration seam, so the Codex provider-routing package can hold the accepted-Chat-work fence while it restarts the Chat services it manages | Maintainers, through RFC review and merge | Restart the Chat services without the fence; copy the lock and state check into the package; keep the edge unrecorded | Section 5 |
+
+No other decision is approved. D1–D4 remain open proposals.
 
 ## Appendix C: Evidence registry
 

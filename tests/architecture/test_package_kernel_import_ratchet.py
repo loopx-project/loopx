@@ -5,9 +5,10 @@ Section 5: a capability package "may only register providers, capability
 contracts and CLI subcommands through `CapabilityRegistry`; it never imports
 kernel-private modules." Three packages already do. The Section 5 supported
 host integration decision adds MemT's public facade and shared file-lock API,
-not another private-kernel exception. This guard pins those
-edges exactly so a new one needs a recorded decision and a removed one
-lowers the pin in the same PR, following `test_top_level_module_budget`.
+plus the Codex provider-routing activation guard, not another private-kernel
+exception. This guard pins those edges exactly so a new one needs a recorded
+decision and a removed one lowers the pin in the same PR, following
+`test_top_level_module_budget`.
 """
 
 from __future__ import annotations

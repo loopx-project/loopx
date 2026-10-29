@@ -208,6 +208,14 @@ MemT 只使用这两个公开模块，不能直接 import executor 或其他内�
 边。Ark/JEV 的既有私有边仍是迁移积压，不新增豁免。facade 只转发现有行为，
 不能复制候选、验收、进程生命周期或文件锁决策。
 
+该接缝再增加一个公开模块。`loopx.runtime_activation` 负责已安装服务的切换，
+其 `managed_chat_activation_guard` 在受管客户端重启期间持有"已受理 Chat 工作"
+栅栏与入口锁。`loopx-codex-provider-routing` 只使用该栅栏、不使用该模块的其他
+入口，在重启自己管理的 Chat 服务之前为已受理的 Chat 工作加栅栏。该栅栏不授予
+工作权限：它获取入口锁，并在仍有已受理工作或入口流量时拒绝继续。import ratchet
+同样钉住这条边。这是接缝中的第三个公开模块，并没有放宽接缝：包依旧不能 import
+executor 或其他内核私有模块。
+
 stdio relay 在父进程 EOF、SIGTERM 或 SIGINT 时取消所持进程组，并等待已有
 监督器完成回收再退出。POSIX 进程组行为与 Windows 尽力而为的进程树回收仍沿用
 原资格边界。这是进程监督，不是沙箱；操作者选择的工具只保有原先获准的效果。
@@ -498,11 +506,29 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
 - **剩余：** 不关闭更广的 M1–M5 发行物与零私有 import 验收；D1–D4 仍未决。
   不改变打包方案或权威决策。
 
+### 2026-10-29 — Codex provider-routing 激活接缝
+
+- **基线：** `5d7f0a61b`。
+- **交付：** 第 5 节的受支持宿主接入接缝再增加一个公开模块。
+  `loopx.runtime_activation` 负责已安装服务的切换，
+  `loopx-codex-provider-routing` 使用其 `managed_chat_activation_guard`，在重启
+  自己管理的 Chat 服务期间持有"已受理 Chat 工作"栅栏与入口锁。import ratchet
+  钉住这条边。
+- **边界修复：** 该栅栏不授予工作权限——它获取入口锁，并在仍有已受理工作或入口
+  流量时拒绝继续——且该包不使用该模块的其他入口。接缝仍然闭合：包依旧不能
+  import executor 或其他内核私有模块，已钉住的 Ark/JEV 私有边仍是迁移积压。
+- **证据：** import ratchet 钉住这条边，而不是让它处于未记录状态；Codex
+  provider-routing 的 native host smoke 覆盖受保护的重启路径。
+- **剩余：** 不关闭更广的 M1–M5 发行物与零私有 import 验收；D1–D4 仍未决。
+  该接缝只为一个调用方记录一个模块，不是通用的包到内核许可。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
 | --- | --- | --- | --- | --- |
-| — | — | — | — | — |
+| 2026-10-29 | `loopx.runtime_activation` 加入受支持的宿主接入接缝，使 Codex provider-routing 包能在重启自己管理的 Chat 服务期间持有"已受理 Chat 工作"栅栏 | maintainers，经 RFC 评审与合并 | 不带栅栏重启 Chat 服务；把锁与状态检查复制进包；让这条边保持未记录 | 第 5 节 |
+
+除此以外没有已批准的决策。D1–D4 仍是未决提案。
 
 ## 附录 C：证据登记
 
