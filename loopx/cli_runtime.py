@@ -77,6 +77,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
 	"performance-diagnosis",
+	"heartbeat-prompt",
 }
 
 
@@ -394,6 +395,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
 
 		register_performance_diagnosis_commands(subparsers, add_subcommand_format)
+	elif command == "heartbeat-prompt":
+		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
+
+		register_heartbeat_control_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -405,6 +410,14 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "heartbeat-prompt":
+		from .cli_commands.support_control_heartbeat import handle_heartbeat_prompt_command
+
+		return handle_heartbeat_prompt_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=not allow_missing_registry,
+			print_payload=print_payload, output_format=output_format,
+		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
 
