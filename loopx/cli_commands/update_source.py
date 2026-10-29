@@ -15,7 +15,7 @@ from ..activation_qualification import runtime_activation_qualification
 
 def prepare_target(payload: dict[str, Any], *, freshness: dict, resolve_remote: bool,
                    allow_downgrade: bool) -> dict[str, Any]:
-    if payload["install_lifecycle"]["owner"] != "loopx_release_snapshot":
+    if payload["install_lifecycle"]["owner"] != "loopx_release_snapshot" or not payload["install_lifecycle"]["loopx_apply_supported"]:
         return payload
     source = payload["source"]
     target = None

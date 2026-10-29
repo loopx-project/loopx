@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import zipfile
+import zipimport
 
 import pytest
 
@@ -128,3 +130,28 @@ def test_material_failure_reports_an_observed_switch_but_never_invents_one(monke
     assert result["ok"] is False
     assert result["changes_applied"] is switched
     assert result["execution"]["activation_observed"] is switched
+
+
+def test_windows_console_guard_runs_in_original_process_before_detaching(tmp_path, monkeypatch):
+    from loopx.cli_commands import support_control_update as command
+    archive = tmp_path / "loopx.exe"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("__main__.py", "")
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys.modules["__main__"], "__loader__", zipimport.zipimporter(str(archive)))
+    monkeypatch.delenv("LOOPX_UPDATE_WORKER", raising=False)
+    monkeypatch.setattr(command, "build_update_plan", lambda **_kw: {
+        "ok": False, "plan": {"apply_supported": False}, "error": "original_console_refusal"})
+    def no_detach(*_args, **_kwargs):
+        raise AssertionError("Detaching would hide the locked console from its existing guard")
+    monkeypatch.setattr(operations, "start_or_observe", no_detach)
+    parser = argparse.ArgumentParser()
+    command.register_update_command(parser.add_subparsers(dest="command"), lambda _parser: None)
+    args = parser.parse_args(["update", "apply", "--background"])
+    args.runtime_root = None
+    values = []
+    code = command.handle_update_command(args, registry_path=tmp_path / "registry.json",
+        registry_was_supplied=True, print_payload=lambda value, *_: values.append(value),
+        output_format=lambda _: "json")
+    assert code == 1
+    assert values[0]["error"] == "original_console_refusal"

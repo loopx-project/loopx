@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+import zipimport
 from collections.abc import Callable
 from pathlib import Path
 from functools import partial
@@ -170,7 +172,12 @@ def handle_update_command(
             )
         if args.installed_doctor_json and update_action is not UpdateAction.CHECK:
             raise ValueError("--installed-doctor-json requires `loopx update check`")
-        if update_action is UpdateAction.APPLY and not args.rollback and os.environ.get("LOOPX_UPDATE_WORKER") != "1":
+        # Keep the original console's owning-entry refusal visible. Moving it
+        # to python first would hide the still-running Windows .exe from that
+        # guard and let pip uninstall the observer's locked launcher.
+        windows_console = sys.platform == "win32" and isinstance(
+            getattr(sys.modules["__main__"], "__loader__", None), zipimport.zipimporter)
+        if update_action is UpdateAction.APPLY and not args.rollback and os.environ.get("LOOPX_UPDATE_WORKER") != "1" and not windows_console:
             from .update_operation import start_or_observe, observe
             progress.report("Starting or reconnecting to update")
             operation = start_or_observe(args, registry_path, registry_was_supplied=registry_was_supplied)
@@ -229,11 +236,16 @@ def handle_update_command(
             )
             if update_action is UpdateAction.APPLY:
                 selected = payload.get("source", {})
-                progress.report({"stage": "target", "target": {
+                lifecycle = payload.get("install_lifecycle", {})
+                target = {
                     "channel": selected.get("ref"), "revision": selected.get("resolved_revision"),
                     "version": selected.get("artifact", {}).get("package_version"),
                     "distribution": selected.get("distribution"),
-                }})
+                } if lifecycle.get("owner") == "loopx_release_snapshot" else {
+                    "owner": lifecycle.get("owner"), "driver": lifecycle.get("execution_driver"),
+                    "resolution": "installation_owner",
+                }
+                progress.report({"stage": "target", "target": target})
             if update_action is UpdateAction.APPLY and payload.get("plan", {}).get(
                 "apply_supported"
             ):

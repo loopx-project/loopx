@@ -66,6 +66,11 @@ loopx --format json update status
 loopx --format json update status --operation-id <returned-id>
 ```
 
+Windows console launchers retain their existing self-uninstall protection in
+the original process. Follow the printed `python -m loopx.entrypoint` retry
+to update safely and use the durable worker; a worker never hides a locked
+console executable from that guard.
+
 JSON stdout contains the final result (or background operation descriptor).
 Progress is NDJSON on stderr: operation id, phase, downloaded bytes, total
 (`null` when unknown), observed rate, elapsed time and last progress time.
