@@ -115,7 +115,10 @@ Release rollout: publish and qualify the stable runtime before deploying the
 new public bootstrap. The Pages lane checks this dependency and retains the
 previous deployed site if it is unavailable. `runtime-snapshots.yml` builds
 main artifacts; `release-artifacts.yml` reuses the release frontend/wheel lane
-for stable. Clean install/upgrade, package contents, byte size, provenance and
+for stable. Main archives and revision-addressed metadata share one dedicated
+`runtime-main` release, keeping product release history and stable-predecessor
+discovery intact; only the latest-channel metadata is replaced. Clean
+install/upgrade, package contents, byte size, provenance and
 phase timings are release evidence. A 20 MiB runtime is an evaluation target,
 not a waived dependency check or a global p50/p95 promise.
 

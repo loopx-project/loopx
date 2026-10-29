@@ -103,7 +103,7 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
             "sha256": hashlib.sha256(identity).hexdigest()})
     if git.wait() != 0 or not version:
         raise ValueError("Git runtime archive failed")
-    tag = f"runtime-{revision}" if channel == "main" else "v" + version
+    tag = "runtime-main" if channel == "main" else "v" + version
     archive = output / filename
     result = validate_manifest({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
         "package_version": version, "channel": channel, "size": archive.stat().st_size,

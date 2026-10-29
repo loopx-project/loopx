@@ -96,7 +96,7 @@ def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
     elif ref == "main":
         url = f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime.json"
     elif SHA.fullmatch(ref):
-        url = f"https://github.com/{repo}/releases/download/runtime-{ref}/loopx-runtime.json"
+        url = f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime-{ref}.json"
     elif re.fullmatch(r"v[0-9][A-Za-z0-9.+-]*", ref):
         url = f"https://github.com/{repo}/releases/download/{ref}/loopx-runtime.json"
     else:

@@ -50,6 +50,14 @@ jobs:
         run: python scripts/runtime_artifact.py --channel main
       - name: Qualify clean installation and upgrade
         run: python scripts/qualify_runtime_artifact.py dist/runtime > dist/runtime/qualification.json
+      - name: Freeze revision-addressed metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(python -c 'import json; print(json.load(open("dist/runtime/loopx-runtime.json"))["source_revision"])')"
+          cp dist/runtime/loopx-runtime.json "dist/runtime/loopx-runtime-${revision}.json"
+          mv dist/runtime/runtime-inventory.json "dist/runtime/runtime-inventory-${revision}.json"
+          mv dist/runtime/qualification.json "dist/runtime/qualification-${revision}.json"
       - name: Attest exact runtime bytes and inventory
         if: github.event_name != 'pull_request'
         uses: actions/attest@v4
@@ -80,14 +88,17 @@ jobs:
         run: |
           set -euo pipefail
           revision="$(python -c 'import json; print(json.load(open("runtime/loopx-runtime.json"))["source_revision"])')"
-          tag="runtime-${revision}"
+          # One dedicated channel release keeps developer snapshots out of
+          # product release history and bounded stable-predecessor discovery.
+          tag=runtime-main
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$revision" --prerelease --title "Runtime ${revision:0:12}" --notes "Prebuilt main CLI snapshot. Stable users continue with PyPI or the stable runtime."
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$revision" --prerelease --title "Latest qualified main runtime" --notes "Mutable channel metadata; revision-addressed archives and manifests are immutable. Stable users continue with PyPI or the stable runtime."
           fi
           # A retry reuses immutable bytes. Never clobber an immutable asset.
           mkdir -p existing
           for file in runtime/*; do
             name="$(basename "$file")"
+            if [[ "$name" == loopx-runtime.json ]]; then continue; fi
             if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir existing >/dev/null 2>&1; then
               cmp "$file" "existing/$name"
             else
@@ -98,7 +109,11 @@ jobs:
           # newer main is still building; never publish a non-main revision.
           relation="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${revision}...main" --jq .status)"
           if [[ "$relation" != ahead && "$relation" != identical ]]; then exit 1; fi
-          if ! gh release view runtime-main --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create runtime-main --repo "$GITHUB_REPOSITORY" --target "$revision" --prerelease --title "Latest qualified main runtime" --notes "Mutable channel metadata; archives live on immutable revision releases."
-          fi
+          # Rerunning an older successful workflow may retain its immutable
+          # assets, but must not move the qualified main channel backwards.
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/commits/runtime-main" --jq .sha)"
+          promotion="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${current}...${revision}" --jq .status)"
+          if [[ "$promotion" == behind ]]; then exit 0; fi
+          if [[ "$promotion" != ahead && "$promotion" != identical ]]; then exit 1; fi
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/runtime-main" -f sha="$revision" -F force=false >/dev/null
           gh release upload runtime-main runtime/loopx-runtime.json --repo "$GITHUB_REPOSITORY" --clobber

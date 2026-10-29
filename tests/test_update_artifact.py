@@ -79,6 +79,18 @@ def test_redirects_cannot_weaken_source_tls():
         assert "require HTTPS" in str(caught.value.__cause__)
 
 
+def test_pinned_runtime_metadata_is_revision_addressed_within_the_channel_release(monkeypatch):
+    body = b"runtime"
+    descriptor = manifest(body, "https://publisher.invalid/runtime.tar.gz")
+    requests = []
+    def metadata(url):
+        requests.append(url)
+        return descriptor
+    monkeypatch.setattr(update, "read_json", metadata)
+    assert update.resolve_artifact("example/loopx", "a" * 40)["source_revision"] == "a" * 40
+    assert requests == ["https://github.com/example/loopx/releases/download/runtime-main/loopx-runtime-" + "a" * 40 + ".json"]
+
+
 @pytest.mark.parametrize("ignore_range,new_etag,wrong_range", [(False, False, False), (True, False, False), (False, True, False), (False, False, True)])
 def test_cross_invocation_resume_validates_origin_range_and_etag(tmp_path, ignore_range, new_etag, wrong_range):
     body = os.urandom(192 * 1024)
