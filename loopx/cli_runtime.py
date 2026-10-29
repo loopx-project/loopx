@@ -76,6 +76,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
+	"performance-diagnosis",
 }
 
 
@@ -385,6 +386,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .help_surface import register_command_reference
 
 		register_command_reference(subparsers)
+	elif command == "performance-diagnosis":
+		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
+
+		register_performance_diagnosis_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -396,6 +401,12 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "performance-diagnosis":
+		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
+
+		return handle_performance_diagnosis_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
 	if args.command in {"agent-context", "agent-directory", "agent-capabilities"}:
 		from .paths import effective_runtime_root
 
