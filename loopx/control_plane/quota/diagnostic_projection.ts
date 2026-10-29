@@ -7,18 +7,15 @@
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject} from "../runtime_decode.ts";
 import {TODO_CANONICAL_READ_RECORD_FIELDS} from "../coordination/coordination_state_contract.ts";
-import {canonicalAuthorityJson} from "../coordination/authority_store_codec.ts";
+import {canonicalAuthorityJson, authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 
 type ProjectionPath = (string | number)[];
 type ProjectionChange = {path: ProjectionPath; value: unknown} |
   {path: ProjectionPath; from: ProjectionPath} | {path: ProjectionPath; remove: true};
 
-/** Return only display edits, never round-trip unrelated source facts through
- * JavaScript numbers. References address the immutable input, including bodies
- * moved into source_projection. Python applies these edits without policy. */
-export function contextProjectionChanges(source: JsonObject, projected: JsonObject): JsonObject {
-  const paths = new WeakMap<object, ProjectionPath>(), changes: ProjectionChange[] = [];
+function contextObjectPaths(source: JsonObject): WeakMap<object, ProjectionPath> {
+  const paths = new WeakMap<object, ProjectionPath>();
   const index = (value: unknown, path: ProjectionPath): void => {
     if (value === null || typeof value !== "object" || paths.has(value)) return;
     paths.set(value, path);
@@ -26,6 +23,58 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
     else Object.entries(value).forEach(([key, item]) => index(item, [...path, key]));
   };
   index(source, []);
+  return paths;
+}
+
+/** Sparse IO number spellings distinguish facts already rounded by JSON.parse.
+ * This is source identity for pure projection, not a second decision owner or
+ * a new hash codec. Native JS callers need no metadata. Never copy full bodies
+ * just to decide whether two registered carriers can share their source. */
+export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
+    (value: unknown, path: ProjectionPath) => string {
+  if (supplied === undefined) return value => JSON.stringify(canonicalAuthorityJson(value));
+  if (!Array.isArray(supplied)) throw new EffectRuntimeRequestError("context source number tokens must be an array");
+  const tokens: {path: ProjectionPath; token: string}[] = [], seen = new Set<string>();
+  for (const entry of supplied) {
+    if (!Array.isArray(entry) || entry.length !== 2 || !Array.isArray(entry[0]) || !entry[0].length ||
+        typeof entry[1] !== "string" || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(entry[1])) {
+      throw new EffectRuntimeRequestError("invalid context source number token");
+    }
+    const path: ProjectionPath = entry[0], token: string = entry[1];
+    let value: unknown = source;
+    for (const key of path) {
+      if (value === null || typeof value !== "object" ||
+          !(Array.isArray(value) ? typeof key === "number" && Number.isSafeInteger(key) && key >= 0
+            : typeof key === "string") || !Object.hasOwn(value, key)) {
+        throw new EffectRuntimeRequestError("context source number token path is unavailable");
+      }
+      value = (value as Record<string | number, unknown>)[key];
+    }
+    const key = JSON.stringify(path);
+    if (seen.has(key) || typeof value !== "number" || !Number.isFinite(value) || !Object.is(JSON.parse(token), value)) {
+      throw new EffectRuntimeRequestError("context source number token differs from input");
+    }
+    seen.add(key);
+    tokens.push({path, token});
+  }
+  const paths = contextObjectPaths(source);
+  return (value, path) => {
+    const original = value !== null && typeof value === "object" ? paths.get(value) : undefined;
+    const prefix = original ?? path;
+    const relative = tokens.filter(item => prefix.every((key, i) => item.path[i] === key))
+      .map(item => [item.path.slice(prefix.length), item.token]);
+    // Sort encoded relative paths, so original object insertion order is not
+    // mistaken for a content difference. Keep token strings separate from data.
+    relative.sort((left, right) => authorityUnicodeCompare(JSON.stringify(left[0]), JSON.stringify(right[0])));
+    return JSON.stringify([canonicalAuthorityJson(value), relative]);
+  };
+}
+
+/** Return only display edits, never round-trip unrelated source facts through
+ * JavaScript numbers. References address the immutable input, including bodies
+ * moved into source_projection. Python applies these edits without policy. */
+export function contextProjectionChanges(source: JsonObject, projected: JsonObject): JsonObject {
+  const paths = contextObjectPaths(source), changes: ProjectionChange[] = [];
   const visit = (before: unknown, after: unknown, path: ProjectionPath): void => {
     if (Object.is(before, after)) return;
     const from = after !== null && typeof after === "object" ? paths.get(after) : undefined;
@@ -103,7 +152,8 @@ export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
   return result;
 }
 
-export function referenceQuotaSummaryLanes(payload: JsonObject): JsonObject {
+export function referenceQuotaSummaryLanes(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
   let result = resolveQuotaSummaryLanes(payload);
   for (const role of ["agent", "user"] as const) {
     const root = `${role}_todo_summary`, summary = jsonObject(result[root]);
@@ -116,7 +166,7 @@ export function referenceQuotaSummaryLanes(payload: JsonObject): JsonObject {
     for (const lane of [preferred, ...DIAGNOSTIC_LANES].filter((key, index, keys) => keys.indexOf(key) === index)) {
       const value = summary[lane];
       if (!Array.isArray(value) || value.length === 0 || Object.hasOwn(summary, `${lane}_ref`)) continue;
-      const encoded = JSON.stringify(canonicalAuthorityJson(value));
+      const encoded = identity(value, [root, lane]);
       const owner = owners.get(encoded);
       if (!owner) { owners.set(encoded, lane); continue; }
       const reference = `$.${root}.${owner}`;

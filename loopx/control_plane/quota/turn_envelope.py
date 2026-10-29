@@ -55,6 +55,10 @@ def _turn_envelope_result(
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
     request = {"operation": operation, **params}
+    if operation in {"reference_context", "compose_complete"} and isinstance(params.get("payload"), Mapping):
+        tokens = _source_number_tokens(params["payload"])
+        if tokens:
+            request["source_number_tokens"] = tokens
     try:
         result = effect_runtime_result("quota.turn_envelope.evaluate", request)
     except EffectRuntimeRejected as error:
@@ -67,6 +71,24 @@ def _turn_envelope_result(
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)
+
+
+def _source_number_tokens(value: object) -> list[list[Any]]:
+    """Transport sparse numeric source identity; no carrier or sharing policy."""
+    tokens: list[list[Any]] = []
+
+    def visit(item: object, path: list[str | int]) -> None:
+        if isinstance(item, float) or type(item) is int and abs(item) > 2**53 - 1:
+            tokens.append([path, json.dumps(item, allow_nan=False)])
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                visit(child, [*path, key])
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, [*path, index])
+
+    visit(value, [])
+    return tokens
 
 
 def assert_turn_envelope_consumer_version(envelope: Mapping[str, Any]) -> None:
@@ -109,7 +131,12 @@ def compose_turn_decision(
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
-    return _turn_envelope_result("compose_complete", payload=dict(payload), scheduler_execution_args=args)
+    from .cli_projection import _apply_context_projection_changes
+
+    source = dict(payload)
+    result = _turn_envelope_result("compose_complete", payload=source,
+        scheduler_execution_args=args, source_edits=True)
+    return _apply_context_projection_changes(source, result)
 
 
 def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:

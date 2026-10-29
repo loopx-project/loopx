@@ -671,5 +671,64 @@ composition. The edit transport preserves untouched facts; it cannot repair an
 earlier incorrect reference decision. These remain adapted assertion probes,
 not passing unchanged cohorts. C1 stays Draft with the original budget,
 writer/caller/reader retirement, numeric-reference and outcome/full-cost gaps.
+
+## Exact source-number comparison
+
+The next C1 slice repairs the preceding 12 failing assertions out of 15 across
+display, CLI and complete composition. It reuses the source-value assertions now
+merged in #7633. Sparse float and unsafe-integer spellings cross the existing
+coarse call; the TypeScript owner uses that original identity when comparing
+registered acceptance carriers and summary lanes. Different bodies remain
+literal, while subsequent exact copies still share their later owner. Python
+supplies JSON source facts and applies edits; it owns no carrier-selection or
+equality policy. Small bodies still use the existing body-versus-reference size
+decision, excluding the transport metadata from that comparison.
+
+Complete composition now returns the same edit plan already used by display
+projection, applied to original IO values. Both paths reuse one object-path
+indexer. There is no additional RPC, full-body return, public view, reader,
+authority store or persistent cache. Native JavaScript callers retain their
+existing result shape; the Python producer requests source-preserving edits.
+
+Frozen synthetic inputs at C1 baseline `dd600ac02` compare as follows. With four
+identical contracts, each coarse call remains one RPC; complete-composition
+request parameters grow by 491 bytes for the sparse identity and edit selector.
+
+| Supporting material per contract, bytes | Composition response body, base → candidate |
+| --- | --- |
+| 8,000 | 31,469 → 1,243 |
+| 64,000 | 87,469 → 1,243 |
+| 256,000 | 279,469 → 1,243 |
+
+The complete caller view grows by four bytes to retain original numeric
+spellings. With different original contracts, correctness requires more input:
+the 256,000-byte case grows from 279,469 to 536,456 caller-view bytes because the
+previous result wrongly discarded a distinct body. The corrected result still
+shares the later exact copies. These are bridge parameter/body and caller-view
+bytes, not model tokens or total cost. Three warm timing samples had uncontrolled
+concurrent work and provide no latency qualification.
+
+The affected Python cohort passes 246 cases, including real isolated File/SQLite
+entrypoints and original-Turn reentry/settlement. Context/capture recovery adds
+128 passes and five existing explicit-native opt-in skips; 104 TypeScript cases,
+control-plane typecheck, configured mypy and scoped Ruff pass. Initial validation
+retains 28 failures from fixtures that hashed Python spellings as though they
+were the existing JavaScript codec; the corrected independent fixture uses native
+JSON number encoding without changing runtime hashing or semantic refusals.
+Four additional legacy-layout assertions fail on the unchanged C1 baseline too;
+their migration now verifies the complete contract's owning command path,
+original identity and integrity, preserving the subsequent once-only settlement
+and successor checks.
+
+The existing JavaScript hash normalization is unchanged: numerically distinct
+source values can still share its normalized hash input. This slice is not new
+numeric hash-integrity qualification; immutable capture hashes retain exact-byte
+verification. C1 must reconcile that identity boundary, merge current main and
+adopt the existing file-first/delta and advisory navigation work while retiring
+its obsolete mandatory outcome scopes/readers. A main integration attempt exposed
+those owner conflicts and was aborted without retaining a parallel owner. C1
+remains Draft. The original 25,862 > 13,000 budget failure, historical negatives,
+writer/caller retirement, original-quota outcome/full-cost comparison and optional
+two-session qualification remain open.
 Continue at the owner already holding the complete source, without resending
 duplicate legacy bodies or introducing another required reader.

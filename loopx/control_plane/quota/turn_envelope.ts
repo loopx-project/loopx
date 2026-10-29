@@ -9,7 +9,7 @@ import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from
 import {prepareContextDelivery, restoreContextDelivery, OUTCOME_CONTEXT_PROJECTION_SCHEMA} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
 import {OUTCOME_CONTEXT_READ_PLAN_SCHEMA} from "../goals/outcome_requirements.ts";
-import {contextProjectionChanges, projectQuotaDiagnostics, referenceQuotaSummaryLanes,
+import {contextProjectionChanges, contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes,
   resolveQuotaSummaryLanes} from "./diagnostic_projection.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 
@@ -287,7 +287,8 @@ function inlineAcceptance(payload: JsonObject, reference: unknown): JsonObject {
   return value;
 }
 
-function referenceGoalAcceptance(payload: JsonObject): JsonObject {
+function referenceGoalAcceptance(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
   let result = payload;
   // Copy only a changed registered carrier's spine. Retained source objects
   // keep their identity for the display-edit transport and original numbers.
@@ -309,10 +310,10 @@ function referenceGoalAcceptance(payload: JsonObject): JsonObject {
     if (!Object.keys(value).length || Object.hasOwn(parent, `${field}_ref`)) continue;
     // Complete canonical JSON distinguishes booleans/numbers, revisions,
     // provenance and negative evidence. Never deduplicate a prose summary.
-    const encoded = JSON.stringify(canonicalValue(value));
+    const encoded = identity(value, [...parentPath, field]);
     const owner = owners.get(encoded);
     if (!owner) owners.set(encoded, path);
-    else if (Buffer.byteLength(encoded, "utf8") > Buffer.byteLength(owner, "utf8") + 8) {
+    else if (Buffer.byteLength(JSON.stringify(canonicalValue(value)), "utf8") > Buffer.byteLength(owner, "utf8") + 8) {
       const target = writableParent(parentPath);
       delete target[field];
       target[`${field}_ref`] = owner;
@@ -1901,6 +1902,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("complete Turn decision source contains reserved version/binding fields");
   }
   requireCompleteDecisionSource(payload);
+  const sourceIdentity = contextSourceIdentity(payload, request.source_number_tokens);
   // A complete input must carry the original-Turn successor instructions that
   // used to exist only in the staged writer. Compose them before hashing and
   // capture; a later material read must not add a competing execution contract.
@@ -1939,12 +1941,12 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
         })}}}};
     }
   }
-  source = referenceGoalAcceptance(source);
+  source = referenceGoalAcceptance(source, sourceIdentity);
   source = referenceReplanAuthoring(source);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);
   source = referenceVisionContinuation(source);
-  source = referenceQuotaSummaryLanes(source);
+  source = referenceQuotaSummaryLanes(source, sourceIdentity);
   requireCompleteDecisionSource(source);
   const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
     contract_binding: {scheduler_execution_args: request.scheduler_execution_args,
@@ -2177,7 +2179,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
   }
-  if (operation === "compose_complete") return composeCompleteTurnDecision(request);
+  if (operation === "compose_complete") {
+    const result = composeCompleteTurnDecision(request);
+    return request.source_edits === true
+      ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result) : result;
+  }
   if (operation === "complete_consumer") {
     requireCompleteTurnDecision(request.payload);
     return {ok: true};
@@ -2262,7 +2268,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const source = requireJsonObject(request.payload, "quota decision");
     let payload = source;
     if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
-    if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload);
+    if (request.goal_acceptance === true) payload = referenceGoalAcceptance(payload,
+      contextSourceIdentity(source, request.source_number_tokens));
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
     // References and diagnostic caps share one edit transport. Untouched facts

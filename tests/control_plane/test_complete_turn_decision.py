@@ -28,8 +28,15 @@ def _valid_interaction():
 
 
 def _canonical_digest(value):
-    return "sha256:" + sha256(json.dumps(value, sort_keys=True,
-        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    # Negative fixtures need the existing JS hash codec, independently of the
+    # production validator. Source-preserving IO now legitimately retains 1.0;
+    # hashing Python's spelling would reject the fixture before its semantic
+    # fault is reached. Native JSON.stringify supplies the number codec only.
+    canonical = subprocess.check_output(["node", "-e",
+        "let s=''; process.stdin.setEncoding('utf8'); process.stdin.on('data',x=>s+=x); "
+        "process.stdin.on('end',()=>process.stdout.write(JSON.stringify(JSON.parse(s))));"],
+        input=json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode())
+    return "sha256:" + sha256(canonical).hexdigest()
 
 
 def _resign_contract(contract):
@@ -195,7 +202,6 @@ def test_complete_action_validation_preserves_registered_union_and_optional_fact
 
 @pytest.mark.parametrize("mutation", ["version", "content", "binding"])
 def test_replan_reader_refuses_invalid_complete_contract_even_with_matching_file_hash(mutation):
-    from hashlib import sha256
     from tests.control_plane.test_replan_host_context_projection import _quota_payload
 
     contract = compose_turn_decision(_quota_payload())
@@ -207,8 +213,7 @@ def test_replan_reader_refuses_invalid_complete_contract_even_with_matching_file
         contract.pop("contract_binding")
     # A caller can truthfully hash the bytes it read without proving that their
     # version or inner source binding is valid. Both checks are required.
-    digest = "sha256:" + sha256(json.dumps(contract, sort_keys=True,
-        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    digest = _canonical_digest(contract)
     with pytest.raises(RuntimeError, match="version|integrity|binding"):
         _turn_envelope_result("replan_view", payload=contract, source_hash=digest, stage="review")
 
@@ -327,9 +332,7 @@ def test_complete_quota_successor_settles_original_turn_without_staged_reader(tm
     assert (capture / "decision.json").read_bytes() == original
 
     # After inline execution/settlement, check historical material-reader parity.
-    from hashlib import sha256
-    digest = "sha256:" + sha256(json.dumps(guard, sort_keys=True,
-        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    digest = _canonical_digest(guard)
     staged = _turn_envelope_result("replan_view", payload=guard, source_hash=digest, stage="writeback")
     assert staged["writeback_contract"]["successor_binding_args"] == writer["successor_binding_args"]
     assert staged["writeback_contract"]["successor_settlement"] == writer["successor_settlement"]
