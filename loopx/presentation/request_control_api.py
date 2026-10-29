@@ -1,6 +1,7 @@
 """Source-owner request controls on the conversation that created the request."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -35,6 +36,49 @@ def _operator_payload(value: Any) -> Any:
     return value
 
 
+def bound_steward_inventory_scope(
+    controller: Any, *, manager_scope_resolver: Callable[[dict[str, Any]], list[str] | None],
+) -> Callable[[dict[str, Any]], list[str] | None]:
+    """Reuse one fresh native selection for Session validation and Goal scope.
+
+    The server supplies its ordinary binding resolver. A later custom resolver
+    keeps the compatibility path; no provider observation survives this call.
+    """
+    def read(session):
+        if controller.manager_scope_resolver is not manager_scope_resolver:
+            return None
+        bindings = controller.project_contexts.conversation_bindings
+        if bindings is None:
+            raise ValueError("bound steward authority is unavailable")
+        selected = bindings.session_context(session["steward_context"], session=session)
+        controller.project_contexts.runtime_context(session, selected)
+        return list(selected["context"]["goal_ids"])
+    return read
+
+
+def manager_source_scope_resolver(
+    server: Any, *, registry_path: Path, executor_runtime_root: Path,
+) -> Callable[[dict[str, Any]], list[str] | None]:
+    """Keep the default manager's native and legacy source routing together."""
+    from ..chat_lark_api import build_lark_goal_topic_runtime_snapshot
+    from ..extensions.lark.manager_routing import authorized_manager_goal_ids
+
+    def read(session):
+        controller = server.runtime_controller
+        if isinstance(session.get("steward_context"), dict):
+            bindings = controller.project_contexts.conversation_bindings
+            if bindings is None:
+                raise ValueError("Steward conversation bindings are unavailable")
+            return bindings.steward_scope(session)
+        return authorized_manager_goal_ids(
+            build_lark_goal_topic_runtime_snapshot(
+                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
+            ), session, runtime_root=controller.coordination_runtime_root,
+            registry_path=registry_path, executor_runtime_root=executor_runtime_root,
+        )
+    return read
+
+
 class RequestControlMixin:
     server: Any
     path: str
@@ -58,8 +102,12 @@ class RequestControlMixin:
         scope = conversation_scope(session)
         if scope["kind"] not in {"owner_portfolio", "owner_goal"} and not scope.get("bound_steward"):
             raise ValueError("request inventory requires an authorized steward conversation")
+        verified_goals = None
         if session.get("steward_context") is not None:
-            controller.project_contexts.session_context(session)
+            read_scope = getattr(self.server, "request_inventory_scope_resolver", None)
+            verified_goals = read_scope(session) if read_scope is not None else None
+            if verified_goals is None:
+                controller.project_contexts.session_context(session)
         selected = getattr(self.server, "selected_goal_id", None)
         if selected and scope.get("goal_ids") != [selected]:
             raise ValueError("request inventory is outside this Goal workspace")
@@ -68,7 +116,7 @@ class RequestControlMixin:
         else:
             if controller.manager_scope_resolver is None:
                 raise ValueError("current steward read scope is unavailable")
-            goals = controller.manager_scope_resolver(session)
+            goals = verified_goals if verified_goals is not None else controller.manager_scope_resolver(session)
             if not isinstance(goals, list):
                 raise ValueError("current steward read scope is unavailable")
             core = evidence_goal_scope(controller.coordination_runtime_root, session["channel_id"],
