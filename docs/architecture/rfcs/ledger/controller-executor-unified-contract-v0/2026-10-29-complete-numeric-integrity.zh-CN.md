@@ -41,6 +41,14 @@ writer 保留 collection error，不调用旧 runtime renderer 或制造完整�
 集成运行：它暴露 capture 诊断、旧 fixture hash 参数及过期失败格式假设；纠正后仍
 保留原语义拒绝断言。
 
+合入 main `3b4641c4fc0ec314d347f74b05880bb516012049` 后，产品源码仍与上述最终
+runtime 相同。原生 file-manifest、选择及压缩／恢复测试 198 过，46 条 native binary
+opt-in 用例仍跳过；external scheduler／worker ladder 183 过。Ark Host 在私有依赖
+目录使用 `arkruntime` 0.8.0 和 mock transport，39 条本地协议 fixture 通过。完整可选
+SDK profile 的 service 依赖展开已被限时停止；这组精选 fixture 不证明该安装 profile
+或 live provider。MemT Host 缺少 tokenizer／runtime 依赖，无法收集 fixture。两条可选
+live provider 及模型行为均未取得资格。
+
 两份隔离 Python 3.14 wheel 各有 1,860 个产品文件与固定源码一致，生成的 frontend
 assets 分别校验。同一合成六成果／24 要求负载经真实 File/SQLite CLI、native hook、
 压缩、损坏恢复、提前 spend 拒绝及一次结算运行。每组既有 21 条来源／恢复判据均过；

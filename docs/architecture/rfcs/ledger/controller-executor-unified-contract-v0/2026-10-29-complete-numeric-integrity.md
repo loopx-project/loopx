@@ -53,6 +53,17 @@ baseline, with no new errors. This is not full typing qualification. The initial
 old fixture hash arguments and an obsolete failure-format assumption. The
 corrections retain the original semantic refusal assertions.
 
+After integrating main `3b4641c4fc0ec314d347f74b05880bb516012049`, product
+sources remain identical to the final runtime above. Native file-manifest,
+selection and compaction/recovery tests pass 198 cases; 46 native-binary opt-in
+cases remain skipped. The external scheduler/worker ladder passes 183 cases.
+Ark Host passes 39 local protocol fixtures with `arkruntime` 0.8.0 and mock
+transport in a private dependency target. Resolving the full optional SDK profile
+was stopped after its service-dependency expansion; this selected fixture run
+does not qualify that installation profile or a live provider. MemT Host fixtures
+cannot collect because tokenizer/runtime dependencies are unavailable. Neither
+optional live provider nor model behavior is qualified.
+
 Both isolated Python 3.14 wheels contain 1,860 product files matching their pinned
 source, with generated frontend assets checked separately. The same synthetic
 six-outcome/24-requirement workload runs through real File and SQLite CLI, native
