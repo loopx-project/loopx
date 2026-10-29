@@ -4,6 +4,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { optionalNonEmptyString, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { visionAuthoringContract } from "../goals/vision_checkpoint.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
+import { TODO_COMPLETION_RECOVERIES } from "../todos/completion_state.ts";
 import {normalizeStrideDecision, normalizeStrideStrategy, STRIDE_DECISION_SCHEMA, strideControlContract, strideReviewMismatch} from "./stride_policy.ts";
 import { projectProgressDelta } from "./progress_delta.ts";
 
@@ -141,7 +142,9 @@ function lifecycleSource(request: JsonObject): JsonObject {
       item.claimed_by === agent && item.last_actor_agent_id === agent &&
       completed !== null && completed <= admitted &&
       strings(item.successor_todo_ids).length === 0 && !item.superseded_by &&
-      (item.no_followup !== true || (item.completion_recovery === "lifecycle_reentry_terminal_closeout" &&
+      // Either canonical closeout path can finish after this review was
+      // admitted. The exact trigger/identity checks below still own reentry.
+      (item.no_followup !== true || (TODO_COMPLETION_RECOVERIES.some(recovery => recovery === item.completion_recovery) &&
         updated !== null && updated >= admissionSecond));
   }).sort((left, right) => {
     // Terminal reentry changes updated_at, never the original completed_at.
@@ -154,7 +157,7 @@ function lifecycleSource(request: JsonObject): JsonObject {
     item.no_followup === true && item.completion_continuation === "no_followup" &&
     typeof item.todo_id === "string" && !!item.todo_id &&
     typeof item.completion_turn_key === "string" && !!item.completion_turn_key &&
-    item.completion_recovery === "lifecycle_reentry_terminal_closeout");
+    TODO_COMPLETION_RECOVERIES.some(recovery => recovery === item.completion_recovery));
   return {items, settled};
 }
 
