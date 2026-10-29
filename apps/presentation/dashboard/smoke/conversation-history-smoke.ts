@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { resolveTestPython } from "../../../../scripts/test-python.mjs";
-import { fetchChatHistory } from "../src/data/chat";
+import { fetchChatHistory, fetchChatSessionHistory } from "../src/data/chat";
 import { readConversationReturns } from "../src/data/conversation-return-observation";
 import { conversationReturnSessions, reconcileConversationReturns } from "../src/data/conversation-returns";
 
@@ -93,11 +93,64 @@ try {
   assert.equal(transcript.find(row => row.sourceSessionId === "current"), originalCurrent, "Old updates preserve current text and object identity");
   await observe();
   assert.equal(transcript.filter(row => row.text === revisedResult).length, 1);
+  child.stdin.write("history\n");
+  const expectedRows = (await next()).history_rows;
+  requests.length = 0;
+  const complete = await fetchChatSessionHistory("old");
+  assert.equal(complete.messages.length, expectedRows);
+  assert.equal(new Set(complete.messages.map(row => row.message_id)).size, expectedRows);
+  assert.equal(complete.messages.find(row => row.message_id === "history-201")?.text, "Original full body. ".repeat(600));
+  assert.equal(requests.length, 3, "A complete original requires every real HTTP page");
+  assert.ok(requests.every(path => new URL(path, origin).searchParams.get("message_limit") === "200"));
+  assert.deepEqual((await fetchChatSessionHistory(complete.session)).messages, complete.messages,
+    "Existing discovered-summary history and delegation-ID readers share one complete-prefix owner");
+  child.stdin.write("page-fault\n");
+  assert.equal((await next()).unavailable_message_pages, true);
+  await assert.rejects(() => fetchChatSessionHistory("old"));
+  child.stdin.write("recover\n"); assert.equal((await next()).recovered, true);
+  assert.equal((await fetchChatSessionHistory("old")).messages.length, expectedRows);
+  const routedFetch = globalThis.fetch;
+  // Challenge the original-source and frozen-prefix rules, not only length.
+  for (const mutate of [
+    (value: any) => {value.session.goal_id = "unrelated-goal";},
+    (value: any) => {value.message_page.snapshot_sha256 = "0".repeat(64);},
+    (value: any) => {value.message_page.offset = 0;},
+    (value: any) => {value.messages[0].message_id = complete.messages[0].message_id;},
+    (value: any) => {delete value.message_page;},
+  ]) {
+    globalThis.fetch = async (input, init) => {
+      const response = await routedFetch(input, init);
+      if (!new URL(String(input), origin).searchParams.has("message_cursor")) return response;
+      const value = await response.json(); mutate(value);
+      return new Response(JSON.stringify(value), {status: response.status});
+    };
+    await assert.rejects(() => fetchChatSessionHistory("old"), "Never accept mixed or partial pages");
+  }
+  globalThis.fetch = routedFetch;
+  const abort = new AbortController(); abort.abort(); requests.length = 0;
+  await assert.rejects(() => fetchChatSessionHistory("old", abort.signal));
+  assert.equal(requests.length, 0, "A closed reader must not start another page read");
+  const inFlight = new AbortController();
+  let pageAborted = false;
+  globalThis.fetch = async (input, init) => {
+    if (!new URL(String(input), origin).searchParams.has("message_cursor")) return routedFetch(input, init);
+    assert.ok(init?.signal);
+    inFlight.abort();
+    pageAborted = init.signal.aborted;
+    init.signal.throwIfAborted();
+    throw new Error("The page did not receive the reader's cancellation");
+  };
+  await assert.rejects(() => fetchChatSessionHistory("old", inFlight.signal));
+  assert.equal(pageAborted, true, "The in-flight page shares the reader's cancellation");
+  // The existing full-snapshot service remains compatible on the first read.
+  globalThis.fetch = async () => new Response(JSON.stringify(complete));
+  assert.deepEqual((await fetchChatSessionHistory(complete.session)).messages, complete.messages);
+  globalThis.fetch = routedFetch;
   child.stdin.end("inspect\n");
   assert.deepEqual(await next(), { store_unchanged: true, turn_count: 0 });
   const [exitCode] = await exited;
   assert.equal(exitCode, 0, stderr);
-  console.log("conversation-history: passed (real HTTP/store, partial read, channel isolation, missing-only recovery, scoped identity, quiet index reads, late revisions, recovery, zero read-side writes or Turns)");
+  console.log("conversation-history: passed (real HTTP/store, channel isolation, missing-only recovery, quiet index reads, late revisions, complete bounded pages, source/prefix conflicts, cancellation, legacy parity, zero read-side writes or Turns)");
 } finally {
   globalThis.fetch = originalFetch;
   output.close();
