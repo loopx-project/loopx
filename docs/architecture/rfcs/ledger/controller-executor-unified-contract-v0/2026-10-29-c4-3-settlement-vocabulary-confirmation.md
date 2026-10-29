@@ -110,7 +110,7 @@ That gap is a separate slice: one shared owner for the ordered host-adapter step
 kinds, registered in the vocabulary registry so that the guard/validation
 distinction becomes machine-readable instead of prose. It must first reconcile
 the in-flight settlement work: #3412, #5677, #7580, #7523. That slice is
-proposed in [#7619](https://github.com/loopx-project/loopx/pull/7619): it
+merged in [#7619](https://github.com/loopx-project/loopx/pull/7619): it
 registers the ordered host-adapter step kinds as their own vocabulary with both
 runtimes as owners, so the two carriers are compared on every drift scan instead
 of hand-kept.

@@ -1,7 +1,7 @@
 # C4.3 adapter partial-step characterization
 
 - Parent: [controller/executor RFC, C4.3](2026-10-27-refactor-handoff.md#c43-settlement-adapters-over-existing-primitives).
-- Baseline: `f2990e3de`, 2026-10-29. The settlement owners are unchanged at `3a350c871`.
+- Baseline: `8caaf678e`, 2026-10-29. The settlement owners are unchanged at `1e3401591`.
 - Status: characterization only. No runtime, schema, wire or default change.
 - Follows: [C4.3 settlement obligation comparison](2026-10-29-c4-3-settlement-obligation-comparison.md).
 - [Chinese mirror](2026-10-29-c4-3-adapter-partial-step-characterization.zh-CN.md).
@@ -86,6 +86,6 @@ the confirmation entry withdrew — one typed owner for `guard`,
 `lifecycle_completion` and `validation` — is not reopened here: that entry
 already identified the shipped caller that adopts both paths and recorded the
 candidate as withdrawn. The slice that remains open is the shared owner for
-the ordered host-adapter step kinds, proposed in
+the ordered host-adapter step kinds, merged in
 [#7619](https://github.com/loopx-project/loopx/pull/7619). That is a registry
 slice, not a continuation of the withdrawn unification.

@@ -1,7 +1,7 @@
 # C4.3 适配器部分步骤行为刻画
 
 - 上级：[controller/executor RFC，C4.3](2026-10-27-refactor-handoff.zh-CN.md#c43-adapter)。
-- 基线：`f2990e3de`，2026-10-29。结算属主自 `3a350c871` 起未变。
+- 基线：`8caaf678e`，2026-10-29。结算属主自 `1e3401591` 起未变。
 - 状态：只做刻画。不改变运行时、schema、wire 或默认值。
 - 上游条目：[C4.3 结算义务对照](2026-10-29-c4-3-settlement-obligation-comparison.zh-CN.md)。
 - [英文版](2026-10-29-c4-3-adapter-partial-step-characterization.md)。
@@ -74,5 +74,5 @@
 与 `validation` 归到一个 typed 属主——在此不重新打开：那条目已经指出了同时采用
 两条路径的已交付调用方，并把该候选记为 withdrawn。仍然开放的切片是为 host-adapter
 有序步骤类型设立共享属主，已在
-[#7619](https://github.com/loopx-project/loopx/pull/7619) 中提出；那是登记切片，
+[#7619](https://github.com/loopx-project/loopx/pull/7619) 中合入；那是登记切片，
 不是被撤回的统一化工作的延续。
