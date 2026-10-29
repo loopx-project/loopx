@@ -212,7 +212,8 @@ MemT 只使用这两个公开模块，不能直接 import executor 或其他内�
 其 `managed_chat_activation_guard` 在受管客户端重启期间持有"已受理 Chat 工作"
 栅栏与入口锁。`loopx-codex-provider-routing` 只使用该栅栏、不使用该模块的其他
 入口，在重启自己管理的 Chat 服务之前为已受理的 Chat 工作加栅栏。该栅栏不授予
-工作权限：它获取入口锁，并在仍有已受理工作或入口流量时拒绝继续。import ratchet
+工作权限：它持有入口准入锁，并在仍有非终态 Turn 时拒绝继续。待处理的入口收据
+不在该检查范围内。import ratchet
 同样钉住这条边。这是接缝中的第三个公开模块，并没有放宽接缝：包依旧不能 import
 executor 或其他内核私有模块。
 
@@ -514,11 +515,15 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   `loopx-codex-provider-routing` 使用其 `managed_chat_activation_guard`，在重启
   自己管理的 Chat 服务期间持有"已受理 Chat 工作"栅栏与入口锁。import ratchet
   钉住这条边。
-- **边界修复：** 该栅栏不授予工作权限——它获取入口锁，并在仍有已受理工作或入口
-  流量时拒绝继续——且该包不使用该模块的其他入口。接缝仍然闭合：包依旧不能
+- **边界修复：** 该栅栏不授予工作权限——它持有入口准入锁，并在仍有非终态 Turn 时
+  拒绝继续；待处理的入口收据不在该检查范围内——且该包不使用该模块的其他入口。
+  接缝仍然闭合：包依旧不能
   import executor 或其他内核私有模块，已钉住的 Ark/JEV 私有边仍是迁移积压。
 - **证据：** import ratchet 钉住这条边，而不是让它处于未记录状态；Codex
   provider-routing 的 native host smoke 覆盖受保护的重启路径。
+  `tests/test_chat_runtime_activation.py::test_a_pending_ingress_receipt_alone_does_not_defer_the_restart`
+  钉住收窄后的边界：只有一条待处理的 `loopx_queue` 或 `loopx_inbox` 收据并不会
+  推迟重启，因为该栅栏是通过 Turn 状态读取已受理工作的。
 - **剩余：** 不关闭更广的 M1–M5 发行物与零私有 import 验收；D1–D4 仍未决。
   该接缝只为一个调用方记录一个模块，不是通用的包到内核许可。
 

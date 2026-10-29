@@ -308,8 +308,9 @@ transition of services that are already installed, and its
 ingress lock while a managed client restarts. `loopx-codex-provider-routing`
 uses that guard, and no other entry point of that module, to fence accepted Chat
 work before it restarts the Chat services it manages. The guard grants no work
-authority: it takes the ingress lock and refuses to continue while accepted
-work or ingress is pending. The import ratchet records that edge as well. This
+authority: it holds the ingress admission lock and refuses to continue while a
+non-terminal Turn is pending. A pending ingress receipt is not part of that
+check. The import ratchet records that edge as well. This
 is a third public module in the seam and does not widen it: a package still may
 not import the executor or another kernel-private module.
 
@@ -716,14 +717,19 @@ Approval needs a reviewed decision, not implementation progress or silence.
   `managed_chat_activation_guard` to hold the accepted-Chat-work fence and the
   ingress lock while it restarts the Chat services it manages. The import
   ratchet records that edge.
-- **Boundary repair:** the guard grants no work authority — it takes the ingress
-  lock and refuses to continue while accepted work or ingress is pending — and
+- **Boundary repair:** the guard grants no work authority — it holds the ingress
+  admission lock and refuses to continue while a non-terminal Turn is pending,
+  and a pending ingress receipt is not part of that check — and
   the package uses no other entry point of that module. The seam stays closed: a
   package still may not import the executor or another kernel-private module,
   and the pinned Ark/JEV edges remain migration debt.
 - **Evidence:** the import ratchet pins the edge instead of leaving it
   unrecorded, and the Codex provider-routing native host smoke exercises the
-  guarded restart path.
+  guarded restart path. `tests/test_chat_runtime_activation.py::
+  test_a_pending_ingress_receipt_alone_does_not_defer_the_restart` pins the
+  narrowed boundary: a pending `loopx_queue` or `loopx_inbox` receipt on its own
+  does not defer the restart, because the guard reads accepted work through the
+  Turn state.
 - **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
   is not closed; D1–D4 stay open. The seam records one module for one caller,
   not a general package-to-kernel permission.

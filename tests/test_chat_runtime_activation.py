@@ -14,7 +14,7 @@ from unittest import mock
 import pytest
 
 from loopx.chat_store import ChatSessionStore
-from loopx.chat_ingress import chat_runtime_activation_lock
+from loopx.chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
 from loopx.runtime_activation import restart_services_for_runtime_activation
 from loopx.self_update import execute_update_plan, render_update_plan_markdown
 
@@ -110,6 +110,34 @@ def test_queue_without_an_active_pointer_still_defers_until_original_work_finish
     assert activate()["restart_status"] == "restarted"
     assert len(calls) == 2
     assert store.load_turn(sid, queued["turn_id"])["message"] == "later input"
+
+
+@pytest.mark.parametrize("mode", ["loopx_queue", "loopx_inbox"])
+def test_a_pending_ingress_receipt_alone_does_not_defer_the_restart(services, mode):
+    """The guard fences non-terminal Turns, not pending ingress receipts.
+
+    A pending ingress receipt reserves external input before the provider
+    delivers it, so it is not a Turn yet. The activation guard reads the
+    accepted work through the Turn state, so a pending receipt on its own
+    does not defer the restart. This is the boundary the guard actually
+    holds, not a promise that pending receipts are covered.
+    """
+    runtime, _agents, calls = services
+    store = ChatSessionStore(runtime)
+    sid = session(store)
+    receipt, created = store.create_ingress_receipt(
+        sid,
+        client_ingress_id=f"client-{mode}",
+        mode=mode,
+        message="reserved input",
+    )
+    assert created is True
+    assert receipt["status"] == "pending"
+    assert chat_runtime_activation_state(runtime)["nonterminal_turns"] == 0
+
+    result = activate()
+    assert result["restart_status"] == "restarted"
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(
