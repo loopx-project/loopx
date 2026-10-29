@@ -94,24 +94,14 @@ class CurrentAgentCheckpoint:
                         attempt=dispatch['attempt'])
                     self._save(path, receipt)
                     raise ValueError(error.reason) from error
-                if decision.get('result_kind') in {'wait', 'user_action_required', 'iteration_failed'}:
-                    # A valid Host response supersedes the prior transport
-                    # failure; retain the total attempt count for future failures.
-                    receipt.pop('direction_host_failure', None)
-                    receipt['direction_stopped'] = True
-                    receipt['direction_stops'] = [*receipt.get('direction_stops', []), {
-                        'attempt': dispatch['attempt'], 'result_kind': decision['result_kind'],
-                        **({'stop_reason': decision['stop_reason']} if decision.get('stop_reason') else {})}]
-                    self._save(path, receipt)
-                    raise ValueError('Current Agent stopped direction continuation; result retained')
                 bound = _checkpoint_effect('goal.checkpoint_read_context.work_binding', {
-                    'phase': 'direction_response', 'identity': self.identity.as_dict(), 'receipt': receipt, 'decision': decision})
+                    'phase': 'direction_return', 'identity': self.identity.as_dict(), 'receipt': receipt, 'decision': decision})
                 if bound.get('ok') is not True:
                     raise ValueError(bound.get('error', 'Direction response binding rejected'))
-                receipt = {**receipt, 'current_agent_decision': decision, 'current_agent_binding': bound['binding']}
-                receipt.pop('direction_host_failure', None)
-                receipt.pop('direction_stopped', None)
+                receipt = bound['receipt']
                 self._save(path, receipt)
+                if bound['stopped']:
+                    raise ValueError('Current Agent stopped direction continuation; result retained')
             else:
                 bound = _checkpoint_effect('goal.checkpoint_read_context.work_binding', {
                     'phase': 'direction_response', 'identity': self.identity.as_dict(), 'receipt': receipt, 'decision': decision})

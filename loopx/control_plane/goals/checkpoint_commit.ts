@@ -42,21 +42,23 @@ function unknown(message: string): never {
   throw new EffectRuntimeRequestError(`${message}; read back the original Turn before retrying`, "checkpoint_commit_unknown");
 }
 
-function indexBytes(path: string): Buffer {
+function checkpointIndex(path: string): {bytes: Buffer; rows: JsonObject[]} {
   let bytes: Buffer;
   try { bytes = readFileSync(path); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return Buffer.alloc(0);
+    return {bytes: Buffer.alloc(0), rows: []};
   }
   // The ordinary history reader tolerates damaged rows. A commit cannot infer
   // absence from that reader or append behind a torn (even JSON-valid) tail.
   if (bytes.length && bytes[bytes.length - 1] !== 10) unknown("checkpoint index has an incomplete tail");
   const checkpoints = new Map<string, string>();
+  const rows: JsonObject[] = [];
   for (const line of bytes.toString("utf8").split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
       const row = requireJsonObject(JSON.parse(line), "run index row");
+      rows.push(row);
       const checkpoint = jsonObject(row.vision_checkpoint);
       const effect = jsonObject(row.settlement_identity)?.effect_id;
       if ((row.result_work_context || checkpoint?.satisfied === true && checkpoint.read_context) && typeof effect === "string") {
@@ -71,7 +73,14 @@ function indexBytes(path: string): Buffer {
     }
     catch { unknown("checkpoint index is malformed"); }
   }
-  return bytes;
+  return {bytes, rows};
+}
+
+function indexBytes(path: string): Buffer { return checkpointIndex(path).bytes; }
+
+/** One strict capture per observation; never a cache or an admission witness. */
+export function readCheckpointHistoryRows(root: string, goal: string): JsonObject[] {
+  return checkpointIndex(join(root, "goals", goalPathSegment(goal), "runs", "index.jsonl")).rows;
 }
 
 function committedArtifacts(prior: JsonObject, runsDir: string): JsonObject {
@@ -161,9 +170,13 @@ function indexedReadProof(rows: JsonObject[], goal: string, name: string): {row:
 export function inspectCheckpointReadHistory(value: unknown): JsonObject {
   const request = requireJsonObject(value, "checkpoint read history inspection");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
+  return inspectCheckpointReadHistoryFromRows(request, readCheckpointHistoryRows(root, goalPathSegment(request.goal_id)));
+}
+
+export function inspectCheckpointReadHistoryFromRows(value: unknown, rows: JsonObject[]): JsonObject {
+  const request = requireJsonObject(value, "checkpoint read history inspection");
+  const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
   const goal = goalPathSegment(request.goal_id);
-  const rows = indexBytes(join(root, "goals", goal, "runs", "index.jsonl"))
-    .toString("utf8").split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line) as JsonObject);
   if (!Array.isArray(request.receipt_names)) throw new EffectRuntimeRequestError("receipt_names must be an array");
   const names = new Set<unknown>(request.receipt_names);
   const contexts = join(root, "goals", goal, "checkpoint-contexts");
@@ -189,8 +202,8 @@ export function inspectCheckpointReadHistory(value: unknown): JsonObject {
     const proof = indexedReadProof(rows, goal, name);
     if (!proof) continue;
     try {
-      const result = inspectCheckpointAttempt({runtime_root: root, identity: proof.row.settlement_identity,
-        purpose: proof.purpose});
+      const result = inspectCheckpointAttemptFromRows({runtime_root: root, identity: proof.row.settlement_identity,
+        purpose: proof.purpose}, rows);
       if (result.status === "committed") verified.push({receipt_name: name, identity: proof.row.settlement_identity,
         purpose: proof.purpose});
     } catch (error) {
@@ -206,9 +219,14 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
   const request = requireJsonObject(value, "checkpoint attempt inspection");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
   const identity = requireJsonObject(request.identity, "settlement identity");
+  return inspectCheckpointAttemptFromRows(request, readCheckpointHistoryRows(root, goalPathSegment(identity.goal_id)));
+}
+
+export function inspectCheckpointAttemptFromRows(value: unknown, rows: JsonObject[]): JsonObject {
+  const request = requireJsonObject(value, "checkpoint attempt inspection");
+  const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
+  const identity = requireJsonObject(request.identity, "settlement identity");
   const runsDir = join(root, "goals", goalPathSegment(identity.goal_id), "runs");
-  const rows = indexBytes(join(runsDir, "index.jsonl")).toString("utf8").split(/\r?\n/)
-    .filter(line => line.trim()).map(line => requireJsonObject(JSON.parse(line), "run index row"));
   const work = request.purpose === "delivery_result";
   const matching = rows.filter(row => jsonObject(row.settlement_identity)?.effect_id === identity.effect_id &&
     (work ? row.result_work_context != null : jsonObject(row.vision_checkpoint)?.satisfied === true &&
@@ -251,8 +269,8 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
         if (proof) {
           // Reuse receipt-first artifact verification without scanning other reads.
           // A work proof alone cannot establish that a direction append committed.
-          const verified = inspectCheckpointAttempt({runtime_root: root, identity: proof.row.settlement_identity,
-            purpose: proof.purpose});
+          const verified = inspectCheckpointAttemptFromRows({runtime_root: root, identity: proof.row.settlement_identity,
+            purpose: proof.purpose}, rows);
           if (verified.status === "committed") continue;
         }
         unknown("checkpoint read receipt is unavailable; preserve original Turn artifacts before retrying");
@@ -262,7 +280,7 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
           owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id) {
         const proof = indexedReadProof(rows, goalPathSegment(identity.goal_id), name);
         if (!proof || proof.purpose !== "first_delivery" ||
-            inspectCheckpointAttempt({runtime_root: root, identity: owner, purpose: "first_delivery"}).status !== "committed") {
+            inspectCheckpointAttemptFromRows({runtime_root: root, identity: owner, purpose: "first_delivery"}, rows).status !== "committed") {
           unknown("another original Turn has an unresolved direction append for this Todo");
         }
       }

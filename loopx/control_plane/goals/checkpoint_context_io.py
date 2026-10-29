@@ -39,7 +39,8 @@ def _checkpoint_effect(method: str, request: dict[str, Any]) -> Any:
         # digest-bound same-UID snapshot transport; default effects stay bounded.
         return effect_runtime_result(method, request,
             large_local_snapshot=method not in ("goal.checkpoint_read_context.inspect_attempt",
-                                                "goal.checkpoint_read_context.inspect_history"))
+                                                "goal.checkpoint_read_context.inspect_history",
+                                                "turn.first_delivery.observe"))
     except EffectRuntimeRejected as error:
         raise CheckpointReadContextRejected({"ok": False, "error": str(error),
             "error_code": error.diagnostic_code, "reread_required": False}) from error
@@ -525,79 +526,24 @@ def _delivery_observation_todos(root: Path, goal_id: str, registry_path: Path | 
 
 def pending_first_delivery_progress(root: Path, goal_id: str, agent_id: str | None = None,
                                    *, registry_path: Path | None = None) -> dict[str, Any] | None:
-    """Isolate historical observation faults; admission still uses strict reads.
+    """Read provider facts once; the typed owners observe all historical Turns.
 
-    An unreadable digest without verified indexed proof cannot be assigned to
-    an Agent. Keep that Goal-scoped uncertainty visible without replacing
-    another lane's normal next action; proved bindings retain pending accounting.
+    This remains an alias observation, as before. A Todo source path does not
+    grant exact GoalRef admission or authorize historical receipt repair.
     """
-    identities = {}
-    errors = []
-    verified_directions = set()
-    for path in (root / "goals" / goal_id / "checkpoint-contexts").glob("*.json"):
-        try:
-            receipt = _read_context_receipt(path)
-        except (ValueError, OSError):
-            errors.append({"scope": "goal", "code": "checkpoint_receipt_unavailable", "receipt": path.stem})
-            continue
-        binding = receipt.get("identity", {})
-        if receipt.get("purpose") not in ("first_delivery", "delivery_result"):
-            continue
-        observed_agent = binding.get("agent_id") if isinstance(binding, dict) else None
-        if isinstance(observed_agent, str) and observed_agent and agent_id is not None and observed_agent != agent_id:
-            continue
-        try:
-            identity = SettlementIdentity.from_runtime_payload(binding)
-            if (receipt.get("schema_version") != "checkpoint_read_context_v2" or identity.goal_id != goal_id
-                    or path != _receipt_path(root, identity, receipt["purpose"])):
-                raise ValueError("checkpoint receipt binding mismatch")
-        except (ValueError, RuntimeError):
-            errors.append({"scope": "goal", "code": "checkpoint_receipt_invalid", "receipt": path.stem})
-            continue
-        identities[identity.effect_id] = identity.as_dict()
     try:
-        recovered = _checkpoint_effect("goal.checkpoint_read_context.inspect_history", {
-            "runtime_root": str(root.resolve()), "goal_id": goal_id, "agent_id": agent_id,
-            "receipt_names": [error["receipt"] + ".json" for error in errors]})
-        for item in recovered["verified"]:
-            identity = SettlementIdentity.from_runtime_payload(item["identity"])
-            errors = [error for error in errors if error["receipt"] + ".json" != item["receipt_name"]]
-            if agent_id is None or identity.agent_id == agent_id:
-                identities[identity.effect_id] = identity.as_dict()
-                if item["purpose"] == "first_delivery":
-                    verified_directions.add(identity.effect_id)
+        todos = [{key: todo.get(key) for key in (
+            "todo_id", "status", "no_followup", "completion_continuation",
+            "completion_requested_continuation", "completion_turn_key")}
+            for todo in _delivery_observation_todos(root, goal_id, registry_path)]
     except (ValueError, OSError):
-        errors.append({"scope": "goal", "code": "checkpoint_history_unavailable"})
-    # Share the complete current authority snapshot across observed identities.
-    # Do not cap the historical scan or silently lose older pending work.
-    canonical_todos = None
-    if identities:
-        try:
-            canonical_todos = _delivery_observation_todos(root, goal_id, registry_path)
-        except (ValueError, OSError):
-            errors.append({"scope": "goal", "code": "checkpoint_authority_unavailable"})
-    for binding in reversed(list(identities.values())):
-        try:
-            identity = SettlementIdentity.from_runtime_payload(binding)
-            observation_unknown = any(error.get("receipt") in {
-                _receipt_path(root, identity, purpose).stem for purpose in ("first_delivery", "delivery_result")
-            } for error in errors)
-            readback = read_heartbeat_settlement(root, goal_id=goal_id, agent_id=binding["agent_id"],
-                todo_id=binding.get("todo_id"), replan_obligation_id=binding.get("replan_obligation_id"),
-                turn_instance_id=binding["turn_instance_id"])
-            if readback is None or canonical_todos is None:
-                raise ValueError("enrolled checkpoint readback unavailable")
-            progress = first_delivery_progress(root, readback, canonical_todos=canonical_todos,
-                observation_unknown=observation_unknown, verified_direction=identity.effect_id in verified_directions)
-        except (ValueError, OSError):
-            progress = effect_runtime_result("turn.first_delivery.evaluate", {"phase": "project", "unknown": True})
-        if progress is not None and progress["stage"] != "settled":
-            return {**progress, "settlement_identity": binding, **({"observation_errors": errors} if errors else {})}
-    if errors:
-        return {**effect_runtime_result("turn.first_delivery.evaluate", {
-            "phase": "project", "observation_unavailable": True}),
-            "goal_id": goal_id, "agent_id": agent_id, "observation_errors": errors}
-    return None
+        todos = None
+    return _checkpoint_effect("turn.first_delivery.observe", {
+        "runtime_root": str(root.resolve()), "goal_id": goal_id,
+        "agent_id": agent_id, "todos": todos,
+        # Keep the caller's historical scan order across Python/Node platforms.
+        "receipt_names": [path.name for path in (root / "goals" / goal_id / "checkpoint-contexts").glob("*.json")],
+    })
 
 
 def delivery_result_context_input(

@@ -11,16 +11,7 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
-
-try:  # pydantic ships with the FastMCP extra; base installs have no pydantic.
-    from pydantic import Strict
-except ImportError:  # pragma: no cover - exercised on base installs only
-
-    class Strict:  # type: ignore[no-redef]
-        """Inert stand-in so the shared annotation still evaluates without
-        pydantic; FastMCP cannot run on such an install anyway."""
-
+from typing import Any
 
 from .control_plane.host_adapter_settlement import (
     HostTodoSettlementRequest,

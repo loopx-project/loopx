@@ -126,7 +126,7 @@ Authority handoff mode between agents.
 Provider step kinds used by host-adapter settlement plans. TypeScript authors each phase's ordered plan and Python validates that phase's sequence before execution. Ordinary settlement uses guard, lifecycle_completion, durable_writeback, quota_spend and optional terminal_closeout; first-delivery preparation uses delivery_context or direction_context in its phase-specific sequence. Distinct from settlement_step_kind, which names the turn settlement phases including seeded validation.
 
 - Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
-- python: [`HOST_ADAPTER_SETTLEMENT_STEP_KINDS`](../../loopx/control_plane/host_adapter_settlement.py).
+- python: [`HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE`](../../loopx/control_plane/host_adapter_settlement.py).
 - typescript: [`HOST_ADAPTER_SETTLEMENT_STEP_KINDS`](../../loopx/control_plane/turn_driver/host_todo_completion.ts).
 - Values / 值: `guard`, `lifecycle_completion`, `durable_writeback`, `quota_spend`, `terminal_closeout`, `delivery_context`, `direction_context`.
 

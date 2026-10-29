@@ -141,6 +141,33 @@ def test_successful_result_replay_precedes_later_goal_source_loss(provider, sour
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_historical_admission_before_first_read_survives_cold_upgrade(provider, tmp_path, monkeypatch):
+    from loopx.control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
+    from loopx.control_plane.quota.settlement import SettlementIdentity
+
+    project, runtime, registry, _ = _default_fixture(provider, tmp_path, monkeypatch)
+    # Seed an actual pre-default admission before any work/read receipt exists.
+    # No current admission is rewritten or downgraded to construct this case.
+    identity = SettlementIdentity(goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID)
+    ensure_turn_heartbeat_settlement_receipt(runtime, identity,
+        semantic_replan_guard_scoped=True, semantic_replan_obligation_id=None)
+    contexts = runtime / "goals" / GOAL_ID / "checkpoint-contexts"
+    assert not list(contexts.glob("*.json"))
+    log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    original = log.read_bytes()
+    for _ in range(2):  # Each CLI invocation starts a fresh Python caller.
+        rc, replay = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+            "--turn-instance-id", TURN_ID, cwd=project)
+        assert rc == 0, replay
+        assert replay["heartbeat_receipt"]["settlement_identity"] == identity.as_dict()
+        assert "delivery_result_context" not in replay
+        assert not list(contexts.glob("*.json"))
+        assert log.read_bytes() == original
+        assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_already_bound_historical_receipt_retains_original_policy(provider, tmp_path, monkeypatch):
     from tests.control_plane.test_quota_settlement_cli import _historical_turn
     project, runtime, registry, _ = _default_fixture(provider, tmp_path, monkeypatch)

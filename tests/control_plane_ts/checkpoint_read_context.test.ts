@@ -203,6 +203,15 @@ test("default direction binds the post-result input and response without relabel
   const decision = {read_context_id: "read-A", vision_unchanged_reason: "Current obligations preserve the route."};
   const request = {phase: "direction_response", identity, receipt: direction.receipt, decision};
   assert.equal(work(request).ok, true);
+  const returned = work({...request, phase: "direction_return", receipt: {...direction.receipt as JsonObject,
+    direction_host_attempt_count: 4, direction_stopped: true, direction_host_failure: {kind: "executor_timeout"}}});
+  assert.equal(returned.stopped, false);
+  assert.deepEqual((returned.receipt as JsonObject).current_agent_decision, decision);
+  assert.equal((returned.receipt as JsonObject).direction_host_attempt_count, 4);
+  assert.equal((returned.receipt as JsonObject).direction_stopped, undefined);
+  assert.equal((returned.receipt as JsonObject).direction_host_failure, undefined);
+  assert.equal(work({...request, phase: "direction_return", receipt: {...direction.receipt as JsonObject,
+    direction_host_attempt_count: 4}, decision: {...decision, read_context_id: "foreign"}}).ok, false);
   assert.equal(work({...request, decision: {...decision, read_context_id: "read-B"}}).error_code,
     "checkpoint_direction_binding_mismatch");
   assert.equal(work({...request, identity: {...identity, agent_id: "another"}}).error_code,
@@ -236,6 +245,24 @@ test("only explicit recovery rearms a known temporary direction stop without res
   const exhausted = {schema_version: "loopx_turn_host_failure_v0", kind: "executor_timeout", attempt: 3,
     retryable: true, retry: {strategy: "same_configuration", max_attempts: 2, backoff_seconds: 20}};
   assert.equal(work({...request, receipt: {...receipt, direction_host_failure: exhausted}}).ok, false);
+});
+
+test("valid Host stops supersede transport failure while keeping original attempts and stop reasons", () => {
+  for (const result_kind of ["wait", "user_action_required", "iteration_failed"]) {
+    const prior = {direction_host_attempt_count: 3, direction_host_failure: {kind: "executor_timeout"},
+      direction_stops: [{attempt: 1, result_kind: "wait"}]};
+    for (const decision of [{result_kind}, {result_kind, stop_reason: "host_stop"}]) {
+      const returned = work({phase: "direction_return", receipt: prior, decision});
+      assert.equal(returned.stopped, true);
+      const receipt = returned.receipt as JsonObject;
+      assert.equal(receipt.direction_stopped, true);
+      assert.equal(receipt.direction_host_failure, undefined);
+      assert.equal(receipt.direction_host_attempt_count, 3);
+      assert.deepEqual((receipt.direction_stops as JsonObject[])[1], {attempt: 3, ...decision});
+      assert.equal(work({phase: "direction_dispatch", receipt, explicit_resume: true}).ok, !("stop_reason" in decision));
+      assert.equal(prior.direction_stops.length, 1, "the raw prior receipt is not mutated");
+    }
+  }
 });
 
 test("direction launch reuses current quota gates and exact original recovery identity", () => {

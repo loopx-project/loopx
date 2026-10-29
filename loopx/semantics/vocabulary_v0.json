@@ -540,7 +540,7 @@
       "tier": "cross_runtime",
       "status": "canonical",
       "owners": {
-        "python": "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_KINDS",
+        "python": "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE",
         "typescript": "loopx/control_plane/turn_driver/host_todo_completion.ts::HOST_ADAPTER_SETTLEMENT_STEP_KINDS"
       },
       "values": [

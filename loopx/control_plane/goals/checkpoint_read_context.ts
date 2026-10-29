@@ -314,6 +314,9 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
 }
 
 /** Work input and validation share the existing read-receipt identity owner. */
+// Existing Host result vocabulary, local to direction transition/reentry rules.
+const temporaryDirectionResults = new Set(["wait", "user_action_required", "iteration_failed"]);
+
 export function evaluateResultWorkBinding(value: unknown): JsonObject {
   const request = requireJsonObject(value, "result work binding");
   if (request.phase === "completion_identity") {
@@ -387,7 +390,7 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
             const stop = jsonObject(value);
             return !stop || !Number.isInteger(stop.attempt) || Number(stop.attempt) < 1 ||
               Number(stop.attempt) > Number(receipt.direction_host_attempt_count) ||
-              !["wait", "user_action_required", "iteration_failed"].includes(String(stop.result_kind)) ||
+              !temporaryDirectionResults.has(String(stop.result_kind)) ||
               Object.hasOwn(stop, "stop_reason");
           })) return rejected("checkpoint_direction_stopped");
     }
@@ -415,6 +418,28 @@ export function evaluateResultWorkBinding(value: unknown): JsonObject {
       jsonObject(current.selected_todo)?.todo_id === identity.todo_id &&
       jsonObject(jsonObject(current.interaction_contract)?.agent_channel)?.delivery_allowed === true;
     return eligible && (sameRecovery || sameWork) ? {ok: true} : rejected("checkpoint_direction_admission_rejected");
+  }
+  if (request.phase === "direction_return") {
+    const receipt = {...requireJsonObject(request.receipt, "direction receipt")};
+    const decision = requireJsonObject(request.decision, "direction decision");
+    const attempt = receipt.direction_host_attempt_count;
+    if (!Number.isInteger(attempt) || Number(attempt) < 1) return rejected("checkpoint_direction_attempt_invalid");
+    if (temporaryDirectionResults.has(String(decision.result_kind))) {
+      delete receipt.direction_host_failure;
+      receipt.direction_stopped = true;
+      receipt.direction_stops = [...(Array.isArray(receipt.direction_stops) ? receipt.direction_stops : []), {
+        attempt, result_kind: decision.result_kind,
+        ...(decision.stop_reason ? {stop_reason: decision.stop_reason} : {}),
+      }];
+      return {ok: true, stopped: true, receipt};
+    }
+    const bound = evaluateResultWorkBinding({...request, phase: "direction_response"});
+    if (bound.ok !== true) return bound;
+    receipt.current_agent_decision = decision;
+    receipt.current_agent_binding = bound.binding;
+    delete receipt.direction_host_failure;
+    delete receipt.direction_stopped;
+    return {ok: true, stopped: false, receipt};
   }
   if (request.phase === "direction_response") {
     const receipt = requireJsonObject(request.receipt, "direction receipt");

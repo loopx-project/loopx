@@ -174,7 +174,17 @@ def test_recovered_history_retains_original_unspent_accounting(provider, loss, t
             path.unlink()
         else:
             path.write_text("{", encoding="utf-8")
+    from loopx.control_plane.goals import checkpoint_context_io as io
+    calls = []
+    effect = io._checkpoint_effect
+
+    def observe(method, request):
+        calls.append(method)
+        return effect(method, request)
+
+    monkeypatch.setattr(io, "_checkpoint_effect", observe)
     progress = pending_first_delivery_progress(runtime, GOAL_ID, AGENT_ID, registry_path=registry)
+    assert calls == ["turn.first_delivery.observe"]  # No per-Turn bridge or repair.
     assert progress["stage"] == "settlement_pending", progress
     assert progress["settlement_identity"] == identity.as_dict()
     assert progress["result_committed"] is True and progress["quota_spent"] is False

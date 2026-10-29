@@ -131,7 +131,10 @@ export function evaluateFirstDelivery(value: unknown): JsonObject {
     }
     const checkpoint = jsonObject(jsonObject(request.writeback_run)?.vision_checkpoint);
     const completion = jsonObject(request.completion_event);
-    const resultCommitted = request.result_committed === true ||
+    const completionTodo = jsonObject(request.completion_todo);
+    const identity = jsonObject(request.identity);
+    const resultCommitted = request.result_committed === true || (completionTodo?.status === "done" && identity !== null &&
+      [identity.effect_id, identity.turn_instance_id].includes(completionTodo.completion_turn_key)) ||
       ["completed", "terminal_no_followup", "receipt_repaired"].includes(String(completion?.status));
     const outcomeRetained = checkpoint?.required === true && checkpoint.satisfied === false;
     const direction = jsonObject(request.direction_receipt);
@@ -139,8 +142,6 @@ export function evaluateFirstDelivery(value: unknown): JsonObject {
     const directionCommitted = checkpoint?.satisfied === true &&
       (jsonObject(checkpoint.read_context)?.purpose === "first_delivery" ||
         (request.checkpoint_continuation === true && checkpoint.read_context != null));
-    const completionTodo = jsonObject(request.completion_todo);
-    const identity = jsonObject(request.identity);
     const terminalRequired = completionTodo !== null && identity !== null &&
       originalTurnRequestsNoFollowup(completionTodo, identity);
     const settlementComplete = request.settlement_complete === true &&

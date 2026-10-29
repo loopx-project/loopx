@@ -24,7 +24,9 @@ HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION = (
     "loopx_host_todo_completion_reduction_v0"
 )
 _RUNTIME_METHOD = "turn.host_todo_completion.evaluate"
-HOST_ADAPTER_SETTLEMENT_STEP_KINDS = (
+# Preserve the registered Python owner and ordinary step prefix. Context-read
+# plans use their own checked sequences in _decode_provider_steps.
+HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE = (
     "guard",
     "lifecycle_completion",
     "durable_writeback",
@@ -348,7 +350,7 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         if len(raw_steps) == 2
         else ("guard", "lifecycle_completion", "direction_context")
         if len(raw_steps) == 3
-        else HOST_ADAPTER_SETTLEMENT_STEP_KINDS[: len(raw_steps)]
+        else HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE[: len(raw_steps)]
     )
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):

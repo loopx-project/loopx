@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from loopx.control_plane.host_adapter_settlement import (
-    HOST_ADAPTER_SETTLEMENT_STEP_KINDS,
+    HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE,
     _decode_provider_steps,
 )
 
@@ -32,7 +32,7 @@ def _typescript_step_kinds() -> tuple[str, ...]:
 
 def test_both_runtimes_carry_the_same_step_kinds() -> None:
     """The plan the TypeScript owner writes must satisfy the Python transport."""
-    assert _typescript_step_kinds() == tuple(HOST_ADAPTER_SETTLEMENT_STEP_KINDS)
+    assert _typescript_step_kinds() == tuple(HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE)
 
 
 def test_the_registry_entry_names_both_owners_and_the_same_values() -> None:
@@ -40,12 +40,12 @@ def test_the_registry_entry_names_both_owners_and_the_same_values() -> None:
     registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
     entry = registry["vocabularies"][VOCABULARY]
     assert entry["owners"]["python"] == (
-        "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_KINDS"
+        "loopx/control_plane/host_adapter_settlement.py::HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE"
     )
     assert entry["owners"]["typescript"] == (
         "loopx/control_plane/turn_driver/host_todo_completion.ts::HOST_ADAPTER_SETTLEMENT_STEP_KINDS"
     )
-    assert entry["values"] == list(HOST_ADAPTER_SETTLEMENT_STEP_KINDS)
+    assert entry["values"] == list(HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE)
 
 
 def _plan(step_kinds: list[str]) -> dict:

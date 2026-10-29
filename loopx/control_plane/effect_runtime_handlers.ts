@@ -454,6 +454,7 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.handoff_mode_migrate", lazyHandler(() => import("./coordination/handoff_mode_runtime.ts"), ({migrateLocalHandoffMode}) => migrateLocalHandoffMode)],
     ["coordination.local_authority.todo_terminal", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({terminalLifecycleLocalCoordinationTodo}) => terminalLifecycleLocalCoordinationTodo)],
     ["turn.first_delivery.evaluate", lazyHandler(() => import("./turn_driver/first_delivery.ts"), ({evaluateFirstDelivery}) => evaluateFirstDelivery)],
+    ["turn.first_delivery.observe", lazyHandler(() => import("./turn_driver/first_delivery.ts"), ({observeFirstDelivery}) => observeFirstDelivery)],
     ["goal.checkpoint_read_context.work_binding", lazyHandler(() => import("./goals/checkpoint_read_context.ts"), ({executeResultWorkBinding}) => executeResultWorkBinding)],
     ["coordination.local_authority.todo_archive", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({archiveLocalCoordinationTodos}) => archiveLocalCoordinationTodos)],
     ["coordination.local_authority.todo_archive_ack", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({acknowledgeLocalCoordinationTodoArchive}) => acknowledgeLocalCoordinationTodoArchive)],

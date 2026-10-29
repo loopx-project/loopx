@@ -543,7 +543,8 @@ def handle_quota_command(
         with fence:
             return _handle_quota_command(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
                 print_payload=print_payload, append_cli_rollout_event=append_cli_rollout_event,
-                capture_directory=capture_directory)
+                capture_directory=capture_directory,
+                retained_action_selection_todo_id=retained_action_selection_todo_id)
     except (ValueError, OSError, RuntimeError) as error:
         payload = quota_failure_payload(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg, error=error)
         print_payload(payload, args.format, _quota_renderer(args))
@@ -558,6 +559,7 @@ def _handle_quota_command(
     print_payload: PrintPayload,
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
+    retained_action_selection_todo_id: str | None = None,
 ) -> int:
     usage_quota_started = time.time_ns() // 1_000_000
     heartbeat_turn_id: str | None = None
