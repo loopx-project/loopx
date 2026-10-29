@@ -1108,6 +1108,12 @@ capture 拒绝/恢复及一次结算。本负载来源保真改善，冷态和�
 精确字节 capture 校验与独立数值 hash 完整性仍是不同边界；这些工程证据不证明
 净成本收益，也不结清 C1。
 
+后续[数值完整性检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.zh-CN.md)
+让尚未合并的完整契约与全部完整 reader 通过同一 typed 来源 owner 承诺 producer
+数值编码，原 capture 字节仍单独校验。独立 Host adapter 同时删除无用的完整来源
+echo；局部运输减少不认证原 quota 成果或完整成本。历史实验 binding 保留版本固定的
+reader，这里没有切换 live 入口。
+
 在同一长程工作上验收[执行期间的人机交互](#human-interaction-during-execution)，
 不能用脱离工作的独立聊天演示代替：
 

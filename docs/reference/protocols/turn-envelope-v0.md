@@ -18,12 +18,14 @@ also covers the direct Turn producer and final host prompts. Quota CLI output
 parity alone does not qualify those consumers. Historical v0 decoding remains
 separate from switching new admissions to a future unified version.
 
-The C1 native candidate composes outcome-reading scope and full/delta encoding
-in one call to the existing typed owner. IO publishes current original recovery
-before that call and commits any scoped required artifact before publishing the
-result. Full views page their existing immutable capture; only deltas need a
-separate encoded wire file. This changes neither the model-facing page contract
-nor the historical reader, default activation, execution or settlement authority.
+The C1 native candidate reuses advisory outcome navigation and the generic
+same-capture selector. Its existing native planner and full/delta encoder retain
+their two calls; the retired mandatory scoped-reading wrapper adds no third
+owner. IO publishes current original recovery before planning and commits the
+required artifact before publishing delivery. Full views page their existing
+immutable capture; only deltas need a separate encoded file. This changes neither
+the model-facing page contract nor historical decoding, default activation,
+execution or settlement authority.
 The candidate's `turn run-once` also reads selection, task commitment, admitted
 action and replan/writeback conditions together from the checked complete source.
 It reuses the task-source boundary call and existing effect projection. The old
@@ -58,6 +60,22 @@ This adds one coarse request per complete completion classification, with no
 additional launch request. It preserves original Turn identity, effect order and
 once-only recovery; it does not establish a net efficiency improvement.
 
+The unmerged C1 complete binding now declares `hash_codec=context_source_numbers_v1`.
+Composition and complete consumers reuse the existing typed source identity to
+commit original numeric tokens alongside canonical JSON. Replan, capture and Host
+checks consume that same binding; missing/unsupported codecs or lost numeric
+transport reject before dependent work. Python derives the sparse tokens from
+its original input and applies source edits; it does not own another digest rule.
+These tokens retain the producer's numeric value/type encoding; exact byte layout
+and alternative numeric spellings remain the capture-byte check's responsibility.
+Historical v0 hashes and Turn keys retain their decoder. Older experimental C1
+bindings without this codec are unavailable for new execution, while their raw
+captures and pinned readers remain evidence. This is integrity checking, not
+authentication or execution authority; the original-quota benefit gate stays open.
+The standalone complete-input adapter also uses the existing compact Host check;
+its unused full-source echo operation is retired. Model input still uses the
+original source, with no extra validation request or model-facing view.
+
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
 历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
@@ -67,10 +85,11 @@ RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified
 还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
 这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
 
-C1 的 native 候选在既有 typed owner 的一次调用中组合成果读取范围与 full/delta
-编码。IO 在调用前发布当前原始恢复引用，并在发布结果前落盘所需的 scoped 必读
-产物。全文视图直接分页已有不可变 capture，只有 delta 需要额外编码文件；模型侧
-分页契约、历史 reader、默认激活、执行及结算权限均不改变。
+C1 的 native 候选复用成果建议导航和通用同 capture selector。既有原生 planner 与
+full/delta encoder 保持两次调用；已退役的强制 scoped-reading wrapper 不增加第三个
+owner。IO 在规划前发布当前原始恢复引用，并在发布交付前落盘所需产物。全文视图直接
+分页已有不可变 capture，只有 delta 需要额外编码文件；模型侧分页契约、历史 decoder、
+默认激活、执行及结算权限均不改变。
 候选 `turn run-once` 也在同一次经过校验的完整来源读取中获得选定工作、正文摘要、
 已准入动作及 replan／写回条件，复用正文来源的边界调用与既有效果投影。旧 adapter
 仍供完整性校验和未迁移消费者使用；只有缺省完整契约的请求使用旧执行 decoder，
@@ -93,6 +112,17 @@ owner 校验。即使 journal 已保存完成 outcome，仍重新检查完整来
 显式无效输入不能走历史回退。省略完整输入的历史请求保留 decoder 和已接受回执
 恢复。完整完成分类每次新增一次粗粒度请求，启动检查不新增请求；原 Turn 身份、
 effect 顺序和一次恢复语义保持，不据此认定净效率提升。
+
+尚未合并的 C1 完整 binding 现声明 `hash_codec=context_source_numbers_v1`，组合与完整
+消费者复用既有 typed 来源身份，把原数值 token 与 canonical JSON 一起纳入承诺。
+Replan、capture 与 Host 检查消费同一 binding；缺失／不支持的 codec 或丢失原数值运输
+信息在依赖工作前拒绝。Python 只从原输入派生稀疏 token 并应用来源 edits，不新增
+digest 决策。Token 保留 producer 的数值／类型编码；精确字节布局与其他数值写法仍由
+capture 字节校验负责。历史 v0 hash 与 Turn key 保留原 decoder；缺少该 codec 的旧实验 C1
+binding 不可用于新执行，其原始 capture 和版本固定的 reader 仍保留为证据。完整性
+校验不授予认证或执行权限；原 quota 的收益验收仍开放。
+独立完整输入 adapter 也复用既有紧凑 Host 检查，退役已无调用方的完整来源 echo
+operation；模型输入仍使用原来源，不增加验证请求或模型侧视图。
 
 Preview it explicitly:
 

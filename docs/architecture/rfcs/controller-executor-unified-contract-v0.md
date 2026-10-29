@@ -1493,6 +1493,13 @@ improves while cold and observer-output bytes grow on that workload. Exact-byte
 capture checks and standalone numeric hash integrity remain distinct; this
 engineering evidence does not establish net cost benefit or complete C1.
 
+The later [numeric-integrity checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.md)
+binds the unmerged complete contract's producer number encoding through the same
+typed source owner and all complete readers. Original capture bytes retain their
+separate check. The standalone Host adapter also drops an unused full-source echo;
+that local transport saving does not qualify original-quota outcomes or full cost.
+Historical prototype bindings retain their pinned reader; this is no live cutover.
+
 Qualify [human interaction during execution](#human-interaction-during-execution)
 on the same long-running work, rather than disconnected chat demonstrations:
 
