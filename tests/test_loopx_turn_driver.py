@@ -1343,9 +1343,14 @@ def test_signed_governance_can_run_while_normal_delivery_remains_withheld(hold):
         assert plan["transaction"]["settlement_plan"]["identity"]["replan_obligation_id"] == obligation
 
 
-@pytest.mark.parametrize("invalid_signature", [False, True])
+@pytest.mark.parametrize(
+    ("invalid_signature", "invalid_schema"),
+    [(False, False), (True, False), (False, True)],
+    ids=["valid_unbound", "invalid_signature", "unsupported_schema"],
+)
 def test_turn_plan_without_todo_requires_signature_and_scoped_binding(
     invalid_signature: bool,
+    invalid_schema: bool,
 ) -> None:
     envelope = _envelope(
         effective_action="autonomous_replan_required" if invalid_signature else "normal_run",
@@ -1353,14 +1358,15 @@ def test_turn_plan_without_todo_requires_signature_and_scoped_binding(
     envelope["action"]["selected_todo"] = None
     if invalid_signature:
         envelope["action_signature"]["matches"] = False
-    else:
+    if invalid_schema:
         envelope["schema_version"] = "unsupported_turn_envelope"
     payload = build_loopx_turn_plan(
         envelope, host="generic-cli", execution_mode="isolated-headless",
     )
 
-    assert payload["ok"] is (not invalid_signature)
-    assert payload["route"]["kind"] == ("contract_error" if invalid_signature else "blocked")
+    invalid = invalid_signature or invalid_schema
+    assert payload["ok"] is (not invalid)
+    assert payload["route"]["kind"] == ("contract_error" if invalid else "blocked")
     assert payload["route"]["would_invoke_host"] is False
     assert payload["route"]["host_invocation_allowed"] is False
     assert payload["session"]["action"] == "none"
