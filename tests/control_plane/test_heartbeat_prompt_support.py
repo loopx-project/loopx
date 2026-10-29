@@ -97,7 +97,7 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
 
 
 @pytest.mark.parametrize("mode,limit", [
-    ("full", 13100), ("compact", 8000), ("brief", 5700),
+    ("full", 13100), ("compact", 8000), ("brief", 5800),
     ("thin", 4500), ("visible_goal", 4000),
 ])
 def test_prompt_body_limit_remains_independent_of_json_envelope(mode: str, limit: int) -> None:
@@ -356,19 +356,23 @@ def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 13100), ("compact", 8000), ("brief", 5700), ("thin", 4500)],
+    [("full", 13100), ("compact", 8000), ("brief", 5800), ("thin", 4500)],
 )
 @pytest.mark.parametrize("scope_chars", [0, 320])
+@pytest.mark.parametrize("runtime_profile", ["codex_app_heartbeat", "generic_cli"])
+@pytest.mark.parametrize("explicit_route", [False, True])
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
-    mode: str, base_budget: int, scope_chars: int
+    mode: str, base_budget: int, scope_chars: int, runtime_profile: str, explicit_route: bool,
 ) -> None:
     profile = {"scope_summary": "x" * scope_chars} if scope_chars else None
+    route = {"registry_path": "/fixture/registry.json", "runtime_root": "/fixture/runtime"} if explicit_route else {}
     enabled = build_heartbeat_prompt(
         goal_id="reward-memory-budget-fixture",
         agent_id="worker-a",
         registered_agents=["worker-a"],
         agent_profile=profile,
-        runtime_profile="codex_app_heartbeat",
+        runtime_profile=runtime_profile,
+        **route,
         **{mode: True},
         reward_memory_enabled=True,
     )
@@ -377,7 +381,8 @@ def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
         agent_id="worker-a",
         registered_agents=["worker-a"],
         agent_profile=profile,
-        runtime_profile="codex_app_heartbeat",
+        runtime_profile=runtime_profile,
+        **route,
         **{mode: True},
         reward_memory_enabled=False,
     )

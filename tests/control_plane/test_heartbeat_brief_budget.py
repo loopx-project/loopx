@@ -108,7 +108,11 @@ def test_brief_keeps_complete_routes_with_128_character_windows_root() -> None:
         "preserve exact identities/effect ids and actual outcomes",
         "Never reconstruct static refresh/spend; ambiguous effects need readback/recovery, not blind retry",
         "Todo done≠Turn settled; no invented successor/--no-follow-up",
-        "No wait spend",
+        "No useful independent work before an evidenced due time",
+        "--status deferred --resume-when resume_at:",
+        "settle original Turn, then yield to host scheduler",
+        "Fresh admission on resume",
+        "No spend for waiting alone",
         "Finish Goal only on terminal no-follow-up",
         "Destructive Git/production requires explicit authorization",
     ):

@@ -17,7 +17,9 @@ INTERFACE_BUDGET_CHARS = {
     # original settlement and fresh admission rather than abbreviating them.
     "full": 13_100,
     "compact": 8_000,
-    "brief": 5_700,
+    # The same generic CLI + 320-char scope with explicit runtime also needs
+    # 5,715 chars; retain those routes instead of shortening the instructions.
+    "brief": 5_800,
     "thin": 4_500,
     "visible_goal": 4_000,
 }

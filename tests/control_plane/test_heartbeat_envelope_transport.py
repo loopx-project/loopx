@@ -82,13 +82,13 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     no_memory = dict(args, reward_memory_enabled=False)
     ordinary = build_heartbeat_prompt(**no_memory)
     captured_only = build_heartbeat_prompt(**no_memory, decision_output_root=tmp_path)
-    assert ordinary['interface_budget']['max_chars'] == 4_200
-    assert captured_only['interface_budget']['max_chars'] == 4_200
+    assert ordinary['interface_budget']['max_chars'] == 4_500
+    assert captured_only['interface_budget']['max_chars'] == 4_500
     oversized = build_heartbeat_prompt(
         **no_memory, decision_output_root=tmp_path, turn_envelope=True,
         agent_scopes=[letter * 320 for letter in 'stu'],
     )
-    assert oversized['interface_budget']['max_chars'] == 4_600
+    assert oversized['interface_budget']['max_chars'] == 4_900
     assert oversized['interface_budget']['within_budget'] is False
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
@@ -163,7 +163,7 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert '--reward-memory-reflection-json' not in body
         assert str(runtime) in body and str(capture) in body
         assert payload['turn_instance_id'] == TURN_ID
-        assert payload['interface_budget']['max_chars'] == 4_600
+        assert payload['interface_budget']['max_chars'] == 4_900
         assert payload['interface_budget']['within_budget'], payload['interface_budget']
         assert len(result.stdout) <= 5_400  # Shipped Agent JSON, not generator metadata.
         assert 'using inline ACK argv' in body
