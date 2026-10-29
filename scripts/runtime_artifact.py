@@ -26,7 +26,7 @@ from loopx.presentation.chat_bundle import source_digest, validate_bundle
 from loopx.cli_commands.update_artifact import RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest
 
 PATHS = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps/presentation",
-         ".github", "README.md", "LICENSE", "pyproject.toml", "setup.py", "MANIFEST.in")
+         ".github", "README.md", "LICENSE", "NOTICE", "LICENSE-MIT", "pyproject.toml", "setup.py", "MANIFEST.in")
 # Static product illustrations/browser captures are not used by CLI execution,
 # skills, installer validation, TS runtime or Chat's source/bundle validator.
 # Text/HTML/SVG and any exact frontend input remain in the runtime below.

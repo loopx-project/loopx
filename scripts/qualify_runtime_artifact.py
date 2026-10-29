@@ -65,6 +65,8 @@ def qualify(directory: Path) -> dict:
         if not doctor.get("ok") or not skills.get("ok"):
             raise RuntimeError("Installed runtime/skills readback failed")
         release = cli.resolve().parents[1]
+        for name in ("LICENSE", "NOTICE", "LICENSE-MIT"):
+            assert (release / name).read_bytes() == (source / name).read_bytes()
         source_record = json.loads((release / "release.json").read_text())["source"]
         assert source_record["git_commit"] == manifest["source_revision"]
         assert source_record["ref"] == manifest["channel"]
@@ -122,7 +124,7 @@ finally:
         return {"ok": True, "source_revision": manifest["source_revision"], "bytes": manifest["size"],
             "clean_install": results[0] == 0, "upgrade": results[1] == 0,
             "doctor": True, "skills": True, "frontend_bundle_contract": True, "frontend_http": True,
-            "no_frontend_build_tools": True, "activation_failure_restored": True}
+            "no_frontend_build_tools": True, "license_notices": True, "activation_failure_restored": True}
 
 
 if __name__ == "__main__":
