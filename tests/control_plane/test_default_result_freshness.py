@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 import pytest
 
@@ -25,6 +26,101 @@ def _default_fixture(provider, tmp_path, monkeypatch, *, handoff_mode="soft_clai
             build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=[todo], handoff_mode=handoff_mode),
             state_path=state, provider=provider)
     return project, runtime, registry, state
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_replan_commands_preserve_result_then_fresh_direction(provider, tmp_path, monkeypatch):
+    from loopx.control_plane.quota.settlement import read_heartbeat_settlement
+    from tests.control_plane.test_quota_settlement_cli import (
+        _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
+        _initialize_fixture_authority,
+    )
+
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "projected-replan-original-turn"
+    guard = _bind_selected_replan_guard(registry, runtime, project, turn)
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    original_basis = guard["delivery_result_context"]
+    admission = read_heartbeat_settlement(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        todo_id=identity["todo_id"], turn_instance_id=turn, registry_path=registry).heartbeat_receipt
+    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    decision_path = project / "new direction.json"
+
+    def execute(command, **replacements):
+        for key, value in replacements.items():
+            command = command.replace(key, str(value))
+        tokens = shlex.split(command)
+        start = next(i for i, token in enumerate(tokens)
+                     if token in {"refresh-state", "checkpoint-context", "quota"})
+        return _run_cli(registry, runtime, *tokens[start:], cwd=project)
+
+    # Run the advertised first action unchanged, before any direction is authored.
+    rc, result = execute(actions[0])
+    assert rc == 0, result
+    retained = read_heartbeat_settlement(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        todo_id=identity["todo_id"], turn_instance_id=turn, registry_path=registry)
+    assert retained.writeback_run is not None and retained.spend_run is None
+    assert retained.heartbeat_receipt == admission
+    assert retained.writeback_run["vision_checkpoint"]["satisfied"] is False
+    assert not retained.writeback_run.get("autonomous_replan_ack", {}).get("recorded")
+    spend = next(c for c in actions if "spend-slot" in c)
+    assert _spend_run_count(runtime) == 0
+    rc, context = execute(actions[1])
+    assert rc == 0 and context["settlement_identity"] == identity, context
+    assert context["basis"]["todo"]["status"] == "open"
+    assert original_basis["settlement_identity"] == identity
+    # The Agent authors the direction only after reading this post-result basis.
+    decision_path.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verify the retained candidate before closing its selected task."},
+        "path_delta": {"outcome": "replan", "prior_assumption": "The oversized serial route could finish directly.",
+            "observed_reality": "The retained result leaves a long open dependency chain requiring a bounded route.",
+            "retained": ["The original candidate and its selected task."],
+            "changed": ["Verify the selected candidate before advancing the dependent tasks."],
+            "evidence_refs": [f"todo:{identity['todo_id']}"]},
+    }), encoding="utf-8")
+    replacements = {
+        "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>": decision_path,
+        "<read-context-id>": context["read_context_id"],
+    }
+    rc, direction = execute(actions[2], **replacements)
+    assert rc == 0 and direction["autonomous_replan_ack"]["recorded"], direction
+    rc, spent = execute(spend)
+    assert rc == 0 and spent["appended"], spent
+    assert execute(spend)[1]["appended"] is False
+    assert _spend_run_count(runtime) == 1
+    final = read_heartbeat_settlement(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
+        todo_id=identity["todo_id"], turn_instance_id=turn, registry_path=registry)
+    assert final.heartbeat_receipt == retained.heartbeat_receipt
+    assert final.writeback_event["event_id"] == retained.writeback_event["event_id"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_historical_replan_projection_does_not_gain_checkpoint_phases(provider, tmp_path, monkeypatch):
+    from tests.control_plane.test_quota_settlement_cli import (
+        _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
+        _historical_turn, _initialize_fixture_authority,
+    )
+
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selected_todo_replan_fixture(project, registry)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = "historical-replan-original-turn"
+    _bind_selected_replan_guard(registry, runtime, project, turn)
+    _historical_turn(runtime, turn)
+    events = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+    original = events.read_bytes()
+    guard = _bind_selected_replan_guard(registry, runtime, project, turn)
+    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert "--agent-vision-json" in actions[0]
+    assert not any("checkpoint-context" in action for action in actions)
+    assert "delivery_result_context" not in guard
+    assert events.read_bytes() == original
+    assert _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

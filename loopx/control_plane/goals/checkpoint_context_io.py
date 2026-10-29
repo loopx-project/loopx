@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 import hashlib
 import json
+import shlex
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
@@ -91,6 +92,47 @@ def checkpoint_continuation_required(readback: Any) -> bool:
     return _checkpoint_effect("goal.checkpoint_read_context.work_binding", {
         "phase": "direction_policy", "heartbeat_receipt": readback.heartbeat_receipt,
     })["required"]
+
+
+def replan_checkpoint_cli_actions(actions: list[str], readback: Any) -> list[str]:
+    """Render the admitted checkpoint phases; the typed receipt owns policy.
+
+    The generic replan command describes semantic authoring, but a default Turn
+    must retain its result before reading and authoring that direction. Historical
+    receipts and lifecycle reentry commands keep their original projection.
+    """
+    if not actions:
+        return actions
+    tokens = shlex.split(actions[0])
+    if "refresh-state" not in tokens or not checkpoint_continuation_required(readback):
+        return actions
+    command_at = tokens.index("refresh-state")
+    prefix, arguments = tokens[:command_at], tokens[command_at + 1:]
+    initial = []
+    context = [*prefix, "checkpoint-context", "--purpose", "supplement_checkpoint"]
+    context_options = {"--goal-id", "--goal-instance-id", "--agent-id", "--todo-id",
+                       "--replan-obligation-id", "--turn-instance-id", "--project", "--state-file"}
+    decision_options = {"--agent-vision-json", "--vision-unchanged-reason"}
+    at = 0
+    while at < len(arguments):
+        option = arguments[at]
+        if option in context_options | decision_options:
+            if at + 1 == len(arguments):
+                raise ValueError(f"checkpoint command requires a value for {option}")
+            pair = arguments[at:at + 2]
+            if option in context_options:
+                context.extend(pair)
+                initial.extend(pair)
+            at += 2
+        else:
+            initial.append(option)
+            at += 1
+    direction = [*tokens, "--checkpoint-read-context", "<read-context-id>"]
+    if not any(option in arguments for option in decision_options):
+        direction.extend(["--agent-vision-json",
+                          "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>"])
+    return [shlex.join([*prefix, "refresh-state", *initial]), shlex.join(context),
+            shlex.join(direction), *actions[1:]]
 
 
 def result_work_read_id(root: Path, identity: SettlementIdentity) -> str:

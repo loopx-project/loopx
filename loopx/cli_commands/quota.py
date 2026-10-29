@@ -997,7 +997,10 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                               registry_path, runtime_root, runtime_root_arg, goal_ref):
     """Restore the original captured input after a successful quota guard."""
     if args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True:
-        from ..control_plane.goals.checkpoint_context_io import TurnResultWork, result_work_required, result_work_context, result_work_context_exists
+        from ..control_plane.goals.checkpoint_context_io import (
+            TurnResultWork, replan_checkpoint_cli_actions, result_work_required,
+            result_work_context, result_work_context_exists,
+        )
         from ..control_plane.quota.settlement import read_heartbeat_settlement
 
         try:
@@ -1021,6 +1024,11 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                 elif work_readback.writeback_run is None:
                     payload["delivery_result_context"] = result_work_context(registry_path=registry_path,
                         runtime_root=runtime_root, identity=work_readback.identity.value, goal_ref=goal_ref)
+                    interaction = payload.get("interaction_contract", {})
+                    if interaction.get("mode") == "autonomous_replan":
+                        channel = interaction["cli_channel"]
+                        channel["next_cli_actions"] = replan_checkpoint_cli_actions(
+                            channel["next_cli_actions"], work_readback)
         except (ValueError, OSError, RuntimeError) as error:
             admitted_receipt = payload.get("heartbeat_receipt")
             payload = quota_failure_payload(args, registry_path=registry_path,

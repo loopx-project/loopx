@@ -1,6 +1,7 @@
 """Default terminal/frontier recovery through disposable owning stores."""
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 
@@ -70,7 +71,8 @@ def settle_frontier_replan(caller, guard, registry, project, runtime, new_todo):
     from tests.control_plane.test_quota_settlement_cli import _projected_cli_args
     actions = guard['interaction_contract']['cli_channel']['next_cli_actions']
     packet = project / 'frontier-replan.json'
-    refresh = next(c for c in actions if 'refresh-state' in c).replace(
+    initial_command, context_command, direction_command = actions[:3]
+    refresh = direction_command.replace(
         '<path-to-evidence-linked-goal-vision-replan-contract-v0.json>', str(packet))
     for key, value in {'<advanced|blocked|exploration_exhausted|no_followup>': 'advanced',
         '<surface-id>': 'delivered-dependency', '<hypothesis-id>': 'dependency-acceptance',
@@ -84,9 +86,7 @@ def settle_frontier_replan(caller, guard, registry, project, runtime, new_todo):
         if flag in refresh_args:
             at = refresh_args.index(flag)
             del refresh_args[at:at + 2]
-    initial = refresh_args.copy()
-    index = initial.index('--agent-vision-json')
-    del initial[index:index + 2]
+    initial = list(_projected_cli_args(initial_command, turn_instance_id=turn))
     pending = json.loads(caller.run_cli([*initial, '--no-global-sync', '--suppress-external-sinks']))
     assert pending['ok'] is True, {key: pending.get(key) for key in ('error', 'reason')}
     retained = json.loads(Path(pending['json_path']).read_text())
@@ -96,10 +96,9 @@ def settle_frontier_replan(caller, guard, registry, project, runtime, new_todo):
     denied_spend = json.loads(caller.run_cli(list(spend)))
     assert denied_spend['ok'] is False, denied_spend
     assert _business_rows(runtime)['quota_slot_spent'] == 1
-    from loopx.control_plane.goals.checkpoint_context_io import read_checkpoint_context
-    context = read_checkpoint_context(registry_path=registry,
-        runtime_root_override=str(runtime), goal_id=GOAL_ID, agent_id=AGENT_ID,
-        todo_id=identity['todo_id'], turn_instance_id=turn, purpose='supplement_checkpoint')
+    context_args = shlex.split(context_command)
+    context = json.loads(caller.run_cli(context_args[context_args.index('checkpoint-context'):]))
+    assert context['ok'] is True, context
     assert context['basis']['todo']['status'] == 'open'
     prior = context['basis']['agent_vision']
     assert prior
@@ -124,8 +123,8 @@ def settle_frontier_replan(caller, guard, registry, project, runtime, new_todo):
         'changed': ['Verify the delivered dependency before another terminal decision.'],
         'evidence_refs': [f'todo:{new_todo}', 'file:new-dependency.txt']}
     packet.write_text(json.dumps(vision), encoding='utf-8')
+    refresh_args = [context['read_context_id'] if arg == '<read-context-id>' else arg for arg in refresh_args]
     refreshed = json.loads(caller.run_cli([*refresh_args,
-        '--checkpoint-read-context', context['read_context_id'],
         '--no-global-sync', '--suppress-external-sinks']))
     assert refreshed['ok'] is True, {key: refreshed.get(key) for key in (
         'error', 'error_code', 'reason', 'vision_checkpoint', 'autonomous_replan_ack')}
