@@ -309,17 +309,26 @@ writeback and spend receipts. Later receipts advance the original Turn's plan;
 they do not discard its identity-bound command templates. This follows the shared
 [quota-bound completion contract](../canonical-terminal-review.md#quota-bound-cli-completion)
 without changing the portfolio, repeats, contrasts or settlement order.
-The refresh CLI's pure progress-input decoder identifies invalid argument
-combinations before dispatch or authority writes. Its structured rejection is
-returned to the same model, which may correct its input within the original
-ten-call budget. Rejected calls remain counted and commit no settlement step;
-the actor never retries a command or restarts a scenario automatically. Other
-non-zero CLI results and fixture identity, route or ordering violations still
-fail immediately; non-zero execution alone does not prove rollback.
+The terminal actor observes the complete disposable fixture before a refresh
+command. An exit-one JSON rejection with `ok=false` and `appended=false` is
+returned to the same model only when an independent file/metadata comparison
+also finds the fixture unchanged. This covers ordinary vision-input correction
+as well as the typed pure progress-input decoder; error wording is not an
+admission rule. Complete vision JSON is structurally checked by the existing
+typed owner before refresh acquires a history lock. Inline patches still use
+current history, and state-dependent validation remains in the normal writer.
+File replacement, same-byte rewrites, permissions, added or
+removed files, unsupported nodes and symlinks fail closed. These observations
+apply to this isolated synthetic fixture, not production rollback or external
+effect recovery.
+The model may correct its input within the original ten-call budget. Rejected
+calls remain counted and commit no settlement step; the actor never retries a
+command or restarts a scenario automatically. Other non-zero results, changed
+fixture state and identity, route or ordering violations still fail immediately.
 The shared CLI transport retains the process exit code and transient stdout;
-even a non-zero process that emitted valid committed-receipt JSON fails unless
-it is that exact pre-dispatch input rejection. Raw stdout is never copied into
-durable qualification receipts.
+even valid committed-receipt JSON cannot bypass a non-zero failure. A false
+`appended` field alone cannot authorize recovery or spend. Raw stdout, fixture
+contents and fingerprints are never copied into durable qualification receipts.
 After the proof is read, a terminal actor may author a project draft in
 `.scratch/` using the existing OS-isolated shell. Original fixture inputs and
 authority stores remain protected; private host data and external networking

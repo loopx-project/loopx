@@ -173,7 +173,7 @@ How a settlement step binds to its receipt.
 - Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
 - python: [`SettlementBindingKind`](../../loopx/control_plane/effect_program.py).
 - typescript: [`SETTLEMENT_BINDING_KINDS`](../../loopx/control_plane/effect_program.ts).
-- Values / 值: `todo`, `autonomous_replan`, `unbound`.
+- Values / 值: `todo`, `autonomous_replan`, `request`, `unbound`.
 
 ## settlement_failure_kind
 

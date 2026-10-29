@@ -1386,8 +1386,8 @@ export type LoopXModeSnapshot = {
   settings: Partial<LoopXModeSettings> & { execution_config?: string };
   native: { status: string; tokenBudget?: number; tokensUsed?: number };
   registered_agents: string[]; paused: boolean; recovery_required: boolean;
-  members: Array<{id: string; agent_id: string; todo_id: string}>;
-  deliveries: Array<{operation_id: string; agent_id: string; todo_id: string; status: string}>;
+  members: Array<{id: string; agent_id: string; todo_id: string | null}>;
+  deliveries: Array<{operation_id: string; agent_id: string; todo_id: string | null; status: string}>;
   ingress: Array<{client_ingress_id: string; mode: string; status: string}>;
   turn_id?: string;
 };
@@ -1395,7 +1395,7 @@ export function fetchLoopXMode(sessionId: string) {
   return requestJson<LoopXModeSnapshot>(`/api/chat/sessions/${sessionId}/loopx`);
 }
 export type DelegationInventory = {
-  items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string;
+  items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string | null;
     status: string; worker_active?: boolean; recovery_required: boolean | null;
     artifacts?: Array<{ref: string; sha256: string}>; current_use?: DelegationReadback["current_use"]}>;
   has_more: boolean; next_cursor: string | null; page_readback_complete: boolean;
@@ -1407,15 +1407,15 @@ export type DelegationDependency = {
 };
 export type DelegationAdoption = {
   requester_agent_id: string; consumer_operation_id: string; consumer_request_id: string;
-  consumer_agent_id: string; consumer_todo_id: string; state: "current" | "unavailable";
+  consumer_agent_id: string; consumer_todo_id: string | null; state: "current" | "unavailable";
   source_artifacts: Array<{ref: string; sha256: string}>;
   consumer_artifacts: Array<{ref: string; sha256: string}>;
 };
 export type DelegationReadback = {
-  operation_id: string; request_id: string; agent_id: string; todo_id: string;
+  operation_id: string; request_id: string; agent_id: string; todo_id: string | null;
   status: string; worker_active: boolean; recovery_required: boolean;
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
-  validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
+  validation?: {source: "goal_acceptance" | "todo_validation" | "request_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>; oracle_checks?: Array<OracleEvidence & {criterion_id: string}>};
   task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";

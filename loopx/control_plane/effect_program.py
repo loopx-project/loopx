@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
 from .effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -203,6 +204,7 @@ def require_turn_provider_step_kind(
 class SettlementBindingKind(StrEnum):
     TODO = "todo"
     AUTONOMOUS_REPLAN = "autonomous_replan"
+    REQUEST = "request"
     UNBOUND = "unbound"
 
 
@@ -228,6 +230,7 @@ def _settlement_identity_full(
     todo_id: str | None,
     turn_instance_id: str,
     replan_obligation_id: str | None,
+    request_subject_json: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         result = effect_runtime_result(
@@ -238,6 +241,7 @@ def _settlement_identity_full(
                 "todo_id": todo_id,
                 "turn_instance_id": turn_instance_id,
                 "replan_obligation_id": replan_obligation_id,
+                **({"request_subject": json.loads(request_subject_json)} if request_subject_json is not None else {}),
             },
         )
     except EffectRuntimeRejected as exc:
@@ -258,6 +262,7 @@ class SettlementIdentity:
     todo_id: str | None
     turn_instance_id: str
     replan_obligation_id: str | None = None
+    request_subject: Mapping[str, Any] | None = None
     _runtime_identity: Mapping[str, Any] = field(
         init=False,
         repr=False,
@@ -276,11 +281,14 @@ class SettlementIdentity:
             self.todo_id,
             self.turn_instance_id,
             self.replan_obligation_id,
+            json.dumps(dict(self.request_subject), sort_keys=True) if self.request_subject is not None else None,
         )
         object.__setattr__(self, "todo_id", identity.get("todo_id"))
         object.__setattr__(
             self, "replan_obligation_id", identity.get("replan_obligation_id")
         )
+        subject = identity.get("request_subject")
+        object.__setattr__(self, "request_subject", MappingProxyType(dict(subject)) if subject is not None else None)
         object.__setattr__(self, "_runtime_identity", identity)
         object.__setattr__(self, "_runtime_payload", payload)
 
@@ -296,12 +304,13 @@ class SettlementIdentity:
     def effect_id(self) -> str:
         return str(self._runtime_identity["effect_id"])
 
-    def as_dict(self) -> dict[str, str]:
-        return {key: str(value) for key, value in self._runtime_payload.items()}
+    def as_dict(self) -> dict[str, Any]:
+        return {**self._runtime_payload,
+            **({"request_subject": dict(self._runtime_payload["request_subject"])} if self.request_subject is not None else {})}
 
     @classmethod
     def from_runtime_payload(cls, payload: Any) -> SettlementIdentity:
-        """Decode a TS-owned identity without issuing a second runtime request."""
+        """Decode a TS-owned identity; saved requests reuse the strict decoder."""
 
         if not isinstance(payload, Mapping):
             raise RuntimeError("TypeScript settlement identity shape mismatch")
@@ -321,6 +330,16 @@ class SettlementIdentity:
         replan_obligation_id = (
             str(payload.get("replan_obligation_id") or "").strip() or None
         )
+        request_subject = payload.get("request_subject")
+        if request_subject is not None:
+            # New request identities also enter through saved transaction plans.
+            # Reuse the typed decoder; Python equality accepts True == 1.
+            verified = cls(goal_id=str(payload["goal_id"]), agent_id=str(payload["agent_id"]),
+                todo_id=todo_id, replan_obligation_id=replan_obligation_id,
+                turn_instance_id=str(payload["turn_instance_id"]), request_subject=request_subject)
+            if verified.as_dict() != payload:
+                raise RuntimeError("TypeScript settlement identity shape mismatch")
+            return verified
         if bool(todo_id) == bool(replan_obligation_id):
             raise RuntimeError("TypeScript settlement identity shape mismatch")
         binding_kind = (
@@ -344,6 +363,7 @@ class SettlementIdentity:
             str(payload["turn_instance_id"]),
         )
         object.__setattr__(instance, "replan_obligation_id", replan_obligation_id)
+        object.__setattr__(instance, "request_subject", request_subject)
         object.__setattr__(
             instance,
             "_runtime_identity",
@@ -353,6 +373,7 @@ class SettlementIdentity:
                 "todo_id": todo_id,
                 "turn_instance_id": instance.turn_instance_id,
                 "replan_obligation_id": replan_obligation_id,
+                **({"request_subject": request_subject} if request_subject is not None else {}),
                 "binding_kind": binding_kind.value,
                 "binding_id": str(binding_id),
                 "effect_id": str(payload["effect_id"]),

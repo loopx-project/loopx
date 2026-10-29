@@ -79,16 +79,14 @@ export function maintainClaimExecution(head: JsonObject, input: ExecutionInput, 
   return materializeTaskLeaseLifecycle(lease, command, decision, input.now);
 }
 
-/** Atomic claim preparation, reusing acquire/lifecycle semantics and the
- * caller's provider CAS. A foreign retained execution needs explicit recovery. */
+/** Prepare execution only after the Todo claim owner accepts the actor (and any
+ * transfer grant). Expired execution is reclaimable without the old process;
+ * acquisition still validates scope, eligibility and generation under one CAS. */
 export function prepareClaimExecution(head: JsonObject,
   input: ExecutionInput & {operation_id: string; claimed_by: string}): {lease: LeaseRecord; changed: boolean} {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now);
   const current = facts.current;
-  if (current && current.owner !== input.claimed_by && current.status !== "released") {
-    throw new AuthorityStoreProtocolError("Another task execution is retained; its owner must release or hand it over");
-  }
   if (current && leaseIsActive(current, input.now)) {
     if (current.owner !== input.claimed_by) throw new AuthorityStoreProtocolError("Task is occupied by another actor");
     const renewed = maintainClaimExecution(head, input, current);
@@ -100,7 +98,10 @@ export function prepareClaimExecution(head: JsonObject,
     expected_version: current ? leaseVersion(current) : 0, ttl_seconds: normalizeTtl(null),
     write_scopes: coordinationTodoWriteScopes(index.todos.get(input.todo_id)!)};
   const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: String(head.handoff_mode),
-    registered_agents: [...input.registered_agents], ...facts, command});
+    registered_agents: [...input.registered_agents], ...facts,
+    // Claim admission has already authorized this assignment. Acquire and the
+    // Todo owner change commit together; the old assignment is not a new gate.
+    todo: facts.todo === null ? null : {...facts.todo, claimed_by: input.claimed_by}, command});
   if (decision.outcome !== "apply") throw new AuthorityStoreProtocolError(`Task claim execution rejected: ${decision.code}`);
   return {lease: materializeTaskLeaseAcquire(input, command, decision, input.now), changed: true};
 }

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
-from ..control_plane.effect_runtime import EffectRuntimeRejected
+from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
@@ -37,7 +37,9 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   output_limit: int | None, instruction: bool,
                   presentation: dict[str, Any] | None = None,
                   next_page_bytes: int | None = None,
-                  next_page_output_bytes: int | None = None) -> dict[str, Any]:
+                  next_page_output_bytes: int | None = None,
+                  select: list[str] | None = None,
+                  selection_sha256: str | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -48,11 +50,17 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
         result: dict[str, Any] = {**(presentation or {}), "ok": True, "schema_version": "context_capture_page_v1", "sha256": digest,
             "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
             "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
-        if instruction:
+        if select is not None:
+            result.update(selection_sha256=selection_sha256, selected_pointers=select)
+            result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
+                "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
+                "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
+        elif instruction:
             result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
-                max_page_output_bytes=next_page_output_bytes or output_limit)
+                max_page_output_bytes=next_page_output_bytes or output_limit,
+                select=select, selection_sha256=selection_sha256)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -85,7 +93,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
-    in that exact capture, so a replacement cannot silently mix two decisions.
+    in that capture or its separately digest-bound selection, so a replacement
+    cannot silently mix two decisions or detail views.
     EOF describes this page, never a model's complete-consumption receipt.
     """
     try:
@@ -124,18 +133,44 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if type(offset) is not int or offset < 0 or type(size) is not int or not 256 <= size <= maximum:
             raise ValueError("context-read requires a nonnegative byte offset and page-bytes between 256 and 8192; "
                 "larger pages require a sufficient max-page-output-bytes within the capture limit")
-        path, raw, _ = _read_capture(value, digest)
+        path, raw, payload = _read_capture(value, digest)
+        selectors = getattr(args, "select", None)
+        selection_digest = getattr(args, "selection_sha256", None)
+        if selectors is None and selection_digest is not None:
+            raise ValueError("selection-sha256 requires --select")
+        if selectors is not None:
+            if getattr(args, "format", None) != "json":
+                raise ValueError("selected context-read requires JSON output")
+            if offset > 0 and selection_digest is None:
+                raise ValueError("selected continuation requires selection-sha256; follow next_command")
+            from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+            plan = _turn_envelope_result("context_select", context=payload, select=selectors)
+            views: list[dict[str, Any]] = []
+            for item in plan["selections"]:
+                selected: Any = payload
+                for key in item["path"]:
+                    selected = selected[key]
+                views.append({"pointer": item["pointer"], "value": selected})
+            raw = json.dumps({"schema_version": "context_capture_selection_v1", "selections": views},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            expected = hashlib.sha256(raw).hexdigest()
+            if selection_digest is not None and selection_digest != expected:
+                raise ValueError("selected view digest changed; restore the original selection and reader")
+            selection_digest = expected
+            selectors = [item["pointer"] for item in views]
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
-            next_page_output_bytes=next_page_output_bytes)
-    except (OSError, ValueError, RecursionError) as exc:
+            next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest)
+    except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
         return {"ok": False, "schema_version": "context_capture_page_v1",
-            "reason": str(exc) if isinstance(exc, ValueError) else "original capture could not be read",
+            "reason": str(exc) if isinstance(exc, (ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError))
+                else "original capture could not be read",
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
@@ -209,7 +244,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
     Publication is delayed until this native tool runs, so the lifecycle owner
     can select its current continuity basis. Optional codec failure returns the
-    original full read reference. An unsafe recovery selector fails explicitly
+    committed required-view reference when available, otherwise the original
+    full read reference. An unsafe recovery selector fails explicitly
     with that same reference, never a replacement guard.
     Invalid run-mode opt-ins fail before that optional transport path.
     """
@@ -243,6 +279,23 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
+        page_bytes, output_bytes = native_context_page_budget()
+        output_limit = getattr(args, "max_page_output_bytes", None)
+        if output_limit is not None:
+            if output_limit <= 0:
+                raise QuotaDecisionTransportError("Native context output limit must be positive.")
+            output_bytes = min(output_bytes, output_limit)
+            page_bytes = min(page_bytes, output_bytes)
+
+        def recovery_reference(value: dict[str, Any]) -> dict[str, str]:
+            # Preserve the caller's read budget on success and failure without
+            # duplicating instructions already carried by the outer view.
+            return {"path": value["path"], "sha256": value["sha256"],
+                "command": context_capture_read_command(Path(value["path"]), value["sha256"],
+                    page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
+
+        full_reference = recovery_reference(full_reference)
+        reference = dict(full_reference)
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=args.codex_context_root, create=True)
         if not directory:
@@ -268,6 +321,12 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None))
         native_prepared = True
+        if projected.get("schema_version") == "context_delivery_v1":
+            # Native publication owns the complete required view. Keep its
+            # committed recovery even if optional wire/inline delivery fails;
+            # the input capture digest below remains the original identity.
+            full_reference = recovery_reference(projected["recovery"])
+            reference = dict(full_reference)
         native_view = native_context_capture_view(projected, cache, context_directory=directory,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
@@ -289,7 +348,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
                     "original captured decision and preserve its Turn receipt; do not rerun admission. "
                     "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_READ_GUIDANCE}
         # Off is inert; after native preparation an optional wire write can fall
-        # back to the original reference without leaving an older selector live.
+        # back to the committed required view without leaving an older selector live.
     result: dict[str, Any] = {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
         "recovery": full_reference,
         "capture_sha256": args.capture_sha256,
@@ -303,6 +362,14 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
 def prepare_quota_capture(args: argparse.Namespace, directory: Path | None) -> Path | None:
     """Validate transport options before allocating a new guard capture."""
+    if getattr(args, "defer_context_presentation", False) and (
+        args.quota_command != "should-run" or args.format != "json"
+        or not native_context_activation(args)["enabled"]
+        or getattr(args, "decision_handoff_socket", None)
+        or not (getattr(args, "decision_output_dir", None) or getattr(args, "decision_output_root", None))
+    ):
+        raise QuotaCommandValidationError(
+            "deferred context presentation requires a native JSON should-run capture without socket handoff")
     if directory is None and (
         getattr(args, "decision_output_dir", None) is not None
         or getattr(args, "decision_output_root", None) is not None

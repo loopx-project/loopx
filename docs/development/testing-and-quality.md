@@ -1265,6 +1265,40 @@ TS RFC 管语义 owner 与跨语言成本，shared-authority RFC 管后端容量
 - **区分缓解与闭环。** 写明消除了所属瓶颈，还是只减轻调用方影响；剩余真实缺口复用
   已有后续任务并指明验收。提示词缩短不算后端验证，修复 PR 数量不算默认切换就绪。
 
+### Progressive Context Qualification
+
+When moving context off the default input, compare the same source, task state and
+caller sequence against the existing path. Separate current goals/criteria/constraints
+from supporting evidence and historical diagnostics; declare which decision still
+needs each moved field and how the caller discovers and reads it. Do not infer that
+an unread field is unnecessary from a successful happy-path completion.
+
+Use meaningful alternatives and tail constraints, shared/cross-owner requirements,
+contrary evidence and missing/stale detail cases. Exercise selection, a continuation
+bound to actual admitted work, a changed requirement that forces reassessment, and
+context loss during detail delivery. Preserve the original capture and settlement
+identity, reject a mismatched detail revision, and prove unread optional detail is
+not acknowledged as retained input. Unknown relevance/coverage must remain visible
+and expand before the decision that depends on it; a narrow projection is not a new
+authorization boundary. Validate the owning real entrypoint, not only its serializer.
+
+Record default input bytes, detail bytes, tool/model round trips, retained/replayed
+history, recovery rereads, time to useful work and accepted outcomes over the same
+segment. Include adapter/producer costs when measured; keep unmeasured fees and
+adoption unknown. Smaller pages or a larger test ceiling cannot qualify an endless
+read/compact/recover loop. The paired task must reach its useful operation after
+recovery before claiming continuation benefit. Reuse existing tests and evidence
+fields; this does not introduce a new telemetry system or receipt gate.
+
+移动默认上下文前，固定来源、任务状态和调用序列，对照旧路径；逐项说明哪些内容
+属于当前目标/标准/约束，哪些是支持材料或历史诊断，以及何时发现和展开。
+以真实选择、已准入任务接续、要求变化及详情读取中断验证；包含尾部约束、跨 Agent
+依赖、反面证据、详情缺失/过期等负例。保持原 capture 和结算身份，不把未读详情记为
+已保留；未知相关性在依赖它的决定前展开。通过实际入口验证，而非仅测 serializer。
+统计整段默认输入、补读、工具/模型往返、历史重放、恢复重读、到首次有效工作的时间
+及验收成果。费用/采纳未测仍为未知；分页成功或预算扩容不能证明读取—压缩—恢复
+循环得到解决，恢复后实际继续完成有用操作才支持接续收益判断。
+
 ### Budget Failure Decisions
 
 The actual-default model portfolio retains the complete capability candidate
@@ -1286,6 +1320,37 @@ performance criteria, and does not qualify a model by itself.
 正文。仅按上述实测把该合成 fixture 的 pretty-JSON UTF-8 字节预算从 40,000 调整到
 90,000；原超限失败保留。新增候选丢失/正文缩短的零模型调用负例，原选择、人工门禁、
 结算、重复次数、对照及生产硬边界不变；本次预算修正不等于真实模型通过。
+
+This allowance is not a target architecture. A source-level attribution at
+`d4980a0e9aa8acf8b847e2fec73d29454c23690d` reproduces those three output sizes.
+Their standalone pretty-JSON capability gates occupy 80,874 / 80,874 / 80,807
+UTF-8 bytes. The fixture deliberately repeats a 28-sentence diagnostic in each
+row: runnable text alone is 28,767 bytes, blocked text 19,168, and binding text
+19,168. These are synthetic stress costs, not a production-volume estimate.
+The fixture's 16 resolution bindings are Todo-shaped text rows; the real
+`agents/capability_gate.ts` owner produces capability/owner/blocked-ID bindings.
+Its selected Todo is outside the runnable set in the two execution fixtures;
+the human-gate fixture has no selected Todo. Preserve this regression fixture
+and its historical failures, but do not use selected-ID invariance alone to
+qualify actual candidate choice or remove those rows to claim a saving.
+
+For the proposed [decision-stage delivery](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage),
+add a separate representative producer-to-consumer comparison: actual eligible
+candidates, non-repeated requirements, meaningful alternatives and a decisive
+tail constraint. Match source, model/policy and acceptance; count all batch
+detail reads and recovery through subsequent verified work. A smaller first
+response or a larger regression allowance cannot qualify the replacement.
+Current full-context preflight remains in force until the replacement has an
+explicit required-read contract; this design does not weaken or rewrite it.
+
+上述归因复现同一组三个输出：capability gate 单独 pretty-JSON 为
+80,874 / 80,874 / 80,807 UTF-8 字节。Fixture 每行重复 28 句诊断；runnable、
+blocked、binding 正文分别为 28,767、19,168、19,168 字节。16 个 binding 是带正文的
+Todo 形状，与生产 owner 的 capability/owner/blocked-ID binding 不同；两个执行
+fixture 的 selected Todo 不在 runnable 集合，human gate 没有 selected Todo。
+这些是压力成本，不是生产规模估计。保留原 fixture/失败，另用真实 producer、非重复
+要求、有意义备选项及末尾约束验证选择与后续工作；计入全部批读/恢复成本。新必读契约
+合格前，当前完整上下文 preflight 保持生效，不能靠删候选或首屏变小宣称收益。
 
 Complete registry routes exposed an existing brief heartbeat regression on the
 unchanged 128-character-root fixture. Commit
@@ -1470,6 +1535,26 @@ failure; the installed-profile smoke and semantic assertions qualify the repair.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+Native progressive-context qualification found an existing default-output
+budget failure: immutable base `fb331f45c` and candidate `edbd56b14` both emit
+25,836 JSON characters for `quota_should_run/multi_agent` with the unchanged
+18-Todo, 3-Agent, 12-run fixture. Recursive comparison differs only in observation
+timestamps and the rollout event id. This is neither an incremental native-off
+regression nor evidence of a saving. Preserve the previous 25,500-ceiling failure;
+calibrate this one regression allowance to 26,500 (664 characters of headroom)
+without dropping fields. Markdown, line, semantic, bootstrap duplication,
+per-Todo/fixed growth and all other surface ceilings remain unchanged. This
+changes no host hard limit, authorized execution quota or frozen experiment
+criterion. Native-on material and recovery savings need separate qualification.
+
+原生渐进上下文资格检查发现已有默认输出超限：不可变 base `fb331f45c` 与 candidate
+`edbd56b14` 在相同 18 个 Todo、3 个 Agent、12 条运行记录夹具上，
+`quota_should_run/multi_agent` 都为 25,836 JSON 字符；递归对比只有观察时间和
+rollout event id 不同。这不是 native-off 新增回归，也不是节省证据。保留旧 25,500
+阈值失败，只将这一回归预算校准为 26,500，留 664 字符余量，不删除字段。Markdown、
+行数、语义、bootstrap 重复、每 Todo/固定增长及其他 surface 阈值不变；宿主硬限制、
+授权执行配额和冻结实验标准均不变。Native-on 材料和恢复收益须单独验证。
+
 The initial-delivery guidance change measured the same 96-row fixture at
 `f6cf9583794eb8c4cca41fa832a1c2f150059583` and
 `da01f996c820aad3bae85268963e64c6bbb19d7c`. The complete instruction adds
@@ -1494,6 +1579,26 @@ not a real model's adoption, benchmark improvement or additional execution quota
 578 个字符，行数不变。保留现有消费者与完整质量、诊断和权限义务，仅对上述输出
 载体从缺失到完整指引的首次变化给予 2400/3600/600 的有界额度；绝对上限、语义、
 规模及后续增长检查不变。原失败保留；不据此声称模型采用、实验增益或额外执行权限。
+
+The thin heartbeat's complete first-guard selection guidance also needs its
+supported 320-character authored scope. At immutable main `b47bbc6c9`, the
+unchanged public CLI fixture emits 4,243 JSON characters with the default scope
+and 4,532 with the full supported scope; the latter fails the old 4,500 regression
+ceiling. Keep that failure and all instruction text. Calibrate only this
+surface's JSON ceiling to 4,600, leaving 68 characters of headroom at the supported
+scope. The candidate must emit the same JSON and task body on that same fixture;
+this is a budget decision, not an output reduction. The presentation calculation
+remains 4,181 / 4,200 characters for that body (distinct from its raw 4,276-character
+string). Markdown, line, growth, semantic and frozen differential/promotion
+limits remain unchanged. No execution, spending, host loading or permission
+limit changes.
+
+thin 心跳保留完整的首次 guard 选择指引与受支持的 320 字符 scope。相同公开 CLI
+夹具在固定主干上分别输出 4,243 / 4,532 个 JSON 字符，后者仍记录为旧 4,500
+回归预算失败。仅将该 surface 的 JSON 预算校准为 4,600，留 68 字符余量；候选
+必须保持同一夹具的 JSON 与正文不变，不宣称压缩收益。正文展示口径仍为
+4,181 / 4,200，与 raw string 的 4,276 字符分列；Markdown、行数、增长、语义、
+冻结差分与晋级标准、执行额度和权限均保持原边界。
 
 The latest qualification pins true main `e47e4507a` and merged candidate
 `3955d1c8b` on the same public fixture, with explicit per-probe source imports.

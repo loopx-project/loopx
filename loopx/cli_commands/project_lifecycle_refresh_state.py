@@ -516,10 +516,13 @@ def handle_refresh_state_command(
                 turn_instance_id=args.turn_instance_id,
             ),
         )
-        if outcome_update is not None and agent_vision_packet is not None:
-            # Reject malformed input before committing the independent outcome
-            # refinement. Reuse the typed owner; do not authorize a transition
-            # or replace the original packet with this context-free result.
+        if agent_vision_packet is not None and (
+            outcome_update is not None or not merge_agent_vision_patch
+        ):
+            # Reject malformed complete input before any history lock or outcome
+            # refinement. Inline patches without an outcome update still merge
+            # with current history first. Reuse the typed owner; this preflight
+            # cannot authorize a transition or replace the original packet.
             # Refresh still checks merged history and policy against current
             # state, including whether a terminal stride is actually enabled.
             prepare_vision_refresh(

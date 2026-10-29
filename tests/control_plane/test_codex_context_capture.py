@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False, working_brief=False):
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
@@ -338,15 +338,33 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             cmd = "printf synthetic-work"
         elif phase == "compact":
             stages["phase"] = "recovery_ready"
-            message["content"][0]["text"] = "Summary deliberately omitting all packet source bodies."
+            message["content"][0]["text"] = ("Continue the same admitted work. "
+                + f"Goal {GOAL_ID}, task {TODO_ID}. Stop before publication. "
+                + "All initial required reads completed; remaining action is synthetic-work. "
+                + json.dumps({"capture": wires["warm"]["recovery"],
+                    "receipt": json.loads(snapshots[-1][1])["heartbeat_receipt"]})
+                if working_brief else "Summary deliberately omitting all packet source bodies.")
             return message
         elif phase == "recovery_ready":
+            if working_brief:
+                text = _input_text(request)
+                assert "Do not replay read context or rerun admission solely" in text
+                assert "Stop before publication." in text and GOAL_ID in text and TODO_ID in text
+                assert wires["warm"]["recovery"]["sha256"] in text
+                assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
+                assert "candidate" not in native_state()
+                stages["brief_continuations"] = stages.get("brief_continuations", 0) + 1
+                if stages["brief_continuations"] < 2:
+                    stages.update(phase="compact", compact_response=number)
+                    return tool("printf synthetic-work", number)
+                stages["phase"] = "done"
+                return message
             if hook_loss:
                 text = _input_text(request)
                 assert "LoopX context baseline invalidated." not in text
                 # The recovery entry must really be present after compaction;
                 # the fixture may not supply a hidden saved capture path.
-                prefix = "If continuing a captured LoopX decision"
+                prefix = "Before dependent action, recover missing or uncertain necessary facts"
                 permanent = text[text.index(prefix):]
                 # Read only the advertised command sentence. Subsequent
                 # recovery guidance is not part of the shell invocation.
@@ -790,3 +808,9 @@ def test_native_large_page_recovery(tmp_path, monkeypatch, surface):
         "code_mode", surface, False, True, True, "missing", shared_root=True,
         native_pragma=True, native_read_batch=1, native_history_tokens=10000,
         bounded_pages=True, reader_output_bytes=32000, ssh_goal=True)
+
+
+@pytest.mark.parametrize("host", ["exec", "code_mode"])
+def test_native_same_turn_working_brief_survives_two_compactions_without_packet_replay(tmp_path, monkeypatch, host):
+    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch,
+        host, "quota_packet", False, False, True, bounded_pages=True, working_brief=True)

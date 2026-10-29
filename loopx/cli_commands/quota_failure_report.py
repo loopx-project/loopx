@@ -9,6 +9,8 @@ inventing success.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -265,6 +267,59 @@ def quota_failure_payload(
             }
         )
     return payload
+
+
+def captured_quota_failure_view(
+    payload: Mapping[str, object], *, capture_directory: Path,
+    max_page_output_bytes: int | None = None,
+) -> dict[str, object]:
+    """Bound an opted-in refusal without entering native delivery continuity.
+
+    The rejected decision remains immutable diagnostic detail. Its current
+    error, receipt and recovery are useful input; unrelated Goal history is not
+    a prerequisite for following that recovery. No field is silently truncated.
+    """
+    from ..control_plane.turn_driver.decision_capture import (
+        context_capture_read_command, native_context_page_budget,
+    )
+
+    page_bytes, limit = native_context_page_budget()
+    if max_page_output_bytes is not None:
+        limit = min(limit, max_page_output_bytes)
+    saved = capture_directory / "decision.json"
+    digest = hashlib.sha256(saved.read_bytes()).hexdigest()
+    fields = ("ok", "goal_id", "decision", "should_run", "error_code", "reason",
+              "recommended_action", "heartbeat_receipt", "action_selection_conflict")
+    result = {key: payload[key] for key in fields if key in payload}
+    interaction = payload.get("interaction_contract")
+    cli = interaction.get("cli_channel") if isinstance(interaction, Mapping) else None
+    if isinstance(cli, Mapping) and "next_cli_actions" in cli:
+        result["next_cli_actions"] = cli["next_cli_actions"]
+    result["captured_decision"] = {"path": str(saved), "sha256": digest,
+        "command": context_capture_read_command(saved, digest,
+            page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
+    result["instruction"] = (
+        "The guard refused this request. Follow its recovery using the original Turn identity. "
+        "The saved decision is optional diagnostic detail; read only facts needed for recovery. "
+        "This response does not establish a context baseline or grant execution authority."
+    )
+    def fits(value: dict[str, object]) -> bool:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
+
+    if not fits(result):
+        # Exceptional large diagnostics still use the shared digest-checked
+        # selected reader, never an eager replay of the full failed packet.
+        pointers = ["/" + key for key in fields if key in payload]
+        if isinstance(cli, Mapping) and "next_cli_actions" in cli:
+            pointers.append("/interaction_contract/cli_channel/next_cli_actions")
+        result = {"ok": False, "captured_decision": result["captured_decision"],
+            "instruction": "Read the selected failure and recovery fields before acting; "
+                "the original decision and Turn identity remain unchanged. No execution authority or context baseline was granted.",
+            "command": context_capture_read_command(saved, digest, select=pointers,
+                page_bytes=min(page_bytes, limit), max_page_output_bytes=limit)}
+        if not fits(result):
+            raise QuotaDecisionTransportError("Failure recovery metadata exceeds the output limit; read the saved original decision.")
+    return result
 
 
 def quota_decision_transport_failure_payload(

@@ -343,6 +343,12 @@ PUBLIC_SAFE_REFERENCE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$"
 )
 COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+# One definition for "a compact token that must start with a letter". The
+# domain-state key validator and the ML-experiment public-token validator each
+# compiled this body under their own name; both now import this object, and
+# tests/control_plane/test_compact_identifier_shape_owner.py rejects a new local
+# copy. Each consumer keeps its own field names and error text.
+LETTER_LED_COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 # One definition for "a compact, path-safe opaque identifier". Four contracts each
 # compiled this body under their own name -- the Chat action surface, the Chat
 # action store, a Goal reference validator and the BotMux runtime -- and a fifth

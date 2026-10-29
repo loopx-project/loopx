@@ -207,6 +207,9 @@ def register_quota_command(
               "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
     quota_parser.add_argument("--capture-file", help="For context-read/context-project: original captured JSON file; no guard is evaluated.")
+    # Host preflight captures the complete native input, then presents that same
+    # immutable view after the model's lifecycle hooks establish continuity.
+    quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
     from ..control_plane.turn_driver.codex_context import CONTEXT_DELIVERY_SETTINGS
 
     quota_parser.add_argument("--context-delivery", choices=CONTEXT_DELIVERY_SETTINGS,
@@ -225,6 +228,11 @@ def register_quota_command(
              "Use for shared Codex App hook configuration; cannot combine with --codex-context-dir. "
              "context-config renders native configuration for the exact Goal/Agent; no host configuration, trust, guard or spend are changed.")
     quota_parser.add_argument("--capture-sha256", help="For context-read/context-project: exact SHA-256 supplied with the capture reference.")
+    quota_parser.add_argument("--select", action="append",
+        help="For context-read: repeat an exact RFC 6901 JSON pointer to read a batch from the original capture. "
+             "Selected detail pages never acknowledge full-context retention; omit for unchanged full capture reads.")
+    quota_parser.add_argument("--selection-sha256",
+        help="For selected context-read continuations: exact derived-view digest from the preceding page.")
     quota_parser.add_argument("--offset", type=int, default=0, help="For context-read: byte offset returned by the previous page.")
     quota_parser.add_argument("--page-bytes", type=int,
         help="For context-read: maximum UTF-8 content bytes per page (JSON default: 64000 under a 64000-byte stdout budget; Markdown: 4096). "

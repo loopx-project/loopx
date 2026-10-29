@@ -240,13 +240,16 @@ def _settlement_identity(
         "todo_id": str(identity.get("todo_id") or ""),
         "effect_id": str(identity.get("effect_id") or ""),
     }
-    if identity.get("replan_obligation_id") is not None:
+    if identity.get("replan_obligation_id") is not None or identity.get("request_subject") is not None:
         try:
             parsed = SettlementIdentity.from_runtime_payload(identity)
         except RuntimeError:
             errors.append("transaction plan is missing its typed settlement identity")
         else:
-            normalized["replan_obligation_id"] = str(parsed.replan_obligation_id)
+            if parsed.request_subject is not None:
+                normalized["request_binding_id"] = parsed.binding_id
+            else:
+                normalized["replan_obligation_id"] = str(parsed.replan_obligation_id)
     elif not all(normalized.values()):
         errors.append("transaction plan is missing its typed settlement identity")
     return normalized
@@ -355,6 +358,8 @@ def validate_loopx_turn_receipt(
             "todo_id": settlement_identity["todo_id"],
             **({"replan_obligation_id": settlement_identity["replan_obligation_id"]}
                if settlement_identity.get("replan_obligation_id") else {}),
+            **({"request_binding_id": settlement_identity["request_binding_id"]}
+               if settlement_identity.get("request_binding_id") else {}),
         },
         "settlement_effect_id": settlement_identity["effect_id"] or None,
         "result_kind": kind.value if kind is not None else None,

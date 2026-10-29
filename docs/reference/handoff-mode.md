@@ -62,6 +62,32 @@ A read-only quota guard never claims or renews. Long-running delegated Hosts ret
 their existing supervision; this CLI path does not supervise an idle external
 process. The App's manual completion boundary described above is unchanged.
 
+Goal-mode MCP uses the same task reference: retain `claim_operation_id` from
+`claim_task` and pass it to `complete_task`, including retries. This is a breaking
+tool-schema change: `complete_task` no longer accepts
+`task_lease_idempotency_key` or `task_lease_expected_version`. Migrate callers
+to the returned claim reference; do not synthesize one from an old lease key.
+Ordinary CLI help also omits those host-only proof flags. Explicit Host supervision
+and diagnostic lease commands retain their generation-fencing protocol.
+
+For an eligible task edit without explicit proof, recovery now offers ordinary
+`todo claim`, then retry with its returned reference. It does not direct the Agent
+through inspect/acquire/release. Expired or replaced references remain rejected;
+recovery advice itself never grants execution or changes state.
+
+An expired hard-lease execution can be reclaimed with ordinary `todo claim`
+by an eligible registered Agent. When the expired holder still matches the Todo
+claim, the claim owner and a fresh execution generation change in one canonical
+transaction. No response, release or transfer grant from the old process is
+required. This intentionally changes the previous cross-agent expiry behavior.
+Active executions remain protected. Missing, malformed, released or unrelated
+lease history cannot authorize this takeover; `soft_claim` keeps its prior
+handoff rules. Current task status, exclusions, acceptance, dependencies and
+write-scope checks remain in force. Concurrent claimants cannot both win the same
+provider revision. Old references cannot update, renew or release the replacement.
+Expiry prevents further control-plane writes; it cannot undo external effects
+already issued, and native Hosts still own process supervision.
+
 ## Choose the policy independently of storage
 
 Use `soft_claim` for an explicitly single executor without parallel takeover.
@@ -252,9 +278,11 @@ under a fresh operation and current revision. Other execution fences remain:
 | Observation | Recovery |
 | --- | --- |
 | Historical `legacy` policy, with or without a retained lease | Release any retained execution using its exact CAS, then review and back up a migration to `soft_claim` or `hard_lease`. Historical acceptance grants no current execution. |
-| Active lease held by the current claim owner; missing/stale proof | Inspect the lease and retry using its current proof. Do not acquire a competing execution. |
-| Released/expired lease; current owner is eligible and acquisition passes the current mode, acceptance and scope checks | Inspect the version, acquire a short lease with a fresh key, update using the returned proof, then release it. |
-| Active foreign holder, divergent claim, or absent claim | Reconcile ownership through its lifecycle; never borrow another holder's proof. |
+| Active execution held by the current claim owner; proof omitted | Use ordinary `todo claim` and retry with its returned reference; claim reuses eligible active execution. |
+| Released/expired execution; proof omitted and current owner passes acquisition checks | Use ordinary `todo claim` for fresh execution, then retry with its returned reference. |
+| Explicit Host proof is stale or partial | Inspect current execution and repair the Host's proof; do not silently fall back to a task reference. |
+| Expired execution matches the retained claim; eligible registered replacement actor | Use ordinary `todo claim` for atomic takeover, then use its new reference. |
+| Active foreign holder, divergent history, or absent claim | Reconcile ownership through its lifecycle; never borrow another holder's proof. |
 | `soft_claim` with released same-owner history, ordinary owner copy edit | Omit lease proof; keep the history. No replacement lease is needed or allowed. |
 | Non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
 | Edit changes retained leased work requirements or status | Use the owning lifecycle transition; acquiring another lease cannot authorize the metadata edit. |
@@ -275,7 +303,8 @@ todo_done:<dependency-todo> --reason '<bounded cause>'` 暂停。此显式 wait 
 或附带执行 proof 仍被拒绝。用 `--status open --clear-resume-when --reason
 '<resume basis>'` 恢复；两次转换都不授予执行权限，下一次执行仍需新 lease。
 
-The recovery descriptor uses the standalone `loopx task-lease acquire` command.
+For explicit Host-proof callers, the recovery descriptor uses the standalone
+`loopx task-lease acquire` command when acquisition is eligible.
 Combined `todo claim --task-lease-idempotency-key` is restricted to `hard_lease`
 and is unavailable in historical `legacy` mode. After reviewed migration,
 acquire uses `--owner`, a **fresh**
@@ -306,9 +335,10 @@ lease 即使自然过期，也不适用。显式旧 proof 或部分 proof 仍拒
 `handoff_mode_requires_lease`
 不表示 Goal 已自动切成 `hard_lease`；拒绝结果会返回真实 mode 与只读 `recovery`。
 
-有效的本主租约应 inspect 后使用当前 proof 重试；已释放或过期的租约，只有当前
-claim owner 满足相同的 acquire 准入规则时，才提示“inspect version → 用新 key
-申请短 lease → 带新 proof 更新 → release”。legacy 下独立 acquire 与合并式
+未提供显式 proof 的普通任务调用，只有当前 owner 满足执行准入时，才提示普通
+`todo claim`，再用返回的 `claim_operation_id` 重试。有效执行复用，已结束执行须
+重新通过准入；旧引用不能复活过期或换代执行。显式 Host proof 过期或不完整时，
+仍须 inspect 并修复 Host 的执行证明，不静默切换协议。legacy 下独立 acquire 与合并式
 claim+lease 均不可执行，必须先审核迁移；合并式 claim+lease 仍仅限 hard_lease。
 
 异主有效 lease、claim 不一致、不允许执行的 Todo、验收阻塞或 scope
@@ -330,3 +360,17 @@ CLI 由明确的 `--agent-id` 认领给自己时，会在同一 canonical 事务
 不自动借用或重新取得证明；显式证明不能与引用混用。原操作回执先于维护恢复，重试不
 重复写入或续租。只读 quota guard 不做认领或续租；长期委派 Host 仍走已有监督，
 本 CLI 路径不监督空闲外部进程，也不改变 App 手工完成的现有边界。
+
+Goal-mode MCP 同样传递任务引用：保存 `claim_task` 返回的 `claim_operation_id`，
+在 `complete_task` 及其重试中原样使用。本次为 breaking change，`complete_task`
+移除 `task_lease_idempotency_key` 和 `task_lease_expected_version` 参数；调用方须
+迁移到认领返回的引用，不能从旧 key 拼造。普通 CLI 帮助也不再展示这两个 Host
+证明参数；显式 Host 监督和诊断命令保留换代隔离协议。恢复提示不授予执行权或写入状态。
+
+过期的 hard-lease 执行可由符合当前条件的注册 Agent 用普通 `todo claim` 接管。
+只有过期持有者仍与 Todo claim 一致时，才在同一 canonical 事务中变更认领人并取得
+新一代执行，无需旧进程回复、释放或提供交接证明。本次明确改变原来的跨 Agent
+过期恢复行为。有效执行不可抢占；缺失、损坏、已释放或不对应的历史记录不能授予
+此接管，`soft_claim` 保持原交接规则。仍检查任务状态、排除规则、验收、依赖和写范围
+冲突；同一 revision 的并发竞争只允许一个成功，旧引用不能写入、续租或释放新执行。
+过期会阻止后续控制面写入，但无法撤回此前已发出的外部副作用；进程监督仍由 Host 负责。

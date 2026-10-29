@@ -149,6 +149,12 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write",
                "--decision-output-root", str(capture_root)]
+    if env.get("LOOPX_CONTEXT_DELIVERY") == "on" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
+        # Capture the complete Goal now, but let the actual native tool select
+        # full/delta after SessionStart. Do not consume or invalidate continuity
+        # while the Host is preparing a checkpoint outside the model session.
+        command += ["--context-delivery", "on", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
+                    "--defer-context-presentation"]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)

@@ -41,7 +41,6 @@ from .todo_branch_plan import (
     _claim_command,
     _compact_text,
     _frontier_tokens,
-    _lease_command,
     _execution_exclusion,
     _required_capabilities,
     _required_write_scopes,
@@ -492,19 +491,9 @@ def _branch_candidate(
     commands: list[str] = []
     for item in todo_bundle:
         todo_id = str(item["todo_id"])
-        commands.extend(
-            command
-            for command in (
-                _claim_command(goal_id=goal_id, todo_id=todo_id, agent_id=agent_id),
-                _lease_command(
-                    goal_id=goal_id,
-                    todo_id=todo_id,
-                    agent_id=agent_id,
-                    write_scopes=item.get("required_write_scopes") or [],
-                ),
-            )
-            if command
-        )
+        command = _claim_command(goal_id=goal_id, todo_id=todo_id, agent_id=agent_id)
+        if command:
+            commands.append(command)
     aggregate_confidence = _aggregate_confidence(todo_bundle)
     candidate = {
         "branch_id": branch_id,
@@ -1177,7 +1166,7 @@ def build_explore_worker_branch_plan(
             "replaces_loopx_runtime": False,
             "launches_workers": False,
             "mutates_quota_or_state": False,
-            "claim_and_lease_are_suggested_only": True,
+            "claim_is_suggested_only": True,
             "duration_guard_controlled_by_planner": False,
             "fixed_worker_count_controlled_by_planner": False,
             "forces_full_branch_fill": False,

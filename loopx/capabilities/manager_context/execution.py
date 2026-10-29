@@ -106,7 +106,7 @@ def dispatch(root: Path, registry: Path, *, session: dict[str, Any], turn: dict[
         # A crash before spawn leaves the original prepared operation pending.
         # Its recovery needs the same fresh native preflight as first dispatch;
         # otherwise a busy/unknown lane can strand it in a premature rejection.
-        preflight = service.inspect(selected)
+        preflight = service.inspect(selected, **({"source_request_id": receipt["request_id"]} if binding["todo_id"] is None else {}))
         # Match the existing start owner: an unprobed configured runtime may
         # attempt bounded execution, but is never presented as ready/running.
         # Known refusal, missing canonical acceptance or an unavailable runtime
@@ -221,7 +221,7 @@ class QueuedSourcePump:
             if cancelled():
                 return False
             try:
-                preflight = service.inspect(binding["id"])
+                preflight = service.inspect(binding["id"], **({"source_request_id": source_id} if binding["todo_id"] is None else {}))
                 if preflight.get("dispatch_allowed") is True and not cancelled() and observe()["status"] == "prepared":
                     service.resume(operation, prepared_source_request_id=source_id)
             except (OSError, ValueError, KeyError, TypeError, RuntimeError):

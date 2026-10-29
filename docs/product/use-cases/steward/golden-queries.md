@@ -109,6 +109,48 @@ new work is needed. Shared CLI/MCP regression tests qualify these seams only;
 release-only live evaluation must still prove receiver adoption and the original
 App/channel result without human reminders or manual relay.
 
+### Delegation backlog to fulfilled requests / 从委派积压到兑现请求
+
+“这些已经交办的事，落实后把结果带回来。” / “Finish the requests I delegated
+and bring the results back.” This is a GQ03/GQ07–GQ09 journey under
+[handoff RFC §5.15](../../../architecture/rfcs/capable-manager-semantic-handoff-v0.md#515-accepted-requests-remain-accountable-through-fulfillment),
+with A25–A28 acceptance. It does not authorize bulk execution, cancellation,
+priority changes or creation of another task authority.
+
+Freeze a disposable source with more than 40 requests, several qualified
+receivers, mixed dispositions and long original content. Include two requests
+linked to one work item, an adopted later correction, an independent same-text
+request, an old eligible commitment amid new arrivals, a completed Todo without
+a usable result, an already-verified artifact awaiting return, and a historical
+Turn whose current handoff receipt conflicts with an older request. Preserve
+source/revision, current grants, output budgets and declared capacity limits.
+
+Observe the original entry → actual receiver assessment/planning → authorized
+work → checked result → original-conversation return. Check idle/busy behavior,
+persistence-before-wake crash, lost ACK, revoked grant, stopped/unknown Host,
+sender restart and uncertain delivery. These failures must not create duplicate
+effects, hidden Todos or false fulfillment. A short response needs no invented
+work item. An implementation plan or delivered conclusion cannot pass a request
+for an actual repair; a genuine remainder keeps its owner and continuation.
+The sender checks all current requirements and integrates results without a
+user reminder, manual relay or an extra routine acknowledgement.
+
+The reader must distinguish request/work counts, matches, loaded pages and
+unreadable coverage. Reach every authorized page and full detail through the
+packaged desktop/narrow/keyboard journey, including refresh/search and changing
+snapshots. Locate evidence conflicts and read back their supported typed
+recovery; never repair a counter by deleting history or weakening identity and
+audience checks. Repeat denied-source/privacy cases; qualify Lark/CLI separately
+where advertised. Record source/build/installed boundaries and waiting age,
+false closeouts, duplicate effects, reminders and complete IO/model/attention
+cost. This defines qualification, not a claim that the backlog has been cleared.
+
+中文验收：多条补充逐项保留并影响实际工作；已采用请求持续进入原负责人的规划；
+已完成产物优先补返回，不重跑；阶段回复与要求兑现分开；长列表、原文和冲突恢复
+均可达。保留暂停/停止、撤权、预算、租约及受众边界，不批量关闭或唤醒旧工作。
+用真实后端和打包界面读回，区分确定性测试、安装采用和实际模型表现；不能只凭
+任务 done、回执、截图或列表变短判定成功。
+
 ### Direct group conversation / 群里直接说话
 
 For the Lark variant of P0 reliable entry, configure the steward connection to

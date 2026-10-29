@@ -921,16 +921,33 @@ read basis，同一 TS recommendation owner 仍在追加 run 前拒绝跨任务�
 本项修复此前错误接受的跨任务写入，不清依赖、不改变 Todo 权威或授予新 Turn。
 
 For an eligible explicit choice deferred solely by runnable autonomous replan,
-the typed qualifier adds `inline_reentry_allowed=true`. After durably retaining
-that choice, the CLI now executes one same-Turn guard reentry and returns its
-fresh result directly, including in TurnEnvelope mode. This changes the previous
-default of returning a failed selection before asking the caller to reenter.
+the typed qualifier adds `inline_reentry_allowed=true`. The CLI executes one
+same-Turn guard reentry and returns its fresh result directly, including in
+TurnEnvelope mode. With an existing receipt it first durably retains the choice.
+On the first guard it carries that choice internally until the final receipt,
+without emitting an intermediate refusal or an unbound discovery packet. A
+concurrent receipt appearing during this first-call retry stops the retry;
+it cannot replace the other caller's binding. This changes the previous first-call
+refusal that required the model to read discovery and binding packets separately.
 It grants no delivery or spend authority: the fresh guard and receipt owner
 still decide the Todo/replan binding, and may return a newly changed gate. It
-does not retry other hard lanes, missing candidates, or a first-call refusal
-without a durable choice receipt. The reentry has no explicit selection, so it
+does not retry other hard lanes or missing candidates. The reentry has no explicit selection, so it
 cannot recursively retry. Hosts that do not execute this CLI path can continue
 to use the existing recovery command.
+
+When native context delivery is enabled, rejected guards keep their error,
+original receipt and recovery action within the configured output budget.
+The full captured rejection is optional diagnostic detail, available through
+the digest-checked reader. Oversized diagnostics use a selected read of those
+failure fields. Neither response enters pending context delivery or establishes
+a differential baseline; disabled context delivery keeps its ordinary output.
+
+中文：已知且合格的任务仅因自主重规划被推迟时，首次调用内部完成一次同 Turn
+重判，只交付最终绑定结果，不要求模型先读拒绝、再读发现包、再读绑定包。
+已有回执仍先持久化选择；首次重试期间出现并发回执则拒绝覆盖。
+重判仍检查当前停止条件和额度，后续交付仍需新 Turn。启用原生上下文传输时，
+拒绝响应有界交付错误、原回执及恢复动作；完整失败包仅供按需诊断，
+不会建立差分基线。关闭该功能时保留原输出。
 
 For other refusals, the agent receives
 `recovery_action=reenter_guard_without_selection` and one executable

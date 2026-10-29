@@ -173,6 +173,44 @@ def test_page_output_budget_rejects_guard_use_without_admission(tmp_path, monkey
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("profile", ["codex_app", "generic_cli"])
+def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(tmp_path, monkeypatch, provider, profile):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path, required_capability="shell")
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    template = read_fixture_todos(state)[0]
+    todos = [{**deepcopy(template), "todo_id": TODO_ID if i == 0 else f"todo_work_{i}",
+        "text": f"Work item {i}. " + "Keep the complete requirement. " * 20 + "Final condition: stop before publication.",
+        "title": f"Work item {i}", "index": i} for i in range(8)]
+    for item in todos:
+        item["title"] = item["text"]
+    todos[1]["resume_when"] = "todo_done:todo_dependency"
+    todos.append({**deepcopy(template), "todo_id": "todo_dependency", "status": "done", "done": True,
+        "text": "Dependency accepted.", "index": 8, "no_followup": True})
+    initialize_canonical_authority(runtime, GOAL_ID,
+        build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
+        state_path=state, provider=provider)
+    host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
+    before = state.read_bytes()
+    code, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", "mixed-diagnostics", cwd=project)
+    assert code == 0 and guard["should_run"], guard
+    summary = guard["agent_todo_summary"]
+    assert [item["todo_id"] for item in summary["backlog_items"]] == ["todo_work_1"]
+    condition = summary["backlog_items"][0]["resume_condition"]
+    assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
+    assert len(summary["first_executable_items"]) == 3
+    candidates = guard["capability_gate"]["runnable_candidates"]
+    assert {row["todo_id"] for row in candidates} == {row["todo_id"] for row in todos[:8]}
+    assert all(row["title"].endswith("Final condition: stop before publication.") for row in candidates)
+    assert state.read_bytes() == before and _spend_run_count(runtime) == 0
+    code, detailed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
+        "--todo-id", "todo_work_7", cwd=project)
+    assert code == 0 and detailed["todo"]["text"] == todos[7]["text"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("profile", ["codex_app", "generic_cli"])
 def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monkeypatch, provider, profile):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
@@ -180,7 +218,7 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     body = "Preserve every source row and cancellation condition. " * 500
     body += "FINAL CONDITION: stop before publication."
     todos = read_fixture_todos(state)
-    todos[0].update(text=body, title=body)
+    todos[0].update(text=body, title=body, required_capabilities=["shell"])
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider=provider)
@@ -227,6 +265,13 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
         delta = prepare_context_delivery(projection, scope=scope, capture_id="whole-b", surface=surface,
             baseline=first, retained={"complete": True, "target": first["target"]})
         assert delta["mode"] == "delta"
+        if surface == "quota_packet":
+            candidates = projection["capability_gate"]["runnable_candidates"]
+            assert any(row["todo_id"] == TODO_ID and row["title"] == body for row in candidates)
+            # The real producer retains every candidate in the cold input. Its
+            # unchanged full body must not recur in the warm model input.
+            assert first["context"]["capability_gate"] == projection["capability_gate"]
+            assert body not in json.dumps(delta["changes"], ensure_ascii=False)
         restored = restore_context_delivery(delta, baseline=first, current=next_capture)
         assert restored["mode"] == "delta" and restored["context"] == projection
         missing = restore_context_delivery(delta, baseline=None, current=next_capture)
@@ -262,6 +307,22 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider=provider)
+    state.write_text(state.read_text().replace("status: active-read-only", "status: active"))
+    settings = json.loads(registry.read_text())
+    settings["goals"][0]["status"] = "active"
+    registry.write_text(json.dumps(settings))
+    code, acceptance = _run_cli(registry, runtime, "goal-acceptance", "inspect", "--goal-id", GOAL_ID)
+    assert code == 0, acceptance
+    source_ref = "owner:validated-request-" + "original-scope-" * 4
+    document = tmp_path / "outcome.json"
+    document.write_text(json.dumps({"outcome_id": "delivery", "owner_agent_id": AGENT_ID,
+        "objective": "Deliver the requested artifact", "todo_ids": [TODO_ID],
+        "requirements": [{"id": "original", "description": "Retain evidence and stop before publication"}],
+        "source": {"ref": source_ref, "summary": "The original owner requested the artifact."}}))
+    code, declared = _run_cli(registry, runtime, "goal-acceptance", "refine", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--document", str(document), "--operation-id", "declare-outcome",
+        "--expected-provider-revision", acceptance["provider_revision"], "--execute")
+    assert code == 0, declared
     before_source = state.read_bytes()
     root = tmp_path / "captures"
     root.mkdir()
@@ -312,10 +373,12 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
 
     cold, first = invoke({"scope": scope})
     assert cold["mode"] == "full"
+    assert source_ref in json.dumps(cold["context"])
     assert json.loads((first / "projection.json").read_bytes()) == cold["context"]
     warm, second = invoke({"scope": scope, "baseline": cold,
         "retained": {"complete": True, "target": cold["target"]}})
     assert warm["mode"] == "delta"
+    assert source_ref not in json.dumps(warm["changes"])
     projection = json.loads((second / "projection.json").read_bytes())
     current = prepare_context_delivery(projection, scope=scope,
         capture_id=warm["target"]["capture_id"], surface=surface)
