@@ -427,7 +427,11 @@ def build_loopx_turn_plan(
         if (not selected_todo and identity_error is None
                 and (settlement_identity is None or (session_scope != "agent"
                   and not (settlement_identity.request_subject is not None and iteration_context_policy == "fresh")))):
-            route = LoopXTurnRoute.BLOCKED
+            # Keep a normal host route with no identity ready long enough for
+            # _session_plan to return its typed missing-lineage contract error.
+            # Replan and invalid request-session combinations remain holds.
+            if route is not LoopXTurnRoute.READY_FOR_HOST or settlement_identity is not None:
+                route = LoopXTurnRoute.BLOCKED
     lineage = _turn_lineage(envelope, selected_todo=selected_todo,
                             settlement_identity=settlement_identity, projection=projection)
     session, session_error = _session_plan(
