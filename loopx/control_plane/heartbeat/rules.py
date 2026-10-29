@@ -111,15 +111,21 @@ HOST_LOOP_QUOTA_DISPATCH_RULE = (
     "preserve exact identities/effect ids and actual outcomes. Never reconstruct "
     "static refresh/spend; ambiguous effects need readback/recovery, not blind retry."
 )
+HOST_LOOP_WAIT_RULE = (
+    "No useful independent work before an evidenced due time: save progress; "
+    "`todo update --status deferred --resume-when resume_at:<RFC3339> --reason ...` "
+    "settle original Turn, then yield to host scheduler, not model sleep/poll loops. "
+    "Fresh admission on resume. Other waits: projected monitor/continuation. "
+    "No spend for waiting alone."
+)
 HOST_LOOP_TODO_CLOSEOUT_RULE = (
     "Todo done does not settle the Turn. Complete it under its original declaration "
     "and current lease; no invented successor or --no-follow-up. Then follow the "
-    "current settlement plan. External wait: keep open; follow projected "
-    "monitor/continuation; continue only admitted work. No wait spend."
+    "current settlement plan. Continue only admitted work. " + HOST_LOOP_WAIT_RULE
 )
 HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE = (
-    "Todo done≠Turn settled; no invented successor/--no-follow-up. Wait: keep open; "
-    "follow projected monitor/continuation; continue only admitted work. No wait spend."
+    "Todo done≠Turn settled; no invented successor/--no-follow-up. "
+    "Continue only admitted work. " + HOST_LOOP_WAIT_RULE
 )
 CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE = (
     "\n\nNative Codex `/goal` owns blocked state. Recheck quota at the "

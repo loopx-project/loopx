@@ -97,8 +97,8 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
 
 
 @pytest.mark.parametrize("mode,limit", [
-    ("full", 12800), ("compact", 7600), ("brief", 5400),
-    ("thin", 4200), ("visible_goal", 4000),
+    ("full", 13100), ("compact", 8000), ("brief", 5700),
+    ("thin", 4500), ("visible_goal", 4000),
 ])
 def test_prompt_body_limit_remains_independent_of_json_envelope(mode: str, limit: int) -> None:
     for size in (limit, limit + 1):
@@ -356,7 +356,7 @@ def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 12800), ("compact", 7600), ("brief", 5400), ("thin", 4200)],
+    [("full", 13100), ("compact", 8000), ("brief", 5700), ("thin", 4500)],
 )
 @pytest.mark.parametrize("scope_chars", [0, 320])
 def test_reward_memory_prompt_headroom_is_fixed_and_feature_scoped(
@@ -406,6 +406,28 @@ def test_sizing_guidance_survives_prompt_compaction(mode: str) -> None:
     # This is guidance, not a new execution profile, scheduler or authority field.
     assert "turn_mode" not in payload
     assert "--fine-grained" not in payload["quota_guard_command"]
+
+
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "envelope"])
+@pytest.mark.parametrize("profile", ["generic_cli", "codex_app_heartbeat"])
+def test_timed_wait_guidance_survives_prompt_compaction(mode: str, profile: str, tmp_path: Path) -> None:
+    options = ({"thin": True, "turn_envelope": True, "decision_output_root": tmp_path,
+                "turn_instance_id": "timed-wait-turn"} if mode == "envelope" else {mode: True})
+    payload = build_heartbeat_prompt(goal_id="timed-wait-fixture", agent_id="agent-wait",
+                                     runtime_profile=profile, **options)
+    body = payload["task_body"]
+    # Preserve the actual lifecycle choice and execution/settlement boundaries,
+    # not an unconditional instruction to keep every kind of wait open.
+    for obligation in (
+        "No useful independent work", "save progress", "todo update --status deferred",
+        "--resume-when resume_at:", "evidenced due time", "settle original Turn",
+        "yield to host scheduler", "not model sleep/poll loops",
+        "Fresh admission on resume", "Other waits: projected monitor/continuation",
+        "No spend for waiting alone",
+    ):
+        assert obligation in body
+    assert "Wait=open" not in body and "Wait: keep open" not in body
+    assert payload["interface_budget"]["within_budget"] is True
 
 
 @pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin"])

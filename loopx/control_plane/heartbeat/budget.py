@@ -10,23 +10,21 @@ from typing import Any
 # Keep useful admission and authority instructions readable; do not abbreviate
 # them solely to fit a historical character ceiling.
 INTERFACE_BUDGET_CHARS = {
-    # Complete outcome intake/review adds 523 authored characters. Matched
-    # no-memory bodies with the supported 320-character profile scope measure
-    # 12,688 / 7,531 / 5,285; preserve the instructions and bound their growth.
-    "full": 12_800,
-    "compact": 7_600,
-    "brief": 5_400,
-    # Matched public CLI fixture: 3,306 -> 3,829 normalized body chars.
-    # The same supported 320-char scope reaches 4,118, leaving 82 chars
-    # above the complete outcome, authority, continuation and settlement rules.
-    "thin": 4_200,
+    # Timed-wait guidance replaces unconditional keep-open advice. With the
+    # same 320-char scope, explicit registry and no reward memory, normalized
+    # base -> head sizes are 12,731 -> 12,982; 7,601 -> 7,861;
+    # 5,355 -> 5,615; 4,057 -> 4,378. Preserve evidence, independent work,
+    # original settlement and fresh admission rather than abbreviating them.
+    "full": 13_100,
+    "compact": 8_000,
+    "brief": 5_700,
+    "thin": 4_500,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]
 
 # Opt-in captured envelopes retain transport routes and same-capture recovery.
-# The no-memory, 128-char-root/320-char-scope CLI body measures 4,512 chars.
-# Keep its 4,600-char presentation allowance separate from ordinary thin.
+# Keep captured-envelope transport headroom separate from ordinary thin.
 CAPTURED_ENVELOPE_PROMPT_HEADROOM_CHARS = 400
 
 # Reward Memory's outcome contract is intentionally readable rather than
