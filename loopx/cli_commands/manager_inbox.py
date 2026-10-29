@@ -59,7 +59,7 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--brief-file", help="For request: collaboration_brief_v0 JSON file.")
     parser.add_argument("--parent-request-id", help="For request: an inbox request received by the sender.")
     parser.add_argument("--goal-id")
-    parser.add_argument("--goal-instance-id", help="Exact source Goal instance for request control.")
+    parser.add_argument("--goal-instance-id", help="Exact source Goal instance for request control or original-conversation.")
     parser.add_argument("--control-operation", choices=("inspect", "revise", "cancel", "recover"),
                         help="For control: inspect, correct, cancel or recover this original request.")
     parser.add_argument("--control-file", help="For control: bounded JSON operation parameters; no source or effect facts.")
@@ -99,6 +99,12 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             from ..control_plane.collaboration.peers import original_conversation_request
             if not args.conversation_operation or not args.conversation_file:
                 raise ValueError("--conversation-operation and --conversation-file are required")
+            caller_goal_ref = None
+            if args.goal_instance_id is not None:
+                from ..control_plane.goals.goal_ref_validation import exact_goal_ref
+                if not args.goal_id:
+                    raise ValueError("--goal-instance-id requires --goal-id")
+                caller_goal_ref = exact_goal_ref(args.goal_id, args.goal_instance_id)
             with Path(args.conversation_file).open("rb") as stream:
                 raw = stream.read(128001)
             if len(raw) > 128000:
@@ -107,7 +113,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             if not isinstance(parameters, dict) or any(key in parameters for key in ("operation", "requester", "coordination_runtime_root")):
                 raise ValueError("conversation parameters cannot assert source identity or routing")
             result = original_conversation_request(runtime_root, registry_path, args.goal_id, args.agent_id,
-                operation=args.conversation_operation, parameters=parameters, **({"chat_url": args.chat_url} if args.chat_url else {}))
+                operation=args.conversation_operation, parameters=parameters, caller_goal_ref=caller_goal_ref,
+                **({"chat_url": args.chat_url} if args.chat_url else {}))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if any(getattr(args, key, None) is not None for key in ("conversation_operation", "conversation_file", "chat_url")):
