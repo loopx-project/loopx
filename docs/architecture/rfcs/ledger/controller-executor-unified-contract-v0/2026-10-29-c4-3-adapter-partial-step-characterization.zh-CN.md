@@ -72,7 +72,7 @@
 本条目不改变结论，但修正了剩余工作的表述方式。删除适配器侧解释器仍需要对照条目
 记录的前提条件。词汇对照条目已经撤回的候选——把 `guard`、`lifecycle_completion`
 与 `validation` 归到一个 typed 属主——在此不重新打开：那条目已经指出了同时采用
-两条路径的已交付调用方，并把该候选记为 withdrawn。仍然开放的切片是为 host-adapter
-有序步骤类型设立共享属主，已在
-[#7619](https://github.com/loopx-project/loopx/pull/7619) 中合入；那是登记切片，
-不是被撤回的统一化工作的延续。
+两条路径的已交付调用方，并把该候选记为 withdrawn。独立的登记切片——为 host-adapter
+有序步骤类型设立共享属主——已在
+[#7619](https://github.com/loopx-project/loopx/pull/7619) 中完成；那是登记切片，
+不是被撤回的统一化工作的延续。仍然开放的是对照条目记录的删除与采用前提。

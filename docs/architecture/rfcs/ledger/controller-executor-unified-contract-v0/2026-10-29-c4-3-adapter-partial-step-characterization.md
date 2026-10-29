@@ -85,7 +85,9 @@ preconditions recorded in the comparison entry. The vocabulary candidate that
 the confirmation entry withdrew — one typed owner for `guard`,
 `lifecycle_completion` and `validation` — is not reopened here: that entry
 already identified the shipped caller that adopts both paths and recorded the
-candidate as withdrawn. The slice that remains open is the shared owner for
-the ordered host-adapter step kinds, merged in
-[#7619](https://github.com/loopx-project/loopx/pull/7619). That is a registry
-slice, not a continuation of the withdrawn unification.
+candidate as withdrawn. The independent registry slice — the shared owner for
+the ordered host-adapter step kinds — is completed in
+[#7619](https://github.com/loopx-project/loopx/pull/7619). That slice was a
+registry change, not a continuation of the withdrawn unification. The work
+that remains open is the deletion and adoption preconditions recorded in the
+comparison entry.
