@@ -40,6 +40,11 @@ def native_admission_observation(payload: Any) -> dict[str, Any] | None:
     for field in fields:
         text = json.dumps(payload[field], ensure_ascii=False) if field in payload else ""
         costs[field] = {"chars": len(text), "utf8_bytes": len(text.encode("utf-8"))}
+    return {"kind": _native_quota_admission_kind(payload), "costs": costs}
+
+
+def _native_quota_admission_kind(payload: dict[str, Any]) -> str | None:
+    """Observe the original quota identity; this diagnostic grants no authority."""
     receipt = payload.get("heartbeat_receipt") or {}
     kind = None
     if (isinstance(receipt, dict)
@@ -81,9 +86,7 @@ def native_admission_observation(payload: Any) -> dict[str, Any] | None:
                 kind = "replan"
             elif not source and not receipt.get("semantic_replan_obligation_id"):
                 kind = "unbound"
-    return {"kind": kind, "costs": costs}
-
-
+    return kind
 
 def authoring_input_observations(text: str) -> dict[str, bool]:
     """Recognize complete reviewed guidance for one-time output qualification.

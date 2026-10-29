@@ -1350,6 +1350,29 @@ This is no output reduction or model-compliance qualification.
 校准为 3,300，留 38 字符余量；不删指令，不改生产正文、4,000 宿主硬边界、
 长路径检查、执行权限或冻结资格结果，也不据此声称输出节省或模型遵从。
 
+The following qualification belongs to the named historical revisions. It does
+not lower the newer target branch's existing 2,026-line baseline to 2,025.
+以下保留指定版本的历史资格，不将较新目标分支已有的 2,026 行基线降为 2,025。
+
+The freshness HTTP history composition measures 2,020 lines at `898363635` and
+2,025 at `3ed36655a`; `Any`/`dict[str, Any]` counts remain 25/0. The five lines
+join provider reply history onto the selected session page at the existing HTTP
+composition root. Moving that join into the shared session projection would
+couple the generic projection to a provider. Retain the join and its paging,
+private-history and recovery coverage; calibrate only `chat_server.py`'s reviewed
+line ceiling from 2,020 to 2,025, with no extra headroom. The default 2,000-line
+hotspot limit, other metric ceilings, runtime behavior and transport budgets
+stay unchanged. The original two unreviewed findings remain historical failures.
+The admission diagnostic instead separates byte measurement from quota-identity
+observation within its existing module; its 90-statement/60-decision limits and
+all identity, malformed-payload and growth assertions remain unchanged.
+
+freshness 的 HTTP 历史拼接在相同文件边界上为 2,020 → 2,025 行，两个类型计数仍为
+25/0。五行在既有 HTTP 组合处把 provider 回复历史接入当前分页；不为减少行数将
+provider 耦合下沉到通用投影。仅将此文件已审行数基线校准为 2,025，不额外放宽，
+保留分页、私有历史和恢复覆盖以及原失败记录。诊断函数则在原模块内分开成本测量与
+身份观察，90/60 复杂度上限及全部负例保持不变；这不改变准入、预算或执行权限。
+
 The actual-default model portfolio retains the complete capability candidate
 context required by the shared diagnostic projection. On the unchanged three
 noisy fixtures, `74b3d526ab1c1fd3d5f96308bef2482fcad7e636` emitted 4,944 /
