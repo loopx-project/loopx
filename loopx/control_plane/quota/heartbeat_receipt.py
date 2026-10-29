@@ -204,6 +204,7 @@ def ensure_turn_heartbeat_settlement_receipt(
     semantic_replan_guard_scoped: bool,
     semantic_replan_obligation_id: str | None,
     semantic_replan_capability_guard: Mapping[str, object] | None = None,
+    semantic_replan_source: dict[str, object] | None = None,
     goal_ref: Mapping[str, object] | None = None,
     result_freshness: str | None = None,
     checkpoint_continuation: str | None = None,
@@ -307,6 +308,13 @@ def ensure_turn_heartbeat_settlement_receipt(
             details["semantic_replan_obligation_id"] = (
                 normalized_semantic_replan_obligation_id or ""
             )
+            if semantic_replan_source is not None:
+                source = validate_guard_source(
+                    semantic_replan_source, normalized_semantic_replan_obligation_id
+                )
+                details["semantic_replan_source_ref"] = store_guard_source_blob(
+                    runtime_root, identity.goal_id, source
+                )
             if semantic_replan_capability_guard is not None:
                 details["semantic_replan_capability_id"] = semantic_replan_capability_guard["capability_id"]
                 details["semantic_replan_gap_id"] = semantic_replan_capability_guard["gap_id"]
@@ -763,6 +771,29 @@ def bounded_guard_source(obligation, cadence):
         raise HeartbeatReceiptIdentityConflictError("guard_source_invalid: bounded source exceeds 64KiB")
     return {"schema_version": "semantic_replan_source_v1", "obligation": value,
         "sha256": _guard_source_digest(value), "cadence": dict(cadence)}
+
+
+def guard_source_from_decision(
+    payload: Mapping[str, object] | None,
+    *,
+    obligation_id: str | None,
+    registry_path: Path,
+    runtime_root: Path,
+    goal_id: str,
+) -> dict[str, object] | None:
+    """Capture only the original admitted obligation, never a settlement replay."""
+    if not obligation_id or payload is None:
+        return None
+    obligation = payload.get("autonomous_replan_obligation")
+    packet = payload.get("replan_action_packet") or {}
+    if (not isinstance(obligation, dict)
+        or obligation.get("obligation_id") != obligation_id
+        or obligation.get("settlement_action_packet")
+        or (isinstance(packet, Mapping) and packet.get("settlement_only"))):
+        return None
+    return bounded_guard_source(
+        obligation, guard_cadence(registry_path, runtime_root, goal_id)
+    )
 
 
 def validate_guard_source(source, obligation_id):

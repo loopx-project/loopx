@@ -9,15 +9,34 @@ import pytest
 
 from host_process_fixture import write_python_host_fixture
 from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture
+from tests.control_plane.host_checkpoint_fixture import checkpoint_fixture_script
 
 
 def _host(root: Path, *, material: bool) -> Path:
     # This is a deterministic process transport, not a model or task evaluator.
     # The material arm writes a distinct artifact checked by the outer validator;
     # the replan arm ends the iteration and earns no writeback or debit.
-    return write_python_host_fixture(root / "native-host", f'''#!/usr/bin/env python3
+    return write_python_host_fixture(root / "native-host", checkpoint_fixture_script(f'''#!/usr/bin/env python3
 import json, pathlib, sys
-request = json.loads(sys.stdin.read().split("Turn request:\\n", 1)[1])
+from tests.control_plane.host_checkpoint_fixture import reply_to_checkpoint
+from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
+prompt = sys.stdin.read()
+direction = prompt.startswith("Continue the current Agent's original Turn")
+request = json.loads(prompt.split("\\n", 1)[1] if direction else prompt.split("Turn request:\\n", 1)[1])
+if direction:
+    assert request["phase"] == "checkpoint_direction"
+    assert request["session"]["action"] == "resume"
+    assert "resume" in sys.argv and "fixture-launch-session" in sys.argv
+    assert pathlib.Path("checked-source.txt").read_text() == "independently checked source\\n"
+    with pathlib.Path("direction-requests.jsonl").open("a") as stream:
+        stream.write(json.dumps(request) + "\\n")
+    result = checkpoint_decision(request["checkpoint_context"])
+    if "agent_vision" in result:
+        result["agent_vision_json"] = json.dumps(result.pop("agent_vision"))
+    args = sys.argv[1:]
+    print(json.dumps({{"type": "thread.started", "thread_id": "fixture-launch-session"}}), flush=True)
+    pathlib.Path(args[args.index("--output-last-message") + 1]).write_text(json.dumps(result))
+    sys.exit(0)
 with pathlib.Path("host-requests.jsonl").open("a") as stream:
     stream.write(json.dumps(request) + "\\n")
 material = {material!r}
@@ -43,7 +62,7 @@ if material:
                   validation_evidence=["check:independent-source-validator"])
 args = sys.argv[1:]
 pathlib.Path(args[args.index("--output-last-message") + 1]).write_text(json.dumps(result))
-''')
+'''))
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -100,11 +119,23 @@ def test_native_cli_uses_original_binding_and_replays_without_new_effects(
         assert result["status"] == "committed" and result["validation"]["ok"] is True
         current = call("todo", "list", "--goal-id", GOAL, "--todo-id", todo_id)
         assert current["todo"]["text"] == declared_text
+        direction = json.loads((project / "direction-requests.jsonl").read_text())
+        assert direction["turn_key"] == result["receipt"]["turn_key"]
+        context = direction["checkpoint_context"]
+        assert context["read_context_id"]
+        assert context["settlement_identity"]["effect_id"] == expected_effect
     else:
         assert result["status"] == "stopped" and result["result_kind"] == "iteration_failed"
         assert not (project / "checked-source.txt").exists()
+        assert not (project / "direction-requests.jsonl").exists()
+        from loopx.control_plane.quota.heartbeat_receipt import find_heartbeat_receipt, guard_source_for_turn
+        source = guard_source_for_turn(runtime, goal_id=GOAL, agent_id=AGENT, turn_instance_id=turn)
+        assert source["obligation"]["obligation_id"] == obligation_id
+        receipt = find_heartbeat_receipt(runtime, goal_id=GOAL, agent_id=AGENT, turn_instance_id=turn)
+        assert "result_freshness" not in receipt["details"]
 
     requests = (project / "host-requests.jsonl").read_bytes()
+    direction_requests = ((project / "direction-requests.jsonl").read_bytes() if todo_id else None)
     sent = json.loads(requests)
     assert sent["turn_key"] == result["receipt"]["turn_key"]
     captures = {path: path.read_bytes() for path in runtime.rglob("decisions/*.json")}
@@ -121,4 +152,6 @@ def test_native_cli_uses_original_binding_and_replays_without_new_effects(
     assert replay["replayed"] is True
     assert not any(replay["effects"].values())
     assert (project / "host-requests.jsonl").read_bytes() == requests
+    if todo_id:
+        assert (project / "direction-requests.jsonl").read_bytes() == direction_requests
     assert all(path.read_bytes() == original for path, original in captures.items())

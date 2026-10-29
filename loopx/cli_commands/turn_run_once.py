@@ -18,6 +18,7 @@ from ..control_plane.goals.first_party_host_admission import (
 )
 from ..control_plane.quota.heartbeat_receipt import (
     ensure_turn_heartbeat_settlement_receipt,
+    guard_source_from_decision,
 )
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.settlement import (
@@ -1027,13 +1028,16 @@ def execute_turn_run_once(
             )
             from ..control_plane.goals.checkpoint_context_io import default_result_freshness_policy
 
-            policy = default_result_freshness_policy(runtime_root, args.goal_id, settlement_identity.todo_id, goal_ref)
+            policy = default_result_freshness_policy(runtime_root, args.goal_id, settlement_identity.todo_id or None, goal_ref)
             ensure_turn_heartbeat_settlement_receipt(
                 runtime_root,
                 settlement_identity,
                 semantic_replan_guard_scoped=replan_guard_scoped,
                 semantic_replan_obligation_id=replan_obligation_id,
                 semantic_replan_capability_guard=capability_guard,
+                semantic_replan_source=guard_source_from_decision(decision,
+                    obligation_id=replan_obligation_id, registry_path=registry_path,
+                    runtime_root=runtime_root, goal_id=args.goal_id),
                 goal_ref=goal_ref,
                 result_freshness=policy,
                 checkpoint_continuation="current_agent_v1" if policy is not None else None,
