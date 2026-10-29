@@ -186,9 +186,11 @@ def _effective_spend_turn_instance_id(
 
 def _quota_renderer(
     args: argparse.Namespace,
+    *,
+    failure: bool = False,
 ) -> Callable[[dict[str, object]], str]:
     command = args.quota_command
-    if bool(getattr(args, "turn_envelope", False)):
+    if not failure and bool(getattr(args, "turn_envelope", False)):
         return render_turn_envelope_markdown
     return {
         "should-run": render_quota_should_run_markdown,
@@ -306,16 +308,20 @@ def _project_quota_cli_payload(
     *,
     captured_decision_path: str | None = None,
 ) -> dict[str, object]:
-    """Project already-decided facts; preserve typed failures on envelope rejection.
+    """Project successful decisions; failed requests retain their diagnostic.
 
-    The envelope is an additive hot-path view over a decided payload. A typed
-    validation/failure payload has no interaction contract to project, so a
-    renderer rejection keeps the typed diagnostic itself (with the skip reason)
-    instead of masking it with a crash (issue #3687).
+    Optional presentation must not call a runtime that failed during collection.
+    A rejected envelope likewise retains the already-decided facts (issue #3687).
     """
     from ..control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if payload.get("ok") is False:
+        # Failure reporting must not reenter the runtime that just failed.
+        # Keep the decided diagnostic, including its original recovery/receipt.
+        if bool(getattr(args, "turn_envelope", False)):
+            return {**payload, "turn_envelope_skipped": "quota request failed; original diagnostic retained"}
+        return payload
     if not bool(getattr(args, "turn_envelope", False)):
         if args.quota_command in {"status", "plan"}:
             return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
@@ -397,7 +403,7 @@ def _emit_quota_result(
                 and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
             print_payload(captured_quota_failure_view(payload, capture_directory=capture_directory,
                 max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
-                args.format, _quota_renderer(args))
+                args.format, _quota_renderer(args, failure=True))
             return 1
         if payload.get("ok") is True:
             delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
@@ -408,7 +414,7 @@ def _emit_quota_result(
         failure = quota_decision_transport_failure_payload(
             args, payload, exc, capture_directory=capture_directory,
         )
-        print_payload(failure, args.format, _quota_renderer(args))
+        print_payload(failure, args.format, _quota_renderer(args, failure=True))
         return 1
     if (delivery_request is not None or getattr(args, "codex_context_dir", None)
             or getattr(args, "codex_context_root", None)):
@@ -477,9 +483,9 @@ def _emit_quota_result(
             failure = quota_decision_transport_failure_payload(
                 args, captured_payload, exc, capture_directory=capture_directory,
             )
-            print_payload(failure, args.format, _quota_renderer(args))
+            print_payload(failure, args.format, _quota_renderer(args, failure=True))
             return 1
-    print_payload(payload, args.format, _quota_renderer(args))
+    print_payload(payload, args.format, _quota_renderer(args, failure=not succeeded))
     return 0 if succeeded else 1
 
 
