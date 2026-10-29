@@ -2421,3 +2421,50 @@ Todo 验证和全 Goal 终态检查仍各自执行。
 
 MCP 显式重读保留候选时，先恢复已准入的原 Turn，再执行 guard；缺失的原准入
 不能通过新建另一工作身份补齐。
+
+### Original facts, derived progress and recovery owners
+
+```text
+Host return / read basis / original intent / attempt / effect receipts
+                              |
+               existing typed domain owners
+          checkpoint     Todo completion     settlement
+                              |
+                 derived progress observation
+                    /                   \
+             status / Chat       current recovery admission
+                                         |
+                              Host IO + original Turn settlement
+                                         |
+                              subsequent work selection
+```
+
+Observation is read-only. It reuses one Todo fact projection, one settlement
+snapshot and one strictly checked checkpoint index per batch; it neither repairs
+read receipts nor authorizes a direction retry. The strict checkpoint parser
+still rejects incomplete tails and competing proofs. A disagreement between its
+index capture and the settlement capture stays uncertain. Historical scans are
+complete, including damaged/deleted read receipts with matching indexed artifacts;
+the output remains one pending original Turn or scoped unavailable evidence.
+
+| Existing contract | Producer and consumer | Retained responsibility |
+| --- | --- | --- |
+| Host transaction v0/v1 | `host_adapter_settlement.py` → `host_todo_completion.ts` | Ordinary completion and Vision/context supplements remain active callers. |
+| Host transaction v2 | Explicit MCP first delivery **and** default `current_agent_checkpoint` → the same typed owner | Wire `first_delivery=true` does not imply an opt-in-only feature. Preserve their different terminal rules and original admission policy. |
+| `delivery_result` / `first_delivery` / supplement reads | Checkpoint capture/commit and historical inspectors | Original work evidence, post-result direction evidence and supplemental authoring have separate identities/purposes. |
+| Completion identity and requested no-followup | Todo completion → `completion_state.ts` and settlement | Current display state cannot reconstruct or replace the original terminal intent. |
+| Direction returns, stops and attempts | Python Host transport → `checkpoint_read_context.ts` → locked Python receipt IO | One typed owner classifies returns and produces the receipt transition. Actual Stop reasons, response bindings and accumulated attempts survive retries. |
+| Progress stage and next action | `first_delivery.ts` → status/quota/Chat | Derive from receipts and Todo facts; do not persist another pending-state authority. |
+
+Decision capture, work read evidence and direction read evidence refer to the
+same original work without becoming interchangeable. Reuse the existing capture
+lineage; proposals for unified capture or receipt-to-continuation composition
+must not be assumed to be shipped APIs. Original-Turn recovery remains separate
+from choosing subsequent work. No v0/v1/v2 producer is retired merely because its
+historical reader remains available.
+
+中文：Host 与持久化层提供原身份、读取依据、完成意图、attempt 和实际回执；既有
+typed owner 解释规则，展示层派生进度，恢复入口重新核验当前权限、Stop 和预算后
+执行。批量观察只减少重复读源与跨语言调用，不新增持久化状态或执行授权。保留不同
+purpose、旧准入政策和真实协议消费者；不能把结果已保留、方向已提交、扣额已完成
+或 Goal 已验收互相替代。
