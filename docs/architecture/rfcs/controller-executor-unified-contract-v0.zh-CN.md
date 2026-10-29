@@ -662,6 +662,21 @@ compactor：精确共享、省略和延后读取的信息与失败后果各不�
 | Full/delta/resume 交付 | 在 composition 后复用既有 continuity owner。行动前验证精确语义重建与必要材料可用；计入冷回退及丢失基线的恢复。 |
 | Scheduler、准入与结算身份 | Capture 前只有一份权威实例；传输保留真实 host owner、原 Turn 与一次性 effects。重复表示不构成削弱检查的理由。 |
 
+单独后移验收共享不自动构成有价值的前置切片。以主线
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` 为基线的 source-level 受控替换，
+只把该规则从本地 CLI compactor 移到已有 `reference_context` 调用。同一份含 100 条
+不同要求的合成 fixture 中，序列化投影输入从 102,680 增至 344,010 字节，调用者可见
+输出仍为相同的 102,189 字节。普通路径仍调用一次；全部 detail 开启时由本地共享变为
+一次请求。这些是投影参数测量，不是带协议包装的流量、延迟、模型计费或完整 C1 对照。
+保留此负结果，不能宣称净效率收益。
+
+先在当前兼容 owner 修复被迁移的验收引用，不引入上述额外传输。已有别名只跟随本次
+投影实际迁移的内联 owner，包括先访问别名、后迁移 owner 的情况。保留完整值、原始
+数值类型、carrier 顺序和现有大小判断；不推断任意引用链，不重写已存 capture。
+完整 C1 composition 应在持有来源的边界吸收该规则，并随调用方退役 Python 兼容
+算法，不能把所有验收副本反复传过另一条 bridge。Writer／consumer 切换和原 quota
+成果／完整成本门继续保持开放。
+
 候选 `895f38fc5` 的固定 source 合成 replan 审计说明了边界的影响。关闭 stride 且不做
 capture 分阶段时，原始 source 为 21,461 个紧凑 UTF-8 JSON 字节，原 quota CLI
 projection 为 20,543，完整候选为 21,738：**相对 CLI 增加 5.82%**，相对原始 source
