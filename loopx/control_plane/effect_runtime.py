@@ -43,6 +43,8 @@ MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.read",
+    "todo.quota_planning.project",
+    "goal.vision_wait.project",
     "collaboration.inbox.read",
     "collaboration.delegation.inventory_page",
     "benchmark.trajectory.codex-usage",
@@ -57,6 +59,7 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "quota.settlement.read",
     "quota.spend.commit",
     "quota.turn_envelope.evaluate",
+    "turn.controller",
     "goal.checkpoint_read_context.resolve",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
@@ -771,22 +774,7 @@ def _stop_effect_runtime(
             if not _pid_is_alive(pid):
                 stopped = True
                 break
-            if os.name == "posix":
-                # A non-child zombie cannot write, but kill(pid, 0) still sees
-                # it. Managed runtimes start in their own session/process group.
-                from ..extensions.process_runtime import _posix_owned_group_has_exited
-                try:
-                    stopped = _posix_owned_group_has_exited(
-                        pid, max(.001, deadline - time.monotonic()),
-                    )
-                except (OSError, subprocess.TimeoutExpired, UnicodeError, RuntimeError):
-                    stopped = False
-                if stopped:
-                    # The child may have exited during the group snapshot,
-                    # after the first nonblocking reap. Retire its wait status
-                    # before returning successful namespace cleanup.
-                    _reap_exited_runtime_child(info)
-                    break
+            # A zombie leader can still have threads writing into the namespace.
             time.sleep(.05)
             continue
         published, published_token = _serving_token(info_path)

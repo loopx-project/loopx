@@ -7,7 +7,7 @@ about what was installed, not about how it starts serving.
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import os
 from pathlib import Path
 import plistlib
@@ -93,9 +93,9 @@ def _managed_service_plists() -> list[Path]:
     ]
 
 
-def _managed_service_pid(plist: Path) -> int | None:
+def _managed_service_pid(plist: Path, *, label: str | None = None) -> int | None:
     result = subprocess.run(
-        ["launchctl", "print", f"gui/{os.getuid()}/{plist.stem}"],
+        ["launchctl", "print", f"gui/{os.getuid()}/{label or plist.stem}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
     )
     if result.returncode != 0:
@@ -111,6 +111,32 @@ def _managed_service_pid(plist: Path) -> int | None:
         return None  # An edited plist is not proof of the running process's route.
     pids = re.findall(r"^\s*pid = ([0-9]+)\s*$", result.stdout, re.MULTILINE)
     return int(pids[0]) if len(pids) == 1 else None
+
+
+@contextmanager
+def managed_chat_activation_guard(
+    plists: list[Path], *, expected_services: dict[Path, tuple[str, int]] | None = None,
+):
+    """Keep accepted Chat work and new ingress safe through a client restart.
+
+    Account-provider handoffs and runtime updates share the same store owner;
+    an empty Session summary is not sufficient evidence of an idle service.
+    The caller must still verify its loaded service/PID before stopping it.
+    """
+    from .chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
+
+    labels = [plist.stem for plist in plists]
+    roots = sorted({_chat_runtime_root(plist) for plist in plists})
+    with ExitStack() as locks:
+        for root in roots:
+            locks.enter_context(chat_runtime_activation_lock(root, timeout_seconds=2.0))
+        for root in roots:
+            if chat_runtime_activation_state(root)["nonterminal_turns"]:
+                raise RuntimeActivationDeferred("chat_work_pending", labels)
+        for plist, (label, pid) in (expected_services or {}).items():
+            if plist not in plists or _managed_service_pid(plist, label=label) != pid:
+                raise ValueError("chat_service_route_unresolved")
+        yield
 
 
 def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float = 5.0) -> str:
@@ -190,21 +216,8 @@ def restart_managed_loopx_services() -> list[str]:
             chat_plists.append(plist)
     restarted: list[str] = []
     uid = os.getuid() if hasattr(os, "getuid") else 0
-    from .chat_ingress import (
-        chat_runtime_activation_lock,
-        chat_runtime_activation_state,
-    )
-
     try:
-        roots = sorted({_chat_runtime_root(plist) for plist in chat_plists})
-        with ExitStack() as locks:
-            for root in roots:
-                locks.enter_context(
-                    chat_runtime_activation_lock(root, timeout_seconds=2.0)
-                )
-            for root in roots:
-                if chat_runtime_activation_state(root)["nonterminal_turns"]:
-                    raise RuntimeActivationDeferred("chat_work_pending", labels)
+        with managed_chat_activation_guard(chat_plists):
             # Keep admission fenced until launchctl has replaced the old process.
             # Existing workers need no new lock: any accepted queued/active work
             # was checked above, including completing and orphaned queued Turns.
@@ -227,8 +240,10 @@ def restart_managed_loopx_services() -> list[str]:
                     raise RuntimeActivationFailed(
                         restarted, [s for s in labels if s not in restarted]
                     ) from exc
-    except RuntimeActivationDeferred:
-        raise
+    except RuntimeActivationDeferred as exc:
+        # The shared Chat guard names its participants; an update still defers
+        # the complete original status/chat activation batch.
+        raise RuntimeActivationDeferred(str(exc), labels) from exc
     except (
         OSError,
         ValueError,

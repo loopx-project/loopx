@@ -23,8 +23,6 @@ from loopx.control_plane.turn_driver.host_failure import build_host_failure_reco
 from loopx.control_plane.turn_driver.managed_step import (
     LOOPX_TURN_MANAGED_STEP_SCHEMA_VERSION,
     decide_managed_step,
-    managed_step_receipt_from_journal,
-    reconcile_observed_attempt,
 )
 
 GOAL_ID = "goal-managed-step"
@@ -245,6 +243,47 @@ def test_observation_must_be_a_positive_integer() -> None:
         _decide(journal, observed_attempt=0)
     with pytest.raises(ValueError, match="positive integer"):
         _decide(journal, observed_attempt=True)
+    with pytest.raises(ValueError, match="positive integer"):
+        _decide(journal, observed_attempt=1.0)
+
+
+@pytest.mark.parametrize("field", ["host_attempt_count", "failure_attempt"])
+def test_json_transport_preserves_python_integer_qualification(field):
+    journal = _failed_journal()
+    if field == "host_attempt_count":
+        journal[field] = 1.0
+    else:
+        journal["host_failure"]["attempt"] = 1.0
+    with pytest.raises(ValueError, match="positive integer|invalid attempt"):
+        _decide(journal)
+
+
+def test_large_attempts_keep_exact_equality_and_readback():
+    attempt = 2**60 + 1
+    journal = _failed_journal()
+    # The native producer computes exponential backoff before capping it. This
+    # fixture tests the transport's integer identity without that unrelated cost.
+    journal["host_attempt_count"] = attempt
+    journal["host_failure"]["attempt"] = attempt
+    journal["host_failure"]["retry"]["backoff_seconds"] = 300
+    assert _decide(journal)["attempt"] == attempt
+    from loopx.control_plane.turn_driver.loop_controller import (
+        ValidatedTurnReceipt, decide_loop_disposition,
+    )
+
+    receipt = ValidatedTurnReceipt.from_execution({
+        "schema_version": "loopx_turn_execution_v0", "status": "failed",
+        "result_kind": "host_failure", "receipt": journal["receipt"],
+        "host_failure": journal["host_failure"],
+    })
+    assert receipt.host_failure["attempt"] == attempt
+    assert decide_loop_disposition(
+        turn_receipt=receipt, quota_decision=_envelope(),
+        predecessor_turn_key=journal["turn_key"],
+    )["disposition"] == "repair"
+    journal["host_attempt_count"] = attempt - 1
+    with pytest.raises(ValueError, match="host_failure attempt disagrees"):
+        _decide(journal)
 
 
 def test_journal_attempt_divergence_is_refused() -> None:
@@ -359,25 +398,16 @@ def test_managed_step_never_spends_or_writes() -> None:
 def test_reconcile_accepts_omitted_observations() -> None:
     journal = _failed_journal(kind="provider_capacity", attempt=1)
 
-    assert reconcile_observed_attempt(
-        journal, observed_attempt=None, observed_max_attempts=None
-    ) is None
+    assert _decide(journal, observed_attempt=None, observed_max_attempts=None)["disposition"] == "wait"
 
 
 def test_receipt_from_journal_projects_lineage_and_kind() -> None:
     journal = _failed_journal(kind="provider_capacity", attempt=1)
 
-    receipt = managed_step_receipt_from_journal(
-        journal,
-        goal_id=GOAL_ID,
-        agent_id=AGENT_ID,
-        turn_key=str(journal["turn_key"]),
-    )
-
-    assert receipt.result_kind is LoopXTurnResultKind.HOST_FAILURE
-    assert receipt.lineage["todo_id"] == TODO_ID
-    assert receipt.host_failure is not None
-    assert receipt.host_failure["kind"] == "provider_capacity"
+    payload = _decide(journal)
+    assert payload["lineage"]["todo_id"] == TODO_ID
+    assert payload["retry_continuation"]["attempt"] == 1
+    assert "provider_capacity" in payload["reason"]
 
 
 def test_journal_without_stored_plan_is_refused() -> None:
@@ -491,3 +521,98 @@ def test_shared_decision_owner_binds_both_turn_owners_to_one_set_of_inputs(monke
         "both Turn owners must receive the resolved runtime root, not the raw "
         f"argument that is None when the registry declares common_runtime_root: {roots}"
     )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("lost_spend_response", [False, True])
+def test_native_cli_retry_and_saved_result_keep_one_original_settlement(
+    tmp_path, monkeypatch, provider, lost_spend_response,
+):
+    """Real CLI, authority and journal with a deterministic native subprocess.
+
+    A capacity refusal may be observed without effects, an explicit same-Turn
+    retry can finish, and a committed spend with a lost response is read back.
+    No live model, active Goal or production state participates.
+    """
+    import json
+    import sys
+
+    from loopx.cli_commands import turn_run_once
+    from loopx.control_plane.turn_driver import load_turn_journal, turn_journal_path
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+    from loopx.todos import list_goal_todos
+    from tests.capabilities.test_pr_wait_observation import _invoke_turn
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.test_loopx_turn_codex_cli import _fake_codex
+    from tests.test_loopx_turn_driver import _write_live_fixture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
+    executable, invocations = _fake_codex(tmp_path)
+    source = executable.read_text().replace(
+        'output_path.write_text(json.dumps({',
+        "pathlib.Path('validated-artifact').write_text('independent marker')\n"
+        'output_path.write_text(json.dumps({',
+    )
+    executable.write_text(source)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(invocations))
+    monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
+    monkeypatch.setenv("FAKE_CODEX_FAILURE_CATEGORY", "capacity-event")
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    run = [*prefix, "turn", "run-once", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+        "--host", "codex-cli", "--codex-bin", str(executable), "--project", str(project),
+        "--validation-command-json", json.dumps([sys.executable, "-c",
+            "from pathlib import Path; assert Path('validated-artifact').read_text() == 'independent marker'"]),
+        "--no-global-sync", "--execute"]
+    code, failed = _invoke_turn([*run, "--todo-id", "todo_fixture0001", "--turn-instance-id", "controller-retry"])
+    assert code == 1 and failed["result_kind"] == "host_failure", failed
+    turn_key = failed["resume_turn_key"]
+    path = turn_journal_path(runtime, goal_id="loopx-turn-fixture", turn_key=turn_key)
+    snapshot = path.read_bytes()
+    events_path = rollout_event_log_path(runtime, "loopx-turn-fixture")
+    events = load_rollout_events(events_path)
+    task = list_goal_todos(registry_path=registry, goal_id="loopx-turn-fixture", todo_id="todo_fixture0001")
+    managed = [*prefix, "turn", "managed-step", "--goal-id", "loopx-turn-fixture",
+        "--agent-id", "codex-fixture", "--host", "codex-cli", "--turn-key", turn_key]
+    code, continuation = _invoke_turn([*managed, "--observed-attempt", "1", "--observed-max-attempts", "3"])
+    assert code == 0 and continuation["disposition"] == "wait", continuation
+    assert continuation["retry_continuation"]["same_turn"] is True
+    assert continuation["retry_continuation"]["retry_after_seconds"] == 30
+    code, refused = _invoke_turn([*managed, "--observed-attempt", "2"])
+    assert code == 1 and "observed_attempt disagrees" in refused["error"], refused
+    assert path.read_bytes() == snapshot
+    assert load_rollout_events(events_path) == events
+    assert list_goal_todos(registry_path=registry, goal_id="loopx-turn-fixture", todo_id="todo_fixture0001")["todo"] == task["todo"]
+    assert len(invocations.read_text().splitlines()) == 1
+
+    monkeypatch.setenv("FAKE_CODEX_FAIL", "0")
+    original_spend = turn_run_once.spend_quota_slot
+    lost = []
+
+    def lose_response(*args, **kwargs):
+        result = original_spend(*args, **kwargs)
+        if lost_spend_response and not lost:
+            assert result["ok"] is True
+            lost.append(True)
+            raise OSError("synthetic response lost after durable spend")
+        return result
+
+    monkeypatch.setattr(turn_run_once, "spend_quota_slot", lose_response)
+    code, committed = _invoke_turn([*run, "--resume-turn-key", turn_key, "--retry-failed-turn"])
+    if lost_spend_response:
+        assert code == 1 and "synthetic response lost" in json.dumps(committed), committed
+        assert lost == [True]
+        code, committed = _invoke_turn([*run, "--resume-turn-key", turn_key])
+    assert code == 0 and committed["status"] == "committed", committed
+    saved = load_turn_journal(path)
+    assert saved["turn_key"] == turn_key and saved["host_attempt_count"] == 2
+    assert [receipt["step_kind"] for receipt in saved["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend"]
+    identity = saved["receipt"]["settlement_effect_id"]
+    assert all(receipt["effect_id"] == identity for receipt in saved["settlement_result"]["receipts"])
+    code, replay = _invoke_turn([*run, "--resume-turn-key", turn_key])
+    assert code == 0 and replay["replayed"] is True, replay
+    assert replay["effects"]["host_invoked"] is False
+    assert replay["effects"]["state_written"] is False and replay["effects"]["quota_spent"] is False
+    assert len(invocations.read_text().splitlines()) == 2
+    assert sum(event["event_kind"] == "quota_spend" for event in load_rollout_events(events_path)) == 1

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ...chat_store import _read_json
+from ...control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
@@ -136,14 +137,18 @@ class LarkOwnerAttention:
         # Scope enumeration remains all-or-nothing. A failed authority read
         # inside that grant is a missing Goal, never an empty Todo list.
         scope = self.transport.bindings.goal_scope_ids(binding)
-        goals, unavailable = [], []
+        goals, unavailable, failures = [], [], []
         for goal_id in scope:
             try:
                 goals.append({"goal_id": goal_id, "todos": self._goal_todos(goal_id)})
-            except (ValueError, OSError, KeyError, TypeError, RuntimeError):
+            except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
                 unavailable.append(goal_id)
+                # Only native error codes reach health; exception messages may
+                # contain private paths, credentials or untrusted source text.
+                failures.append({"goal_id": goal_id, "error_code": "canonical_authority_required"
+                                 if isinstance(exc, CanonicalAuthorityRequired) else "source_unavailable"})
         return {"goals": goals, "scope_goal_ids": scope, "unavailable_goal_ids": unavailable,
-                "source_complete": not unavailable}
+                "source_complete": not unavailable, "source_failures": failures}
 
     def _goal_todos(self, goal_id: str) -> list[dict[str, Any]]:
         controller = self.transport.core.controller

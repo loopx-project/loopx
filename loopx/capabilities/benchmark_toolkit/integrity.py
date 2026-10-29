@@ -134,6 +134,7 @@ _RESTRICTED_ACCESS_REVIEW_CATEGORIES = frozenset(
         "other_trial_request",
         "controller_private_state_request",
         "host_escape_probe",
+        "credential_probe",
     }
 )
 _SENSITIVE_VALUE_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{12,}")
@@ -1292,7 +1293,15 @@ def build_benchmark_integrity_qualification(
         for category, count in counts.items()
         if count
         and category not in permitted_network_categories
-        and category not in _RESTRICTED_ACCESS_REVIEW_CATEGORIES
+        and (
+            category not in _RESTRICTED_ACCESS_REVIEW_CATEGORIES
+            # A declared typed environment contract is an exact allowlist.
+            # A broad shell probe bypasses that contract and remains a hard
+            # policy violation.  Without such a contract, a probe alone is a
+            # reviewable suspicion; observed credential values still fail
+            # closed through ``credential_value_observed``.
+            or (category == "credential_probe" and task_environment_access is not None)
+        )
     ]
     restricted_access_review = _build_restricted_access_review(
         counts=counts,

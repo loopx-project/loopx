@@ -934,7 +934,7 @@ class ChatRequestHandler(
             self.server.runtime_controller.recover_exited_turn(session_id)
             snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
             self._send_json(snapshot(
-                self.server.runtime_root, self.server.chat_store, session_id,
+                self.server.runtime_controller.coordination_runtime_root, self.server.chat_store, session_id,
                 registry=self.server.registry_path, message_limit=message_limit,
                 message_cursor=query.get("message_cursor", [None])[0]))
         except KeyError:

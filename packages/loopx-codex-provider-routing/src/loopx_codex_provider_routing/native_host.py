@@ -7,6 +7,7 @@ outside policy input and browser projections. Run only through the opt-in host.
 from __future__ import annotations
 
 import hashlib
+from contextlib import ExitStack, contextmanager
 import ctypes
 import importlib
 import json
@@ -145,12 +146,18 @@ class NativeHost:
         def idle():
             if self.not_after is not None and time.time() >= self.not_after:
                 raise HostError("quota_stale")
+            # A filesystem server holding only read-only directory handles
+            # neither pins auth.json nor proves a cached Codex login. Keep
+            # real file owners and warm Codex processes as independent holds.
+            if self._home_owners():
+                raise HostError("waiting_for_idle")
             try:
-                self.apps.account_idle(self.home, self.spec)
+                self.apps.account_idle(self.home, self.spec,
+                                       read_only_owners=tuple(self._directory_identities))
             except (ValueError, OSError, subprocess.SubprocessError):
                 raise HostError("waiting_for_idle") from None
             # A warm CLI can cache auth without keeping an auth file open.
-            if self._cached_codex_owners():
+            if self._home_owners():
                 raise HostError("waiting_for_idle")
             if self.expected is not None and self.revision() != self.expected:
                 raise HostError("selection_changed")
@@ -296,13 +303,26 @@ class NativeHost:
         # which was never inspected. Rescan only discovery; never retry effects.
         for _ in range(3):
             processes = self._processes()
-            result = subprocess.run(["/usr/sbin/lsof", "-Fp", "+d", str(self.spec["home"])],
+            result = subprocess.run(["/usr/sbin/lsof", "-Fpfat", "+d", str(self.spec["home"])],
                                     capture_output=True, text=True, timeout=10)
             if result.returncode not in (0, 1):
                 raise HostError("ownership_unverified")
-            owners = {int(line[1:]) for line in result.stdout.splitlines()
-                      if line.startswith("p") and line[1:].isdigit()}
-            owners |= self._cached_codex_owners(processes)
+            handles, owner, descriptor = {}, None, None
+            for line in result.stdout.splitlines():
+                if line.startswith("p") and line[1:].isdigit():
+                    owner, descriptor = int(line[1:]), None
+                    handles.setdefault(owner, [])
+                elif line.startswith("f") and owner is not None:
+                    descriptor = {"fd": line[1:].lstrip("*")}
+                    handles[owner].append(descriptor)
+                elif line[:1] in ("a", "t") and descriptor is not None and line[:1] not in descriptor:
+                    descriptor[line[0]] = line[1:]
+                elif line:
+                    raise HostError("ownership_unverified")
+            cached = self._cached_codex_owners(processes)
+            directories = {pid for pid, files in handles.items() if files and all(
+                f["fd"].isdigit() and f.get("a") == "r" and f.get("t") == "DIR" for f in files)} - cached
+            owners = set(handles) | cached
             unstable = False
             for pid in owners:
                 current, previous = process_identity(pid), processes.get(pid)
@@ -315,7 +335,8 @@ class NativeHost:
                     raise HostError("client_changed")  # Reuse/unknown is a hold.
             if not unstable:
                 self._owner_identities = {p: processes[p] for p in owners}
-                return sorted(owners)
+                self._directory_identities = {p: processes[p] for p in directories}
+                return sorted(owners - directories)
         raise HostError("client_changed")
 
     def _processes(self) -> dict:
@@ -527,6 +548,44 @@ class NativeHost:
              **({"service": services[p]} if p in services else {}),
              **(self._external_manager(p) if p not in app and p not in services else {})} for p in owners]}
 
+    @contextmanager
+    def restart_guard(self):
+        """Resolve blockers before quitting an App; fence accepted Chat work."""
+        owners = self._home_owners()
+        inspected, helpers = self.inspect_client_helpers()
+        agents = self._consumer_agents(owners)
+        restartable = set(helpers) | ({inspected[0]} if inspected[0] else set())
+        restartable.update(p for _, _, _, _, children in agents for p in children)
+        if set(owners) - restartable:
+            raise HostError("waiting_for_idle")
+        if not agents:
+            yield
+            return
+        try:
+            # Reuse the running product's accepted-work reader and ingress
+            # lock. Missing/unsupported Core cannot authorize a service stop.
+            from loopx.runtime_activation import managed_chat_activation_guard, RuntimeActivationDeferred
+        except ImportError as error:
+            raise HostError("waiting_for_idle") from error
+        frozen = {label: (pid, identity, self._chat_definition(plist, label))
+                  for label, plist, pid, identity, _ in agents}
+        with ExitStack() as guard:
+            try:
+                guard.enter_context(managed_chat_activation_guard(
+                    [plist for _, plist, _, _, _ in agents],
+                    expected_services={plist: (label, pid) for label, plist, pid, _, _ in agents},
+                ))
+                if any(self._chat_definition(plist, label) != frozen[label][2]
+                       for label, plist, _, _, _ in agents):
+                    raise HostError("client_changed")
+            except (RuntimeActivationDeferred, OSError, ValueError, TimeoutError) as error:
+                raise HostError("waiting_for_idle") from error
+            try:
+                self._guarded_agents = frozen
+                yield
+            finally:
+                self._guarded_agents = {}
+
     def _chat_recovery(self) -> tuple[Path, dict]:
         from .native import SCHEMA, private_read
         path = self.manager.root / "chat-recovery.json"
@@ -576,6 +635,9 @@ class NativeHost:
         for label, plist, service_pid, service, descendants in self._consumer_agents(self._home_owners()):
             if label in recovery["agents"]:
                 continue
+            if getattr(self, "_guarded_agents", {}).get(label) != (
+                    service_pid, service, self._chat_definition(plist, label)):
+                raise HostError("client_changed")
             target = f"gui/{os.getuid()}/{label}"
             digest = self._chat_definition(plist, label)
             fresh = set(self._home_owners())
@@ -694,81 +756,84 @@ class NativeHost:
         # idle() is rechecked by the native owner under launch/account locks,
         # and immediately before its first mutation. This is the CAS fence,
         # including against manual selections outside LoopX.
-        result, restore_error = None, None
-        try:
+        with ExitStack() as guard:
+            if restart_clients:
+                guard.enter_context(self.restart_guard())
+            result, restore_error = None, None
             try:
-                if restart_clients:
-                    if not_after is not None and time.time() >= not_after:
-                        raise HostError("quota_stale")
-                    inspected, helpers = self.inspect_client_helpers()
-                    self.close_client(expected, inspected=inspected,
-                                      **({"force": True} if force_quit_clients else {}))
-                    # Orphaned App helpers and idle chat transports are
-                    # product-owned clients of this home. Retire or pause them;
-                    # an unrelated CLI/file owner remains a hold, never a kill
-                    # target.
-                    self.retire_app_helpers(helpers)
-                    helpers.update(self.pause_chat_agents())
-                    self.retire_app_helpers(helpers)
-                    deadline = time.monotonic() + 15
-                    force_after, rescans = deadline - 5, 0
-                    while True:
+                try:
+                    if restart_clients:
+                        if not_after is not None and time.time() >= not_after:
+                            raise HostError("quota_stale")
+                        inspected, helpers = self.inspect_client_helpers()
+                        self.close_client(expected, inspected=inspected,
+                                          **({"force": True} if force_quit_clients else {}))
+                        # Orphaned App helpers and idle chat transports are
+                        # product-owned clients of this home. Retire or pause them;
+                        # an unrelated CLI/file owner remains a hold, never a kill
+                        # target.
+                        self.retire_app_helpers(helpers)
+                        helpers.update(self.pause_chat_agents())
+                        self.retire_app_helpers(helpers)
+                        deadline = time.monotonic() + 15
+                        force_after, rescans = deadline - 5, 0
+                        while True:
+                            try:
+                                if not self._helpers_stopped(helpers):
+                                    raise HostError("waiting_for_idle")
+                                self.manager.idle()
+                                break
+                            except HostError as error:
+                                if error.code != "waiting_for_idle":
+                                    raise
+                                if time.monotonic() >= deadline:
+                                    raise HostError("other_clients_busy") from None
+                                # Catch services started during initial shutdown,
+                                # without an unbounded scan/termination loop.
+                                if rescans < 3:
+                                    helpers.update(self.pause_chat_agents())
+                                    rescans += 1
+                                self.retire_app_helpers(helpers, force=force_quit_clients and time.monotonic() >= force_after)
+                                time.sleep(0.2)
+                    result = self.manager.switch(slot)
+                except Exception:
+                    # A refused/failed transaction must not unnecessarily leave a
+                    # normally closed source App down. Native preflight blocks
+                    # opening an incomplete credential journal; a later manual
+                    # choice wins.
+                    if restart_clients and before.get("client_running"):
                         try:
-                            if not self._helpers_stopped(helpers):
-                                raise HostError("waiting_for_idle")
-                            self.manager.idle()
-                            break
-                        except HostError as error:
-                            if error.code != "waiting_for_idle":
-                                raise
-                            if time.monotonic() >= deadline:
-                                raise HostError("other_clients_busy") from None
-                            # Catch services started during initial shutdown,
-                            # without an unbounded scan/termination loop.
-                            if rescans < 3:
-                                helpers.update(self.pause_chat_agents())
-                                rescans += 1
-                            self.retire_app_helpers(helpers, force=force_quit_clients and time.monotonic() >= force_after)
-                            time.sleep(0.2)
-                result = self.manager.switch(slot)
-            except Exception:
-                # A refused/failed transaction must not unnecessarily leave a
-                # normally closed source App down. Native preflight blocks
-                # opening an incomplete credential journal; a later manual
-                # choice wins.
-                if restart_clients and before.get("client_running"):
-                    try:
-                        if self.status().get("client_running") is False:
-                            self.reopen(expected)
-                    except (HostError, OSError, ValueError, subprocess.SubprocessError):
-                        pass
-                raise
-        finally:
-            # Restore product-owned transports even when the handoff fails.
-            try:
-                self.resume_chat_agents()
-            except HostError as error:
-                if result is None:
+                            if self.status().get("client_running") is False:
+                                self.reopen(expected)
+                        except (HostError, OSError, ValueError, subprocess.SubprocessError):
+                            pass
                     raise
-                # A committed account still needs its App reopened. Report the
-                # retained service recovery after that original continuation.
-                restore_error = error
-        value = self.status()
-        if value["active_slot"] != slot or value["current_login_matches"] is not True:
-            raise HostError("readback_failed")
-        launch_failed = False
-        if reopen:
-            try:
-                self.apps.open_app(self.home, "gpt", [])
-            except (OSError, ValueError, subprocess.SubprocessError):
-                launch_failed = True
-        after = self.status()
-        if after["selection_revision"] != value["selection_revision"]:
-            raise HostError("selection_changed")
-        value = after
-        if restore_error is not None:
-            raise restore_error
-        return value | {"history_untouched": result["history_untouched"], "launch_failed": launch_failed}
+            finally:
+                # Restore product-owned transports even when the handoff fails.
+                try:
+                    self.resume_chat_agents()
+                except HostError as error:
+                    if result is None:
+                        raise
+                    # A committed account still needs its App reopened. Report the
+                    # retained service recovery after that original continuation.
+                    restore_error = error
+            value = self.status()
+            if value["active_slot"] != slot or value["current_login_matches"] is not True:
+                raise HostError("readback_failed")
+            launch_failed = False
+            if reopen:
+                try:
+                    self.apps.open_app(self.home, "gpt", [])
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    launch_failed = True
+            after = self.status()
+            if after["selection_revision"] != value["selection_revision"]:
+                raise HostError("selection_changed")
+            value = after
+            if restore_error is not None:
+                raise restore_error
+            return value | {"history_untouched": result["history_untouched"], "launch_failed": launch_failed}
 
     def recover(self, rollback: bool, expected: str) -> dict:
         if sys.platform != "darwin":

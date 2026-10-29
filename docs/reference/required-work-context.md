@@ -66,23 +66,13 @@ narrative is never classified by headings or clipped to a size budget. Read all
 delivered context and remaining reads before dependent work; changed sources need
 a fresh guard. Enabled scoped acceptance does not replace original Goal intent.
 
-The complete Turn writer and explicitly enabled native context delivery request
-complete Goal material before capture. For an unmarked or mixed Goal, the
-registered-source adapter supplies the entire original UTF-8 text with its
-full-file revision and `full_source: true`. The existing TypeScript context owner
-checks that revision before fulfilling the Goal read. Marked sources retain
-their existing excluded-region lineage and canonical Todo authority. Ordinary
-quota with context delivery off retains the progressive behavior above.
-
-The internal `complete_goal_v1` acknowledgement prevents an older runtime from
-silently ignoring this requirement. Automatic complete-contract business-work Host dispatch
-uses `host_dispatch_context`: pending or invalid Goal material rejects before
-loading the Host. The `host_context` metadata read remains available for
-historical interpretation and result finalization. Saved contracts are not
-rewritten; a historical pending Goal read cannot become fulfilled merely by
-restoring its capture. This change neither grants execution permission nor
-establishes enforcement for other pending capability reads. Replan material-reading
-invocations retain their existing staged reader and work restrictions.
+Explicitly enabled native context delivery requests complete Goal material before
+capture. For an unmarked or mixed Goal, the registered-source adapter supplies
+the entire original UTF-8 text with its full-file revision and `full_source: true`.
+The existing TypeScript interaction owner checks that digest before fulfilling
+the read; `complete_goal_v1` acknowledges support so an older runtime cannot
+silently retain a pending Goal read. Missing or invalid sources still reject.
+Marked sources retain their generated-region lineage and canonical Todo authority.
 
 Native delta delivery and source fulfillment share the same integrity predicate.
 Only exact verified Goal text can be inherited from the retained baseline;
@@ -107,16 +97,10 @@ The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
 that same model view. A selected detail page cannot acknowledge the required
 view, establish a full baseline or prove that other hidden details were read.
-The adapter applies the existing typed edit plans without round-tripping the
-original JSON values through JavaScript. Validated signed complete inputs use
-the same scope and material owners, within `outcome_context_projection_v0`;
-the canonical decision is neither edited nor re-signed. Scope filtering and
-material edits apply in sequence, so a retained outcome that moves in an array
-still references its original capture position and retains its exact values.
-Historical scope-only presentations remain readable through their original
-decoder. Unknown outcome fields, unknown source read obligations, unsupported
-or invalid signatures and unavailable planning retain their original full
-content. Context delivery off remains unchanged.
+The adapter edits paths selected by the typed owner without round-tripping the
+original JSON values through JavaScript. Unknown outcome fields, unknown source
+read obligations, unsupported schemas, signed envelopes and unavailable planning
+retain their original full content. Context delivery off remains unchanged.
 If the required view and its index are not smaller in serialized UTF-8 bytes,
 delivery retains the original full view and read obligations; small material
 does not need a more expensive detail round trip. This is a transport-size
@@ -136,10 +120,9 @@ The reader must recover a missing target from this same capture before dependent
 work; it does not need a new detail read when the complete target is present.
 This is exact reuse, not candidate relevance or selection. It changes no
 canonical record or authority, and does not permit skipping other candidates.
-Validated signed native inputs reuse the same reference owner. Disabled native
-delivery and historical captures keep their existing behavior. The existing
-size comparison retains a full view when the reference guidance would cost more
-than the duplicate rows.
+Signed envelopes, disabled native delivery and historical captures keep their
+existing behavior. The existing size comparison retains a full view when the
+reference guidance would cost more than the duplicate rows.
 
 A context epoch is not a work Turn. Compaction or a failed native hook invalidates
 delta reuse; it does not require another admission or unconditional replay of the
@@ -172,10 +155,9 @@ presentation, and context delivery off keeps its original pending Goal reads.
 Unbound staged replans retain their existing review-owned original Goal read.
 
 The Goal availability adapter still reads and UTF-8-validates the complete file
-and hashes all bytes for its revision. In ordinary progressive delivery with
-context delivery off, unmarked or mixed sources send only their path and revision
-across the internal context-projection bridge, without an unused body copy.
-Explicitly owned sources send the complete
+and hashes all bytes for its revision. With native context delivery off, only the path and revision of unmarked or mixed sources cross the
+internal context-projection bridge, preserving the complete progressive read
+without an unused body copy. Explicitly owned sources send the complete
 non-generated narrative and region lineage to the typed consumer. Missing files
 and invalid UTF-8 still block dependent delivery. Byte reduction alone does not
 establish model-token, latency or outcome gains.
@@ -230,49 +212,28 @@ acceptance, authority or a measured model benefit.
 
 The complete Turn contract stores equal, nonempty registered Todo-summary lanes
 once when a local reference is smaller. A `<lane>_ref` names a literal array in
-the same signed summary, for example
-`$.agent_todo_summary.first_executable_items`; it requires no additional read.
-Equality includes array order, JSON types and unknown item fields. Resolve these
-references before applying display caps. Literal/reference ambiguity, missing
-targets, reference chains and references outside that summary are rejected.
-Counts, candidate collections and unknown summary fields keep their original
-values. The original capture remains complete; this encoding changes no work
-selection, authority, recovery or settlement rule.
+the same signed summary. Equality preserves array order, original numeric source
+identity, JSON types and unknown item fields. Resolve references before display
+caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
+candidate collections, selection, authority and settlement retain their owners.
 
-Within the opt-in native context transport, a verified same-capture reading plan
-now produces `outcome_context_projection_v0`: an explicit model presentation,
-with the current Agent's and related outcomes expanded and other independent
-outcomes indexed with current states and exact original-source references.
-Global intent, checks, permissions, stops and pending reads stay intact. The
-interaction owner adjusts its own fulfilled outcome-reading instruction; read
-complete optional detail before relying on it, and recover the complete original
-source for unknown relevance or Goal-wide acceptance. Unknown optional fields,
-unsupported guidance or a pending acceptance read keep full delivery. The
-canonical decision and ordinary inspection still retain all requirements.
+For enabled native quota with selected work, the same acceptance snapshot may
+include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
+connected through registered Todo relations, shared acceptance/source/evidence
+references, or failed/stale observations. An Agent owning two outcomes does not
+by itself connect their work. `coverage_complete` describes coverage of the
+registered relationship graph, not completeness of model understanding or proof
+that other outcomes are irrelevant. Missing relationships, unbound work or global
+acceptance widen suggestions and expose `limitations`.
 
-Warm native delivery may reuse the wrapper's exact reading instruction and
-outcome titles. Current source references, scope, owners, revisions, requirement
-states and unknown controls remain literal on every input, including reordered
-indexes. Changed prose is delivered exactly; cold delivery and context-loss
-recovery retain the complete current presentation.
-
-The complete-file Goal source uses the same integrity predicate for dispatch
-and native reuse: exact text digest, explicit full-source marker, no conflicting
-exclusions and no incomplete-read flag. Its text may be inherited from the
-exact baseline; current source witnesses and unknown fields remain inline.
-
-Native full/delta baselines and compaction recovery bind the exact required
-presentation, including its original-source digest. A newly required outcome
-must deliver its body before reuse; machine storage of optional text is not
-model reading. Publish current full-source recovery before optional scope
-composition, then the exact required artifact before encoding, so interruption
-cannot recover the preceding input. `quota context-read --outcome-ref` on the
-presentation rechecks
-its original full source through the same registry and exact-page reader.
-Those detail pages cannot establish full-presentation retention. Old full
-captures keep their original full-read obligation; transport off is unchanged.
-These are source-path guarantees, not installed App adoption, actual model
-retention or accepted-outcome/full-cost benefit.
+This is advisory reading order. It neither filters outcomes nor adds a full-read
+obligation, admission rule, approval or completion proof. The complete contract
+stays in the existing capture; use generic `quota context-read --select` to open
+needed sections, with `--list` where the installed reader supports discovery.
+No outcome-specific reader or pagination protocol is introduced. The suggestion
+is bound to the exact acceptance digest and provider revision; host oracle
+readback that changes the source drops that stale advice. Disabled delivery,
+explicit inventory inspection and signed TurnEnvelope retain their prior shapes.
 
 For an exact Todo, the existing command now returns one complete record:
 
@@ -583,6 +544,11 @@ as a substitute. Both paths establish a new chain only after a complete verified
 full read. Ordinary tools and turn endings do not invalidate it. An interrupted
 pending delivery requires full recovery. Repeated reset events are idempotent.
 Recovery reads the same immutable capture without re-admission or spend.
+The adapter commits the current complete capture reference and pending delivery
+under the existing session lock before optional material planning or encoding.
+A process exit during planning therefore recovers the current source rather
+than its predecessor. The planner reuses that archive; an unread current source
+still cannot establish a full native baseline.
 
 This deliberately replaces per-request complete-input proof with lifecycle
 assumptions. Downstream output loss or truncation not exposed to the hook, a
@@ -634,11 +600,6 @@ Todo 区域相交的区间均拒绝。
 普通注释、代码块中的示例、损坏或未知回执、其他 Goal 的回执和附带其他文字的行均原样
 保留。这样首轮全文读取不再携带累积的恢复日志；不改变回执重放校验，也不据此宣称
 模型输入或 token 成本已经降低。
-未合并的 C1 完整 Turn writer 同样在捕获前请求完整 Goal；自动业务 Host dispatch
-通过 `host_dispatch_context` 在加载 Host 前拒绝未完成或无效的 Goal 材料。历史解释与
-结果收尾继续使用 `host_context` 元数据读取，恢复旧 capture 不会自动履行其原本未完成
-的 Goal 读取。本增量不扩大权限，也不声称强制其他 capability 的待完成读取。
-
 显式开启的 native context delivery 在捕获前请求完整 Goal。未标记或混合归属的来源
 由原 registered-source adapter 提供全部原始 UTF-8 正文、完整修订与 `full_source: true`。
 既有 TypeScript interaction owner 核对正文 digest 后才履行读取；`complete_goal_v1`
@@ -676,36 +637,6 @@ context delivery 时，未标记或混合归属仅在内部桥接传路径与修
 全部保留，包括其他 owner 的要求。选定 Todo 的完整正文与声明仍由独立来源携带。
 没有选定工作的读取及显式 `goal-acceptance inspect` 保留完整列表；正文减少不等于
 验收、执行权限或已经测得模型收益。
-
-完整 Turn 契约在本地引用更小时，仅存一份相等且非空的已注册 Todo 摘要列表。
-`<lane>_ref` 指向同一签名摘要中的字面数组，例如
-`$.agent_todo_summary.first_executable_items`，不需要额外读取。相等比较包含数组
-顺序、JSON 类型和未知条目字段；应用展示上限前须先展开引用。正文与引用并存、目标
-缺失、引用链或跨摘要引用均拒绝。计数、候选集合及未知摘要字段保留原值。原 capture
-仍完整；编码不改变工作选择、权限、恢复或结算规则。
-
-可选 native context transport 在同 capture 读取计划完整匹配时生成显式模型展示
-`outcome_context_projection_v0`：展开当前 Agent 及相关成果，其他独立成果保留当前
-状态索引和精确原来源引用。全局意图、检查、权限、停止和未完成读取保持完整；既有
-interaction owner 仅调整自己的已履行成果读取指导。依赖可选成果前先读完整正文，
-相关性未知或 Goal 整体验收时读原完整来源。未知可选字段、不支持的指导或尚未完成的
-acceptance read 均保留全量交付；canonical decision 和普通 inspect 不删减要求。
-
-温态 native 交付可复用 wrapper 中完全相同的阅读说明和成果标题。当前来源引用、
-范围、owner、修订、要求状态及未知控制字段每轮仍明文提供，包括索引重排；变化后的
-正文精确交付。冷态及上下文丢失恢复仍保留当前完整展示。
-
-完整文件 Goal 来源的派发和 native 复用共享同一完整性判断：正文 digest 精确匹配、
-明确标记 full source、无矛盾的排除区域且读取完整。正文可继承精确 baseline；当前
-来源凭据与未知字段每轮仍明文提供。
-
-native 全量/差分 baseline 与压缩恢复绑定真正交付的必读展示及其原来源 digest。
-新增必读成果须先交付正文，机器保存可选文字不代表模型已读。
-可选 scope 组合前先发布当前完整来源的恢复引用，编码前再发布精确必读产物，避免
-中断后恢复前次输入。对该展示运行
-`quota context-read --outcome-ref` 会通过同一 registry 和精确分页 reader 重验原完整
-来源；详情分页不确认完整展示已保留。旧 full capture 仍按原完整义务读取，transport
-关闭不变。这些是源码路径保证，不证明正式 App 采用、模型保留或验收成果/完整成本收益。
 
 `todo list --todo-id …` 默认只返回一份完整 `todo.text`，保留来源、修订、身份、
 状态和关系。精确响应移除列表及角色视图，不保留兼容开关；`--thin` 只用于概览。
@@ -857,6 +788,9 @@ code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部
 原捕获，不能用新 guard 替代。两条路径都只在完整且已校验的全量读取后建立新差分链。
 普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
 后须完整恢复。重复重置事件幂等；恢复读取同一不可变捕获，不重新准入或扣额。
+Adapter 在可选材料规划或编码前，先持既有 session 锁提交当前完整 capture 引用及
+pending delivery。规划过程中进程退出后，恢复指向当前来源而非上一份；planner
+复用同一 archive。尚未读取的当前来源仍不能建立完整 native baseline。
 
 这是以生命周期假设替换逐轮完整输入证明。Hook 未暴露的下游丢失／截断、漏掉失效事件，
 或在声明开关之外静默禁用 hooks，仍可能漏检；不把这些假设称为实测保留，也不新增审批门。

@@ -206,8 +206,8 @@ The [packaged C1 heartbeat checkpoint](ledger/controller-executor-unified-contra
 preserves required source and same-capture settlement semantics on isolated
 File/SQLite. Its diagnostic follow-through reuses one typed owner and removes the
 Python duplicates; [#7557](https://github.com/loopx-project/loopx/pull/7557) is merged,
-and #7430 reuses its repaired module. Later complete-Goal and scoped-prose reuse
-improves cold, warm and recovery stdout against the original quota baseline when
+and #7430 reuses its repaired module. Historical complete-Goal and scoped-prose reuse
+improved cold, warm and recovery stdout against the original quota baseline when
 both arms include all mandatory reads. Earlier negative warm cohorts and the
 integration's existing v4 budget failure remain recorded; optional all-peer reads
 still add cost. [#7575](https://github.com/loopx-project/loopx/pull/7575) is merged
@@ -218,6 +218,15 @@ the original v4 budget still fails. Continue C1 on remaining real consumers,
 writer cutover and reader retirement with complete unknown-field/obligation
 preservation. These engineering observations do not promote defaults or qualify
 model-token, complete-cost or actual decision/outcome benefit.
+
+C1 now retires its unmerged mandatory outcome-reading plan and scoped wrapper,
+reusing merged #7560's advisory navigation and the generic same-capture selector.
+Merged #7643 preserves original values through the existing edit transport.
+The [navigation convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.md)
+keeps signed contracts complete and main's recovery-before-planning ordering;
+#7627's file-first delivery remains a separately reviewed dependency. The old
+fused native-call saving does not apply to this integration. Numeric hash identity,
+writer/caller retirement and original-quota outcomes/full cost remain open.
 
 The same integration codec now adopts merged [#7528](https://github.com/loopx-project/loopx/pull/7528)
 for exact relocated evidence with literal current overrides, including scoped

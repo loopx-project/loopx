@@ -367,6 +367,17 @@ Failure to enumerate scope or verify the original owner, App, grant or route
 still pauses delivery. The panel distinguishes a fresh partial-source check
 from a stale worker or a delivery error; unknown receipts remain visible.
 
+Expand **View unavailable Goals** in that setting to identify each missing
+source. A native `canonical_authority_required` result asks the project's
+maintainer to back up and migrate its Todo authority; other read failures stay
+generic and are checked again. Only the Goal identity and an allowlisted error
+code enter this health view. Private exception text and paths are not displayed.
+This diagnosis never migrates a Goal, changes its grant, or resends a notice.
+
+在同一设置中展开“查看不可读的 Goal”，可逐项定位缺失来源。原生待办尚未迁移时，
+需由该项目维护者先备份并迁移；其他读取失败只提示暂不可读，服务会继续检查。
+页面不显示原始异常或私有路径，也不会据此迁移项目、扩权或重发通知。
+
 The packaged fixture
 `apps/presentation/dashboard/smoke/owner-attention-source-fixture.py` uses real
 HTTP, native File authority and the existing outbound worker, with synthetic

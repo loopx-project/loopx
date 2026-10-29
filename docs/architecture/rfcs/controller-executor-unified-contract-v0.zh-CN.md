@@ -321,44 +321,26 @@ C2 须在相同冷态、已保留温态及上下文丢失来源上验证：默�
 约束的成本。这是拟议交付行为，替换与回滚完成资格验证前，仍以当前完整来源 reader
 为准。
 
-第一项 reader 前置现已有实际普通 CLI 调用方：给定原 capture 文件和文件字节
-SHA-256，`quota context-read --outcome-ref` 分页读取成果索引，附上返回的精确引用
-则分页读取该成果全文。普通与 staged replan 复用同一 TypeScript registry/index
-owner；索引保留 owner/工作关联，并将当前 check/planning/review 事实完全相同的
-要求标识分组，缺失事实保持未知。相同正文共享引用，同 id 的变化版本仍分别保留。
-详情保留原描述、声明来源、review 证据与未知字段。每页重新核验原文件，返回的
-接续命令还绑定所选 JSON 字节 digest，拒绝在原文件 hash 未变时混合变化的渲染。
-游标仅定位所选 JSON，不能证明完整 capture 已保留。这是读取前置，尚未切换默认自己
-Agent：原完整读取义务、Host 连续性和 Goal 权限保持不变。
+当前集成证据：[导航收敛检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.zh-CN.md)。
 
-既有 canonical acceptance 读取还从同一份完整工作快照提供版本化的候选读取计划，
-不增加 authority 读取或 RPC。计划包含自己的成果、选定工作、传递的 typed 依赖/
-lineage、共同工作/check scope、精确声明来源或 review 证据，以及失败/过期观察及其
-相关工作。工作未绑定、关系/生命周期不可用或 Goal 全局检查均保留全部成果。
-捕获索引仅在计划与 Goal/Agent/Todo、provider revision 和完整验收来源 digest
-一致时标记 `required_in_scope`；oracle 事实变化、额外载体版本或不支持的计划均
-扩大为完整读取。原完整 capture reader 仍返回 `scope_applied=false`：索引不改变
-该 capture 的完整读取义务；普通 acceptance inspect 保持原完整格式。
+当前 C1 分支复用已合入 #7560 的 `outcome_context_navigation_v1` 和通用同 capture
+`context-read --select`。注册关系建议读取顺序；归属不证明独立性，覆盖限制也不
+新增模型全文读取门。原完整要求、当前状态、全局约束和反证仍可从原 digest 绑定的
+capture 取得。
 
-可选 native transport 现在将计划同时接入 required-read、交付与恢复。
-`outcome_context_projection_v0` 只标识派生的模型展示，不是部分 canonical decision
-或新的决策 owner。原完整 capture 保持不可变和 digest 绑定；展示展开全部必读成果，
-保留所有全局字段、完整当前成果索引及精确原来源引用。未知可选字段、未解决的
-acceptance read 或不认识的来源指导均保持完整交付。既有 interaction owner 仅替换
-自己精确生成、已履行的成果读取指导；目标采用、原始和累计要求、工作核对、独立检查
-区别、新鲜度、权限及停止义务保留，不引入自然语言相关性分类器。注册关系闭包仍
-不能证明任意语义独立性：依赖可选成果前先读完整正文，相关性未知或需要 Goal 全局
-决定时扩大为原完整来源。
+此前未发布的强制阅读计划、`outcome_context_projection_v0` wrapper、普通读取的
+专用成果 reader 和融合 native projection 操作均已退役。Staged replan 原本的
+decision 绑定验收引用仍归其 owner。Native IO 复用主干材料 planner 与精确恢复
+codec，在可选规划前先提交当前完整恢复引用。简单 native capture 因而恢复为两次
+owner 调用，而非原型的一次融合调用；旧调用数优化不构成当前资格。
 
-native candidate 与压缩恢复指向真正交付的必读模型产物，而不是机器保存的完整
-canonical 来源。既有 delta codec 因而会交付新增必读正文，不能从隐藏 baseline 借用
-模型未读过的可选正文。当前完整来源的恢复引用先于可选 scope/codec 组合发布；共享
-typed owner 在一次调用中计算两者，IO 在暴露任何结果前落盘精确必读产物并切换恢复
-引用。组合期间中断不能让恢复仍选中前一次 capture。完整分页覆盖仍只是
-显式 native-hook 连续性假设，不证明模型
-保留。可选详情复用同一原来源 registry，重验文件和派生展示，不确认完整 capture
-保留。transport 关闭和旧 capture 保持原行为；其他 Host adapter、正式 App 采用、
-实际模型决定及匹配验收成果/完整成本仍未资格。
+[#7627](https://github.com/loopx-project/loopx/pull/7627) 单独提议文件优先交付及文件
+差分，无需强制模型全文读取。沿既有 native owner 采用其评审后的精确实现，不再
+引入已退役的 scope 机制。实际安装采用、模型决定和验收成果/完整成本仍须分列。
+历史 capture 保留其原身份与受支持的恢复。
+
+以下测量和测试对应已退役原型的精确检查点，作为历史证据保留，不代表当前导航/
+planner 集成的结果。
 
 同一 24 成果/253 要求合成快照，以 61 组交替温态真实 provider owner 调用对照
 旧实现：File 中位数 5.890→6.317 ms，SQLite 为 2.239→2.521 ms；p95 分别为

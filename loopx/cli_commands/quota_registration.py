@@ -43,9 +43,7 @@ def register_quota_command(
         help="Use status for all groups, plan for next-turn groups, should-run for one goal, context-read for bounded original-capture recovery without a guard, context-project to present an existing digest-bound quota capture with native full/delta and a full-read fallback, context-hook for opt-in native Codex lifecycle IO, context-config for native hook/recovery configuration without installation or trust changes, monitor-poll for no-spend quiet poll evidence, scheduler-ack for successful Codex App RRULE state, scheduler-fail-current to suppress a repeated failed host update pair, spend-slot for accounting, or void-slot for a non-destructive accounting correction.",
     )
     quota_parser.add_argument("--decision-file", help="Original captured decision for read-only replan-view.")
-    quota_parser.add_argument("--outcome-ref", nargs="?", const="",
-        help="For context-read: omit the value to list captured outcomes, or supply an exact reference to page its full detail. "
-             "For replan-view: exact captured acceptance outcome reference. Neither changes required-read obligations.")
+    quota_parser.add_argument("--outcome-ref", help="Exact captured acceptance outcome reference for replan-view. Use context-read --select for saved-file detail.")
     quota_parser.add_argument("--source-hash", help="Original source_decision_hash for replan-view.")
     quota_parser.add_argument("--replan-stage", choices=["review", "writeback", "acceptance", "explore"], default="review",
                               help="Read decision context before opening its writeback format.")

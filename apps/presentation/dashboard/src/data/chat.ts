@@ -2754,6 +2754,8 @@ const privateConversationSchema = z.object({
       last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
       source_coverage: z.object({goal_count: z.number().int().nonnegative(),
         read_goal_count: z.number().int().nonnegative(), unavailable_goal_count: z.number().int().nonnegative()}).nullable().optional(),
+      source_failures: z.array(z.object({goal_id: z.string(),
+        error_code: z.enum(["canonical_authority_required", "source_unavailable"])})).optional(),
       pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),

@@ -38,7 +38,7 @@ pytestmark = pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"
   + [(host, surface, False, True, False) for host in ("benchmark", "code_mode")
      for surface in ("quota_packet", "turn_envelope")]
   + [("code_mode", surface, False, True, True) for surface in ("quota_packet", "turn_envelope")])
-def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False, scoped_outcomes=False, working_brief=False):
+def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, host, surface, failed_primary, resumed, adaptive, hook_loss=None, shared_root=False, checkpoint_handoff=False, handoff_socket=None, native_pragma=False, native_read_batch=2, native_history_tokens=None, resume_loss=None, bounded_pages=False, ssh_goal=False, reader_output_bytes=None, recovery_resume=False, working_brief=False):
     # Real worker qualification follows returned cursors; output budgets can
     # shrink a page, so precomputed fixed offsets are not its production path.
     bounded_pages = bounded_pages or host == "benchmark"
@@ -58,31 +58,9 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         body += '\nMixed UTF-8 and JSON escaping: 汉🙂"\\\t' * 100
     todos = read_fixture_todos(state)
     todos[0].update(text=body, title=body)
-    if scoped_outcomes:
-        config = json.loads(registry.read_text())
-        config["goals"][0].update(status="active", adapter={"kind": "generic_project_goal_v0", "status": "connected"})
-        config["goals"][0]["coordination"]["registered_agents"].append("independent-peer")
-        registry.write_text(json.dumps(config))
-        state.write_text(state.read_text().replace("status: active-read-only", "status: active"))
-        todos.append({**todos[0], "todo_id": "todo_independent_peer", "text": "Independent peer deliverable.",
-            "title": "Independent peer deliverable.", "claimed_by": "independent-peer"})
     initialize_canonical_authority(runtime, GOAL_ID,
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider="sqlite")
-    if scoped_outcomes:
-        for owner, todo_id, outcome_id in ((AGENT_ID, TODO_ID, "own-result"),
-                ("independent-peer", "todo_independent_peer", "peer-result")):
-            document = workspace / f"{outcome_id}.json"
-            document.write_text(json.dumps({"outcome_id": outcome_id, "owner_agent_id": owner,
-                "objective": f"Deliver {outcome_id}.", "todo_ids": [todo_id],
-                "requirements": [{"id": "complete", "description": f"Complete {outcome_id} requirement tail."}],
-                "source": {"ref": f"message:{outcome_id}", "summary": f"Independent origin for {outcome_id}."}}))
-            rc, observed_acceptance = _run_cli(registry, runtime, "goal-acceptance", "inspect", "--goal-id", GOAL_ID)
-            assert rc == 0, observed_acceptance
-            rc, refined = _run_cli(registry, runtime, "goal-acceptance", "refine", "--goal-id", GOAL_ID,
-                "--agent-id", owner, "--document", str(document), "--operation-id", f"declare-{outcome_id}",
-                "--expected-provider-revision", observed_acceptance["provider_revision"], "--execute")
-            assert rc == 0, refined
     original_state = state.read_bytes()
     root = workspace / "captures"
     root.mkdir()
@@ -103,7 +81,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             capture_output=True, text=True, timeout=15)
         assert prepared.returncode == 0, prepared.stderr
         native_configuration = json.loads(prepared.stdout)["native_config"]
-    automatic_output_budget = host == "benchmark" or native_configuration is not None or scoped_outcomes
+    automatic_output_budget = host == "benchmark" or native_configuration is not None
     native_guard_output_bytes = (7900 if not automatic_output_budget or (
         native_history_tokens is not None and native_configuration is not None
         and native_history_tokens < native_configuration["config_overrides"]["tool_output_token_limit"])
@@ -499,9 +477,6 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     with local_inference_provider(observed_response, usage) as (url, calls, observed):
         if host != "benchmark":
             _configure_provider(home, url)
-            if scoped_outcomes:
-                config = home / "config.toml"
-                config.write_text("tool_output_token_limit=20000\n" + config.read_text())
             if host == "code_mode":
                 config = home / "config.toml"
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
@@ -711,23 +686,6 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     # reconstructed fact with its original capture, not two compact views.
     for document, (_, raw) in zip((wires["cold"]["context"], current["context"]), snapshots, strict=True):
         original = json.loads(raw)
-        if scoped_outcomes:
-            assert document["schema_version"] == "outcome_context_projection_v0"
-            assert {row["id"]: row["required_in_scope"] for row in document["outcome_index"]} == {
-                "own-result": True, "peer-result": False}
-            assert "Complete own-result requirement tail." in json.dumps(document)
-            assert "Complete peer-result requirement tail." not in json.dumps(document)
-            assert json.loads(Path(document["source_capture"]["path"]).read_bytes()) == original
-            # Independent full-source oracle: only the declared reading scope
-            # and its owner-generated instruction differ in model presentation.
-            document = json.loads(json.dumps(document["context"]))
-            actual_sources = document["interaction_contract"]["agent_channel"]["work_context"]["sources"]
-            original_sources = original["interaction_contract"]["agent_channel"]["work_context"]["sources"]
-            for actual_source, original_source in zip(actual_sources, original_sources, strict=True):
-                if actual_source.get("source") == "goal_acceptance":
-                    assert "read_scope" in actual_source["reason"]
-                    actual_source["reason"] = original_source["reason"]
-                    actual_source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"] = original_source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
         assert document == original
         assert document["schema_version"] == "loopx_turn_envelope_v1"
         context = document["interaction_contract"]["agent_channel"]["work_context"]
@@ -767,12 +725,6 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
     if bounded_pages:
         assert bounded_sizes and max(bounded_sizes) > 3072
-
-
-@pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])
-def test_native_scoped_outcome_input_and_same_capture_recovery(tmp_path, monkeypatch, surface):
-    test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, "code_mode", surface,
-        False, False, False, bounded_pages=True, scoped_outcomes=True)
 
 
 @pytest.mark.parametrize("surface", ["quota_packet", "turn_envelope"])

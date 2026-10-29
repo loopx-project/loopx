@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from collections.abc import Iterator
 from typing import Any
+import copy
 import json
 import os
 from pathlib import Path
@@ -469,48 +470,71 @@ def register_native_context_view(directory: str | None, view: dict[str, Any]) ->
         _save(root, state)
 
 
-def _capture_required_context(payload: dict[str, Any], *, directory: Path,
-                              archive: dict[str, Any],
-                              plan: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Apply the typed owner's plan to the original values and publish that view.
+def _capture_required_context(
+    payload: dict[str, Any], *, directory: Path, surface: str, archive: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Publish the archive first, then the model view selected by the typed owner.
 
     Only the required view may become a full/delta baseline. Detail pointers
     always address the immutable archive, never a later canonical-state read.
     """
-    from ..quota.cli_projection import _apply_context_projection_changes
+    from ..quota.turn_envelope import plan_progressive_context
+    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
-    def original_value(path: list[str | int]) -> Any:
-        value: Any = payload
-        for key in path:
-            value = value[key]
-        return value
-
-    # The bridge cannot distinguish an integral float from an integer. Verify
-    # exact reference equality on the IO side before replacing either record.
-    for check in plan.get("reference_checks", []):
-        if json.dumps(original_value(check["path"]), sort_keys=True) != json.dumps(
-            original_value(check["from"]), sort_keys=True
-        ):
-            return payload, archive
-    projected = payload
+    if archive is None:
+        archive = capture_context_projection(payload, directory=directory,
+            read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
     try:
-        for stage in plan["stages"]:
-            projected = _apply_context_projection_changes(projected, stage)
-    except RuntimeError as error:
-        raise ValueError("Invalid required-context presentation plan") from error
-    presentation = plan.get("presentation")
-    if isinstance(presentation, dict):
-        projected = {**presentation, "context": projected}
+        plan = plan_progressive_context(payload, surface=surface)
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        return payload, archive
+    if not plan["deferred"] and not plan.get("references"):
+        return payload, archive
+    projected = copy.deepcopy(payload)
+
+    def at(path):
+        row = projected
+        for key in path:
+            row = row[key]
+        return row
+
+    for edit in plan.get("references", []):
+        # Compare original Python values as well: the typed bridge must never
+        # equate distinct integers or change the source record's numeric types.
+        value, target = at(edit["path"]), at(edit["from"])
+        if json.dumps(value, sort_keys=True) != json.dumps(target, sort_keys=True):
+            return payload, archive
+        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
+    for edit in plan["deferred"]:
+        path, parent = edit["path"], edit["parent"]
+        del at(path[:-1])[path[-1]]
+        at(parent)[edit["index_key"]] = "/" + "/".join(
+            str(key).replace("~", "~0").replace("/", "~1") for key in parent)
+    for edit in plan["instructions"]:
+        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
+    page_bytes, output_bytes = native_context_page_budget()
+    details = {
+        "path": archive["path"], "sha256": archive["sha256"],
+        "command_template": context_capture_read_command(Path(archive["path"]), archive["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes) + " --select '<supporting_material_pointer>/sources'",
+        "instruction": "This view retains complete requirements and current review/check states. "
+            "Source history, review reasoning and evidence references are supporting material. "
+            "Read them from this same immutable capture when a decision, verification or review depends on them. "
+            "For source history use supporting_material_pointer plus /sources. For review detail append "
+            "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. "
+            "Repeat --select to batch needed fields without replaying the outcome's requirements. "
+            "Detail reads never establish a full baseline. "
+            "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance.",
+    }
+    if plan["deferred"]:
+        projected["context_details"] = details
     # These are transport bytes, not a semantic relevance heuristic or a model
     # token estimate. Small material is cheaper inline than an index plus IO.
     required_bytes = len((json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))
     if required_bytes >= Path(archive["path"]).stat().st_size:
         return payload, archive
-    recovery = capture_context_projection(projected, directory=directory,
+    return projected, capture_context_projection(projected, directory=directory,
         filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
-    if projected.get("schema_version") == "outcome_context_projection_v0":
-        recovery["presentation_schema"] = projected["schema_version"]
-    return projected, recovery
 
 
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
@@ -547,7 +571,6 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
                 request = _native_context_request(state, scope)
-                required = payload
                 recovery = capture_context_projection(payload, directory=capture_directory,
                     read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 page_bytes, output_bytes = native_context_page_budget()
@@ -562,52 +585,20 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                         "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
                     _save(root, state)
 
-                # Retire old reuse before *any* optional scope/codec call. A
-                # process interruption must recover this original, never its
-                # predecessor. Scoped publication can then replace this route.
+                # Publish the current complete source before optional planning
+                # or encoding can be interrupted. Never recover its predecessor.
                 publish_recovery(recovery)
                 recovery_committed = True
-                # The canonical capture stays complete. A scoped model context
-                # owns a distinct immutable recovery/baseline artifact containing
-                # exactly what the model reads, never hidden optional bodies.
-                from ..quota.turn_envelope import _turn_envelope_result
-                from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-
-                try:
-                    prepared = _turn_envelope_result("native_context_delivery", payload=required,
-                        source_capture={key: recovery[key] for key in ("path", "sha256")},
-                        **request, surface=surface, capture_id=capture_id)
-                    material = prepared.get("required_context_plan")
-                    if isinstance(material, dict):
-                        required, recovery = _capture_required_context(payload, directory=capture_directory,
-                            archive=recovery, plan=material)
-                        publish_recovery(recovery)
-                        result = project_captured_context(required, directory=capture_directory,
-                            request=request, captured_recovery=recovery,
-                            goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
-                        projected = required
-                    else:
-                        result = prepared.get("delivery")
-                        projected = prepared.get("projection", result.get("context") if isinstance(result, dict) else None)
-                    if not isinstance(projected, dict):
-                        raise ValueError("native projection result has no complete context")
-                except (ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
-                    projected = required
-                    # A failed optional composition can still use the ordinary
-                    # codec; its own failure returns the original full source.
-                    result = project_captured_context(required, directory=capture_directory,
-                        request=request, captured_recovery=recovery,
-                        goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
-                if projected.get("schema_version") == "outcome_context_projection_v0" and projected is not required:
-                    payload = projected
-                    recovery = capture_context_projection(payload, directory=capture_directory,
-                        filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
-                    recovery["presentation_schema"] = payload["schema_version"]
+                required, planned_recovery = _capture_required_context(payload, directory=capture_directory,
+                    surface=surface, archive=recovery)
+                if planned_recovery is not recovery:
+                    recovery = planned_recovery
                     publish_recovery(recovery)
 
-                result = result if isinstance(result, dict) else required
+                result = project_captured_context(required, directory=capture_directory,
+                    request=request, captured_recovery=recovery,
+                    goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
                 if result.get("schema_version") == "context_delivery_v1":
-                    result["recovery"] = recovery
                     state["recovery"]["target"] = result["target"]
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"])
                     _save(root, state)

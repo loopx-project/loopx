@@ -69,8 +69,17 @@ try {
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();
     await dialog.getByRole('button', {name: '清空', exact: true}).click(); await settled();
     await rows(12);
-    await dialog.getByRole('button', {name: '更多记录', exact: true}).click(); await settled();
+    await page.setViewportSize({width: 390, height: 844});
+    const more = dialog.getByRole('button', {name: '更多记录', exact: true});
+    assert.ok(await more.evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return box.top >= 0 && box.bottom <= innerHeight;
+    }), 'The next page must be reachable without scrolling through the current page');
+    await more.focus(); await page.keyboard.press('Enter'); await settled();
     await rows(13);
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), '已显示 13 / 13',
+      'Finishing keyboard pagination keeps focus on its result');
+    await page.setViewportSize({width: 1440, height: 1000});
     await fixture('fault'); await search('reviewer'); await settled();
     await dialog.getByRole('alert').waitFor();
     await rows(0);

@@ -202,6 +202,7 @@ COVERAGE_SUFFIX_ANCHOR = (".py", ".ts")
 LITERAL_SCAN_ROOTS = ["loopx"]
 # Input producers with an executable witness in loopx.semantics.production.
 INPUT_PRODUCER_ANCHOR = {
+    "turn_route": "loopx/control_plane/turn_driver/driver.py::_typed_route",
     "effective_action": "loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision",
     "turn_result_kind": "loopx/control_plane/turn_driver/transaction.py::_result_kind",
     "loop_disposition": "loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition",
@@ -215,7 +216,7 @@ PRODUCER_VOCABULARY_ANCHOR = {
     "settlement_binding_kind",
 }
 RETURN_PRODUCER_ANCHOR = {
-    "turn_route": {"loopx/control_plane/turn_driver/driver.py::_typed_route", "loopx/control_plane/turn_driver/loop_controller.py::_envelope_route", "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"},
+    "turn_route": {"loopx/control_plane/turn_driver/driver.py::_typed_route", "loopx/control_plane/turn_driver/driver.py::build_loopx_turn_plan"},
     "loop_disposition": {"loopx/control_plane/turn_driver/turn_contract_generated.py::project_turn_route"},
     "effective_action": {"loopx/control_plane/quota/run_decision.ts::quotaEffectiveAction", "loopx/control_plane/quota/run_decision.ts::taskOrchestrationEffectiveAction"},
     "turn_result_kind": {"loopx/control_plane/turn_driver/executor.py::_task_validation_receipt"},
@@ -223,7 +224,8 @@ RETURN_PRODUCER_ANCHOR = {
 # Reviewed output arguments/paths replace the old any-enum-use heuristic. These
 # anchors retain that coverage if registry metadata is accidentally removed.
 CALL_PRODUCER_ANCHOR = {
-    "loop_disposition": {"loopx/control_plane/turn_driver/loop_controller.py::_disposition": ["disposition"]},
+    # The retired Python output builder is covered by the existing executable
+    # complete-controller witness; routes now also have an input witness.
     "agent_scope_frontier_action": {"loopx/control_plane/agents/agent_scope_frontier.py::build_agent_scope_frontier_payload": ["action"]},
     "turn_result_kind": {
         "loopx/control_plane/turn_driver/executor.py::_host_failure": ["kind"],
@@ -236,7 +238,7 @@ RETURN_PATH_ANCHOR = {
     "turn_result_kind": {"loopx/control_plane/turn_driver/executor.py::_task_validation_receipt": ["recovery_kind"]},
 }
 TWIN_ROOT_ANCHOR = "loopx/control_plane"
-TWIN_BUDGET_ANCHOR = 43
+TWIN_BUDGET_ANCHOR = 45
 BUDGET_ANCHOR = {
     "same_runtime_forks": 1,
     "same_runtime_fork_definitions": 3,

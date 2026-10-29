@@ -20,8 +20,8 @@ from ..scheduler.monitor_batch_receipts import is_monitor_receipt_line
 from ..todos.summary_item import todo_text_content_revision
 
 
-def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id,
-                    inline_goal_source=False, agent_id=None):
+def _source_content(read, *, registry_path, runtime_root, goal_id, todo_id, agent_id=None,
+                    inline_goal_source=False):
     source = read.get("source")
     if source == "goal_state":
         _goal, _project, state_file = resolve_goal_state(
@@ -131,6 +131,7 @@ def _user_context(*, registry_path, runtime_root, goal_id, agent_id):
 
 def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
                         runtime_root: Path, hook_dispatch: dict[str, Any] | None,
+                        context_navigation: bool = False,
                         inline_goal_source: bool = False) -> None:
     packet_selected = payload.get("selected_todo")
     selected_text_snapshot = None
@@ -157,7 +158,7 @@ def attach_work_context(payload: dict[str, Any], *, registry_path: Path,
         try:
             result["content"] = _source_content(read, registry_path=registry_path,
                 runtime_root=runtime_root, goal_id=goal_id, todo_id=plan.get("todo_id"),
-                inline_goal_source=inline_goal_source, agent_id=agent_id)
+                agent_id=agent_id if context_navigation else None, inline_goal_source=inline_goal_source)
         except (OSError, ValueError, RuntimeError):
             result["error_code"] = "context_source_unavailable"
         results.append(result)

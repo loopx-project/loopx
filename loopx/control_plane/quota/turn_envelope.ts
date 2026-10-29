@@ -1,17 +1,15 @@
 import {capturedContextSelection} from "./context_selection.ts";
-import {applyProgressiveContextPlan, progressiveContextPlan} from "./progressive_context.ts";
+import {progressiveContextPlan} from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EFFECTIVE_ACTIONS, EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../agents/agent_scope_frontier.generated.ts";
 import { createHash } from "node:crypto";
 import { ENVELOPED_SHA256_PATTERN, BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {omitUnboundExploreResultWriteback, referenceExploreResultWriteback} from "../capabilities/explore_turn_context.ts";
-import {prepareContextDelivery, restoreContextDelivery, OUTCOME_CONTEXT_PROJECTION_SCHEMA} from "./context_delivery.ts";
+import {prepareContextDelivery, restoreContextDelivery} from "./context_delivery.ts";
 import {updateNativeContextLifecycle} from "./native_context_lifecycle.ts";
-import {OUTCOME_CONTEXT_READ_PLAN_SCHEMA} from "../goals/outcome_requirements.ts";
 import {contextProjectionChanges, contextSourceIdentity, projectQuotaDiagnostics, referenceQuotaSummaryLanes,
   resolveQuotaSummaryLanes} from "./diagnostic_projection.ts";
-import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
 
 import {
   interpretQuotaShouldRunPacket,
@@ -24,7 +22,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { assertGoalContextDelivered, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, scopeInteractionOutcomeReadGuidance, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { assertGoalContextDelivered, capturedTodoTextSha256, decodeInteractionContract, projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -394,252 +392,6 @@ function capturedOutcomeIndex(outcomes: ReadonlyMap<string, JsonObject>): JsonOb
       requirement_count: Array.isArray(outcome.requirements) ? outcome.requirements.length : null,
       requirement_states: Array.isArray(outcome.requirements) ? [...states.values()] : null};
   });
-}
-
-/** A captured, source-owned reading plan can prioritize exact detail reads.
- * This does not relax the existing complete-capture obligation. The eventual
- * scope cutover must also migrate delivery and Host recovery together.
- */
-function capturedOutcomeReadPlan(payload: JsonObject, outcomes: ReadonlyMap<string, JsonObject>): {
-  required: ReadonlySet<string>; facts: JsonObject;
-} {
-  const agent = payload.agent_id ?? object(payload.agent_identity).agent_id;
-  const todo = selectedWorkTodoId(payload);
-  const all = new Set(outcomes.keys());
-  const fallback = (reason: string) => ({required: all,
-    facts: {complete: false, fallback_reasons: [reason], scope_applied: false}});
-  if (typeof agent !== "string" || typeof todo !== "string") return fallback("selected_work_unbound");
-  if (payload.agent_id !== undefined && object(payload.agent_identity).agent_id !== undefined &&
-      payload.agent_id !== object(payload.agent_identity).agent_id) return fallback("captured_scope_unavailable");
-  if (Object.keys(object(payload.autonomous_replan_obligation)).length ||
-      Object.keys(object(payload.replan_action_packet)).length) return fallback("broad_replan_read");
-  const sources = object(object(object(payload.interaction_contract).agent_channel).work_context).sources;
-  const plans = (Array.isArray(sources) ? sources : []).map(object)
-    .filter(source => source.source === "goal_acceptance").map(source => object(source.content))
-    .filter(content => content.status === "loaded" && object(content.outcome_context).complete === true);
-  const covered = new Set<string>(), required = new Set<string>();
-  for (const content of plans) {
-    const plan = object(content.outcome_context), acceptance = object(content.goal_acceptance_contract);
-    const declaration = object(acceptance.outcome_requirements);
-    if (plan.schema_version !== OUTCOME_CONTEXT_READ_PLAN_SCHEMA ||
-        plan.goal_id !== payload.goal_id || plan.agent_id !== agent || plan.todo_id !== todo ||
-        typeof content.provider_revision !== "string" || plan.provider_revision !== content.provider_revision ||
-        plan.outcome_revision !== declaration.revision || !Array.isArray(declaration.outcomes) ||
-        !Array.isArray(plan.required_outcome_ids) || plan.required_outcome_ids.some(id => typeof id !== "string")) continue;
-    try {
-      // Bind the whole source, including unknown evidence and negative facts.
-      // Later oracle observations or an upgraded projection widen to full;
-      // the reader does not recompute scope from a different observation.
-      if (plan.acceptance_digest !== canonicalAuthoritySha256(acceptance)) continue;
-    } catch { continue; }
-    const ids = new Set(plan.required_outcome_ids);
-    const rows = declaration.outcomes.map(object);
-    if (rows.some(outcome => outcome.owner_agent_id === agent && !ids.has(outcome.id)) ||
-        [...ids].some(id => !rows.some(outcome => outcome.id === id))) continue;
-    for (const outcome of rows) {
-      const ref = canonicalHash(outcome);
-      covered.add(ref);
-      if (ids.has(outcome.id)) required.add(ref);
-    }
-  }
-  if ([...all].some(ref => !covered.has(ref))) return fallback("captured_scope_unavailable");
-  return {required, facts: {complete: true, fallback_reasons: [], scope_applied: false,
-    goal_id: payload.goal_id, agent_id: agent, todo_id: todo}};
-}
-
-/** A model presentation, never a partial canonical decision. The full source
- * remains immutable; native baseline/recovery stores this exact presentation,
- * so an unread optional body cannot become a retained requirement later. */
-function capturedOutcomeContext(request: JsonObject): JsonObject {
-  const payload = requireJsonObject(request.payload, "captured outcome source");
-  const outcomes = capturedAcceptanceOutcomes(payload);
-  if (payload.ok !== true || outcomes === null || !outcomes.size) return payload;
-  const plan = capturedOutcomeReadPlan(payload, outcomes);
-  if (plan.facts.complete !== true || plan.required.size === outcomes.size) return payload;
-  // Unknown outcome-local fields may carry new obligations. Preserve full
-  // delivery until the existing projection owner explicitly supports them.
-  const known = (value: JsonObject, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
-  for (const [ref, row] of outcomes) {
-    if (plan.required.has(ref)) continue;
-    if (!known(row, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"]) ||
-        !Array.isArray(row.requirements) || row.requirements.some(value => {
-          const requirement = object(value), review = jsonObject(requirement.agent_review);
-          return !known(requirement, ["id", "description", "status", "planning_satisfied", "agent_review"]) ||
-            (Object.hasOwn(requirement, "agent_review") && (!review || !known(review,
-              ["id", "conclusion", "evidence_refs", "note", "basis_current", "independently_verified"])));
-        }) || !Array.isArray(row.sources) || row.sources.some(value => !known(object(value), ["ref", "summary"])) ||
-        !Array.isArray(row.work) || row.work.some(value => !known(object(value), ["todo_id", "status"]))) return payload;
-  }
-  const source = requireJsonObject(request.source_capture, "original capture reference");
-  requireNonEmptyString(source.path, "original capture path");
-  if (typeof source.sha256 !== "string" || !BARE_SHA256_PATTERN.test(source.sha256))
-    throw new EffectRuntimeRequestError("outcome context needs the original file digest");
-  const context = projectQuotaDiagnostics(structuredClone(payload.schema_version === COMPLETE_TURN_DECISION_VERSION
-    ? resolveQuotaSummaryLanes(payload) : payload), {capture_ref: "$.source_capture"});
-  const carriers = acceptanceCarriers(context);
-  const channel = jsonObject(jsonObject(context.interaction_contract)?.agent_channel);
-  if (!channel || !scopeInteractionOutcomeReadGuidance(channel)) return payload;
-  const sources = jsonObject(jsonObject(jsonObject(context.interaction_contract)?.agent_channel)?.work_context)?.sources;
-  if (Array.isArray(sources)) for (const [index, value] of sources.entries()) {
-    const entry = jsonObject(value), content = jsonObject(entry?.content);
-    if (entry?.source === "goal_acceptance" && content?.status === "loaded")
-      carriers.push({parent: content, field: "goal_acceptance_contract", path: "",
-        parentPath: ["interaction_contract", "agent_channel", "work_context", "sources", index, "content"]});
-  }
-  for (const {parent, field, parentPath} of carriers) {
-    const acceptance = jsonObject(parent[field]), declaration = jsonObject(acceptance?.outcome_requirements);
-    if (Array.isArray(declaration?.outcomes)) {
-      let original: unknown = payload;
-      for (const key of [...parentPath, field, "outcome_requirements", "outcomes"])
-        original = Array.isArray(original) ? original[Number(key)] : object(original)[key];
-      // Keep each retained row's original identity. The transport edit owner
-      // can then copy its exact JSON values even when filtering moves indices.
-      if (!Array.isArray(original)) return payload;
-      declaration.outcomes = original.filter(row => plan.required.has(canonicalHash(row)));
-    }
-  }
-  return {schema_version: OUTCOME_CONTEXT_PROJECTION_SCHEMA,
-    source_capture: {path: source.path, sha256: source.sha256},
-    read_scope: {...plan.facts, scope_applied: true, required_outcome_refs: [...plan.required]},
-    outcome_index: capturedOutcomeIndex(outcomes).map(row => ({...row,
-      required_in_scope: plan.required.has(String(row.outcome_ref))})),
-    instruction: "This is the complete required model context, not a canonical decision or execution authority. " +
-      "Read this entire presentation before dependent work. The nested context expands every required outcome; " +
-      "other independent outcomes retain current index facts and exact references in source_capture. " +
-      "Use quota context-read on that original file/hash with --outcome-ref for complete detail before relying on it. " +
-      "Known Todo diagnostic lists are bounded; their full_detail_capture_ref resolves to source_capture. " +
-      "Read that original file/hash with quota context-read for captured diagnostics, without a new guard. " +
-      "Goal-wide acceptance or unproven relevance requires the complete original source. " +
-      "After context loss recover this exact presentation, not a fresh admission. Original requirements and evidence remain binding.",
-    context};
-}
-
-function capturedOutcomeRead(request: JsonObject): JsonObject {
-  let payload = requireJsonObject(request.payload, "captured outcome source");
-  let scoped = false, presented = false;
-  if (payload.schema_version === OUTCOME_CONTEXT_PROJECTION_SCHEMA) {
-    const original = requireJsonObject(request.source_payload, "original outcome source");
-    const projectionRequest = {payload: original, source_capture: payload.source_capture, surface: "quota_packet"};
-    // Historical scope-only presentations keep their original decoder. New
-    // staged material is independently reconstructed from that same source.
-    if (canonicalHash(capturedOutcomeContext(projectionRequest)) !== canonicalHash(payload) &&
-        canonicalHash(requiredNativeContext(projectionRequest).projection) !== canonicalHash(payload))
-      throw new EffectRuntimeRequestError("scoped context differs from its original source; recover the original complete capture");
-    scoped = object(payload.read_scope).scope_applied === true;
-    payload = original; presented = true;
-  }
-  if (payload.ok !== true) throw new EffectRuntimeRequestError("outcome read requires an original successful capture");
-  if (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding")) {
-    requireCompleteTurnDecision(payload);
-  }
-  const outcomes = capturedAcceptanceOutcomes(payload);
-  if (outcomes === null) throw new EffectRuntimeRequestError("capture has no registered acceptance source; recover the original complete capture");
-  const common = {ok: true, goal_id: payload.goal_id,
-    agent_id: payload.agent_id ?? object(payload.agent_identity).agent_id};
-  if (request.outcome_ref === "") {
-    const plan = capturedOutcomeReadPlan(payload, outcomes);
-    return {...common, read_plan: {...plan.facts, scope_applied: scoped}, outcomes: capturedOutcomeIndex(outcomes)
-      .map(row => ({...row, required_in_scope: plan.required.has(String(row.outcome_ref))})),
-    instruction: (presented ? "Read the complete required presentation; other detail must be read before reliance. " :
-      "This index and reading plan do not replace full-read obligations; scope_applied is false. ") +
-      "Read required complete outcome detail before a dependent decision. Unknown scope retains all outcomes. " +
-      "Planning satisfaction, Agent review and independent checks remain distinct; no execution authority or fresh admission is granted."};
-  }
-  const ref = request.outcome_ref;
-  const outcome = typeof ref === "string" && ENVELOPED_SHA256_PATTERN.test(ref) ? outcomes.get(ref) : null;
-  if (!outcome) throw new EffectRuntimeRequestError("acceptance read requires an exact captured outcome reference");
-  return {...common, outcome_ref: ref, outcome};
-}
-
-/** Scope and material staging share the existing owners. A signed canonical
- * decision is never edited or re-signed: only this capture-bound presentation
- * changes, and only its delivered content may become a native baseline. */
-function requiredNativeContext(request: JsonObject): {projection: JsonObject; plan?: JsonObject} {
-  const payload = requireJsonObject(request.payload, "native context source");
-  const signed = Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding");
-  if (signed) requireCompleteTurnDecision(payload);
-  const projection = capturedOutcomeContext(request);
-  const unchanged = {projection};
-  if (request.surface !== "quota_packet" && !(signed && request.surface === "complete_turn")) return unchanged;
-  const wrapped = projection.schema_version === OUTCOME_CONTEXT_PROJECTION_SCHEMA;
-  const inner = wrapped ? requireJsonObject(projection.context, "required model context") : projection;
-  const sources = object(object(object(payload.interaction_contract).agent_channel).work_context).sources;
-  const declaredScope = Array.isArray(sources) && sources.some(value => {
-    const source = object(value);
-    return source.source === "goal_acceptance" && Object.hasOwn(object(source.content), "outcome_context");
-  });
-  if (projection === payload && declaredScope) {
-    const outcomes = capturedAcceptanceOutcomes(payload);
-    if (outcomes === null || capturedOutcomeReadPlan(payload, outcomes).facts.complete !== true) return unchanged;
-  }
-  if (signed && !wrapped && !scopeInteractionOutcomeReadGuidance(
-    structuredClone(object(object(payload.interaction_contract).agent_channel)))) return unchanged;
-  // Validation above owns the signature; the material planner owns only its
-  // registered outcome fields and exact source-owned reading clause.
-  const source = {...inner};
-  if (signed) { delete source.schema_version; delete source.contract_binding; }
-  const plan = progressiveContextPlan({...request, surface: "quota_packet", payload: source, source_payload: payload});
-  if (!(plan.deferred as unknown[]).length && !(plan.references as unknown[] | undefined)?.length) return unchanged;
-  const context = applyProgressiveContextPlan(inner, plan);
-  const capture = requireJsonObject(request.source_capture, "original material capture");
-  const path = requireNonEmptyString(capture.path, "original material capture path");
-  if (typeof capture.sha256 !== "string" || !BARE_SHA256_PATTERN.test(capture.sha256))
-    throw new EffectRuntimeRequestError("material context needs the original file digest");
-  const details = (plan.deferred as unknown[]).length ? {context_details: {
-    path, sha256: capture.sha256,
-    command_template: `loopx --format json quota context-read --capture-file ${shellQuote(path)}` +
-      ` --capture-sha256 ${capture.sha256} --select '<supporting_material_pointer>/sources'`,
-    instruction: "This view retains complete requirements and current review/check states. " +
-      "Source history, review reasoning and evidence references are supporting material. " +
-      "Read them from this same immutable capture when a decision, verification or review depends on them. " +
-      "For source history use supporting_material_pointer plus /sources. For review detail append " +
-      "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. " +
-      "Repeat --select to batch needed fields without replaying the outcome's requirements. " +
-      "Detail reads never establish a full baseline. " +
-      "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance.",
-  }} : {};
-  const result: JsonObject = wrapped ? {...projection, ...details, context} : signed ? {
-    schema_version: OUTCOME_CONTEXT_PROJECTION_SCHEMA,
-    source_capture: {path, sha256: capture.sha256},
-    instruction: "This is the complete required model presentation, not a canonical decision or new authority. " +
-      "Read its requirements and current states before work; supporting material remains in the exact original capture. " +
-      "After context loss recover this presentation without a new admission. Original identities, permissions and stops remain binding.",
-    ...details, context,
-  } : {...context, ...details};
-  // Keep small material inline; an index plus later IO must earn its bytes.
-  if (Buffer.byteLength(JSON.stringify(result), "utf8") >= Buffer.byteLength(JSON.stringify(projection), "utf8")) return unchanged;
-  const {context: _context, ...presentation} = result;
-  return {projection: result, plan: {
-    // Scope may move a retained row before material edits change its spine.
-    // Apply those independently so both stages reuse exact original values.
-    stages: [contextProjectionChanges(payload, inner),
-      contextProjectionChanges(inner, wrapped || signed ? context : result)],
-    reference_checks: (plan.references as JsonObject[] ?? []).map(({path, from}) => ({path, from})),
-    ...(wrapped || signed ? {presentation} : {}),
-  }};
-}
-
-/** One native projection call, after IO has published the current full recovery.
- * Reuse both owners without another model wire or retention claim. Full codec
- * results already carry the projection; delta/fallback results return it only
- * for the caller's immutable required-context capture, never as hidden input.
- */
-function nativeContextDelivery(request: JsonObject): JsonObject {
-  let projection = requireJsonObject(request.payload, "native context source");
-  let plan: JsonObject | undefined;
-  try { ({projection, plan} = requiredNativeContext(request)); }
-  catch { /* Optional scope failure retains the original complete source. */ }
-  // Keep the existing lossless IO edit plan in this same boundary. A source
-  // without supporting material can proceed to scope/encoding in one call;
-  // material edits still apply to the caller's original JSON before encoding.
-  if (plan) return {required_context_plan: plan};
-  try {
-    const delivery = prepareContextDelivery({...request, context: projection}, LEGACY_QUOTA_CONTEXT_FIELDS);
-    return delivery.mode === "full" ? {delivery} : {projection, delivery};
-  } catch {
-    // Preserve a successful scope projection when the optional codec fails.
-    return {projection};
-  }
 }
 
 /** Reuse the existing settlement authoring owner, never a summary or a chain. */
@@ -2138,7 +1890,6 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
-  if (operation === "captured_outcome") return capturedOutcomeRead(request);
   if (operation === "reference_vision_continuation") {
     return referenceVisionContinuation(requireJsonObject(request.payload, "vision audit sharing source"));
   }
@@ -2146,6 +1897,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return referenceReplanAuthoring(requireJsonObject(request.payload, "authoring sharing source"));
   }
   if (operation === "replan_view") return replanView(request);
+  if (operation === "progressive_context_plan") return progressiveContextPlan(request);
   if (operation === "context_select") return capturedContextSelection(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
@@ -2281,7 +2033,6 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const envelope = buildTurnEnvelope(request);
     return {envelope, route: turnEnvelopeRoute(envelope)};
   }
-  if (operation === "native_context_delivery") return nativeContextDelivery(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

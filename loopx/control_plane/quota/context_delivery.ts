@@ -9,7 +9,6 @@ import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_co
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 
 const VERSION = "context_delivery_v1";
-export const OUTCOME_CONTEXT_PROJECTION_SCHEMA = "outcome_context_projection_v0";
 const MAX_ANCESTRY = 32;
 type Path = (string | number)[];
 type Split = {fresh: JsonObject; valid: boolean};
@@ -195,29 +194,6 @@ const REUSABLE_PACKET_FIELDS = new Set([
  * duplicating them in both a fresh frame and a patch. Static authoring guidance
  * remains binding via exact reuse; commands, conditions and identity stay fresh. */
 function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[], binding: JsonObject): {paths: Path[]; valid: boolean} {
-  if (context.schema_version === OUTCOME_CONTEXT_PROJECTION_SCHEMA) {
-    const inner = jsonObject(context.context);
-    if (!inner) return {paths: [[]], valid: false};
-    const projected = freshPaths(inner, surface, legacyQuotaFields, binding);
-    const wrapper: Path[] = [];
-    for (const [key, value] of Object.entries(context)) {
-      if (key === "context" || key === "instruction" && typeof value === "string") continue;
-      // Reuse only exact explanatory prose. Scope, identities, current
-      // verdicts and unknown controls remain literal, including after reorder.
-      if (key === "outcome_index" && Array.isArray(value) && value.length) {
-        value.forEach((item, i) => {
-          const row = jsonObject(item);
-          if (!row) { wrapper.push([key, i]); return; }
-          for (const [field, detail] of Object.entries(row))
-            if (field !== "objective" || typeof detail !== "string") wrapper.push([key, i, field]);
-        });
-      } else wrapper.push([key]);
-    }
-    return {valid: projected.valid, paths: [
-      ...wrapper,
-      ...projected.paths.map(path => ["context", ...path]),
-    ]};
-  }
   const paths: Path[] = [];
   let valid = true;
   const leaves = (value: unknown, original: unknown, path: Path) => {

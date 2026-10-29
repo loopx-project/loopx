@@ -159,7 +159,7 @@ def deliver(root, event, pages):
             "tool_use_id": f"page-{page.get('offset')}", "tool_response": json.dumps(page)}) == {}
 
 
-def test_native_projection_uses_one_boundary_and_pages_its_existing_full_capture(tmp_path, monkeypatch):
+def test_native_projection_reuses_existing_planner_and_pages_its_full_capture(tmp_path, monkeypatch):
     from loopx.cli_commands.quota_capture import native_context_capture_view
     from loopx.control_plane.quota import turn_envelope
 
@@ -173,9 +173,9 @@ def test_native_projection_uses_one_boundary_and_pages_its_existing_full_capture
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", counted)
     payload, wire = project(tmp_path)
-    # One source/projection boundary, rather than a scope request followed by
-    # another encoding request for the same current capture.
-    assert len(calls) == 1
+    # Use main's material planner and codec; the discarded scope wrapper no
+    # longer fuses them. Keep their actual transport cost visible.
+    assert calls == ["progressive_context_plan", "context_delivery"]
     assert wire["mode"] == "full" and wire["context"] == payload
     recovery = wire["recovery"]
     original = Path(recovery["path"]).read_bytes()
@@ -187,7 +187,7 @@ def test_native_projection_uses_one_boundary_and_pages_its_existing_full_capture
     assert json.loads(view["content"]) == payload and view["eof"] is True
 
 
-def test_scope_projection_interruption_keeps_current_original_recovery(tmp_path, monkeypatch):
+def test_material_projection_interruption_keeps_current_original_recovery(tmp_path, monkeypatch):
     from loopx.control_plane.quota import turn_envelope
 
     event = setup(tmp_path, monkeypatch)
@@ -197,18 +197,18 @@ def test_scope_projection_interruption_keeps_current_original_recovery(tmp_path,
     operation = turn_envelope._turn_envelope_result
     observed = []
 
-    class ScopeInterrupted(BaseException):
+    class PlannerInterrupted(BaseException):
         pass
 
     def interrupt(name, **request):
-        if name == "native_context_delivery":
+        if name == "progressive_context_plan":
             observed.append(context._state(tmp_path))
-            raise ScopeInterrupted()
+            raise PlannerInterrupted()
         return operation(name, **request)
 
     monkeypatch.setattr(turn_envelope, "_turn_envelope_result", interrupt)
     current = {"ok": True, "goal_id": "fixture", "requirements": "New current requirements after the prior delivery."}
-    with pytest.raises(ScopeInterrupted):
+    with pytest.raises(PlannerInterrupted):
         project(tmp_path, "current", payload=current)
     expected = tmp_path / "current" / "projection.json"
     assert observed[0]["recovery"]["path"] == str(expected)

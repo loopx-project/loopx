@@ -1045,6 +1045,14 @@ lane 正文超过 2 MiB 响应边界、从而阻断启动及 Goal 增长后的�
 64 MiB 展开边界。这是内部传输，不新增 capability、设置、授权源，也不代表安装态
 已采用此修改。
 
+Resume-planning 输入采用协同发布的 v1 record table，供重复 source lane 引用。
+每条记录在 TS 决策前保留全部 v0 payload 事实，不使用面向某个消费者的字段白名单，
+也不再由 Python 二次恢复。已有 v0 调用者仍有效；相同 id 的冲突事实不会合并。
+Quota planning 及其后续 Vision-wait 投影均显式复用既有私有、摘要校验的本地
+snapshot 通道，承载超过 2 MiB 的独立历史；64 MiB snapshot／响应展开边界和
+普通 RPC 上限不变。File／SQLite 验证必须到达公开 quota 结果，保留来源并选中
+尾部工作，不能只以第一层超大请求得到修复作为完整交付证据。
+
 当前有边界交付：shared-goal alignment 与 amendment admission 每次决策共用一份
 `shared_goal_work_source.py` 快照，promotion 后复用 canonical Todo summary；同一次
 provider 读取可返回同 revision 的 lease。缺失／空／陈旧展示及旧 lease 文件不再是

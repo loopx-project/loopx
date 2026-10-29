@@ -158,7 +158,7 @@ C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-�
 [C1 打包 heartbeat 检查点](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.zh-CN.md)
 在隔离 File/SQLite 保留必读来源及同 capture 结算语义。后续诊断投影复用同一 typed
 owner 并删除 Python 重复算法；[#7557](https://github.com/loopx-project/loopx/pull/7557)
-已合并，#7430 复用修复后的模块。后续完整 Goal 与作用域指令复用，在两组均计入全部
+已合并，#7430 复用修复后的模块。历史完整 Goal 与作用域指令复用，在两组均计入全部
 必读内容后，相比原 quota 基线减少冷态、温态和恢复 stdout。历史温态负向 cohort 与
 集成原有 v4 预算失败仍保留，可选全部 peer 补读仍另增成本。
 [#7575](https://github.com/loopx-project/loopx/pull/7575) 已合并，提供可独立使用的原生完整
@@ -166,6 +166,14 @@ Goal／复用切片：温态输入改善，冷态与恢复则增加开销。C1 �
 完整 capture 中引用相同的 Todo 摘要列表；原 v4 预算仍失败。原 C1 继续剩余真实消费者、writer
 切换与 reader 退役，保留未知字段和完整义务。这些工程观察不提升默认，也不认证模型
 token、完整成本或实际决策／成果收益。
+
+C1 现退役其未发布的强制成果阅读计划和 scoped wrapper，复用已合入 #7560 的
+建议性导航与通用同 capture selector。已合入 #7643 通过既有修改计划保留原始数值。
+[导航收敛检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.zh-CN.md)
+保留签名契约全文与主干先恢复后规划的顺序；#7627 文件优先交付仍是独立评审的依赖。
+旧 native 融合调用节省不适用于本次集成。数值 hash 身份、writer/caller 退役及原
+quota 成果/完整成本仍未闭合。
+
 
 同一集成 codec 现采用已合入的 [#7528](https://github.com/loopx-project/loopx/pull/7528)，在精确
 搬移证据上叠加字面当前控制，覆盖 scoped context。Ledger 同时记录局部搬移差分变小

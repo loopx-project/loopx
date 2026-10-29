@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -19,6 +20,8 @@ _SOURCE_KEYS = (
     "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
     "current_agent_claimed_monitor_items", "claimed_monitor_open_items",
 )
+
+_REFERENCE_REQUEST_SCHEMA = "todo_resume_planning_request_v1"
 
 
 def _planning_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +84,45 @@ def build_todo_resume_planning_request(
             if available_capabilities is not None else None
         ),
     }
+
+
+def build_referenced_todo_resume_planning_request(
+    value: Any, *, agent_id: str | None = None, item_limit: int = 5,
+    available_capabilities: Any = None,
+) -> dict[str, Any]:
+    """Encode one semantic snapshot without repeating full payloads per lane.
+
+    The ordinary v0 builder remains the compatibility contract for callers that
+    inspect or rewrite its source rows. The v1 wire changes only repeated lane
+    bodies: every record retains its complete v0 facts for all typed consumers.
+    """
+    request = build_todo_resume_planning_request(
+        value,
+        agent_id=agent_id,
+        item_limit=item_limit,
+        available_capabilities=available_capabilities,
+    )
+    records: list[dict[str, Any]] = []
+    references: dict[str, int] = {}
+    sources: dict[str, list[int]] = {}
+    for source_name, source_rows in request["sources"].items():
+        source_refs: list[int] = []
+        for row in source_rows:
+            # Equal normalized records are semantically interchangeable.  Use
+            # their exact JSON form instead of Todo id alone so conflicting
+            # historical facts remain separate and are still diagnosed.
+            identity = json.dumps(
+                row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            reference = references.get(identity)
+            if reference is None:
+                reference = len(records)
+                references[identity] = reference
+                records.append(row)
+            source_refs.append(reference)
+        sources[source_name] = source_refs
+    return {**request, "schema_version": _REFERENCE_REQUEST_SCHEMA,
+            "sources": sources, "records": records}
 
 
 def project_todo_resume_planning(

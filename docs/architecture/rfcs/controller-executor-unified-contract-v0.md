@@ -421,65 +421,33 @@ page is not a benefit when required follow-up reads or missed constraints erase
 the saving. This is proposed delivery behavior; the current complete-source
 reader remains authoritative until replacement and rollback are qualified.
 
-The first reader prerequisite now has an actual ordinary CLI caller. With the
-original capture file and its byte SHA-256, `quota context-read --outcome-ref`
-pages an outcome index; supplying the exact returned reference pages that whole
-outcome. Ordinary and staged replan reads use the same TypeScript registry and
-index owner. The index includes owner/work and groups requirement identities by
-identical current check/planning/review facts; missing facts remain unknown.
-Equal bodies share a reference, while changed same-id revisions remain separate.
-Full detail retains original descriptions, origins, review evidence and unknown
-fields. Every page verifies the original file again. The returned continuation
-also binds the selected JSON byte digest, refusing changed renderings under the
-same original-file hash. Its cursor addresses the selected JSON, and it cannot
-establish full-capture retention. This is a read
-prerequisite, not the default own-Agent cutover: original full-read obligations,
-host continuity and Goal authority remain unchanged.
+Current integration evidence: [navigation convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.md).
 
-The existing canonical acceptance read also supplies a versioned candidate
-reading plan from the same complete work snapshot, without another authority
-read or RPC. It includes the Agent's outcomes, selected work, transitive typed
-dependencies/lineage, shared work/check scope, exact declared sources or review
-evidence, and failed/stale observations with their related work. Unbound work,
-unavailable relationships/lifetime and Goal-wide checks retain all outcomes.
-The captured index labels `required_in_scope` only when the plan matches the
-Goal/Agent/Todo, provider revision and complete acceptance-source digest. Changed
-oracle facts, additional carrier versions or unsupported plans widen to full.
-The original full-capture reader still returns `scope_applied=false`: its index
-does not change that capture's full-read obligations. Ordinary acceptance
-inspection retains its existing complete format.
+The current C1 branch reuses merged #7560's
+`outcome_context_navigation_v1` and the generic same-capture `context-read --select`
+reader. Registered relations guide reading order; ownership does not prove
+independence, and limitations do not create a full-file model-reading gate.
+Complete original requirements, current states, global constraints and contrary
+evidence remain reachable in the original digest-bound capture.
 
-The opt-in native transport now applies that plan jointly to required reads,
-delivery and recovery. `outcome_context_projection_v0` identifies a derived
-model presentation, never a partial canonical decision or another decision
-owner. The original complete capture stays immutable and digest-bound. The
-presentation expands all required outcomes and keeps every global field, plus
-the complete current outcome index and exact original-source references.
-Unknown optional fields, unresolved acceptance reads or unrecognized source
-guidance retain full delivery. The existing interaction owner changes only its
-exact fulfilled outcome-reading instruction; objective adoption, original and
-cumulative requirements, work reconciliation, independent-check distinctions,
-freshness, permissions and stops retain their obligations. No prose relevance
-classifier is introduced. Registered relation closure still cannot prove
-arbitrary semantic independence: read complete optional detail before relying
-on it, and widen to the original full source when relevance is unknown or a
-Goal-wide decision is needed.
+The earlier unmerged mandatory reading plan, `outcome_context_projection_v0`
+wrapper, outcome-specific ordinary reader and fused native projection operation
+are retired. Staged replan's existing decision-bound acceptance reference stays
+with its owner. Native IO uses main's material planner and exact recovery codec;
+it commits the current complete recovery before optional planning. This restores
+two owner calls for a simple native capture instead of the prototype's fused
+call, so the old call-count improvement is not a current qualification.
 
-The native candidate and compaction recovery point to the exact required model
-artifact, rather than the machine's full canonical source. The existing delta
-codec therefore delivers a newly required body's actual text; it cannot borrow
-an unread optional body from a hidden baseline. The current full-source recovery
-reference is published before optional scope/codec composition. The shared typed
-owner computes both in one call; before exposing any result, IO commits the exact
-required artifact and switches recovery to it. An interruption during composition
-therefore cannot leave the preceding capture selected for recovery. Full page
-coverage remains an
-explicit native-hook continuity assumption, not model-retention proof. Optional
-detail resolves through the same original-source registry, revalidating the
-file and presentation; it does not acknowledge full-capture retention. Ordinary
-transport-off and old captures retain their original behavior. Other Host
-adapters, installed App adoption, actual model decisions and matched
-accepted-outcome/full-cost qualification remain open.
+[#7627](https://github.com/loopx-project/loopx/pull/7627) separately proposes
+saved-file-first delivery and file deltas without mandatory full model reading.
+Adopt its reviewed exact implementation through the existing native owner rather
+than reintroduce the retired scope mechanism. Its installed adoption, actual
+model decisions and accepted-outcome/full-cost qualification remain separate.
+Historical captures retain their original identity and supported recovery.
+
+The following measurements and tests describe the retired prototype's exact
+checkpoints. They remain historical evidence, not results for the current
+navigation/planner integration.
 
 On one 24-outcome / 253-requirement synthetic snapshot, 61 alternating warm
 real-provider owner calls against the prior implementation measured File median

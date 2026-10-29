@@ -176,6 +176,49 @@ def configured(native, tmp_path):
     return provider, transport, clock
 
 
+@pytest.mark.parametrize("detached", [False, True])
+def test_native_worker_inherits_loaded_core_outside_checkout(native, monkeypatch, tmp_path, detached):
+    import loopx
+    expected = str(Path(loopx.__file__).resolve())
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    # Probe real child import provenance through host's two launch paths.
+    # -S removes editable-install/site-package help, as in an archive bootstrap.
+    # The child substitutes only the account protocol result; no auth is read.
+    probe = '''
+import json, os, sys
+from pathlib import Path
+import loopx
+from loopx.runtime_activation import managed_chat_activation_guard
+packet = {"ok": True, "result": {"core": str(Path(loopx.__file__).resolve()),
+                               "guard": callable(managed_chat_activation_guard)}}
+if len(sys.argv) == 3 and sys.argv[1] == "--result-file":
+    packet["schema_version"] = "codex_native_accounts_v1"
+    fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        json.dump(packet, stream)
+else:
+    print(json.dumps(packet))
+'''
+    launch = native.subprocess.Popen if detached else native.subprocess.run
+    def child(command, **kwargs):
+        return launch([command[0], "-S", "-c", probe, *command[3:]], cwd=tmp_path, **kwargs)
+    monkeypatch.setattr(native.subprocess, "Popen" if detached else "run", child)
+    result = native.host({}, "status", **({"handoff_receipt": str(tmp_path / "reply.json")} if detached else {}))
+    assert result == {"core": expected, "guard": True}
+    assert "PYTHONPATH" not in os.environ  # No process-wide environment mutation.
+
+
+def test_native_worker_does_not_invent_a_core_owner(native, monkeypatch):
+    monkeypatch.delitem(sys.modules, "loopx", raising=False)
+    captured = []
+    def child(_command, **kwargs):
+        captured.append(kwargs["env"])
+        return SimpleNamespace(stdout='{"ok": true, "result": {}}')
+    monkeypatch.setattr(native.subprocess, "run", child)
+    assert native.host({}, "status") == {}
+    assert captured == [None]
+
+
 def test_default_off_has_no_native_effect_or_startup_observer(native, tmp_path):
     from loopx.presentation.codex_accounts_api import CodexAccountService
 
@@ -346,6 +389,112 @@ def test_paused_unchanged_selection_does_not_repeat_usage_or_shutdown(native, tm
         assert provider.tick()["action"] == "client_quit_timeout"
     assert [operation for operation, _ in transport.calls[before:]] == ["status", "status"]
     assert provider._load()["failure_count"] == 3
+
+
+def test_busy_blocker_release_resumes_without_refresh_or_account_choice(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    provider.configure(expected_revision=1, enabled=True, slots=["a", "b"], restart_clients=True)
+    attempts = []
+    busy = True
+
+    def handoff(adapter, operation, **parameters):
+        if operation == "switch":
+            attempts.append(parameters)
+            if busy:
+                raise native.HostError("other_clients_busy")
+        return transport(adapter, operation, **parameters)
+
+    for _ in range(4):
+        restarted = native.NativeAccounts(tmp_path, transport=handoff, clock=clock)
+        assert restarted.tick()["action"] == "waiting_for_idle"
+        assert restarted._load()["failure_count"] == 0
+        clock.now += 301
+    busy = False
+    assert restarted.tick()["active_slot"] == "b"
+    clock.now += 301
+    assert restarted.tick()["action"] == "ready"
+    assert len(attempts) == 5  # No second account transaction after success.
+
+
+def test_existing_busy_pause_reenters_new_readonly_preflight(native, tmp_path):
+    provider, transport, clock = configured(native, tmp_path)
+    state = provider._load()
+    state.update(failure_count=3, code="other_clients_busy", action="unavailable")
+    native.atomic(provider.path, state)
+    restarted = native.NativeAccounts(tmp_path, transport=transport, clock=clock)
+    assert restarted.tick()["action"] == "selected"
+    assert restarted._load()["failure_count"] == 0
+    assert len([call for call in transport.calls if call[0] == "switch"]) == 1
+
+
+@pytest.mark.parametrize("status", ["queued", "starting", "running", "completing", "interrupting", "invalid"])
+def test_native_restart_uses_real_accepted_work_fence_before_app_quit(native, monkeypatch, tmp_path, status):
+    from loopx.chat_store import ChatSessionStore
+    host_module = importlib.import_module("loopx_codex_provider_routing.native_host")
+    store = ChatSessionStore(tmp_path / "runtime")
+    sid = store.create_session(goal_id="test", agent_id="test", adapter_kind="fake",
+                               upstream_thread_id="test", upstream_mode="managed")["session_id"]
+    turn, _ = store.create_queued_turn(sid, client_turn_id="original", message="preserve this input")
+    store.update_turn(sid, turn["turn_id"], status=status)
+    before = {p: p.read_bytes() for p in store.root.rglob("*.json")}
+    plist = tmp_path / "renamed.plist"
+    plist.write_bytes(plistlib.dumps({"Label": "renamed", "ProgramArguments": ["loopx", "--runtime-root", str(tmp_path / "runtime"), "chat"]}))
+    host = host_module.NativeHost.__new__(host_module.NativeHost)
+    host.resume_chat_agents = lambda: None
+    host._chat_recovery = lambda: (None, {"agents": {}})
+    host.status = lambda: {"selection_revision": "fixture", "active_slot": "a",
+                          "current_login_matches": True, "recovery_required": False,
+                          "client_running": True}
+    host._home_owners = lambda: [301]
+    host.inspect_client_helpers = lambda: ((100, (1, "/test/app", 1, 1)), {})
+    host._consumer_agents = lambda _: [("renamed", plist, 300, (1, "/test/chat", 1, 1), {301: ("/test/codex", 1, 1)})]
+    monkeypatch.setattr("loopx.runtime_activation._managed_service_pid", lambda p, *, label: 300 if p == plist and label == "renamed" else None)
+
+    class OwnedQuitReached(Exception):
+        pass
+
+    quits = []
+    def quit_client(*_args, **_kwargs):
+        quits.append("quit")
+        from loopx.chat_ingress import chat_runtime_activation_lock
+        with pytest.raises(TimeoutError):
+            with chat_runtime_activation_lock(tmp_path / "runtime", timeout_seconds=0.01):
+                pytest.fail("new input was not fenced during client quit")
+        raise OwnedQuitReached()  # Stop before any synthetic credential effect.
+
+    host.close_client = quit_client
+    with pytest.raises(native.HostError, match="waiting_for_idle"):
+        host.switch("b", "fixture", reopen=True, restart_clients=True)
+    assert not quits
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    if status != "invalid":
+        store.update_turn(sid, turn["turn_id"], status="completed")
+        with pytest.raises(OwnedQuitReached):
+            host.switch("b", "fixture", reopen=True, restart_clients=True)
+        assert quits == ["quit"]
+
+
+@pytest.mark.parametrize("handles,ignored", [
+    ("f12\nar\ntDIR\n", True),
+    ("f*12\nar\ntDIR\nf13\nar\ntDIR\n", True),
+    ("f12\nar\ntREG\n", False),  # Read-only auth inode is still a hold.
+    ("f12\naw\ntDIR\n", False),
+    ("fcwd\nar\ntDIR\n", False),
+    ("f12\nar\n", False),
+    ("f12\nar\ntDIR\nf13\nar\ntREG\n", False),
+])
+def test_only_proven_readonly_directory_handles_are_not_auth_consumers(native, monkeypatch, tmp_path, handles, ignored):
+    module = importlib.import_module("loopx_codex_provider_routing.native_host")
+    host = module.NativeHost.__new__(module.NativeHost)
+    host.spec = {"home": tmp_path}
+    identity = (1, "/test/filesystem-server", 10, 20)
+    host._processes = lambda: {200: identity}
+    host._cached_codex_owners = lambda _: set()
+    monkeypatch.setattr(module, "process_identity", lambda _: identity)
+    monkeypatch.setattr(module.subprocess, "run", lambda *_a, **_k: SimpleNamespace(returncode=0, stdout="p200\n" + handles))
+    assert host._home_owners() == ([] if ignored else [200])
+    host._cached_codex_owners = lambda _: {200}
+    assert host._home_owners() == [200]  # Closed FDs do not clear a cached CLI.
 
 
 @pytest.mark.parametrize("force", [False, True])

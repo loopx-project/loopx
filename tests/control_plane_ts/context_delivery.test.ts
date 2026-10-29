@@ -1,8 +1,8 @@
+import {createHash} from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
-import {createHash} from "node:crypto";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
-import {compactTodoContextSource, OUTCOME_CONTEXT_PROJECTION_SCHEMA, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
+import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {updateNativeContextLifecycle} from "../../loopx/control_plane/quota/native_context_lifecycle.ts";
@@ -250,59 +250,6 @@ function inline(delivery: JsonObject, path: (string | number)[]): unknown {
   }
 }
 
-test("scoped outcome indexes reuse exact prose while current scope and verdicts remain literal", () => {
-  const guidance = "Read every required outcome and recover this same capture before work. ".repeat(100);
-  const objective = "An independent peer's complete export and recovery outcome. ".repeat(100);
-  const original = {schema_version: OUTCOME_CONTEXT_PROJECTION_SCHEMA,
-    source_capture: {path: "/capture/original.json", sha256: "a".repeat(64)},
-    read_scope: {complete: true, scope_applied: true, required_outcome_refs: ["own"]},
-    instruction: guidance, unknown_scope_control: {may_publish: false},
-    outcome_index: ["one", "two"].map(id => ({id, outcome_ref: id, objective: objective + id,
-      owner_agent_id: "peer", revision: 1, work: [{todo_id: id, status: "open"}],
-      required_in_scope: false, requirement_count: 1,
-      requirement_states: [{requirement_ids: [id], status: "unverified",
-        agent_review: {conclusion: "uncertain", basis_current: false, independently_verified: false}}],
-      unknown_index_control: {stop: true}})),
-    context: {interaction_contract: {agent_channel: {work_context: context()}}}};
-  const args = {scope, surface: "quota_packet", capture_id: "scoped-before", context: original};
-  const baseline = prepareContextDelivery(args);
-  for (const reordered of [false, true]) {
-    const current = structuredClone(original);
-    current.source_capture = {path: "/capture/current.json", sha256: "b".repeat(64)};
-    current.outcome_index[0].revision = 2;
-    current.outcome_index[0].requirement_states[0].status = "failed";
-    current.outcome_index[0].requirement_states[0].agent_review.conclusion = "unmet";
-    if (reordered) current.outcome_index.reverse();
-    const request = {...args, context: current, capture_id: "scoped-after"};
-    const fullCurrent = prepareContextDelivery(request);
-    const delta = prepareContextDelivery({...request, baseline,
-      retained: {complete: true, target: baseline.target}});
-    assert.equal(delta.mode, "delta");
-    const wire = JSON.stringify(delta.changes);
-    assert.ok(!wire.includes(guidance), "Unchanged reading guidance must use the exact retained baseline");
-    assert.ok(!wire.includes(objective), "Index prose must not be resent with current verdicts");
-    for (const key of ["schema_version", "source_capture", "read_scope", "unknown_scope_control"])
-      assert.deepEqual(inline(delta, [key]), current[key as keyof typeof current]);
-    current.outcome_index.forEach((row, i) => {
-      for (const [key, value] of Object.entries(row)) if (key !== "objective")
-        assert.deepEqual(inline(delta, ["outcome_index", i, key]), value, key);
-    });
-    assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: fullCurrent}).context, current);
-    assert.deepEqual(restoreContextDelivery({delivery: delta, current: fullCurrent}).context, current);
-    assert.deepEqual(fullCurrent.context, current); // Cold and lost-context delivery remain complete.
-  }
-  const corrected = structuredClone(original);
-  corrected.instruction = "A new owner correction requires the complete current source.";
-  corrected.outcome_index[0].objective = "A changed outcome must reach the current input.";
-  const request = {...args, context: corrected, capture_id: "corrected"};
-  const delta = prepareContextDelivery({...request, baseline,
-    retained: {complete: true, target: baseline.target}});
-  assert.equal(inline(delta, ["instruction"]), corrected.instruction);
-  assert.equal(inline(delta, ["outcome_index", 0, "objective"]), corrected.outcome_index[0].objective);
-  assert.deepEqual(restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(request)}).context, corrected);
-  assert.deepEqual(baseline.context, original);
-});
-
 test("complete original Goal text reuses the same integrity witness as Host dispatch", () => {
   const goal = {state_file: "goal.md", text: long, full_source: true,
     revision: `sha256:${createHash("sha256").update(long, "utf8").digest("hex")}`};
@@ -522,7 +469,7 @@ test("relocated immutable records reuse complete subtrees without hiding fresh d
     current: prepareContextDelivery(request)}).context, request.context);
 });
 
-for (const projected of [false, true]) test(`relocated evidence overlays preserve literal controls with scoped projection=${projected}`, () => {
+test("relocated evidence overlays keep current controls literal without repeating reference paths", () => {
   const requirements = Array.from({length: 24}, (_, i) => ({id: `r${i}`,
     description: `Requirement ${i}: ${long}`, status: "unverified", planning_satisfied: false,
     unknown_control: {may_publish: false},
@@ -533,12 +480,8 @@ for (const projected of [false, true]) test(`relocated evidence overlays preserv
   const work = {complete: true, sources: [{source: "goal_acceptance", content: {
     provider_revision: "current", goal_acceptance_contract: acceptance}}]};
   // Actual callers relocate acceptance from planning into the admitted source.
-  const wrap = (value: JsonObject): JsonObject => projected ? {
-    schema_version: OUTCOME_CONTEXT_PROJECTION_SCHEMA, context: value,
-    unknown_scope_control: {may_publish: false},
-  } : value;
-  const original = wrap({planning_horizon: {core_goal: {objective: long, acceptance_contract: acceptance}}});
-  const current = wrap({interaction_contract: {agent_channel: {work_context: work}}});
+  const original = {planning_horizon: {core_goal: {objective: long, acceptance_contract: acceptance}}};
+  const current = {interaction_contract: {agent_channel: {work_context: work}}};
   const initial = prepareContextDelivery({context: original, scope, capture_id: "a", surface: "quota_packet"});
   const args = {context: current, scope, capture_id: "b", surface: "quota_packet"};
   const delta = prepareContextDelivery({...args, baseline: initial, retained: {complete: true, target: initial.target}});
@@ -552,8 +495,7 @@ for (const projected of [false, true]) test(`relocated evidence overlays preserv
   };
   walk(delta.changes);
   assert.ok(overlays.length > 0, "relocated evidence should share a base with literal current overrides");
-  if (projected) assert.deepEqual(inline(delta, ["unknown_scope_control"]), {may_publish: false});
-  const path = [...(projected ? ["context"] : []), "interaction_contract", "agent_channel", "work_context", "sources", 0, "content",
+  const path = ["interaction_contract", "agent_channel", "work_context", "sources", 0, "content",
     "goal_acceptance_contract", "outcome_requirements"];
   assert.equal(inline(delta, [...path, "revision"]), 1);
   requirements.forEach((row, i) => {

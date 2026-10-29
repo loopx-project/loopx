@@ -14,6 +14,7 @@ import tempfile
 from unittest.mock import patch
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PACKAGE_ROOT.parents[1]))  # The actual LoopX service fence.
 sys.path.insert(0, str(PACKAGE_ROOT / "src"))
 host_module = importlib.import_module("loopx_codex_provider_routing.native_host")
 from loopx_codex_provider_routing.native import private_read  # noqa: E402
@@ -38,7 +39,8 @@ class Fixture:
         self.plist = home / "Library/LaunchAgents" / (LABEL + ".plist")
         self.service_pid = 300
         self.plist.parent.mkdir(parents=True)
-        self.plist.write_bytes(plistlib.dumps({"Label": LABEL, "ProgramArguments": ["/test/chat"]}))
+        self.service_args = ["/test/chat", "--runtime-root", str(home / "runtime"), "chat"]
+        self.plist.write_bytes(plistlib.dumps({"Label": LABEL, "ProgramArguments": self.service_args}))
         self.plist.chmod(0o600)
         self.root = home / "native-accounts"
         self.root.mkdir(mode=0o700)
@@ -84,8 +86,9 @@ class Fixture:
             return SimpleNamespace(returncode=0, stdout="".join(f"p{p}\n" for p in self.holders))
         verb = command[1]
         if verb == "print":
+            arguments = "arguments = {\n" + "\n".join(self.service_args) + "\n}\n"
             return SimpleNamespace(returncode=0 if self.loaded else 113,
-                                   stdout=f"path = {self.plist}\npid = {self.service_pid}\n" if self.loaded else "")
+                                   stdout=f"path = {self.plist}\npid = {self.service_pid}\n{arguments}" if self.loaded else "")
         if verb == "bootout":
             self.loaded = False
             self.holders = [p for p in self.holders if p != 301]
@@ -128,6 +131,10 @@ class Fixture:
 
     def handoff(self, **kwargs):
         return self.host.switch("b", "before", reopen=True, restart_clients=True, **kwargs)
+
+    def pause(self):
+        with self.host.restart_guard():
+            return self.host.pause_chat_agents()
 
 
 def error(code, operation):
@@ -229,7 +236,8 @@ with tempfile.TemporaryDirectory() as temporary:
     renamed = "org.example.codex.transport"
     f.plist.rename(f.plist.with_name("transport-installation.plist"))
     f.plist = f.plist.with_name("transport-installation.plist")
-    f.plist.write_bytes(plistlib.dumps({"Label": renamed, "ProgramArguments": ["/test/chat"]}))
+    f.plist.write_bytes(plistlib.dumps({"Label": renamed, "ProgramArguments": [
+        "/test/chat", "--runtime-root", str(f.home / "runtime"), "chat"]}))
     with f.context():
         assert f.handoff()["active_slot"] == "b"
     assert any(c[1:3] == ["bootout", f"gui/{os.getuid()}/{renamed}"] for c in f.calls)
@@ -268,7 +276,7 @@ with tempfile.TemporaryDirectory() as temporary:
     f.run = stuck_unload
     with f.context(), patch.object(host_module.time, "monotonic", side_effect=iter(range(0, 100, 2))), \
             patch.object(host_module.time, "sleep"):
-        error("chat_pause_failed", f.host.pause_chat_agents)
+        error("chat_pause_failed", f.pause)
     assert f.switches == 0 and private_read(f.root / "chat-recovery.json")["agents"]
 
     # A second independent service participates in the same transaction. Neither
@@ -276,17 +284,19 @@ with tempfile.TemporaryDirectory() as temporary:
     f = fixture()
     f.holders = [101, 301, 701]
     second = f.plist.with_name("another-provider.plist")
-    second.write_bytes(plistlib.dumps({"Label": "org.example.second", "ProgramArguments": ["/test/other"]}))
+    second.write_bytes(plistlib.dumps({"Label": "org.example.second", "ProgramArguments": [
+        "/test/other", "--runtime-root", str(f.home / "runtime"), "chat"]}))
     f.records.update({700: (1, "/test/other", 1500, 14), 701: (700, "/test/codex", 1501, 15)})
     second_state = {"loaded": True, "pid": 700}
     primary_run = f.run
     def multi_run(command, **kwargs):
-        if (command[0] == "/bin/launchctl" and
+        if (Path(command[0]).name == "launchctl" and
                 (command[-1].endswith("/org.example.second") or command[-1] == str(second))):
             f.calls.append(command)
             if command[1] == "print":
+                arguments = "arguments = {\n" + "\n".join(plistlib.loads(second.read_bytes())["ProgramArguments"]) + "\n}\n"
                 return SimpleNamespace(returncode=0 if second_state["loaded"] else 113,
-                                       stdout=f"path = {second}\npid = {second_state['pid']}\n")
+                                       stdout=f"path = {second}\npid = {second_state['pid']}\n{arguments}")
             if command[1] == "bootout":
                 second_state["loaded"] = False
                 f.records.pop(700)
@@ -325,7 +335,7 @@ with tempfile.TemporaryDirectory() as temporary:
         with f.context(), patch.object(host_module, "codex_home", return_value=str(f.home if same_home else f.home / "other")), \
                 patch.object(host_module.time, "monotonic", side_effect=lambda: next(clock)):
             if same_home:
-                error("other_clients_busy", f.handoff)
+                error("waiting_for_idle", f.handoff)
             else:
                 assert f.handoff()["active_slot"] == "b"
         assert 200 not in f.killed and f.switches == (0 if same_home else 1)
@@ -401,13 +411,13 @@ with tempfile.TemporaryDirectory() as temporary:
             f.host, "before", inspected=(100, (1, EXE, 99, 0))))
 
     # A remaining independent CLI blocks the full switch and leaves its work
-    # untouched; the source App is reopened without changing the account.
+    # untouched. Read-only preflight leaves even the source App running.
     f = fixture()
     clock = iter(range(0, 1000, 20))
     with f.context(), patch.object(host_module.time, "monotonic", side_effect=lambda: next(clock)):
-        error("other_clients_busy", f.handoff)
-    assert f.killed == [101] and f.holders == [200] and f.switches == 0
-    assert f.active == "a" and f.app_pid is not None
+        error("waiting_for_idle", f.handoff)
+    assert not f.killed and f.holders == [101, 200] and f.switches == 0
+    assert f.active == "a" and f.app_pid == 100
 
     # PID reuse, a prior orphan, a new launch and unprovable identity stay holds.
     for mutation in ("pid_reused", "unreadable", "new_launch", "selection_changed", "quota_stale"):
@@ -496,7 +506,7 @@ with tempfile.TemporaryDirectory() as temporary:
     f = fixture()
     f.holders = [301]
     with f.context():
-        f.host.pause_chat_agents()
+        f.pause()
         f.plist.write_text("changed by user")
         error("chat_resume_failed", f.host.resume_chat_agents)
     assert not f.loaded
@@ -507,7 +517,7 @@ with tempfile.TemporaryDirectory() as temporary:
     f = fixture()
     f.holders = [301]
     with f.context():
-        f.host.pause_chat_agents()
+        f.pause()
         journal = f.root / "chat-recovery.json"
         recovery = private_read(journal)
         recovery["owner"]["pid"] = 500

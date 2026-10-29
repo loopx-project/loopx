@@ -1,5 +1,5 @@
 import {bindGoalOutcomesStateOwner, GoalOutcomeValidationError, goalOutcomeCheckBasis, refineGoalOutcome,
-  outcomeContextReadPlan} from "./outcome_requirements.ts";
+  outcomeContextNavigation} from "./outcome_requirements.ts";
 /** Acceptance effects use the existing canonical head, CAS and operation journal.
  * Only trusted local owner/host adapters may invoke these mutation exports. */
 import {isAbsolute} from "node:path";
@@ -586,11 +586,11 @@ export async function inspectGoalAcceptance(
   }));
   const contract = projectGoalAcceptance(head.head, goalId, registeredAgents);
   const context = !includeWorkDetails && contextAgentId !== undefined && todoId !== undefined
-    ? outcomeContextReadPlan(head.head, goalId, contextAgentId, todoId, contract) : null;
+    ? outcomeContextNavigation(head.head, goalId, contextAgentId, todoId, contract) : null;
   if (context && (!Array.isArray(registeredAgents) || !registeredAgents.includes(contextAgentId))) {
-    context.complete = false;
-    context.fallback_reasons = [...context.fallback_reasons as string[], "context_agent_unavailable"];
-    context.required_outcome_ids = ((contract.outcome_requirements as JsonObject).outcomes as JsonObject[]).map(o => o.id);
+    context.coverage_complete = false;
+    context.limitations = [...context.limitations as string[], "context_agent_unavailable"];
+    context.suggested_outcome_ids = ((contract.outcome_requirements as JsonObject).outcomes as JsonObject[]).map(o => o.id);
   }
   return source(store, {status: "loaded", provider_revision: head.provider_revision,
     revision: state?.revision ?? null, contract_digest: state?.digest ?? null,
