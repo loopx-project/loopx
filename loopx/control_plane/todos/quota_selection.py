@@ -21,10 +21,7 @@ from .todo_semantics import (
     todo_item_task_class, todo_projection_sort_key,
     todo_summary_monitor_writeback_supported,
 )
-from .resume_planning import (
-    build_referenced_todo_resume_planning_request,
-    rehydrate_todo_resume_planning_result,
-)
+from .resume_planning import build_referenced_todo_resume_planning_request
 from .handoff_note import todo_read_source
 from .user_gate import is_user_gate_todo_item
 from .route_continuation import build_todo_route_continuation_facts
@@ -154,7 +151,7 @@ def project_quota_planning(
         raw = value.get(key)
         return [encode(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
-    resume_request, resume_payloads = build_referenced_todo_resume_planning_request(
+    resume_request = build_referenced_todo_resume_planning_request(
         value,
         agent_id=agent,
         item_limit=8,
@@ -188,9 +185,7 @@ def project_quota_planning(
         }, large_local_snapshot=True)
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
-    result = rehydrate_todo_resume_planning_result(
-        _decode_quota_planning_wire(wire), resume_payloads
-    )
+    result = _decode_quota_planning_wire(wire)
     if not isinstance(result, dict) or result.get("schema_version") != "todo_quota_planning_v0":
         raise RuntimeError("TypeScript Todo quota planning shape mismatch")
     if not isinstance(result.get("lanes"), dict) or not isinstance(result["lanes"].get("gate_items"), list):

@@ -302,9 +302,8 @@ function blockedVisibility(resumeBlocked: Item[], monitorItems: Item[], options:
  * No mutation, claim, lease grant, monitor poll, or recovery effect is emitted. */
 export function projectTodoResumePlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "resume planning request");
-  if (![RESUME_PLANNING_REQUEST, REFERENCED_RESUME_PLANNING_REQUEST].includes(
-    String(request.schema_version),
-  )) {
+  if (request.schema_version !== RESUME_PLANNING_REQUEST &&
+      request.schema_version !== REFERENCED_RESUME_PLANNING_REQUEST) {
     throw new EffectRuntimeRequestError("resume planning schema mismatch");
   }
   const records = request.schema_version === REFERENCED_RESUME_PLANNING_REQUEST

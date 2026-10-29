@@ -1,6 +1,7 @@
 """Quota scope is distinct from execution ownership; all data are synthetic."""
 import pytest
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, empty_todo_display
@@ -56,6 +57,75 @@ def test_agent_execution_still_respects_claim_and_exclusion():
     assert [row["todo_id"] for row in result["first_executable_items"]] == ["todo_owned", "todo_free"]
     assert result["claim_scope"]["executor_excluded_self_count"] == 1
     assert result["claim_scope"]["other_agent_claimed_open_count"] == 1
+
+
+@pytest.mark.parametrize("identity_field", ["target_key", "action_kind", "title"])
+def test_quota_frontier_keeps_identity_without_a_typed_todo_id(identity_field):
+    row = item(None, task_class="advancement_task", resume_when="resume_at:2099-01-01T00:00:00Z",
+               resume_ready=False, next_due_at="2099-01-01T00:00:00Z",
+               **{identity_field: "synthetic-frontier-identity"})
+    result = summarize_user_todos_for_quota(summary([row]),
+        agent_identity={"agent_id": "agent-b"})
+    assert result["frontier_deadline"]["identity"] == "synthetic-frontier-identity"
+
+
+@pytest.mark.parametrize("entrypoint", ["summary", "planning"])
+def test_quota_returned_records_do_not_alias_source_or_other_lanes(entrypoint):
+    from loopx.control_plane.todos.quota_selection import project_quota_planning
+
+    row = item("todo_wait", task_class="advancement_task", required_capabilities=["shell"],
+        resume_when="todo_done:todo_dependency", resume_ready=False,
+        resume_condition={"kind": "todo_done", "satisfied": False,
+            "target_todo_id": "todo_dependency", "target_status": "open",
+            "target_task_class": "advancement_task"})
+    source = summary([row])
+    before = deepcopy(source)
+    if entrypoint == "summary":
+        result = summarize_user_todos_for_quota(source, agent_identity={"agent_id": "agent-b"})
+        output = result["resume_blocked_items"][0]
+        other = result["first_open_items"][0]
+    else:
+        result = project_quota_planning(source, all_open_items=[row], source_open_count=1,
+            agent_identity={"agent_id": "agent-b"}, filter_user_gate_blocks_agent=False,
+            available_capabilities=[], current_time="2026-10-01T00:00:00Z")
+        resume = result["resume_planning"]
+        output = resume["resume_blocked_lanes"]["resume_blocked_items"][0]
+        other = resume["blocked_successor_items"][0]
+    output["required_capabilities"].append("synthetic-change")
+    output["resume_condition"]["target_status"] = "done"
+    assert source == before
+    assert other["required_capabilities"] == ["shell"]
+    assert other["resume_condition"]["target_status"] == "open"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_large_history_completes_public_quota_through_vision_wait(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
+    records = [item(f"todo_history_{index}", role="agent", source_section="Agent Todo",
+        schema_version="todo_item_v0", archive_state="active", done=True, status="done",
+        task_class="advancement_task", text=f"Completed synthetic work {index}. " * 60,
+        index=index + 1) for index in range(2500)]
+    records.append(item("todo_tail", role="agent", source_section="Agent Todo",
+        schema_version="todo_item_v0", archive_state="active", done=False,
+        task_class="advancement_task", claimed_by="agent-b", index=2501))
+    state.write_text("---\nstatus: active\n---\n# Goal\n\n## Objective\n"
+                     "Deliver a checked change.\n\n## Next Action\nComplete the remaining work.\n")
+    write_fixture_registry(project=tmp_path, runtime_root=runtime, registry_path=registry,
+        goal_id="goal-history", domain="quota-history", adapter_kind="generic_project_goal_v0",
+        state_file=str(state), registered_agents=["agent-b"], quota_allowed_slots=None)
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-history", todos=records, handoff_mode="soft_claim")
+    initialize_canonical_authority(runtime, "goal-history", projection, state_path=state, provider=provider)
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-history")
+    narrative = state.read_bytes()
+    code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "goal-history",
+        "--agent-id", "agent-b", registry_path=registry, runtime_root=runtime)
+    assert code == 0, packet
+    assert packet["agent_todo_summary"]["total_count"] == 2501
+    assert packet["selected_todo"]["todo_id"] == "todo_tail"
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-history") == before
+    assert state.read_bytes() == narrative
 
 
 @pytest.mark.parametrize("gate_scope", [False, True])

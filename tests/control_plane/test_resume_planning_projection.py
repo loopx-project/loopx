@@ -13,8 +13,10 @@ from loopx.control_plane.todos.active_state_todo_parser import parse_active_stat
 
 from loopx.control_plane.todos.resume_planning import (
     build_referenced_todo_resume_planning_request,
+    build_todo_resume_planning_request,
     project_todo_resume_planning,
 )
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from loopx.control_plane.todos.quota_summary import select_quota_todo_summary
 
 
@@ -56,12 +58,12 @@ def ids(items: list[dict]) -> list[str]:
     return [item["todo_id"] for item in items]
 
 
-def test_referenced_request_deduplicates_lanes_and_keeps_full_payload_local() -> None:
+def test_referenced_request_deduplicates_lanes_without_pruning_payload_facts() -> None:
     row = waiting(
         "todo_shared",
         content_revision="sha256:synthetic-full-projection",
     )
-    request, payloads = build_referenced_todo_resume_planning_request({
+    request = build_referenced_todo_resume_planning_request({
         "items": [row],
         "first_open_items": [row],
         "deferred_items": [row],
@@ -72,9 +74,34 @@ def test_referenced_request_deduplicates_lanes_and_keeps_full_payload_local() ->
     assert request["sources"]["items"] == [0]
     assert request["sources"]["first_open_items"] == [0]
     assert request["sources"]["deferred_items"] == [0]
-    assert request["records"][0]["payload"]["_loopx_resume_record_ref"] == 0
-    assert "content_revision" not in request["records"][0]["payload"]
-    assert payloads[0]["content_revision"] == row["content_revision"]
+    assert request["records"][0]["payload"]["content_revision"] == row["content_revision"]
+
+
+def test_referenced_projection_keeps_conflicting_same_id_source_facts() -> None:
+    source = {"items": [waiting("todo_shared")],
+              "first_open_items": [waiting("todo_shared", claimed_by="agent-b")],
+              "deferred_items": [waiting("todo_shared", status="deferred")]}
+    request = build_referenced_todo_resume_planning_request(source, agent_id="agent-a")
+    assert len(request["records"]) == 3
+    assert effect_runtime_result("todo.resume_planning.project", request) == effect_runtime_result(
+        "todo.resume_planning.project", build_todo_resume_planning_request(source, agent_id="agent-a"))
+
+
+@pytest.mark.parametrize("reference", [-1, 1, True, 0.5, "0"])
+def test_referenced_projection_rejects_malformed_or_out_of_range_references(reference) -> None:
+    request = build_referenced_todo_resume_planning_request({"items": [waiting("todo_shared")]})
+    request["sources"]["items"] = [reference]
+    with pytest.raises(EffectRuntimeRejected, match="record reference"):
+        effect_runtime_result("todo.resume_planning.project", request)
+
+
+@pytest.mark.parametrize("schema", [["todo_resume_planning_request_v0"],
+                                  ["todo_resume_planning_request_v1"], None, "unsupported"])
+def test_resume_planning_rejects_coercible_or_unknown_schema_versions(schema) -> None:
+    request = build_referenced_todo_resume_planning_request({})
+    request["schema_version"] = schema
+    with pytest.raises(EffectRuntimeRejected, match="schema mismatch"):
+        effect_runtime_result("todo.resume_planning.project", request)
 
 
 def test_claim_priority_and_exclusion_are_independent_of_display_priority() -> None:

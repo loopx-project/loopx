@@ -44,6 +44,7 @@ MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.read",
     "todo.quota_planning.project",
+    "goal.vision_wait.project",
     "collaboration.inbox.read",
     "collaboration.delegation.inventory_page",
     "benchmark.trajectory.codex-usage",
