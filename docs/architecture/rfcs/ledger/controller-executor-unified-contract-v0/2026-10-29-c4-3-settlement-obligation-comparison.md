@@ -1,8 +1,11 @@
 # C4.3 settlement obligation comparison
 
 - Parent: [controller/executor RFC, C4.3](2026-10-27-refactor-handoff.md#c43--settlement-adapters-over-existing-primitives).
-- Baseline: `e19d94ca0`, 2026-10-29.
+- Baseline: `e19d94ca0`, 2026-10-29. The settlement owners are unchanged at `fb331f45`.
 - Status: reading-only comparison. No deletion, runtime, schema, wire or default change.
+- Correction: an earlier revision of this entry read the adapter's lack of a
+  local journal as a lack of recovery on the whole MCP path. That was wrong.
+  The recovery baseline is corrected below, in both mirrors.
 - [Chinese mirror](2026-10-29-c4-3-settlement-obligation-comparison.zh-CN.md).
 
 ## Why this entry exists
@@ -35,8 +38,8 @@ once per transaction, and whose owner must reject, replay or recover it.
 | Durable writeback | `durable_writeback` step, condition guarded | `durable_writeback` provider effect through the reducer | Same kind, different execution and recovery |
 | Quota spend | `quota_spend` step | `quota_spend` provider effect | Same kind, different execution and recovery |
 | Terminal closeout | `terminal_closeout` step, emitted last with `continue_when: null` | `terminal_closeout` provider effect plus `terminal_closeout_requirement` | Same kind, B owns the requirement rule |
-| Replay / recovery | None: prepare → plan → finalize is single-shot, no journal | Checkpoint per step, `resolve_prepared`, receipt replay, retry ceiling | **Decisive asymmetry** |
-| Persistence | Only a temporary vision file | Durable checkpoint plus source journal | B-only |
+| Replay / recovery | The adapter keeps no journal of its own. The call chain still recovers: `turnInstanceId` derives a stable identity from the same intent, the CLI persists canonical settlement receipts, and the continue-when conditions accept `idempotent_replay` / `receipt_repaired`, so re-entering the same intent succeeds and spends exactly one slot | Checkpoint per step, `resolve_prepared`, receipt replay, retry ceiling | **Different owner and granularity** — not "recovery versus none" |
+| Persistence | The adapter writes only a temporary vision file; the durable settlement receipts live in the canonical CLI/quota store, owned by the CLI | Durable checkpoint plus source journal | Different owners: CLI receipts versus transaction journal |
 
 ## Findings
 
@@ -51,10 +54,20 @@ once per transaction, and whose owner must reject, replay or recover it.
    and `lifecycle_completion` have no B counterpart, and B's `validation` is a
    phase marker it refuses to execute rather than A's admission call.
 
-3. **Recovery is the real difference, not duplication.** A has no journal and no
-   replay; it either completes or raises. B persists a checkpoint per provider
-   and can resume, replay receipts and reject ambiguous attempts. Deleting A
-   into B would require giving the MCP host a journal it does not have today.
+3. **Recovery differs in owner and granularity, not in existence.** The adapter
+   keeps no journal, but the MCP path is not recovery-free.
+   `turnInstanceId` derives a stable identity from the same intent, the CLI
+   persists canonical settlement receipts, and `spendContinueWhen` accepts
+   `idempotent_replay` / `receipt_repaired`. A response lost after the real
+   commit therefore recovers by re-entering the same intent: the durable
+   readback reports `settlement_pending` or `settled`, a premature terminal
+   completion is blocked, the retry succeeds, and the slot is spent exactly
+   once — `tests/test_goal_mode_mcp_settlement.py::test_real_mcp_completion_recovers_a_lost_mutation_response`,
+   parametrized over `lifecycle`, `writeback` and `spend`. B recovers at
+   provider-step granularity inside one transaction, through its own checkpoint
+   and `resolve_prepared`. A consolidation must preserve the CLI-receipt replay
+   path; it must neither assume the MCP host needs a new journal nor assume the
+   CLI receipts disappear with the adapter.
 
 4. **At the shipped capability call site they already compose.**
    `extensions/governed_capability_execution.py` calls A's
@@ -75,9 +88,13 @@ once per transaction, and whose owner must reject, replay or recover it.
 
 None of these is established today:
 
-- the MCP host path gaining a journal and an effect receiver for A's steps; or
+- the consolidation preserving the CLI's canonical receipt replay and the
+  stable turn instance id that let a re-entry of the same intent succeed
+  without paying twice, together with an adapter-local journal *or* an
+  equivalent effect receiver for A's steps; or
 - B accepting `ordered_cli_sequence` plans with `continue_when` plus A's `guard`
-  and `lifecycle_completion` kinds without a per-step runtime call; or
+  and `lifecycle_completion` kinds without a per-step runtime call, and
+  adopting the CLI-receipt replay that A's path relies on today; or
 - evidence that no shipped caller uses A end-to-end.
 
 ## Candidate next slices
@@ -86,9 +103,12 @@ None of these is established today:
    `guard`, `lifecycle_completion` and `validation` one typed owner instead of
    three names in two files. Do not unify names that describe different
    obligations.
-2. **Characterization of A's single-shot behavior (medium).** Pin what happens
-   when a step succeeds and a later step raises, before any recovery change
-   touches it.
+2. **Characterization of A's adapter-local behavior (medium).** Pin what the
+   adapter itself does when a step succeeds and a later step raises, before any
+   recovery change touches it. The end-to-end response-loss case is already
+   characterized by `test_real_mcp_completion_recovers_a_lost_mutation_response`;
+   what is not characterized is the adapter's own partial-step behavior and
+   where the recovery boundary between the adapter and the CLI receipts sits.
 3. **Not recommended now.** Merging A and B, or adding a third plan format,
    would add a transaction boundary without deleting an obligation.
 
@@ -105,5 +125,7 @@ diffs first.
 ## What this does not establish
 
 No equivalence proof, no deletion authorization, no runtime qualification, no
-benefit measurement, and no claim that either path is redundant. Source facts
-are read at the baseline above and may drift.
+benefit measurement, and no claim that either path is redundant. The recovery
+baseline is the CLI-receipt replay that exists today; the adapter-local
+partial-step behavior is not characterized here. Source facts are read at the
+baseline above and may drift.
