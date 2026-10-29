@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -13,6 +14,130 @@ import pytest
 from loopx.control_plane.turn_driver import host_process_transport as transport
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object transport")
+
+
+@pytest.mark.parametrize("suffix", ["", ".cmd", ".exe", ".bat", ".com"])
+def test_missing_host_is_spawn_failure(tmp_path: Path, suffix: str) -> None:
+    result = transport.run_host_process([str(tmp_path / ("absent" + suffix))],
+        project=tmp_path, input_text="", timeout_seconds=5)
+    assert result["outcome"] == "spawn_failed" and result["returncode"] is None
+
+
+def test_empty_command_cannot_resolve_a_dot_exe(tmp_path: Path) -> None:
+    shutil.copyfile(Path(os.environ["SYSTEMROOT"]) / "System32" / "cmd.exe", tmp_path / ".exe")
+    result = transport.run_host_process(["", "/d", "/c", "echo wrong>marker"],
+        project=tmp_path, input_text="", timeout_seconds=5)
+    assert result["outcome"] == "spawn_failed" and not (tmp_path / "marker").exists()
+
+
+@pytest.mark.parametrize("suffix", [".cmd", ".exe", ".com"])
+def test_explicit_exe_never_executes_an_added_extension(tmp_path: Path, suffix: str) -> None:
+    if suffix == ".cmd":
+        (tmp_path / "absent.exe.cmd").write_text("@echo alternate>marker\n")
+    else:
+        shutil.copyfile(Path(os.environ["SYSTEMROOT"]) / "System32" / "cmd.exe", tmp_path / ("absent.exe" + suffix))
+    result = transport.run_host_process([str(tmp_path / "absent.exe"), "/d", "/c", "echo alternate>marker"],
+        project=tmp_path, input_text="", timeout_seconds=5)
+    assert result["outcome"] == "spawn_failed"
+    assert not (tmp_path / "marker").exists()
+
+
+def test_bare_command_keeps_exe_priority_independent_of_parent_pathext(tmp_path: Path, monkeypatch) -> None:
+    shutil.copyfile(Path(os.environ["SYSTEMROOT"]) / "System32" / "cmd.exe", tmp_path / "runner.exe")
+    shutil.copyfile(Path(os.environ["SYSTEMROOT"]) / "System32" / "whoami.exe", tmp_path / "runner.com")
+    (tmp_path / "runner.cmd").write_text("@echo wrong-batch\n")
+    monkeypatch.setenv("PATHEXT", ".CMD;.COM;.EXE")
+    output = []
+    environment = {**os.environ, "PATHEXT": ".EXE"}
+    before = environment.copy()
+    result = transport.run_host_process(["runner", "/d", "/c", "echo expected-exe"],
+        project=tmp_path, input_text="", timeout_seconds=5, environment=environment, on_stdout=output.append)
+    assert result["outcome"] == "exited" and result["returncode"] == 0
+    assert "".join(output).strip() == "expected-exe"
+    assert environment == before and os.environ["PATHEXT"] == ".CMD;.COM;.EXE"
+
+
+@pytest.mark.parametrize("suffix", [".cmd", ".bat"])
+def test_batch_uses_host_relative_path_preserving_input_and_arguments(tmp_path: Path, suffix: str) -> None:
+    scripts = tmp_path / "bin with spaces"
+    scripts.mkdir()
+    echo = scripts / "echo.py"
+    echo.write_text("import json,sys;print(json.dumps({'input':json.load(sys.stdin),'args':sys.argv[1:]}))")
+    (scripts / ("host" + suffix)).write_text(f'@echo off\n"{sys.executable}" "{echo}" %*\n')
+    output = []
+    result = transport.run_host_process(["host" + suffix, "two words", "", "汉字"],
+        project=tmp_path, input_text='{"message":"hello"}', timeout_seconds=5,
+        environment={**os.environ, "PATH": "bin with spaces" + os.pathsep + os.environ["PATH"]}, on_stdout=output.append)
+    assert result["outcome"] == "exited" and result["returncode"] == 0
+    assert json.loads("".join(output)) == {"input": {"message": "hello"}, "args": ["two words", "", "汉字"]}
+
+
+def test_batch_selection_uses_host_cwd_not_owner(tmp_path: Path, monkeypatch) -> None:
+    owner, project = tmp_path / "owner", tmp_path / "project"
+    owner.mkdir()
+    project.mkdir()
+    (owner / "host.cmd").write_text("@echo wrong-owner\n")
+    (project / "host.cmd").write_text("@echo correct-host\n")
+    monkeypatch.chdir(owner)
+    output = []
+    result = transport.run_host_process(["host.cmd"], project=project,
+        input_text="", timeout_seconds=5, on_stdout=output.append)
+    assert result["returncode"] == 0 and "".join(output).strip() == "correct-host"
+
+
+def test_selection_then_removal_does_not_restart_search(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver import windows_host_command
+    target = tmp_path / "removed.exe"
+    shutil.copyfile(Path(os.environ["SYSTEMROOT"]) / "System32" / "cmd.exe", target)
+    shutil.copyfile(target, tmp_path / "removed.exe.exe")
+    report = tmp_path / "created.json"
+    script = (
+        "import sys;from pathlib import Path;"
+        f"sys.path.insert(0,{str(Path(windows_host_command.__file__).parents[3])!r});"
+        "from loopx.control_plane.turn_driver import windows_host_command as relay;"
+        "resolve=relay.resolve_executable;"
+        "\ndef remove(name):\n path=resolve(name);Path(path).unlink();return path\n"
+        "relay.resolve_executable=remove;sys.argv=['relay',*sys.argv[1:]];sys.exit(relay.main())"
+    )
+    result = subprocess.run([sys.executable, "-c", script, str(report), str(target), "/d", "/c", "echo wrong>marker"],
+        cwd=tmp_path, timeout=10, capture_output=True)
+    assert report.exists(), result.stderr.decode(errors="replace")
+    assert result.returncode == 1 and json.loads(report.read_text()) is False
+    assert not (tmp_path / "marker").exists()
+
+
+def test_running_host_exit_and_caller_failure_are_distinct(tmp_path: Path) -> None:
+    from loopx.control_plane.turn_driver.executor import _run_host
+    result = transport.run_host_process([sys.executable, "-c", "import sys;sys.exit(7)"],
+        project=tmp_path, input_text="", timeout_seconds=5)
+    assert result["outcome"] == "exited" and result["returncode"] == 7
+    failure = _run_host({}, argv=[str(tmp_path / "absent.exe")], project=tmp_path, timeout_seconds=5)
+    assert failure["reason"] == "host process spawn_failed"
+    assert failure["failure_kind"] == "transport_lost" and failure["returncode"] is None
+
+
+@pytest.mark.parametrize("report_content", [None, '"true"'])
+def test_missing_or_invalid_launch_report_cannot_use_business_stdout(tmp_path: Path, monkeypatch, report_content) -> None:
+    popen = subprocess.Popen
+    observed = []
+    invalid = tmp_path / "invalid.json"
+    if report_content is not None:
+        invalid.write_text(report_content)
+
+    def launch(argv, **kwargs):
+        argv = list(argv)
+        if "--windows-launch-status" not in argv:
+            return popen(argv, **kwargs)
+        argv[argv.index("--windows-launch-status") + 1] = str(invalid)
+        process = popen(argv, **kwargs)
+        observed.append(process)
+        return process
+
+    monkeypatch.setattr(transport.subprocess, "Popen", launch)
+    with pytest.raises(RuntimeError, match="supervision returned no result"):
+        transport.run_host_process([sys.executable, "-c", "print('true')"],
+            project=tmp_path, input_text="", timeout_seconds=5)
+    assert observed[0].poll() is not None and observed[0].stdout.closed
 
 
 def host_source(marker: Path, pid: Path, *, exit_leader: bool = False) -> str:

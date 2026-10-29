@@ -17,11 +17,6 @@ from ...file_lock import lock_holder_host_label
 from ..effect_runtime import _node_executable
 from .host_bridge_transport import GuardedHostBridge
 
-# Keep Python's Windows executable/batch launcher compatibility. No timeout,
-# buffering or lifecycle decision lives in this transport-only child.
-_WINDOWS_COMMAND_RELAY = "import subprocess,sys;sys.exit(subprocess.call(sys.argv[1:]))"
-
-
 # A launching owner that must later prove its Host drained names a record path
 # here. The transport consumes it: the Host never inherits it, so a nested
 # LoopX run inside the Host cannot overwrite its parent's record.
@@ -283,8 +278,6 @@ def run_host_process(
     then releases before Host output; it must never lock the entire Host run.
     """
     command = list(argv)
-    if sys.platform == "win32":
-        command = [sys.executable, "-c", _WINDOWS_COMMAND_RELAY, *command]
     request: dict[str, Any] = {
         "argv": command,
         "cwd": str(project),
@@ -303,9 +296,17 @@ def run_host_process(
                         if launch_guard is not None else [])
     with ExitStack() as containment:
         windows_job = None
+        launch_report_arguments: list[str] = []
         if sys.platform == "win32":
             from .windows_host_job import WindowsHostJob
             windows_job = containment.enter_context(WindowsHostJob())
+            report_directory = containment.enter_context(tempfile.TemporaryDirectory(prefix="loopx-host-launch-"))
+            from ..runtime.private_permissions import protect_private_path
+            protect_private_path(Path(report_directory), directory=True)
+            report_path = str(Path(report_directory) / "created.json")
+            relay = Path(__file__).with_name("windows_host_command.py")
+            request["argv"] = [sys.executable, str(relay), report_path, *command]
+            launch_report_arguments = ["--windows-launch-status", report_path]
         proc = subprocess.Popen(
             [
                 _node_executable(),
@@ -313,6 +314,7 @@ def run_host_process(
                 "--experimental-strip-types",
                 str(bridge),
                 *launch_arguments,
+                *launch_report_arguments,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -402,13 +404,19 @@ def run_host_process(
                         proc.kill()
                         proc.wait()
             finally:
-                if windows_job is not None:
-                    windows_job.finish()
-                launch_scope.close()
-                if guarded is not None:
-                    guarded.close_output()
-                else:
-                    proc.stdout.close()
+                try:
+                    if windows_job is not None:
+                        windows_job.finish()
+                finally:
+                    try:
+                        # Preserve the active setup/Job failure if releasing
+                        # the admission guard also fails.
+                        launch_scope.__exit__(*sys.exc_info())
+                    finally:
+                        if guarded is not None:
+                            guarded.close_output()
+                        else:
+                            proc.stdout.close()
         if record is not None and result is not None and proc.returncode == 0:
             assert record_path is not None
             # The supervisor returned only after cleaning its group; the group is still re-read.
