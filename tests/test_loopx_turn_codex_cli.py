@@ -446,14 +446,20 @@ def test_codex_cli_prompt_isolates_subagent_instructions_to_enabled_request() ->
 
 
 @pytest.mark.parametrize("sandbox", ["read-only", "workspace-write", "danger-full-access"])
+@pytest.mark.parametrize("long_runtime", [False, True], ids=["ordinary-runtime", "long-runtime"])
 def test_codex_cli_host_starts_then_resumes_opaque_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sandbox: str,
+    long_runtime: bool,
 ) -> None:
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
     runtime_root = tmp_path / "runtime"
+    if long_runtime:
+        while len(str(runtime_root)) < 220:
+            runtime_root /= "runtime-" + "x" * 60
     project = tmp_path / "project"
     project.mkdir()
     first_request = _request()
@@ -535,7 +541,7 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         "host",
         "session_id",
     }
-    session_paths = _session_files(runtime_root)
+    session_paths = _session_files(windows_extended_path(runtime_root))
     assert len(session_paths) == 1
     if os.name != "nt":  # POSIX mode bits do not express Windows ACLs.
         assert stat.S_IMODE(session_paths[0].stat().st_mode) == 0o600

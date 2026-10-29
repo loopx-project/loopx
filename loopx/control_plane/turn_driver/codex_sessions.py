@@ -14,6 +14,7 @@ from typing import Any
 from ...boundary_authority import normalize_checkpointed_boundary_authority_entries
 from ...file_lock import exclusive_file_lock
 from ..runtime.private_permissions import protect_private_path
+from ..runtime.file_paths import windows_extended_path
 from ...runtime import validate_goal_id_path_segment
 from ..content_digest import BARE_SHA256_PATTERN
 from ..projects.registry_codec import (
@@ -78,7 +79,7 @@ def _session_path(
         ).encode("utf-8")
     ).hexdigest()
     goal_id: str = validate_goal_id_path_segment(lineage["goal_id"])
-    return runtime_root / "goals" / goal_id / "turn-sessions" / f"{digest}.json"
+    return windows_extended_path(runtime_root / "goals" / goal_id / "turn-sessions" / f"{digest}.json")
 
 
 def _valid_session_id(value: Any) -> str | None:
