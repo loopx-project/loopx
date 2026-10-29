@@ -37,6 +37,10 @@ $loopx 优化这个项目最慢的流程，对比方案并验证性能提升
 
 Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升级说明 ↓](#试用-loopx)
 
+想动手跑通一次流程，读[查 bug 入门教程](docs/guides/first-bugfix-loop.zh-CN.md)；
+接入与恢复见[长程编程任务指南（English）](docs/guides/long-running-coding-agents.md)；
+App 与 dashboard 操作见[图文工作区手册](docs/guides/personal-workspace-user-guide.md)。
+
 ## 📰 最新动态
 
 <!-- Curate major product/architecture releases, research findings, consequential
