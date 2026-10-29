@@ -48,13 +48,14 @@ def _resign_contract(contract):
     return contract, source
 
 
-def _complete_digest(value):
+def _complete_digest(value, *, include_fractional_tokens=False):
     # Independent negative-fixture oracle: canonical JS values plus the
     # caller's sparse original numeric tokens, sorted by their encoded paths.
     tokens = []
 
     def visit(item, path):
-        if isinstance(item, float) or type(item) is int and abs(item) > 2**53 - 1:
+        if (isinstance(item, float) and (include_fractional_tokens or item.is_integer())
+                or type(item) is int and abs(item) > 2**53 - 1):
             tokens.append([path, json.dumps(item, allow_nan=False)])
         elif isinstance(item, dict):
             for key, child in item.items():

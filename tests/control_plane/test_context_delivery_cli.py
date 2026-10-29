@@ -819,7 +819,9 @@ def test_default_json_reader_and_generated_recovery_use_large_pages(tmp_path):
         assert collected == raw and calls <= 10
 
 
-@pytest.mark.parametrize("number", [1, 1.0, -0.0, 2**60 + 1, float(2**60), 1e-7])
+@pytest.mark.parametrize("number", [1, 1.0, -0.0, 2**60 + 1, float(2**60),
+    1e-7, 1e-6, 0.1, 1.0000000000000002, 5e-324, -5e-324,
+    sys.float_info.min, sys.float_info.max])
 def test_context_codec_keeps_original_numbers_through_full_delta_and_recovery(tmp_path, monkeypatch, number):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
@@ -886,3 +888,61 @@ def test_context_numeric_source_reordering_and_grouped_literals(tmp_path, monkey
     assert restored["mode"] == "delta"
     assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
     assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), -float("inf")])
+def test_context_nonfinite_numbers_are_rejected_before_rpc(monkeypatch, number):
+    from loopx.control_plane.quota import turn_envelope
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Non-finite evidence must not enter the codec")
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_result", unexpected)
+    with pytest.raises(ValueError, match="finite"):
+        prepare_context_delivery({"nested": [{"measurement": number}]},
+            scope={}, capture_id="invalid")
+
+
+def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path, monkeypatch):
+    """Count both sides of the real RPC, including full and recovery paths."""
+    from loopx.control_plane.quota import turn_envelope
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    original_rpc = turn_envelope.effect_runtime_result
+    costs = []
+
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"),
+            allow_nan=False).encode())
+
+    def measured_rpc(method, params, **kwargs):
+        result = original_rpc(method, params, **kwargs)
+        costs.append(size(params) + size(result))
+        return result
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_result", measured_rpc)
+    totals, source_sizes = [], []
+    for fraction in (False, True):
+        costs.clear()
+        before = {"registry": {"values": [i + 0.5 if fraction else i for i in range(1000)]}}
+        after = deepcopy(before)
+        after["registry"]["values"][-1] += 1
+        args = dict(scope=dict(goal_id="fixture", agent_id="reader", session_id="native",
+            context_epoch="epoch"), surface="quota_packet")
+        first = prepare_context_delivery(before, capture_id="before", **args)
+        current = prepare_context_delivery(after, capture_id="after", **args)
+        delta = prepare_context_delivery(after, capture_id="after", baseline=first,
+            continuity={"basis": "captured_file", "capture_bytes_verified": True,
+                "target": first["target"]}, **args)
+        assert delta["mode"] == "delta"
+        assert json.dumps(first["context"]) == json.dumps(before)
+        for baseline in (first, None):
+            restored = restore_context_delivery(delta, baseline=baseline, current=current)
+            assert json.dumps(restored["context"]) == json.dumps(after)
+        assert len(costs) == 5
+        totals.append(sum(costs))
+        source_sizes.append(size(before) + size(after))
+    # Fractions need more JSON digits, not per-element identity metadata.
+    # Allow payload growth plus 25% structural headroom over the matched
+    # safe-integer workload; count complete requests and results, not deltas alone.
+    assert totals[1] / totals[0] <= 1.25 * source_sizes[1] / source_sizes[0]

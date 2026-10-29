@@ -1555,6 +1555,9 @@ function coldPath(
  * The v0 envelope remains an internal executor adapter during reader migration.
  */
 export const COMPLETE_TURN_DECISION_VERSION = "loopx_turn_envelope_v1";
+// Sparse producer metadata is a different identity from the earlier
+// experimental all-float binding; its saved contracts need their pinned reader.
+const COMPLETE_TURN_HASH_CODEC = "context_source_numbers_v2";
 
 function requireCompleteDecisionSource(source: JsonObject): void {
   assertSupportedQuotaPacket(source);
@@ -1588,7 +1591,7 @@ export function requireCompleteTurnDecision(value: unknown, numberTokens?: unkno
     throw new EffectRuntimeRequestError("unsupported complete Turn decision version");
   }
   const binding = requireJsonObject(decision.contract_binding, "Turn contract binding");
-  if (binding.hash_codec !== "context_source_numbers_v1") {
+  if (binding.hash_codec !== COMPLETE_TURN_HASH_CODEC) {
     throw new EffectRuntimeRequestError("unsupported complete Turn decision hash codec");
   }
   const identity = contextSourceIdentity(decision, numberTokens ?? []);
@@ -1719,7 +1722,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   requireCompleteDecisionSource(source);
   const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
     contract_binding: {scheduler_execution_args: request.scheduler_execution_args,
-      hash_codec: "context_source_numbers_v1",
+      hash_codec: COMPLETE_TURN_HASH_CODEC,
       source_decision_hash: completeSourceHash(source, sourceIdentity)}};
   result.contract_binding = {...object(result.contract_binding), content_hash: completeSourceHash(result, sourceIdentity)};
   return result;

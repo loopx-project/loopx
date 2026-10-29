@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -81,7 +82,13 @@ def _source_number_tokens(value: object) -> list[list[Any]]:
     tokens: list[list[Any]] = []
 
     def visit(item: object, path: list[str | int]) -> None:
-        if isinstance(item, float) or type(item) is int and abs(item) > 2**53 - 1:
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Context source numbers must be finite")
+        # Fractional doubles retain their identity through JSON/JavaScript.
+        # Only integral floats (including signed zero) and unsafe integers
+        # can become indistinguishable from a different Python source number.
+        if (isinstance(item, float) and item.is_integer()
+                or type(item) is int and abs(item) > 2**53 - 1):
             tokens.append([path, json.dumps(item, allow_nan=False)])
         elif isinstance(item, Mapping):
             for key, child in item.items():
