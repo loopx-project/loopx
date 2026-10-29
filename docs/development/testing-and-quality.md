@@ -1528,6 +1528,18 @@ failure; the installed-profile smoke and semantic assertions qualify the repair.
 | Regression budget / 回归预算 | A measured guard against unexplained growth; preserving, reducing or increasing it needs consumer and cost evidence. / 用测量防止无解释增长；保持、压缩或扩容都依据消费者价值与成本。 |
 | Presentation cap / 展示上限 | Bound returned detail, not source truth; preserve selection, totals, completeness and drill-down. / 限制返回细节而非源事实；保留选择、总数、完整性与下钻路径。 |
 
+Heartbeat's authored-text regression metric normalizes the selected runtime,
+registry and active-state paths before their goal-id or parent-path substrings,
+including their shell-quoted spellings. Undeclared paths still count. Keep the
+raw body `char_count`, emitted JSON/Markdown budgets and native Goal host's
+4,000-character transport check independent: normalized metadata is not a
+transport saving or permission to exceed a host limit.
+
+Heartbeat 的正文回归计量先归一化已选择的 runtime、registry 和 active-state
+完整路径及其 shell 引用形式，再处理 Goal id、父路径等子串；未声明路径仍计入。
+原始正文 `char_count`、JSON/Markdown 输出预算与原生 Goal 宿主的 4,000 字符
+传输检查各自保留。归一化元数据不代表传输节省，也不豁免宿主限制。
+
 1. **Measure the same contract.** Record base/head revisions, workload, metric
    and measurement boundary. Compact JSON characters, UTF-8 bytes, nested keys,
    emitted stdout and tokens are different metrics. For latency, retain the

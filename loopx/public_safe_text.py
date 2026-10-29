@@ -370,6 +370,21 @@ LETTER_LED_COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$"
 # a value this shape accepts is not yet a claim that the destination may publish
 # it.
 OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
+# One definition for "a compact label naming a provider, service or source". Five
+# contracts each compiled this body under their own name -- the service-ownership
+# projection, the Issue-Fix repository context and repository memory, the memory
+# provider that publishes them, and the reviewer-recommendation route -- and each
+# keeps its own field names and error text. The bound is the one those sites
+# already enforced: widening it to the 120-character identity shape below would
+# accept labels they reject today, so the two stay separate on purpose and
+# tests/control_plane/test_compact_identifier_shape_owner.py census both.
+COMPACT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
+# One definition for "an identity token in a public-safe envelope", the shape
+# `loopx/capabilities/reliability_diagnostics/README.md` already documents for
+# `goal_id` and `session_id`. Three contracts compiled it locally -- the observer
+# envelope, the command-record projector and the OpenViking history export -- and
+# the envelope module remains the public name its own package imports.
+IDENTITY_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$")
 MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
     r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$"
 )

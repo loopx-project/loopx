@@ -19,6 +19,7 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
     full/delta view when the native tool actually presents it.
     """
     from loopx.command_invocation import loopx_cli_argv
+    from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
 
     prefix = [*loopx_cli_argv(env["LOOPX_CLI"]), "--format", "json", "quota"]
     source = ["--capture-file", str(path), "--capture-sha256", digest]
@@ -27,12 +28,8 @@ def preflight_context_instruction(env: dict[str, str], path: Path, digest: str, 
         "--turn-instance-id", turn_id, "--context-delivery", "on", "--runtime-profile", "generic_cli", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"]]
     full = [*prefix, "context-read", *source]
     return ("Present that same immutable packet with:\n```sh\n" + shlex.join(project)
-        + "\n```\nConsume any returned page content, then follow next_command through eof. "
-        "If no page content is returned, run command and follow all next_command pages. Reconstruct any delta against "
-        "its exact retained baseline before following the original interaction_contract. "
-        "Normal completed reads use the explicit native-hook continuity assumption. "
-        "If projection is unavailable, the baseline was invalidated, or a response is incomplete, "
-        "follow its full recovery reference. If the projection command itself fails, read the original "
+        + "\n```\n" + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
+        + "If the projection command itself fails, read the original "
         "complete packet with:\n```sh\n" + shlex.join(full) + "\n```\nFollow every next_command. "
         "Neither presentation nor recovery renews this decision's authority or freshness. ")
 

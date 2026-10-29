@@ -931,6 +931,37 @@ loopx todo update \
   --reason "<public-safe deferred rationale>"
 ```
 
+For a known future eligibility time, continue useful independent work first.
+When only the timed wait remains, save recoverable progress and defer the Todo
+using the timestamp supplied by the current contract or observed service:
+
+```bash
+loopx todo update \
+  --goal-id <goal-id> \
+  --todo-id <todo_id> \
+  --agent-id <registered-agent> \
+  --status deferred \
+  --resume-when resume_at:<timezone-aware-rfc3339-timestamp> \
+  --reason "Await the observed eligibility time"
+```
+
+The ordinary lifecycle update retires the applicable execution; no separate
+lease operation is needed. Settle any validated work already performed under
+the original Turn identity, then return control to the host scheduler. Waiting
+alone is not progress or a reason to spend a slot. Do not keep a model invocation
+alive with repeated sleeps, clock reads, or unchanged progress messages. The
+scheduler can recheck current state without waking the model while the wait is
+pending. At the due time, follow the projected resume/replan and fresh admission;
+the timestamp does not itself authorize execution, reset a service cooldown,
+extend a budget, or override an explicit stop. Unknown-time observations retain
+their projected monitor contract; do not invent a retry time or successor.
+
+已知恢复时间且没有可推进的独立工作时，保存进展，通过普通 Todo 更新设置
+`deferred` 和 `resume_at`，按原 Turn 身份完成已有工作的结算，再交还宿主调度器。
+不需要单独管理租约，也不应让模型反复睡眠、读时钟或播报无变化的进度。等待本身不
+算成果、不扣额；到期只触发生命周期恢复判断，仍须按当前准入、预算和停止条件执行。
+未知时间的外部反馈沿用已有 monitor 合同，不臆造时钟或后继任务。
+
 When an open advancement slice is waiting for a monitor observation, keep it
 visible and atomically bind both the wait and an independent runnable
 successor:

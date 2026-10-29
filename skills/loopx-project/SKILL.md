@@ -149,6 +149,15 @@ Quota, context, tools and installed skills do not grant write or spawn authority
 A raw/legacy attention queue is not owner/gate/stop authority without a
 project-asset-backed source.
 
+Use the narrowest existing read that answers the next decision. Known paths or
+record IDs go directly to batched reads; discover only missing locations. Reuse
+the same captured response while applicable, and size independent read batches
+against their combined output budget. Keep dependent operations and mutations
+ordered; refresh authority after relevant state changes. For missing paths,
+truncation or uncertain effects, follow
+[targeted diagnostics](../loopx-self-repair/references/targeted-diagnostics.md),
+not a repeated directory/status/full-packet preflight.
+
 For first-time or recovered recurring hosts, read
 [heartbeat hosts](references/heartbeat-hosts.md) and install the returned stable
 bootstrap loader. Each wake reads the full fresh result and follows its current

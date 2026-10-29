@@ -722,6 +722,13 @@ class ChatRuntimeController:
         with self.lock:
             return self.session_adapter_locks.setdefault(session_id, threading.Lock())
 
+    def _has_live_turn_worker(self, session: dict[str, Any], turn: dict[str, Any] | None) -> bool:
+        """Under the controller lock, distinguish local work from model transport."""
+        if not turn or turn.get("status") not in {"starting", "running", "interrupting"}:
+            return False
+        done = self.turn_done_events.get((session["session_id"], turn["turn_id"]))
+        return done is not None and not done.is_set()
+
     def _ensure_adapter(
         self,
         session: dict[str, Any],
@@ -841,6 +848,10 @@ class ChatRuntimeController:
                 and not settings_changed
             ):
                 reusable = current
+            elif current is None and self._has_live_turn_worker(session, active):
+                # A native observation needs no model adapter. Absence of that
+                # transport cannot prove that its original Chat worker exited.
+                raise ValueError("the original Chat worker is still active; read its current Turn")
             elif current is not None:
                 current.close_session()
                 self.adapters.pop(session_id, None)
@@ -2271,9 +2282,11 @@ class ChatRuntimeController:
             with self.lock:
                 current = self.adapters.get(session_id)
                 adapter_healthy = current is not None and current.healthcheck()
+                active = self.store.load_turn(session_id, session["active_turn_id"]) if session.get("active_turn_id") else None
+                preserve_active = adapter_healthy or self._has_live_turn_worker(session, active)
             with goal_commit():
                 session, active_turn_preserved = self.store.prepare_managed_session_resume(
-                    session_id, preserve_active_turn=adapter_healthy,
+                    session_id, preserve_active_turn=preserve_active,
                 )
             if active_turn_preserved:
                 return session

@@ -750,6 +750,12 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
 也不豁免第 9 节相对原 quota 基线的验证。
 
+原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
+`codex-cli` 和 `codex-app-server` 都调用既有
+`current_turn_host_launch_decision` owner；观察到的 replan packet 是上下文，
+不再作为另一份绑定参数。这项运输简化可以先于 wire 切换交付。沿相同原身份验证真实
+启动、拒绝与重放，保留既有 typed 资格、Stop 和结算 owner。
+
 首个**切换**片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
 从共享 quota emission 边界开始，同时追踪 attached heartbeat 交付与 Turn adapter，
 保留各自真实宿主归属。不能新增无人使用的第三个 serializer，而两个活跃 writer 继续

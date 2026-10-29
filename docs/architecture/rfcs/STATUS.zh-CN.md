@@ -28,7 +28,7 @@
 | [RFC：强能力 Agent 管家与语义工作交接（v0）](capable-manager-semantic-handoff-v0.zh-CN.md) | 已接受 | [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md) | [2 条](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC：完整状态恢复与受控重新激活（v0）](complete-state-recovery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：可组合状态机与恢复验证（v0）](composable-state-machines-recovery-verification-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：Controller / Executor 会话与统一受治理工作契约（v0）](controller-executor-unified-contract-v0.zh-CN.md) | 已接受 | 无 | [3 条](ledger/controller-executor-unified-contract-v0/) |
+| [RFC：Controller / Executor 会话与统一受治理工作契约（v0）](controller-executor-unified-contract-v0.zh-CN.md) | 已接受 | 无 | [5 条](ledger/controller-executor-unified-contract-v0/) |
 | [显式 Todo 接续：阶段 A](cross-session-memory-substrate-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：LoopX 桌面执行前端 v0](desktop-execution-frontends-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：外部证据研究能力 v0](external-evidence-research-capability-v0.zh-CN.md) | 已接受 | 无 | [3 条](ledger/external-evidence-research-capability-v0/) |
@@ -53,7 +53,7 @@
 | [RFC：长程 Agent 可靠性诊断与治理交付 v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.zh-CN.md) | 已接受 | 无 | — |
 | [LoopX 整体路线总纲 v0：产品、协作、技术与交付](loopx-overall-roadmap-v0.zh-CN.md) | 已接受 | 无 | [1 条](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0 / 管家运行模式 v0](manager-runtime-profile-v0.zh-CN.md) | 已接受 | 无 | — |
-| [RFC：Monorepo 内的发行物拆分（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：Monorepo 发行拆分与小内核运行时装配（v0）](monorepo-distribution-split-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Agent 判断与可选独立评估——以 Jev 为候选方案（v0）](optional-semantic-assistance-jev-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：结果后记忆效用归因 v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | 已接受 | 无 | — |

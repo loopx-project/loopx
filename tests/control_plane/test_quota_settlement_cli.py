@@ -5327,7 +5327,7 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         ),
         encoding="utf-8",
     )
-    _initialize_fixture_authority(project, runtime, provider=provider)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
     turn_id = "turn-bound-p0-then-deferred"
     guard = (
         "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -5336,6 +5336,11 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
     first_rc, first = _run_cli(registry_path, runtime, *guard, "--todo-id", TODO_ID)
     assert first_rc == 0, first
     assert first["heartbeat_receipt"]["settlement_identity"]["todo_id"] == TODO_ID
+    claim_rc, claim = _run_cli(
+        registry_path, runtime, "todo", "claim", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--claimed-by", AGENT_ID, "--todo-id", TODO_ID,
+    )
+    assert claim_rc == 0 and claim["execution_managed"] is True, json.dumps(claim)
     # This result exists before the lifecycle wait; recovery must account for
     # it without executing more work or rebinding the original Turn.
     artifact = project / "verified-before-wait.txt"
@@ -5348,8 +5353,15 @@ def test_same_turn_bound_p0_does_not_project_p1_after_p0_becomes_deferred(
         "--status", "deferred",
         "--resume-when", "resume_at:2099-01-01T00:00:00Z",
         "--reason", "Wait for the future resume condition.",
+        "--claim-operation-id", claim["claim_operation_id"],
     )
     assert update_rc == 0, update
+    # The ordinary wait transition retires execution without a manual release.
+    inspect_rc, inspected = _run_cli(
+        registry_path, runtime, "task-lease", "inspect", "--goal-id", GOAL_ID,
+        "--todo-id", TODO_ID,
+    )
+    assert inspect_rc == 0 and inspected["lease"]["status"] == "released", inspected
     replay_rc, replay = _run_cli(registry_path, runtime, *guard)
     assert replay_rc == 0, replay
     assert replay["effective_action"] == "unsettled_host_turn_recovery"

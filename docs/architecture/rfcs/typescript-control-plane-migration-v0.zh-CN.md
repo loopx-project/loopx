@@ -732,6 +732,13 @@ ownership-holder 路由及 native complete/supersede 统一到
 语义 owner，不宣称减少 crossings，native transaction 仍进程内调用。下一步将这些
 crossing 一起折叠进完整事务，不能沿着 adapter 逐字段继续加桥。
 
+自动等待读模型现在在展示压缩前校验全部 canonical witness；只有
+`pending_resume_count` 覆盖每个等待后继时，才扩展既有安静等待路径。纯时钟 frontier
+使用最早期限。交互适配层复用按 Agent 过滤的 notice-only 分类，避免可选用户事项
+取代已验证的等待。真实门槛、未知来源、Turn 绑定和 monitor-poll 的严格身份检查
+保持。File/SQLite CLI 的首次与重放、状态保留和不扣费检查只限定本源码切片；
+安装采用及长期 Host 行为仍须分别验收。
+
 等待/恢复规划现由 `todos/resume_planning.ts` 一次完成 deferred、resume-blocked、
 monitor-repair 和 blocked-successor 选择。Quota 为每个 source summary 将容量条件与这些 lane 合为一个请求，
 在 TS 进程内复用既有 resume evaluator；vision-wait、agent-scope、frontier、replan

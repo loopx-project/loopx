@@ -70,9 +70,9 @@ def test_quota_monitor_selection_requires_one_clock_and_one_existing_batch(monke
         clocks.append(True)
         return NOW
 
-    def record(method, params):
+    def record(method, params, **kwargs):
         calls.append(method)
-        return original(method, params)
+        return original(method, params, **kwargs)
 
     monkeypatch.setattr(quota_selection, "now_utc", clock, raising=False)
     monkeypatch.setattr(quota_selection, "effect_runtime_result", record)

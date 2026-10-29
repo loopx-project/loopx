@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import COMPACT_LABEL_PATTERN as REVIEWER_SOURCE_ID_PATTERN
 
 
 ISSUE_FIX_REVIEWER_RECOMMENDATION_SCHEMA_VERSION = (
@@ -43,7 +44,6 @@ REVIEWER_SOURCE_MATCH_KINDS = {
     "path_glob",
     "repository_fallback",
 }
-REVIEWER_SOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
 REVIEWER_SOURCE_INPUT_FIELDS = {"schema_version", "sources"}
 REVIEWER_SOURCE_FIELDS = {
     "source_id",

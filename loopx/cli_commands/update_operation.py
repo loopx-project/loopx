@@ -45,27 +45,27 @@ def read_operation(operation_id: str | None = None) -> dict:
     root = operation_root()
     if operation_id is None:
         try:
-            operation_id = json.loads((root / f"{installation_key()}.active.json").read_text())["operation_id"]
+            operation_id = json.loads((root / f"{installation_key()}.active.json").read_text(encoding="utf-8"))["operation_id"]
         except (OSError, ValueError, KeyError):
             return {"ok": True, "status": "none", "operation_id": None}
     if not re.fullmatch(r"[a-f0-9]{32}", operation_id):
         raise ValueError("Invalid update operation id")
     folder = root / operation_id
     try:
-        state = json.loads((folder / "status.json").read_text())
+        state = json.loads((folder / "status.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         state = {"operation_id": operation_id, "status": "unavailable", "ok": False}
     result_file = folder / "result.json"
     if result_file.is_file():
         try:
-            result = json.loads(result_file.read_text())
+            result = json.loads(result_file.read_text(encoding="utf-8"))
             state.update(status="succeeded" if result.get("ok") else "failed", ok=bool(result.get("ok")), result=result)
         except (OSError, ValueError):
             state.update(status="interrupted", ok=False)
     elif state.get("status") in {"running", "starting"}:
         # PID alone is not sufficient proof of work after a reboot/PID reuse.
         try:
-            worker = json.loads((folder / "worker.json").read_text())
+            worker = json.loads((folder / "worker.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             worker = {}
         observed = process_is_alive(state.get("pid") or worker.get("pid")) and time.time() - state.get("updated_at", 0) < 30
@@ -148,7 +148,7 @@ def observe(operation_id: str, *, json_output: bool = False) -> dict:
 
 def worker(operation_id: str) -> int:
     folder = operation_root() / operation_id
-    request = json.loads((folder / "request.json").read_text())
+    request = json.loads((folder / "request.json").read_text(encoding="utf-8"))
     # The lifetime lock covers planning, downloading, install and readback.
     with exclusive_file_lock(operation_root() / (request["installation_key"] + ".worker"),
                              timeout_seconds=0, operation="update_worker"):
@@ -168,7 +168,7 @@ def worker(operation_id: str) -> int:
                 "error": "Update worker failed; inspect private worker.log and installed doctor before retrying"}
             code = 1
         try:
-            progress = json.loads((folder / "status.json").read_text())
+            progress = json.loads((folder / "status.json").read_text(encoding="utf-8"))
             progress.update(status="succeeded" if payload.get("ok") else "failed", updated_at=time.time())
             atomic_json(folder / "status.json", progress)
         except (OSError, ValueError):

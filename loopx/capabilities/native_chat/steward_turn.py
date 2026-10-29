@@ -60,7 +60,22 @@ class StewardTurnHost:
             and not any(row["kind"] == "native_loopx.monitor_poll"
                 for row in self.store.events_after(turn["session_id"], turn["turn_id"], None)))
 
+    def _observe(self, actor: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Verify provider identity before entering publication/effect fences."""
+        if actor.get("schema_version") == "loopx_managed_session_actor_v0":
+            return None
+        if self.bindings is None:
+            raise ValueError("the original steward binding is unavailable")
+        session = self.store.load_session(actor["session_id"])
+        if not session or not session.get("steward_context"):
+            raise ValueError("the original steward Session is unavailable")
+        saved = session["steward_context"]
+        return self.bindings.resolve(binding_id=saved["binding_id"], session=session,
+            include_observation=True, origin="web", source_ref=saved["source_ref"],
+            sender_ref=saved["operator_ref"], private_human_message=False, session_context=saved)
+
     def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
+               observed: dict[str, Any] | None = None,
                prepare_context: bool = False, settlement_recovery: dict[str, Any] | None = None,
                launch_recovery: dict[str, Any] | None = None,
                selection_recovery: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -72,13 +87,21 @@ class StewardTurnHost:
                 settlement_recovery=settlement_recovery, selection_recovery=selection_recovery)
         if self.bindings is None:
             raise ValueError("the original steward binding is unavailable")
+        observed = observed if observed is not None else self._observe(actor)
         session = self.store.load_session(actor["session_id"])
         if not session or not session.get("steward_context"):
             raise ValueError("the original steward Session is unavailable")
         saved = session["steward_context"]
-        selected = self.bindings.resolve(binding_id=saved["binding_id"], session=session,
-            include_observation=True, origin="web", source_ref=saved["source_ref"],
-            sender_ref=saved["operator_ref"], private_human_message=False, session_context=saved)
+        current = self.bindings.read()
+        binding = next((row for row in current["bindings"] if row["binding_id"] == saved["binding_id"]), None)
+        if binding != observed["binding"]:
+            raise ValueError("the original steward authorization changed during identity verification")
+        # Identity IO may have waited. Its result is not a cached grant: the
+        # existing typed owner checks the current binding and Session again.
+        selected = {**self.bindings._resolve_observed(current, binding, observed["observation"], {
+            "source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
+            "private_human_message": False, "origin": "web", "session_context": saved,
+            "session": self.bindings._session_observation(session)}), "observation": observed["observation"]}
         from ...agent_registry import load_goal_from_registry
         goal = load_goal_from_registry(self.controller.registry_path, actor["goal_id"])
         from .steward_monitor import StewardMonitor
@@ -377,6 +400,7 @@ class StewardTurnHost:
         from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
         from ..periodic_report.private_generation import attempt_directory, validate_private_generation
         from .steward_reports import report_service
+        observed = self._observe(actor)
         with self.controller.lock, self._report_fence({"actor": actor}):
             original = report_turn(self.store, actor, window)
             if not original:
@@ -398,7 +422,7 @@ class StewardTurnHost:
                 return
             inspection = inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                 agent_id=actor["agent_id"], turn_key=key, retry_failed=True)
-            admitted = self._admit(request, settlement_recovery=inspection)
+            admitted = self._admit(request, observed=observed, settlement_recovery=inspection)
             def no_model(*_args):
                 raise ValueError("report settlement recovery must never invoke a model")
             args = build_parser().parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
@@ -419,6 +443,86 @@ class StewardTurnHost:
             # supplies the new event; no status or publication proof is forged.
             self.store.append_event(actor["session_id"], original["turn_id"], kind="native_loopx.result", payload=result)
 
+    def _prepare_submission(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None,
+                            validation_command: Sequence[str] | None, work_kind: str,
+                            monitor_deadline: str | None, report_window: dict[str, Any] | None) -> dict[str, Any]:
+        """Read original request/recovery identity without accepting any work."""
+        binding = next((row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id), None)
+        if binding is None:
+            raise ValueError("the original steward binding is unavailable")
+        actor = binding.get("managed_actor")
+        if not actor:
+            raise ValueError("prepare the original steward identity first")
+        request = {"operation": "native_turn", "host": "codex-app-server", "actor": actor,
+            "turn_instance_id": turn_instance_id, "todo_id": todo_id,
+            "work_kind": work_kind,
+            "validation_command": list(validation_command) if validation_command is not None else None}
+        if work_kind == "report":
+            if not report_window:
+                raise ValueError("a report requires its original admitted calendar window")
+            request.update(report_window_id=report_window["window_id"],
+                report_subscription_revision=report_window["subscription_revision"])
+        client_id = native_steward_client_id(actor, turn_instance_id)
+        existing = self.store.turn_for_client(actor["session_id"], client_id)
+        launch_recovery = None
+        selection_recovery = None
+        if existing is not None:
+            # Never replay a failed/unknown model Turn. A committed Chat
+            # request is observed; native journal recovery remains separate.
+            frozen = {key: value for key, value in (existing.get("loopx_request") or {}).items()
+                if key not in {"monitor_lease_version", "monitor_deadline"}}
+            frozen.setdefault("work_kind", "native_turn")
+            if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
+                raise ValueError("native steward request identity conflict")
+            if work_kind == "report":
+                retained = report_turn(self.store, actor, report_window)
+                if retained is not None and retained["turn_id"] != existing["turn_id"]:
+                    return {"turn": retained}
+                quota_request = self.report_quota_request(existing)
+                if quota_request is not None:
+                    request = quota_request
+                    client_id = native_steward_client_id(actor, request["turn_instance_id"])
+                    existing = None
+        if existing is not None:
+            # Keep the separately proven legacy admission-refusal route
+            # below ahead of broader runtime-error observation candidates.
+            restart_request = (self.monitor_restart_request(existing)
+                if work_kind == "monitor" and not self._monitor_selection_failed_before_poll(existing) else None)
+            if restart_request is not None:
+                client_id += ".restart-recovery"
+                continued = self.store.turn_for_client(actor["session_id"], client_id)
+                if continued is not None:
+                    return {"turn": continued}
+                request, existing = restart_request, None
+        if existing is not None:
+            monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
+            if not monitor_retry and work_kind != "report":
+                return {"turn": existing}
+            # One separately correlated retry after the proven admission
+            # failure. Retain the failed Chat Turn and original native
+            # observation identity; that poll's owner remains idempotent.
+            client_id = native_steward_client_id(actor, turn_instance_id + ".admission-retry")
+            retry = self.store.turn_for_client(actor["session_id"], client_id)
+            if retry is not None:
+                if work_kind != "report":
+                    return {"turn": retry}
+                selection_recovery = self.report_selection_recovery(existing, probe_turn=retry)
+                if selection_recovery is None or "probe" not in selection_recovery:
+                    return {"turn": retry}
+                client_id = native_steward_client_id(actor, turn_instance_id + ".admission-resume")
+                resumed = self.store.turn_for_client(actor["session_id"], client_id)
+                if resumed is not None:
+                    return {"turn": resumed}
+            if work_kind == "report" and selection_recovery is None:
+                selection_recovery = self.report_selection_recovery(existing)
+                if selection_recovery is None:
+                    launch_recovery = self._report_launch_recovery(existing)
+                    if launch_recovery is None:
+                        return {"turn": existing}
+                    request["resume_turn_key"] = existing["response"]["native_loopx"].get("resume_turn_key")
+        return {"request": request, "client_id": client_id,
+            "launch_recovery": launch_recovery, "selection_recovery": selection_recovery}
+
     def submit(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None = None,
                validation_command: Sequence[str] | None = None,
                work_kind: str = "native_turn", monitor_deadline: str | None = None,
@@ -429,89 +533,34 @@ class StewardTurnHost:
         remains with its native owner; preparing identity never calls submit.
         """
         controller = self.controller
+        parameters = dict(turn_instance_id=turn_instance_id, todo_id=todo_id,
+            validation_command=validation_command, work_kind=work_kind,
+            monitor_deadline=monitor_deadline, report_window=report_window)
+        with controller.lock, exclusive_file_lock(self.bindings.path, operation="inspect_native_steward_turn"):
+            prepared = self._prepare_submission(binding_id, **parameters)
+            if "turn" in prepared:
+                return prepared["turn"], False
+        observed = self._observe(prepared["request"]["actor"])
+        retained = None
+        if work_kind == "monitor":
+            from .steward_commands import native_command
+            if not todo_id or not monitor_deadline:
+                raise ValueError("a native watch requires its original Todo and deadline")
+            retained = native_command(controller, ["task-lease", "inspect", "--goal-id", prepared["request"]["actor"]["goal_id"],
+                "--todo-id", todo_id]).get("lease")
         with controller.lock, exclusive_file_lock(self.bindings.path, operation="admit_native_steward_turn"):
-            binding = next((row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id), None)
-            if binding is None:
-                raise ValueError("the original steward binding is unavailable")
-            actor = binding.get("managed_actor")
-            if not actor:
-                raise ValueError("prepare the original steward identity first")
-            request = {"operation": "native_turn", "host": "codex-app-server", "actor": actor,
-                "turn_instance_id": turn_instance_id, "todo_id": todo_id,
-                "work_kind": work_kind,
-                "validation_command": list(validation_command) if validation_command is not None else None}
-            if work_kind == "report":
-                if not report_window:
-                    raise ValueError("a report requires its original admitted calendar window")
-                request.update(report_window_id=report_window["window_id"],
-                    report_subscription_revision=report_window["subscription_revision"])
-            client_id = native_steward_client_id(actor, turn_instance_id)
-            existing = self.store.turn_for_client(actor["session_id"], client_id)
-            launch_recovery = None
-            selection_recovery = None
-            if existing is not None:
-                # Never replay a failed/unknown model Turn. A committed Chat
-                # request is observed; native journal recovery remains separate.
-                frozen = {key: value for key, value in (existing.get("loopx_request") or {}).items()
-                    if key not in {"monitor_lease_version", "monitor_deadline"}}
-                frozen.setdefault("work_kind", "native_turn")
-                if frozen != request or work_kind == "monitor" and existing["loopx_request"].get("monitor_deadline") != monitor_deadline:
-                    raise ValueError("native steward request identity conflict")
-                if work_kind == "report":
-                    retained = report_turn(self.store, actor, report_window)
-                    if retained is not None and retained["turn_id"] != existing["turn_id"]:
-                        return retained, False
-                    quota_request = self.report_quota_request(existing)
-                    if quota_request is not None:
-                        request = quota_request
-                        client_id = native_steward_client_id(actor, request["turn_instance_id"])
-                        existing = None
-            if existing is not None:
-                # Keep the separately proven legacy admission-refusal route
-                # below ahead of broader runtime-error observation candidates.
-                restart_request = (self.monitor_restart_request(existing)
-                    if work_kind == "monitor" and not self._monitor_selection_failed_before_poll(existing) else None)
-                if restart_request is not None:
-                    client_id += ".restart-recovery"
-                    continued = self.store.turn_for_client(actor["session_id"], client_id)
-                    if continued is not None:
-                        return continued, False
-                    request, existing = restart_request, None
-            if existing is not None:
-                monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
-                if not monitor_retry and work_kind != "report":
-                    return existing, False
-                # One separately correlated retry after the proven admission
-                # failure. Retain the failed Chat Turn and original native
-                # observation identity; that poll's owner remains idempotent.
-                client_id = native_steward_client_id(actor, turn_instance_id + ".admission-retry")
-                retry = self.store.turn_for_client(actor["session_id"], client_id)
-                if retry is not None:
-                    if work_kind != "report":
-                        return retry, False
-                    selection_recovery = self.report_selection_recovery(existing, probe_turn=retry)
-                    if selection_recovery is None or "probe" not in selection_recovery:
-                        return retry, False
-                    client_id = native_steward_client_id(actor, turn_instance_id + ".admission-resume")
-                    resumed = self.store.turn_for_client(actor["session_id"], client_id)
-                    if resumed is not None:
-                        return resumed, False
-                if work_kind == "report" and selection_recovery is None:
-                    selection_recovery = self.report_selection_recovery(existing)
-                    if selection_recovery is None:
-                        launch_recovery = self._report_launch_recovery(existing)
-                        if launch_recovery is None:
-                            return existing, False
-                        request["resume_turn_key"] = existing["response"]["native_loopx"].get("resume_turn_key")
+            current = self._prepare_submission(binding_id, **parameters)
+            if "turn" in current:
+                return current["turn"], False
+            if current["request"] != prepared["request"] or current["client_id"] != prepared["client_id"]:
+                raise ValueError("the original native steward submission changed during identity verification")
+            request, client_id = current["request"], current["client_id"]
+            actor = request["actor"]
             if work_kind == "monitor":
-                from .steward_commands import native_command
-                if not todo_id or not monitor_deadline:
-                    raise ValueError("a native watch requires its original Todo and deadline")
-                retained = native_command(controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                    "--todo-id", todo_id]).get("lease")
                 request.update(monitor_deadline=monitor_deadline,
                     monitor_lease_version=retained["version"] if retained else 0)
-            admitted = self._admit(request, launch_recovery=launch_recovery, selection_recovery=selection_recovery)
+            admitted = self._admit(request, observed=observed,
+                launch_recovery=current["launch_recovery"], selection_recovery=current["selection_recovery"])
             session = self.store.load_session(actor["session_id"])
             accepted = self.store.accept_managed_turn(actor["session_id"], client_turn_id=client_id,
                 message="Advance the currently admitted native LoopX work.",
@@ -588,9 +637,9 @@ class StewardTurnHost:
         def report_lease_proof():
             return self._task_lease_proof(request, report_lease)
 
-        def current():
+        def current(observed=None):
             fresh = self.store.load_turn(session_id, turn_id)
-            self._admit(request, turn=fresh, selection_recovery=selection_recovery)
+            self._admit(request, turn=fresh, observed=observed, selection_recovery=selection_recovery)
             if adapter.upstream_thread_id != original_thread:
                 raise ValueError("the original steward native thread changed")
             if report_lease:
@@ -645,6 +694,7 @@ class StewardTurnHost:
             def launch():
                 # The existing app-server request owner holds this fence only
                 # through turn/start publication, never through model waiting.
+                observed = self._observe(actor)
                 with ExitStack() as stack:
                     try:
                         if previous_guard is not None:
@@ -652,7 +702,7 @@ class StewardTurnHost:
                         stack.enter_context(launch_scope())
                         stack.enter_context(nullcontext() if actor.get("schema_version") == "loopx_managed_session_actor_v0"
                             else exclusive_file_lock(self.bindings.path, operation="native_steward_launch"))
-                        current()
+                        current(observed)
                     except FirstPartyHostRuntimeRejected as exc:
                         if not report_work or exc.code != "stale_goal_authority":
                             raise
@@ -674,8 +724,9 @@ class StewardTurnHost:
                 candidate = {"result_kind": "wait", "classification": "report_replan_not_settled",
                     "next_action": "Retain the original report until its native semantic replan is settled."}
             if report_work and not governance_work and candidate and candidate.get("result_kind") in {"validated_progress", "validated_completion"}:
+                observed = self._observe(actor)
                 with self.controller.lock, self._report_fence(request):
-                    current()
+                    current(observed)
                     reports.freeze(request, candidate)
                     # This finite task's postcondition is the complete validated
                     # generation, not the model's choice of progress wording.

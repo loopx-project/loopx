@@ -31,7 +31,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Capable Agent Manager and Semantic Work Handoff (v0)](capable-manager-semantic-handoff-v0.md) | Accepted | [Personal Follow-through independent proposal](personal-follow-through-v0.md) | [2 entries](ledger/capable-manager-semantic-handoff-v0/) |
 | [RFC: Complete State Recovery and Controlled Reactivation (v0)](complete-state-recovery-v0.md) | Accepted | none | — |
 | [RFC: Composable State Machines and Recovery Verification (v0)](composable-state-machines-recovery-verification-v0.md) | Accepted | none | — |
-| [RFC: Controller / Executor Sessions and One Governed Work Contract (v0)](controller-executor-unified-contract-v0.md) | Accepted | none | [3 entries](ledger/controller-executor-unified-contract-v0/) |
+| [RFC: Controller / Executor Sessions and One Governed Work Contract (v0)](controller-executor-unified-contract-v0.md) | Accepted | none | [5 entries](ledger/controller-executor-unified-contract-v0/) |
 | [Explicit Todo continuation: Stage A](cross-session-memory-substrate-v0.md) | Accepted | none | — |
 | [RFC: LoopX Desktop Execution Frontends v0](desktop-execution-frontends-v0.md) | Accepted | none | — |
 | [RFC: External Evidence Research Capability v0](external-evidence-research-capability-v0.md) | Accepted | none | [3 entries](ledger/external-evidence-research-capability-v0/) |
@@ -56,7 +56,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Long-Running Agent Reliability Diagnostics and Governed Delivery v0](long-running-agent-reliability-diagnostics-governed-delivery-v0.md) | Accepted | none | — |
 | [LoopX Overall Roadmap v0: Product, Collaboration, Technology and Delivery](loopx-overall-roadmap-v0.md) | Accepted | none | [1 entry](ledger/loopx-overall-roadmap-v0/) |
 | [Manager runtime profile v0](manager-runtime-profile-v0.md) | Accepted | none | — |
-| [RFC: Monorepo Distribution Split (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
+| [RFC: Monorepo Distribution and Small-Kernel Runtime Composition (v0)](monorepo-distribution-split-v0.md) | Accepted | none | — |
 | [RFC: Obelisk Session Evidence Provider v0](obelisk-session-evidence-provider-v0.md) | Accepted | none | — |
 | [RFC: Agent Judgment and Optional Independent Assessment — Jev as a Candidate (v0)](optional-semantic-assistance-jev-v0.md) | Accepted | none | — |
 | [RFC: Post-Outcome Memory Utility Attribution v0](post-outcome-memory-utility-attribution-v0.md) | Accepted | none | — |

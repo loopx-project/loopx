@@ -991,6 +991,13 @@ and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
 
+Native launch rechecks use the original `SettlementIdentity` as their sole
+Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing
+`current_turn_host_launch_decision` owner; an observed replan packet is context,
+not an additional binding argument. This transport simplification can ship before
+wire cutover. Qualify real launch, refusal and replay against the same original
+identity; retain the current typed eligibility, Stop and settlement owners.
+
 The first **cutover** slice pairs the complete field/clause migration with a
 real single-session producer and consumer replacement. Start at the
 shared quota emission boundary and trace both attached heartbeat delivery and
