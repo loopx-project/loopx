@@ -131,13 +131,19 @@ and consumer assumptions, rather than introduce another capture service or
 rewrite already shared delta/native-resume logic.
 
 Journal persistence is an independent source-fidelity prerequisite. The proposed
-Python adapter carries finite original JSON text through the existing TypeScript
-journal owner, which retains its transition, lifetime, effect and lock checks
-before atomic publication. Integral floats, signed zero and unsafe integers
-retain their source values; native object callers keep their existing encoding.
-Historical hashes and receipts retain their codecs. JSON-string escaping adds
-request bytes, so qualify matched transport costs under unchanged limits. This
-slice does not qualify the unified writer/consumer cutover or net cost benefit.
+Python adapter reuses context delivery's sparse number-token collector; both
+TypeScript consumers reuse one source-number validator. Journals remain JSON
+objects, with metadata only for integral floats, signed zero and unsafe integers.
+The journal owner restores these numbers before atomic publication and retains
+their distinctions in replay and immutable-plan comparisons. Ordinary native
+objects retain their encoding; historical receipts are not rewritten.
+
+The interim whole-JSON-string carrier failed the existing 2 MiB request boundary
+for a synthetic 1.55-million-character quoted body accepted by the object path.
+Keep that negative result: qualify the sparse replacement against the same
+workload and limit, including number-dense overhead. Neither this prerequisite
+nor a component byte saving qualifies the unified writer/consumer cutover or
+long-horizon net benefit.
 
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |

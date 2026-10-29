@@ -104,12 +104,16 @@ Quota capture 与 Turn journal capture 都调用
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
 
-Journal 持久化是独立的来源保真前置。本次提议由 Python adapter 传递有限数值的
-原始 JSON 文本，既有 TypeScript journal owner 在原子发布前继续执行状态转换、
-生命周期、effect 与锁检查。整值浮点、带符号零和非安全整数保留来源值；原生对象
-调用方保留已有编码。历史 hash 与回执保留原 codec。JSON 字符串转义会增加请求
-字节，须在原有限制下比较相同负载的传输成本；该切片不构成统一 writer/consumer
-切换或净成本收益的资格。
+Journal 持久化是独立的来源保真前置。本次提议由 Python adapter 复用 context
+delivery 的稀疏数值 token 收集器；两个 TypeScript 消费者复用同一来源数值校验器。
+Journal 继续传递 JSON 对象，仅为整值浮点、带符号零和非安全整数增加元数据。
+Journal owner 在原子发布前恢复这些数值，并在重放与不可变 plan 比较中保留其
+区别。普通原生对象保留已有编码，不改写历史回执。
+
+中间的完整 JSON 字符串方案，在合成的 155 万字符带引号正文上超过既有 2 MiB
+请求边界；原对象路径能够接收同一负载。保留这一负面结果：稀疏替代须在相同
+负载与上限下比较，包括数值密集时的元数据开销。该前置或组件字节减少，都不
+构成统一 writer/consumer 切换或长程净收益的资格。
 
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
