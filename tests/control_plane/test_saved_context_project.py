@@ -575,10 +575,12 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
                 if benchmark:
                     assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
-                wire = json.loads((Path(descriptor["path"]).parent / "delivery.json").read_text())
-                assert descriptor["target"] == wire["target"]
-                observed[name] = (wire, descriptor)
                 data = Path(descriptor["path"]).read_bytes()
+                assert hashlib.sha256(data).hexdigest() == descriptor["sha256"]
+                published = json.loads(data)
+                if descriptor["mode"] == "delta":
+                    assert descriptor["target"] == published["target"]
+                observed[name] = (published, descriptor)
                 # The existing page protocol also admits the projector's first
                 # page. Old installed projectors still start with command.
                 offset = descriptor["next_offset"] if "content" in descriptor else 0
@@ -618,7 +620,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if benchmark and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
                     # worker, rather than manually supplying missing flags.
-                    presented = json.loads(Path(observed[name][0]["recovery"]["path"]).read_text())
+                    presented = json.loads(Path(descriptor["recovery"]["path"]).read_text())
                     selection = presented["interaction_contract"]["cli_channel"]["selection_command"]
                     command = selection["route_prefix"] + " " + selection["command_args_template"].replace("{todo_id}", TODO_ID)
                     argv = shlex.split(command)
@@ -705,12 +707,16 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert _heartbeat_receipt_count(runtime, "saved-native-turn") == receipts and _spend_run_count(runtime) == 0
     cold = observed["cold"][0]
     baseline = None
-    for wire, _ in observed.values():
-        projected = json.loads(Path(wire["recovery"]["path"]).read_text())
+    for published, descriptor in observed.values():
+        projected = json.loads(Path(descriptor["recovery"]["path"]).read_text())
         current = prepare_context_delivery(projected,
-            scope={key: wire["target"][key] for key in
-                ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation") if key in wire["target"]},
-            capture_id=wire["target"]["capture_id"], surface="quota_packet")
+            scope={key: descriptor["target"][key] for key in
+                ("goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation") if key in descriptor["target"]},
+            capture_id=descriptor["target"]["capture_id"], surface="quota_packet")
+        # Full presentation publishes the original document; only deltas have
+        # a separate wire target. Both retain the same typed recovery check.
+        wire = current if descriptor["mode"] == "full" else published
+        assert current["target"] == descriptor["target"]
         restored = restore_context_delivery(wire, baseline=baseline, current=current)
         assert restored["context"] == projected
         if wire["mode"] == "delta":
@@ -720,7 +726,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         baseline = {**current, "ancestry": 0 if wire.get("continuity_basis") == "captured_file" else wire["ancestry"]}
     if benchmark:
         for name, (_, raw) in zip(("cold", "warm"), sources):
-            presentation = json.loads(Path(observed[name][0]["recovery"]["path"]).read_text())
+            presentation = json.loads(Path(observed[name][1]["recovery"]["path"]).read_text())
             original = json.loads(raw)
             selected = presentation["interaction_contract"]["cli_channel"]["selection_command"]
             original_command = original["interaction_contract"]["cli_channel"]["selection_command"]["command_args_template"]
@@ -749,7 +755,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             presentation.pop("context_reference_instruction", None)
             assert presentation == original  # only presentation transport differs
     else:
-        assert cold["context"] == json.loads(sources[0][1]) and projected == json.loads(sources[1][1])
+        assert cold == json.loads(sources[0][1]) and projected == json.loads(sources[1][1])
     assert all(path.read_bytes() == raw for path, raw in sources)
 
 

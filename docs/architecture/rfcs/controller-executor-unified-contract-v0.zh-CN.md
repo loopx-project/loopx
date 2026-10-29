@@ -104,6 +104,12 @@ Quota capture 与 Turn journal capture 都调用
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
 
+独立的原生展示切片复用已提交的完整恢复原件作为 reader 目标，避免再次发布未使用的
+wire 副本。Delta 与未包装输入仍保留各自的不可变文件，reader/lifecycle owner 不变。
+同一 107,289 字节合成来源的 capture 写入从 216,754 降为 107,289 字节；完整 reader
+字节及 3,937 字节的 warm delta 均不变。这只验证重复 capture IO 的消除，不证明模型
+输入减少、完整成本收益、成果验收或 C1 writer/consumer 切换。
+
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |

@@ -33,6 +33,29 @@ def outcome(document):
     return document["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"][0]
 
 
+def test_full_native_reference_reuses_the_committed_recovery(tmp_path, monkeypatch):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.turn_driver import decision_capture
+
+    setup(tmp_path, monkeypatch)
+    original, full = project(tmp_path, payload=payload())
+    recovery = full["recovery"]
+    saved = Path(recovery["path"]).read_bytes()
+
+    def unexpected_publication(*args, **kwargs):
+        pytest.fail("Full presentation must reuse its already committed recovery")
+
+    monkeypatch.setattr(decision_capture, "write_decision_capture", unexpected_publication)
+    view = native_context_capture_view(full, Path(recovery["path"]).parent,
+        context_directory=str(tmp_path))
+    assert (view["path"], view["sha256"]) == (recovery["path"], recovery["sha256"])
+    assert Path(view["path"]).read_bytes() == saved
+    pages = read_pages(tmp_path, full)
+    assert json.loads("".join(page["content"] for page in pages)) == full["context"]
+    details = full["context"]["context_details"]
+    assert json.loads(Path(details["path"]).read_bytes()) == original
+
+
 def test_cold_warm_and_repeated_compaction_keep_requirements_without_replaying_material(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     original = payload()
