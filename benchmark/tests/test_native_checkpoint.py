@@ -306,7 +306,7 @@ def test_real_native_workspace_readback_rejects_foreign_code_basis(tmp_path):
                     reason="Requires an explicit real native Host binary; only a local static provider is used")
 @pytest.mark.parametrize("case", ["resume", "scope_change", "profile_change", "joint", "binding_reply_loss",
                                  "fork_reply_loss", "fork_missing", "fork_ambiguous", "warm_preparation",
-                                 "model_transition"])
+                                 "model_transition", "provider_transport"])
 def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, capsys, monkeypatch, case, request):
     """Real Host/CLI/Goal/session/artifact owners; deterministic synthetic work.
 
@@ -319,6 +319,8 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     import shlex
     import subprocess
     import sys
+    import tomllib
+    from contextlib import ExitStack
     from pathlib import Path
     from benchmark.runtime.codex import Execution
     from loopx.hosts.codex_checkpoint import admit_native_checkpoint_session
@@ -432,10 +434,10 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
     binary = os.environ["LOOPX_NATIVE_CHECKPOINT_BIN"]
     # The warm receiver uses the benchmark's execution profile inside its
     # isolated worker. Other cases retain their original sandbox contract.
-    sandbox = ("danger-full-access" if case in {"warm_preparation", "model_transition"} else
+    sandbox = ("danger-full-access" if case in {"warm_preparation", "model_transition", "provider_transport"} else
                "workspace-write" if case == "joint" else "read-only")
     execution = Execution(context="resume", sandbox=sandbox)
-    with real_native_source(tmp_path / "native", binary, workspace, close_source=True,
+    with ExitStack() as receiver_transports, real_native_source(tmp_path / "native", binary, workspace, close_source=True,
                             response_builder=response, sandbox=execution.sandbox) as (env, source_session, _, calls):
         env.update(LOOPX_REGISTRY=str(source_registry), LOOPX_RUNTIME_ROOT=str(source_runtime),
                    LOOPX_GOAL_ID=source_goal, LOOPX_AGENT_ID=source_agent,
@@ -539,6 +541,25 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             env.update(MODEL_NAME="fixture-next", REASONING_EFFORT="max")
             admission_options = {"destination_config": target_config}
             model_config_args = ["--destination-model-config", str(target_config)]
+        if case == "provider_transport":
+            from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+            from benchmark.runtime.sforge_warm_start import admit_warm_session
+
+            def receiver_response(body, index, message):
+                calls.append("/v1/responses")
+                return response(body, index + 1, message)
+
+            receiver_url, _, _ = receiver_transports.enter_context(local_inference_provider(receiver_response))
+            original = tomllib.loads(config.read_text())
+            source_url = original["model_providers"][original["model_provider"]]["base_url"]
+            assert receiver_url != source_url
+            target_config = tmp_path / "destination-transport.toml"
+            target_config.write_text(config.read_text().replace(source_url, receiver_url))
+            env["OPENAI_BASE_URL"] = receiver_url
+            admission_options = {"destination_config": target_config, "provider_base_url": receiver_url}
+            transport_declaration = {"root": str(unit), "sha256": digest, "config": str(config),
+                "destination_config": str(target_config), "provider_base_url": receiver_url,
+                "deadline_epoch": int(time.time()) + 600}
         lifecycle_registry = tmp_path / "lifecycle-only" / "registry.json"
         assert main(["--format", "json", "--registry", str(lifecycle_registry),
             "--runtime-root", str(tmp_path / "lifecycle-only/runtime"), "project", "register",
@@ -641,12 +662,19 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert load_codex_cli_session(runtime, lineage={"goal_id": destination_goal,
                 "agent_id": destination_agent}, session_scope="agent")["checkpoint_artifact_sha256"] == digest
             assert len(calls) == 1
-        admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
-            "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config),
-            "--sandbox", execution.sandbox, *model_config_args],
-            env=env, text=True, capture_output=True, timeout=40)
-        assert admitted_cli.returncode == 0, admitted_cli.stderr
-        admitted = json.loads(admitted_cli.stdout)
+        if case == "provider_transport":
+            with pytest.raises(ValueError, match="only model and reasoning effort"):
+                admit_warm_session(env, {key: value for key, value in transport_declaration.items()
+                                        if key != "provider_base_url"})
+            assert not Path(env["CODEX_HOME"]).exists() and len(calls) == 1
+            admitted = admit_warm_session(env, transport_declaration)
+        else:
+            admitted_cli = subprocess.run([sys.executable, "-m", "loopx.hosts.codex_checkpoint",
+                "--root", str(unit), "--expected-sha256", digest, "--config-path", str(config),
+                "--sandbox", execution.sandbox, *model_config_args],
+                env=env, text=True, capture_output=True, timeout=40)
+            assert admitted_cli.returncode == 0, admitted_cli.stderr
+            admitted = json.loads(admitted_cli.stdout)
         assert admitted["session_binding_admitted"] and admitted["history_verified"]
         assert admitted["model_calls"] == 0 and not admitted["continuation_qualified"]
         assert admitted["session_id"] != source_session and len(calls) == 1
@@ -666,9 +694,12 @@ def test_real_fork_admission_and_native_resume_use_retained_state(tmp_path, caps
             assert bound["checkpoint_artifact_sha256"] == digest
             # Transport reply loss leaves the atomic source-bound binding as the
             # original receipt. An exact CLI retry must also recover it.
-            retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
-            assert retry_cli.returncode == 0, retry_cli.stderr
-            assert json.loads(retry_cli.stdout) == admitted
+            if case == "provider_transport":
+                assert admit_warm_session(env, transport_declaration) == admitted
+            else:
+                retry_cli = subprocess.run(admitted_cli.args, env=env, text=True, capture_output=True, timeout=40)
+                assert retry_cli.returncode == 0, retry_cli.stderr
+                assert json.loads(retry_cli.stdout) == admitted
             with pytest.raises(ValueError, match="profile changed|destination model differs"):
                 admit_native_checkpoint_session({**env, "REASONING_EFFORT": "low"}, unit, digest,
                     config, sandbox=(execution).sandbox, timeout=30, **admission_options)

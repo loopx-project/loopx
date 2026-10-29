@@ -282,17 +282,22 @@ def _native_thread_ids(home: Path) -> set[str]:
 
 
 def checkpoint_destination_config(config_path: Path, source_sha256: str,
-                                  destination_config: Path | None = None) -> tuple[bytes, dict[str, str] | None]:
-    """Verify sealed source settings and an explicit model/effort-only change.
+                                  destination_config: Path | None = None, *,
+                                  provider_base_url: str | None = None) -> tuple[bytes, dict[str, str] | None]:
+    """Verify sealed settings and a new receiver's explicit configuration.
 
-    A destination is a new isolated receiver, never permission to change an
-    active session. Provider, tools, sandbox and all other configuration stay
-    semantically identical. Source bytes remain part of the sealed evidence.
+    Model/effort may change as declared. A Host may separately bind its current
+    credential-gateway route; that changes only the existing provider's base URL,
+    never its protocol, credential contract, tools or permissions. The complete
+    source and destination config digests remain in the transition provenance.
+    This does not authorize changing an active session or selecting a provider.
     """
     source = config_path.read_bytes()
     if hashlib.sha256(source).hexdigest() != source_sha256:
         raise ValueError("native checkpoint effective configuration differs")
     if destination_config is None:
+        if provider_base_url is not None:
+            raise ValueError("provider transport rebinding requires explicit destination settings")
         return source, None
     if (not destination_config.is_absolute() or
             destination_config.resolve(strict=True) != destination_config):
@@ -303,9 +308,31 @@ def checkpoint_destination_config(config_path: Path, source_sha256: str,
     if any(not isinstance(config.get(key), str) or not config[key].strip()
            for config in (original, changed) for key in keys):
         raise ValueError("checkpoint model transition requires explicit model and reasoning effort")
-    if ({k: v for k, v in original.items() if k not in keys} !=
-            {k: v for k, v in changed.items() if k not in keys}):
-        raise ValueError("checkpoint configuration transition may change only model and reasoning effort")
+    original_other = {k: v for k, v in original.items() if k not in keys}
+    changed_other = {k: v for k, v in changed.items() if k not in keys}
+    if provider_base_url is not None:
+        provider = original.get("model_provider")
+        before_profiles, after_profiles = original.get("model_providers"), changed.get("model_providers")
+        if (not isinstance(provider, str) or not isinstance(before_profiles, dict)
+                or not isinstance(after_profiles, dict)):
+            raise ValueError("checkpoint provider transport requires an existing custom provider")
+        before = before_profiles.get(provider, {})
+        after = after_profiles.get(provider, {})
+        if (not isinstance(provider_base_url, str) or not provider_base_url.strip()
+                or not isinstance(provider, str) or provider == "openai"
+                or changed.get("model_provider") != provider
+                or not isinstance(before, dict) or not isinstance(after, dict)
+                or not isinstance(before.get("base_url"), str) or not before["base_url"]
+                or after.get("base_url") != provider_base_url):
+            raise ValueError("checkpoint provider transport differs from the current Host route")
+        # Compare typed TOML values, not text substitutions or hostname guesses.
+        # All other provider entries and every non-route setting stay fixed.
+        for config, profile in ((original_other, before), (changed_other, after)):
+            config["model_providers"] = {**config["model_providers"], provider: {
+                key: value for key, value in profile.items() if key != "base_url"}}
+    if original_other != changed_other:
+        raise ValueError("checkpoint configuration transition may change only model and reasoning effort "
+                         "or an explicitly bound provider transport route")
     return target, {
         "source_config_sha256": source_sha256,
         "destination_config_sha256": hashlib.sha256(target).hexdigest(),
@@ -316,7 +343,8 @@ def checkpoint_destination_config(config_path: Path, source_sha256: str,
 
 def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str,
                            config_path: Path, *, timeout: float,
-                           destination_config: Path | None = None) -> dict[str, Any]:
+                           destination_config: Path | None = None,
+                           provider_base_url: str | None = None) -> dict[str, Any]:
     # The existing process lock serializes reconstruction in this isolated home.
     # The private attempt below describes one opaque native RPC, not authority
     # to admit a Goal, a work Turn, or a second fork after an uncertain response.
@@ -324,6 +352,8 @@ def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("native checkpoint reconstruction timeout must be finite and positive")
+    if provider_base_url is not None and provider_base_url != env.get("OPENAI_BASE_URL"):
+        raise ValueError("checkpoint provider transport differs from the current launch")
     deadline = time.monotonic() + timeout
     home = Path(env["CODEX_HOME"])
     if not home.is_absolute() or home != home.resolve():
@@ -333,12 +363,14 @@ def fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str
         if remaining <= 0:
             raise TimeoutError("native checkpoint reconstruction window closed")
         return _fork_native_checkpoint(env, unit, expected_sha256, config_path, timeout=remaining,
-            **({"destination_config": destination_config} if destination_config is not None else {}))
+            **({"destination_config": destination_config} if destination_config is not None else {}),
+            **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
 
 
 def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: str,
                             config_path: Path, *, timeout: float,
-                            destination_config: Path | None = None) -> dict[str, Any]:
+                            destination_config: Path | None = None,
+                            provider_base_url: str | None = None) -> dict[str, Any]:
     """Reconstruct one native branch in a new, fixed-path isolated environment.
 
     No model starts and no LoopX binding is registered. Existing session/Goal
@@ -374,7 +406,8 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
     if recovering and (not attempt_path.is_file() or attempt_path.resolve() != attempt_path):
         raise ValueError("native checkpoint destination home must be new or retain its original fork attempt")
     config, transition = checkpoint_destination_config(
-        config_path, native["config_sha256"], destination_config)
+        config_path, native["config_sha256"], destination_config,
+        **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
     version = subprocess.check_output([env["CODEX_BIN"], "--version"], env=env, text=True, encoding="utf-8",
                                       timeout=max(.1, deadline - time.monotonic())).strip()
     if version != native["host_version"]:
@@ -491,7 +524,8 @@ def _fork_native_checkpoint(env: dict[str, str], unit: Path, expected_sha256: st
 
 def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sha256: str,
                                     config_path: Path, *, sandbox: str, timeout: float,
-                                    destination_config: Path | None = None) -> dict[str, Any]:
+                                    destination_config: Path | None = None,
+                                    provider_base_url: str | None = None) -> dict[str, Any]:
     """Explicit controller admission of a verified fork into a destination Goal.
 
     Existing native fork, Goal lifetime and session owners retain their rules.
@@ -512,6 +546,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
 
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("checkpoint session admission timeout must be finite and positive")
+    if provider_base_url is not None and provider_base_url != env.get("OPENAI_BASE_URL"):
+        raise ValueError("checkpoint provider transport differs from the current launch")
     deadline = time.monotonic() + timeout
     effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "verify", "root": str(unit), "expected_sha256": expected_sha256,
@@ -525,7 +561,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
     if tomllib.loads(config_path.read_text(encoding="utf-8")).get("features", {}).get("goals") is not False:
         raise ValueError("checkpoint session admission requires native automatic Goals explicitly disabled")
     config, transition = checkpoint_destination_config(
-        config_path, metadata["native_session"]["config_sha256"], destination_config)
+        config_path, metadata["native_session"]["config_sha256"], destination_config,
+        **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
     target_profile = source_profile
     if transition is not None:
         if (env["MODEL_NAME"] != transition["destination_model"] or
@@ -599,7 +636,8 @@ def admit_native_checkpoint_session(env: dict[str, str], unit: Path, expected_sh
                 **({"model_transition": transition} if transition is not None else {})}
     result = fork_native_checkpoint(env, unit, expected_sha256, config_path,
         timeout=max(.1, deadline - time.monotonic()),
-        **({"destination_config": destination_config} if destination_config is not None else {}))
+        **({"destination_config": destination_config} if destination_config is not None else {}),
+        **({"provider_base_url": provider_base_url} if provider_base_url is not None else {}))
     receipt: dict[str, Any] = {}
     wake = CodexAgentSession(env, context="resume", sandbox=sandbox, receipt=receipt)
     # Hold the existing registry owner's fence through the session write. This
