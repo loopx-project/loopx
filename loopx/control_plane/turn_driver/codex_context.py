@@ -470,8 +470,9 @@ def register_native_context_view(directory: str | None, view: dict[str, Any]) ->
         _save(root, state)
 
 
-def _capture_required_context(payload: dict[str, Any], *, directory: Path,
-                              surface: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _capture_required_context(
+    payload: dict[str, Any], *, directory: Path, surface: str, archive: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the archive first, then the model view selected by the typed owner.
 
     Only the required view may become a full/delta baseline. Detail pointers
@@ -480,8 +481,9 @@ def _capture_required_context(payload: dict[str, Any], *, directory: Path,
     from ..quota.turn_envelope import plan_progressive_context
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
-    archive = capture_context_projection(payload, directory=directory,
-        read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
+    if archive is None:
+        archive = capture_context_projection(payload, directory=directory,
+            read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
     try:
         plan = plan_progressive_context(payload, surface=surface)
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
@@ -569,19 +571,29 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 if continuity_generation is not None:
                     scope["continuity_generation"] = continuity_generation
                 request = _native_context_request(state, scope)
-                required, recovery = _capture_required_context(payload, directory=capture_directory, surface=surface)
+                recovery = capture_context_projection(payload, directory=capture_directory,
+                    read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                 page_bytes, output_bytes = native_context_page_budget()
-                recovery["command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
-                    page_bytes=page_bytes, max_page_output_bytes=output_bytes)
-                state["recovery"] = {**{key: recovery[key] for key in ("path", "sha256", "command")},
-                    "goal_id": goal_id, "agent_id": agent_id,
-                    "total_bytes": Path(recovery["path"]).stat().st_size}
-                # Block reuse before optional wire IO, not after a first page
-                # or EOF. A codec/read interruption keeps this incomplete.
-                state["pending"] = {"path": recovery["path"], "sha256": recovery["sha256"],
-                    "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
-                _save(root, state)
+
+                def publish_recovery(reference: dict[str, Any]) -> None:
+                    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                    state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
+                        "goal_id": goal_id, "agent_id": agent_id,
+                        "total_bytes": Path(reference["path"]).stat().st_size}
+                    state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
+                        "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
+                    _save(root, state)
+
+                # Publish the current complete source before optional planning
+                # or encoding can be interrupted. Never recover its predecessor.
+                publish_recovery(recovery)
                 recovery_committed = True
+                required, planned_recovery = _capture_required_context(payload, directory=capture_directory,
+                    surface=surface, archive=recovery)
+                if planned_recovery is not recovery:
+                    recovery = planned_recovery
+                    publish_recovery(recovery)
 
                 result = project_captured_context(required, directory=capture_directory,
                     request=request, captured_recovery=recovery,

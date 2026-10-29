@@ -245,6 +245,64 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
     assert json.loads(recovered) == original and path.read_bytes() == raw
 
 
+@pytest.mark.parametrize("source", ["compact", "resume"])
+def test_saved_projection_planner_process_exit_keeps_current_recovery(tmp_path, monkeypatch, source):
+    import subprocess
+    from loopx.control_plane.turn_driver import codex_context
+    from tests.control_plane.test_codex_context_lifecycle import setup, project, deliver, read_pages
+
+    native, captures = tmp_path / "native", tmp_path / "captures"
+    native.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    event = setup(native, monkeypatch)
+    prior = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "agent"},
+        "heartbeat_receipt": {"turn_instance_id": "prior-turn"}, "requirement": "Stop before publication."}
+    _, delivered = project(native, payload=prior)
+    deliver(native, event, read_pages(native, delivered))
+    assert codex_context._state(native)["candidate"]
+    prior_file = Path(delivered["recovery"]["path"])
+    prior_bytes = prior_file.read_bytes()
+
+    current = {**prior, "heartbeat_receipt": {"turn_instance_id": "current-turn"},
+        "requirement": "Retain this changed requirement and stop before deployment."}
+    original = tmp_path / "current.json"
+    raw = json.dumps(current).encode()
+    original.write_bytes(raw)
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    script = (
+        "import os\n"
+        "from loopx.control_plane.quota import turn_envelope\n"
+        "def interrupt(*args, **kwargs): os._exit(37)\n"
+        "turn_envelope.plan_progressive_context = interrupt\n"
+        "from loopx.cli import main\n"
+        "raise SystemExit(main())\n"
+    )
+    arguments = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "quota", "context-project", "--capture-file", str(original),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--goal-id", "fixture", "--agent-id", "agent",
+        "--turn-instance-id", "current-turn", "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(native), "--decision-output-root", str(captures)]
+    stopped = subprocess.run([sys.executable, "-c", script, *arguments], cwd=native,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])},
+        capture_output=True, text=True, timeout=30)
+    assert stopped.returncode == 37, stopped.stdout + stopped.stderr
+    current_files = list(captures.rglob("projection.json"))
+    assert len(current_files) == 1 and json.loads(current_files[0].read_bytes()) == current
+    journal = codex_context._state(native)
+    assert journal["recovery"]["path"] == str(current_files[0])
+    assert journal["pending"]["ranges"] == {}
+
+    resumed = codex_context.codex_context_hook(str(native), {**event, "source": source})
+    assert journal["recovery"]["sha256"] in resumed["hookSpecificOutput"]["additionalContext"]
+    assert "candidate" not in codex_context._state(native)
+    code, page = _run_cli(registry, runtime, "quota", "context-read", "--codex-context-dir", str(native),
+        "--goal-id", "fixture", "--agent-id", "agent", cwd=native)
+    assert code == 0 and page["eof"] and json.loads(page["content"]) == current
+    assert page["sha256"] == journal["recovery"]["sha256"]
+    assert prior_file.read_bytes() == prior_bytes and original.read_bytes() == raw
+    assert not registry.exists() and not runtime.exists()
+
+
 def test_saved_projection_recovery_failure_returns_typed_error_and_current_reference(
     tmp_path, monkeypatch, capsys,
 ):

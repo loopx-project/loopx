@@ -519,6 +519,11 @@ as a substitute. Both paths establish a new chain only after a complete verified
 full read. Ordinary tools and turn endings do not invalidate it. An interrupted
 pending delivery requires full recovery. Repeated reset events are idempotent.
 Recovery reads the same immutable capture without re-admission or spend.
+The adapter commits the current complete capture reference and pending delivery
+under the existing session lock before optional material planning or encoding.
+A process exit during planning therefore recovers the current source rather
+than its predecessor. The planner reuses that archive; an unread current source
+still cannot establish a full native baseline.
 
 This deliberately replaces per-request complete-input proof with lifecycle
 assumptions. Downstream output loss or truncation not exposed to the hook, a
@@ -758,6 +763,9 @@ code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部
 原捕获，不能用新 guard 替代。两条路径都只在完整且已校验的全量读取后建立新差分链。
 普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
 后须完整恢复。重复重置事件幂等；恢复读取同一不可变捕获，不重新准入或扣额。
+Adapter 在可选材料规划或编码前，先持既有 session 锁提交当前完整 capture 引用及
+pending delivery。规划过程中进程退出后，恢复指向当前来源而非上一份；planner
+复用同一 archive。尚未读取的当前来源仍不能建立完整 native baseline。
 
 这是以生命周期假设替换逐轮完整输入证明。Hook 未暴露的下游丢失／截断、漏掉失效事件，
 或在声明开关之外静默禁用 hooks，仍可能漏检；不把这些假设称为实测保留，也不新增审批门。
