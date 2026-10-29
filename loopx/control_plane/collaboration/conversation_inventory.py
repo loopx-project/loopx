@@ -32,6 +32,43 @@ def _last_event(values):
     return max(dated, default=(None, None), key=lambda pair: pair[0])[1]
 
 
+def _project_request_observations(root, registry, observations, *, core_goal_ids, history):
+    """Combine captured receipt facts with current linked Core observations."""
+    rows, unreadable, cache = [], 0, {}
+    for row, source_session_id, turn, state, agenda, controlled, read, read_error, decision, decision_error, replies in observations:
+        try:
+            gid, aid = row["goal_id"], row["agent_id"]
+            work = read_linked_work(root, registry, row, cache,
+                include_core_details=core_goal_ids is None or gid in core_goal_ids)
+            warnings = list(state.get("warnings", [])) + work["warnings"]
+            warnings += [error for error in (read_error, decision_error) if error]
+            if not history and agenda is None:
+                rows.append({"request_id": row["request_id"], "unfinished": False})
+                continue
+            control_unavailable = "request_control" in row and controlled is None
+            brief = controlled["brief"] if controlled else None if control_unavailable else row.get("brief")
+            assessment = controlled["decision"] if controlled else {
+                "status": "unavailable" if control_unavailable else decision.get("decision", "not_recorded"),
+                "at": None if control_unavailable else decision.get("decided_at"),
+                "reason": None if control_unavailable else decision.get("reason")}
+            read_at = controlled["read"].get("at") if controlled else read.get("read_at")
+            rows.append({"request_id": row["request_id"], "goal_id": gid, "agent_id": aid,
+                "unfinished": agenda is not None, "agenda": agenda,
+                "control_state": (state.get("request_control_view") or {}).get("control_state"),
+                "brief": brief, "source_question": turn.get("message", ""),
+                "request_revision": controlled["request_revision"] if controlled else None if control_unavailable else 1,
+                "read_status": controlled["card_read_status"] if controlled else
+                    "unavailable" if read_error or control_unavailable else "supplied" if read else "pending",
+                "decision": assessment["status"], "decision_reason": assessment.get("reason"),
+                "returns": replies, "linked_todos": work["linked_todos"], "evidence_refs": work["evidence_refs"],
+                "warnings": warnings, "source_session_id": source_session_id, "source_turn_id": turn["turn_id"],
+                "last_event_at": _last_event([row.get("delivered_at"), read_at, assessment.get("at"),
+                    *(reply.get(key) for reply in replies for key in ("created_at", "delivered_at"))])})
+        except (OSError, ValueError, KeyError, TypeError):
+            unreadable += 1
+    return rows, unreadable
+
+
 def read_conversation_requests(root, registry, store, session, *, goal_ids, core_goal_ids,
                                validate_source_session, history=False, offset=0, limit=12, search=""):
     """Read only this host's exact source Session, with fresh caller read scope.
@@ -45,7 +82,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
         raise ValueError("request search must be at most 200 characters")
     query = search.strip().casefold()
     paths = sorted((_root(root) / "entries").glob("*/*.json"))
-    rows, unreadable, cache, turn_readers, diagnostics = [], 0, {}, {}, []
+    unreadable, turn_readers, diagnostics = 0, {}, []
     groups, work_reads = {}, []
     for path in paths[:2000]:
         try:
@@ -135,37 +172,9 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             unreadable += failed
     # Request/return observations are version-consistent. Core work is a
     # separate observation: release all lifetime/request guards before its IO.
-    for row, source_session_id, turn, state, agenda, controlled, read, read_error, decision, decision_error, replies in work_reads:
-        try:
-            gid, aid = row["goal_id"], row["agent_id"]
-            work = read_linked_work(root, registry, row, cache,
-                include_core_details=core_goal_ids is None or gid in core_goal_ids)
-            warnings = list(state.get("warnings", [])) + work["warnings"]
-            warnings += [error for error in (read_error, decision_error) if error]
-            if not history and agenda is None:
-                rows.append({"request_id": row["request_id"], "unfinished": False})
-                continue
-            control_unavailable = "request_control" in row and controlled is None
-            brief = controlled["brief"] if controlled else None if control_unavailable else row.get("brief")
-            assessment = controlled["decision"] if controlled else {
-                "status": "unavailable" if control_unavailable else decision.get("decision", "not_recorded"),
-                "at": None if control_unavailable else decision.get("decided_at"),
-                "reason": None if control_unavailable else decision.get("reason")}
-            read_at = controlled["read"].get("at") if controlled else read.get("read_at")
-            rows.append({"request_id": row["request_id"], "goal_id": gid, "agent_id": aid,
-                "unfinished": agenda is not None, "agenda": agenda,
-                "control_state": (state.get("request_control_view") or {}).get("control_state"),
-                "brief": brief, "source_question": turn.get("message", ""),
-                "request_revision": controlled["request_revision"] if controlled else None if control_unavailable else 1,
-                "read_status": controlled["card_read_status"] if controlled else
-                    "unavailable" if read_error or control_unavailable else "supplied" if read else "pending",
-                "decision": assessment["status"], "decision_reason": assessment.get("reason"),
-                "returns": replies, "linked_todos": work["linked_todos"], "evidence_refs": work["evidence_refs"],
-                "warnings": warnings, "source_session_id": source_session_id, "source_turn_id": turn["turn_id"],
-                "last_event_at": _last_event([row.get("delivered_at"), read_at, assessment.get("at"),
-                    *(reply.get(key) for reply in replies for key in ("created_at", "delivered_at"))])})
-        except (OSError, ValueError, KeyError, TypeError):
-            unreadable += 1
+    rows, projection_failures = _project_request_observations(root, registry, work_reads,
+        core_goal_ids=core_goal_ids, history=history)
+    unreadable += projection_failures
     rows = list({row["request_id"]: row for row in rows}.values())
     pending_count = sum(row["unfinished"] for row in rows)
     visible = [row for row in rows if history or row["unfinished"]]
