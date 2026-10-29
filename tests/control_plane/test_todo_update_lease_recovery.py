@@ -16,7 +16,8 @@ from loopx.control_plane.todos.markdown import render_todo_markdown
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_execution_scoped_planning_recovery_through_public_cli(tmp_path: Path, monkeypatch, provider: str) -> None:
+@pytest.mark.parametrize("initial_state", ["active", "released"])
+def test_execution_scoped_planning_recovery_through_public_cli(tmp_path: Path, monkeypatch, provider: str, initial_state: str) -> None:
     mode = "hard_lease"
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -51,44 +52,43 @@ def test_execution_scoped_planning_recovery_through_public_cli(tmp_path: Path, m
         return result
 
     first = cli("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "first-execution", "--ttl-seconds", "60")
-    cli("task-lease", "release", "--owner", "agent-a", "--idempotency-key", "first-execution",
-        "--expected-version", str(first["lease"]["version"]))
+    if initial_state == "released":
+        cli("task-lease", "release", "--owner", "agent-a", "--idempotency-key", "first-execution",
+            "--expected-version", str(first["lease"]["version"]))
     before = snapshot()
     display_before = state.read_bytes() if state.exists() else None
     edit = ("todo", "update", "--agent-id", "agent-a", "--text", "Recovered edit", "--unblocks-todo-id", "todo_recovery")
     for dry in [("--dry-run",), ()]:
         rejected = cli(*edit, *dry, ok=False)
-        assert rejected["error_code"] == "handoff_mode_requires_lease"
+        assert rejected["error_code"] == ("lease_fence_required" if initial_state == "active" else "handoff_mode_requires_lease")
         assert rejected["handoff_mode"] == mode
         recovery = rejected["recovery"]
-        assert recovery["action"] == "acquire_fresh_lease"
-        assert recovery["lease_state"] == "released"
+        assert recovery["action"] == "claim_task"
+        assert recovery["lease_state"] == initial_state
         assert recovery["owner_relation"] == "same_owner"
-        assert recovery["acquire"]["command"] == "loopx task-lease acquire"
+        assert recovery["claim"]["command"] == "loopx todo claim"
         assert recovery["execution_authority_granted"] is False
         rendered = render_todo_markdown(rejected)
         assert f"handoff_mode: `{mode}`" in rendered
-        assert "loopx task-lease acquire" in rendered
+        assert "loopx todo claim" in rendered
+        assert "task-lease" not in json.dumps(recovery)
         assert "first-execution" not in rendered
         assert "first-execution" not in json.dumps(rejected)
         assert snapshot() == before
         assert (state.read_bytes() if state.exists() else None) == display_before
-    observed = cli("task-lease", "inspect")["lease"]
-    assert observed["version"] == recovery["acquire"]["expected_version"]
-    acquired = cli("task-lease", "acquire", "--owner", "agent-a", "--idempotency-key", "new-execution",
-        "--expected-version", str(observed["version"]), "--ttl-seconds", str(recovery["acquire"]["ttl_seconds"]))
-    proof = ("--task-lease-idempotency-key", "new-execution", "--task-lease-expected-version", str(acquired["lease"]["version"]))
+    acquired = cli(*recovery["claim"]["cli_args"], "--claim-operation-id", "new-execution")
+    assert acquired["execution_managed"] and "lease" not in acquired
+    proof = ("--claim-operation-id", acquired["claim_operation_id"])
     before = snapshot()
-    stale = cli(*edit, "--task-lease-idempotency-key", "first-execution",
-        "--task-lease-expected-version", str(observed["version"]), ok=False)
+    stale = cli(*edit, "--task-lease-idempotency-key", "wrong-execution",
+        "--task-lease-expected-version", str(first["lease"]["version"]), ok=False)
     assert stale["error_code"] == "lease_cas_mismatch"
     assert stale["recovery"]["action"] == "inspect_current_proof"
     assert snapshot() == before
     assert cli(*edit, *proof)["ok"] is True
     assert snapshot()["todos"][0]["text"] == "Recovered edit"
-    released = cli("task-lease", "release", "--owner", "agent-a", "--idempotency-key", "new-execution",
-        "--expected-version", str(acquired["lease"]["version"]))
-    assert released["lease"]["status"] == "released"
+    completed = cli("todo", "complete", "--agent-id", "agent-a", *proof, "--evidence", "evidence:validated")
+    assert completed["ok"]
     assert cli("task-lease", "inspect")["lease"]["status"] == "released"
     assert registry.read_bytes() == registry_bytes
     # Successful publication may materialize a derived display; it is not an input.

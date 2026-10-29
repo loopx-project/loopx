@@ -229,3 +229,11 @@ def test_empty_managed_reference_is_rejected_without_mutation(claim_cli, command
         else "invalid_local_coordination_todo_terminal_lifecycle_request")
     assert rejected["error"] == "claim_operation_id must be a non-empty trimmed string"
     assert snapshot() == before
+
+
+def test_task_help_exposes_managed_reference_not_host_lease_flags():
+    result = subprocess.run([sys.executable, "-m", "loopx.cli", "todo", "claim", "--help"],
+        cwd=REPO, capture_output=True, text=True, check=True)
+    assert "--claim-operation-id" in result.stdout
+    assert "--task-lease-idempotency-key" not in result.stdout
+    assert "--task-lease-expected-version" not in result.stdout

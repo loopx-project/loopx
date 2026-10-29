@@ -54,7 +54,13 @@ from .control_plane.todos.list_readback import list_goal_todos
 
 
 def _status_runtime_root(server: Any) -> str | None:
-    """Registered work follows the same authority as the Chat coordinator."""
+    """Keep registry source routing; Chat storage is only an unbound fallback."""
+    registry = _discovery_registry(server.registry_path)
+    if registry.get("common_runtime_root"):
+        # Passing the coordinator's resolved root as an explicit override
+        # suppresses the collector's per-Goal source_registry routing. A
+        # global directory may contain Goals owned by different runtimes.
+        return None
     controller = getattr(server, "runtime_controller", None)
     root = getattr(controller, "coordination_runtime_root", None)
     return str(root) if root is not None else server.runtime_root_override

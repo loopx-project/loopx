@@ -312,12 +312,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            # Matched Linux output: JSON 3,649 -> 4,172 and Markdown
-            # 5,553 -> 6,076. The supported 320-char scope reaches 4,461
-            # JSON chars. Keep the full outcome guidance and Markdown guard.
-            "small": {"json": 4_500, "markdown": 6_200},
-            "crowded": {"json": 4_500, "markdown": 6_200},
-            "multi_agent": {"json": 4_500, "markdown": 6_200},
+            # The complete first-guard selection guidance and supported
+            # 320-char scope emit 4,532 JSON chars at immutable b47bbc6c9.
+            # Retain the old 4,500 failure; allow 68 chars of JSON headroom.
+            # Body presentation stays 4,200; Markdown/line guards are unchanged.
+            "small": {"json": 4_600, "markdown": 6_200},
+            "crowded": {"json": 4_600, "markdown": 6_200},
+            "multi_agent": {"json": 4_600, "markdown": 6_200},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -770,12 +771,6 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         qualification="qualified_default",
         surface_id="todo_list",
         rationale="agent work-queue read path",
-    ),
-    CliOutputCommandClassification(
-        command_id="task-lease",
-        qualification="explicit_cold_path_exception",
-        surface_id=None,
-        rationale="explicit per-todo lease lifecycle command family",
     ),
     CliOutputCommandClassification(
         command_id="coordination-shadow",

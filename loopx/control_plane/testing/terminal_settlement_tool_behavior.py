@@ -30,6 +30,7 @@ from .model_tool_behavior import (
     digest_text,
     execute_loopx_cli,
     loopx_command_tokens,
+    snapshot_disposable_fixture,
 )
 from .selected_todo_tool_behavior import bounded_workspace_read_plan
 from .vision_shell_host import VisionShellHost
@@ -71,6 +72,10 @@ _EXPECTED_RECEIPT_STEPS = [
 
 class _TerminalToolViolation(ValueError):
     """A fixture-owned invariant code, never provider or CLI error text."""
+
+
+class _UnchangedFixtureRejection(dict[str, Any]):
+    """Real CLI rejection independently observed to leave this fixture intact."""
 
 
 def _terminal_failure_code(error: Exception) -> str:
@@ -711,6 +716,8 @@ def _execute_cli(command: str, state: _QualificationState) -> dict[str, Any]:
             raise _TerminalToolViolation("vision_draft_outside_workspace")
     if tokens and "--format" not in tokens:
         command = shlex.join([tokens[0], "--format", "json", *tokens[1:]])
+    before = (snapshot_disposable_fixture(fixture.project_root.parent)
+              if _command_path(tokens or [])[0] == "refresh_state" else None)
     try:
         output = execute_loopx_cli(
             command,
@@ -730,9 +737,10 @@ def _execute_cli(command: str, state: _QualificationState) -> dict[str, Any]:
             raise exc from None
         if not (isinstance(rejected, dict) and rejected.get("ok") is False
                 and rejected.get("appended") is False
-                and rejected.get("error_code") == "progress_observation_invalid_arguments"):
+                and before is not None
+                and snapshot_disposable_fixture(fixture.project_root.parent) == before):
             raise
-        return rejected
+        return _UnchangedFixtureRejection(rejected)
     payload = json.loads(output)
     if not isinstance(payload, dict):
         raise ValueError("LoopX command output must be an object")
@@ -935,12 +943,13 @@ def _execute_terminal_cli(
         if not tokens or not _matches_identity(tokens, state):
             raise _TerminalToolViolation("writeback_identity_mismatch")
         payload = _execute_cli(command, state)
-        if (payload.get("ok") is False and payload.get("appended") is False
-                and payload.get("error_code") == "progress_observation_invalid_arguments"):
-            # Only the CLI's pure input decoder emits this code, before refresh
-            # dispatch. Give the same model its real tool error within the
-            # original call budget; do not retry or count a committed effect.
-            return json.dumps(payload, ensure_ascii=False, sort_keys=True), "progress_observation_invalid_arguments"
+        if isinstance(payload, _UnchangedFixtureRejection):
+            # A real error plus independently unchanged fixture files permits
+            # correction, not settlement. Keep every call in the same budget.
+            kind = ("progress_observation_invalid_arguments"
+                    if payload.get("error_code") == "progress_observation_invalid_arguments"
+                    else "fixture_unchanged_cli_rejection")
+            return json.dumps(payload, ensure_ascii=False, sort_keys=True), kind
         receipt_steps = _settlement_receipt_steps(payload)
         if receipt_steps != _EXPECTED_RECEIPT_STEPS[:2]:
             raise _TerminalToolViolation("writeback_receipt_mismatch")

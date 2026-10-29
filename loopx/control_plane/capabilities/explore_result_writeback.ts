@@ -17,10 +17,10 @@ export const EXPLORE_WRITEBACK_SUMMARY_LIMIT = 2000;
 // before authoring. Keep them in the entry even when attachment syntax is read
 // later. The full standalone guidance retains its original order and bytes.
 const EXPLORE_BEFORE_WORK = {
-  openLease: "For an open Todo under hard_lease, keep the active task lease through refresh-state and Explore graph/Todo-link delivery; release only after explore_result_delivery.ok=true.",
-  leaseRecovery: "If already released, re-enter the normal guard/claim/lease path before retrying.",
-  completedLease: "A completed Todo under hard_lease permits only its existing additive evidence-link exception with the owner's retained released lease key and current version; this grants no new execution authority.",
-  deliveryReplay: "An exact replay of already-successful delivery is readback-only and needs no new lease; unfinished delivery still requires the applicable claim/lease proof.",
+  openLease: "When execution fencing applies to an open Todo, keep its claimed execution through refresh-state and Explore graph/Todo-link delivery; end that execution only after explore_result_delivery.ok=true. The writeback resolves and checks execution proof internally.",
+  leaseRecovery: "If execution has ended or expired, re-enter the normal guard and todo claim path before retrying; a stale task reference cannot resume execution.",
+  completedLease: "When execution fencing applies to a completed Todo, only its existing owner-scoped additive evidence-link exception is permitted. Writeback checks retained execution history internally; this grants no new execution authority.",
+  deliveryReplay: "An exact replay of already-successful delivery is readback-only and needs no new claim; unfinished delivery still requires current ownership and execution checks.",
   optionalFinding: "Routine work needs no attachment; do not invent findings.",
   optionalCapture: "Capture is optional, not a settlement obligation.",
   negativeEvidence: "A stopped route does not imply refuted status, and a score alone does not prove refutation.",

@@ -4,7 +4,7 @@
 - **Supersedes / closes:** [Personal Follow-through independent proposal](personal-follow-through-v0.md)
 - **Delivery maturity:** Partial; private runtime profile, team-plan confirmation and Todo materialization shipped; complete M1–M4 remain unqualified.
 - **Authors / owners:** LoopX maintainers; manager engineering owner
-- **Created / last normative revision:** 2026-09-13 / 2026-10-27
+- **Created / last normative revision:** 2026-09-13 / 2026-10-28
 - **Implementation baseline:** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **Language mirror:** [中文版](capable-manager-semantic-handoff-v0.zh-CN.md)
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Manager continuity](../../reference/protocols/manager-evidence-and-continuity-v0.md), [Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md), [Desktop frontends](desktop-execution-frontends-v0.md), [Shared authority](shared-goal-authority-state-provider-v0.md), [Shared Goal alignment/amendment](shared-goal-alignment-and-governed-amendment-v0.md), [TS migration](typescript-control-plane-migration-v0.md)
@@ -707,7 +707,7 @@ Routing uses §5.5 rather than a static Agent name list. For a product-design re
 
 Delivery now prioritizes one complete supported intent→receiver→work→result journey, with the shared report, activity and stop/steer behavior needed by that journey. Do not make routing wait for presentation polish across every channel. Frontend and Lark still need separate real acceptance before an equivalence claim. Characterize and retire duplicated answer-shape prose and message/Turn correlation rules where parity is proven.
 
-The [golden-query pack](../../product/use-cases/steward/golden-queries.md) supplies short user requests and independent outcome/attention oracles. GQ01/GQ02 qualify creation and existing-Agent connection; GQ03/GQ04 qualify responsible dispatch; GQ05/GQ11–GQ13 qualify two-cycle small-team coordination, with GQ07–GQ09 continuity; GQ06/GQ10/GQ14–GQ15 extend materials, attention and replanning. GQ16/GQ17 remain later cross-host/scale qualification. These are scenario tests over existing A1–A24, not new Core protocol states.
+The [golden-query pack](../../product/use-cases/steward/golden-queries.md) supplies short user requests and independent outcome/attention oracles. GQ01/GQ02 qualify creation and existing-Agent connection; GQ03/GQ04 qualify responsible dispatch; GQ05/GQ11–GQ13 qualify two-cycle small-team coordination, with GQ07–GQ09 continuity; GQ06/GQ10/GQ14–GQ15 extend materials, attention and replanning. GQ16/GQ17 remain later cross-host/scale qualification. These scenarios map to A1–A28, including the fulfillment journey in §5.15, without adding Core protocol states.
 
 GQ06's [material-to-work pilot](../../product/use-cases/steward/golden-queries.md#gq06-material-to-work-pilot--从材料到实际改进)
 qualifies an ordinary article request through the same M2/M3 boundary. Source
@@ -733,6 +733,91 @@ next implementation/qualification slice; it does not mark M2/M3 or GQ06 passed.
 When routing fails, distinguish unread/unavailable sources, incomplete or stale directory coverage, no relevant registered owner, unauthorized scope, missing binding, unknown runtime readiness, capacity wait and receiver rejection. Probe/refresh permitted sources and repair an eligible binding through its owner before asking the user to locate an Agent. Registration grants neither reachability nor authority. If no existing receiver qualifies, an already-authorized creation path is valid; otherwise retain the request and ask only for the concrete missing decision. Never select an irrelevant sole candidate or silently replace an explicitly requested model. A well-written recommendation with no requested dispatch is still an undelivered task.
 
 Ordinary follow-ups retain the responsible owner; direct small reads need no team. One binding retains one execution driver. Existing request/outbox and continuous-monitor owners handle event-driven continuation and delayed return; do not compensate with faster polling. Retain useful constraints through scoped context, distinguishing preference, current fact and action grant; optional memory providers remain optional. GQ03's CI example requires causal evidence and all other review blockers, not a blanket approve policy.
+
+### 5.15 Accepted requests remain accountable through fulfillment
+
+The product promise is one delegation followed by a usable result in the
+original conversation. The sender retains responsibility for integration and
+return; the receiver retains responsibility for the accepted work. This section
+refines §§5.5–5.6/5.11, not a new request store, scheduler or execution grant.
+The [backlog journey](../../product/use-cases/steward/golden-queries.md#delegation-backlog-to-fulfilled-requests--从委派积压到兑现请求)
+qualifies these requirements through GQ03/GQ07–GQ09.
+
+**Assessment must reach execution.** An adoption identifies the accepted delta,
+the preserved requirements and its relation to existing work or a supported
+request-bound execution. Link existing work where applicable; a pre-created or
+hidden Todo is not required. A per-Turn reminder is insufficient unless a safe
+continuation actually considers the request in receiver-owned planning. Reuse
+the existing Inbox, Turn admission and Host wake: idle and authorized work may
+start once; busy work queues; unavailable, paused, stopped, revoked or
+budget-limited paths expose their actual condition. A recorded adoption,
+registration or wake attempt never proves execution.
+
+**Corrections retain individual obligations.** The receiver or coordinator may
+relate several requests to one artifact/work item using the source, purpose,
+destination and accepted revision. Preserve each original request, its delta
+and its disposition; text similarity alone cannot merge independent intent.
+Before the affected effect, reconcile later corrections and rejected approaches.
+Changing the recipient does not retract a delivered misroute: verify the
+original/correction receipts and carry any still-needed ownership correction
+through the original collaboration path without replaying a delivered correction.
+
+**Accepted work must not disappear from planning.** At the existing safe
+planning boundary, compose incoming, adopted-but-unfulfilled and owed-return
+observations with the current runnable frontier. Within existing priority,
+dependency, capacity and budget rules, account for waiting age and work already
+in progress so repeated new arrivals cannot indefinitely displace an accepted
+request. Age is not a priority grant; no preemption, lease transfer or wake of
+stopped work follows from this read. Record a material plan delta, actual
+continuation or evidenced wait. Do not force progress prose, a new task or a
+model wake when nothing changed. Work/result/dependency events and bounded
+recovery reuse the existing scheduling and outbox owners.
+
+**Disposition, fulfillment and delivery are distinct observations.** Derive
+them from existing request revisions, assessments, work/artifact versions,
+validation and return receipts. These are read-model relations, not a new set
+of independently writable lifecycle states. An assessment or a reply can resolve
+the communication step while accepted execution remains owed. For each current
+requirement, the receiver supplies the result/evidence or a bounded remainder
+with its owner and resume condition. A done Todo, hash, plan, PR or a reply named
+`conclusion` cannot alone satisfy the original completion question. A requested
+analysis needs its full answer; an implementation needs its agreed validation;
+an installed-product repair retains adoption/readback when requested. A genuine
+deferral/rejection/cancellation remains distinguishable from fulfillment.
+
+The sender checks returned scope against the current request and corrections,
+integrates dependencies and returns the useful result or remaining gap without
+requiring the user to relay it or ask again. Reuse existing accepted checks;
+ordinary replies do not acquire a mandatory human acknowledgement or a new
+independent-verifier requirement. Existing optional acceptance contracts remain
+optional. New validation must bind the actual input/output versions; it must
+not claim acceptance from delivery or invent checks for an older result.
+
+**Backlog recovery must preserve truth.** First qualify the original source,
+audience, current grant and request lifetime. Reconcile delivered/unassessed,
+adopted/unfulfilled, result-ready/undelivered and conflicting-evidence cases
+through their existing owners. Reuse verified artifacts and delivered receipts;
+do not relaunch finished work, close by age or bulk-wake every recipient. An
+old request whose Turn now names another handoff needs an exact conflict and
+typed recovery outcome. Never remove the identity guard, overwrite history,
+infer cancellation or hide the record merely to make coverage complete.
+
+**The product reader shows actionable coverage.** Group by responsible Agent,
+show the current obstacle/next responsible action and retain full briefs,
+corrections, linked work and original conversations on demand. Distinguish
+request count, linked work count, filtered matches, loaded rows and unreadable
+coverage. Pagination/recovery controls remain reachable with long expanded
+content on desktop, narrow view and keyboard. A first page is not the complete
+inventory; unavailable records remain locatable without disclosing unverified
+private content. App, Lark and CLI consume the same facts within their grants.
+
+Measure delegation-to-effective-assessment and assessment-to-verified-result
+latency, waiting age, duplicate effects, false closeouts, user reminders and
+complete IO/model/attention cost. Declare window, denominator, source/version
+and unknown coverage. Establish a baseline before numeric targets or savings
+claims. Prefer event-driven deltas, request-scoped fresh reads and bounded
+backoff over all-history scans on every refresh or per-request model polling;
+retain full-source recovery, current authorization and existing output budgets.
 
 ## 6. Alternatives and disposition of #4306
 
@@ -806,6 +891,10 @@ The following IDs are durable acceptance anchors for engineering Todos and PRs. 
 | A22 | Tool/progress events, reconnect, SSE replay and delayed final answer | The current phase and only host-emitted public activity are visible; replay deduplicates by event identity, keeps the complete final answer and does not restart the Turn. Failures and absent activity remain truthful |
 | A23 | Stop and steer an active Turn; stale button, duplicate ingress, completion race and unsupported adapter | Stop affects only the selected Turn and reports the actual outcome. Steering retains its original Turn and ingress identity; stale/unavailable targets are refused. Later queue delivery requires a previously permitted fallback or a new explicit delivery choice, with a distinct truthful receipt. No silent loss, retargeting, duplicate model run or unrelated worker cancellation |
 | A24 | Steward routes a product request to a responsible active Agent amid stopped, registered-only, stale and model-mismatched decoys | Fresh responsibility, authorization, runtime reachability, capacity and profile fit determine the recipient; receiver assessment, work and final evidenced conclusion return once to the original frontend/Lark conversation. Catalog discovery and inbox delivery alone fail |
+| A25 | Idle and busy receivers accept a request without a pre-created Todo; crash between persistence and wake, lose the ACK, revoke the grant or stop before execution | Accepted scope reaches the existing plan/request-bound execution and original return. Busy work queues; restart reconciles the same operation without duplicate invocation/debit. Revoked, stopped, unknown-host and budget-denied paths do not execute; delivery/read/adoption/wake alone fail |
+| A26 | Multiple requests share one work item; later corrections, independent same-text requests, new arrivals and a delivered misroute coexist | Each obligation/revision remains attributable and adopted corrections affect the actual work. Existing priority/capacity/stop rules hold while an eligible older commitment progresses. No similarity-only merge, automatic priority change or assumed cancellation; delivered corrections are reused |
+| A27 | A linked Todo ends or a partial plan is returned as a conclusion; the actual result arrives during sender/transport restart | Completion follows the original current requirement and qualified result version. A bounded remainder retains its owner/continuation; committed results return without replay. Sender integration and delivery remain distinct from fulfillment; no extra routine user confirmation or invented acceptance for historical artifacts |
+| A28 | More than 40 requests across recipients, long details, paging/search, changing snapshots and a historical request/Turn receipt conflict; paired denied audiences | Counts distinguish total/matched/loaded/unknown scope, all authorized pages and original details are reachable, and recovery identifies the exact gap. No mixed snapshots, hidden records, private leakage or bypass of source/receipt guards. Validate real File/SQLite and any additional affected supported provider, packaged desktop/narrow/keyboard, and separately advertised Lark/CLI boundaries |
 
 Run deterministic transition/compatibility tests, real installed-runtime qualification, then real frontend/Lark roundtrips with synthetic safe tasks and an authorized private canary. Record runtime/source versions and emitted receipts. Include mobile Lark and packaged frontend render/readback; backend tests alone do not pass A10. Provider receipt ambiguity and offline failure cases are required, not optional happy-path add-ons.
 
@@ -998,8 +1087,8 @@ Implement coherent end-to-end slices, not one PR per incidental field. The manag
 | --- | --- | --- | --- |
 | M0 — reconcile direction | Manager capability owner inventories current restrictions, grants, sessions and pending exchanges; closes superseded #4306 path and maps surviving fixes | Existing fixtures + public decision link + no orphaned request; no runtime claim | Documentation/proposal only |
 | M1 — useful host agent | Manager capability + runtime adapter use ordinary tools/skills and persistent owner grant; frontend exposes effective profile/session, supported tool activity and actionable failures | A1–A3, A12 on real installed runtime; qualify shared-resource coordination; portfolio remains reusable; no per-resource wrapper required | Restore restricted profile, preserve requests |
-| M2 — semantic continuation | Core collaboration replaces manager-specific request transitions; reuses alignment and selected work authority; supports pre-Todo/cross-Goal requests and receiver planning; both consumers qualify the same contract | A4–A7, A11, A13–A20 at the supported boundary; A19 requires honest disabled/unqualified behavior and does not mandate Obelisk promotion; old/new parity and crash reconciliation; TS migration economics review artifact (§5.12) | Disable new producer, retain compatible readers and pending results; do not switch Goal authority |
-| M3 — automatic complete exchange | Receiver conclusion + existing outbox + frontend/Lark visibility, safe rich output and restart recovery | A8–A10 plus A13–A14/A17/A20 return-path qualification; failure injection and live readback; user receives conclusion without querying | Keep result store, switch transport/profile without replay |
+| M2 — semantic continuation | Core collaboration replaces manager-specific request transitions; reuses alignment and selected work authority; supports pre-Todo/cross-Goal requests and receiver planning; both consumers qualify the same contract | A4–A7, A11, A13–A20 and A25–A26 at the supported boundary; A19 requires honest disabled/unqualified behavior and does not mandate Obelisk promotion; old/new parity and crash reconciliation; TS migration economics review artifact (§5.12) | Disable new producer, retain compatible readers and pending results; do not switch Goal authority |
+| M3 — automatic complete exchange | Receiver conclusion + existing outbox + frontend/Lark visibility, safe rich output and restart recovery | A8–A10 plus A13–A14/A17/A20/A27–A28 return/fulfillment qualification; failure injection and live readback; user receives conclusion without querying | Keep result store, switch transport/profile without replay |
 | M4 — promotion and retirement | Three heterogeneous active Goals, owner + shared-scope and configured SSH journeys pass; obsolete manager restrictions/compatibility seams removed | All acceptance rows, permission regression and measured SLO/cost; document remaining unqualified hosts | Scoped rollback with schema-aware drain/export |
 
 M1 need not wait for a generic handoff refactor. M3's independent format/delivery fixes may ship early using the existing inbox. M2 promotion needs the second consumer; it must not hold a useful manager-only improvement hostage. No milestone creates an extra user confirmation for routine research or normal delegation.
@@ -1032,6 +1121,18 @@ If this program changes a provider, retention or authority-source profile, its a
 At every PR handoff, report: base/head; this RFC's milestone/acceptance IDs; relevant TS T-card and authority D-card if affected; alignment stage consumed; exact owner/command/receipt and source mode; callers deleted; tests/real-runtime evidence; unresolved holds; and one next executable step. Link the existing canonical engineering Todos rather than copying a live task list into this document. If upstream ownership moves, resolve the new symbol and update both language versions before implementing; do not restore the old module just to satisfy this plan.
 
 Cross-session sequencing inside these milestones is explicit: first qualify same-Agent replacement with history retrieval disabled; then cross-Agent continuation through the existing transfer adapter; then qualify optional gap recall under its own rollout. Each slice includes the affected CLI/managed Turn, packaged frontend and Lark readback/feedback, rather than deferring product entry points to a later backend-only release. Measure time to the first valid continuation step, retained material obligations, avoided repeated failures, duplicate effects and context cost. More restored tokens or a successful `resume` response alone is not improvement.
+
+For §5.15, the product/manager engineering owner integrates three reviewable
+vertical slices into M2/M3: (1) original request → safe wake/queue → real work →
+original return, with existing Host/Core owners; (2) corrections, retained
+commitments, fulfillment checks and their frontend reader; (3) bounded recovery
+of the retained backlog using verified prior effects. Each slice carries its
+A25–A28 evidence and retains unqualified acceptance. Reuse the existing wake,
+per-Turn agenda and presentation tasks; coordinate their owners rather than
+creating a parallel ledger or taking another lane's lease. Docs, unit tests,
+an author PR or one synthetic transport do not qualify installed adoption.
+Rollback stops the new producer/activation, preserves compatible readers,
+original effects and pending returns, and never reinterprets newer journals.
 
 ## 12. Open decisions
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -569,3 +570,28 @@ class LoopxCliExecutionError(RuntimeError):
         # Transient tool feedback only. Durable receipts must never serialize
         # this raw output or infer rollback from the presence of valid JSON.
         self.stdout = stdout
+
+
+def snapshot_disposable_fixture(root: Path) -> dict[str, tuple[Any, ...]]:
+    """Observe all fixture files, never infer production rollback from stdout.
+
+    Contents remain transient hashes. Metadata catches replacement, permission
+    changes and same-byte rewrites; access times do not make reads into writes.
+    Unknown nodes and links fail closed rather than hide effects outside root.
+    """
+    root = root.resolve(strict=True)
+    observed: dict[str, tuple[Any, ...]] = {}
+    for path in (root, *root.rglob("*")):
+        metadata = path.lstat()
+        mode = metadata.st_mode
+        identity = (mode, metadata.st_uid, metadata.st_gid, metadata.st_ino,
+                    metadata.st_mtime_ns, metadata.st_ctime_ns)
+        value: tuple[Any, ...]
+        if stat.S_ISDIR(mode):
+            value = identity
+        elif stat.S_ISREG(mode):
+            value = (*identity, sha256(path.read_bytes()).hexdigest())
+        else:
+            raise ValueError("Disposable fixture contains an unsupported node")
+        observed[str(path.relative_to(root))] = value
+    return observed

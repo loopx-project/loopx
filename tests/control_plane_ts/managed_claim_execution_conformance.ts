@@ -8,6 +8,7 @@ import {executeCoordinationTodoTerminalLifecycle as complete} from "../../loopx/
 import {executeCoordinationTodoUpdate as update} from "../../loopx/control_plane/coordination/todo_update.ts";
 import {executeCanonicalTaskLeaseLifecycle as maintain} from "../../loopx/control_plane/coordination/task_lease_lifecycle.ts";
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
+import {todoUpdateLeaseRecovery} from "../../loopx/control_plane/coordination/task_lease_proof.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 
 async function loaded(store: AuthorityStore) {
@@ -107,6 +108,48 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     assert.equal((await update(store, progress)).status, "failed");
     assert.deepEqual(await loaded(store), excluded);
   });
+  test(`${provider} managed execution: authorized expiry takeover commits one generation and fences the old writer`, async t => {
+    const {store, request, progress} = await setup(t);
+    const accepted = await claim(store, request);
+    assert.equal(accepted.status, "applied");
+    const original = accepted.lease as JsonObject;
+    const before = await loaded(store);
+    const target = {...request, actor_agent_id: "agent-b", claimed_by: "agent-b", operation_id: "takeover",
+      expected_provider_revision: before.provider_revision, now: new Date("2026-09-13T10:45:00Z")};
+    assert.equal((await claim(store, {...target,
+      now: new Date("2026-09-13T10:44:59Z")})).reason_code, "claim_owner_mismatch");
+    assert.equal((await claim(store, {...target, registered_agents: ["agent-a"]})).status, "failed");
+    assert.equal((await claim(store, {...target, manage_execution: false})).reason_code, "claim_owner_mismatch");
+    assert.deepEqual(await loaded(store), before);
+    const recovery = todoUpdateLeaseRecovery(before.head,
+      {...progress, claim_operation_id: undefined, actor_agent_id: "agent-b", now: target.now}, "hard_lease");
+    assert.equal(recovery.action, "claim_task");
+    assert.equal(recovery.execution_authority_granted, false);
+    assert.equal(recovery.inspect, undefined);
+    assert.equal(recovery.acquire, undefined);
+    assert.deepEqual(await loaded(store), before, "recovery advice is read-only");
+    const attempts = ["takeover-one", "takeover-two"].map(operation_id => ({...target, operation_id}));
+    const results = await Promise.all(attempts.map(input => claim(store, input)));
+    const winner = results.findIndex(result => result.status === "applied");
+    assert.equal(results.filter(result => result.status === "applied").length, 1, JSON.stringify(results));
+    const after = await loaded(store);
+    const current = (after.head.leases as JsonObject[])[0]!;
+    assert.equal((after.head.todos as JsonObject[])[0]!.claimed_by, "agent-b");
+    assert.equal(current.owner, "agent-b");
+    assert.equal(current.lease_epoch, Number(original.lease_epoch) + 1);
+    assert.equal(current.version, Number(original.version) + 1);
+    assert.notEqual(current.idempotency_key, original.idempotency_key);
+    assert.deepEqual(current.write_scopes, original.write_scopes);
+    assert.equal((await update(store, {...progress, now: target.now})).status, "failed");
+    for (const operation of ["renew", "release"] as const) {
+      assert.equal((await maintain(store, {operation, goal_id: request.goal_id, todo_id: request.todo_id,
+        owner: "agent-a", idempotency_key: String(original.idempotency_key), expected_version: Number(original.version),
+        ttl_seconds: null, registered_agents: request.registered_agents, now: target.now})).status, "failed");
+    }
+    assert.deepEqual(await loaded(store), after, "late old execution cannot write or end its replacement");
+    assert.equal((await claim(store, attempts[winner]!)).status, "replayed");
+    assert.deepEqual(await loaded(store), after, "lost takeover response does not acquire another generation");
+  });
   test(`${provider} managed execution: unavailable receipt and changed policy reject without maintenance`, async t => {
     const {store, request, progress} = await setup(t);
     assert.equal((await claim(store, request)).status, "applied");
@@ -129,6 +172,29 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     const changed = await loaded(store);
     assert.equal((await update(store, {...progress, operation_id: "post-policy-change"})).reason_code, "claim_execution_unavailable");
     assert.deepEqual(await loaded(store), changed);
+  });
+  test(`${provider} managed execution: expiry takeover rejects ineligible or unproven recovery without writes`, async t => {
+    for (const scenario of ["released", "invalid-expiry", "unrelated-holder", "excluded", "blocked", "soft-claim"]) {
+      const {store, request} = await setup(t);
+      assert.equal((await claim(store, request)).status, "applied");
+      const head = await loaded(store);
+      const todo = {...(head.head.todos as JsonObject[])[0]!};
+      const lease = {...(head.head.leases as JsonObject[])[0]!};
+      if (scenario === "released") lease.status = "released";
+      if (scenario === "invalid-expiry") lease.expires_at = "invalid";
+      if (scenario === "unrelated-holder") lease.owner = "agent-b";
+      if (scenario === "excluded") todo.excluded_agents = ["agent-b"];
+      if (scenario === "blocked") todo.status = "blocked";
+      assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+        operation_id: "recovery-boundary", expected_provider_revision: head.provider_revision,
+        projection: {...head.head, ...(scenario === "soft-claim" ? {handoff_mode: "soft_claim"} : {})},
+        mutations: [{kind: "todo_upsert", todo}, {kind: "lease_upsert", lease}]}))).status, "applied");
+      const before = await loaded(store);
+      const result = await claim(store, {...request, operation_id: "takeover", actor_agent_id: "agent-b",
+        claimed_by: "agent-b", now: new Date("2026-09-13T10:45:00Z")});
+      assert.equal(result.status, "failed", `${scenario}: ${JSON.stringify(result)}`);
+      assert.deepEqual(await loaded(store), before, scenario);
+    }
   });
   test(`${provider} managed execution: pre-upgrade plain claim recovery never changes its intent`, async t => {
     const {store, request} = await setup(t);

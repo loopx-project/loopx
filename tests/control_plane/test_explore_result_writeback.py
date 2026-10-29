@@ -834,7 +834,7 @@ def test_real_cli_open_capture_release_order_and_readback_replay(tmp_path, provi
                      ]
     guard = run(*guard_command)
     hint = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["optional_attachments"][0]
-    assert "release only after explore_result_delivery.ok=true" in hint["guidance"]
+    assert "end that execution only after explore_result_delivery.ok=true" in hint["guidance"]
     lease_binding = ["--goal-id", GOAL_ID, "--todo-id", TODO_ID, "--owner", AGENT_ID]
     early = run("task-lease", "acquire", *lease_binding, "--idempotency-key", "early-release")["lease"]
     run("task-lease", "release", *lease_binding, "--idempotency-key", "early-release",

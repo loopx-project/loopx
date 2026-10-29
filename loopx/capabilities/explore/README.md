@@ -555,8 +555,8 @@ packet with:
   enter the exploration scheduler or consume branch width;
 - a dry-run A/B estimate comparing baseline serial execution with the
   DSpark-style selected prefix (`ab_result.estimated_speedup_vs_baseline`);
-- suggested `loopx todo claim` and `loopx task-lease acquire` commands for a
-  human operator or registered peer runner to execute explicitly;
+- suggested ordinary `loopx todo claim` commands for a human operator or
+  registered peer runner; the claim manages execution and returns its task reference;
 - the safety boundary that keeps the packet advisory rather than an
   replacement for `quota should-run`.
 
@@ -687,12 +687,12 @@ the existing LoopX harness, not beside it and not instead of it:
 2. The opt-in planner groups todos into worker-lane candidates and uses
    DSpark-style confidence/prefix/load scoring to pick a worker branch prefix.
 3. Execution must return to the normal LoopX path: `quota should-run`,
-   `todo claim`, `task-lease acquire`, worker execution, `explore node|edge|finding`,
+   `todo claim`, worker execution, `explore node|edge|finding`,
    `refresh-state`, and `quota spend-slot`.
 
 For goals that have opted in, the packet therefore contains
 `harness_compatibility` and `boundary` fields: `replaces_loopx_runtime=false`,
-`launches_workers=false`, and `claim_and_lease_are_suggested_only=true`; the
+`launches_workers=false`, and `claim_is_suggested_only=true`; the
 deny-by-default disabled packet carries the `boundary` block plus the opt-in
 `required_contract` instead. The packet can be used by a controller or human
 operator to decide which workers to start, but it cannot launch workers or

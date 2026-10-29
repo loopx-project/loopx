@@ -31,6 +31,7 @@ from ..external_connector_runtime import (
     build_external_event_response_receipt,
     decide_external_event_ack,
 )
+from .event_collector_runtime import EVENT_DIAGNOSTIC_PREFIX, EVENT_READY_PREFIX
 from .event_inbox import (
     MESSAGE_ID_PATTERN,
     acknowledge_lark_event_inbox,
@@ -120,8 +121,6 @@ _EVENT_PROJECTION = (
     "mentions:(.mentions // .message.mentions // .event.message.mentions // [])}"
 )
 
-_EVENT_READY_PREFIX = "[event] ready "
-_EVENT_DIAGNOSTIC_PREFIX = "[event] "
 _EVENT_EXIT_REASON = re.compile(r"\(reason: (limit|timeout|signal)\)$")
 
 
@@ -750,7 +749,7 @@ def stream_lark_goal_topic_profile(
             if stop.is_set():
                 break
             stripped = line.strip()
-            if stripped.startswith(_EVENT_READY_PREFIX):
+            if stripped.startswith(EVENT_READY_PREFIX):
                 with result_lock:
                     provider_ready = True
                     if health_sink is not None and not dispatch.failed:
@@ -760,7 +759,7 @@ def stream_lark_goal_topic_profile(
                 match = _EVENT_EXIT_REASON.search(stripped)
                 exit_reason = match.group(1) if match else None
                 continue
-            if stripped.startswith(_EVENT_DIAGNOSTIC_PREFIX):
+            if stripped.startswith(EVENT_DIAGNOSTIC_PREFIX):
                 continue
             # Batch-shaped provider records are split before scheduling, so an
             # unrelated conversation in a batch can progress independently too.

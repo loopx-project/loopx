@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from collections.abc import Mapping
@@ -432,6 +433,59 @@ def test_terminal_native_draft_preserves_proof_and_authority(
         assert receipt["observed_tool_sequence"].count("progress_observation_invalid_arguments") == 1
 
 
+@pytest.mark.skipif(not shell_isolation_available(), reason="Draft authoring requires native OS isolation")
+def test_terminal_corrects_rejected_vision_within_original_budget(tmp_path: Path) -> None:
+    fixture = _build_fixture(tmp_path / "oracle")
+    before_rejection: dict[str, bytes] = {}
+
+    def authority_files() -> dict[str, bytes]:
+        root = tmp_path / "actor"
+        return {str(path.relative_to(root)): path.read_bytes()
+                for tree in (root / "runtime", root / "project/.codex", root / "project/.loopx", root / "home")
+                for path in tree.rglob("*") if path.is_file()}
+
+    def draft(request, *, corrected=False):
+        if corrected:
+            rejected = json.loads(request["messages"][-1]["content"])
+            assert rejected["ok"] is False and rejected["appended"] is False
+            assert authority_files() == before_rejection
+        vision = {
+            "schema_version": "goal_vision_replan_contract_v0", "state": "vision_closed",
+            "vision_patch": {},
+        }
+        if corrected:
+            vision["vision_patch"] = {"acceptance_summary": "Original proof and Todo validation are retained."}
+            vision["path_delta"] = {
+                "outcome": "no_change", "prior_assumption": "Final delivery requires validation.",
+                "observed_reality": "Original proof and Todo validation were checked.",
+                "retained": ["Original validated delivery"], "evidence_refs": ["fixture-settlement-proof"],
+            }
+        return ScriptedExecToolAction(command="cat > .scratch/vision.json <<'JSON'\n" +
+                                      json.dumps(vision) + "\nJSON")
+
+    def writeback(request):
+        before_rejection.clear()
+        before_rejection.update(authority_files())
+        return ScriptedExecToolAction(command=_writeback_action(request).command +
+                                      " --agent-vision-json .scratch/vision.json")
+
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"), draft, writeback,
+        partial(draft, corrected=True), writeback, _spend_action, _completion_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="native-vision-input-correction", fixture_root=tmp_path / "actor")
+    assert receipt["qualification_passed"] is True, receipt
+    assert receipt["tool_call_count"] == len(transport.requests) == 9
+    assert receipt["settlement_receipt_steps"] == [
+        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+    ]
+    assert (tmp_path / "actor/project/fixture/settlement-proof.json").read_bytes() == fixture.proof_target.read_bytes()
+
+
 def test_terminal_input_rejections_do_not_reset_the_call_budget(tmp_path: Path) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
 
@@ -455,9 +509,9 @@ def test_terminal_input_rejections_do_not_reset_the_call_budget(tmp_path: Path) 
     assert receipt["settlement_receipt_steps"] == ["validation"]
 
 
-@pytest.mark.parametrize("payload_ok", [False, True])
+@pytest.mark.parametrize(("payload_ok", "payload_appended"), [(False, True), (True, True), (False, False)])
 def test_nonzero_after_actual_writeback_cannot_advance_to_spend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload_ok: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload_ok: bool, payload_appended: bool,
 ) -> None:
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     fixture = _build_fixture(tmp_path / "oracle")
@@ -474,6 +528,7 @@ def test_nonzero_after_actual_writeback_cannot_advance_to_spend(
             # Inject only a post-effect process failure; the actual CLI above
             # produced the independent writeback and committed receipt.
             payload["ok"] = payload_ok
+            payload["appended"] = payload_appended
             return subprocess.CompletedProcess(
                 completed.args, 1, json.dumps(payload), "synthetic post-effect failure",
             )
@@ -503,6 +558,73 @@ def test_nonzero_after_actual_writeback_cannot_advance_to_spend(
     )
     assert readback is not None
     assert readback.progress["next_step"] == "quota_spend"
+
+
+@pytest.mark.parametrize("change", [
+    "same_bytes", "replacement", "added_file", "transient_file",
+    pytest.param("permissions", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows chmod cannot toggle executable permission",
+    )),
+    pytest.param("symlink", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows symlink creation needs separate privileges",
+    )),
+])
+def test_input_rejection_with_changed_fixture_cannot_continue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+) -> None:
+    from loopx.control_plane.testing import terminal_settlement_tool_behavior as terminal
+    from loopx.control_plane.testing.model_tool_behavior import LoopxCliExecutionError
+
+    fixture = _build_fixture(tmp_path / "oracle")
+    execute = terminal.execute_loopx_cli
+
+    def mutate_after_rejection(command, **kwargs):
+        try:
+            return execute(command, **kwargs)
+        except LoopxCliExecutionError as exc:
+            assert "refresh-state" in command
+            rejected = json.loads(exc.stdout)
+            assert rejected["ok"] is False and rejected["appended"] is False
+            proof = kwargs["project_root"] / "fixture/settlement-proof.json"
+            metadata = proof.stat()
+            if change == "same_bytes":
+                proof.write_bytes(proof.read_bytes())
+                os.utime(proof, ns=(metadata.st_atime_ns, metadata.st_mtime_ns - 1_000_000_000))
+            elif change == "replacement":
+                replacement = proof.with_suffix(".replacement")
+                replacement.write_bytes(proof.read_bytes())
+                replacement.replace(proof)
+            elif change == "permissions":
+                proof.chmod(metadata.st_mode ^ 0o100)
+            elif change == "added_file":
+                proof.with_suffix(".unexpected").write_text("unexpected fixture write")
+            elif change == "transient_file":
+                transient = proof.with_suffix(".temporary")
+                transient.write_text("unexpected fixture write")
+                transient.unlink()
+            else:
+                proof.unlink()
+                proof.symlink_to(fixture.proof_target)
+            raise
+
+    def reject(request):
+        return ScriptedExecToolAction(command=_writeback_action(request).command +
+                                      " --progress-result-class no_followup")
+
+    monkeypatch.setattr(terminal, "execute_loopx_cli", mutate_after_rejection)
+    transport = ScriptedDoubaoExecTransport([
+        ScriptedExecToolAction(command=fixture.quota_guard_command),
+        ScriptedExecToolAction(command="cat fixture/settlement-proof.json"),
+        partial(_completion_action, kind="validation"), reject, _spend_action,
+    ])
+    receipt = DoubaoTerminalSettlementToolBehaviorActor(
+        api_key="test-only-placeholder", transport=transport,
+    ).qualify(qualification_id="rejection-with-mutation", fixture_root=tmp_path / "actor")
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "tool_execution_failed"
+    assert receipt["tool_call_count"] == len(transport.requests) == 4
+    assert receipt["settlement_receipt_steps"] == ["validation"]
+    assert "unexpected fixture write" not in json.dumps(receipt)
 
 
 def test_ordinary_completion_requires_its_actual_validation_receipt(

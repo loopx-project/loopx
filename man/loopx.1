@@ -105,9 +105,6 @@ Preview an explicit local\-state path migration or receipt\-bound rollback; stop
 \fBloopx todo \-\-help\fR
 Show todo lifecycle commands.
 .TP
-\fBloopx task\-lease \-\-help\fR
-Acquire, renew, transfer, release, or inspect a hard per\-todo lease.
-.TP
 \fBloopx coordination\-shadow \-\-help\fR
 Inspect, bootstrap, or revision\-fenced rollback the default\-off Stage 2C file shadow.
 .TP
@@ -197,6 +194,9 @@ Install, inspect, or remove release\-owned skills in selected project agent host
 \fBloopx workflow\-skills\fR
 Inspect, install, or remove packaged user\-level LoopX workflow skills.
 .SH MAINTAINER AND ADAPTER COMMANDS
+.TP
+\fBloopx task\-lease \-\-help\fR
+Host/adapter execution ownership protocol; ordinary task work uses todo claim and update.
 .TP
 \fBloopx check\fR
 Run contract and public/private boundary checks.
