@@ -879,6 +879,10 @@ def _continuation_instruction_migration(
         # Measured warning appearance: +417/+419 chars and four lines. Preserve
         # the warning and its target; paired JSON proves the reviewed cause.
         chars, lines = max(chars, 448), 4
+    if row_id.startswith("surface/heartbeat_prompt_thin/") and migrated("failed_guard_recovery"):
+        # Same 96-row fixture: complete failed-guard guidance adds 90 JSON
+        # chars / 89 Markdown chars. No line, absolute or later-growth waiver.
+        chars += 96
     if not chars:
         return {}, []
     return {

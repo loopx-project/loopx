@@ -1383,6 +1383,27 @@ guard前传入已知Todo选择。pytest隔离目录另增加51个原始JSON路�
 设为6,300，留75字符。行数、增长及原生传输检查独立，原生Goal宿主限制仍为4,000。这些调整不证明模型采纳
 或整体premerge通过。
 
+The next matched `c38b3a1a6` / `7d9bb6fe1` probe has 96 rows on each side;
+candidate absolute and semantic assertions pass. Its six thin differential
+growth failures are exactly the failed-guard clause: +90 JSON / +89 Markdown
+characters versus the existing 64 / 32 growth limits. Preserve those failures.
+Qualify only the first complete clause between the actual thin worker's guard
+code block and notification, with a
+96-character allowance (6 / 7 headroom); do not change absolute, line or
+later-growth limits. Missing no-work/spend, authority or original-Turn text,
+diagnostic/scope quotes, ambiguous old/new blocks, other surfaces and
+already-present clauses do not qualify.
+These observations extend the local output-test receipt, not runtime state or
+authority. The sequential samples took 139.9 / 290.2 seconds; this is neither
+a sustained performance result nor evidence of model-token savings.
+
+后续同负载 `c38b3a1a6` / `7d9bb6fe1` 各96行，候选绝对预算和语义断言通过；
+六个thin差分增长失败均为新增失败处理句：JSON +90、Markdown +89，原限制
+为64 / 32，失败保留。仅在实际thin worker的guard代码块与通知之间首次出现完整条款时允许96字符
+（余6 / 7）；不改绝对、行数或后续增长门。缺少禁工作/扣费、权限或原Turn任一
+含义、诊断区/scope引用、新旧块歧义、其他表面及已存在条款均不适用。这只扩展本地输出验证回执，
+不改变运行时状态或权限。顺序单次139.9 / 290.2秒不证明持续性能或模型token收益。
+
 The native first-admission qualification at `ff1c8a947` uses the same public
 fixture populations, interpreter, Node version, physical path layout and shared
 probe on target main `8caaf678e` and head. The three quota JSON outputs measure

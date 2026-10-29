@@ -218,6 +218,7 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
     )
     # Decode JSON string escaping before observing exact clauses. For Markdown
     # the emitted instruction is already readable. No runtime state is inferred.
+    payload = None
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
@@ -279,7 +280,24 @@ def continuation_instruction_observations(text: str) -> dict[str, bool]:
         "Reuse inline facts; inspect missing context only, without polling or a per-Turn revision/check receipt.",
         "Retain root commitments; a proposal or adoption grants no permissions.",
     )
+    # Only the actual heartbeat worker receives this cost qualification. A
+    # matching quote in another JSON field or Markdown diagnostics is not it.
+    worker = payload.get("task_body") if isinstance(payload, dict) and payload.get(
+        "schema_version") == "heartbeat_agent_input_v1" else None
+    if payload is None and text.startswith("# Heartbeat Automation Prompt\n"):
+        _, opening, remaining = text.partition("````text\n")
+        body, closing, _ = remaining.partition("\n````")
+        worker = body if opening and closing else None
+    failed_guard_recovery = (
+        "Failed preflight/guard: no work/spend. Repair within authority; retry the original Turn."
+    )
     return {
+        # Bind to the renderer's guard -> notification boundary. Scope quotes
+        # cannot qualify; observing both old/new blocks is ambiguous and fails.
+        "failed_guard_recovery_before": isinstance(worker, str) and "\n```\nLang=user;" in worker,
+        "failed_guard_recovery_after": isinstance(worker, str) and (
+            "\n```\n" + failed_guard_recovery + "\nLang=user;"
+        ) in worker,
         "objective_replan_before": contains(objective_replan_prior) and not any(
             contains(clause) for clause in objective_replan_clauses),
         "objective_replan_after": contains(objective_replan_prior + " " + " ".join(objective_replan_clauses)),

@@ -2046,6 +2046,53 @@ def test_objective_replan_cost_is_complete_once_and_carrier_scoped():
     assert not observe(prior + " " + " ".join(reversed(clauses)))["objective_replan_after"]
     assert not observe(json.dumps({"prior": prior, "clauses": clauses}))["objective_replan_after"]
 
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_failed_guard_guidance_cost_requires_complete_worker_clause_once(output_format):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations as observe
+
+    clause = "Failed preflight/guard: no work/spend. Repair within authority; retry the original Turn."
+
+    def rendered(body="", note="", scope="registered peer"):
+        worker = f"Scope: {scope}\n```sh\nloopx quota should-run\n```\n{body}Lang=user; default=en."
+        if output_format == "json":
+            return json.dumps({"schema_version": "heartbeat_agent_input_v1", "task_body": worker, "note": note})
+        return f"# Heartbeat Automation Prompt\n\n````text\n{worker}\n````\n{note}"
+
+    base = _row(row_id=f"surface/heartbeat_prompt_thin/small/{output_format}",
+        surface_id="heartbeat_prompt_thin", format=output_format, chars=1000,
+        utf8_bytes=1000, compact_payload_chars=800 if output_format == "json" else None, lines=20,
+        continuation_instructions=observe(rendered()))
+    growth = 90 if output_format == "json" else 89
+    complete = observe(rendered(clause + "\n"))
+    head = {**base, "chars": 1000 + growth, "utf8_bytes": 1000 + growth,
+        "compact_payload_chars": 800 + growth if output_format == "json" else None,
+        "continuation_instructions": complete}
+    assert not _compare_row(base, head)["failures"]
+    assert _compare_row(base, head)["allowances"]["chars"] == 96
+    # Already-shipped guidance, partial obligations, metadata quotes and other
+    # surfaces cannot inherit this first complete transition's allowance.
+    assert _compare_row({**base, "continuation_instructions": complete}, head)["failures"]
+    for omitted in ("no work/spend. ", "within authority", "original Turn"):
+        partial = observe(rendered(clause.replace(omitted, "") + "\n"))
+        assert not partial["failed_guard_recovery_after"]
+        assert _compare_row(base, {**head, "continuation_instructions": partial})["failures"]
+    quoted = observe(rendered(note=clause))
+    assert not quoted["failed_guard_recovery_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": quoted})["failures"]
+    scoped = observe(rendered(scope="\n" + clause + "\n"))
+    assert not scoped["failed_guard_recovery_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": scoped})["failures"]
+    ambiguous = observe(rendered(scope="\n```\n" + clause + "\nLang=user;\n"))
+    assert ambiguous["failed_guard_recovery_before"] and ambiguous["failed_guard_recovery_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": ambiguous})["failures"]
+    assert _compare_row(base, {**head, "chars": 1097})["failures"]
+    assert _compare_row(base, {**head, "lines": 23})["failures"]
+    for surface in ("status", "quota_should_run", "heartbeat_prompt_compact"):
+        wrong = f"surface/{surface}/small/{output_format}"
+        assert _compare_row({**base, "row_id": wrong}, {**head, "row_id": wrong})["failures"]
+
+
 def _admission_packet():
     identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": "fixture-goal",
                 "agent_id": "fixture-agent", "todo_id": "todo_fixture", "turn_instance_id": "work:original"}
