@@ -61,6 +61,24 @@ def journal_committed_effect_id(journal: Mapping[str, Any]) -> str | None:
     return effect_id or None
 
 
+def _extract_settlement_identity_payload(journal: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Extract settlement identity payload from journal structure."""
+
+    stored_plan = journal.get("plan")
+    if not isinstance(stored_plan, Mapping):
+        return None
+    transaction = stored_plan.get("transaction")
+    if not isinstance(transaction, Mapping):
+        return None
+    settlement_plan = transaction.get("settlement_plan")
+    if not isinstance(settlement_plan, Mapping):
+        return None
+    identity = settlement_plan.get("identity")
+    if not isinstance(identity, Mapping):
+        return None
+    return identity
+
+
 def _turn_journal_goal_route(path: Path) -> tuple[Path, str] | None:
     resolved = path.expanduser().resolve()
     turns_dir = resolved.parent
@@ -77,10 +95,21 @@ def write_turn_journal_checkpoint(
     *,
     source_admission: Mapping[str, Any] | None = None,
 ) -> None:
+    # Extract C3/C4 session fields from settlement_identity and add to journal
+    journal_data = dict(journal)
+    settlement_identity = _extract_settlement_identity_payload(journal)
+    if settlement_identity is not None:
+        if "controller_session_id" in settlement_identity:
+            journal_data["controller_session_id"] = settlement_identity["controller_session_id"]
+        if "executor_session_id" in settlement_identity:
+            journal_data["executor_session_id"] = settlement_identity["executor_session_id"]
+        if "generation" in settlement_identity:
+            journal_data["generation"] = settlement_identity["generation"]
+
     def write() -> None:
         write_turn_journal(
             str(path),
-            journal,
+            journal_data,
             expected_effect_id=journal_committed_effect_id(journal),
             source_admission=source_admission,
         )
