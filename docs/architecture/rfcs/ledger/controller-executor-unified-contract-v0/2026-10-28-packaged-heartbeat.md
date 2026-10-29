@@ -597,3 +597,41 @@ capture files remain two and typed requests remain two. This buys current-source
 durability, not a measured latency, model or complete-cost improvement. The same
 recovery ordering is already present in this C1 integration; future mainline
 integration must reuse that owner rather than restore another implementation.
+
+## Lossless-reference qualification and deferred caller migration
+
+The independent test proposal [#7633](https://github.com/loopx-project/loopx/pull/7633)
+adds ten combinations across the existing acceptance-sharing helper and ordinary
+CLI projection, directly on main `ee7b65f124`. It preserves distinct integer/float,
+negative-zero and large-integer source values, a later exact carrier, source
+immutability and repeated projection. The affected mainline cohort has **116
+passed**, including the existing real File/SQLite entrypoint cases; standard
+premerge passes. This is a test prerequisite, not another runtime projection.
+
+Applying the same inputs and assertions through C1 `c335aae894`'s renamed display
+and CLI interfaces produces **eight counterexamples out of ten**: JavaScript
+number equality can cause a different acceptance body to be referenced away.
+This adapted assertion probe is not an unchanged pytest cohort or an installed
+observation. Earlier passing cohorts remain valid for their stated cases, but do
+not qualify this lossless boundary. C1 stays Draft pending repair and revalidation.
+
+A separate, unsubmitted migration prototype moved the legacy caller's acceptance
+matching into its single existing TypeScript projection call. A matched local
+probe used the frozen main Python caller and the candidate against the same
+native backend, with ten alternating warm samples and four equal synthetic
+contracts. Output remained equal and both made one typed request, but moving
+sharing after transport increased the request and local median:
+
+| Requirement characters per contract | Request bytes, base → candidate | Median milliseconds, base → candidate |
+| --- | --- | --- |
+| 8,000 | 30,498 → 55,229 | 8.18 → 8.51 |
+| 64,000 | 86,498 → 279,229 | 9.25 → 10.64 |
+| 256,000 | 278,498 → 1,047,229 | 11.55 → 17.04 |
+
+These are diagnostic caller measurements, not production-volume, isolated CPU,
+model-token or long-horizon benefit qualification. The prototype was deferred
+before publication; its larger transport is not an accepted refactor outcome.
+Converge at the C1 boundary that already receives the complete source, validating
+references against original IO values before replacement. Keep the existing
+legacy caller until that usable replacement qualifies; do not add another reader
+or restore mandatory outcome scopes while adopting file-first delivery.
