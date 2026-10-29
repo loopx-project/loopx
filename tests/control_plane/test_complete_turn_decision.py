@@ -43,9 +43,120 @@ def _resign_contract(contract):
     source = {key: value for key, value in contract.items()
               if key not in {"schema_version", "contract_binding"}}
     contract["contract_binding"].pop("content_hash")
-    contract["contract_binding"]["source_decision_hash"] = _canonical_digest(source)
-    contract["contract_binding"]["content_hash"] = _canonical_digest(contract)
+    contract["contract_binding"]["source_decision_hash"] = _complete_digest(source)
+    contract["contract_binding"]["content_hash"] = _complete_digest(contract)
     return contract, source
+
+
+def _complete_digest(value):
+    # Independent negative-fixture oracle: canonical JS values plus the
+    # caller's sparse original numeric tokens, sorted by their encoded paths.
+    tokens = []
+
+    def visit(item, path):
+        if isinstance(item, float) or type(item) is int and abs(item) > 2**53 - 1:
+            tokens.append([path, json.dumps(item, allow_nan=False)])
+        elif isinstance(item, dict):
+            for key, child in item.items():
+                visit(child, [*path, key])
+        elif isinstance(item, list):
+            for index, child in enumerate(item):
+                visit(child, [*path, index])
+
+    visit(value, [])
+    tokens.sort(key=lambda entry: json.dumps(entry[0], ensure_ascii=False, separators=(",", ":")))
+    return _canonical_digest([value, tokens])
+
+
+def _source_digest(value):
+    binding = value.get("contract_binding", {})
+    if value.get("schema_version") == "loopx_turn_envelope_v1" and isinstance(binding.get("content_hash"), str):
+        return binding["content_hash"]
+    return _canonical_digest(value)
+
+
+@pytest.mark.parametrize("original,changed", [(1, 1.0), (1.0, 1),
+    (2**60, 2**60 + 1), (-0.0, 0), (0, -0.0)])
+def test_complete_numeric_integrity_rejects_changes_across_consumers(original, changed):
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision, build_turn_envelope, bind_turn_decision_capture,
+    )
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    source = _quota_payload()
+    source["future_evidence"] = {"measurement": original}
+    contract = compose_turn_decision(source)
+    before = copy.deepcopy(contract)
+    assert_complete_turn_decision(contract)
+    envelope = build_turn_envelope(contract)
+    assert compose_turn_decision(contract) == contract
+    tampered = copy.deepcopy(contract)
+    tampered["future_evidence"]["measurement"] = changed
+    for read in (
+        lambda: assert_complete_turn_decision(tampered),
+        lambda: compose_turn_decision(tampered),
+        lambda: build_turn_envelope(tampered),
+        lambda: _turn_envelope_result("host_context", payload=tampered, envelope=envelope),
+        lambda: _turn_envelope_result("driver_lineage", payload=tampered, envelope=envelope),
+        lambda: _turn_envelope_result("replan_view", payload=tampered,
+            source_hash=_source_digest(tampered), stage="review"),
+        lambda: bind_turn_decision_capture(tampered, envelope, captured_decision_path="/capture/original.json",
+            turn_instance_id="original-turn", turn_key="sha256:" + "a" * 64),
+    ):
+        with pytest.raises(RuntimeError, match="integrity mismatch"):
+            read()
+    assert contract == before
+
+
+@pytest.mark.parametrize("codec", [None, "future_source_codec"])
+def test_complete_readers_refuse_an_unsupported_numeric_codec_without_fallback(codec):
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    contract = compose_turn_decision(_quota_payload())
+    contract["contract_binding"]["hash_codec"] = codec
+    contract, _ = _resign_contract(contract)
+    with pytest.raises(RuntimeError, match="unsupported complete Turn decision hash codec"):
+        _turn_envelope_result("complete_consumer", payload=contract)
+
+
+def test_complete_reader_requires_original_numeric_transport_before_validation():
+    from loopx.control_plane.effect_runtime import effect_runtime_result
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    source = _quota_payload()
+    source["future_measurement"] = {"value": 1.0}
+    contract = compose_turn_decision(source)
+    assert _turn_envelope_result("complete_consumer", payload=contract) == {"ok": True}
+    # A transport that parsed away the original token cannot certify this
+    # contract. Reject it; do not reinterpret the source or admit more work.
+    with pytest.raises(RuntimeError, match="integrity mismatch"):
+        effect_runtime_result("quota.turn_envelope.evaluate",
+            {"operation": "complete_consumer", "payload": contract})
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_replan_reader_rejects_numeric_mutation_and_restores_original_source(tmp_path, monkeypatch, provider):
+    from tests.control_plane.test_replan_successor_guard_reentry import _fixture, GOAL, AGENT, TURN
+
+    call, runtime, _ = _fixture(tmp_path, monkeypatch, provider, future_monitor=False)
+    guard = call("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", TURN)
+    source = {key: value for key, value in guard.items() if key not in {"schema_version", "contract_binding"}}
+    source["future_measurement"] = {"value": 1.0}
+    contract = compose_turn_decision(source)
+    capture = tmp_path / "numeric-source.json"
+    original = json.dumps(contract, ensure_ascii=False, allow_nan=False)
+    capture.write_text(original)
+    args = ("quota", "replan-view", "--decision-file", str(capture),
+        "--source-hash", contract["contract_binding"]["content_hash"], "--replan-stage", "review")
+    before = call(*args)
+    contract["future_measurement"]["value"] = 1
+    capture.write_text(json.dumps(contract, ensure_ascii=False, allow_nan=False))
+    refused = call(*args, expected_code=1)
+    assert "integrity mismatch" in json.dumps(refused)
+    capture.write_text(original)
+    assert call(*args) == before
+    assert _spend_run_count(runtime) == 0
 
 
 def _future_producer_contract(contract):
@@ -85,7 +196,7 @@ def test_complete_readers_reject_invalid_interaction_with_valid_integrity(mutati
         lambda: compose_turn_decision(contract),
         lambda: build_turn_envelope(contract),
         lambda: _turn_envelope_result("replan_view", payload=contract,
-            source_hash=_canonical_digest(contract), stage="review"),
+            source_hash=_source_digest(contract), stage="review"),
     ):
         with pytest.raises(RuntimeError, match=error):
             read()
@@ -127,7 +238,7 @@ def test_complete_readers_refuse_invalid_diagnostic_references_with_valid_hashes
     contract, _ = _resign_contract(contract)
     for read in (lambda: compose_turn_decision(contract), lambda: build_turn_envelope(contract),
         lambda: _turn_envelope_result("replan_view", payload=contract,
-            source_hash=_canonical_digest(contract), stage="review")):
+            source_hash=_source_digest(contract), stage="review")):
         with pytest.raises(RuntimeError, match="summary lane reference"):
             read()
 
@@ -181,7 +292,7 @@ def test_complete_readers_refuse_unknown_action_even_with_valid_integrity():
         build_turn_envelope(contract)
     with pytest.raises(RuntimeError, match="effective_action"):
         _turn_envelope_result("replan_view", payload=contract,
-            source_hash=_canonical_digest(contract), stage="review")
+            source_hash=_source_digest(contract), stage="review")
 
 
 def test_complete_action_validation_preserves_registered_union_and_optional_facts():
@@ -213,7 +324,7 @@ def test_replan_reader_refuses_invalid_complete_contract_even_with_matching_file
         contract.pop("contract_binding")
     # A caller can truthfully hash the bytes it read without proving that their
     # version or inner source binding is valid. Both checks are required.
-    digest = _canonical_digest(contract)
+    digest = _source_digest(contract)
     with pytest.raises(RuntimeError, match="version|integrity|binding"):
         _turn_envelope_result("replan_view", payload=contract, source_hash=digest, stage="review")
 
@@ -332,7 +443,7 @@ def test_complete_quota_successor_settles_original_turn_without_staged_reader(tm
     assert (capture / "decision.json").read_bytes() == original
 
     # After inline execution/settlement, check historical material-reader parity.
-    digest = _canonical_digest(guard)
+    digest = _source_digest(guard)
     staged = _turn_envelope_result("replan_view", payload=guard, source_hash=digest, stage="writeback")
     assert staged["writeback_contract"]["successor_binding_args"] == writer["successor_binding_args"]
     assert staged["writeback_contract"]["successor_settlement"] == writer["successor_settlement"]

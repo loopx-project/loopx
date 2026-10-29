@@ -319,7 +319,7 @@ def _project_quota_cli_payload(
     if payload.get("ok") is False:
         # Failure reporting must not reenter the runtime that just failed.
         # Keep the decided diagnostic, including its original recovery/receipt.
-        if bool(getattr(args, "turn_envelope", False)):
+        if args.quota_command != "should-run" and bool(getattr(args, "turn_envelope", False)):
             return {**payload, "turn_envelope_skipped": "quota request failed; original diagnostic retained"}
         return payload
     if args.quota_command == "should-run":

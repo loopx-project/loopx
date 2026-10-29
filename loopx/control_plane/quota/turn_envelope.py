@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..scheduler.execution_context import (
@@ -45,7 +45,7 @@ class TurnControllerInput:
         raise TypeError("Use build_turn_controller_input with the original quota source")
 
     def envelope(self) -> dict[str, Any]:
-        return json.loads(self.envelope_json)
+        return cast(dict[str, Any], json.loads(self.envelope_json))
 
 
 def _turn_envelope_result(
@@ -55,8 +55,10 @@ def _turn_envelope_result(
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
     request = {"operation": operation, **params}
-    token_source = params.get("payload") if operation in {"reference_context", "compose_complete"} else params
-    if operation in {"reference_context", "compose_complete", "context_delivery", "context_recovery"}:
+    payload = params.get("payload")
+    complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
+    token_source = payload if isinstance(payload, Mapping) else params
+    if complete or operation in {"reference_context", "compose_complete", "context_delivery", "context_recovery"}:
         tokens = _source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens
@@ -127,7 +129,9 @@ def turn_envelope_replan_settlement_identity(
 
 
 def compose_turn_decision(
-    payload: Mapping[str, Any], *, scheduler_execution_context: object = None,
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -171,7 +175,9 @@ def build_turn_envelope(
 
 
 def build_turn_controller_input(
-    payload: Mapping[str, Any], *, scheduler_execution_context: object = None,
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
 ) -> TurnControllerInput:
     """Build the managed controller's envelope and route in one existing RPC."""
     result = _build_turn_projection(payload,
@@ -188,12 +194,14 @@ def build_turn_controller_input(
 
 
 def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: object = None,
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
     captured_decision_path: str | None = None, operation: str = "build",
 ) -> dict[str, Any]:
 
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
-    scheduler_execution_args = ""
+    scheduler_execution_args: object = ""
     if resolution.ok and resolution.context is not None:
         scheduler_execution_args = render_scheduler_execution_args(
             scheduler_execution_context=resolution,

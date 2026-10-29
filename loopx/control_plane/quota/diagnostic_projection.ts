@@ -57,12 +57,24 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
     seen.add(key);
     tokens.push({path, token});
   }
+  if (!tokens.length) return value => JSON.stringify([canonicalAuthorityJson(value), []]);
   const paths = contextObjectPaths(source);
+  const byPath = new Map(tokens.map(item => [JSON.stringify(item.path), item.token]));
   return (value, path) => {
-    const original = value !== null && typeof value === "object" ? paths.get(value) : undefined;
-    const prefix = original ?? path;
-    const relative = tokens.filter(item => prefix.every((key, i) => item.path[i] === key))
-      .map(item => [item.path.slice(prefix.length), item.token]);
+    const relative: [ProjectionPath, string][] = [];
+    // Follow retained objects, including containers moved by source edits.
+    // Removed carriers must not leave ghost numeric facts in the new digest.
+    const visit = (item: unknown, origin: ProjectionPath, target: ProjectionPath): void => {
+      if (item !== null && typeof item === "object") {
+        const original = paths.get(item) ?? origin;
+        if (Array.isArray(item)) item.forEach((child, i) => visit(child, [...original, i], [...target, i]));
+        else Object.entries(item).forEach(([key, child]) => visit(child, [...original, key], [...target, key]));
+      } else if (typeof item === "number") {
+        const token = byPath.get(JSON.stringify(origin));
+        if (token !== undefined && Object.is(JSON.parse(token), item)) relative.push([target, token]);
+      }
+    };
+    visit(value, path, []);
     // Sort encoded relative paths, so original object insertion order is not
     // mistaken for a content difference. Keep token strings separate from data.
     relative.sort((left, right) => authorityUnicodeCompare(JSON.stringify(left[0]), JSON.stringify(right[0])));

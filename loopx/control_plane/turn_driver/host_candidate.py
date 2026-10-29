@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from hashlib import sha256
 import json
-from typing import Any
+from typing import Any, cast
 
 from ..quota.turn_envelope import assert_turn_envelope_consumer_version, turn_envelope_action_signature_document
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_CHOICES
@@ -84,7 +84,7 @@ def execution_profile_present(request: Mapping[str, Any]) -> bool:
     """
     checked = _complete_host_source(request, operation="host_context")
     if checked is not None:
-        return checked["execution_profile_present"]
+        return cast(bool, checked["execution_profile_present"])
     envelope = _mapping(request.get("turn_envelope"))
     decision = _mapping(envelope.get("contract_capsule"))
     profile = decision.get("execution_profile")
@@ -98,7 +98,7 @@ def complete_host_input(request: Mapping[str, Any]) -> dict[str, Any] | None:
     compacts decision facts or derives a second model-facing authority view.
     Historical requests without a complete contract retain their old decoder.
     """
-    if _complete_host_source(request) is None:
+    if _complete_host_source(request, operation="host_context") is None:
         return None
     return _captured_model_input(request)
 

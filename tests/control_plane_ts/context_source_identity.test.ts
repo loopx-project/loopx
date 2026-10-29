@@ -51,3 +51,23 @@ test("already shared numeric summary arrays reuse their original identity withou
   ]);
   assert.deepEqual(referenceQuotaSummaryLanes(source, key), source);
 });
+
+test("projected source identity tracks retained and moved values without removed tokens", () => {
+  const source = {first: {values: [1, 2 ** 60]}, second: {values: [1, 2 ** 60]}};
+  const tokens = [
+    [["first", "values", 0], "1.0"], [["first", "values", 1], "1152921504606846977"],
+    [["second", "values", 0], "1.0"], [["second", "values", 1], "1152921504606846977"],
+  ];
+  const identity = contextSourceIdentity(source, tokens);
+  const projected = {saved: source.first, second_ref: "$.saved"};
+  const actual = JSON.parse(identity(projected, []));
+  assert.deepEqual(actual[1], [
+    [["saved", "values", 0], "1.0"], [["saved", "values", 1], "1152921504606846977"],
+  ]);
+  const restored = contextSourceIdentity(projected, actual[1]);
+  assert.equal(restored(projected, []), identity(projected, []));
+  // The complete codec explicitly selects numeric framing. Existing callers
+  // without transport metadata retain their original canonical identity.
+  assert.equal(contextSourceIdentity({n: 1})({n: 1}, []), '{"n":1}');
+  assert.equal(contextSourceIdentity({n: 1}, [])({n: 1}, []), '[{"n":1},[]]');
+});

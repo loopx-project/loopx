@@ -174,7 +174,7 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
 
     if captured:
         from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-        from test_complete_turn_decision import _canonical_digest, _resign_contract
+        from test_complete_turn_decision import _source_digest, _resign_contract
         from test_quota_settlement_cli import _spend_run_count
         saved = json.loads((capture / "decision.json").read_text())
         assert saved == full
@@ -188,7 +188,7 @@ def test_real_guard_keeps_multiline_task_once_without_differential_opt_in(tmp_pa
         invalid_path = tmp_path / "invalid.json"
         invalid_path.write_text(json.dumps(invalid))
         rc, refused = _run_cli(registry, runtime, "quota", "replan-view",
-            "--decision-file", str(invalid_path), "--source-hash", _canonical_digest(invalid),
+            "--decision-file", str(invalid_path), "--source-hash", _source_digest(invalid),
             "--replan-stage", "review", cwd=project)
         assert rc != 0 and "Current Task title reference" in json.dumps(refused)
         assert state.read_bytes() == original_state and _spend_run_count(runtime) == 0
@@ -327,7 +327,7 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     assert rc == 0, standalone
     assert owner == standalone["graph"]["result_writeback_guidance"]
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-    from test_complete_turn_decision import _canonical_digest, _resign_contract
+    from test_complete_turn_decision import _source_digest, _resign_contract
     saved = json.loads((capture / "decision.json").read_text())
     assert saved == guard
     envelope = build_turn_envelope(saved)
@@ -346,7 +346,7 @@ def test_real_cli_explore_reference_resolves_to_standalone_guidance(tmp_path, mo
     state = project / f".codex/goals/{fixture.GOAL_ID}/ACTIVE_GOAL_STATE.md"
     before = state.read_bytes()
     rc, refused = fixture._run_cli(registry, runtime, "quota", "replan-view",
-        "--decision-file", str(invalid_path), "--source-hash", _canonical_digest(invalid),
+        "--decision-file", str(invalid_path), "--source-hash", _source_digest(invalid),
         "--replan-stage", "writeback", cwd=project)
     assert rc != 0
     assert "Explore guidance reference" in json.dumps(refused)

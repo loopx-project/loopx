@@ -225,6 +225,15 @@ function canonicalHash(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(canonicalValue(value)), "utf8").digest("hex")}`;
 }
 
+/** Complete references reuse the checked content binding. Historical captures
+ * retain their old JSON hash; never rewrite a stored action or Turn key. */
+function decisionSourceHash(payload: JsonObject): string {
+  if (payload.schema_version !== COMPLETE_TURN_DECISION_VERSION) return canonicalHash(payload);
+  const digest = object(payload.contract_binding).content_hash;
+  if (typeof digest !== "string") throw new EffectRuntimeRequestError("complete Turn decision content binding is missing");
+  return digest;
+}
+
 /** Existing acceptance carriers only: this is not a general JSON-path codec.
  * The loaded work context is preferred, then the complete planning/replan facts.
  */
@@ -663,7 +672,7 @@ function replanReadCommands(payload: JsonObject, path = payload.replan_read_path
     throw new EffectRuntimeRequestError("captured replan CLI route is malformed");
   }
   const command = `${argv.map(arg => shellQuote(arg as string)).join(" ")} --format json quota replan-view --decision-file ${shellQuote(path)}` +
-    ` --source-hash ${canonicalHash(payload)}`;
+    ` --source-hash ${decisionSourceHash(payload)}`;
   return {review: `${command} --replan-stage review`, writeback: `${command} --replan-stage writeback`,
     acceptance: `${command} --replan-stage acceptance`, explore: `${command} --replan-stage explore`};
 }
@@ -785,14 +794,14 @@ function bindReplanSuccessorContract(value: JsonObject, plan: JsonObject): JsonO
 
 function replanView(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured replan decision");
-  if (request.source_hash !== canonicalHash(payload) || payload.ok !== true) {
+  if (request.source_hash !== decisionSourceHash(payload) || payload.ok !== true) {
     throw new EffectRuntimeRequestError("Replan read requires the original successful decision and matching source hash");
   }
   // A matching file hash proves which bytes were read, not whether a modern
   // contract's version and inner binding are supported. Historical unversioned
   // captures keep their decoder; modern captures must pass their shared owner.
   if (Object.hasOwn(payload, "schema_version") || Object.hasOwn(payload, "contract_binding")) {
-    requireCompleteTurnDecision(payload);
+    requireCompleteTurnDecision(payload, request.source_number_tokens);
   }
   const packet = object(payload.replan_action_packet);
   const obligation = object(payload.autonomous_replan_obligation);
@@ -1569,25 +1578,33 @@ function requireCompleteDecisionSource(source: JsonObject): void {
   }
 }
 
-export function requireCompleteTurnDecision(value: unknown): JsonObject {
+function completeSourceHash(value: JsonObject, identity = contextSourceIdentity(value, [])): string {
+  return `sha256:${createHash("sha256").update(identity(value, []), "utf8").digest("hex")}`;
+}
+
+export function requireCompleteTurnDecision(value: unknown, numberTokens?: unknown): JsonObject {
   const decision = requireJsonObject(value, "complete Turn decision");
   if (decision.schema_version !== COMPLETE_TURN_DECISION_VERSION) {
     throw new EffectRuntimeRequestError("unsupported complete Turn decision version");
   }
   const binding = requireJsonObject(decision.contract_binding, "Turn contract binding");
+  if (binding.hash_codec !== "context_source_numbers_v1") {
+    throw new EffectRuntimeRequestError("unsupported complete Turn decision hash codec");
+  }
+  const identity = contextSourceIdentity(decision, numberTokens ?? []);
   if (typeof binding.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
   const unsignedBinding = {...binding};
   delete unsignedBinding.content_hash;
   const content = {...decision, contract_binding: unsignedBinding};
-  if (binding.content_hash !== canonicalHash(content)) {
+  if (binding.content_hash !== completeSourceHash(content, identity)) {
     throw new EffectRuntimeRequestError("complete Turn decision content integrity mismatch");
   }
   const source = {...decision};
   delete source.schema_version;
   delete source.contract_binding;
-  if (binding.source_decision_hash !== canonicalHash(source)) {
+  if (binding.source_decision_hash !== completeSourceHash(source, identity)) {
     throw new EffectRuntimeRequestError("complete Turn decision source integrity mismatch");
   }
   requireCompleteDecisionSource(source);
@@ -1598,11 +1615,11 @@ export function requireCompleteTurnDecision(value: unknown): JsonObject {
  * historical effect adapter may remain in the request during migration, but it
  * cannot redirect the complete contract to another Goal, Agent or work item. */
 function completeHostSource(request: JsonObject): {decision: JsonObject; projection: JsonObject} {
-  const decision = requireCompleteTurnDecision(request.payload);
+  const decision = requireCompleteTurnDecision(request.payload, request.source_number_tokens);
   const envelope = requireJsonObject(request.envelope, "complete Turn executor envelope");
   assertTurnEnvelopeConsumerVersion(envelope);
   const signature = object(envelope.action_signature);
-  if (signature.source_decision_hash !== canonicalHash(decision)
+  if (signature.source_decision_hash !== decisionSourceHash(decision)
       || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))
       || signature.source_hash !== signature.envelope_hash || signature.matches !== true) {
     throw new EffectRuntimeRequestError("complete Turn model input differs from captured executor source");
@@ -1644,7 +1661,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
-    const prior = requireCompleteTurnDecision(payload);
+    const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
       throw new EffectRuntimeRequestError("complete Turn decision cannot change its host binding");
     }
@@ -1654,7 +1671,7 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     throw new EffectRuntimeRequestError("complete Turn decision source contains reserved version/binding fields");
   }
   requireCompleteDecisionSource(payload);
-  const sourceIdentity = contextSourceIdentity(payload, request.source_number_tokens);
+  const sourceIdentity = contextSourceIdentity(payload, request.source_number_tokens ?? []);
   // A complete input must carry the original-Turn successor instructions that
   // used to exist only in the staged writer. Compose them before hashing and
   // capture; a later material read must not add a competing execution contract.
@@ -1702,8 +1719,9 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   requireCompleteDecisionSource(source);
   const result: JsonObject = {...source, schema_version: COMPLETE_TURN_DECISION_VERSION,
     contract_binding: {scheduler_execution_args: request.scheduler_execution_args,
-      source_decision_hash: canonicalHash(source)}};
-  result.contract_binding = {...object(result.contract_binding), content_hash: canonicalHash(result)};
+      hash_codec: "context_source_numbers_v1",
+      source_decision_hash: completeSourceHash(source, sourceIdentity)}};
+  result.contract_binding = {...object(result.contract_binding), content_hash: completeSourceHash(result, sourceIdentity)};
   return result;
 }
 
@@ -1716,7 +1734,7 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     );
   }
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
-    requireCompleteTurnDecision(payload);
+    requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(payload.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
       throw new EffectRuntimeRequestError("Turn adapter host binding differs from captured contract");
     }
@@ -1754,7 +1772,7 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
     source_hash: canonicalHash(sourceSignature),
     envelope_hash: canonicalHash(envelopeSignature),
     matches: JSON.stringify(sourceSignature) === JSON.stringify(envelopeSignature),
-    source_decision_hash: canonicalHash(payload),
+    source_decision_hash: decisionSourceHash(payload),
   };
   measureTurnEnvelope(envelope, payload);
   return envelope;
@@ -1765,6 +1783,16 @@ export function buildTurnEnvelope(value: unknown): JsonObject {
 function bindTurnDecisionCapture(request: JsonObject): JsonObject {
   const payload = requireJsonObject(request.payload, "captured decision");
   assertSupportedQuotaPacket(payload);
+  if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
+    try {
+      requireCompleteTurnDecision(payload, request.source_number_tokens);
+    } catch (error) {
+      if (!(error instanceof EffectRuntimeRequestError)) throw error;
+      throw new EffectRuntimeRequestError(
+        `Turn decision capture does not match the original observation: ${error.message}`, error.code);
+    }
+  }
+  const sourceHash = decisionSourceHash(payload);
   const envelope = requireJsonObject(request.envelope, "captured decision envelope");
   assertSupportedQuotaPacket(envelope);
   const path = scalarString(request.captured_decision_path, "capture path");
@@ -1775,7 +1803,7 @@ function bindTurnDecisionCapture(request: JsonObject): JsonObject {
       !ENVELOPED_SHA256_PATTERN.test(turnKey) || payload.ok !== true ||
       payload.goal_id !== envelope.goal_id ||
       object(payload.agent_identity).agent_id !== envelope.agent_id ||
-      signature.source_decision_hash !== canonicalHash(payload)) {
+      signature.source_decision_hash !== sourceHash) {
     throw new EffectRuntimeRequestError("Turn decision capture does not match the original observation");
   }
   const detail = object(envelope.detail_ref);
@@ -1937,7 +1965,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       ? contextProjectionChanges(requireJsonObject(request.payload, "complete Turn source"), result) : result;
   }
   if (operation === "complete_consumer") {
-    requireCompleteTurnDecision(request.payload);
+    requireCompleteTurnDecision(request.payload, request.source_number_tokens);
     return {ok: true};
   }
   if (operation === "validate_complete" || operation === "complete_host_lineage") {
