@@ -275,11 +275,11 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 if qualified_resume:
                     # Actual worker process exit/resume, qualified by the shared
                     # native-selected replay checkpoint. No old full prefetch.
-                    assert ("LoopX context baseline invalidated." in _input_text(request)) == bool(resume_loss)
+                    assert ("LoopX model-context baseline invalidated." in _input_text(request)) == bool(resume_loss)
                     stages["phase"] = "warm_ready"
                     cmd = invoke("warm")
                 else:
-                    assert "LoopX context baseline invalidated." in _input_text(request)
+                    assert "LoopX model-context baseline invalidated." in _input_text(request)
                     assert wires["cold"]["recovery"]["command"] in _input_text(request)
                     # Unqualified native histories still recover the exact
                     # original before continuing its dependent decision.
@@ -297,7 +297,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             # The native consumer must discover the next command from its
             # actual retained input. Disk reads below are independent expected
             # byte/state oracles, never a substitute for a truncated guard.
-            descriptor = _last_page(request)
+            descriptor = _last_page(request, allow_reference=True)
             assert descriptor and descriptor["ok"], "native guard is not complete model-visible JSON"
             assert descriptor == json.loads(wire_paths[name].read_bytes())
             assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= (native_guard_output_bytes or 64000)
@@ -308,12 +308,19 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             wires[name] = json.loads(wire_file.read_text())
             assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" or resume_loss else "delta")
             assert "Native input observation independently verifies" not in descriptor["instruction"]
-            if name == "warm" and not resume_loss:
+            if name == "warm" and not resume_loss and "content" in descriptor:
                 assert json.dumps(wires[name]["instruction"]).encode() in descriptor["content"].encode()
             capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
             snapshots.append((capture, capture.read_bytes()))
             read_paths[name] = Path(wires[name]["recovery"]["path"]) if wires[name]["mode"] == "full" else wire_file
-            stages["pages"] = ([descriptor["next_command"]] if not descriptor["eof"] else []) if bounded_pages else pages(name, read_paths[name])
+            if "content" not in descriptor:
+                # File-first delivery is a reference, not an already-read page.
+                # Discover the read from model-visible output, never from the
+                # independent disk oracle. Recovery after compaction remains
+                # governed by the same admitted Turn's working brief below.
+                stages["pages"] = [descriptor["command"]] if bounded_pages else pages(name, read_paths[name])
+            else:
+                stages["pages"] = ([descriptor["next_command"]] if not descriptor["eof"] else []) if bounded_pages else pages(name, read_paths[name])
             page_digests[name] = descriptor["sha256"]
             stages["phase"] = name + "_read"
             if not stages["pages"]:
@@ -361,7 +368,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 return message
             if hook_loss:
                 text = _input_text(request)
-                assert "LoopX context baseline invalidated." not in text
+                assert "LoopX model-context baseline invalidated." not in text
                 # The recovery entry must really be present after compaction;
                 # the fixture may not supply a hidden saved capture path.
                 prefix = "Before dependent action, recover missing or uncertain necessary facts"
@@ -372,7 +379,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 stages["phase"] = "lookup_read"
                 assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
                 return tool(cmd, number)
-            assert "LoopX context baseline invalidated." in _input_text(request)
+            assert "LoopX model-context baseline invalidated." in _input_text(request)
             assert wires["warm"]["recovery"]["command"] in _input_text(request)
             assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
             stages["phase"] = "recovered"

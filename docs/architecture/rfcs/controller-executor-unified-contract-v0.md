@@ -824,6 +824,13 @@ full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
 
+The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
+file deltas, capture refusal/recovery and once-only settlement. Source fidelity
+improves while cold and observer-output bytes grow on that workload. Exact-byte
+capture checks and standalone numeric hash integrity remain distinct; this
+engineering evidence does not establish net cost benefit or complete C1.
+
 Qualify [human interaction during execution](#human-interaction-during-execution)
 on the same long-running work, rather than disconnected chat demonstrations:
 

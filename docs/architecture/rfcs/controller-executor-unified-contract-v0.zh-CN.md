@@ -618,6 +618,12 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
 抵消 C1 回归。
 
+[打包来源对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
+固定 mainline quota 与 C1 候选版本，经真实 File/SQLite CLI 验证交付、文件差分、
+capture 拒绝/恢复及一次结算。本负载来源保真改善，冷态和观察器累计输出字节增加。
+精确字节 capture 校验与独立数值 hash 完整性仍是不同边界；这些工程证据不证明
+净成本收益，也不结清 C1。
+
 在同一长程工作上验收[执行期间的人机交互](#human-interaction-during-execution)，
 不能用脱离工作的独立聊天演示代替：
 
