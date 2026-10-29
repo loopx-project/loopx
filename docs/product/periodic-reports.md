@@ -632,6 +632,14 @@ not replay the failed attempt; a later due window can progress. A changed future
 plan is also allowed after retirement. Unknown model outcomes and partial or
 unknown sends cannot take this exit; they keep the original recovery boundary.
 
+Execution failure is visible even when it happens before an editorial response:
+the original steward and managed Session health expose `execution_failed` for
+the exact current actor, window and subscription revision. The steward settings
+show the retained failed execution instead of “Not generated”; the next calendar
+deadline is not a promise that the held window can run. This observation grants
+no cancellation, retirement or retry. A correlated quota continuation that
+succeeds clears the current failure projection while retaining its failed predecessor.
+
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |
 | ![Cancelled generation is not completed or delivered](../assets/personal-workspace/steward-reports/failed-window-cancelled.png) | ![Retained cancelled window in a narrow viewport](../assets/personal-workspace/steward-reports/cancelled-window-narrow.png) |

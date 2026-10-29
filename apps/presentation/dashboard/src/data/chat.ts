@@ -2768,7 +2768,7 @@ const privateConversationSchema = z.object({
         z.object({available: z.literal(true), enabled: z.boolean(), configured: z.boolean(),
           schedule: z.record(z.string(), z.unknown()).nullable().optional(), next_due_at: z.string().nullable().optional(),
           retained_window_due_at: z.string().nullable().optional(), generation_id: z.string().nullable().optional(),
-          delivery_status: z.string().optional(), publication_verified: z.boolean().optional(),
+          delivery_status: z.string().optional(), execution_failed: z.boolean().optional(), publication_verified: z.boolean().optional(),
           destination: z.string().optional()}),
         z.object({available: z.literal(false), error_code: z.string()}),
       ]).optional(),
