@@ -134,6 +134,15 @@ def test_complete_reader_requires_original_numeric_transport_before_validation()
             {"operation": "complete_consumer", "payload": contract})
 
 
+def test_retired_complete_echo_cannot_recreate_a_second_source_view():
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    from tests.control_plane.test_replan_host_context_projection import _quota_payload
+
+    contract = compose_turn_decision(_quota_payload())
+    with pytest.raises(RuntimeError, match="turn envelope operation is unsupported"):
+        _turn_envelope_result("validate_complete", payload=contract, envelope=build_turn_envelope(contract))
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_replan_reader_rejects_numeric_mutation_and_restores_original_source(tmp_path, monkeypatch, provider):
     from tests.control_plane.test_replan_successor_guard_reentry import _fixture, GOAL, AGENT, TURN

@@ -65,7 +65,7 @@ def _canonical_hash(value: Any) -> str:
 
 
 def _complete_host_source(
-    request: Mapping[str, Any], *, operation: str = "validate_complete",
+    request: Mapping[str, Any], *, operation: str = "host_context",
 ) -> dict[str, Any] | None:
     if "work_contract" not in request:
         return None

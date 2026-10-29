@@ -1968,9 +1968,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     requireCompleteTurnDecision(request.payload, request.source_number_tokens);
     return {ok: true};
   }
-  if (operation === "validate_complete" || operation === "complete_host_lineage") {
+  if (operation === "complete_host_lineage") {
     const decision = completeHostDecision(request);
-    if (operation === "validate_complete") return decision;
     return {goal_id: scalarString(decision.goal_id, "Turn Goal identity").trim(),
       agent_id: scalarString(object(decision.agent_identity).agent_id, "Turn Agent identity").trim(),
       todo_id: (selectedWorkTodoId(decision) ?? "").trim()};
