@@ -1799,6 +1799,7 @@ def test_controller_snapshot_retains_private_file_and_method_guards(
 ) -> None:
     import tempfile
 
+    from loopx.control_plane.runtime.private_permissions import protect_private_path
     from tests.test_loop_turn_loop_controller import _envelope
 
     monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
@@ -1808,14 +1809,15 @@ def test_controller_snapshot_retains_private_file_and_method_guards(
     assert info is not None
     with tempfile.TemporaryDirectory(prefix="loopx-effect-", dir=tmp_path) as directory:
         root = Path(directory)
+        protect_private_path(root, directory=True)
         params = root / "params.json"
         sink = root / "response.json"
         decision = _envelope(should_run=True)
         decision["work_context"] = {"text": "G" * 2_420_000}
         params.write_text(json.dumps({"operation": "disposition", "decision": decision, "receipt": None}))
         sink.touch()
-        params.chmod(0o600)
-        sink.chmod(0o600)
+        protect_private_path(params)
+        protect_private_path(sink)
         ref = {"schema_version": "loopx_effect_runtime_snapshot_v0", "path": str(params),
                "byte_count": params.stat().st_size, "sha256": hashlib.sha256(params.read_bytes()).hexdigest()}
 

@@ -157,11 +157,11 @@ def main():
                 release_worker.set()
                 if held_worker is not None:
                     held_worker.join(timeout=30)
+                    assert not held_worker.is_alive(), "fixture worker did not exit"
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
                 controller.close()
-                assert workers, "fixture did not observe its own launched worker"
                 drain_fixture_workers(workers)
         finally:
             for cleanup in reversed(cleanups):
