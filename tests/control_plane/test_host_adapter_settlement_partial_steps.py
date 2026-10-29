@@ -262,6 +262,15 @@ def test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt(
     # The spend receipt was committed before the failure, and the adapter left
     # nothing of its own behind it.
     assert readback.replay_phase == "settled"
+    assert readback.progress is not None
+    assert readback.progress["state"] == "settled"
+    # Only the spend stage was reached, so only its receipts exist. The
+    # validation receipt is committed even when the plan stops early.
+    assert _committed_receipt_kinds(readback) == [
+        "validation",
+        "durable_writeback",
+        "quota_spend",
+    ]
 
     calls.clear()
     replay = json.loads(
@@ -305,8 +314,12 @@ def test_a_raised_step_before_completion_commits_no_settlement(
     todo_id = str(added["todo_id"])
     control = _control(registry)
     original = control.run_cli
+    turn_instance_id = ""
 
     def raise_on_completion(args: list[str], **kwargs: object) -> str:
+        nonlocal turn_instance_id
+        if "--turn-instance-id" in args:
+            turn_instance_id = str(args[args.index("--turn-instance-id") + 1])
         if args[:2] == ["todo", "complete"]:
             raise RuntimeError("synthetic CLI transport failure before completion")
         return original(args, **kwargs)  # type: ignore[arg-type]
@@ -331,3 +344,120 @@ def test_a_raised_step_before_completion_commits_no_settlement(
         for item in todos["agent_todos"]["items"]
     }
     assert by_id[todo_id]["status"] == "open"
+
+    # The guard already ran, so the validation receipt is committed. No
+    # lifecycle completion, writeback or spend receipt exists, and the
+    # settlement is still open rather than pending.
+    readback = read_heartbeat_settlement(
+        tmp_path / "runtime",
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=todo_id,
+        turn_instance_id=turn_instance_id,
+    )
+    assert readback is not None
+    assert readback.replay_phase == "open"
+    assert readback.progress is not None
+    assert readback.progress["state"] == "writeback_required"
+    assert _committed_receipt_kinds(readback) == ["validation"]
+
+
+def _raise_after_step(
+    tmp_path: Path,
+    step_prefix: tuple[str, ...],
+) -> tuple[Path, str, str]:
+    """Complete a Todo whose transport fails just after ``step_prefix`` commits.
+
+    Returns the runtime root, the Todo id and the turn instance id the plan used,
+    so the caller can read back the receipts the CLI already committed.
+    """
+    registry, _ = _write_fixture(tmp_path)
+    added = add_goal_todo(
+        registry_path=registry,
+        goal_id=GOAL_ID,
+        role="agent",
+        text="Characterize the partial-step recovery boundary.",
+        task_class="advancement_task",
+        claimed_by=AGENT_ID,
+    )
+    todo_id = str(added["todo_id"])
+    control = _control(registry)
+    original = control.run_cli
+    turn_instance_id = ""
+    injected = False
+
+    def raise_after_commit(args: list[str], **kwargs: object) -> str:
+        nonlocal turn_instance_id, injected
+        if "--turn-instance-id" in args:
+            turn_instance_id = str(args[args.index("--turn-instance-id") + 1])
+        output = original(args, **kwargs)  # type: ignore[arg-type]
+        if not injected and tuple(args[: len(step_prefix)]) == step_prefix:
+            injected = True
+            raise RuntimeError("synthetic CLI transport failure after commit")
+        return output
+
+    control.run_cli = raise_after_commit  # type: ignore[assignment]
+    with pytest.raises(RuntimeError, match="synthetic CLI transport failure"):
+        control.complete_task(
+            todo_id,
+            AGENT_ID,
+            "partial-step fixture check passed",
+            no_follow_up=True,
+        )
+    return tmp_path / "runtime", todo_id, turn_instance_id
+
+
+def _committed_receipt_kinds(readback: object) -> list[str]:
+    """The receipt kinds the CLI committed, in settlement order."""
+    return [
+        receipt.step_kind.value
+        for result in (
+            readback.identity,  # type: ignore[attr-defined]
+            readback.writeback,  # type: ignore[attr-defined]
+            readback.spend,  # type: ignore[attr-defined]
+        )
+        for receipt in result.receipts
+    ]
+
+
+@pytest.mark.parametrize(
+    ("step_prefix", "expected_replay_phase", "expected_state", "expected_receipt_kinds"),
+    [
+        (("quota", "should-run"), "open", "writeback_required", ["validation"]),
+        (("todo", "complete"), "settlement_pending", "writeback_required", ["validation"]),
+        (
+            ("refresh-state",),
+            "settlement_pending",
+            "spend_required",
+            ["validation", "durable_writeback"],
+        ),
+        (
+            ("quota", "spend-slot"),
+            "settled",
+            "settled",
+            ["validation", "durable_writeback", "quota_spend"],
+        ),
+    ],
+)
+def test_a_raised_step_after_a_durable_commit_leaves_only_that_stage_pending(
+    tmp_path: Path,
+    step_prefix: tuple[str, ...],
+    expected_replay_phase: str,
+    expected_state: str,
+    expected_receipt_kinds: list[str],
+) -> None:
+    """Each durable stage leaves exactly its own receipt behind."""
+    runtime_root, todo_id, turn_instance_id = _raise_after_step(tmp_path, step_prefix)
+
+    readback = read_heartbeat_settlement(
+        runtime_root,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        todo_id=todo_id,
+        turn_instance_id=turn_instance_id,
+    )
+    assert readback is not None
+    assert readback.replay_phase == expected_replay_phase
+    assert readback.progress is not None
+    assert readback.progress["state"] == expected_state
+    assert _committed_receipt_kinds(readback) == expected_receipt_kinds
