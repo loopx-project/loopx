@@ -637,3 +637,39 @@ Converge at the C1 boundary that already receives the complete source, validatin
 references against original IO values before replacement. Keep the existing
 legacy caller until that usable replacement qualifies; do not add another reader
 or restore mandatory outcome scopes while adopting file-first delivery.
+
+## Source-preserving display transport follow-through
+
+The independent normal proposal [#7643](https://github.com/loopx-project/loopx/pull/7643),
+head `0212a1f2e` on main `5d7f0a61b`, removes a separate source-preservation defect:
+reference-only context sharing returned the entire JavaScript-decoded payload
+when diagnostic caps were absent. Eight numeric regression cases and an
+untouched-material response check fail on that unchanged base. Both callers now
+use the existing typed edit plan and original IO facts, preserving numeric
+spelling, nested facts, immutability and repeated application with one request.
+The same change is absorbed in C1 `fd65514e7`; it does not add another owner.
+
+The exact frozen requests remain byte-identical before/after. With 8,000,
+64,000 and 256,000 bytes of untouched synthetic supporting material, owner
+response payloads change from 31,853 / 87,853 / 279,853 bytes to 388 bytes in
+each reference-only case. The diagnostic control stays at 7,659 bytes. The
+model-visible views retain their content and grow nine bytes to preserve the
+original numeric spelling. These are local transport observations, not model
+token, latency, installed-client or complete-cost qualification; budgets are
+unchanged. The proposal passes 176 Python cases, including isolated real
+File/SQLite CLI and staged reads, 74 TypeScript cases and standard premerge.
+Configured mypy passes 17 files; three errors in an extra CLI-file typing check
+reproduce on base and head. Readback tests use the existing source signature
+and reject a mutated capture; the runtime hash codec is unchanged.
+The separate C1 integration cohort passes 255 Python and 94 TypeScript cases,
+control-plane typecheck, configured mypy and Ruff. This affected cohort does not
+replace the earlier whole-path or budget evidence.
+
+After absorption, the adapted #7633 assertions still produce **eight failures
+out of ten** through C1 display/CLI, plus **four out of five** through complete
+composition. The edit transport preserves untouched facts; it cannot repair an
+earlier incorrect reference decision. These remain adapted assertion probes,
+not passing unchanged cohorts. C1 stays Draft with the original budget,
+writer/caller/reader retirement, numeric-reference and outcome/full-cost gaps.
+Continue at the owner already holding the complete source, without resending
+duplicate legacy bodies or introducing another required reader.
