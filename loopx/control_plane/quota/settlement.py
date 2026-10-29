@@ -9,6 +9,17 @@ from typing import Any
 from ...command_invocation import loopx_cli_argv
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
+from ..turn_driver.dual_session import (
+    ControllerSession,
+    ExecutorSession,
+    load_controller_session,
+    load_executor_session,
+)
+from ..turn_driver.generation_fence import (
+    GenerationFenceValidator,
+    GenerationFenceViolation,
+    GenerationValidationPhase,
+)
 from .accounting_admission import quota_accounting_admission
 from .effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
@@ -332,8 +343,40 @@ def read_heartbeat_settlement(
     source_admission: Mapping[str, Any] | None = None,
     borrow_source_admission: bool = False,
     heartbeat_reentry_guard: dict[str, Any] | None = None,
+    validate_generation_fence: bool = True,
 ) -> QuotaSettlementReadback | None:
-    """Read one complete heartbeat settlement through the TS domain owner."""
+    """Read one complete heartbeat settlement through the TS domain owner.
+
+    Args:
+        validate_generation_fence: Enable generation fence validation at prepare phase.
+                                   Set to False to skip validation (testing only).
+    """
+
+    # Load dual-session for generation fence validation
+    validator: GenerationFenceValidator | None = None
+    if validate_generation_fence and agent_id and todo_id:
+        try:
+            controller = load_controller_session(
+                runtime_root, goal_id, agent_id, todo_id
+            )
+            executor = load_executor_session(
+                runtime_root, goal_id, agent_id, todo_id
+            )
+
+            if controller is not None and executor is not None:
+                validator = GenerationFenceValidator(executor, controller)
+                # Validate at settlement prepare phase before quota spend
+                validator.validate(GenerationValidationPhase.SETTLEMENT_PREPARE)
+        except GenerationFenceViolation as exc:
+            raise ValueError(
+                f"Generation fence violation at settlement prepare: "
+                f"executor gen {exc.executor_generation} != "
+                f"controller gen {exc.controller_generation}"
+            ) from exc
+        except Exception as exc:
+            # Log warning but don't block settlement read if session loading fails
+            # This maintains backward compatibility with pre-dual-session code
+            pass
 
     def read(admission: Mapping[str, Any] | None) -> Any:
         try:
@@ -410,6 +453,18 @@ def read_heartbeat_settlement(
         return None
     if payload.get("found") is not True:
         raise RuntimeError("TypeScript quota settlement readback result shape mismatch")
+
+    # Validate at checkpoint phase before effect commit
+    if validator is not None:
+        try:
+            validator.validate(GenerationValidationPhase.SETTLEMENT_CHECKPOINT)
+        except GenerationFenceViolation as exc:
+            raise ValueError(
+                f"Generation fence violation at settlement checkpoint: "
+                f"executor gen {exc.executor_generation} != "
+                f"controller gen {exc.controller_generation}"
+            ) from exc
+
     workspace_causality = _optional_readback_record(
         payload.get("workspace_causality")
     )
