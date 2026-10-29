@@ -1332,6 +1332,57 @@ model compliance, runtime recovery or lower cost.
 4,000 字符宿主硬边界、既有 JSON/正文夹具上限及执行权限不变；不据此声称节省
 输出、恢复运行或改善模型行为。
 
+Earlier pre-integration PR measurements (the source revisions below retain their own limits and failures):
+
+The thin heartbeat JSON failure carried by `8caaf678e` also reproduces after
+integrating main `c38b3a1a6`: 4,607 characters against the 4,600 fixture ceiling.
+At rebased head `9bea38cd4`, the ordinary thin dispatch rule matches that main. On the same public
+fixture, substituting only `HOST_LOOP_QUOTA_DISPATCH_RULE` from the immutable
+parent of `1d5d2d0f6` emits 4,544 characters. The complete current rule emits
+4,607, and replacing that rule in the current body produces the entire old
+body exactly: the sole 63-character change teaches a known Todo choice before
+the first current guard. This resolves the earlier unproven layout attribution;
+it is authored guidance, not unexplained path growth. The original pytest
+isolation namespace adds 51 emitted path characters to the default output
+(4,658); its supported 320-character scope adds another 289 (4,947). Capture
+those unmodified outputs rather than truncating scope or normalizing raw stdout.
+The initial 4,650 attempt failed both original tests and remains a failure.
+The broader agent-input suite exposed missing failed-preflight/guard guidance
+in ordinary thin and incomplete compact/brief peer guidance. Restore main's
+complete peer rule and explicit claim command in compact/brief. For ordinary
+thin, state no work/spend after failure, repair within authority and retry the
+original Turn. This adds 89 body characters, 90 in JSON: the complete supported
+fixture emits 5,037. Set its three JSON ceilings to 5,100 (63 headroom), retaining
+all earlier failures. A second CLI fixture with the same 320-character scope
+and three observed capabilities measures 4,485 -> 4,574 normalized characters;
+raise the generic thin presentation budget 4,500 -> 4,600 (26 headroom) rather
+than deleting those obligations. Align both exact metadata assertions with the
+owner, including the full-scope test's stale 4,200 expectation from before
+main's `7a2421ec89`. Keep full scope, within-budget and all independent authority,
+outcome-update and root-continuation assertions. Markdown also measures
+6,136 -> 6,225 with this 89-character clause: retain the 6,200 failure and set
+the three thin Markdown ceilings to 6,300 (75 headroom). Line, growth and
+native transport checks remain independent; the native Goal host limit stays
+4,000. These measured adjustments do not prove model adoption or premerge.
+
+thin heartbeat 的4,607>4,600在整合 main `c38b3a1a6` 后仍复现；其生产源码
+与该main相同。同一公开夹具仅换成 `1d5d2d0f6` 父版本的 dispatch 指引，
+输出为4,544；当前为4,607，正文除这63字符外逐字符一致。新增内容用于首次
+guard前传入已知Todo选择。pytest隔离目录另增加51个原始JSON路径字符，默认为
+4,658；已支持的320字符scope再增289，为4,947。初次4,650校准被两个原测试
+拒绝，失败保留；不缩短scope或归一化原始stdout。以上与main相同指重放后
+`9bea38cd4`的普通thin dispatch规则，后续检查发现普通thin缺少失败禁执行指引，compact/brief的peer
+简写也缺少完整规则。compact/brief恢复main的完整peer规则和claim命令；普通thin
+补充失败后不执行/扣费、权限内修复并重试原Turn。正文增加89字符，JSON增加90，
+完整夹具实测5,037，三个thin JSON预算设为5,100，留63字符。另一CLI夹具在同样
+320字符scope及三个已观察能力下，归一化正文4,485→4,574；通用thin展示预算
+4,500→4,600，留26字符，保留全部义务和历史失败。两处精确元数据断言随owner
+对齐，包括完整scope用例遗留的4,200预期（main的`7a2421ec89`已改为4,500）。
+完整scope、within-budget、权限、方向和根继续语义断言保留；Markdown实测
+6,136→6,225，正好增加该89字符条款，保留6,200失败，三个thin Markdown预算
+设为6,300，留75字符。行数、增长及原生传输检查独立，原生Goal宿主限制仍为4,000。这些调整不证明模型采纳
+或整体premerge通过。
+
 The native first-admission qualification at `ff1c8a947` uses the same public
 fixture populations, interpreter, Node version, physical path layout and shared
 probe on target main `8caaf678e` and head. The three quota JSON outputs measure

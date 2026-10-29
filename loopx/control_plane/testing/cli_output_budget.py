@@ -322,10 +322,16 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # chars, retaining the original Turn, due time and fresh admission.
             # All three scenarios now emit 4,853 / 6,969 chars and 63 Markdown
             # lines. Preserve historical misses; retain complete instructions,
-            # the current 4,500 body allowance and unchanged line/growth guards.
-            "small": {"json": 5_000, "markdown": 7_100},
-            "crowded": {"json": 5_000, "markdown": 7_100},
-            "multi_agent": {"json": 5_000, "markdown": 7_100},
+            # the target's Markdown and unchanged line/growth guards. At c38,
+            # the real full-scope pytest input plus restored failed-guard
+            # guidance measured 5,037 JSON / 6,225 Markdown chars; retain its
+            # 4,650 JSON and 6,200 Markdown failures. Keep that JSON ceiling
+            # and the target's larger Markdown ceiling for the combined rule.
+            # Body/transport limits remain independently owned by heartbeat
+            # budget and native host; qualify the complete merged fixture.
+            "small": {"json": 5_100, "markdown": 7_100},
+            "crowded": {"json": 5_100, "markdown": 7_100},
+            "multi_agent": {"json": 5_100, "markdown": 7_100},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},

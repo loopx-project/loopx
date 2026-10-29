@@ -718,6 +718,7 @@ P0 blocked -> admitted P1/P2; quiet polls do not spend.
 {render_turn_bootstrap()}
 {pr_review_pre_quota_instruction}{quota_guard_command}
 ```
+Failed preflight/guard: no work/spend. Repair within authority; retry the original Turn.
 {HEARTBEAT_NOTIFICATION_RULE_SHORT}
 {SCOPE_BOUNDED_WORK_RULE}
 {RUNTIME_CAPABILITY_PROJECTION_THIN_RULE}
