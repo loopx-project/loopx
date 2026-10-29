@@ -1,7 +1,7 @@
 # C4.3 adapter partial-step characterization
 
-- Parent: [controller/executor RFC, C4.3](2026-10-27-refactor-handoff.md#c43--settlement-adapters-over-existing-primitives).
-- Baseline: `2a2323756`, 2026-10-29. The settlement owners are unchanged at `fb331f45`.
+- Parent: [controller/executor RFC, C4.3](2026-10-27-refactor-handoff.md#c43-settlement-adapters-over-existing-primitives).
+- Baseline: `f2990e3de`, 2026-10-29. The settlement owners are unchanged at `3a350c871`.
 - Status: characterization only. No runtime, schema, wire or default change.
 - Follows: [C4.3 settlement obligation comparison](2026-10-29-c4-3-settlement-obligation-comparison.md).
 - [Chinese mirror](2026-10-29-c4-3-adapter-partial-step-characterization.zh-CN.md).
@@ -24,10 +24,12 @@ starts from measured behavior rather than from the comparison's wording.
 | A step returns output the adapter cannot read | `_provider_condition_matches` treats a non-JSON output as a condition that did not match, so the plan stops after that step | The finalize phase still runs and the owner classifies the stop: `blocked`, `failed_stage: guard`, reason `quota guard returned malformed JSON` |
 | A step raises | The exception propagates out of the adapter. The finalize phase never runs, so the transaction is never classified. The adapter keeps no record of the step that already succeeded | Nothing is classified, because the owner is never asked |
 | A retry after a raise | The adapter re-enters the plan at its first step and never resumes mid-plan | The identity is re-derived from the same intent, so the same settlement identity is used |
-| A step raises after a durable commit | The adapter leaves nothing behind; the CLI's canonical receipt store holds the committed receipt | The readback reports `settled`; the retry replays that receipt (`idempotent_replay`), spends no second slot and reports the same settlement identity |
-| A step raises before the lifecycle completion | Nothing is spent and the Todo stays open | No settlement receipt exists to replay |
+| A step raises before the lifecycle completion | Nothing is spent and the Todo stays open | The guard already ran, so the `validation` receipt is committed. The readback is `open` with progress `writeback_required`; there is no lifecycle completion, writeback or spend receipt to replay |
+| A step raises after the lifecycle completion | The adapter leaves nothing behind; the CLI's canonical receipt store holds the committed receipt | The readback is `settlement_pending` with progress `writeback_required`: `validation` is committed, the writeback and spend receipts are missing |
+| A step raises after the durable writeback | The adapter leaves nothing behind; the CLI's canonical receipt store holds the committed receipt | The readback is `settlement_pending` with progress `spend_required`: `validation` and `durable_writeback` are committed, the spend receipt is missing |
+| A step raises after the quota spend | The adapter leaves nothing behind; the CLI's canonical receipt store holds the committed receipt | The readback is `settled`; the retry replays that receipt (`idempotent_replay`), spends no second slot and reports the same settlement identity |
 
-Two findings follow from these cases.
+Three findings follow from these cases.
 
 1. **The adapter makes no classification decision.** A stopped plan is
    classified by the TypeScript owner; a raised step is not classified at all,
@@ -36,6 +38,12 @@ Two findings follow from these cases.
    raise, the only durable evidence is what the CLI already committed. The
    retry succeeds because that receipt replays, and the adapter contributes
    nothing but a re-execution of the plan.
+3. **The outstanding work is named by the owner, stage by stage.** The
+   readback distinguishes an open settlement from a pending one and names the
+   step still owed — `writeback_required` after the lifecycle completion,
+   `spend_required` after the durable writeback, `settled` after the spend.
+   A raise is therefore not a single undifferentiated failure state, and the
+   committed receipt kinds tell which stage a retry would resume from.
 
 ## Evidence
 
@@ -43,6 +51,10 @@ Two findings follow from these cases.
 
 - `test_an_unreadable_step_output_stops_the_plan_and_the_owner_classifies_it`
 - `test_a_raising_step_leaves_no_finalize_and_no_adapter_local_resume`
+- `test_a_raised_step_after_a_durable_commit_leaves_only_that_stage_pending`
+  (real CLI, real quota store; parametrized over the guard, lifecycle
+  completion, durable writeback and quota spend stages, reading back the
+  committed receipt kinds, the replay phase and the settlement progress)
 - `test_a_raising_step_after_a_durable_commit_recovers_through_the_cli_receipt`
   (real CLI, real quota store)
 - `test_a_raised_step_before_completion_commits_no_settlement` (real CLI)
@@ -67,6 +79,13 @@ through a raised transport instead.
 
 ## Next slices
 
-Unchanged by this entry. A deletion of the adapter-side interpreter still
-needs the preconditions recorded in the comparison entry, and vocabulary
-unification still needs a caller that adopts both paths.
+Unchanged by this entry, with one correction to how the remaining work is
+described. A deletion of the adapter-side interpreter still needs the
+preconditions recorded in the comparison entry. The vocabulary candidate that
+the confirmation entry withdrew — one typed owner for `guard`,
+`lifecycle_completion` and `validation` — is not reopened here: that entry
+already identified the shipped caller that adopts both paths and recorded the
+candidate as withdrawn. The slice that remains open is the shared owner for
+the ordered host-adapter step kinds, proposed in
+[#7619](https://github.com/loopx-project/loopx/pull/7619). That is a registry
+slice, not a continuation of the withdrawn unification.
