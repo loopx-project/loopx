@@ -45,7 +45,8 @@ def delivered_context(request, digest):
     return raw.decode().rstrip("\n")
 
 
-def last_context_page(request):
+def last_context_page(request, *, allow_reference=False):
+    """Observe the latest tool result; a saved-file reference is not a page."""
     for item in reversed(request["input"]):
         output = item.get("output")
         parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
@@ -56,10 +57,18 @@ def last_context_page(request):
                 value = json.loads(part.split("\nOutput:\n", 1)[-1])
                 if isinstance(value, dict) and value.get("exit_code") == 0:
                     value = json.loads(value["output"])
-                if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
+                if isinstance(value, dict) and (
+                    value.get("schema_version") == "context_capture_page_v1"
+                    or (allow_reference and value.get("mode") in {"full", "delta"}
+                        and all(key in value for key in ("path", "sha256", "command", "target", "recovery")))
+                ):
                     return value
             except (ValueError, KeyError):
-                continue
+                return None
+        if output is not None:
+            # An earlier valid response cannot repair a missing or malformed
+            # current result in the model's input.
+            return None
     return None
 
 
