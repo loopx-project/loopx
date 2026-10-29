@@ -1332,6 +1332,44 @@ model compliance, runtime recovery or lower cost.
 4,000 字符宿主硬边界、既有 JSON/正文夹具上限及执行权限不变；不据此声称节省
 输出、恢复运行或改善模型行为。
 
+The native first-admission qualification at `ff1c8a947` uses the same public
+fixture populations, interpreter, Node version, physical path layout and shared
+probe on target main `8caaf678e` and head. The three quota JSON outputs measure
+23,287→28,057 / 35,553→42,997 / 25,562→27,694 characters (small / crowded /
+multi-agent); a separate focused pytest small case measured 28,343. Preserve
+the original 25,000 / 42,000 / 26,500 ceiling failures. The added carriers bind
+the original Turn and work read, expose replan choices when selection is owed,
+and report the existing admission recall result. For the small case, compact
+field values add 857 characters for the heartbeat receipt, 2,052 for the work
+context and 1,745 for recall; the observed whole-output delta is 4,770, including
+field names, punctuation and other changed projections. These field costs use
+compact JSON, while the shared probe's standalone carrier metrics include
+normal JSON separators; do not mix their sums.
+
+Retain the complete decision clauses and identity/source facts. Calibrate only
+these synthetic JSON ceilings to 29,000 / 44,000 / 28,500, leaving 657 / 1,003 /
+806 characters above the largest observed case for each scenario. Markdown,
+line, per-Todo/fixed-growth, differential migration and production transport
+limits stay unchanged. The measurement-only 96-row comparison has no growth
+failures and 12 review signals; it does not certify absolute budgets or replace
+the enforced candidate tests. Both revisions also exceed the thin heartbeat
+fixture's existing 4,600-character ceiling by seven characters in this layout;
+that separate baseline gap remains open. One sequential full-probe pair took
+130.9/291.5 seconds, and the focused quota pair took 2.45/6.57, 1.67/4.98 and
+2.08/4.92 seconds. These are observed added costs, not a sustained latency or
+model-token qualification; no output saving is claimed.
+
+原生首次准入在同一公开负载与路径布局上的 quota JSON 为 small
+23,287→28,057、crowded 35,553→42,997、multi-agent 25,562→27,694 字符；
+另一次聚焦 pytest 的 small 为28,343。保留原25,000 / 42,000 / 26,500超限
+失败，仅将这三个合成 JSON 回归预算校准为29,000 / 44,000 / 28,500。
+新增内容承载原 Turn、原工作读依据、必要的重规划选择与已有 recall 结果；
+不删除决策条款，不改变 Markdown、行数、增长门、生产传输或执行权限。
+96行测量差分无增长失败、12项待复审，但不等于绝对预算已通过。两个版本在此
+布局的 thin heartbeat 均为4,607>4,600，该独立基线缺口继续保留。
+整批130.9/291.5秒及三个聚焦场景的新增耗时均保留，不据此宣称节省 token、
+持续性能达标或模型行为改善。
+
 The fixed visible-Goal host fixture's 3,200-character regression guard predates
 `1d5d2d0f6`, which adds the known Todo choice to the first current guard. On the
 same four host inputs at `b201da8ba`, substituting only the pre-change dispatch
