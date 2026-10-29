@@ -103,6 +103,16 @@ def turn_envelope_replan_settlement_identity(
     return dict(identity)
 
 
+def turn_envelope_scoped_settlement_identity(
+    envelope: Mapping[str, Any], *, turn_instance_id: str | None,
+) -> dict[str, Any] | None:
+    identity = _turn_envelope_result("scoped_settlement_identity", envelope=dict(envelope),
+                                    turn_instance_id=turn_instance_id).get("identity")
+    if identity is not None and not isinstance(identity, Mapping):
+        raise RuntimeError("TypeScript Turn settlement identity must be an object")
+    return dict(identity) if identity is not None else None
+
+
 def build_turn_envelope(
     payload: Mapping[str, Any],
     *,
@@ -165,6 +175,11 @@ def bind_turn_decision_capture(
         turn_instance_id=turn_instance_id, turn_key=turn_key,
         **({"reader_argv": reader_argv} if reader_argv is not None else {}),
     )
+
+
+def plan_progressive_context(payload: Mapping[str, Any], *, surface: str) -> dict[str, Any]:
+    """Typed presentation edits; the source JSON and all work authority stay intact."""
+    return _turn_envelope_result("progressive_context_plan", payload=dict(payload), surface=surface)
 
 
 def prepare_context_delivery(

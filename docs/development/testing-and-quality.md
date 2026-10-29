@@ -1535,6 +1535,26 @@ failure; the installed-profile smoke and semantic assertions qualify the repair.
    or promotion thresholds stay fixed for that result; revised thresholds belong
    to a new qualification, never a relabeled historical pass.
 
+Native progressive-context qualification found an existing default-output
+budget failure: immutable base `fb331f45c` and candidate `edbd56b14` both emit
+25,836 JSON characters for `quota_should_run/multi_agent` with the unchanged
+18-Todo, 3-Agent, 12-run fixture. Recursive comparison differs only in observation
+timestamps and the rollout event id. This is neither an incremental native-off
+regression nor evidence of a saving. Preserve the previous 25,500-ceiling failure;
+calibrate this one regression allowance to 26,500 (664 characters of headroom)
+without dropping fields. Markdown, line, semantic, bootstrap duplication,
+per-Todo/fixed growth and all other surface ceilings remain unchanged. This
+changes no host hard limit, authorized execution quota or frozen experiment
+criterion. Native-on material and recovery savings need separate qualification.
+
+原生渐进上下文资格检查发现已有默认输出超限：不可变 base `fb331f45c` 与 candidate
+`edbd56b14` 在相同 18 个 Todo、3 个 Agent、12 条运行记录夹具上，
+`quota_should_run/multi_agent` 都为 25,836 JSON 字符；递归对比只有观察时间和
+rollout event id 不同。这不是 native-off 新增回归，也不是节省证据。保留旧 25,500
+阈值失败，只将这一回归预算校准为 26,500，留 664 字符余量，不删除字段。Markdown、
+行数、语义、bootstrap 重复、每 Todo/固定增长及其他 surface 阈值不变；宿主硬限制、
+授权执行配额和冻结实验标准均不变。Native-on 材料和恢复收益须单独验证。
+
 The initial-delivery guidance change measured the same 96-row fixture at
 `f6cf9583794eb8c4cca41fa832a1c2f150059583` and
 `da01f996c820aad3bae85268963e64c6bbb19d7c`. The complete instruction adds
@@ -1559,6 +1579,26 @@ not a real model's adoption, benchmark improvement or additional execution quota
 578 个字符，行数不变。保留现有消费者与完整质量、诊断和权限义务，仅对上述输出
 载体从缺失到完整指引的首次变化给予 2400/3600/600 的有界额度；绝对上限、语义、
 规模及后续增长检查不变。原失败保留；不据此声称模型采用、实验增益或额外执行权限。
+
+The thin heartbeat's complete first-guard selection guidance also needs its
+supported 320-character authored scope. At immutable main `b47bbc6c9`, the
+unchanged public CLI fixture emits 4,243 JSON characters with the default scope
+and 4,532 with the full supported scope; the latter fails the old 4,500 regression
+ceiling. Keep that failure and all instruction text. Calibrate only this
+surface's JSON ceiling to 4,600, leaving 68 characters of headroom at the supported
+scope. The candidate must emit the same JSON and task body on that same fixture;
+this is a budget decision, not an output reduction. The presentation calculation
+remains 4,181 / 4,200 characters for that body (distinct from its raw 4,276-character
+string). Markdown, line, growth, semantic and frozen differential/promotion
+limits remain unchanged. No execution, spending, host loading or permission
+limit changes.
+
+thin 心跳保留完整的首次 guard 选择指引与受支持的 320 字符 scope。相同公开 CLI
+夹具在固定主干上分别输出 4,243 / 4,532 个 JSON 字符，后者仍记录为旧 4,500
+回归预算失败。仅将该 surface 的 JSON 预算校准为 4,600，留 68 字符余量；候选
+必须保持同一夹具的 JSON 与正文不变，不宣称压缩收益。正文展示口径仍为
+4,181 / 4,200，与 raw string 的 4,276 字符分列；Markdown、行数、增长、语义、
+冻结差分与晋级标准、执行额度和权限均保持原边界。
 
 The latest qualification pins true main `e47e4507a` and merged candidate
 `3955d1c8b` on the same public fixture, with explicit per-probe source imports.

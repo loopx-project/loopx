@@ -64,7 +64,8 @@ try {
     if (body?.operation !== "read" || body.operation_id !== "accepted-analysis") return route.fallback();
     api.loopxModeRequests.push({sessionId: configured.sessionId, ...body});
     return checkUnavailable ? route.fulfill({status: 409, json: {error: "delegation output changed during validation"}})
-      : route.fulfill({json: {...legacyReadback, validation}});
+      : route.fulfill({json: {...legacyReadback,
+        ...(validation.source === "request_validation" ? {todo_id: null} : {}), validation}});
   };
   await page.route("**/api/chat/sessions/*/loopx", checkedRead);
   const recheck = evidence.getByRole("button", {name: "重新检查交付", exact: true});
@@ -90,6 +91,13 @@ try {
   await checkObservation.getByText(outputVersions[1].sha256, {exact: true}).scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "team-checked-output-mobile.png"), animations: "disabled"});
   await page.setViewportSize({width: 1512, height: 980});
+  validation = {...currentValidation, source: "request_validation", pinned_file_count: 0};
+  await recheck.click();
+  await original().waitFor();
+  await evidence.getByText("本次验收依据", {exact: true}).click();
+  await checkObservation.getByText("请求独立验收规则", {exact: false}).waitFor();
+  assert.doesNotMatch(await checkObservation.innerText(), /任务验收规则|Task validation rules/,
+    "An independently validated original request must not claim a Todo validation basis");
   // Another version's witness must never appear as a check of this report.
   validation = {...validation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
   await recheck.click();

@@ -7,6 +7,7 @@ import {
   settlementBindReduce,
   settlementReceipt,
   settlementIdentity,
+  executionRequestSubject,
   settlementIdentityPayload,
   settlementPlanPayload,
   settlementResultPayload,
@@ -103,6 +104,7 @@ function settlementIdentityInput(
       input.replan_obligation_id,
       `${label}.replan_obligation_id`,
     ),
+    ...(input.request_subject === undefined ? {} : {request_subject: executionRequestSubject(input.request_subject)}),
   };
 }
 
@@ -609,6 +611,8 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.delegation.binding", lazyHandler(() => import("./collaboration/delegation.ts"), ({selectDelegationBinding}) => selectDelegationBinding)],
     ["collaboration.delegation.source_replay", lazyHandler(() => import("./collaboration/delegation.ts"), ({verifyDelegationSourceReplay}) => verifyDelegationSourceReplay)],
+    ["collaboration.delegation.request_decision", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationRequestDecision}) => delegationRequestDecision)],
+    ["collaboration.delegation.request_subject", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationRequestSubject}) => params => delegationRequestSubject(requiredObject(params.entry, "request entry"), requiredObject(params.binding, "binding"), params.expected))],
     ["collaboration.delegation.turn_context", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationTurnWorkContext}) => delegationTurnWorkContext)],
     ["turn.selection.rejection", lazyHandler(() => import("./turn_driver/selection_rejection.ts"), ({projectTurnSelectionRejection}) => projectTurnSelectionRejection)],
     ["collaboration.delegation.preflight", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationPreflight}) => delegationPreflight)],

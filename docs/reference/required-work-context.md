@@ -77,9 +77,71 @@ Marked sources retain their generated-region lineage and canonical Todo authorit
 Native delta delivery and source fulfillment share the same integrity predicate.
 Only exact verified Goal text can be inherited from the retained baseline;
 current source witnesses and unknown fields remain literal. Cold delivery and
-context-loss recovery retain the complete original text, including arbitrary
-sections, comments and final stops. This does not establish model retention,
-execution authority, token savings or accepted outcome gains.
+full-capture recovery retain the complete original text, including arbitrary
+sections, comments and final stops.
+
+Enabled native quota delivery separates known acceptance requirements from their
+supporting material before full/delta presentation. The TypeScript acceptance
+projection keeps every scoped outcome objective, requirement description,
+review conclusion, current-basis flag, independent-verification flag, work link
+and source revision inline. Outcome source history and Agent review notes/evidence
+references remain in the immutable original capture. Each projected outcome has
+a `supporting_material_pointer`; `context_details` supplies the original path,
+SHA-256 and `quota context-read --select` command. Read needed evidence before a
+decision, verification or review that depends on it; repeated selectors batch
+related source, note and evidence fields without replaying the outcome's inline
+requirements. An unmet or stale review stays visible before its explanation
+is opened. Agent review still does not establish independent acceptance.
+
+The archive remains `projection.json`; the required model view is
+`required-context.json`. Required reads, full/delta preparation and recovery use
+that same model view. A selected detail page cannot acknowledge the required
+view, establish a full baseline or prove that other hidden details were read.
+The adapter edits paths selected by the typed owner without round-tripping the
+original JSON values through JavaScript. Unknown outcome fields, unknown source
+read obligations, unsupported schemas, signed envelopes and unavailable planning
+retain their original full content. Context delivery off remains unchanged.
+If the required view and its index are not smaller in serialized UTF-8 bytes,
+delivery retains the original full view and read obligations; small material
+does not need a more expensive detail round trip. This is a transport-size
+comparison, not a relevance heuristic or a model-token estimate.
+Historical captures retain their original obligations. This acceptance-material
+slice does not yet stage candidate selection, preferences or Explore history,
+and a smaller body alone does not establish lower total model cost.
+
+Native required views also replace exact repeated registered Todo rows in
+summary lanes with `{todo_id, context_ref}`. The JSON pointer addresses the
+complete first occurrence in this **same required view**, never an old baseline
+or an unexpanded detail. Every lane retains its membership and order; all unique
+fields, revisions, ownership, dependency state, contrary evidence and final
+constraints remain inline. Referenced rows carry exactly those same obligations.
+Unknown row fields/schemas, unknown lanes and unsafe numeric values stay literal.
+The reader must recover a missing target from this same capture before dependent
+work; it does not need a new detail read when the complete target is present.
+This is exact reuse, not candidate relevance or selection. It changes no
+canonical record or authority, and does not permit skipping other candidates.
+Signed envelopes, disabled native delivery and historical captures keep their
+existing behavior. The existing size comparison retains a full view when the
+reference guidance would cost more than the duplicate rows.
+
+A context epoch is not a work Turn. Compaction or a failed native hook invalidates
+delta reuse; it does not require another admission or unconditional replay of the
+old quota packet. Within the existing Turn, continue from the working brief with
+the Goal, applicable requirements/stops, task and original capture/settlement
+identity. Before an action that depends on missing or uncertain facts, recover
+those facts from the same immutable capture. An unfinished initial required read
+still requires its missing content; summarizing it does not fulfill that read.
+Do not repeat completed work or settle the original Turn twice. If the original
+reference is lost, repair it before dependent work; independently authorized work
+can continue. A later work Turn obtains its own current guard and required
+context, without prefetching an older packet to manufacture a delta baseline.
+
+The native lifecycle still invalidates the previous baseline. A working brief
+is sufficient only for the work whose necessary facts it preserves; it is not
+input-byte coverage, a new baseline, renewed authority or proof of freshness or
+model retention. These separate boundaries prevent transport loss from becoming
+either a repeated full-input loop or permission to act on missing requirements.
+No token savings or accepted outcome gains follow from instruction delivery alone.
 
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
@@ -215,12 +277,16 @@ branch identity, selection, status, resume facts and orchestration gates remain
 current. Reordering, refutation, removed evidence and changed guidance reconstruct
 the exact current source; no timestamp, revision or text is normalized away.
 
-Within successfully read cumulative Goal outcomes, source summaries, review notes
-and string evidence references also use exact reuse. They are provenance and
-explanations, not current acceptance decisions. Requirement status, review
+Within successfully read cumulative Goal outcomes, string source references,
+source summaries, review notes and string evidence references also use exact
+reuse. They are provenance and explanations, not current acceptance decisions. Requirement status, review
 conclusion, basis currency, independent verification, revisions and unknown fields
 remain literal current input. Changed, removed or reordered evidence reconstructs
 the complete current source; failed or incomplete sources retain full delivery.
+Containers emptied solely by removing reusable fields do not force those fields
+back into the delta. Originally empty unknown records and non-string source
+references remain literal current input. Reuse keeps the locator's exact value;
+it neither rereads the referenced material nor refreshes its authority.
 
 The registered preference owner permits exact reuse of its complete instructions,
 statements, source quotes and source references. Each read still supplies the
@@ -232,6 +298,14 @@ or parsing its read command. Explore retains its explicit scoped hook identity.
 Unknown, failed, incompatible or ambiguous hook views stay complete. A changed
 scope or lost baseline still selects full delivery; reuse never makes a retired
 or expired preference actionable or grants authority.
+
+Quota capability candidates use the same exact codec for registered Todo text,
+title and note strings. Every candidate remains in the complete cold input;
+warm input still carries current membership/order, identity, revision, ownership,
+eligibility, handoff and unknown fields. Unknown schemas, duplicate identities or
+structured values in those text fields stay literal. This removes repeated
+authoring only when a complete baseline is usable; it neither narrows candidate
+selection nor implements the proposed decision-stage read contract.
 
 Object edits may group complete current fields in `values`, alongside recursive
 `changed` edits and `removed` keys. Array edits use exact indices in `items` and
@@ -384,7 +458,14 @@ output profile. Both the initial guard and continuations use that page budget,
 including when the shell lacks the declaration. The worker applies this configuration
 automatically inside its isolated opt-in trial. The persistent instruction requests
 22000 tokens for each context-read tool result and 24000 for its code-mode emission,
-forwarding one stdout at a time. Remove the generated output overrides together with the
+forwarding one stdout at a time. The post-compaction/recovery hook carries the same
+per-call budget guidance so recovery does not depend on retaining the setup text.
+Both the nested reader and outer code-mode emission can truncate independently;
+per-call requests do not prove retained history or change host configuration.
+If either layer truncates, retry the affected range of the same capture with
+smaller content and complete-output byte budgets. This avoids a transport retry
+failure; it does not make an oversized total context fit or qualify scoped reads.
+Remove the generated output overrides together with the
 context setup on rollback; saving a machine preference alone does not apply them.
 This output sizing does not prove retained input, lower fees or task benefit.
 For an SSH Goal, replace `--codex-app`
@@ -551,10 +632,17 @@ TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `
 条件、身份、命令与未知控制仍逐轮发送。Explore owner 登记分支证据审计与证据关联
 模板的精确复用；分支身份、选择、状态、恢复事实与编排门仍是当前输入。重排、反证、
 移除与指导变更完整重建当前来源，不规范化时间戳、修订或正文。
-已成功完整读取的累计 Goal outcome 中，来源说明、复核笔记及字符串证据引用也按精确
+已成功完整读取的累计 Goal outcome 中，字符串来源引用、来源说明、复核笔记及字符串证据引用也按精确
 差分传输。它们是来源与解释；要求状态、复核结论、依据是否当前、独立验证标记、修订
 及未知字段仍逐轮完整发送。证据变化、移除或重排后仍须精确还原当前来源；来源失败或
 读取不完整时保留完整投递。
+仅因移除可复用字段而变空的容器，不会把这些字段重新带回差分；原本为空的未知对象和
+非字符串来源引用仍逐轮发送。复用保留定位符的精确值，不重读其指向的材料，也不刷新权限。
+quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标题与笔记字符串。
+冷启动仍完整交付全部候选；warm 仍逐轮携带当前成员与顺序、身份、修订、归属、
+准入能力、交接及未知字段。未知 schema、重复身份或文本字段中的结构化值保持原文。
+这只在完整基线可用时减少重复正文，不缩小候选选择范围，也不等于按决策阶段读取的
+替代契约已经实现。
 对象编辑可以在 `values` 中合并携带本轮完整字段，同时保留递归 `changed` 与删除
 `removed`；数组的 `items` 与 `values` 使用精确索引，`length` 调整长度。
 字段仍在本轮输入中，只减少重复 wrapper；codec 比较普通编辑、合并字段
@@ -624,6 +712,10 @@ exec stdout；把整包重打进哈希工具不构成原始字节已被保留的
 开启的 benchmark worker 在其
 隔离会话内自动应用；持久指引要求每次续读直接输出预算 22000 token、Code Mode
 输出预算 24000 token，每次直接转发一份 stdout。
+压缩/恢复 hook 同样携带这段调用预算指引，避免恢复依赖已经丢失的配置正文。
+内层读取与外层 Code Mode 输出可分别截断；单次预算请求不证明历史保留，也不修改宿主配置。
+任一层截断时，减小正文和完整输出字节预算，重读同一 capture 的受影响范围。
+这仅修复传输重试故障，不代表超大的完整上下文已能容纳，也不证明范围裁剪合格。
 回滚时同时移除生成的输出覆盖项；仅保存机器偏好并不会应用这些宿主配置。
 该设置不证明输入保留、总费用降低或任务效果改善。
 读取器校验不可变 capture 的摘要。Post-tool 适配层复用显式输入观察的字节范围校验，
@@ -694,6 +786,12 @@ selects the root. Missing pointers or invalid array indices reject the whole
 batch; a present JSON `null` is a valid value. Duplicate pointers are removed
 and the remaining pointers are sorted.
 
+Explicit `context-read` capture/hash or native-location arguments are independent
+of Goal registry discovery and machine configuration. Conflicting default runtime
+roots cannot block that read; capture integrity and native-session scope still
+apply. A read without an explicit source keeps its existing machine lookup.
+Admission and accounting retain their registry/runtime route checks.
+
 The existing page envelope keeps the original `sha256` and adds
 `selected_pointers` and `selection_sha256`. Concatenated `content` is a
 `context_capture_selection_v1` object with `selections: [{pointer, value}]`.
@@ -716,6 +814,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 `--capture-sha256`，或从已有会话查询入口开始；省略 `--select` 保持原有全量读取。
 选择模式仅支持 JSON：`~1` 表示 `/`，`~0` 表示 `~`，空 pointer 选择根对象。
 任一路径不存在或数组索引无效时整批失败；已存在的 `null` 合法。路径去重并排序。
+
+显式提供 capture/hash 或原生会话位置的 `context-read` 不依赖 Goal registry 发现或
+机器配置。默认 runtime root 冲突不阻断该读取，原 capture 完整性与原生会话作用域
+检查仍生效。未显式指定来源时仍沿原机器配置查找；准入与记账保留原路由检查。
 
 分页保留原始 `sha256`，新增 `selected_pointers` 与 `selection_sha256`。
 拼接 `content` 后得到带 `selections: [{pointer, value}]` 的

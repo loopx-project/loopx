@@ -121,8 +121,11 @@ function splitContext(context: JsonObject, binding: JsonObject): Split {
         // controls still reach every input literally.
         if (Array.isArray(outcome.sources)) {
           outcome.sources.forEach((entry, index) => {
-            if (jsonObject(entry)) add(JSON.stringify([kind, outcome.id, "source_summary", index]),
-              [...path, "sources", index, "summary"]);
+            const source = jsonObject(entry);
+            if (!source) return;
+            add(JSON.stringify([kind, outcome.id, "source_summary", index]), [...path, "sources", index, "summary"]);
+            if (typeof source.ref === "string") add(JSON.stringify([kind, outcome.id, "source_ref", index]),
+              [...path, "sources", index, "ref"]);
           });
         }
         const requirements = outcome.requirements;
@@ -193,17 +196,19 @@ const REUSABLE_PACKET_FIELDS = new Set([
 function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: readonly string[], binding: JsonObject): {paths: Path[]; valid: boolean} {
   const paths: Path[] = [];
   let valid = true;
-  const leaves = (value: unknown, path: Path) => {
-    if (Array.isArray(value) && value.length) value.forEach((v, i) => leaves(v, [...path, i]));
+  const leaves = (value: unknown, original: unknown, path: Path) => {
+    if (Array.isArray(value) && value.length) value.forEach((v, i) => leaves(v, (original as unknown[])[i], [...path, i]));
     else if (jsonObject(value) && Object.keys(value as JsonObject).length)
-      Object.entries(value as JsonObject).forEach(([k, v]) => leaves(v, [...path, k]));
-    else paths.push(path);
+      Object.entries(value as JsonObject).forEach(([k, v]) => leaves(v, (original as JsonObject)[k], [...path, k]));
+    // Removing only registered reusable fields leaves an empty container, not
+    // a current control. An originally empty unknown record still stays literal.
+    else if (!(jsonObject(value) && jsonObject(original) && Object.keys(original as JsonObject).length)) paths.push(path);
   };
   const work = (value: unknown, path: Path) => {
     const source = jsonObject(value);
     if (!source) { paths.push(path); return; }
     const split = splitContext(source, binding); valid &&= split.valid;
-    leaves(split.fresh, path);
+    leaves(split.fresh, source, path);
   };
   const vision = (value: unknown, path: Path) => {
     const audit = jsonObject(value);
@@ -234,6 +239,32 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
             });
           } else paths.push([...path, key, i, field]);
         }
+      });
+    }
+  };
+  const candidates = (value: unknown, path: Path) => {
+    const gate = jsonObject(value), ids = new Set<string>();
+    const lanes = ["runnable_candidates", "blocked_candidates"];
+    if (gate?.schema_version !== "capability_gate_v0"
+        || lanes.some(lane => !Array.isArray(gate[lane]) || (gate[lane] as unknown[]).some(value => {
+          const row = jsonObject(value), id = row?.todo_id;
+          if (typeof id !== "string" || !id || ids.has(id)) return true;
+          ids.add(id); return false;
+        }))) { paths.push(path); return; }
+    for (const [field, item] of Object.entries(gate)) {
+      if (!lanes.includes(field)) { paths.push([...path, field]); continue; }
+      if (!(item as unknown[]).length) { paths.push([...path, field]); continue; }
+      (item as JsonObject[]).forEach((row, i) => {
+        const prefix = [...path, field, i];
+        if (row.schema_version !== COORDINATION_STATE_CONTRACT.todo_read_record.item_schema_version
+            || ["text", "title", "note"].some(key => Object.hasOwn(row, key) && typeof row[key] !== "string")) {
+          paths.push(prefix); return;
+        }
+        // Reuse only registered authoring strings through the exact codec.
+        // Selection, order, revisions, ownership, capability facts, handoffs and
+        // all unknown controls remain current literals, even when unchanged.
+        for (const key of Object.keys(row))
+          if (!["text", "title", "note"].includes(key)) paths.push([...prefix, key]);
       });
     }
   };
@@ -273,6 +304,7 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
   } else {
     for (const [key, value] of Object.entries(context)) {
       if (key === "planning_horizon") { horizon(value, [key]); continue; }
+      if (key === "capability_gate") { candidates(value, [key]); continue; }
       if (key !== "interaction_contract") {
         if (!REUSABLE_PACKET_FIELDS.has(key) && !legacyQuotaFields.includes(key)) paths.push([key]);
         continue;
@@ -520,10 +552,13 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
       + (assumed ? "After reading this delta completely, use it with the retained model context. "
         + "Do not also fetch the full projection just to materialize JSON or replace missing Code Mode variables; "
         + "tool-process memory is separate from retained model context. If required baseline content is unavailable "
-        + "or continuity is uncertain, recover this capture in full before dependent work. " : "")
+        + "or continuity is uncertain, do not reconstruct from that baseline. Recover the necessary current facts "
+        + "from this capture before dependent work; completing an unfinished required read still needs its missing content. " : "")
       + "A value replaces its subtree; from copies the exact string, array or object at that path in the base capture, never in current changes. "
       + (hasOverlay(changes) ? "An optional edit then applies to that copied value, with all nested from paths still rooted in the immutable base. " : "")
-      + "Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. Lost context triggers automatic full recovery from this capture, never an owner question."};
+      + "Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. "
+      + "Within the same work Turn, compaction alone requires neither another guard nor replay of already-read context. "
+      + "Continue from the working brief and original work/settlement identity; missing facts use same-capture recovery."};
   if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
   if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
   // Native consumers page the wire before they can use its baseline. Deliver

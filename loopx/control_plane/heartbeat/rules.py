@@ -101,8 +101,11 @@ HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake, replace `<current_time_iso>` once. Run assignment and guard as separate "
     "statements in one shell, not a command-prefix assignment; reuse the value on retries."
 )
+HEARTBEAT_KNOWN_CHOICE_RULE = (
+    "Known new-Turn choice: add `--todo-id <id>` to first guard; otherwise "
+)
 HOST_LOOP_QUOTA_DISPATCH_RULE = (
-    "Quota: use selection_command when required; "
+    HEARTBEAT_KNOWN_CHOICE_RULE + "use selection_command when required; "
     "re-enter as instructed, do/verify authorized work. "
     "Settle with current settlement_plan.ordered_steps, else next_cli_actions; "
     "preserve exact identities/effect ids and actual outcomes. Never reconstruct "

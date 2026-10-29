@@ -1,4 +1,5 @@
 import {capturedContextSelection} from "./context_selection.ts";
+import {progressiveContextPlan} from "./progressive_context.ts";
 import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -1407,6 +1408,7 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (operation === "progressive_context_plan") return progressiveContextPlan(request);
   if (operation === "replan_view") return replanView(request);
   if (operation === "context_select") return capturedContextSelection(request);
   if (operation === "replan_cli_view") {
@@ -1470,6 +1472,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
+  if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(
+    requireJsonObject(request.envelope, "envelope"), request.turn_instance_id)};
   if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(
     requireJsonObject(request.envelope, "turn_envelope"), request.turn_instance_id,
   )};
@@ -1485,28 +1489,35 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
 /** A scoped planning identity comes from the signed quota plan, never a Host
  * session or a missing Todo. Journal validation reuses this exact binding rule.
  */
-export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+export function turnEnvelopeScopedSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
   assertSupportedQuotaPacket(envelope);
   const writeback = object(envelope.writeback);
   const plan = Object.keys(object(writeback.settlement_plan)).length ? object(writeback.settlement_plan)
     : {identity: writeback.settlement_identity};
   const raw = object(plan.identity);
-  if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;
+  if (raw.replan_obligation_id == null && raw.request_subject == null && raw.binding_kind !== "autonomous_replan") return null;
   const parsed = settlementIdentityFromPlan({settlement_plan: plan});
   if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason);
   const identity = parsed.value;
   const signature = object(envelope.action_signature);
   if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION
-      || envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+      || (identity.binding_kind === "request" ? envelope.effective_action !== EffectiveAction.NORMAL_RUN
+        : envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED)
       || selectedWorkTodoId({selected_todo: object(envelope.action).selected_todo,
         task_orchestration_contract: envelope.task_orchestration_contract}) !== null
-      || identity.binding_kind !== "autonomous_replan"
+      || !["autonomous_replan", "request"].includes(identity.binding_kind)
       || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
       || turnInstanceId != null && identity.turn_instance_id !== turnInstanceId
-      || identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
+      || identity.binding_kind === "autonomous_replan" && identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
       || signature.matches !== true || signature.source_hash !== signature.envelope_hash
       || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))) {
     throw new EffectRuntimeRequestError("Turn replan settlement identity does not match its signed quota admission");
   }
   return settlementIdentityPayload(identity);
+}
+
+/** Persisted planning callers retain their narrow compatibility entrypoint. */
+export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  const identity = turnEnvelopeScopedSettlementIdentity(envelope, turnInstanceId);
+  return identity?.binding_kind === "autonomous_replan" ? identity : null;
 }

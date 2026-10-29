@@ -923,6 +923,16 @@ read-only quota guard fail. Task graph uses the same canonical Todo rows, while
 extending them with terminal predecessor/evidence rows and remaining an
 agent-neutral read model with separate gate/evidence context.
 
+Known diagnostic Todo rows use the existing bounded summary view. An unfamiliar
+record (including a structured recovery condition) remains complete at its
+original relative position; it does not expand every known sibling. Candidate
+collections and selection obligations stay complete. Omission counts describe
+only removed rows, and explicit detail views retain the original records.
+
+已知诊断 Todo 按原有摘要规则显示。包含结构化恢复条件或未知字段的记录仍按原相对
+顺序完整保留，不再使同组其他已知记录全部展开。候选集合与选择义务保持完整；省略
+计数只统计真正移除的记录，显式详情视图保留原始记录。
+
 Blocked candidates retain typed `resolution_bindings` even when another todo is
 runnable. Each binding names the capability, its resolution owner, and the
 exact `blocked_todo_ids`. The interaction contract turns an owner-held binding

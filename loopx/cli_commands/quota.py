@@ -100,6 +100,7 @@ from .quota_context import (
 )
 from .quota_failure_report import (
     QUOTA_EVENT_KINDS,
+    captured_quota_failure_view,
     quota_decision_transport_failure_payload,
     quota_failure_payload,
     quota_validation_failure_payload,
@@ -375,7 +376,13 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
-    context_delivery_enabled = payload.get("ok") is True and native_context_activation(args)["enabled"]
+    try:
+        context_delivery_enabled = native_context_activation(args)["enabled"]
+    except QuotaCommandValidationError:
+        if payload.get("ok") is True:
+            raise
+        # Preserve the original validation error when activation itself failed.
+        context_delivery_enabled = False
     bind_capture_selection_transport(payload, args)
     delivery_request = None
     decision_identity = ("", "")
@@ -386,6 +393,12 @@ def _emit_quota_result(
             "replan_read_argv": current_loopx_cli_argv()}
     try:
         capture_decision(capture_directory, payload)
+        if (payload.get("ok") is False and context_delivery_enabled and capture_directory
+                and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
+            print_payload(captured_quota_failure_view(payload, capture_directory=capture_directory,
+                max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
+                args.format, _quota_renderer(args))
+            return 1
         if payload.get("ok") is True:
             delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
     except QuotaDecisionTransportError as exc:
@@ -539,6 +552,7 @@ def handle_quota_command(
     print_payload: PrintPayload,
     append_cli_rollout_event: RolloutEventAppender,
     capture_directory: Path | None = None,
+    retained_action_selection_todo_id: str | None = None,
 ) -> int:
     native_result = handle_native_context_command(args, print_payload=print_payload,
         registry_path=registry_path, runtime_root_arg=runtime_root_arg)
@@ -604,6 +618,7 @@ def handle_quota_command(
                 runtime_root=runtime_root,
                 turn_instance_id=heartbeat_turn_id,
                 goal_ref=goal_ref,
+                retained_todo_id=retained_action_selection_todo_id,
             )
             heartbeat_receipt_existing = action_selection.receipt
             payload = build_live_quota_should_run_decision(
@@ -667,6 +682,10 @@ def handle_quota_command(
                         print_payload=print_payload,
                         append_cli_rollout_event=append_cli_rollout_event,
                         capture_directory=capture_directory,
+                        retained_action_selection_todo_id=(
+                            action_selection.requested_todo_id
+                            if action_selection_preflight.receipt is None else None
+                        ),
                     )
                 heartbeat_receipt_existing = action_selection_preflight.receipt
                 heartbeat_receipt_existing_status = (

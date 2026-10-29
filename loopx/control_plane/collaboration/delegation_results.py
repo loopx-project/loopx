@@ -58,8 +58,17 @@ def accepted_result(service, binding):
 
 
 def operation_brief(service, row):
+    from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
+
     identity = row["identity"]
-    return _entry(service.root, service.goal_id, identity["binding"]["agent_id"], identity["request_id"])["brief"]
+    with collaboration_goal_scope(service.registry, goal_id=service.goal_id, agents=(),
+            caller_goal_ref=service._caller_goal_ref()) as scope:
+        try:
+            entry = _entry(service.root, service.goal_id, identity["binding"]["agent_id"], identity["request_id"], scope=scope)
+        except OSError as exc:
+            raise ValueError("delegation request brief unavailable for the captured Goal instance") from exc
+        decide_collaboration_lifecycle(scope, operation="history_inspect", record=entry)
+        return entry["brief"]
 
 
 class _ResultUseRead:

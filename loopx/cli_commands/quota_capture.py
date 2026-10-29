@@ -244,7 +244,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
     Publication is delayed until this native tool runs, so the lifecycle owner
     can select its current continuity basis. Optional codec failure returns the
-    original full read reference. An unsafe recovery selector fails explicitly
+    committed required-view reference when available, otherwise the original
+    full read reference. An unsafe recovery selector fails explicitly
     with that same reference, never a replacement guard.
     Invalid run-mode opt-ins fail before that optional transport path.
     """
@@ -278,6 +279,23 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
 
         if not activation["enabled"]:
             raise ValueError("context delivery is off")
+        page_bytes, output_bytes = native_context_page_budget()
+        output_limit = getattr(args, "max_page_output_bytes", None)
+        if output_limit is not None:
+            if output_limit <= 0:
+                raise QuotaDecisionTransportError("Native context output limit must be positive.")
+            output_bytes = min(output_bytes, output_limit)
+            page_bytes = min(page_bytes, output_bytes)
+
+        def recovery_reference(value: dict[str, Any]) -> dict[str, str]:
+            # Preserve the caller's read budget on success and failure without
+            # duplicating instructions already carried by the outer view.
+            return {"path": value["path"], "sha256": value["sha256"],
+                "command": context_capture_read_command(Path(value["path"]), value["sha256"],
+                    page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
+
+        full_reference = recovery_reference(full_reference)
+        reference = dict(full_reference)
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=args.codex_context_root, create=True)
         if not directory:
@@ -303,6 +321,12 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             capture_id=hashlib.sha256(raw).hexdigest(),
             continuity_generation=getattr(args, "_context_delivery_generation", None))
         native_prepared = True
+        if projected.get("schema_version") == "context_delivery_v1":
+            # Native publication owns the complete required view. Keep its
+            # committed recovery even if optional wire/inline delivery fails;
+            # the input capture digest below remains the original identity.
+            full_reference = recovery_reference(projected["recovery"])
+            reference = dict(full_reference)
         native_view = native_context_capture_view(projected, cache, context_directory=directory,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
                 "context_delivery": activation},
@@ -324,7 +348,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
                     "original captured decision and preserve its Turn receipt; do not rerun admission. "
                     "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_READ_GUIDANCE}
         # Off is inert; after native preparation an optional wire write can fall
-        # back to the original reference without leaving an older selector live.
+        # back to the committed required view without leaving an older selector live.
     result: dict[str, Any] = {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),
         "recovery": full_reference,
         "capture_sha256": args.capture_sha256,

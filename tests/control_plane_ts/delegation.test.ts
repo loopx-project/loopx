@@ -244,7 +244,7 @@ test("same explicit grant contract applies to a coordinator and an ordinary memb
 
 test("malformed operator binding fails before launch", () => {
   for (const patch of [{timeout_seconds: 0}, {timeout_seconds: 5000}, {output_refs: ["../secret"]},
-    {output_refs: ["/secret"]}, {host_args: []}, {todo_id: null}]) {
+    {output_refs: ["/secret"]}, {host_args: []}, {todo_id: ""}]) {
     assert.throws(() => selectDelegationBinding({...params,
       config: {...params.config, bindings: [{...binding, ...patch}]}}));
   }
@@ -515,6 +515,29 @@ test("inventory paging is bounded and never interprets a missing result as accep
   assert.equal(unavailable.status, "unavailable");
   assert.equal(unavailable.recovery_required, null);
   assert.equal(unavailable.artifacts, undefined);
+});
+
+test("ordinary request preflight retains its original subject and validation repair", () => {
+  const ordinary = {...binding, todo_id: null};
+  const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const waiting = delegationPreflight({binding: ordinary, workspace: {state: "available"},
+    authority: {ready: true}, request_required: true});
+  assert.equal(waiting.state, "turn_blocked");
+  assert.equal(waiting.request_required, true);
+  assert.equal(waiting.dispatch_allowed, false);
+  assert.deepEqual(waiting.effects, effects);
+  const params = {binding: ordinary, validation_files_current: false,
+    acceptance: {todo_id: null, state: "unbound", reason: "independent_delegation_validation_required"},
+    preview: {dry_run: true, status: "preview", effects,
+      route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: null},
+      managed_executor: {executor: "generic-cli", available: true, unavailable_reason: null, execution_profile: null}}};
+  const refused = delegationPreflight(params);
+  assert.equal(refused.state, "acceptance_unavailable");
+  assert.equal(refused.acceptance_next_action, "review_original_request_validation");
+  assert.equal(refused.dispatch_allowed, false);
+  const todo = delegationPreflight({...params, binding, acceptance: {...params.acceptance, todo_id: binding.todo_id},
+    preview: {...params.preview, route: {...params.preview.route, selected_todo_id: binding.todo_id}}});
+  assert.equal(todo.acceptance_next_action, "review_original_todo_validation");
 });
 
 test("preflight separates task admission, acceptance binding and runtime availability", () => {

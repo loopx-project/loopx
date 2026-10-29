@@ -155,8 +155,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
             "crowded": {"json": 42_000, "markdown": 10_500},
-            # Matched canonical base/head both emit 24,820 JSON characters.
-            "multi_agent": {"json": 25_500, "markdown": 7_000},
+            # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
+            # this candidate both emit 25,836 JSON characters (96 matched
+            # surface/mode measurements, no semantic or route differences).
+            # Preserve complete decision facts; calibrate only this synthetic
+            # presentation ceiling. The historical 25,500 failure remains;
+            # line/growth guards and production transport limits are unchanged.
+            "multi_agent": {"json": 26_500, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 190},
@@ -307,12 +312,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            # Matched Linux output: JSON 3,649 -> 4,172 and Markdown
-            # 5,553 -> 6,076. The supported 320-char scope reaches 4,461
-            # JSON chars. Keep the full outcome guidance and Markdown guard.
-            "small": {"json": 4_500, "markdown": 6_200},
-            "crowded": {"json": 4_500, "markdown": 6_200},
-            "multi_agent": {"json": 4_500, "markdown": 6_200},
+            # The complete first-guard selection guidance and supported
+            # 320-char scope emit 4,532 JSON chars at immutable b47bbc6c9.
+            # Retain the old 4,500 failure; allow 68 chars of JSON headroom.
+            # Body presentation stays 4,200; Markdown/line guards are unchanged.
+            "small": {"json": 4_600, "markdown": 6_200},
+            "crowded": {"json": 4_600, "markdown": 6_200},
+            "multi_agent": {"json": 4_600, "markdown": 6_200},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
