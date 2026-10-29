@@ -696,7 +696,7 @@ def build_update_plan(
     current_version = install_freshness.get("current_version")
     source_version_check = (
         _source_version_check(source)
-        if check_only and lifecycle["owner"] == "loopx_release_snapshot"
+        if check_only and lifecycle["owner"] == "loopx_release_snapshot" and source["distribution"] == "source"
         else {
             "schema_version": SOURCE_VERSION_CHECK_SCHEMA_VERSION,
             "attempted": False,

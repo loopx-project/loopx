@@ -23,7 +23,7 @@ import time
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -43,15 +43,23 @@ def safe_url(url: str) -> str:
     return url
 
 
+class UpdateRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        safe_url(new_url)
+        if request.type == "https" and urlsplit(new_url).scheme != "https":
+            raise ValueError("Update redirects must preserve TLS")
+        return super().redirect_request(request, response, code, message, headers, new_url)
+
+
 def read_json(url: str) -> dict[str, Any]:
     request = Request(safe_url(url), headers={"User-Agent": "LoopX-update", "Accept": "application/json"})
     try:
-        with urlopen(request, timeout=10) as response:
+        with build_opener(UpdateRedirectHandler()).open(request, timeout=10) as response:
             raw = response.read(MAX_MANIFEST + 1)
         if len(raw) > MAX_MANIFEST:
             raise ValueError("Update metadata exceeds its size limit")
         result = json.loads(raw)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, HTTPException) as exc:
         # Do not echo proxy credentials, signed URLs or response bodies.
         raise ValueError("Update metadata unavailable; retry online or explicitly use --source") from exc
     if not isinstance(result, dict):
@@ -206,7 +214,7 @@ def download_artifact(manifest: dict[str, Any], *, progress=lambda _event: None,
                 headers.update({"Range": f"bytes={offset}-", "If-Range": etag})
             progress({"stage": "download", "received": offset, "total": expected, "attempt": attempt + 1})
             try:
-                with urlopen(Request(safe_url(url), headers=headers), timeout=min(10, max(.1, deadline - time.monotonic()))) as response:
+                with build_opener(UpdateRedirectHandler()).open(Request(safe_url(url), headers=headers), timeout=min(10, max(.1, deadline - time.monotonic()))) as response:
                     status = response.status
                     if status == 206:
                         content_range = response.headers.get("Content-Range", "")

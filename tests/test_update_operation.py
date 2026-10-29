@@ -28,6 +28,19 @@ def test_installed_channel_and_pinned_ref_survive_both_update_entrypoints(monkey
     assert _source_config(repo=None, ref=None, archive_url=None)["ref"] == "stable"
 
 
+def test_runtime_check_uses_one_qualified_version_and_revision(monkeypatch):
+    from loopx.cli_commands import update_source
+    def no_branch_probe(*_args):
+        raise AssertionError("The mutable branch version must not describe a qualified artifact")
+    monkeypatch.setattr("loopx.self_update._source_version_check", no_branch_probe)
+    monkeypatch.setattr(update_source, "resolve_artifact", lambda *_: {
+        "source_revision": "2" * 40, "package_version": "1.2.3"})
+    monkeypatch.setattr(update_source, "target_direction", lambda *_: "ahead")
+    plan = build_update_plan(action="check", doctor_payload=doctor_payload(), resolve_remote=True)
+    assert plan["source"]["resolved_revision"] == "2" * 40
+    assert plan["source_version_check"]["version"] == "1.2.3"
+
+
 @pytest.mark.parametrize("direction,accepted", [("ahead", True), ("identical", True), ("behind", False), ("diverged", False), ("unknown", False)])
 def test_target_is_resolved_before_any_mutation_and_downgrade_needs_intent(monkeypatch, direction, accepted):
     from loopx.cli_commands import update_source

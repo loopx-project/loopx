@@ -20,6 +20,11 @@ def server(body: bytes):
              "etag": '"one"', "no_length": False, "wrong_range": False}
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if state.get("redirect"):
+                self.send_response(302)
+                self.send_header("Location", state["redirect"])
+                self.end_headers()
+                return
             offset = int(self.headers.get("Range", "bytes=0-")[6:-1])
             state["requests"].append((self.path, self.headers.get("Range"), self.headers.get("If-Range")))
             if state["offline"] or self.path == "/bad":
@@ -60,6 +65,18 @@ def server(body: bytes):
 def manifest(body: bytes, url: str):
     return {"schema_version": update.RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": "a" * 40,
         "package_version": "1.2.3", "channel": "main", "size": len(body), "sha256": hashlib.sha256(body).hexdigest(), "urls": [url]}
+
+
+def test_redirects_cannot_weaken_source_tls():
+    from urllib.request import Request
+    handler = update.UpdateRedirectHandler()
+    with pytest.raises(ValueError, match="preserve TLS"):
+        handler.redirect_request(Request("https://publisher.invalid/runtime"), None, 302, "", {}, "http://127.0.0.1/runtime")
+    with server(b"{}") as (url, state):
+        state["redirect"] = "http://publisher.invalid/runtime"
+        with pytest.raises(ValueError, match="metadata unavailable") as caught:
+            update.read_json(url)
+        assert "require HTTPS" in str(caught.value.__cause__)
 
 
 @pytest.mark.parametrize("ignore_range,new_etag,wrong_range", [(False, False, False), (True, False, False), (False, True, False), (False, False, True)])

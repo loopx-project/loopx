@@ -386,6 +386,7 @@ class FakeVersionResponse:
 def test_check_compares_selected_source_version() -> None:
     with mock.patch("loopx.self_update.urlopen", return_value=FakeVersionResponse("9.9.9")) as fetch:
         payload = build_update_plan(
+            build_from_source=True,
             repo="example/loopx",
             ref="stable",
             check_only=True,
@@ -404,6 +405,7 @@ def test_check_compares_selected_source_version() -> None:
 
     with mock.patch("loopx.self_update.urlopen", return_value=FakeVersionResponse(__version__)):
         current_payload = build_update_plan(
+            build_from_source=True,
             repo="example/loopx",
             ref="stable",
             check_only=True,
@@ -417,6 +419,7 @@ def test_check_compares_selected_source_version() -> None:
 def test_check_degrades_when_source_version_is_unavailable() -> None:
     with mock.patch("loopx.self_update.urlopen", side_effect=OSError("offline")):
         payload = build_update_plan(
+            build_from_source=True,
             repo="example/loopx",
             ref="stable",
             check_only=True,

@@ -26,6 +26,11 @@ def prepare_target(payload: dict[str, Any], *, freshness: dict, resolve_remote: 
                 artifact = resolve_artifact(source["repo"], source["ref"])
                 source["artifact"] = artifact
                 target = artifact["source_revision"]
+                version = artifact["package_version"]
+                payload["source_version_check"].update(attempted=True, status="available",
+                    version=version, version_tag="v" + version,
+                    matches_current=version == freshness.get("current_version"),
+                    reason="Version and revision come from the same qualified runtime metadata")
             except ValueError as exc:
                 reason = str(exc)
         else:
