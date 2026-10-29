@@ -227,3 +227,96 @@ def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, 
     code, denied = _inventory(api, route["session_id"])
     assert code == 400 and denied["error_code"] == "request_inventory_unavailable"
     assert "rows" not in denied and "Check the current contract" not in str(denied)
+
+
+def test_inventory_bounds_lifetime_guards_and_keeps_core_io_outside_them(api, monkeypatch):
+    from contextlib import contextmanager
+    from loopx.control_plane.collaboration import conversation_inventory as inventory
+
+    _, _, route = _source(api)
+    _, f, server = api
+    session = server.chat_store.load_session(route["session_id"])
+    for number in range(12):
+        turn, _ = server.chat_store.create_turn(session["session_id"], client_turn_id=f"batch-{number}",
+            message=f"Check artifact {number}", origin="web")
+        delivered = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-a"}, source_store=server.chat_store)
+        server.chat_store.update_turn(session["session_id"], turn["turn_id"], status="completed",
+            response={"context_handoff_receipt": delivered})
+        server.chat_store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    original_scope, original_work = inventory.collaboration_goal_scope, inventory.read_linked_work
+    held, batches = [], []
+
+    @contextmanager
+    def scope(*args, **kwargs):
+        with original_scope(*args, **kwargs) as current:
+            held.append(current)
+            batches.append(0)
+            try:
+                yield current
+            finally:
+                held.pop()
+
+    original_entry = inventory._entry
+    def entry(*args, **kwargs):
+        assert held, "A request must retain the Goal lifetime guard"
+        batches[-1] += 1
+        return original_entry(*args, **kwargs)
+
+    def work(*args, **kwargs):
+        assert not held, "Core IO must not nest under a Goal lifetime guard"
+        return original_work(*args, **kwargs)
+
+    monkeypatch.setattr(inventory, "collaboration_goal_scope", scope)
+    monkeypatch.setattr(inventory, "_entry", entry)
+    monkeypatch.setattr(inventory, "read_linked_work", work)
+    code, value = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and value["matched"] == value["pending_count"] == 13
+    assert value["coverage"] == {"scan_complete": True, "unreadable": 0}
+    assert sum(batches) == 13 and len(batches) == 2 and max(batches) <= 12
+
+
+def test_inventory_rereads_goal_lifetime_between_batches(api, monkeypatch):
+    from contextlib import contextmanager
+    from loopx.control_plane.collaboration import conversation_inventory as inventory
+    from loopx.control_plane.goals.source_session_recreation import RecreateGoalRequest, recreate_goal_instance
+
+    _, _, route = _source(api)
+    _, f, server = api
+    session = server.chat_store.load_session(route["session_id"])
+    for number in range(12):
+        turn, _ = server.chat_store.create_turn(session["session_id"], client_turn_id=f"replace-{number}",
+            message=f"Check artifact {number}", origin="web")
+        delivered = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-a"}, source_store=server.chat_store)
+        server.chat_store.update_turn(session["session_id"], turn["turn_id"], status="completed",
+            response={"context_handoff_receipt": delivered})
+        server.chat_store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    original_scope = inventory.collaboration_goal_scope
+    original_decide = inventory.decide_collaboration_lifecycle
+    calls, modes = [], []
+
+    @contextmanager
+    def scope(*args, **kwargs):
+        if calls:
+            replaced = recreate_goal_instance(RecreateGoalRequest(registry_path=f["registry"],
+                goal_id=f["ref"]["goal_id"], goal_instance_id=f["ref"]["goal_instance_id"], operation_id="replace-during-read"))
+            assert replaced["ok"]
+        with original_scope(*args, **kwargs) as current:
+            calls.append(current.current_goal_ref)
+            yield current
+
+    def decide(*args, **kwargs):
+        result = original_decide(*args, **kwargs)
+        modes.append(result.get("mode"))
+        return result
+
+    monkeypatch.setattr(inventory, "collaboration_goal_scope", scope)
+    monkeypatch.setattr(inventory, "decide_collaboration_lifecycle", decide)
+    code, value = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and len(calls) == 2
+    assert calls[0] == f["ref"] and calls[1] != f["ref"]
+    # The existing typed owner permits proven historical inspection after a
+    # replacement; it must observe the new lifetime rather than reuse the old.
+    assert modes == ["current_instance"] * 12 + ["historical_read"]
+    assert value["matched"] == 13 and value["coverage"] == {"scan_complete": True, "unreadable": 0}

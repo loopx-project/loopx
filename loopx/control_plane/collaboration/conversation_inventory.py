@@ -46,6 +46,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
     query = search.strip().casefold()
     paths = sorted((_root(root) / "entries").glob("*/*.json"))
     rows, unreadable, cache, turn_readers = [], 0, {}, {}
+    groups, work_reads = {}, []
     for path in paths[:2000]:
         try:
             candidate = _read(path)
@@ -67,29 +68,67 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             gid, aid = route["goal_id"], route["agent_id"]
             if goal_ids is not None and gid not in goal_ids:
                 continue
-            sid = source_session["session_id"]
-            if sid not in turn_readers:
-                turn_readers[sid] = original_turn_reader(store, sid)
-            turn = turn_readers[sid](route["client_turn_id"])
-            if turn is None:
-                raise ValueError("original source Turn unavailable")
-            with collaboration_goal_scope(registry, goal_id=gid, agents=(), caller_goal_ref=route.get("goal_ref")) as scope:
-                with _request_lock(root, candidate["request_id"], scope, path.with_suffix(".lock")):
-                    row = _entry(root, gid, aid, candidate["request_id"], scope=scope)
-                    if row.get("source_kind") == "peer":
-                        continue
-                    grant = source_context_target_authority(root, source_session, turn, {"goal_id": gid, "agent_id": aid})
-                    decide_collaboration_lifecycle(scope, operation="original_request_inspect", record=row, route=route,
-                        initial_delivery=original_delivery_facts(row, route, turn, source_id=grant["source_id"]))
-                    observed = read_inbox_transaction(root, {"operation": "receipt_states", "rows": [row], "include_agenda": True})
-                    state, agenda = observed["items"][0], observed["agenda_items"][0]
-                    controlled = state.get("readback")
-                    read, read_error = _receipt(root, "reads", row)
-                    decision, decision_error = _receipt(root, "decisions", row)
-                    replies = reply_status(root, row)
-            # Request/return observations are version-consistent. Core work is
-            # a separate current observation; never hold its request lock over
-            # another authority's IO.
+            if not isinstance(gid, str) or not isinstance(aid, str):
+                raise ValueError("invalid request target")
+            key = (gid, json.dumps(route.get("goal_ref"), sort_keys=True))
+            groups.setdefault(key, []).append((path, route, candidate["request_id"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            unreadable += 1
+    # Reuse only the held lifetime guard, never an authorization or request
+    # snapshot. Resolve sources outside it first: their provider checks can
+    # read another authority. Each source/Turn and request is reread below.
+    # Keep each guard bounded to a page-sized batch so a long inventory does
+    # not exclude Goal writers for the entire history scan.
+    batches = [(key, items[start:start + limit]) for key, items in groups.items()
+               for start in range(0, len(items), limit)]
+    for (gid, _), requests in batches:
+        start, failed = len(work_reads), 0
+        try:
+            with collaboration_goal_scope(registry, goal_id=gid, agents=(),
+                                          caller_goal_ref=requests[0][1].get("goal_ref")) as scope:
+                for path, route, request_id in requests:
+                    try:
+                        source_session = store.load_session(route["session_id"])
+                        if not source_session or source_session.get("channel_id") != session["channel_id"]:
+                            raise ValueError("original source Session unavailable")
+                        validate_source_session(source_session)
+                        sid = source_session["session_id"]
+                        if sid not in turn_readers:
+                            turn_readers[sid] = original_turn_reader(store, sid)
+                        turn = turn_readers[sid](route["client_turn_id"])
+                        if turn is None:
+                            raise ValueError("original source Turn unavailable")
+                        with _request_lock(root, request_id, scope, path.with_suffix(".lock")):
+                            row = _entry(root, gid, route["agent_id"], request_id, scope=scope)
+                            if row.get("source_kind") == "peer":
+                                continue
+                            grant = source_context_target_authority(root, source_session, turn,
+                                {"goal_id": gid, "agent_id": route["agent_id"]})
+                            decide_collaboration_lifecycle(scope, operation="original_request_inspect", record=row, route=route,
+                                initial_delivery=original_delivery_facts(row, route, turn, source_id=grant["source_id"]))
+                            observed = read_inbox_transaction(root, {"operation": "receipt_states", "rows": [row], "include_agenda": True})
+                            state, agenda = observed["items"][0], observed["agenda_items"][0]
+                            controlled = state.get("readback")
+                            read, read_error = _receipt(root, "reads", row)
+                            decision, decision_error = _receipt(root, "decisions", row)
+                            replies = reply_status(root, row)
+                        # Do not retain full model responses while waiting for
+                        # linked-work IO; only the displayed question is used.
+                        source_turn = {"turn_id": turn["turn_id"], "message": turn.get("message", "")}
+                        work_reads.append((row, source_session["session_id"], source_turn, state, agenda, controlled,
+                                           read, read_error, decision, decision_error, replies))
+                    except (OSError, ValueError, KeyError, TypeError):
+                        failed += 1
+        except (OSError, ValueError, KeyError, TypeError):
+            del work_reads[start:]
+            unreadable += len(requests)
+        else:
+            unreadable += failed
+    # Request/return observations are version-consistent. Core work is a
+    # separate observation: release all lifetime/request guards before its IO.
+    for row, source_session_id, turn, state, agenda, controlled, read, read_error, decision, decision_error, replies in work_reads:
+        try:
+            gid, aid = row["goal_id"], row["agent_id"]
             work = read_linked_work(root, registry, row, cache,
                 include_core_details=core_goal_ids is None or gid in core_goal_ids)
             warnings = list(state.get("warnings", [])) + work["warnings"]
@@ -113,7 +152,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
                     "unavailable" if read_error or control_unavailable else "supplied" if read else "pending",
                 "decision": assessment["status"], "decision_reason": assessment.get("reason"),
                 "returns": replies, "linked_todos": work["linked_todos"], "evidence_refs": work["evidence_refs"],
-                "warnings": warnings, "source_session_id": source_session["session_id"], "source_turn_id": turn["turn_id"],
+                "warnings": warnings, "source_session_id": source_session_id, "source_turn_id": turn["turn_id"],
                 "last_event_at": _last_event([row.get("delivered_at"), read_at, assessment.get("at"),
                     *(reply.get(key) for reply in replies for key in ("created_at", "delivered_at"))])})
         except (OSError, ValueError, KeyError, TypeError):

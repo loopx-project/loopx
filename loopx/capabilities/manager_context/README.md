@@ -182,10 +182,19 @@ Goal visibility are checked before and after reading. Original-Chat delivery
 and explicit peer-return consumption remain different receipt paths. The list
 does not mark reads, accept work, start an Agent or certify an overall outcome.
 Unreadable/missing sources and incomplete scans keep counts visibly partial.
+Within one inventory read, requests sharing an exact Goal lifetime reuse its
+held guard in batches of at most one page. Every request retains its own lock,
+source/Turn read, grant and typed receipt/lifecycle checks; each new batch
+observes the current Goal lifetime. Core linked-work IO runs after those guards
+are released. This reduces repeated fence IO without caching authorization
+between requests or pages; pagination and search still scan the bounded history.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
+来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
+在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current
