@@ -1,6 +1,7 @@
 import { ChevronUp, Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspaceI18n } from "./i18n";
+import { observeTransfer, transferText, type TransferSample } from "./update-progress";
 
 type Phase = "idle" | "runtime_required" | "runtime_pairing_required" | "connecting" | "service_error" | "checking" | "available" | "up_to_date" | "downloading" | "installing_app" | "installing_runtime" | "restart_required" | "ready" | "error";
 type UpdateState = { phase: Phase; details?: { version?: string; channel?: string; received?: number; total?: number; code?: string; background?: boolean; prepared?: boolean } };
@@ -45,6 +46,8 @@ export function DesktopUpdate() {
   const [rollbackAvailable, setRollbackAvailable] = useState(false);
   const [runtimeSelection, setRuntimeSelection] = useState<RuntimeSelection>();
   const busy = useRef(false);
+  const [transfer, setTransfer] = useState<TransferSample | null>(null);
+  const [now, setNow] = useState(Date.now);
   const statusGeneration = useRef(0);
   const selectedChannel = useRef<string | null>(null);
   const invoke = (window as DesktopWindow).__TAURI__?.core.invoke;
@@ -52,6 +55,15 @@ export function DesktopUpdate() {
   const working = observing && state.details?.background !== true;
   const repairAvailable = runtimeSelection?.explicit !== true && runtimeSelection?.bundled_repair_available !== false;
   const restoreInPlace = state.phase === "error" && state.details?.code === "app_install_incomplete" && rollbackAvailable;
+
+  useEffect(() => {
+    setTransfer((previous) => observeTransfer(previous, state.phase, state.details?.received, Date.now()));
+  }, [state.phase, state.details?.received]);
+  useEffect(() => {
+    if (!observing) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [observing]);
 
   function readStatus(value: UpdateStatus, includeState = true) {
     setVersion(value.app_version);
@@ -195,6 +207,7 @@ export function DesktopUpdate() {
       {state.details?.version ? <p>{zh ? "目标版本：" : "Target: "}{state.details.version}</p> : null}
       <p role="status" aria-live="polite">{observing ? <RefreshCw className="is-spinning" size={14} aria-hidden="true" /> : null}{message[state.phase]}</p>
       {state.phase === "downloading" && state.details?.total ? <progress aria-label={zh ? "下载进度" : "Download progress"} max={state.details.total} value={state.details.received ?? 0} /> : null}
+      {state.phase === "downloading" && transfer ? <p className="personal-update-transfer" role="status">{transferText(transfer, state.details?.total, now, zh)}</p> : null}
       {invoke ? <div className="personal-update-actions">
         {state.phase === "restart_required" ? <button type="button" onClick={() => void run("restart")}>{zh ? "重启完成更新" : "Restart to finish"}</button> : <>
           {restoreInPlace ? <button type="button" onClick={() => void run("rollback")}>{zh ? "恢复上个版本" : "Restore previous version"}</button> : null}
