@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {ChevronRight, CircleAlert, ListChecks, RefreshCw, X} from "lucide-react";
-import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
+import {fetchChatSessionHistory, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
 import {z} from "zod";
 import {fetchConversationRequests, type ConversationRequest, type ConversationRequestInventory} from "../../data/conversation-requests";
 import {ContextHelp} from "./context-help";
@@ -170,9 +170,8 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
     setError(false);
     if (!open || !active) {setMessages(null); return;}
     const abort = new AbortController();
-    void fetchChatSession(row.source_session_id, abort.signal).then(value => {
+    void fetchChatSessionHistory(row.source_session_id, abort.signal).then(value => {
       if (abort.signal.aborted) return;
-      if (value.session.session_id !== row.source_session_id) throw new Error("Original conversation scope changed.");
       const source = value.messages.filter(message => message.turn_id === row.source_turn_id);
       if (!source.length) throw new Error("Original turn unavailable.");
       setMessages(source);
