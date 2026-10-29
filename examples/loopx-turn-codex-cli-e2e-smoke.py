@@ -25,6 +25,7 @@ from tests.control_plane.canonical_authority_fixture import (  # noqa: E402
     initialize_canonical_source_fixture,
 )
 from tests.control_plane.host_process_fixture import write_python_host_fixture  # noqa: E402
+from loopx.control_plane.runtime.file_paths import windows_extended_path  # noqa: E402
 
 
 GOAL_ID = "loopx-turn-real-cli-e2e"
@@ -367,7 +368,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    with tempfile.TemporaryDirectory(prefix="loopx-turn-real-cli-e2e-") as directory:
+    with tempfile.TemporaryDirectory(
+        prefix="loopx-turn-real-cli-e2e-",
+        dir=windows_extended_path(Path(tempfile.gettempdir())),
+    ) as directory:
         root = Path(directory)
         project, runtime, workspace, registry = _write_fixture(
             root,

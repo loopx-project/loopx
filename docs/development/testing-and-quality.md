@@ -1350,6 +1350,28 @@ This is no output reduction or model-compliance qualification.
 校准为 3,300，留 38 字符余量；不删指令，不改生产正文、4,000 宿主硬边界、
 长路径检查、执行权限或冻结资格结果，也不据此声称输出节省或模型遵从。
 
+The deterministic three-Turn Codex CLI smoke exceeded its 30-second outer test
+watchdog on Windows even at target main `544aa0fee`: 35.0 seconds versus 73.7
+seconds with the integrated freshness recovery. Both runs used the same Python
+interpreter and Node dependencies, isolated File fixtures, three committed
+transactions, one opaque session and an effect-free final replay. Preserve the
+head's additional cost and the timeout as evidence; this is not a performance
+improvement or latency qualification. The Windows-only outer watchdog is 120
+seconds; the POSIX 30-second limit, production Host timeouts, execution quota,
+three independent validations/debits and all session/replay assertions remain.
+An additional pair measured 16.8/74.4 seconds, but overlapped other validation;
+retain it as noisy evidence, not a controlled performance comparison. The
+repeat variation and the remaining head cost need separate performance work.
+
+同机 Windows 的确定性三 Turn Codex CLI smoke，在目标 main `544aa0fee` 已耗时
+35.0 秒，整合 freshness 恢复后的 head 为 73.7 秒，均使用同一 Python 解释器与
+Node 依赖、隔离 File fixture、三次提交、同一会话及无新增副作用的最终重放。
+保留 head 新增成本和原 30 秒超时，不宣称性能改善或延迟达标。仅将 Windows
+外层测试看门狗校准为 120 秒；POSIX 的 30 秒、生产 Host 超时、执行配额、三次
+独立验证与扣额以及全部会话和重放断言保持不变。
+另一次测得 16.8/74.4 秒，但与其他验证重叠，仅保留为带干扰的记录，不作为受控
+性能比较；重复测量波动与 head 剩余成本需要单独的性能验证。
+
 The following qualification belongs to the named historical revisions. It does
 not lower the newer target branch's existing 2,026-line baseline to 2,025.
 以下保留指定版本的历史资格，不将较新目标分支已有的 2,026 行基线降为 2,025。

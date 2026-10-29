@@ -14,6 +14,7 @@ from ..coordination.shadow_management import (
     shadow_maintenance_lock_target,
 )
 from ..effect_runtime import EffectRuntimeConflict, effect_runtime_result
+from ..runtime.file_paths import windows_extended_path
 from .turn_journal_runtime import (
     write_turn_journal,
 )
@@ -31,6 +32,7 @@ def turn_journal_path(runtime_root: Path, *, goal_id: str, turn_key: str) -> Pat
 
 
 def load_turn_journal(path: Path) -> dict[str, Any] | None:
+    path = windows_extended_path(path)
     if not path.exists():
         return None
     value = json.loads(path.read_text(encoding="utf-8"))
