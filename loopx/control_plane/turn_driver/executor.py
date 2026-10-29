@@ -37,7 +37,14 @@ from .command_validation import (
     reward_memory_reflection_digest,
 )
 from .driver import selected_turn_todo
+from .dual_session import (
+    ControllerSession,
+    ExecutorSession,
+    bind_controller_executor_sessions,
+    save_executor_session,
+)
 from .execution_readback import execution_payload
+from .generation_fence import GenerationFenceViolation
 from .host_process_transport import run_host_process
 from .host_binding import (
     managed_executor_unavailable_payload,
@@ -1327,6 +1334,8 @@ def _typed_settlement_stage(
         effect_attempts=journal_adapter.effect_attempts,
         effect_resolvers=effect_resolvers,
         turn_result_kind=str(result.get("result_kind") or "") or None,
+        controller_session=controller_session,
+        executor_session=executor_session,
     )
 
     journal["settlement_result"] = settlement_result_payload(settlement_result)
@@ -1422,6 +1431,17 @@ def _typed_settlement_stage(
         receipt=_receipt(plan, result, completed_phases=completed_phases),
     )
     persist_tail_checkpoint(release=True)
+
+    # Record successful executor attempt and save executor session
+    if executor_session is not None and controller_session is not None:
+        from .dual_session import ExecutorAttemptOutcome
+        controller_session.record_executor_attempt(
+            generation=executor_session.generation,
+            outcome=ExecutorAttemptOutcome.INVOKED,
+            turn_instance_id=executor_session.turn_instance_id,
+        )
+        save_executor_session(executor_session, runtime_root)
+
     return execution_payload(
         plan,
         journal,
@@ -1511,6 +1531,46 @@ def run_loopx_turn_once(
     if writeback is None or spend is None or scheduler is None:
         raise ValueError(
             "executing run-once requires writeback, spend, and scheduler callbacks"
+        )
+
+    # Extract identifiers for session binding
+    envelope = (
+        plan.get("turn_envelope")
+        if isinstance(plan.get("turn_envelope"), Mapping)
+        else {}
+    )
+    agent_id = str(envelope.get("agent_id") or "")
+    selected_todo = selected_turn_todo(envelope)
+    todo_id = str(selected_todo.get("todo_id") or "")
+
+    # Bind controller and executor sessions with generation coordination
+    controller_session: ControllerSession | None = None
+    executor_session: ExecutorSession | None = None
+    session_profile_digest = "default"  # TODO: Extract from actual session profile
+
+    try:
+        controller_session, executor_session = bind_controller_executor_sessions(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            todo_id=todo_id,
+            profile_digest=session_profile_digest,
+        )
+    except GenerationFenceViolation as exc:
+        # Stale executor detected - fail fast before acquiring any resources
+        return execution_payload(
+            plan,
+            {
+                "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
+                "status": "failed",
+                "reason": f"generation fence violation: {exc}",
+                "result_kind": None,
+                "receipt": None,
+                "scheduler": {"disposition": "not_applicable"},
+            },
+            execute=True,
+            replayed=False,
+            effects=empty_effects,
         )
 
     turn_key = str(request["turn_key"])
