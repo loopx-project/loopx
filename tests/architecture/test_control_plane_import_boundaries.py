@@ -460,12 +460,15 @@ def test_core_does_not_import_experiments() -> None:
 def test_quota_markdown_is_owned_by_the_presentation_layer() -> None:
     legacy_renderer = CONTROL_PLANE_ROOT / "quota" / "markdown.py"
     imports = _resolved_imports(QUOTA_MODULE)
-    cli_imports = _resolved_from_imports(QUOTA_CLI_MODULE)
+    cli_imports = _resolved_from_imports(QUOTA_CLI_MODULE.with_name("quota_presentation.py"))
     presentation_renderers = cli_imports.get(
         "loopx.presentation.renderers.quota_event_markdown", set()
     )
 
     assert not legacy_renderer.exists()
+    assert {"_quota_renderer", "_project_quota_cli_payload"} <= _resolved_from_imports(
+        QUOTA_CLI_MODULE
+    ).get("loopx.cli_commands.quota_presentation", set())
     assert "loopx.presentation.renderers.quota_markdown" in imports
     assert {
         "render_quota_monitor_poll_markdown",

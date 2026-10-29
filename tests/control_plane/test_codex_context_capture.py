@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -371,11 +372,30 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 assert "LoopX model-context baseline invalidated." not in text
                 # The recovery entry must really be present after compaction;
                 # the fixture may not supply a hidden saved capture path.
-                prefix = "Before dependent action, recover missing or uncertain necessary facts"
-                permanent = text[text.index(prefix):]
-                # Read only the advertised command sentence. Subsequent
-                # recovery guidance is not part of the shell invocation.
-                cmd = permanent.split("with: ", 1)[1].split(". ", 1)[0]
+                commands = set()
+                for advertised in re.findall(r"with: ([^\n]+?)(?:\. |$)", text):
+                    try:
+                        argv = shlex.split(advertised)
+                        quota = argv.index("quota")
+                        if argv[quota:quota + 2] != ["quota", "context-read"]:
+                            continue
+                        # The worker advertises its own trial-local directory
+                        # in the actual guard; it need not use this fixture's.
+                        if (argv[argv.index(context_option) + 1] != command[command.index(context_option) + 1]
+                                or argv[argv.index("--goal-id") + 1] != GOAL_ID
+                                or argv[argv.index("--agent-id") + 1] != AGENT_ID):
+                            continue
+                    except (ValueError, IndexError):
+                        continue
+                    # Voluntary full traversal serves this byte oracle. Index
+                    # and selected reads do not themselves establish a baseline.
+                    for option, width in (("--select", 2), ("--list", 1)):
+                        while option in argv:
+                            index = argv.index(option)
+                            del argv[index:index + width]
+                    commands.add(shlex.join(argv))
+                assert len(commands) == 1, "One scoped permanent reader must be visible in model input"
+                cmd = commands.pop()
                 stages["phase"] = "lookup_read"
                 assert delivered(request, "cold") == "" and delivered(request, "warm") == ""
                 return tool(cmd, number)

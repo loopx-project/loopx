@@ -56,27 +56,6 @@ def bound_steward_inventory_scope(
     return read
 
 
-def manager_source_scope_resolver(
-    server: Any, *, registry_path: Path, executor_runtime_root: Path,
-) -> Callable[[dict[str, Any]], list[str] | None]:
-    """Keep the default manager's native and legacy source routing together."""
-    from ..chat_lark_api import build_lark_goal_topic_runtime_snapshot
-    from ..extensions.lark.manager_routing import authorized_manager_goal_ids
-
-    def read(session):
-        controller = server.runtime_controller
-        if isinstance(session.get("steward_context"), dict):
-            bindings = controller.project_contexts.conversation_bindings
-            if bindings is None:
-                raise ValueError("Steward conversation bindings are unavailable")
-            return bindings.steward_scope(session)
-        return authorized_manager_goal_ids(
-            build_lark_goal_topic_runtime_snapshot(
-                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=controller.coordination_runtime_root,
-            registry_path=registry_path, executor_runtime_root=executor_runtime_root,
-        )
-    return read
 
 
 class RequestControlMixin:

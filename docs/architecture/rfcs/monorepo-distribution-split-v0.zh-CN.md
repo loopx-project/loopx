@@ -208,6 +208,14 @@ MemT 只使用这两个公开模块，不能直接 import executor 或其他内�
 边。Ark/JEV 的既有私有边仍是迁移积压，不新增豁免。facade 只转发现有行为，
 不能复制候选、验收、进程生命周期或文件锁决策。
 
+独立安装的 Codex provider-routing host 通过
+`loopx.extensions.chat_service_guard` 接入其已有、已获授权的托管 Chat consumer
+重启。facade 只转出现有 runtime activation owner 的
+`managed_chat_activation_guard` 与 `RuntimeActivationDeferred`。已接受工作观察、
+准确服务身份和 ingress lock 仍由该 owner 负责；包不读取私有 Goal 状态，
+也不复制决策。Core 缺失或不支持时延期重启；没有托管服务的路径仍不依赖 Core。
+import ratchet 只记录这一条受支持公开边；它不授予停止服务或增加其他内核 import 的权限。
+
 stdio relay 在父进程 EOF、SIGTERM 或 SIGINT 时取消所持进程组，并等待已有
 监督器完成回收再退出。POSIX 进程组行为与 Windows 尽力而为的进程树回收仍沿用
 原资格边界。这是进程监督，不是沙箱；操作者选择的工具只保有原先获准的效果。

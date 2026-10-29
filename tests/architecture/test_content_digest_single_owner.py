@@ -180,6 +180,7 @@ CONSUMER_MODULES = (
     "loopx.chat_action_normalization",
     "loopx.capabilities.manager_context.chat_history",
     "loopx.cli_commands.quota_capture",
+    "loopx.cli_commands.update_artifact",
     "loopx.configuration_transaction",
     "loopx.control_plane.agents.execution_facts",
     "loopx.control_plane.collaboration.conversation_inventory",

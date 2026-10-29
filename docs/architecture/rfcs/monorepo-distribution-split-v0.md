@@ -302,6 +302,16 @@ records both edges. Existing Ark/JEV private edges remain migration debt and
 receive no new exemption. The facade forwards existing behavior; it must not
 copy candidate, acceptance, process-lifetime or locking decisions.
 
+The independently installed Codex provider-routing host uses
+`loopx.extensions.chat_service_guard` for its existing authorized restart of
+managed Chat consumers. The facade exports only `managed_chat_activation_guard`
+and `RuntimeActivationDeferred` from the current runtime activation owner.
+Accepted-work observation, exact service identity and the ingress lock stay
+with that owner; the package neither reads private Goal state nor copies the
+decision. Missing or unsupported Core defers the service restart. The no-service
+path remains independent of Core. This one supported public edge is pinned;
+it grants no authority to stop a service or add other kernel imports.
+
 The stdio relay cancels its owned process group on parent EOF, SIGTERM or
 SIGINT and waits for the existing supervisor's cleanup before exiting. POSIX
 process-group behavior and Windows best-effort tree cleanup retain their
