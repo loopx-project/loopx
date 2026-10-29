@@ -61,9 +61,10 @@ def test_complete_numeric_observations_keep_full_transport_cost_proportional(tmp
 
     monkeypatch.setattr(turn, "effect_runtime_result", measured_rpc)
     totals, source_sizes = [], []
+    template = _quota_payload()
     for fraction in (False, True):
         costs.clear()
-        before = _quota_payload()
+        before = deepcopy(template)
         before["observations"] = [i + 0.5 if fraction else i for i in range(1000)]
         after = deepcopy(before)
         after["observations"][-1] += 1
