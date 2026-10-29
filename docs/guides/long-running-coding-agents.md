@@ -19,11 +19,6 @@ If this is your first LoopX task, run the [small bug-fixing exercise](first-bugf
 before leaving a real project running. This guide takes the next step: define
 a bounded result, activate the host you use, then recover the same work after an interruption.
 
-Before starting, decide what a successful result looks like. For a failing test,
-that might be a reproduced failure, a patch, passing relevant checks, and a PR
-ready for review. Name the module or repository the agent may change, the
-existing test command, your spending boundary, and the point where it must stop.
-
 ## Install and check the current project
 
 If LoopX is already installed, keep that installation and start with
@@ -59,7 +54,10 @@ runtime state out of version control as described in the installation guide.
 ## Codex: continue a task across sessions
 
 In Codex App, use the installed `loopx` skill through `$loopx` or `/skills`.
-A useful first task has a bounded result and a clear stopping rule:
+Before starting, decide what a successful result looks like. For a failing test,
+that might be a reproduced failure, a patch, passing relevant checks, and a PR
+ready for review. Name the module or repository the agent may change, the
+existing test command, your spending boundary, and the point where it must stop:
 
 ```text
 $loopx Fix the failing integration test, explain the cause, and prepare a

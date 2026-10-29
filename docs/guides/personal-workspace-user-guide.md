@@ -1,4 +1,6 @@
-# LoopX 个人工作区控制台（Personal Workspace Console）使用指南
+<a id="loopx-个人工作区控制台personal-workspace-console使用指南"></a>
+
+# LoopX 个人工作区使用指南
 
 在 LoopX 工作区里，你可以交代任务、查看 Agent 的进展、处理需要你决定的事项，
 再检查交付结果。**Goal 是你想要的结果，Todo 是为实现它而推进的具体工作。**
