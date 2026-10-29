@@ -28,6 +28,41 @@ def test_literal_scan_rejects_invalid_syntax_without_a_field_mention():
     source = SourceFile('loopx/broken_probe.py', '.py', 'def broken(')
     with pytest.raises(SyntaxError):
         python_production.python_literal_uses(source, 'action')
+    with pytest.raises(SyntaxError):
+        python_production.scan_python_production(source, field='action', enums={})
+
+
+@pytest.mark.parametrize('text,options,expected', [
+    ("def choose():\n return 'run'", {'return_functions': frozenset({'choose'})},
+     {('return', frozenset({'run'}), False)}),
+    ("class Action:\n RUN='run'\ndef choose():\n return Action.RUN",
+     {'enums': {'loopx/field_absence.py::Action': {'RUN': 'run'}}},
+     {('enum_result', frozenset({'run'}), False)}),
+    ("def pack(result):\n return result\npack('run')",
+     {'call_arguments': {'loopx/field_absence.py::pack': {'result': 0}}},
+     {('call_argument', frozenset({'run'}), False)}),
+    ("def choose(value):\n return value", {'return_functions': frozenset({'choose'})},
+     {('return', frozenset(), True)}),
+])
+def test_field_absence_preserves_registered_and_enum_evidence(text, options, expected):
+    source = SourceFile('loopx/field_absence.py', '.py', text)
+    assert 'action' not in text
+    rows = python_production.scan_python_production(source, **{'field': 'action', 'enums': {}, **options})
+    assert {(row.form, row.values, row.unresolved) for row in rows} == expected
+
+
+def test_field_presence_tracks_source_changes_despite_hash_collisions():
+    class CollidingText(str):
+        def __hash__(self):
+            return 0
+
+    for text, expected in [
+        ("other = 'wait'", set()),
+        (r"packet['\x61ction'] = 'run'", {'run'}),
+        ("other = 'run'", set()),
+    ]:
+        source = SourceFile('loopx/field_presence.py', '.py', CollidingText(text))
+        assert python_production.python_literal_uses(source, 'action') == expected
 
 
 @pytest.mark.parametrize('first_text,second_text', [
