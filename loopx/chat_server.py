@@ -59,7 +59,7 @@ from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
-from .extensions.lark.private_conversations import LarkPrivateConversations
+from .extensions.lark.private_conversations import LarkPrivateConversations, project_private_reply_history
 from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
@@ -933,10 +933,16 @@ class ChatRequestHandler(
                 raise ValueError("message_limit must be between 1 and 200")
             self.server.runtime_controller.recover_exited_turn(session_id)
             snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
-            self._send_json(snapshot(
-                self.server.runtime_controller.coordination_runtime_root, self.server.chat_store, session_id,
+            payload = snapshot(
+                self.server.runtime_controller.coordination_runtime_root,
+                self.server.chat_store, session_id,
                 registry=self.server.registry_path, message_limit=message_limit,
-                message_cursor=query.get("message_cursor", [None])[0]))
+                message_cursor=query.get("message_cursor", [None])[0])
+            # The HTTP composition root joins provider history onto the selected page.
+            payload["messages"] = project_private_reply_history(
+                self.server.chat_store, self.server.chat_store.load_session(session_id) or {},
+                payload["messages"])
+            self._send_json(payload)
         except KeyError:
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:
