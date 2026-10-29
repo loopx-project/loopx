@@ -106,6 +106,10 @@ def write_fixture(root: Path, *, initialize: bool = True) -> tuple[Path, Path, P
     registry_path = project / ".loopx" / "registry.json"
 
     state_path.parent.mkdir(parents=True, exist_ok=True)
+    # Own the public scan namespace before admission, even when TEMP lives
+    # below another checkout's ignored private directory.
+    subprocess.run(["git", "init", "--quiet", str(project)], check=True)
+    (project / ".gitignore").write_text(".codex/\n.loopx/\n.local/\n", encoding="utf-8")
     state_path.write_text(
         "---\n"
         "status: active-read-only\n"

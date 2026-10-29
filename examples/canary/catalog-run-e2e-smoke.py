@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -113,14 +115,17 @@ def assert_git_required_smoke_skips_without_git_worktree() -> None:
         (temp_root / "examples" / "control_plane").mkdir(parents=True)
         runner_module.REPO_ROOT = temp_root
         try:
-            payload = build_catalog_canary_run(
-                catalog_path=REPO_ROOT / "docs/concepts/interaction-pattern-catalog.md",
-                profiles=["repo-architecture-budget"],
-                max_checks_per_profile=1,
-                check_limit=1,
-                execute=True,
-                timeout_seconds=10,
-            )
+            # TEMP may be inside the source checkout. Exercise real Git's
+            # non-worktree result without discovering an unrelated ancestor.
+            with patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(temp_root.parent)}):
+                payload = build_catalog_canary_run(
+                    catalog_path=REPO_ROOT / "docs/concepts/interaction-pattern-catalog.md",
+                    profiles=["repo-architecture-budget"],
+                    max_checks_per_profile=1,
+                    check_limit=1,
+                    execute=True,
+                    timeout_seconds=10,
+                )
         finally:
             runner_module.REPO_ROOT = original_root
 
