@@ -88,7 +88,7 @@ def doctor_payload(
 
 def build_check(doctor: dict[str, object], *, ref: str = "main") -> dict[str, object]:
     with mock.patch("loopx.self_update.urlopen", return_value=FakeVersionResponse()):
-        return build_update_plan(
+        return build_update_plan(build_from_source=True,
             repo="example/loopx",
             ref=ref,
             check_only=True,
@@ -110,7 +110,7 @@ def build_live_check(
     with mock.patch("loopx.self_update.collect_doctor", return_value=doctor), mock.patch(
         "loopx.self_update.urlopen", side_effect=response
     ):
-        return build_update_plan(
+        return build_update_plan(build_from_source=True,
             repo="example/loopx", ref="main", check_only=True
         )
 
@@ -132,7 +132,7 @@ def test_update_plan_resolves_mutable_ref_commit_before_claiming_no_update(
         ),
     )
 
-    payload = build_update_plan(repo="example/loopx", ref="main", action="plan")
+    payload = build_update_plan(build_from_source=True, repo="example/loopx", ref="main", action="plan")
     commit_check = payload["source_commit_check"]
     assert commit_check["status"] == "available"
     assert commit_check["matches_current"] is False
@@ -156,7 +156,7 @@ def test_update_plan_accepts_exact_commit_under_pinned_install_ref(
         lambda *_args, **_kwargs: FakeVersionResponse(INSTALLED_COMMIT.encode()),
     )
 
-    payload = build_update_plan(repo="example/loopx", ref="main", action="plan")
+    payload = build_update_plan(build_from_source=True, repo="example/loopx", ref="main", action="plan")
     assert payload["source_commit_check"]["matches_current"] is True
     assert payload["runtime_activation_qualification"]["decision"] == "runtime_active"
     assert "no update needed" in payload["recommended_action"]
@@ -174,7 +174,7 @@ def test_update_plan_offline_never_calls_unqualified_source_current(
     monkeypatch.setattr("loopx.self_update.collect_doctor", lambda: doctor)
     monkeypatch.setattr("loopx.self_update.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")))
 
-    payload = build_update_plan(repo="example/loopx", ref="main", action="plan")
+    payload = build_update_plan(build_from_source=True, repo="example/loopx", ref="main", action="plan")
     assert payload["source_commit_check"]["status"] == "unavailable"
     assert payload["runtime_activation_qualification"]["decision"] == "activation_qualification_required"
     assert "no update needed" not in payload["recommended_action"]
@@ -233,7 +233,7 @@ def test_update_readiness_remains_bounded_when_one_source_registry_stalls(
     monkeypatch.setattr("loopx.self_update.urlopen", lambda *_args, **_kwargs: FakeVersionResponse())
 
     started = time.monotonic()
-    payload = build_update_plan(
+    payload = build_update_plan(build_from_source=True,
         action=action,
         repo="example/loopx",
         ref="main",
@@ -641,7 +641,7 @@ def test_pipx_distribution_apply_preserves_the_pipx_environment() -> None:
 def test_archive_apply_restarts_managed_services_when_only_extensions_are_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    payload = build_update_plan(action="apply", doctor_payload=doctor_payload())
+    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
 
     assert payload["install_lifecycle"]["execution_driver"] == "archive_snapshot"
 
@@ -681,7 +681,7 @@ def test_archive_apply_restarts_managed_services_when_only_extensions_are_blocke
 def test_archive_apply_skips_managed_service_restart_when_the_runtime_is_unhealthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    payload = build_update_plan(action="apply", doctor_payload=doctor_payload())
+    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
 
     failed_install = subprocess.CompletedProcess([], 1, "", "installer failed")
     monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
@@ -713,7 +713,7 @@ def test_live_checkout_apply_never_mutates_git_or_switches_install_channels() ->
         "/workspace/loopx/scripts/install-local.sh\nloopx doctor"
     )
 
-    payload = build_update_plan(action="apply", doctor_payload=doctor)
+    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor)
 
     assert payload["ok"] is False
     assert payload["install_lifecycle"]["owner"] == "source_checkout"
@@ -938,7 +938,7 @@ def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_up
 ])
 def test_update_preserves_selected_route_through_install_and_readback(tmp_path, monkeypatch, driver):
     registry, runtime = tmp_path / "project/.loopx/registry.json", tmp_path / "selected runtime"
-    payload = build_update_plan(action="apply", doctor_payload=doctor_payload())
+    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
     payload["install_lifecycle"].update(execution_driver=driver)
     calls, installer_env = [], {}
     monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
@@ -1018,7 +1018,7 @@ def test_archive_readback_and_activation_follow_installer_bin_owner(
 @pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
 def test_python_distribution_activation_ignores_archive_bin_override(tmp_path, monkeypatch, driver):
     monkeypatch.setenv("LOOPX_BIN_DIR", str(tmp_path / "custom/bin"))
-    payload = build_update_plan(action="apply", doctor_payload=doctor_payload())
+    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
     payload["install_lifecycle"].update(execution_driver=driver)
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
     with (

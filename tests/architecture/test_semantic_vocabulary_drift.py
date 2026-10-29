@@ -431,19 +431,27 @@ def test_registered_kernel_producer_coverage_cannot_be_removed(name):
         smoke['check_coverage_floor'](registry)
 
 
-@pytest.mark.parametrize('metadata,name', [
-    ('call_producers', 'loop_disposition'),
-    ('call_producers', 'agent_scope_frontier_action'),
-    ('call_producers', 'turn_result_kind'),
-    ('return_paths', 'turn_route'),
-    ('return_paths', 'turn_result_kind'),
-])
-def test_explicit_output_evidence_cannot_be_removed_or_redirected(metadata, name):
+@pytest.mark.parametrize('metadata', ['call_producers', 'return_paths'])
+def test_explicit_output_evidence_cannot_be_removed_or_redirected(metadata):
+    """Every vocabulary that carries explicit output evidence must keep it.
+
+    The anchored vocabularies are read from the registry instead of being
+    written out here. Evidence that moves to another vocabulary, or is retired
+    together with its owner, then changes what this case proves instead of
+    leaving it silently vacuous.
+    """
     smoke = runpy.run_path(str(SMOKE))
     registry = copy.deepcopy(smoke['load_registry']())
-    registry['vocabularies'][name][metadata] = {}
-    with pytest.raises(smoke['Drift'], match='anchored output evidence'):
-        smoke['check_coverage_floor'](registry)
+    anchored = sorted(
+        name for name, vocabulary in registry['vocabularies'].items()
+        if vocabulary.get(metadata)
+    )
+    assert anchored, f"no vocabulary carries {metadata} evidence to protect"
+    for name in anchored:
+        mutated = copy.deepcopy(registry)
+        mutated['vocabularies'][name][metadata] = {}
+        with pytest.raises(smoke['Drift'], match='anchored output evidence'):
+            smoke['check_coverage_floor'](mutated)
 
 
 @pytest.mark.parametrize('name', [

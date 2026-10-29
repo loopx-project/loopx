@@ -307,8 +307,8 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     # or re-reading every off-page Turn for each page.
     snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
-    from ...extensions.lark.private_conversations import project_private_reply_history
-    snapshot["messages"] = project_private_reply_history(store, store.load_session(session_id) or {}, snapshot["messages"])
+    # Provider-owned history joins the selected page at the composition root.
+    # Core capabilities never import an extension projection sink.
     if page is not None:
         snapshot["message_page"] = page["message_page"]
     return snapshot

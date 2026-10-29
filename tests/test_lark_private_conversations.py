@@ -5,6 +5,7 @@ import time
 import http.client
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -41,7 +42,8 @@ class Provider:
             "sender_type": "user", "sender_id": f"ou_{profile.replace('-', '_')}", "message_type": kind,
             "content": text}
         self.messages[event["message_id"]] = {"message_id": event["message_id"], "chat_id": event["chat_id"],
-            "sender": {"id": event["sender_id"], "sender_type": "user"}, "msg_type": kind, "content": text}
+            "sender": {"id": event["sender_id"], "sender_type": "user"}, "msg_type": kind, "content": text,
+            "create_time": str(int(time.time() * 1000))}
         return event
 
     def topic(self, name, text, *, root=None, chat="oc_community", sender="ou_member", addressed=True):
@@ -71,6 +73,37 @@ class Provider:
         elif "+chat-list" in args:
             data = {"ok": True, "data": {"chats": [{"chat_id": chat, "name": title}
                 for chat, title in [("oc_community", "Community trial"), ("oc_second", "Second trial")]]}}
+        elif "+chat-messages-list" in args:
+            # Exercise the existing ingress owner against actual synthetic
+            # history, including its time windows and continuation tokens.
+            chat = args[args.index("--chat-id") + 1]
+            if chat != f"oc_{profile.replace('-', '_')}":
+                raise ValueError("synthetic private history belongs to another profile")
+            start = args[args.index("--start") + 1] if "--start" in args else None
+            end = args[args.index("--end") + 1]
+            order = args[args.index("--order") + 1]
+            if order not in {"asc", "desc"}:
+                raise ValueError("unsupported synthetic history order")
+            lower = datetime.fromisoformat(start).timestamp() * 1000 if start else float("-inf")
+            upper = datetime.fromisoformat(end).timestamp() * 1000
+            query = [profile, chat, start, end, order]
+            offset = 0
+            if "--page-token" in args:
+                cursor = json.loads(args[args.index("--page-token") + 1])
+                if (not isinstance(cursor, list) or len(cursor) != 6 or cursor[:5] != query
+                        or type(cursor[5]) is not int or cursor[5] < 0):
+                    raise ValueError("synthetic history cursor does not match its source window")
+                offset = cursor[5]
+            size = int(args[args.index("--page-size") + 1])
+            if not 1 <= size <= 50:
+                raise ValueError("invalid synthetic history page size")
+            rows = [dict(row) for row in tuple(self.messages.values())
+                    if row["chat_id"] == chat and lower <= int(row["create_time"]) <= upper]
+            rows.sort(key=lambda row: (int(row["create_time"]), row["message_id"]), reverse=order == "desc")
+            page = rows[offset:offset + size]
+            more = offset + size < len(rows)
+            data = {"ok": True, "identity": "bot", "data": {"messages": page, "has_more": more,
+                "page_token": json.dumps([*query, offset + size]) if more else None}}
         elif "api" in args and "GET" in args:
             path = args[args.index("GET") + 1]
             assert path.startswith("/open-apis/im/v1/messages/")
@@ -113,7 +146,8 @@ class Provider:
                 target = self.messages[args[args.index("--message-id") + 1]] if "+messages-reply" in args else None
                 self.messages[ref] = {"message_id": ref, "msg_type": kind, "body": {"content": content},
                     "chat_id": target["chat_id"] if target else args[args.index("--chat-id") + 1],
-                    "sender": {"id": self.profile_apps[profile], "sender_type": "app"}}
+                    "sender": {"id": self.profile_apps[profile], "sender_type": "app"},
+                    "create_time": str(int(time.time() * 1000))}
                 if target:
                     assert "--reply-in-thread" in args
                     root = target.get("root_id") or target["message_id"]
@@ -146,6 +180,31 @@ class Provider:
         else:
             pytest.fail(f"unnecessary provider operation: {args[2:5]}")
         return {"returncode": 0, "stdout": json.dumps(data), "stderr": ""}
+
+
+def test_synthetic_private_history_preserves_window_pages_and_audience():
+    provider = Provider()
+    for profile in ("notes-app", "steward-app"):
+        for index in range(5):
+            event = provider.event(profile, f"{profile}-{index}", f"source {index}")
+            provider.messages[event["message_id"]]["create_time"] = str((100 + index) * 1000)
+    args = ["lark-cli", "--profile", "steward-app", "im", "+chat-messages-list", "--as", "bot",
+        "--chat-id", "oc_steward_app", "--start", "1970-01-01T00:01:41+00:00",
+        "--end", "1970-01-01T00:01:43+00:00", "--order", "asc", "--page-size", "2"]
+    first = json.loads(provider(args)["stdout"])["data"]
+    assert [row["message_id"] for row in first["messages"]] == ["om_steward-app-1", "om_steward-app-2"]
+    assert first["has_more"]
+    second = json.loads(provider([*args, "--page-token", first["page_token"]])["stdout"])["data"]
+    assert [row["message_id"] for row in second["messages"]] == ["om_steward-app-3"]
+    assert not second["has_more"] and second["page_token"] is None
+    wrong_window = list(args)
+    wrong_window[wrong_window.index("--end") + 1] = "1970-01-01T00:01:44+00:00"
+    with pytest.raises(ValueError, match="cursor does not match"):
+        provider([*wrong_window, "--page-token", first["page_token"]])
+    foreign = list(args)
+    foreign[foreign.index("--chat-id") + 1] = "oc_notes_app"
+    with pytest.raises(ValueError, match="another profile"):
+        provider(foreign)
 
 
 def connect(fixture):

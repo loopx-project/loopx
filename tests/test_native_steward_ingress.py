@@ -16,11 +16,12 @@ def ingress_path(store, row):
 
 
 @pytest.mark.parametrize("revoke_during_read", [False, True])
-@pytest.mark.parametrize("revoke", ["binding", "provider"])
-def test_request_inventory_keeps_native_source_scope_and_holds_revoked_binding(steward, monkeypatch, revoke_during_read, revoke):  # noqa: F811
+@pytest.mark.parametrize("revoke", ["binding", "provider", "scope"])
+@pytest.mark.parametrize("scoped_reader", [False, True])
+def test_request_inventory_keeps_native_source_scope_and_holds_revoked_binding(steward, monkeypatch, revoke_during_read, revoke, scoped_reader):  # noqa: F811
     from types import SimpleNamespace
     from urllib.parse import urlencode
-    from loopx.presentation.request_control_api import RequestControlMixin
+    from loopx.presentation.request_control_api import RequestControlMixin, bound_steward_inventory_scope
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     target = {"goal_id": "registered-work", "agent_id": "worker"}
@@ -54,16 +55,28 @@ def test_request_inventory_keeps_native_source_scope_and_holds_revoked_binding(s
             return self.result
 
     reader = Reader()
+    if scoped_reader:
+        reader.server.request_inventory_scope_resolver = bound_steward_inventory_scope(
+            runtime, manager_scope_resolver=runtime.manager_scope_resolver)
+    observations = []
+    observe = transport.bindings._observe_owner
+    def observe_owner(ref):
+        observations.append(ref)
+        return observe(ref)
+    monkeypatch.setattr(transport.bindings, "_observe_owner", observe_owner)
     code, value = reader.read()
     assert code == 200 and value["pending_count"] == 1, value
     assert value["rows"][0]["request_id"] == receipt["request_id"]
+    assert len(observations) == (2 if scoped_reader else 4)
     # A fresh source read cannot turn a revoked personal binding into local-owner
     # scope, nor use cached brief content after the authorization disappears.
     def withdraw_scope():
         if revoke == "binding":
             transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
-        else:
+        elif revoke == "provider":
             provider.owner_ready = False
+        else:
+            runtime.manager_scope_resolver = lambda _: []
     if revoke_during_read:
         from loopx.control_plane.collaboration import conversation_inventory
         read_requests = conversation_inventory.read_conversation_requests
@@ -75,8 +88,144 @@ def test_request_inventory_keeps_native_source_scope_and_holds_revoked_binding(s
     else:
         withdraw_scope()
     code, refused = reader.read()
-    assert code == 400 and "rows" not in refused
+    if revoke == "scope" and not revoke_during_read:
+        assert code == 200 and refused["rows"] == [] and refused["pending_count"] == 0
+    else:
+        assert code == 400 and "rows" not in refused
     assert (capture.read_bytes() if capture.exists() else b"") == calls
+
+
+@pytest.mark.parametrize("backend", ["file", "sqlite"])
+def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(steward, monkeypatch, backend):  # noqa: F811
+    import hashlib
+    import http.client
+    import threading
+    from urllib.parse import urlencode
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+    from loopx.control_plane.collaboration.links import link
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.todos.mutation_api import add_goal_todo
+    from loopx.extensions.lark.conversation_identity import identity_ref
+    from loopx.presentation.request_control_api import bound_steward_inventory_scope, manager_source_scope_resolver
+
+    store, runtime, provider, transport, binding, capture, workspace = steward
+    goal = "registered-work"
+    state = workspace / "ACTIVE_GOAL_STATE.md"
+    state.write_text("# Goal\n\n## User Todo\n\n## Agent Todo\n\n## Completed Work Archive\n")
+    root = runtime.coordination_runtime_root
+    registry = json.loads(runtime.registry_path.read_text())
+    registry["common_runtime_root"] = str(root)
+    registry["goals"] = [{"id": goal, "repo": str(workspace), "state_file": str(state),
+        "coordination": {"registered_agents": ["worker", "reviewer"]}}]
+    runtime.registry_path.write_text(json.dumps(registry))
+    initialize_canonical_authority(root, goal, build_todo_runtime_shadow_projection(goal_id=goal, todos=[]),
+        state_path=state, provider=backend)
+    tasks = {}
+    for agent in ("worker", "reviewer"):
+        created = add_goal_todo(registry_path=runtime.registry_path, runtime_root_arg=str(root), goal_id=goal,
+            role="agent", text=f"Inspect the retained artifact for {agent}", claimed_by=agent)
+        assert created["ok"] is True
+        tasks[agent] = created["todo_id"]
+    for number in range(43):
+        event = provider.event("steward-app", f"history-{number}",
+            f"Record {number}: " + "保留来源身份、当前版本和核验结果。" * 100)
+        transport.admit("steward-app", event)
+        accepted = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+        finish(runtime, accepted)
+        session = store.load_session(accepted["session_id"])
+        turn = store.load_turn(accepted["session_id"], accepted["turn_id"])
+        if number == 0:
+            configure_evidence_scope(root, runtime.registry_path, channel=session["channel_id"], goal_ids=[goal], execute=True)
+            for agent in ("worker", "reviewer"):
+                configure_delivery_target(root, runtime.registry_path, channel=session["channel_id"],
+                    goal_id=goal, agent_id=agent, grant=True, execute=True)
+        agent = "reviewer" if number % 2 else "worker"
+        delivered = deliver(root, runtime.registry_path, session=session, turn=turn,
+            request={"goal_id": goal, "agent_id": agent}, source_store=store)
+        if number < 2:
+            link(root, runtime.registry_path, goal, agent, delivered["request_id"], [tasks[agent]], [])
+
+    sources = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in _root(root).rglob("*.json")}
+    model_calls = capture.read_bytes() if capture.exists() else b""
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root, server.chat_store = runtime.registry_path, store.root.parent, store
+    server.runtime_root_override, server.runtime_controller = str(store.root.parent), runtime
+    server.selected_goal_id, server.verbose = None, False
+    runtime.manager_scope_resolver = manager_source_scope_resolver(server,
+        registry_path=runtime.registry_path, executor_runtime_root=store.root.parent)
+    server.request_inventory_scope_resolver = bound_steward_inventory_scope(
+        runtime, manager_scope_resolver=runtime.manager_scope_resolver)
+    observations = []
+    observe = transport.bindings._observe_owner
+    def observe_owner(ref):
+        observations.append(ref)
+        return observe(ref)
+    monkeypatch.setattr(transport.bindings, "_observe_owner", observe_owner)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    def read(**query):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=30)
+        before = len(observations)
+        connection.request("GET", "/api/chat/request-inventory?" + urlencode({"session_id": session["session_id"], **query}))
+        response = connection.getresponse()
+        body = json.loads(response.read())
+        connection.close()
+        return response.status, body, len(observations) - before
+    try:
+        offset, ids, snapshot, linked = 0, [], None, []
+        while offset is not None:
+            code, page, checks = read(view="history", offset=offset)
+            assert code == 200 and checks == 2 and page["matched"] == page["pending_count"] == 43
+            assert page["coverage"] == {"scan_complete": True, "unreadable": 0, "diagnostics": []}
+            assert all(len(row["source_question"]) > 1000 for row in page["rows"])
+            snapshot = snapshot or page["snapshot_digest"]
+            assert page["snapshot_digest"] == snapshot
+            ids.extend(row["request_id"] for row in page["rows"])
+            linked.extend(todo for row in page["rows"] for todo in row["linked_todos"])
+            offset = page["next_offset"]
+        assert len(ids) == len(set(ids)) == 43
+        assert {todo["todo_id"] for todo in linked} == set(tasks.values())
+        assert all(todo["status"] == "open" and "Inspect the retained artifact" in todo["title"] for todo in linked)
+        assert {row["agent_id"] for row in page["rows"]} <= {"worker", "reviewer"}
+        code, searched, checks = read(view="history", search=ids[-1])
+        assert code == 200 and checks == 2 and searched["matched"] == 1
+        provider.owner_ready = False
+        code, refused, _ = read(view="history")
+        assert code == 400 and "rows" not in refused and "保留来源身份" not in str(refused)
+        provider.owner_ready = True
+        assert read(view="history")[1]["matched"] == 43
+        assert {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources} == sources
+        assert (capture.read_bytes() if capture.exists() else b"") == model_calls
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+
+
+def test_manager_source_scope_keeps_source_and_executor_routes_distinct(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from loopx import chat_lark_api
+    from loopx.extensions.lark import manager_routing
+    from loopx.presentation.request_control_api import manager_source_scope_resolver
+
+    source, frozen_registry, executor = tmp_path / "source", tmp_path / "registry", tmp_path / "executor"
+    server = SimpleNamespace(registry_path=source, runtime_root_override="current-source-override",
+        runtime_controller=SimpleNamespace(coordination_runtime_root=tmp_path / "coordination"))
+    observed = []
+    def snapshot(**kwargs):
+        observed.append(kwargs)
+        return {"source": "current"}
+    def authorize(value, session, **kwargs):
+        assert value == {"source": "current"} and session == {"channel_id": "legacy-manager"}
+        observed.append(kwargs)
+        return ["permitted-goal"]
+    monkeypatch.setattr(chat_lark_api, "build_lark_goal_topic_runtime_snapshot", snapshot)
+    monkeypatch.setattr(manager_routing, "authorized_manager_goal_ids", authorize)
+    read = manager_source_scope_resolver(server, registry_path=frozen_registry, executor_runtime_root=executor)
+    assert read({"channel_id": "legacy-manager"}) == ["permitted-goal"]
+    assert observed == [{"registry_path": source, "runtime_root_override": "current-source-override"}, {
+        "runtime_root": tmp_path / "coordination", "registry_path": frozen_registry, "executor_runtime_root": executor}]
 
 
 @pytest.mark.parametrize("separate_coordination_root", [False, True])

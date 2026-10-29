@@ -614,7 +614,27 @@ try {
   await page.getByRole("button", { name: "Update prepared" }).click();
   await page.getByText(/It installs on the next open/).waitFor();
   assert.deepEqual(calls.slice(beforeBackground).map((call) => call.args?.action), ["check"]);
-  console.log("desktop-update-browser-smoke: passed (confirmation, failure redaction, mobile, missing assets + reload, startup motion states, startup recovery, immediate terminal recovery, automatic startup presentation)");
+  // Reopening observes a transfer; it must neither restart it nor invent a
+  // total/percentage when the native source has not reported Content-Length.
+  const beforeTransfer = calls.length;
+  nativeState = { phase: "downloading", details: { channel: "stable", received: 1048576, total: 4194304 } };
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.reload();
+  await page.getByRole("button", { name: "Updating…" }).click();
+  await page.getByText(/1.0 MiB \/ 4.0 MiB/).waitFor();
+  assert.equal(await page.getByRole("progressbar").getAttribute("value"), "1048576");
+  await page.screenshot({ path: resolve(output, "transfer-progress-desktop.png") });
+  nativeState = { phase: "downloading", details: { channel: "stable", received: 2097152 } };
+  await page.getByText(/2.0 MiB \/ size unknown/).waitFor();
+  assert.equal(await page.getByRole("progressbar").count(), 0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open Goal navigation" }).click();
+  if (!await page.locator(".personal-update-panel").isVisible()) await page.getByRole("button", { name: "Updating…" }).click();
+  await page.getByText(/2.0 MiB \/ size unknown/).waitFor();
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: resolve(output, "transfer-progress-mobile.png") });
+  assert.equal(calls.length, beforeTransfer, "observing transfer metrics must never start an installation");
+  console.log("desktop-update-browser-smoke: passed (recovery, channel ownership, transfer bytes/unknown totals, bilingual narrow/desktop)");
 } finally {
   await browser.close();
   await new Promise((done) => server.close(done));

@@ -131,6 +131,13 @@ def main() -> None:
 
         assert not (home / ".local" / "bin" / "loopx-canary").exists()
         assert not (home / ".local" / "bin" / "goal-harness-canary").exists()
+        # Retire this disposable installed runtime before its HOME is removed;
+        # an idle server can otherwise publish an exit-time cache during rmtree.
+        subprocess.run([sys.executable, "-c",
+            "from loopx.control_plane.effect_runtime import restart_effect_runtime; "
+            "restart_effect_runtime(wait_for_exit=True)"],
+            env={**env, "PYTHONPATH": str(release_root)}, cwd=release_root,
+            check=True, timeout=15, stdout=subprocess.DEVNULL)
 
 
 if __name__ == "__main__":
