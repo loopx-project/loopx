@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -172,7 +173,9 @@ def write_turn_journal(
 
     request: dict[str, Any] = {
         "path": path,
-        "journal": dict(journal),
+        # TS owns validation, transitions and publication. Carry the original
+        # JSON as text so its parser/stringifier cannot round source evidence.
+        "journal": json.dumps(dict(journal), ensure_ascii=False, separators=(",", ":"), allow_nan=False),
         "expected_effect_id": expected_effect_id,
     }
     if source_admission is not None:

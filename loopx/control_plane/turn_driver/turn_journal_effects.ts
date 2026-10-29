@@ -10,6 +10,7 @@ import {
 } from "../effect_runtime_errors.ts";
 import {
   atomicWriteJson,
+  atomicWriteText,
   claimFileMutationLock,
   mutationLockOwner,
   releaseFileMutationLock,
@@ -318,7 +319,22 @@ export async function commitTurnJournal(
   if (!isAbsolute(path)) {
     throw new EffectRuntimeRequestError("Turn journal path must be absolute");
   }
-  const journal = asObject(params.journal);
+  // Serialized input is an IO carrier, not a second transition owner. Validate
+  // its decoded facts below, then publish those same source bytes atomically.
+  // Existing native object callers keep their historical encoding.
+  const originalJson = typeof params.journal === "string" ? params.journal : null;
+  let value: unknown = params.journal;
+  if (originalJson !== null) {
+    try {
+      value = JSON.parse(originalJson, (_key, item: unknown) => {
+        if (typeof item === "number" && !Number.isFinite(item)) throw new Error("non-finite number");
+        return item;
+      });
+    } catch {
+      throw new EffectRuntimeRequestError("Turn journal requires valid finite JSON", "journal_snapshot_invalid");
+    }
+  }
+  const journal = asObject(value);
   const goalBinding = parseTurnJournalGoalBinding(journal);
   if (goalBinding.kind === "invalid") {
     throw new EffectRuntimeRequestError(
@@ -373,7 +389,8 @@ export async function commitTurnJournal(
       )) {
         conflict("A new Turn journal must begin in progress with no completed phases");
       }
-      await atomicWriteJson(path, journal);
+      if (originalJson === null) await atomicWriteJson(path, journal);
+      else await atomicWriteText(path, `${originalJson}\n`);
       return {
         ok: true,
         appended: true,

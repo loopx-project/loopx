@@ -83,6 +83,41 @@ function sourceJournal(
   return snapshot;
 }
 
+test("serialized journal preserves numeric source bytes and retains transition and lifetime checks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-journal-source-"));
+  const path = join(root, "turn.json");
+  try {
+    const encoded = JSON.stringify(journal()).replace(/}$/, ',"source":[1.0,-0.0,1152921504606846977]}');
+    const written = await commitTurnJournal({path, journal: encoded, expected_effect_id: effectId()});
+    assert.equal(written.appended, true);
+    assert.equal(await readFile(path, "utf8"), encoded + "\n");
+    assert.equal((await commitTurnJournal({path, journal: encoded})).replayed, true);
+    await assert.rejects(commitTurnJournal({path, journal: JSON.stringify(journal("committed", phases))}),
+      /skip transaction checkpoints/);
+    await assert.rejects(commitTurnJournal({path: join(root, "scoped.json"),
+      journal: JSON.stringify(sourceJournal(instanceA, turnKey))}), /require source admission/);
+    await assert.rejects(commitTurnJournal({path, journal: encoded, expected_effect_id: "other-effect"}),
+      /expected settlement effect/);
+    assert.equal(await readFile(path, "utf8"), encoded + "\n");
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+for (const encoded of ['{"broken":', 'null', '[]', '1',
+  JSON.stringify(journal()).replace(/}$/, ',"source":1e400}')]) {
+  test(`serialized journal rejects invalid input before writing: ${encoded.slice(0, 24)}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "loopx-journal-invalid-"));
+    const path = join(root, "turn.json");
+    try {
+      await assert.rejects(commitTurnJournal({path, journal: encoded}), /JSON|schema/);
+      await assert.rejects(readFile(path), {code: "ENOENT"});
+    } finally {
+      await rm(root, {recursive: true, force: true});
+    }
+  });
+}
+
 function sourceGuardPath(registryPath: string, goalId: string): string {
   const alias = createHash("sha256").update(goalId, "utf8").digest("hex");
   return join(
