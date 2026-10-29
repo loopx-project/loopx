@@ -115,3 +115,47 @@ def test_native_hook_does_not_promote_selected_eof(tmp_path, monkeypatch):
         "tool_use_id": "selected-detail", "tool_response": json.dumps(page)})
     after = context._state(tmp_path)
     assert "candidate" not in after and after["recovery"] == before["recovery"]
+    assert after["context_epoch"] == before["context_epoch"] and after["pending"] == before["pending"]
+
+
+def test_index_is_a_paginated_directory_not_a_read_receipt(tmp_path):
+    path, raw, original = fixture_capture(tmp_path)
+    request = args(path, raw)
+    request.select = ["", "/rows", "/a~1b", "/large"]
+    request.list_fields = True
+    combined = b""
+    first = None
+    while True:
+        page = read_context_capture(request)
+        assert page["ok"] and page["offset"] == len(combined), page
+        assert page["list_fields"] and capture_page_range(page, raw=raw, digest=request.capture_sha256) is None
+        first = first or page
+        combined += page["content"].encode()
+        if page["eof"]:
+            break
+        assert "--list" in page["next_command"]
+        request.offset, request.selection_sha256 = page["next_offset"], page["selection_sha256"]
+    directory = json.loads(combined)
+    assert directory["schema_version"] == "context_capture_index_v1"
+    groups = {row["pointer"]: row["fields"] for row in directory["selections"]}
+    assert groups["/large"] == []  # listing a scalar never leaks its value
+    assert groups["/rows"][0]["pointer"] == "/rows/0"
+    assert groups["/a~1b"] == [{"pointer": "/a~1b/~0", "type": "null", "bytes": 4}]
+    fields = {row["pointer"]: row for row in groups[""]}
+    assert fields["/large"] == {"pointer": "/large", "type": "number", "bytes": len(str(original["large"]))}
+    assert fields["/rows"]["count"] == 1
+    assert original["rows"][0]["text"] not in combined.decode()
+    # A cursor from an index cannot be replayed as a selected-value cursor.
+    request.list_fields = False
+    request.offset, request.selection_sha256 = first["next_offset"], first["selection_sha256"]
+    assert read_context_capture(request)["ok"] is False
+
+
+def test_cli_index_defaults_to_root_without_registry_or_runtime(tmp_path):
+    path, raw, _ = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "missing.json", tmp_path / "missing-runtime"
+    code, page = _run_cli(registry, runtime, "quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--list", cwd=tmp_path)
+    assert code == 0 and page["eof"], page
+    assert page["selected_pointers"] == [""]
+    assert not registry.exists() and not runtime.exists()

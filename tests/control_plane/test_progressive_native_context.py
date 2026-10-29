@@ -76,8 +76,10 @@ def test_cold_warm_and_repeated_compaction_keep_requirements_without_replaying_m
         assert "Do not replay read context or rerun admission solely" in result["hookSpecificOutput"]["additionalContext"]
         assert "Previous failure" not in json.dumps(result)
     _, fresh = project(tmp_path, "fresh", payload={**original, "stop": "Stop all delivery."})
-    assert fresh["mode"] == "full" and fresh["context"]["stop"] == "Stop all delivery."
-    assert fresh["context"]["capability_gate"] == original["capability_gate"]
+    assert fresh["mode"] == "full"
+    current = json.loads(Path(fresh["recovery"]["path"]).read_bytes())
+    assert current["stop"] == "Stop all delivery."
+    assert current["capability_gate"] == original["capability_gate"]
     assert json.loads(Path(archive["path"]).read_bytes()) == original
 
 
@@ -148,11 +150,14 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
         deliver(tmp_path, event, recovered)
         assert context._state(tmp_path)["candidate"]["capture_file"] == view["recovery"]["path"]
         code, warm = _run_cli(registry, runtime, *command, cwd=tmp_path)
-        assert code == 0 and warm["target"]["context_epoch"] == view["target"]["context_epoch"], warm
+        assert code == 0 and warm["ok"], warm
+        if "target" in warm:
+            assert warm["target"]["context_epoch"] == view["target"]["context_epoch"]
         check_recovery(warm)
         context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
         code, compacted = _run_cli(registry, runtime, *command, cwd=tmp_path)
-        assert code == 0 and compacted["mode"] == "full", compacted
+        assert code == 0 and compacted["ok"], compacted
+        assert compacted["mode"] == "full"
         check_recovery(compacted)
     assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
 

@@ -170,7 +170,7 @@ token、完整成本或实际决策／成果收益。
 C1 现退役其未发布的强制成果阅读计划和 scoped wrapper，复用已合入 #7560 的
 建议性导航与通用同 capture selector。已合入 #7643 通过既有修改计划保留原始数值。
 [导航收敛检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.zh-CN.md)
-保留签名契约全文与主干先恢复后规划的顺序；#7627 文件优先交付仍是独立评审的依赖。
+保留签名契约全文与主干先恢复后规划的顺序；#7627 已合入的文件优先交付经同一 owner 采用。
 旧 native 融合调用节省不适用于本次集成。数值 hash 身份、writer/caller 退役及原
 quota 成果/完整成本仍未闭合。
 

@@ -438,10 +438,10 @@ it commits the current complete recovery before optional planning. This restores
 two owner calls for a simple native capture instead of the prototype's fused
 call, so the old call-count improvement is not a current qualification.
 
-[#7627](https://github.com/loopx-project/loopx/pull/7627) separately proposes
+Merged [#7627](https://github.com/loopx-project/loopx/pull/7627) supplies
 saved-file-first delivery and file deltas without mandatory full model reading.
-Adopt its reviewed exact implementation through the existing native owner rather
-than reintroduce the retired scope mechanism. Its installed adoption, actual
+C1 adopts its reviewed implementation through the existing native owner,
+without reintroducing the retired scope mechanism. Its installed adoption, actual
 model decisions and accepted-outcome/full-cost qualification remain separate.
 Historical captures retain their original identity and supported recovery.
 
@@ -1761,6 +1761,15 @@ are stable design references, not claims that a canonical Todo is complete.
 | **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
 | **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, Stop and artifact return | Packaged managed and supported attached heartbeat journeys, including unavailable host and late results; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
+
+The existing native context entry now supports a bounded C2 precursor: complete
+captures remain on disk, the normal response exposes file navigation, and exact
+file deltas do not require model retention. After compaction the next work Turn
+establishes a new full saved baseline, without an immediate full reread.
+Required facts still precede dependent decisions; admission and settlement are
+unchanged. This does not qualify C1's unified producer/consumer cutover or the
+matched effectiveness/full-cost result in §9. Rollback uses the existing
+context-delivery off path; staged material composition remains separately owned.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;

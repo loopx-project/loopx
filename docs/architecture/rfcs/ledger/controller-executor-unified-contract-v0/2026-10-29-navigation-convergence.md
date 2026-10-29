@@ -2,6 +2,11 @@
 
 中文镜像：[同名检查点](2026-10-29-navigation-convergence.zh-CN.md)。
 
+C1 subsequently adopts merged #7627's file-first delivery and file deltas at
+target `385eb853c1d37f5a285f2e8e0b875bd0ea04d3b3`, preserving #7643.
+The former `--turn-envelope` spelling no longer changes navigation or diagnostic
+detail selection; both callers use the same owners.
+
 C1 integrates target main `bcb1a8710844bda6b84c2a00cf5d86ba78e126d9` after
 its numeric-reference checkpoint `16626b9d08b4017376093cff7c669241d68f99bb`.
 This is an in-flight integration in #7430, not a new default or installed rollout.
@@ -27,8 +32,8 @@ The discarded fusion used one owner call for a simple native projection. The
 current path explicitly observes the existing planner plus codec: two calls.
 The earlier call-count improvement and scope-specific size/timing results remain
 historical; they do not qualify this integration. No latency, model-token,
-accepted-outcome or complete-cost gain is claimed. #7627 separately owns saved
-file-first delivery and file deltas; its exact adoption remains to be qualified.
+accepted-outcome or complete-cost gain is claimed. #7627's merged source implementation is reused here; installed/model adoption
+and outcomes still need separate qualification.
 
 Validation and remaining gaps are recorded on the exact PR head. Preserve the
 initial integration collection error, historical two layout failures and retired

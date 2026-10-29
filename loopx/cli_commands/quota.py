@@ -635,10 +635,7 @@ def handle_quota_command(
                 inline_goal_source=native_context_activation(args)["enabled"],
                 available_capabilities=args.available_capabilities,
                 include_scheduler_detail="scheduler" in detail_sections,
-                include_agent_todo_detail=(
-                    "agent-todos" in detail_sections
-                    and not bool(getattr(args, "turn_envelope", False))
-                ),
+                include_agent_todo_detail="agent-todos" in detail_sections,
                 codex_app_current_rrule=args.app_automation_current_rrule,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
@@ -661,10 +658,7 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
-                context_navigation=(
-                    native_context_activation(args)["enabled"]
-                    and not bool(getattr(args, "turn_envelope", False))
-                ),
+                context_navigation=native_context_activation(args)["enabled"],
                 goal_ref=goal_ref,
             )
             _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)

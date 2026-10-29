@@ -246,6 +246,13 @@ cross-work dependencies and contrary or unresolved evidence require expansion
 before a dependent decision. Reuse an existing typed scope owner instead of adding
 keyword classifiers or another relevance engine.
 
+Keep file availability separate from model retention. Saving a complete capture
+permits exact file comparison, not a claim that the model read it. In native
+context delivery, a new compaction epoch starts with a full saved baseline on
+the next work Turn; ordinary resume and selective reads preserve the epoch.
+Recovery continues the original Turn and reads missing necessary facts, without
+replaying admission or draining an entire packet to enable later deltas.
+
 Separate **acceptance criteria** from **acceptance evidence**. Criteria and current
 unmet/unknown status guide execution; historical reviewer notes, full provenance,
 logs and detailed evidence support a specific verification, dispute, replan or

@@ -18,7 +18,7 @@ import uuid
 
 from .decision_capture import (
     write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_PAGE_GUIDANCE,
-    capture_page_range, read_context_capture_file,
+    capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     context_capture_read_command, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
@@ -213,12 +213,13 @@ def _context_continuation_instructions(command: str) -> str:
     preserved. Do not turn every compaction into another full-input loop.
     """
     return (
-        "A new work Turn needs its current guard and required reads; never prefetch an old packet to seed a delta. "
-        "Compaction or a failed hook invalidates delta reuse, not the existing Turn. "
+        "A new work Turn needs its current guard and the facts its work depends on; never prefetch an old packet to seed a delta. "
+        "Compaction or a failed hook starts a new baseline epoch for the next work Turn; it does not invalidate the existing Turn or its saved recovery files. "
         "Continue from its working brief, preserving Goal, requirements/stops and original task/capture/settlement identity. "
         "Do not replay read context or rerun admission solely because the baseline was invalidated. "
-        "Before dependent action, recover missing or uncertain necessary facts from the same capture with: " + command + ". "
-        "An unfinished required read still needs its missing content; a summary cannot declare it read. "
+        "To find missing necessary facts, discover this same capture with: " + command + " --list. "
+        "Then use --select for the relevant sections; full-file traversal is not a prerequisite. "
+        "Finish an interrupted selected section only if the next decision needs it; do not claim unread content was read. "
         "Never repeat completed effects or settlement. If the original reference is lost, repair it first; "
         "independently authorized work can continue. A brief or recovery grants no new authority/freshness, "
         "delta baseline or retention proof. "
@@ -244,7 +245,7 @@ def codex_context_recovery_instructions(directory: str, *, goal_id: str, agent_i
         "--max-page-output-bytes", str(page_output_bytes)])
     return (
         _context_continuation_instructions(command) +
-        "When recovering a required full read, follow next_command through eof and verify complete bytes/digest. " +
+        CONTEXT_CAPTURE_NAVIGATION_GUIDANCE +
         ("The generated native configuration supports 64000-byte context-read outputs and a 20000-token history limit. "
          + _NATIVE_CONTEXT_OUTPUT_GUIDANCE +
          "Read one continuation per tool call; in code-mode, forward successful stdout directly with text(result.output). "
@@ -334,7 +335,12 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     checkpoint_native_read(read_state, updated, event, pages)
                 if updated != state:
                     _save(root, updated)
-                recovery_needed = same and not updated.get("candidate")
+                saved = updated.get("recovery")
+                current_file_epoch = (isinstance(saved, dict)
+                    and saved.get("continuity_basis") == "captured_file"
+                    and isinstance(saved.get("target"), dict)
+                    and saved["target"].get("context_epoch") == updated.get("context_epoch"))
+                recovery_needed = same and not updated.get("candidate") and not current_file_epoch
             except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
                 # A transient read/reduction failure can miss invalidation just
                 # as a failed write can. While holding the same lock, retire
@@ -347,10 +353,10 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     if (name == "SessionStart" and recovery_needed
             and isinstance(recovery, dict) and recovery.get("command")):
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
-            "LoopX context baseline invalidated. "
+            "LoopX model-context baseline invalidated. Saved files remain available. "
             + _context_continuation_instructions(recovery["command"])
             + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
-            + "When completing a required full-capture read: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
+            + "If you choose to read an entire file: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
     return {}
 
 
@@ -405,6 +411,8 @@ def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) 
     files: dict[str, bytes] = {}
     result = []
     for page in pages:
+        if any(key in page for key in ("selection_sha256", "selected_pointers", "list_fields")):
+            continue  # A directory/detail read makes no full-delivery claim.
         reference = next((value for value in references if value.get("sha256") == page.get("sha256")), None)
         if reference is None or page.get("ok") is not True:
             result.append(page)  # the typed owner handles failures and unrelated reads
@@ -434,24 +442,49 @@ def _discard_recovery(root: Path) -> None:
     path.unlink()
 
 
+def _file_codec_numbers_supported(value: Any) -> bool:
+    """Keep exact file values when the JSON/JavaScript bridge cannot encode them."""
+    if isinstance(value, dict):
+        return all(_file_codec_numbers_supported(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_file_codec_numbers_supported(item) for item in value)
+    return not isinstance(value, int) or abs(value) <= 9007199254740991
+
+
+def _integral_float_sources(value: Any, path: tuple = ()) -> dict[tuple, str]:
+    """Identify source distinctions that the JSON/JavaScript bridge erases."""
+    if isinstance(value, dict):
+        return {key: token for name, item in value.items()
+            for key, token in _integral_float_sources(item, (*path, name)).items()}
+    if isinstance(value, list):
+        return {key: token for index, item in enumerate(value)
+            for key, token in _integral_float_sources(item, (*path, index)).items()}
+    return {path: repr(value)} if isinstance(value, float) and value.is_integer() else {}
+
+
 def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
-    """Use the explicit completed-delivery assumption, never a fabricated ACK."""
+    """Compare verified durable versions independently of model retention.
+
+    The same session's last full capture is a file baseline after partial reads
+    within one context epoch. Compaction starts a fresh full baseline on the
+    next work Turn. Missing/replaced/unreadable files also fall back to full.
+    The shared codec verifies scope and content; no ACK is fabricated.
+    """
     request: dict[str, Any] = {"scope": scope}
-    candidate = state.get("candidate")
-    if (isinstance(candidate, dict) and candidate.get("basis") == "native_hook_assumption"
-            and not state.get("pending")):
+    previous = state.get("recovery")
+    if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
-            path = Path(candidate["capture_file"])
-            _, _, payload = read_context_capture_file(str(path), candidate["capture_sha256"], private=True)
-            # The shared codec independently validates the complete context
-            # digest and scope. No second read or full native-history scan.
+            path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
+            if not _file_codec_numbers_supported(payload):
+                return request
             baseline = dict(schema_version="context_delivery_v1", mode="full",
-                target=candidate["target"], ancestry=candidate.get("ancestry", 0), context=payload)
+                target=previous["target"], ancestry=0, context=payload)
             request.update(baseline=baseline,
-                continuity={"basis": "native_hook_assumption", "target": candidate["target"],
-                    "capture_bytes_verified": candidate.get("capture_bytes_verified", False)})
+                baseline_reference={"path": str(path), "sha256": previous["sha256"], "total_bytes": len(raw),
+                    "command": context_capture_read_command(path, previous["sha256"])},
+                continuity={"basis": "captured_file", "target": previous["target"], "capture_bytes_verified": True})
         except (OSError, ValueError, KeyError, TypeError, RecursionError):
-            pass  # Missing candidate affects reuse, never the current recovery reference.
+            pass
     return request
 
 
@@ -544,7 +577,7 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
 
     Serialization prevents invalidation from moving the epoch during preparation.
     Full fallback must recover this capture or refuse lookup, never an older one.
-    Completed full or delta pages establish the explicit native-hook assumption.
+    Saved-file comparison is independent of any complete model-read observation.
     """
     from ..quota.error_codes import QuotaDecisionTransportError
 
@@ -595,11 +628,19 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                     recovery = planned_recovery
                     publish_recovery(recovery)
 
+                prior = request.get("baseline", {}).get("context")
+                if (not _file_codec_numbers_supported(required)
+                        or prior is not None and _integral_float_sources(prior) != _integral_float_sources(required)):
+                    request = {"scope": scope}
+
                 result = project_captured_context(required, directory=capture_directory,
                     request=request, captured_recovery=recovery,
                     goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
+                if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
+                    result["baseline_reference"] = request["baseline_reference"]
                 if result.get("schema_version") == "context_delivery_v1":
                     state["recovery"]["target"] = result["target"]
+                    state["recovery"]["continuity_basis"] = "captured_file"
                     state["pending"].update(target=result["target"], ancestry=result["ancestry"])
                     _save(root, state)
                 return result

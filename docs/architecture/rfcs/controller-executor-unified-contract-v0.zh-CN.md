@@ -334,8 +334,8 @@ decision 绑定验收引用仍归其 owner。Native IO 复用主干材料 planne
 codec，在可选规划前先提交当前完整恢复引用。简单 native capture 因而恢复为两次
 owner 调用，而非原型的一次融合调用；旧调用数优化不构成当前资格。
 
-[#7627](https://github.com/loopx-project/loopx/pull/7627) 单独提议文件优先交付及文件
-差分，无需强制模型全文读取。沿既有 native owner 采用其评审后的精确实现，不再
+已合入 [#7627](https://github.com/loopx-project/loopx/pull/7627) 提供文件优先交付及文件
+差分，无需强制模型全文读取。C1 沿既有 native owner 采用其评审后的精确实现，不再
 引入已退役的 scope 机制。实际安装采用、模型决定和验收成果/完整成本仍须分列。
 历史 capture 保留其原身份与受支持的恢复。
 
@@ -1298,6 +1298,13 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 | **C7 — Benchmark 复用与完整成本归因；C4/C6** | Benchmark toolkit/execution owner：薄 adapter 选择相同产品 profile；合并重复 launch/session 配置，跟踪两个会话，不改冻结 trial | Native/plain 对照不变，可比组配置/replay 与完整成本覆盖；合并 helper 不启动 job |
 | **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、Stop 和产物返回 | 打包 managed 及受支持 attached heartbeat 流程，包括 host 不可用和结果迟到；安装资格另验；不新增 packet 格式开关 |
 | **C9 — 旧路径退役与采用资格；C1–C8** | Contract/runtime 维护者：删除被替代 producer、格式开关、重复提示/测试，更新 protocol、guide 和 RFC 交付事实 | 调用方/字段/decoder 退役清单、历史 replay 与回退证据；App + benchmark 验收及可比收益成立后再决定默认提升 |
+
+现有原生上下文入口增加一个有界 C2 前置改进：完整捕获保存在磁盘，常规响应提供
+文件导航，精确文件差分不依赖模型保留；压缩后下一个新 Turn 建立新的完整文件基线，不要求立即
+全量重读。必要事实仍须在
+依赖性决策前理解；准入、结算不变。这不代表 C1 统一 producer/consumer 切换或
+第 9 节可比效果/完整成本验收完成。沿既有 context-delivery off 路径回滚；材料分阶段
+组合仍由原 owner 独立收敛。
 
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余

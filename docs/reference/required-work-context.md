@@ -15,8 +15,8 @@ The RFC's [candidate context by decision stage](../architecture/rfcs/controller-
 proposes complete captured alternatives with discoverable decision facts and
 same-capture batch detail reads. It does not change current read obligations.
 The current capability gate leaves candidate selection to the Agent; a selected
-Todo display is not proof that it can ignore alternatives. Existing full-context
-captures must still be read completely. A future staged caller must replace its
+Todo display is not proof that it can ignore alternatives. Default-off and signed-envelope captures retain their existing full-read obligations.
+Enabled native file delivery instead follows the progressive-read contract below. A future staged caller must replace its
 delivery, required reads and recovery together, including unknown-scope full
 fallback; an index read cannot establish delivery of hidden bodies.
 
@@ -62,7 +62,7 @@ change receipt replay validation or declare a model-input/token saving.
 Unmarked or mixed ownership keeps the original full progressive read in
 `agent_channel.required_reads`. Malformed markers, non-generated content inside
 a marked region, unavailable files and invalid UTF-8 fail closed. Unknown
-narrative is never classified by headings or clipped to a size budget. Read all
+narrative is never classified by headings or clipped to a size budget. For default-off and signed-envelope callers, read all
 delivered context and remaining reads before dependent work; changed sources need
 a fresh guard. Enabled scoped acceptance does not replace original Goal intent.
 
@@ -95,8 +95,9 @@ is opened. Agent review still does not establish independent acceptance.
 
 The archive remains `projection.json`; the required model view is
 `required-context.json`. Required reads, full/delta preparation and recovery use
-that same model view. A selected detail page cannot acknowledge the required
-view, establish a full baseline or prove that other hidden details were read.
+that same model view. A selected detail page cannot acknowledge full model retention of the required
+view or prove that other hidden details were read. Native file baselines are
+established independently from complete saved captures.
 The adapter edits paths selected by the typed owner without round-tripping the
 original JSON values through JavaScript. Unknown outcome fields, unknown source
 read obligations, unsupported schemas, signed envelopes and unavailable planning
@@ -125,12 +126,13 @@ existing behavior. The existing size comparison retains a full view when the
 reference guidance would cost more than the duplicate rows.
 
 A context epoch is not a work Turn. Compaction or a failed native hook invalidates
-delta reuse; it does not require another admission or unconditional replay of the
+the previous epoch’s delta reuse; it does not require another admission or unconditional replay of the
 old quota packet. Within the existing Turn, continue from the working brief with
 the Goal, applicable requirements/stops, task and original capture/settlement
 identity. Before an action that depends on missing or uncertain facts, recover
-those facts from the same immutable capture. An unfinished initial required read
-still requires its missing content; summarizing it does not fulfill that read.
+those facts from the same immutable capture. An unfinished selected section needs its missing facts before dependent work;
+summarizing it does not prove those facts were read. Legacy captures retain
+their original read contract until their current work Turn ends.
 Do not repeat completed work or settle the original Turn twice. If the original
 reference is lost, repair it before dependent work; independently authorized work
 can continue. A later work Turn obtains its own current guard and required
@@ -286,6 +288,10 @@ transport flag does not restore the old exact Todo schema.
 
 ## Opt-in native reuse
 
+The retained-input codec described first in this section serves explicit
+confirmed-input clients. Native Codex uses the separate saved-file basis
+described under Machine default; it does not require full model retention.
+
 The existing [native context delivery option](../heartbeat-automation-prompt.md#opt-in-native-context-delivery)
 uses one TypeScript codec for ordinary quota and TurnEnvelope. Within a usable
 baseline, both representations repeat `planning_horizon.core_goal`'s original
@@ -368,12 +374,11 @@ patch or an incompatible reader automatically recovers the same original full
 capture. Recovery never reruns the guard, asks the owner, spends quota or grants
 execution. Wire reduction alone does not establish actual model costs or outcomes.
 
-After reading a native delta completely, the Agent uses its changes with the
-retained model context. A resumed tool process may have no earlier Code Mode
-variables; that alone does not mean the model lost the baseline. Materializing a
-JavaScript object does not require another full read. If required baseline content
-is unavailable or continuity is uncertain, recover the same capture in full before
-dependent work. Compaction still invalidates the baseline and requires recovery.
+The retained-input rules above apply to explicit confirmed-input clients. Native
+Codex delivery instead compares verified saved files (see below); the model may
+read changes and necessary facts progressively, without importing the full base.
+Compaction starts a new baseline epoch for the next work Turn, without invalidating
+the existing Turn or its recovery files.
 
 ### Machine default
 
@@ -435,51 +440,48 @@ projection path and does not acquire a second native journal.
 Unrelated quota commands and digest-bound recovery pages do not activate this
 setting. Ordinary machine validation still applies to business operations.
 
-Native `quota should-run` and the saved `context-project` entry share the same
-paged presentation. Each returns page zero, a digest-pinned continuation and full
-recovery without another admission. Inline and continuation pages use the same
-64000-byte output budget, including recovery, instructions, escaping, commands
-and newline. Content shrinks at UTF-8 boundaries to fit that complete stdout;
-captures that fit finish inline. This default does not depend on a shell output
-declaration. An explicit `--max-page-output-bytes` also bounds the initial enabled
-`should-run` or `context-project` frame, its continuations and full-recovery
-command. For example, append `--max-page-output-bytes 7900` to the existing guard
-command for a smaller tool-output budget. This does not change host history
-limits; a batch must fit their aggregate budget too. Explicit smaller reader
-budgets remain available to recover a truncated range of the same capture. Consume the inline
-page before following next_command; when the retained-history limit is unknown,
-read one bounded output at a time. This is not a guarantee of model retention.
-Forward exec stdout directly in code mode. Repeating the packet in
-a hashing tool call does not establish that its original bytes were retained.
-Keep these short local reader commands in the foreground; for `exec_command`,
-use its normal 10000 ms wait rather than an aggressive early yield. A native
-host can deliver a page before the process exits but give `PostToolUse` only the
-remaining output when polling finishes. Complete model-visible text then does
-not imply complete hook coverage. If a reader yields, consume all its output
-chunks; missing hook coverage keeps the next decision on full delivery. Do not
-fabricate a read receipt or rerun admission to make it differential. Continuing
-that captured decision after context loss still uses its exact full recovery.
-The reader verifies the immutable capture digest. Native lifecycle delivery uses
-the same byte-range validator as explicit input observations: before merging
-reader ranges, the post-tool adapter checks actual UTF-8 content against the
-trusted journal's digest-pinned physical capture. A changed body, missing or
-replaced file, symlink or digest failure cannot advance the baseline. It keeps
-the original recovery reference; it does not collect another decision. This
-checks output observed at the hook boundary, not downstream model retention.
-Older metadata-only candidates require a new complete verified read before
-resume or the codec can reuse them; page metadata alone cannot mark them verified.
-Native lifecycle continuity still uses
-an explicit engineering assumption: a normally completed full read was read and
-remains available until invalidated. This is not a retained-input observation or
-a model ACK. The shared codec still validates the exact baseline digest, scope,
-current controls and reconstruction. Explicit final-input Host clients retain
-their separate confirmed-input contract.
+Native `quota should-run` and saved `context-project` persist the complete
+capture and return a small file reference, not an eager first page. The response
+names the delta/full `path`, digest and reader `command`; `recovery` names the
+current complete file. A file delta additionally carries `baseline_reference`.
+`index_command` lists current fields and `select_command` batches exact pointers.
+The reference stays below 7900 serialized bytes (or the explicit smaller output
+ceiling); if metadata cannot fit, recovery retains the current capture. Reader
+pages remain independently bounded. A complete raw tool log is not proof that
+the Host retained the same bytes in model history.
+
+The native codec's `captured_file` basis verifies the previous full file and
+compares exact versions, including unchanged control fields. It does not depend
+on a full read, page EOF, a model ACK or a retained-input claim. Goal, Agent,
+session, surface, projection version and configuration generation remain scoped;
+the context epoch is also bound. After compaction the next work Turn starts a new
+full saved baseline; later Turns may use file deltas without a full model read.
+Missing, changed, unsafe or incompatible baselines fall back to the current
+full-file reference. Integers outside JavaScript's exact range and changes to
+integral-float source values (including type or signed-zero changes) use that
+same fallback: the bridge cannot preserve all their source distinctions.
+Unchanged numeric values stay inherited in place; the codec avoids replacing
+their parents or relocating normalized numeric subtrees. The original values remain
+available through the same progressive reader, without a full-read obligation.
+Each base is a full saved version,
+so selective reading never creates a requirement to replay a chain of deltas.
+
+The model chooses the changes and details its current decision needs. It must
+understand applicable Goal intent, acceptance criteria, constraints and stops
+before dependent work, and the relevant operation/settlement contract before
+effects. Supporting evidence is read when verification needs it. There is no
+prerequisite to drain the entire packet, baseline or delta. After compaction,
+recover only missing necessary facts from the same current capture; preserve
+Turn, task and settlement identity and do not re-admit or repeat effects. A file
+reference grants neither authority nor freshness. Selected/index reads never
+establish full model retention; complete-page observations retain that separate
+meaning for explicit retained-input consumers.
 
 For native setup, `quota context-config --codex-app --goal-id GOAL --agent-id AGENT`
 under machine on prepares only that private transport leaf and renders the
 existing hooks, recovery instructions and `config_overrides`. Applying those overrides
 selects a 20000-token native history limit and declares the existing 64000-byte
-output profile. Both the initial guard and continuations use that page budget,
+output profile. The initial guard returns the small file manifest; requested reader pages use that budget,
 including when the shell lacks the declaration. The worker applies this configuration
 automatically inside its isolated opt-in trial. The persistent instruction requests
 22000 tokens for each context-read tool result and 24000 for its code-mode emission,
@@ -509,11 +511,11 @@ endpoints, provider selection and connection mode, including implicit history vi
 `previous_response_id`. It neither enables input diagnostics nor scans model-input
 history. Benchmark preparation stages those same hooks in its isolated trial home.
 
-`PostToolUse` records complete digest-bound reader ranges in the existing session
-journal; EOF without preceding pages, a known malformed/truncated page or a reader
-error cannot establish a baseline. Concurrent and repeated pages coalesce.
+`PostToolUse` can record complete digest-bound reader ranges in the existing session
+journal for the separate model-retention observation. EOF without preceding pages,
+a known malformed/truncated page or a reader error cannot establish that observation. Concurrent and repeated pages coalesce.
 `PreCompact`, `PostCompact`, clear, fork and a changed session/workspace invalidate
-it. A resume may supply different history under the same session ID; the
+that observation and rotate the file epoch for the next work Turn. A resume may supply different history under the same session ID; the
 [native event contract](https://learn.chatgpt.com/docs/hooks#sessionstart) alone
 does not attest retention. The shared Codex adapter can qualify a resume against
 the complete read's native replay checkpoint: the native-selected physical
@@ -536,19 +538,20 @@ it neither scans model requests nor asks the model for an ACK.
 Opted-in benchmark native children create owner-only files automatically; the
 parent process and off-mode file creation policy stay unchanged. Group-writable
 existing replay sources cannot establish cross-process continuity.
-A new independent decision uses its normal guarded
-context command and reads the resulting current full capture; it need not first
-read an older capture to seed a delta. Continuing a captured decision after context
-loss still requires complete recovery of that exact original, never a new guard
-as a substitute. Both paths establish a new chain only after a complete verified
-full read. Ordinary tools and turn endings do not invalidate it. An interrupted
-pending delivery requires full recovery. Repeated reset events are idempotent.
-Recovery reads the same immutable capture without re-admission or spend.
+A new independent decision uses its normal guarded context command. Actual
+compaction selects a new full saved baseline; ordinary resume preserves the file
+epoch without claiming model retention. A previously qualified replay checkpoint
+that now fails may conceal compaction and conservatively rotates the epoch.
+No prior complete-read checkpoint is required for file comparison. Continuing a
+captured decision after loss recovers only the necessary missing facts from that
+same original, with no new guard or spend. Ordinary tools and Turn endings do
+not invalidate file comparison. Repeated reset events are idempotent.
 The adapter commits the current complete capture reference and pending delivery
 under the existing session lock before optional material planning or encoding.
 A process exit during planning therefore recovers the current source rather
-than its predecessor. The planner reuses that archive; an unread current source
-still cannot establish a full native baseline.
+than its predecessor. The planner reuses that archive. A saved file can support
+file comparison without implying that its contents were read by the model.
+
 
 This deliberately replaces per-request complete-input proof with lifecycle
 assumptions. Downstream output loss or truncation not exposed to the hook, a
@@ -687,10 +690,9 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 或读者不兼容时，自动恢复同一原始 full capture，不重跑 guard、不问询、不扣额，
 也不授予执行权限。传输减少本身不证明实际模型费用或结果改善。
 
-完整读完原生差分后，Agent 将变化与模型仍保留的上下文一起使用。恢复后的工具进程可能
-没有此前的 Code Mode 变量；仅此并不表示模型丢失了基线。不必为了组装 JavaScript
-对象再读一次全量。若当前工作所需的基线内容不可用或连续性不确定，仍须先完整恢复
-同一捕获，再做依赖它的工作。压缩仍会使基线失效，并要求恢复。
+上面的保留输入规则适用于显式 confirmed-input 客户端。原生 Codex 改用校验后的
+文件版本比较：模型可渐进式读取变化和必要事实，无须把完整基线装入上下文。
+压缩后下一个新 Turn 建立新的完整文件基线，不使已有 Turn 或恢复文件失效。
 
 ### 机器级默认
 
@@ -725,38 +727,26 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 私有传输末级目录并生成已有 hook 和恢复指令，不安装或信任 hook，也不更改宿主配置。
 SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和 thin/bootstrap 提示，
 沿用可见 Goal 的执行与结算身份；仅启用差分时接入捕获目录，不转换成自动心跳。
-原生 `quota should-run` 与已保存捕获的 `context-project` 共用分页呈现，直接返回第零页、
-固定摘要的后续读取与完整恢复，不另行准入。内联页与续页共用 64000 字节输出预算，
-包含恢复字段、完整指引、转义、后续命令与换行；正文按 UTF-8 边界缩小以适配完整 stdout，
-能放下的捕获一次返回。默认值不依赖 shell 输出声明；显式更小的读取预算仍可用于恢复
-同一捕获中被截断的范围。先消费内联页，再跟随 next_command；保留历史
-上限未知时，每次只读一个有界输出。该上限不证明模型保留。Code Mode 直接转发
-exec stdout；把整包重打进哈希工具不构成原始字节已被保留的证明。
-这些短时本地读取命令应前台等到结束；`exec_command` 使用正常的 10000 ms 等待，
-避免激进提前返回。原生宿主可能先把页面交给模型，却只把轮询结束时剩余的输出交给
-`PostToolUse`；模型可见正文完整不等于 hook 观察范围完整。读取器若提前返回，仍须
-消费全部输出片段；hook 覆盖缺失时，下次决定继续全量投递。不伪造读取回执或重跑
-准入来制造差分；丢失上下文后继续该已捕获决定，仍沿它的精确全量恢复引用读取。
-原生配置同时返回 `config_overrides`：应用后，原生历史上限为 20000 token，并声明已有
-64000 字节输出配置。首次 guard 和续页均使用此分页预算，shell 缺少声明时也一样。
-开启的 benchmark worker 在其
-隔离会话内自动应用；持久指引要求每次续读直接输出预算 22000 token、Code Mode
-输出预算 24000 token，每次直接转发一份 stdout。
-压缩/恢复 hook 同样携带这段调用预算指引，避免恢复依赖已经丢失的配置正文。
-内层读取与外层 Code Mode 输出可分别截断；单次预算请求不证明历史保留，也不修改宿主配置。
-任一层截断时，减小正文和完整输出字节预算，重读同一 capture 的受影响范围。
-这仅修复传输重试故障，不代表超大的完整上下文已能容纳，也不证明范围裁剪合格。
-回滚时同时移除生成的输出覆盖项；仅保存机器偏好并不会应用这些宿主配置。
-该设置不证明输入保留、总费用降低或任务效果改善。
-读取器校验不可变 capture 的摘要。Post-tool 适配层复用显式输入观察的字节范围校验，
-先将实际 UTF-8 正文与可信 journal 指向的物理捕获及固定摘要核对，再合并读取范围。
-正文改变、文件丢失或替换、符号链接及摘要失败均不得晋升基线；保留原始恢复引用，
-不重新收集决策。这只验证 hook 边界观察到的输出，不证明下游模型输入保留。
-旧版仅凭页元数据建立的候选须先完整读取并通过字节校验，才能在 resume 或 codec 中复用；
-页元数据本身不能写入已校验标记。
-原生连续性仍明确采用工程假设：正常完整交付的首包已读，
-在失效事件发生前仍可用；这不是实际输入保留证明或模型 ACK。共享 codec 仍校验精确基线
-摘要、作用域、本轮控制与完整重建。显式 final-input Host 客户端保留独立的确认输入契约。
+原生 `quota should-run` 与 `context-project` 先保存完整捕获，默认返回小型文件入口，
+不内联第一页。`path`、摘要与 `command` 指向当前差分或全量；`recovery` 指向当前
+完整文件；文件差分另带 `baseline_reference`。`index_command` 展示当前字段目录，
+`select_command` 批量选读精确路径。引用输出不超过 7900 序列化字节或调用者显式更小
+的上限；元数据放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
+原始工具日志完整，不证明宿主保留给模型的字节也完整。
+
+原生 `captured_file` 基线来自校验后的前一完整文件，可差分复用所有未变字段，包括
+控制字段；不依赖通读、EOF、模型 ACK 或保留输入声明。Goal、Agent、会话、surface、
+投影版本、配置 generation 和上下文 epoch 仍隔离；压缩后下一个新 Turn 建立完整
+文件基线，同周期后续 Turn 再差分，无须模型先通读这份基线。
+基线缺失、损坏、不安全或不兼容时回退当前完整文件入口；超出 JavaScript 精确范围的
+整数也回退，以保留原值。每个基线都是完整保存版本，无须因选读而重放差分链。
+
+模型自主选择本次决策需要的变化和详情：依赖性工作前理解适用的 Goal 意图、验收标准、
+约束及停止条件，执行副作用前理解相关操作/结算契约，验证时按需查证材料。
+不要求把整包、基线或差分读完才能工作。压缩后仅从同一当前捕获恢复缺失的必要事实，
+保留 Turn、任务和结算身份，不重新准入或重复副作用。引用不授予权限或新鲜度。
+目录/选读不构成全量模型保留证明；完整页面观察仍为显式 retained-input 消费者
+保留独立含义。现有原生配置的读取预算只约束被选择的页面，不强制通读。
 
 为下次原生会话配置并信任精确 hooks，不重启当前 App。已加载线程可能继续沿用旧 hook
 配置；`hooks/list` 的 enabled/trusted 读回不等于向该线程交付 `SessionStart` 或初始化
@@ -766,10 +756,11 @@ context journal。当前工作到达正常安全边界后，沿宿主正常启�
 和连接方式，包括带 `previous_response_id` 的隐式历史；不启用输入诊断，也不逐轮扫描
 模型完整输入。Benchmark 在各自隔离的 trial home 内自动准备同一组 hooks。
 
-`PostToolUse` 在现有 session journal 中合并摘要固定的完整读取范围；缺少前页的 EOF、
-已知的格式损坏／截断或读取失败不能建立基线。并发、重复页幂等合并。`PreCompact`、
-`PostCompact`、清空、分叉、会话／工作区切换使基线失效；同一会话 ID 的 resume
-也可能使用不同历史，[原生事件契约](https://learn.chatgpt.com/docs/hooks#sessionstart)本身不证明保留。
+`PostToolUse` 可在现有 session journal 中合并摘要固定的完整读取范围，用于独立的
+模型保留观察；缺少前页的 EOF、已知格式损坏／截断或读取失败不能建立该观察。
+并发、重复页幂等合并。`PreCompact`、`PostCompact`、清空、分叉、会话／工作区切换
+使该观察失效，并为下一个新工作 Turn 轮换文件 epoch；同一会话 ID 的 resume 也可能
+使用不同历史，[原生事件契约](https://learn.chatgpt.com/docs/hooks#sessionstart)本身不证明保留。
 共享 Codex adapter 可核对完整读取时的原生重放检查点：原生实际选择的物理历史文件，
 须保留从当前基线首次 reader 开始的摘要固定区间，以及每份精确 reader 输出，完整覆盖固定捕获的全部字节；
 会话、工作区、模型和权限模式相同，
@@ -783,14 +774,14 @@ code-mode 父调用的保留输出须包含嵌套 reader hook 观察到的全部
 工程假设，不声称证明未来模型输入；不扫描模型请求，也不要求模型 ACK。
 开启后的 benchmark 原生子进程自动以仅所有者可访问的权限创建文件，父进程与关闭态
 保持原权限策略；既有可组写的重放来源不能建立跨进程连续性。
-新的独立决定走正常准入与上下文命令，完整读取其返回的当前全量捕获；不必为了建立差分
-基线而先读旧捕获。若丢失上下文后继续某个已捕获决定的依赖工作，仍须完整恢复那份精确
-原捕获，不能用新 guard 替代。两条路径都只在完整且已校验的全量读取后建立新差分链。
-普通工具和正常轮次结束不无条件失效。尚未完成的交付被中断
-后须完整恢复。重复重置事件幂等；恢复读取同一不可变捕获，不重新准入或扣额。
+新的独立决定走正常准入与上下文命令。实际压缩后，下一个新工作 Turn 建立新的完整
+文件基线；普通 resume 保留文件 epoch，不声称模型保留。曾合格的重放检查点若核验
+失败，可能隐藏压缩，保守地轮换 epoch；文件比较本身不要求先有完整读取检查点。
+上下文丢失后继续原决定，只从同一原始捕获恢复缺失的必要事实，不重新准入或扣额。
+普通工具和 Turn 结束不会使文件比较失效；重复重置事件幂等。
 Adapter 在可选材料规划或编码前，先持既有 session 锁提交当前完整 capture 引用及
 pending delivery。规划过程中进程退出后，恢复指向当前来源而非上一份；planner
-复用同一 archive。尚未读取的当前来源仍不能建立完整 native baseline。
+复用同一 archive。完整落盘可支持文件比较，不表示模型已经读过其内容。
 
 这是以生命周期假设替换逐轮完整输入证明。Hook 未暴露的下游丢失／截断、漏掉失效事件，
 或在声明开关之外静默禁用 hooks，仍可能漏检；不把这些假设称为实测保留，也不新增审批门。
@@ -835,12 +826,15 @@ original JSON values (including large integers), and performs no admission,
 settlement or live Goal lookup. Selection requires the existing typed runtime;
 ordinary full reads retain their file-only path.
 
-Selected EOF, including a root selection, cannot establish a full-context
-baseline in the native hook. This shared reader enables exact detail expansion;
-it does not change which facts a caller must read, relax required reads, or
-switch existing native input to a necessary-only view. Those consumers must
-integrate their scope, instructions and recovery together before claiming a
-progressive-delivery or total-cost improvement.
+`quota context-read --list` discovers immediate child pointers, JSON types,
+serialized value sizes and object/array counts without returning their bodies.
+Combine `--list` with `--select` to explore nested sections; omit the selectors
+for the root. Its `context_capture_index_v1` view shares the digest-bound
+pagination contract, but an index cursor cannot be used for a value selection.
+
+Selected/index EOF, including root selection, never proves full model retention.
+Native file comparison is independent of that claim. The model can inspect the
+current file directly, or consult its baseline and delta, without a full drain.
 
 `quota context-read --select /path --select /another/path` 用 RFC 6901 JSON
 pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--capture-file` 与
@@ -858,9 +852,11 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 沿 `next_command` 继续，它保留两个摘要及精确路径；非零偏移必须携带
 `--selection-sha256`。读取器校验两者，保留包括大整数在内的原 JSON 值，
 不准入、不结算、不查询实时 Goal。选择模式依赖已有 typed runtime；普通全量
-读取仍只走文件路径。包括根对象选择在内的详情 EOF 均不能被原生 hook 记为
-完整上下文基线。此共享读取器提供精确展开能力，不改变调用方必读事实或自动切换
-必要视图；调用方须共同接入范围、指引与恢复后，再验收渐进投递及完整成本收益。
+读取仍只走文件路径。`--list` 列出直接子字段的精确 pointer、类型、序列化字节数
+及对象/数组成员数，不返回正文。与 `--select` 组合可探索嵌套章节；省略路径从根开始。
+`context_capture_index_v1` 沿用双摘要分页，目录 cursor 不能用作正文选择 cursor。
+包括根选择在内的目录/详情 EOF 不证明全量模型保留；原生文件比较与此独立。
+模型可直接查当前完整文件，也可查基线和差分，无须先通读。
 
 ### Saved context cache / 已保存上下文缓存
 
@@ -875,34 +871,14 @@ Read-only recovery never creates a cache. With context delivery off, projection
 remains inert and reads the original capture. Failures retain that capture's
 exact digest and Turn receipt; they never rerun admission or spend quota.
 
-With delivery on, a successful saved projection also returns page zero using
-the existing `context_capture_page_v1` fields. It uses the same 64000-byte
-complete-stdout budget as continuations, including recovery, activation and
-instructions; captures that fit finish inline. JSON `context-read` with no page
-arguments also defaults to 64000 content bytes under a 64000-byte output cap.
-Markdown retains its 4096-byte content default. Explicit page/output arguments
-retain their prior semantics; a page above 8192 bytes still requires a sufficient
-output cap, within the existing capture limit. The JSON-only
-`--max-page-output-bytes` also bounds the initial enabled native guard/projection
-frame; it shrinks content at UTF-8 boundaries and persists in
-`next_command`, including for explicitly smaller same-capture recovery. An
-insufficient cap returns an error without a zero-progress page; increase it for
-the same capture. Error messages are not subject to an impossible page limit.
-The reader changes no host or retained-history setting. Historical Codex 0.162.1
-qualification used a 10,000-token history setting and a 12,000-token code-mode
-result budget with one directly forwarded stdout per call; that observation
-does not establish another host's output capacity. The shared native setup above
-supplies matching history/execution budgets; only the opted-in worker applies
-them automatically. Larger defaults never prove history retention, and missing
-output still requires recovery from this same capture.
-Consume `content`, then follow `next_command` through `eof` for full byte coverage.
-The reader verifies the original digest; do not retype or hash the content. The
-existing `command` still restarts at zero for older readers or incomplete inline
-output. If the optional first-page read fails, that same command remains usable.
-Off responses do not add an inline page or activate native reuse; their recovery
-references use the same JSON reader default. No admission
-or retention receipt is introduced; an inline page alone cannot prove complete
-input retention.
+With delivery on, the saved projection uses the file-first native entry above.
+An explicit full read remains available: follow `next_command` through EOF only
+when that complete content is needed. JSON `context-read` defaults to 64000
+content bytes under a 64000-byte serialized-output ceiling; Markdown retains its
+4096-byte content default. Explicit limits and UTF-8 byte cursors are unchanged.
+Oversized or missing tool output is recovered from the affected range of this
+same capture, never by another admission. Off responses retain their original
+contract. Reader/output sizing alone proves neither model retention nor savings.
 
 `quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
 省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
@@ -911,24 +887,8 @@ input retention.
 只读恢复不创建缓存；关闭上下文投递时保持无副作用，读取原始 capture。失败仍保留
 原始摘要和 Turn 回执，不重新准入或扣减额度。
 
-开启时，成功的已保存投影同时用现有 `context_capture_page_v1` 字段返回第一页。
-该页与续页共用 64000 字节完整 stdout 预算，包含恢复、启用配置与完整指引；能放下的
-捕获一次返回。JSON `context-read` 省略分页参数时，也默认在 64000 字节输出上限下
-请求 64000 字节正文；Markdown 保留 4096 字节正文默认值。显式分页/输出参数保留
-原有语义：超过 8192 字节的页仍须足够的输出上限，且不超过既有 capture 限制。
-JSON 专用参数 `--max-page-output-bytes` 按 UTF-8 边界缩减正文，并在 `next_command`
-中保留，也约束开启原生投递的 `should-run`／`context-project` 首次输出及完整恢复命令。
-例如在已有 guard 命令后追加 `--max-page-output-bytes 7900`；省略时仍为 64000 字节。
-该上限不修改宿主历史容量，批量输出还须满足总预算。显式更小的同捕获恢复也一样。
-上限不足时返回错误，不返回无进展分页；
-增大上限后重读同一捕获。错误消息不受无法满足的分页上限限制。
-读取器不修改宿主或保留历史设置。历史 Codex 0.162.1 定向验证采用 10,000 token 历史
-设置和 12,000 token code-mode 输出预算，每次直接转发一份 stdout；该观察不证明
-其他宿主的输出容量。上述共享原生配置提供配套历史和执行预算，仅开启的 worker
-自动应用。较大默认值不证明历史保留，缺失输出仍恢复同一 capture。
-先读取 `content`，再沿 `next_command` 读至 `eof`，确保完整字节覆盖。
-读取器校验原始摘要；无需重抄正文或计算哈希。
-原有 `command` 仍从零开始，供旧读取方或内联输出不完整时重读；可选的首屏读取
-失败时也保留该命令。关闭态不增加内联分页或启用原生复用；其恢复引用同样采用 JSON
-读取器默认值。不新增准入或保留回执；
-单页内联内容不证明完整输入仍被保留。
+开启时采用上面的文件入口。需要全文时仍可显式读取并沿 `next_command` 到 EOF；
+不将此操作设为通用前置条件。JSON `context-read` 默认请求 64000 字节正文，完整输出
+上限 64000 字节；Markdown 保留 4096 字节正文默认值。显式上限和 UTF-8 字节 cursor
+语义不变。工具输出过大或缺失时，只恢复同一捕获的受影响范围，不重新准入。
+关闭态保持原有契约。页大小与输出预算本身不证明模型保留或成本收益。

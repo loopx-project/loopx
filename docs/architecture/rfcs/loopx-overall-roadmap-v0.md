@@ -224,7 +224,7 @@ reusing merged #7560's advisory navigation and the generic same-capture selector
 Merged #7643 preserves original values through the existing edit transport.
 The [navigation convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.md)
 keeps signed contracts complete and main's recovery-before-planning ordering;
-#7627's file-first delivery remains a separately reviewed dependency. The old
+#7627's merged file-first delivery is adopted through that existing owner. The old
 fused native-call saving does not apply to this integration. Numeric hash identity,
 writer/caller retirement and original-quota outcomes/full cost remain open.
 

@@ -14,10 +14,12 @@ from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 from loopx.cli_commands.quota_capture import read_context_capture
 
 
+@pytest.mark.parametrize("legacy_spelling", [False, True])
 @pytest.mark.parametrize("inherited", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("marked_goal", [True, False])
-def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited):
+def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited, legacy_spelling):
+    alias = ("--turn-envelope",) if legacy_spelling else ()
     goal, agent = "scope-cli", "author"
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     todos = [{"schema_version": "todo_item_v0", "todo_id": f"todo_{owner}", "role": "agent",
@@ -54,7 +56,7 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         from tests.control_plane.test_context_machine_configuration import configure
         code, applied = configure(registry, runtime, tmp_path, "on")
         assert code == 0 and applied["readback_verified"], applied
-    off = cli("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
+    off = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent, "--context-delivery", "off")
     source = next(row["content"] for row in off["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
     assert "outcome_context" not in source
@@ -67,7 +69,7 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
     monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
     codex_context_hook(str(native), {"hook_event_name": "SessionStart", "session_id": "scope-session",
         "cwd": str(tmp_path), "source": "startup"})
-    first = cli("quota", "should-run", "--goal-id", goal, "--agent-id", agent,
+    first = cli("quota", "should-run", *alias, "--goal-id", goal, "--agent-id", agent,
         *([] if inherited else ["--context-delivery", "on"]),
         "--runtime-profile", "generic_cli", "--codex-context-dir", str(native),
         "--decision-output-root", str(tmp_path / "captures"), "--turn-instance-id", "scope-turn")

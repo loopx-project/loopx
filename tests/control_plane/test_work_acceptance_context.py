@@ -57,7 +57,9 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     def cli(*arguments):
         code, result = run_json_cli_result(*arguments, registry_path=registry, runtime_root=runtime)
         assert code == 0, result
-        return result
+        # The harness adds transport metadata after decoding stdout. It is
+        # not part of the signed CLI wire consumed by the Host.
+        return {key: value for key, value in result.items() if key != "_returncode"}
 
     # Two owners' cumulative outcomes remain Goal requirements. Selection must
     # not silently narrow those requirements or their work/evidence references.
@@ -210,7 +212,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     def cli(*arguments):
         code, result = run(*arguments)
         assert code == 0, result
-        return result
+        return {key: value for key, value in result.items() if key != "_returncode"}
 
     def configure(*arguments):
         code, result = acceptance_cli(*arguments)
@@ -233,22 +235,29 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     capture = tmp_path / "decision"
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
     first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
-        "--turn-envelope", "--decision-output-dir", str(capture))
+        "--turn-envelope", "--context-delivery", "on", "--defer-context-presentation",
+        "--decision-output-dir", str(capture))
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)
-    basis = next(row["content"] for row in first["work_context"]["sources"]
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+    first_envelope = build_turn_envelope(first, captured_decision_path=str(capture / "decision.json"))
+    assert first["schema_version"] == "loopx_turn_envelope_v1"
+    assert first == full
+    basis = next(row["content"] for row in first_envelope["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    assert first["action"]["delivery_allowed"] is True
+    assert first["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     assert basis["tasks"][0]["state"] == "ready"
     assert basis["goal_acceptance_contract"]["outcome_requirements"] == original
-    request = build_loopx_turn_host_request(build_loopx_turn_plan(first,
+    request = build_loopx_turn_host_request(build_loopx_turn_plan(first_envelope, work_contract=first,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id="original-delivery"))
     result = subprocess.run(_recording_host(project), input=json.dumps(request),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (project / "received.txt").read_text()
-    authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["work_context"] == first["work_context"]
+    authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    assert authority["schema_version"] == "loopx_turn_host_request_v0"
+    assert authority["work_contract"] == first
+    assert authority["work_contract"]["interaction_contract"]["agent_channel"]["work_context"] == first["interaction_contract"]["agent_channel"]["work_context"]
 
     # Finish the original synthetic work before attempting another managed
     # Turn. An unsettled receipt is its own legitimate recovery boundary.
@@ -316,7 +325,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
         if source.get("source") == "goal_acceptance":
             assert source["content"]["goal_acceptance_contract"] == cold["goal_acceptance_contract"]
     before_read = {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()}
-    detail = subprocess.run(shlex.split(first["detail_ref"]["full_decision"]),
+    detail = subprocess.run(shlex.split(first_envelope["detail_ref"]["full_decision"]),
         capture_output=True, check=True).stdout
     assert detail == saved and json.loads(detail) == full
     assert {p: p.read_bytes() for p in capture.rglob("*") if p.is_file()} == before_read
