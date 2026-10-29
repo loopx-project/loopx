@@ -229,7 +229,11 @@ fused native-call saving does not apply to this integration. Numeric hash identi
 writer/caller retirement and original-quota outcomes/full cost remain open.
 The [journal source-fidelity prerequisite](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.md)
 is split into normal #7657 and reused by C1. Its original-number preservation
-does not qualify a new hash codec or a positive full-cost comparison.
+does not qualify a new hash codec or a positive full-cost comparison. The
+[context source-fidelity slice](ledger/controller-executor-unified-contract-v0/2026-10-29-context-source-fidelity.md)
+is independently proposed as normal #7661, preserving original numbers through
+cold/delta/full recovery via the same TS owner. C1 reuses it; unchanged historical
+hashes, remaining consumer bridges and original-quota full-cost acceptance stay open.
 
 The same integration codec now adopts merged [#7528](https://github.com/loopx-project/loopx/pull/7528)
 for exact relocated evidence with literal current overrides, including scoped

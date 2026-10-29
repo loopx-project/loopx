@@ -424,7 +424,12 @@ reader remains authoritative until replacement and rollback are qualified.
 Current integration evidence: [navigation convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.md).
 The [journal source-fidelity checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.md)
 separates the independently reviewable persistence repair from the still-open
-numeric hash/context-codec qualification. Existing hash semantics remain unchanged.
+numeric hash/context-codec qualification. The subsequent
+[context source-fidelity checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-context-source-fidelity.md)
+splits generic cold/delta/full-recovery repair into normal #7661 and reuses one
+source-identity/edit owner in C1. Its component transport reduction does not
+qualify canonical hashes, installed adoption or original-quota full-cost benefit.
+Existing hash semantics remain unchanged.
 
 The current C1 branch reuses merged #7560's
 `outcome_context_navigation_v1` and the generic same-capture `context-read --select`

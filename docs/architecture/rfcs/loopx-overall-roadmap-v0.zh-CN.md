@@ -176,6 +176,9 @@ quota 成果/完整成本仍未闭合。
 [Journal 来源保真前置切片](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.zh-CN.md)
 独立为普通 PR #7657，C1 复用同一实现。保留原始数值不等于新 hash codec 已合格，
 也不证明完整成本对照正向。
+[上下文来源保真切片](ledger/controller-executor-unified-contract-v0/2026-10-29-context-source-fidelity.zh-CN.md)
+独立为普通 #7661，沿同一 TS owner 保留冷态/差分/全量恢复的原数值，C1 复用。
+历史 hash、剩余消费者 bridge 与原 quota 完整成本验收仍开放。
 
 
 同一集成 codec 现采用已合入的 [#7528](https://github.com/loopx-project/loopx/pull/7528)，在精确

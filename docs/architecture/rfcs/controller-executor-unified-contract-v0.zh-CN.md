@@ -325,6 +325,10 @@ C2 须在相同冷态、已保留温态及上下文丢失来源上验证：默�
 [Journal 来源保真检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.zh-CN.md)
 将可独立评审的持久化修复与尚未完成的数值 hash／上下文 codec 资格分开记录；既有
 hash 语义保持不变。
+后续[上下文来源保真检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-context-source-fidelity.zh-CN.md)
+将通用冷态、差分和全量恢复修复拆为普通 #7661，C1 复用同一来源身份/修改 owner。
+组件传输缩减不证明 canonical hash、安装采用或原 quota 完整成本收益；历史 hash
+语义仍保持。
 
 当前 C1 分支复用已合入 #7560 的 `outcome_context_navigation_v1` 和通用同 capture
 `context-read --select`。注册关系建议读取顺序；归属不证明独立性，覆盖限制也不
