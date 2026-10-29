@@ -9,7 +9,7 @@
   the session-ownership decision already described for the Desktop frontend.
   Session-ownership and host-admission decisions require maintainer acceptance.
 - **Created:** 2026-09-15
-- **Last normative revision:** 2026-10-27
+- **Last normative revision:** 2026-10-29
 - **Implementation baseline:** `6c3da75ca`
 - **Related contracts:** [Desktop execution frontends](desktop-execution-frontends-v0.md),
   [Single-owner local daemon](single-owner-local-daemon-v0.md),
@@ -244,6 +244,15 @@ Core credentials/write tools outside executor access. Role changes, stop, late
 results and controller recovery must retain the original request/attempt and
 settlement binding. Until that profile qualifies, existing bindings retain their
 current behavior; no implicit conversion or host promotion follows.
+
+For C6/C8's [human interaction during execution](controller-executor-unified-contract-v0.md#human-interaction-during-execution),
+keep the controller's conversation queue available while the single admitted
+executor works. Questions, proactive reports and previews reuse current session,
+audience and delivery bindings; they do not admit another business attempt.
+Feedback retains its ordered request revision and actual consumption/adoption
+readback across stop, restart and late results. A host unable to support this
+concurrency or fencing must expose that limit; existing serialized Chat or a
+successful bounded runtime invocation does not qualify the two-session journey.
 
 ### Reusable Agent operations and continuation ownership
 

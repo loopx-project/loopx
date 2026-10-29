@@ -196,6 +196,16 @@ session. Deterministic composition and exact delta encoding retain their own
 owners. Qualify retained obligations and subsequent accepted work against the
 controller's added complete costs; query counts or text size cannot pass it.
 
+C6/C8 also own the [human interaction during execution](controller-executor-unified-contract-v0.md#human-interaction-during-execution)
+product target: a busy executor does not block the controller conversation;
+meaningful changes prompt evidence-based reports and task-appropriate rich
+views, while feedback remains traceable into subsequent work and artifacts.
+Qualify quiet/deduplicated reporting, audience limits, accessible fallback and
+revision/stop/recovery races through existing session/request/projection owners.
+These are proposed outcomes, not current runtime qualification or extra gates
+on independent C1 work. Preserve single-session comparison first and include
+all reporting, presentation and human-attention costs in the later opt-in arm.
+
 C1's [caller cutover map](controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
 includes quota emission, the direct Turn producer and the final native/structured
 host prompts. A common capture does not unify those consumers. Qualification
