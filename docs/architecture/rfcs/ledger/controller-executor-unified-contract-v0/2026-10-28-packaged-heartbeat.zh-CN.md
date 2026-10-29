@@ -425,3 +425,18 @@ compaction 仍恢复相同当前呈现及原来源，不要求先读完已不可
 失败／中断 cohort 及完整成本表均保留原状态。安装采用、实际模型输入／保留、
 tokens／cache／账单、验收成果与总延迟／成本仍未资格化。调用方／writer 替换、历史
 reader 退役及相对原 quota 的单会话成果对照保持开放；双会话 controller 研究另行进行。
+
+## 独立的当前捕获恢复切片
+
+优先让可独立评审的 [#7628](https://github.com/loopx-project/loopx/pull/7628) 先于剩余
+C1 切换推进。该提案 `6743ce72593121b2e15a9f8ef84355c31c94e46c` 直接面向 main，
+不依赖未合 C1。既有 native adapter 在可选材料规划前，先发布当前原始来源的 recovery
+及 pending delivery。真实 saved-context CLI 进程退出反例在 main `ce4c78088` 的
+resume／compaction 均复现恢复前一份来源，提案通过相同断言。受影响 cohort 为
+199 项通过、五项既有显式 native opt-in 跳过；标准 premerge 通过。仍为提案，未认证
+合入或安装采用。
+
+相同 project 调用的关闭态／普通态 capture 及 typed 请求数不变。材料分阶段多一次
+journal 发布，从两次增至三次；capture 文件及 typed 请求仍各两份／次。这换取当前
+来源的持久可恢复性，不是已测延迟、模型或完整成本收益。C1 集成已具有相同恢复顺序；
+后续主线集成应复用该 owner，不恢复第二份实现。

@@ -578,3 +578,22 @@ tokens/cache/billing, accepted outcomes and total latency/cost are unqualified.
 Caller/writer replacement, historical-reader retirement and the original quota
 single-session outcome comparison remain open; the two-session controller study
 remains separate.
+
+## Independent current-capture recovery slice
+
+Prioritize the independently reviewable [#7628](https://github.com/loopx-project/loopx/pull/7628)
+before the remaining C1 cutover. It targets main directly at
+`6743ce72593121b2e15a9f8ef84355c31c94e46c`, without an unmerged C1 dependency.
+The existing native adapter publishes current original recovery and pending
+delivery before optional material planning. A real saved-context CLI process
+exit reproduces stale predecessor recovery on main `ce4c78088` in both resume
+and compaction; the same assertions pass on the proposal. Its affected cohort
+has 199 passed and five existing explicit-native opt-in skips; standard premerge
+passes. It remains proposed, without merge or installed-adoption qualification.
+
+Matched project-call observations keep off/plain capture and typed-request counts
+unchanged. Material staging adds one journal publication, from two to three;
+capture files remain two and typed requests remain two. This buys current-source
+durability, not a measured latency, model or complete-cost improvement. The same
+recovery ordering is already present in this C1 integration; future mainline
+integration must reuse that owner rather than restore another implementation.
