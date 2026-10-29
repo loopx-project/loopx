@@ -87,9 +87,14 @@ def qualify(directory: Path) -> dict:
         failing_chmod.chmod(0o755)
         failed = subprocess.run(["bash", str(source / "scripts/install-local.sh")], env=env,
             text=True, capture_output=True, timeout=180)
-        if failed.returncode == 0 or cli.resolve() != release:
-            raise RuntimeError("Activation failure did not preserve the previous executable")
+        if failed.returncode == 0 or cli.resolve().parents[1] != release:
+            raise RuntimeError("Activation failure did not preserve the previous executable: " + failed.stderr[-3000:])
         assert read("doctor", "--installation-only")["ok"]
+        subprocess.run([sys.executable, "-c",
+            "from loopx.control_plane.effect_runtime import restart_effect_runtime; "
+            "restart_effect_runtime(wait_for_exit=True)"],
+            env={**env, "PYTHONPATH": str(release)}, cwd=release,
+            check=True, timeout=15, stdout=subprocess.DEVNULL)
         return {"ok": True, "source_revision": manifest["source_revision"], "bytes": manifest["size"],
             "clean_install": results[0] == 0, "upgrade": results[1] == 0,
             "doctor": True, "skills": True, "frontend_bundle_contract": True,
