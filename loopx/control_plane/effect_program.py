@@ -258,6 +258,9 @@ class SettlementIdentity:
     todo_id: str | None
     turn_instance_id: str
     replan_obligation_id: str | None = None
+    controller_session_id: str | None = None
+    executor_session_id: str | None = None
+    generation: int | None = None
     _runtime_identity: Mapping[str, Any] = field(
         init=False,
         repr=False,
@@ -281,6 +284,15 @@ class SettlementIdentity:
         object.__setattr__(
             self, "replan_obligation_id", identity.get("replan_obligation_id")
         )
+
+        # Extract session IDs and generation from payload if present
+        if "controller_session_id" in payload:
+            object.__setattr__(self, "controller_session_id", str(payload["controller_session_id"]))
+        if "executor_session_id" in payload:
+            object.__setattr__(self, "executor_session_id", str(payload["executor_session_id"]))
+        if "generation" in payload:
+            object.__setattr__(self, "generation", int(payload["generation"]))
+
         object.__setattr__(self, "_runtime_identity", identity)
         object.__setattr__(self, "_runtime_payload", payload)
 
@@ -334,6 +346,13 @@ class SettlementIdentity:
             or payload.get("binding_id") != binding_id
         ):
             raise RuntimeError("TypeScript settlement identity shape mismatch")
+
+        # Extract session fields if present
+        controller_session_id = str(payload.get("controller_session_id") or "").strip() or None
+        executor_session_id = str(payload.get("executor_session_id") or "").strip() or None
+        generation_value = payload.get("generation")
+        generation = int(generation_value) if generation_value is not None else None
+
         instance = object.__new__(cls)
         object.__setattr__(instance, "goal_id", str(payload["goal_id"]))
         object.__setattr__(instance, "agent_id", str(payload["agent_id"]))
@@ -344,6 +363,9 @@ class SettlementIdentity:
             str(payload["turn_instance_id"]),
         )
         object.__setattr__(instance, "replan_obligation_id", replan_obligation_id)
+        object.__setattr__(instance, "controller_session_id", controller_session_id)
+        object.__setattr__(instance, "executor_session_id", executor_session_id)
+        object.__setattr__(instance, "generation", generation)
         object.__setattr__(
             instance,
             "_runtime_identity",
