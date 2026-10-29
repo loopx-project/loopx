@@ -73,16 +73,21 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
 /** Return only display edits, never round-trip unrelated source facts through
  * JavaScript numbers. References address the immutable input, including bodies
  * moved into source_projection. Python applies these edits without policy. */
-export function contextProjectionChanges(source: JsonObject, projected: JsonObject): JsonObject {
+export type ProjectionSourceValues = WeakMap<object, Map<string, ProjectionPath>>;
+
+export function contextProjectionChanges(source: JsonObject, projected: JsonObject,
+    sourceValues?: ProjectionSourceValues): JsonObject {
   const paths = contextObjectPaths(source), changes: ProjectionChange[] = [];
-  const visit = (before: unknown, after: unknown, path: ProjectionPath): void => {
+  const visit = (before: unknown, after: unknown, path: ProjectionPath, parent?: object): void => {
+    const original = parent && sourceValues?.get(parent)?.get(String(path.at(-1)));
+    if (original) { changes.push({path, from: original}); return; }
     if (Object.is(before, after)) return;
     const from = after !== null && typeof after === "object" ? paths.get(after) : undefined;
     if (from) { changes.push({path, from}); return; }
     if (Array.isArray(after)) {
       const old = Array.isArray(before) ? before : [];
       if (!Array.isArray(before)) changes.push({path, value: []});
-      after.forEach((value, i) => visit(old[i], value, [...path, i]));
+      after.forEach((value, i) => visit(old[i], value, [...path, i], after));
       // Remove from the end so earlier indices retain their original meaning.
       for (let i = old.length - 1; i >= after.length; i--) changes.push({path: [...path, i], remove: true});
     } else if (jsonObject(after)) {
@@ -91,11 +96,31 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
       for (const key of Object.keys(old))
         if (!Object.hasOwn(after as JsonObject, key)) changes.push({path: [...path, key], remove: true});
       for (const [key, value] of Object.entries(after as JsonObject))
-        visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key]);
+        visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key], after as object);
     } else changes.push({path, value: after});
   };
   visit(source, projected, []);
   return {changes};
+}
+
+/** Compare a pure edit result using the same original number spellings.
+ * References are IO lineage, not an alternate context/hash or decision owner. */
+export function contextProjectionIdentity(source: JsonObject, projected: JsonObject,
+    supplied?: unknown, sourceValues?: ProjectionSourceValues): string {
+  if (supplied === undefined) return JSON.stringify(canonicalAuthorityJson(projected));
+  // Validate every supplied path/token before deriving identities from it.
+  contextSourceIdentity(source, supplied);
+  const tokens = supplied as [ProjectionPath, string][];
+  const result: [ProjectionPath, string][] = [];
+  const edits = contextProjectionChanges(source, projected, sourceValues).changes as ProjectionChange[];
+  for (const edit of edits) {
+    if (!("from" in edit)) continue;
+    for (const [path, token] of tokens) {
+      if (edit.from.every((key, i) => path[i] === key))
+        result.push([[...edit.path, ...path.slice(edit.from.length)], token]);
+    }
+  }
+  return contextSourceIdentity(projected, result)(projected, []);
 }
 
 const AGENT_LIMITS: Readonly<Record<string, number>> = {

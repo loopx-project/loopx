@@ -249,12 +249,14 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id=profile, context_epoch="epoch-a")
     full = prepare_context_delivery(context, scope=scope, capture_id="capture-a")
     assert full["mode"] == "full" and full["context"] == context
+    assert json.dumps(full["context"], sort_keys=True) == json.dumps(context, sort_keys=True)
     warm = prepare_context_delivery(context, scope=scope, capture_id="capture-b",
         baseline=full, retained={"complete": True, "target": full["target"]})
     assert warm["mode"] == "delta"
     assert len(json.dumps(warm).encode()) < len(json.dumps(full).encode()) / 2
     current = prepare_context_delivery(context, scope=scope, capture_id="capture-b")
-    assert restore_context_delivery(warm, baseline=full, current=current)["context"] == context
+    restored = restore_context_delivery(warm, baseline=full, current=current)
+    assert json.dumps(restored["context"], sort_keys=True) == json.dumps(context, sort_keys=True)
     turn_full = prepare_context_delivery(turn_context, scope=scope, capture_id="turn-capture")
     turn_delta = prepare_context_delivery(turn_context, scope=scope, capture_id="turn-capture",
         baseline=full, retained={"complete": True, "target": full["target"]})
@@ -284,8 +286,10 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
             assert body not in json.dumps(delta["changes"], ensure_ascii=False)
         restored = restore_context_delivery(delta, baseline=first, current=next_capture)
         assert restored["mode"] == "delta" and restored["context"] == projection
+        assert json.dumps(restored["context"], sort_keys=True) == json.dumps(projection, sort_keys=True)
         missing = restore_context_delivery(delta, baseline=None, current=next_capture)
         assert missing["mode"] == "full" and missing["context"] == projection
+        assert json.dumps(missing["context"], sort_keys=True) == json.dumps(projection, sort_keys=True)
     # Neither native source state, the signed decision nor settlement is changed
     # by presentation, warm reuse or recovery. A new capture is not an admission.
     assert state.read_bytes() == before_source
@@ -813,3 +817,72 @@ def test_default_json_reader_and_generated_recovery_use_large_pages(tmp_path):
             assert len(page["content"].encode()) > 32000
             args = parser.parse_args(shlex.split(page["next_command"])[1:])
         assert collected == raw and calls <= 10
+
+
+@pytest.mark.parametrize("number", [1, 1.0, -0.0, 2**60 + 1, float(2**60), 1e-7])
+def test_context_codec_keeps_original_numbers_through_full_delta_and_recovery(tmp_path, monkeypatch, number):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    original = {"registry": {"body": "Preserve original evidence. " * 600, "measurement": number},
+        "current_control": {"measurement": number, "state": "original"}}
+    current = deepcopy(original)
+    current["current_control"]["state"] = "current"
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    warm = prepare_context_delivery(current, capture_id="after", baseline=first,
+        retained={"complete": True, "target": first["target"]}, **args)
+    assert warm["mode"] == "delta"
+    for baseline in [first, None]:
+        restored = restore_context_delivery(warm, baseline=baseline, current=full)
+        assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)
+
+
+@pytest.mark.parametrize("before,after", [(1, 1.0), (0, -0.0), (2**60, 2**60 + 1)])
+def test_context_codec_rejects_numeric_delta_collisions(tmp_path, monkeypatch, before, after):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    original = {"registry": {"body": "Keep numeric evidence distinct. " * 600, "measurement": before}}
+    current = deepcopy(original)
+    current["registry"]["measurement"] = after
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    warm = prepare_context_delivery(current, capture_id="after", baseline=first,
+        retained={"complete": True, "target": first["target"]}, **args)
+    assert warm["mode"] == "delta"
+    assert warm["changes"] is not None
+    restored = restore_context_delivery(warm, baseline=first, current=full)
+    assert restored["mode"] == "delta"
+    assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    # Neither omission nor a normalized-equivalent numeric literal is the
+    # exact current evidence, even when the legacy JS digest is unchanged.
+    for replacement in [None, {"changed": {"registry": {"changed": {"measurement": {"value": before}}}}}]:
+        damaged = deepcopy(warm)
+        damaged["changes"] = replacement
+        recovered = restore_context_delivery(damaged, baseline=first, current=full)
+        assert recovered["mode"] == "full"
+        assert json.dumps(recovered["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+
+
+@pytest.mark.parametrize("continuity", ["native_hook_assumption", "captured_file"])
+def test_context_numeric_source_reordering_and_grouped_literals(tmp_path, monkeypatch, continuity):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    body = "Keep source numbers, original ordering and metadata. " * 400
+    original = {"registry": {"body": body, "observations": [1.0, -0.0, 2**60 + 1]},
+        "current_control": {"a": 1.0, "b": -0.0, "c": 2**60 + 1}}
+    current = {"registry": {"body": body, "observations": [2**60 + 1, 1.0, -0.0]},
+        "current_control": {"a": -0.0, "b": 2**60 + 1, "c": 1.0}}
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    delta = prepare_context_delivery(current, capture_id="after", baseline=first,
+        continuity={"basis": continuity, "capture_bytes_verified": True, "target": first["target"]}, **args)
+    assert delta["mode"] == "delta" and delta["continuity_basis"] == continuity
+    restored = restore_context_delivery(delta, baseline=first, current=full)
+    assert restored["mode"] == "delta"
+    assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)

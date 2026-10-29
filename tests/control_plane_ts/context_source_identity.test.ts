@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {contextSourceIdentity, referenceQuotaSummaryLanes} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
+import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity, referenceQuotaSummaryLanes} from "../../loopx/control_plane/quota/diagnostic_projection.ts";
 
 test("source identity keeps number spellings separate from strings and retains later exact owners", () => {
   const source = {first: {observations: [1, 2 ** 60]},
@@ -27,6 +27,20 @@ for (const tokens of [null, {}, [[[], "1"]], [[["missing"], "1"]],
       /context source number token/);
   });
 }
+
+test("source edit identities follow retained objects and primitive source references", () => {
+  const source = {before: {measurement: 1}, current: {measurement: 1}, raw: -0};
+  const tokens = [[["current", "measurement"], "1.0"], [["raw"], "-0.0"]];
+  const value = {value: source.raw}, projected = {body: source.current, literal: value};
+  const origins = new WeakMap([[value, new Map([["value", ["raw"]]])]]);
+  const edits = contextProjectionChanges(source, projected, origins).changes;
+  assert.ok(Array.isArray(edits));
+  assert.ok(edits.some(edit => JSON.stringify(edit) === JSON.stringify({path: ["literal", "value"], from: ["raw"]})));
+  assert.notEqual(contextProjectionIdentity(source, {body: source.before}, tokens),
+    contextProjectionIdentity(source, {body: source.current}, tokens));
+  assert.notEqual(contextProjectionIdentity(source, {literal: {value: 0}}, tokens),
+    contextProjectionIdentity(source, {literal: value}, tokens, origins));
+});
 
 test("already shared numeric summary arrays reuse their original identity without new copies", () => {
   const rows = [{todo_id: "task", text: "Keep every original constraint. ".repeat(20), measurement: 1}];
