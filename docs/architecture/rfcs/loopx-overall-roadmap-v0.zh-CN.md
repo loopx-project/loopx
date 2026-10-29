@@ -192,6 +192,11 @@ quota 成果/完整成本仍未闭合。
 搬移证据上叠加字面当前控制，覆盖 scoped context。Ledger 同时记录局部搬移差分变小
 和普通温态字节对照仍负向；这是采用共享 owner，没有新增第二编码器或提升默认。
 
+[固定版本的打包对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
+在真实 File/SQLite fixture 验证 C1 来源/恢复行为，同时记录更大的冷态/累计输出，
+以及尚开放的独立数值 hash 边界。保留这些反证和原成果/完整成本门；文件差分或一次
+结算回执可用，不证明长程收益。
+
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback
 及退役。App heartbeat 流程和实际 benchmark 消费者分别验收；managed Codex 可以作为
