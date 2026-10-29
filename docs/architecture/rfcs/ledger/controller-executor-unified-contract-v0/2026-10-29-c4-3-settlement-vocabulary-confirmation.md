@@ -1,12 +1,10 @@
 # C4.3 settlement vocabulary confirmation
 
 - Parent: [controller/executor RFC, C4.3](2026-10-27-refactor-handoff.md#c43--settlement-adapters-over-existing-primitives).
-- Precedes: the C4.3 settlement obligation comparison entry of 2026-10-29 in this
-  directory. It is named here in prose rather than linked, because that entry is
-  not on the base branch yet and a link to a missing file breaks the strict
-  documentation build.
-- Baseline: `544aa0fee`, 2026-10-29. The settlement owners are unchanged since
-  `fb331f45`.
+- Follows: the [C4.3 settlement obligation comparison entry](2026-10-29-c4-3-settlement-obligation-comparison.md)
+  of 2026-10-29 in this directory. It settles that entry's first candidate slice.
+- Baseline: `0a9a3a388`, 2026-10-29. The settlement owners are unchanged since
+  `544aa0fee`.
 - Status: read-only confirmation. No code, schema, wire, registry or default change.
 - [Chinese mirror](2026-10-29-c4-3-settlement-vocabulary-confirmation.zh-CN.md).
 
@@ -111,7 +109,11 @@ TypeScript literal can drift, and the failure would surface at runtime as
 That gap is a separate slice: one shared owner for the ordered host-adapter step
 kinds, registered in the vocabulary registry so that the guard/validation
 distinction becomes machine-readable instead of prose. It must first reconcile
-the in-flight settlement work: #3412, #5677, #7580, #7523.
+the in-flight settlement work: #3412, #5677, #7580, #7523. That slice is
+proposed in [#7619](https://github.com/loopx-project/loopx/pull/7619): it
+registers the ordered host-adapter step kinds as their own vocabulary with both
+runtimes as owners, so the two carriers are compared on every drift scan instead
+of hand-kept.
 
 ## What this does not establish
 

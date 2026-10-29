@@ -1,9 +1,10 @@
 # C4.3 结算词汇确认
 
 - 上级：[controller/executor RFC，C4.3](2026-10-27-refactor-handoff.zh-CN.md#c43--settlement-adapters-over-existing-primitives)。
-- 前序：本目录 2026-10-29 的《C4.3 结算义务对照》条目。此处只用文字提及而不做
-  链接：那条目尚未进入基线分支，指向缺失文件的链接会让严格文档构建失败。
-- 基线：`544aa0fee`，2026-10-29。结算属主自 `fb331f45` 起未变。
+- 前序：本目录 2026-10-29 的
+  [《C4.3 结算义务对照》条目](2026-10-29-c4-3-settlement-obligation-comparison.zh-CN.md)。
+  本条目回答该条目列出的第一个候选切片。
+- 基线：`0a9a3a388`，2026-10-29。结算属主自 `544aa0fee` 起未变。
 - 状态：只读确认。不改代码、schema、wire、registry 或默认值。
 - [英文版](2026-10-29-c4-3-settlement-vocabulary-confirmation.md)。
 
@@ -94,7 +95,10 @@ C4.3 结算义务对照列出一个候选后续切片：*词汇统一（小）�
 
 这是一个独立切片：为 host-adapter 的有序步骤类型给出同一个共享属主，并登记进
 词汇 registry，让 guard/validation 的区别从散文变成机器可读。它必须先调和在途的
-结算工作：#3412、#5677、#7580、#7523。
+结算工作：#3412、#5677、#7580、#7523。该切片已在
+[#7619](https://github.com/loopx-project/loopx/pull/7619) 中提出：它把 host-adapter
+的有序步骤类型登记为独立词汇，并由两个运行时共同作为属主，于是两个载体在每次
+漂移扫描中都会被比较，而不再靠手工维护。
 
 ## 本记录不成立的结论
 
