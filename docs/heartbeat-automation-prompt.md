@@ -73,6 +73,14 @@ static refresh/spend sequence: after validated work it follows the current
 compatibility, not as a stale fallback. Todo acceptance alone is not Turn
 settlement or terminal vision closure. The brief base budget is 4,800 characters; reward-memory headroom remains separate.
 
+Markdown prints a complete guard command once when the successful task body
+already contains that exact command as a whole line. Generator Inputs then
+points to the body; JSON fields remain complete. Missing, different, partial or
+failed bodies retain the complete diagnostic command.
+
+成功正文已按完整行包含同一 guard 命令时，Markdown 诊断区指向正文，避免重复长命令；
+JSON 字段保留全文。正文缺失、不同、仅匹配前缀或生成失败时，诊断区仍打印完整命令。
+
 Brief 与 thin 共用完整执行义务路径；full、compact、brief 均移除固定结算配方，而不是
 删除结算义务。真实 App preflight、registry scope、完整 guard 和静态安全规则
 均保留；结算顺序与身份以本轮动态 contract 为准，vision replan 不由历史成功清账。

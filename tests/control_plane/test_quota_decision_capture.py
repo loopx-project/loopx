@@ -86,6 +86,72 @@ def test_existing_symlink_is_not_followed(tmp_path):
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_native_refusal_is_bounded_without_pending_context_or_admission(tmp_path, monkeypatch, provider):
+    import hashlib
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+    from tests.control_plane.test_quota_settlement_cli import (
+        _configure_selectable_alternative, _initialize_fixture_authority, _spend_run_count,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture, native = tmp_path / 'refused-capture', tmp_path / 'native-session'
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv('CODEX_THREAD_ID', 'refusal-session')
+    monkeypatch.delenv('CODEX_ROLLOUT_TRACE_ROOT', raising=False)
+    codex_context_hook(str(native), dict(session_id='refusal-session', cwd=str(project),
+        hook_event_name='SessionStart', source='startup'))
+    journal = (native / 'session.json').read_bytes()
+    guard = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
+             '--todo-id', 'todo_missing', '--turn-instance-id', TURN_ID, '--codex-app']
+    rc, refused = _run_cli(registry, runtime, *guard, '--decision-output-dir', str(capture),
+        '--context-delivery', 'on', '--codex-context-dir', str(native), '--max-page-output-bytes', '4096')
+    raw = (capture / 'decision.json').read_bytes()
+    original = json.loads(raw)
+    assert rc == 1 and refused['ok'] is False
+    assert len(raw) > 4096
+    assert len(json.dumps(refused, ensure_ascii=False, separators=(',', ':')).encode()) + 1 <= 4096
+    assert refused['error_code'] == original['error_code'] == 'quota_action_selection_rejected'
+    assert refused['reason'] == original['reason']
+    assert refused['heartbeat_receipt'] == original['heartbeat_receipt']
+    assert refused['next_cli_actions'] == original['interaction_contract']['cli_channel']['next_cli_actions']
+    assert refused['captured_decision']['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert (native / 'session.json').read_bytes() == journal
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == _spend_run_count(runtime) == 0
+    # Explicitly disabled delivery preserves the ordinary failure view.
+    rc, disabled = _run_cli(registry, runtime, *guard, '--context-delivery', 'off')
+    assert rc == 1 and disabled['error_code'] == refused['error_code']
+    assert 'action_selection_qualification' in disabled and 'captured_decision' not in disabled
+
+
+def test_large_refusal_diagnostics_remain_reachable_by_selected_read(tmp_path):
+    from loopx.cli_commands.quota_failure_report import captured_quota_failure_view
+    from loopx.cli_commands.quota_capture import read_context_capture
+
+    payload = {'ok': False, 'reason': '必要的诊断证据' * 10000,
+               'heartbeat_receipt': {'status': 'not_committed'},
+               'unrelated_history': 'optional history ' * 10000}
+    capture_decision(tmp_path, payload)
+    result = captured_quota_failure_view(payload, capture_directory=tmp_path, max_page_output_bytes=4096)
+    assert result['ok'] is False and len(json.dumps(result).encode()) < 4096
+    from loopx.cli import build_parser
+
+    command = result['command']
+    content = []
+    while command:
+        tokens = shlex.split(command)
+        args = build_parser().parse_args(tokens[tokens.index('--format'):])
+        page = read_context_capture(args)
+        assert page['ok'], page
+        content.append(page['content'])
+        command = page.get('next_command')
+    selected = {item['pointer']: item['value'] for item in json.loads(''.join(content))['selections']}
+    assert selected['/reason'] == payload['reason']
+    assert '/unrelated_history' not in selected
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
 def test_real_cli_fallback_reference_keeps_capture_and_turn_effects(tmp_path, monkeypatch, provider):
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import quota_action_signature_document
