@@ -39,3 +39,19 @@ test("discovery lists exact child addresses without materializing values", () =>
       {pointer: "/a~1b/~0/0", path: ["a/b", "~", 0]}, {pointer: "/a~1b/~0/1", path: ["a/b", "~", 1]}]},
     {pointer: "/n", path: ["n"], children: []}]});
 });
+
+test("bounded depth discovers nested addresses in one batch without values", () => {
+  const context = {"a/b": {"~": [{stop: "private-value"}]}, scalar: false};
+  const request = {operation: "context_select", context, select: ["/a~1b"], list_fields: true};
+  assert.deepEqual(evaluateTurnEnvelope({...request, list_depth: 3}), {selections: [
+    {pointer: "/a~1b", path: ["a/b"], children: [
+      {pointer: "/a~1b/~0", path: ["a/b", "~"]},
+      {pointer: "/a~1b/~0/0", path: ["a/b", "~", 0]},
+      {pointer: "/a~1b/~0/0/stop", path: ["a/b", "~", 0, "stop"]},
+    ]},
+  ]});
+  assert.deepEqual(evaluateTurnEnvelope({...request, list_depth: 1}), evaluateTurnEnvelope(request));
+  for (const list_depth of [0, -1, 9, 1.5, true, "2", null])
+    assert.throws(() => evaluateTurnEnvelope({...request, list_depth}));
+  assert.throws(() => evaluateTurnEnvelope({...request, list_fields: false, list_depth: 2}));
+});

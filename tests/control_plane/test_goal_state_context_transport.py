@@ -86,6 +86,11 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     page, raw = json.loads(output.getvalue()), bytearray()
     assert code == 0 and page["ok"], (page.get("reason"), page.get("error"), page.get("error_code"))
     digest = page["sha256"]
+    if page.get("schema_version") != "context_capture_page_v1":
+        page = read_context_capture(build_parser().parse_args([
+            "--format", "json", "quota", "context-read", "--capture-file", page["path"],
+            "--capture-sha256", digest, "--offset", "0", "--page-bytes", "3072"]))
+        assert page["ok"], page
     while True:
         assert page["offset"] == len(raw) and page["sha256"] == digest
         raw.extend(page["content"].encode())

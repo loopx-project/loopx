@@ -356,11 +356,15 @@ def test_saved_projection_recovery_failure_returns_typed_error_and_current_refer
 
 def test_preflight_instruction_pins_both_projection_and_full_fallback(tmp_path):
     from benchmark.runtime.context_delivery import preflight_context_instruction
+    from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
 
     source = tmp_path / "saved packet.json"
     env = {"LOOPX_CLI": "/fixture/bin/loopx", "LOOPX_GOAL_ID": "goal",
         "LOOPX_AGENT_ID": "agent", "LOOPX_CODEX_CONTEXT_DIR": str(tmp_path / "private native")}
     body = preflight_context_instruction(env, source, "a" * 64, "original-turn")
+    # The worker must carry the product's current read obligations, rather
+    # than retain its own eager-read/model-retention policy after a cutover.
+    assert CONTEXT_CAPTURE_NAVIGATION_GUIDANCE in body
     commands = [shlex.split(block.split("\n```", 1)[0]) for block in body.split("```sh\n")[1:]]
     assert len(commands) == 2
     assert commands[0][6] == "context-project" and commands[1][6] == "context-read"
@@ -479,7 +483,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "app_machine", "app_code_mode", "app_progressive"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -493,11 +497,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     )
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    benchmark = host in ("benchmark", "benchmark_progressive")
+    progressive = host in ("app_progressive", "benchmark_progressive")
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
     project, runtime, registry = _write_fixture(workspace)
-    if host == "benchmark":
+    if benchmark:
         _configure_selectable_alternative(project)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = read_fixture_todos(state)
@@ -506,7 +512,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="soft_claim"),
         state_path=state, provider="sqlite")
     sources = []
-    for name in (("cold", "warm") if host != "benchmark" else ()):
+    for name in (() if benchmark else ("cold", "warm")):
         code, decision = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app", cwd=project)
         assert code == 0, decision
@@ -529,7 +535,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert code == 0, setup
         configuration = setup["native_config"]
         cli += ["--runtime-root", str(runtime)]
-    if host != "benchmark":
+    if not benchmark:
         (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
     phase, queue, observed, errors = "cold", [], {}, []
     actual_turn = None
@@ -540,7 +546,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             if queue:
                 command = queue.pop(0)
             elif phase in ("cold", "warm"):
-                if host == "benchmark":
+                if benchmark:
+                    from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_NAVIGATION_GUIDANCE
+                    assert CONTEXT_CAPTURE_NAVIGATION_GUIDANCE in _input_text(request)
                     command = [line for line in _input_text(request).splitlines() if " quota context-project " in line][-1]
                     argv = shlex.split(command)
                     actual_turn = argv[argv.index("--turn-instance-id") + 1]
@@ -565,7 +573,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 descriptor = json.loads(output.split("\nOutput:\n", 1)[-1])
                 assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
-                if host == "benchmark":
+                if benchmark:
                     assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
                 wire = json.loads((Path(descriptor["path"]).parent / "delivery.json").read_text())
                 assert descriptor["target"] == wire["target"]
@@ -579,7 +587,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     queue.append(shlex.join([*cli, "--format", "json", "quota", "context-read",
                         "--capture-file", descriptor["path"], "--capture-sha256", descriptor["sha256"],
                         "--offset", str(offset)]))
-                if host == "app_progressive":
+                if progressive:
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
                     assert "content" not in descriptor
@@ -592,7 +600,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             else:
                 name = phase.removesuffix("_read")
                 descriptor = observed[name][1]
-                if host == "app_progressive":
+                if progressive:
                     outputs = [item["output"] for item in request["input"]
                         if item.get("type") in ("function_call_output", "custom_tool_call_output")]
                     output = outputs[-1]
@@ -601,11 +609,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     page = json.loads(output.split("\nOutput:\n", 1)[-1])
                     values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
                     assert values["/goal_id"] == GOAL_ID
-                    assert values["/heartbeat_receipt"]["turn_instance_id"] == "saved-native-turn"
-                    assert "candidate" not in json.loads((context / "session.json").read_bytes())
+                    assert values["/heartbeat_receipt"]["turn_instance_id"] == (
+                        actual_turn if benchmark else "saved-native-turn")
+                    native_context = home / "loopx-context" if benchmark else context
+                    assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
                     assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
-                if host == "benchmark" and name in ("cold", "warm"):
+                if benchmark and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
                     # worker, rather than manually supplying missing flags.
                     presented = json.loads(Path(observed[name][0]["recovery"]["path"]).read_text())
@@ -623,7 +633,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 else:
                     # A new worker wake owns its own original guard.
                     phase = "warm"
-                    if host == "benchmark":
+                    if benchmark:
                         return message
                     return response(request, number, message)
             if host == "app_code_mode":
@@ -639,7 +649,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             return message
 
     with local_inference_provider(response) as (url, _, _):
-        if host == "benchmark":
+        if benchmark:
             from benchmark.runtime.worker import run_once
             skills = workspace / "skills"
             skills.mkdir()
@@ -656,7 +666,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             result = run_once(env)
             assert result["ok"] and result["context_transport"] == {"available": True}, result
             session_id = result["session"]["session_id"]
-            assert phase == "warm" and sources[0][0].read_bytes() == sources[0][1]
+            assert phase == "warm" and sources[0][0].read_bytes() == sources[0][1], errors
             # Settle this isolated, independently verified readback once before
             # a new wake. Presentation itself still performs no debit or guard.
             cold_turn = json.loads(sources[0][1])["heartbeat_receipt"]["turn_instance_id"]
@@ -686,7 +696,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
     assert not errors and phase == "done", errors
-    if host == "benchmark":
+    if benchmark:
         turns = [json.loads(raw)["heartbeat_receipt"]["turn_instance_id"] for _, raw in sources]
         assert len(set(turns)) == 2
         assert all(_heartbeat_receipt_count(runtime, turn) == 2 for turn in turns)  # original guard + selection
@@ -708,7 +718,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         # Match the native journal's exact prior full capture and depth. The
         # reconstructed mapping need not preserve that capture's field order.
         baseline = {**current, "ancestry": 0 if wire.get("continuity_basis") == "captured_file" else wire["ancestry"]}
-    if host == "benchmark":
+    if benchmark:
         for name, (_, raw) in zip(("cold", "warm"), sources):
             presentation = json.loads(Path(observed[name][0]["recovery"]["path"]).read_text())
             original = json.loads(raw)

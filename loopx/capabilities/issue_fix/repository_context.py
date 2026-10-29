@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...public_safe_text import COMPACT_LABEL_PATTERN as _SOURCE_ID_PATTERN
 from .repository_memory import (
     SUPPORT_ASPECTS,
     build_issue_fix_repository_memory_hook,
@@ -36,7 +37,6 @@ CONSULTATION_STATES = {"not_applicable", "available", "queried", "unavailable"}
 REQUIRED_FIX_ASPECTS = ("change_scope", "reproduction", "validation")
 MAX_SOURCES = 16
 
-_SOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
 _INPUT_FIELDS = {"schema_version", "repository_revision", "sources"}
 _SOURCE_FIELDS = {
     "source_id",

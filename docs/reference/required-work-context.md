@@ -821,9 +821,28 @@ ordinary full reads retain their file-only path.
 
 `quota context-read --list` discovers immediate child pointers, JSON types,
 serialized value sizes and object/array counts without returning their bodies.
-Combine `--list` with `--select` to explore nested sections; omit the selectors
-for the root. Its `context_capture_index_v1` view shares the digest-bound
-pagination contract, but an index cursor cannot be used for a value selection.
+When pointers are known, skip discovery and batch the needed values with repeated
+`--select` in one call. When unknown, select the nearest known parent and add
+`--list --list-depth 2` to discover nested fields together. Depth defaults to one
+and accepts one through eight; select a deeper parent for further exploration.
+This bounds traversal depth, not the capture size or readable content. Prefer a
+focused subtree to recursively listing unrelated evidence. Omit selectors for the
+root. The generated capture guidance teaches this choice without making an index
+read mandatory or changing which requirements must be read before work.
+Normal capture replies, persistent native setup and post-compaction recovery
+carry the same selection advice. Recovery points directly to `--select`, so a
+known pointer does not require another index round trip. Batch within the combined
+output budget, avoid overlapping parent/child selections, and inspect a missing
+pointer's parent before retrying the rejected batch. These are caller guidelines;
+selection validation, required reads and authority checks remain unchanged.
+
+The `context_capture_index_v1` view shares the digest-bound pagination contract.
+An expanded index includes its `list_depth`; `next_command` preserves the depth,
+selectors and both hashes. Changing depth rejects the prior view's continuation.
+An index cursor cannot be used for a value selection. For a truncated or missing
+page, recover the affected range of the same capture with a sufficient output
+budget; keep the original Turn and effect identities rather than repeating
+admission. Indexing never claims that the listed bodies have been read.
 
 Selected/index EOF, including root selection, never proves full model retention.
 Native file comparison is independent of that claim. The model can inspect the
@@ -846,8 +865,20 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 `--selection-sha256`。读取器校验两者，保留包括大整数在内的原 JSON 值，
 不准入、不结算、不查询实时 Goal。选择模式依赖已有 typed runtime；普通全量
 读取仍只走文件路径。`--list` 列出直接子字段的精确 pointer、类型、序列化字节数
-及对象/数组成员数，不返回正文。与 `--select` 组合可探索嵌套章节；省略路径从根开始。
-`context_capture_index_v1` 沿用双摘要分页，目录 cursor 不能用作正文选择 cursor。
+及对象/数组成员数，不返回正文。已知路径时跳过目录查询，一次重复 `--select` 批量
+读取所需字段；路径未知时选择最近的已知父节点，用 `--list --list-depth 2` 一次
+发现多层字段。深度默认为 1，可选 1–8；需要更深时选择新的父节点继续。这只限制
+单次遍历深度，不限制 capture 容量或可读正文。优先展开相关子树，省略路径才从根开始。
+生成的读取指引会提示上述选择，不把查目录变成前置步骤，也不改变工作前的必读要求。
+普通 capture 回复、原生持久配置与压缩后恢复携带同一份选择指引。恢复命令直接指向
+`--select`，已知路径无须多查一轮目录。按合计输出预算分批，避免同时选择父节点和
+子节点；路径缺失时先查其父节点，再重试被拒绝的批次。这些是调用建议，不改变
+选择校验、必读要求或权限检查。
+
+`context_capture_index_v1` 沿用双摘要分页；展开的目录包含 `list_depth`，
+`next_command` 保留深度、路径和两个摘要。更改深度会拒绝旧视图的续读，目录 cursor
+也不能用作正文 cursor。遇到输出截断或缺页，用足够的输出预算恢复同一 capture
+的受影响范围，保留原 Turn/操作身份，不重新准入。列出字段不表示读过其正文。
 包括根选择在内的目录/详情 EOF 不证明全量模型保留；原生文件比较与此独立。
 模型可直接查当前完整文件，也可查基线和差分，无须先通读。
 

@@ -19,6 +19,7 @@ import uuid
 from .decision_capture import (
     write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
+    CONTEXT_CAPTURE_SELECTION_GUIDANCE,
     context_capture_read_command, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
@@ -217,8 +218,8 @@ def _context_continuation_instructions(command: str) -> str:
         "Compaction or a failed hook starts a new baseline epoch for the next work Turn; it does not invalidate the existing Turn or its saved recovery files. "
         "Continue from its working brief, preserving Goal, requirements/stops and original task/capture/settlement identity. "
         "Do not replay read context or rerun admission solely because the baseline was invalidated. "
-        "To find missing necessary facts, discover this same capture with: " + command + " --list. "
-        "Then use --select for the relevant sections; full-file traversal is not a prerequisite. "
+        "Read missing necessary facts from this same capture with: " + command + " --select '<pointer>'. "
+        "Replace the placeholder with a required pointer; full-file traversal is not a prerequisite. "
         "Finish an interrupted selected section only if the next decision needs it; do not claim unread content was read. "
         "Never repeat completed effects or settlement. If the original reference is lost, repair it first; "
         "independently authorized work can continue. A brief or recovery grants no new authority/freshness, "
@@ -355,6 +356,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX model-context baseline invalidated. Saved files remain available. "
             + _context_continuation_instructions(recovery["command"])
+            + CONTEXT_CAPTURE_SELECTION_GUIDANCE
             + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
             + "If you choose to read an entire file: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
     return {}

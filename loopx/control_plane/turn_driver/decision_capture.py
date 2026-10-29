@@ -150,11 +150,19 @@ _CONTEXT_CAPTURE_PAGE_END = (
     "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
+CONTEXT_CAPTURE_SELECTION_GUIDANCE = (
+    "For known required pointers, repeat --select in one call without listing again. "
+    "For unknown pointers, use --list on the nearest known parent; add --list-depth 2 "
+    "when nested discovery helps, expanding only needed branches. "
+    "Size batches against the combined output budget; avoid selecting both a parent and its children. "
+    "A missing pointer rejects the batch: inspect its parent in this capture before retrying. "
+)
+
 # A durable capture is a source library, not an instruction to import it all.
 CONTEXT_CAPTURE_NAVIGATION_GUIDANCE = (
     "The complete decision is saved locally. Choose the sections needed for the current decision; "
     "you do not need to read the whole file or drain all pages before working. "
-    "Use index_command to discover exact pointers, then repeat --select to batch relevant fields. "
+    + CONTEXT_CAPTURE_SELECTION_GUIDANCE +
     "Read applicable goals, acceptance criteria, constraints and stop conditions before dependent work; "
     "read the current operation/settlement contract before effects, and supporting evidence when verification needs it. "
     "An index is navigation, not evidence of reading or fresh authority. "
@@ -202,7 +210,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  max_page_output_bytes: int | None = None,
                                  select: list[str] | None = None,
                                  selection_sha256: str | None = None,
-                                 list_fields: bool = False) -> str:
+                                 list_fields: bool = False,
+                                 list_depth: int | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -213,6 +222,7 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes),
         *(["--list"] if list_fields else []),
+        *(["--list-depth", str(list_depth)] if list_depth is not None else []),
         *(argument for pointer in select or [] for argument in ("--select", pointer)),
         *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
         *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])

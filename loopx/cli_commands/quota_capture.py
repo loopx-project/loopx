@@ -40,7 +40,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   next_page_output_bytes: int | None = None,
                   select: list[str] | None = None,
                   selection_sha256: str | None = None,
-                  list_fields: bool = False) -> dict[str, Any]:
+                  list_fields: bool = False,
+                  list_depth: int | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -63,7 +64,7 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
                 max_page_output_bytes=next_page_output_bytes or output_limit,
-                select=select, selection_sha256=selection_sha256, list_fields=list_fields)
+                select=select, selection_sha256=selection_sha256, list_fields=list_fields, list_depth=list_depth)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -138,6 +139,9 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 "larger pages require a sufficient max-page-output-bytes within the capture limit")
         path, raw, payload = _read_capture(value, digest)
         list_fields = getattr(args, "list_fields", False)
+        list_depth = getattr(args, "list_depth", None)
+        if list_depth is not None and (not list_fields or type(list_depth) is not int or not 1 <= list_depth <= 8):
+            raise ValueError("list-depth requires --list and an integer from 1 to 8")
         selectors = getattr(args, "select", None)
         if list_fields and selectors is None:
             selectors = [""]
@@ -151,7 +155,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 raise ValueError("selected continuation requires selection-sha256; follow next_command")
             from ..control_plane.quota.turn_envelope import _turn_envelope_result
 
-            plan = _turn_envelope_result("context_select", context=payload, select=selectors, list_fields=list_fields)
+            depth_options = {"list_depth": list_depth} if list_depth is not None else {}
+            plan = _turn_envelope_result("context_select", context=payload, select=selectors, list_fields=list_fields, **depth_options)
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload
@@ -174,7 +179,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     views.append({"pointer": item["pointer"], "fields": fields})
                 else:
                     views.append({"pointer": item["pointer"], "value": selected})
-            raw = json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1", "selections": views},
+            view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
+            raw = json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1", "selections": views, **view_options},
                 ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
             expected = hashlib.sha256(raw).hexdigest()
             if selection_digest is not None and selection_digest != expected:
@@ -186,7 +192,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         return _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
-            next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest, list_fields=list_fields)
+            next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
+            list_fields=list_fields, list_depth=list_depth)
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -596,6 +603,11 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    list_depth = getattr(args, "list_depth", None)
+    if list_depth is not None and (args.quota_command != "context-read" or not getattr(args, "list_fields", False)
+            or type(list_depth) is not int or not 1 <= list_depth <= 8):
+        print_payload({"ok": False, "reason": "--list-depth requires context-read --list and an integer from 1 to 8"}, args.format, str)
+        return 1
     if getattr(args, "list_fields", False) and args.quota_command != "context-read":
         print_payload({"ok": False, "reason": "--list is only supported by context-read"}, args.format, str)
         return 1

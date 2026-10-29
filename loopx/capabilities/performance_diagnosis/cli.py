@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from ...control_plane.effect_runtime import effect_runtime_result
-
 MAX_INPUT_BYTES = 16 * 1024 * 1024
 AddFormat = Callable[[argparse.ArgumentParser], None]
 OutputFormat = Callable[..., str]
@@ -46,6 +44,8 @@ def _render(payload: dict[str, Any]) -> str:
 def handle_performance_diagnosis_command(args: argparse.Namespace, *, output_format: OutputFormat, print_payload: PrintPayload) -> int | None:
     if args.command != "performance-diagnosis":
         return None
+    from ...control_plane.effect_runtime import effect_runtime_result
+
     try:
         if args.performance_diagnosis_action == "plan":
             params = {"tool": args.tool, "command": _load(args.command_json),
