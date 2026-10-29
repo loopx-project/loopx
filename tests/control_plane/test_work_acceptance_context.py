@@ -57,9 +57,7 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     def cli(*arguments):
         code, result = run_json_cli_result(*arguments, registry_path=registry, runtime_root=runtime)
         assert code == 0, result
-        # The harness adds transport metadata after decoding stdout. It is
-        # not part of the signed CLI wire consumed by the Host.
-        return {key: value for key, value in result.items() if key != "_returncode"}
+        return result
 
     # Two owners' cumulative outcomes remain Goal requirements. Selection must
     # not silently narrow those requirements or their work/evidence references.
@@ -212,7 +210,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     def cli(*arguments):
         code, result = run(*arguments)
         assert code == 0, result
-        return {key: value for key, value in result.items() if key != "_returncode"}
+        return result
 
     def configure(*arguments):
         code, result = acceptance_cli(*arguments)

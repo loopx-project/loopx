@@ -35,6 +35,11 @@ historical; they do not qualify this integration. No latency, model-token,
 accepted-outcome or complete-cost gain is claimed. #7627's merged source implementation is reused here; installed/model adoption
 and outcomes still need separate qualification.
 
+The source-faithful CLI helper repair is split into normal [PR #7654](https://github.com/loopx-project/loopx/pull/7654).
+C1 reuses the same implementation and removes case-local metadata filters;
+process exit status is separate from original JSON. This is a testing transport
+repair, not a change to production signature or admission rules.
+
 Validation and remaining gaps are recorded on the exact PR head. Preserve the
 initial integration collection error, historical two layout failures and retired
 reader-test failures as failed cohorts, then validate the current generic/staged

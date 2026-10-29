@@ -27,6 +27,10 @@ File/SQLite 集成核验完整签名来源、原最后约束、八项声明来�
 历史，不资格化本次集成。不宣称延迟、模型 token、验收成果或完整成本收益。
 #7627 的来源实现已经合入并由本集成复用，实际安装/模型采用与成果仍须单独验收。
 
+原 JSON 保真的 CLI helper 修复独立提交为普通 [PR #7654](https://github.com/loopx-project/loopx/pull/7654)。
+C1 复用同一实现并删除个别测试中的 metadata 过滤；进程退出码与原 JSON 分开返回。
+本项修复测试传输，不修改生产签名或准入规则。
+
 验证及余项绑定 PR 精确 head。保留首次集成 collection 错误、两项旧布局失败及
 已退役 reader 测试失败 cohort，再验证当前通用/staged 路径；不降低原 quota 预算，
 不把测试数变化当作收益。数值 source/hash 身份、writer/caller 替换、受支持历史
