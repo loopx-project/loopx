@@ -74,6 +74,30 @@ def qualify(directory: Path) -> dict:
             env=env, check=True, stdout=subprocess.DEVNULL)
         bundle = json.loads((release / "loopx/web/chat/bundle-manifest.json").read_text())
         assert bundle["source_revision"] == manifest["source_revision"]
+        # Exercise the installed delivery owner, not a development file server.
+        subprocess.run([sys.executable, "-c", """
+import hashlib
+import json
+import threading
+from urllib.request import urlopen
+from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
+assets = default_chat_assets_dir()
+manifest = json.loads((assets / 'bundle-manifest.json').read_text())
+server = ChatHTTPServer(('127.0.0.1', 0), ChatRequestHandler)
+server.assets_dir, server.verbose = assets, False
+worker = threading.Thread(target=server.serve_forever, daemon=True)
+worker.start()
+try:
+    for name, digest in manifest['files'].items():
+        with urlopen(f'http://127.0.0.1:{server.server_port}/chat/{name}', timeout=10) as response:
+            assert response.status == 200
+            assert hashlib.sha256(response.read()).hexdigest() == digest, name
+finally:
+    server.shutdown()
+    server.server_close()
+    worker.join()
+"""], env={**env, "PYTHONPATH": str(release)}, cwd=release,
+            check=True, timeout=60, stdout=subprocess.DEVNULL)
         # Inject a post-switch executable failure at the manpage chmod step.
         # Only a disposable candidate is touched, never a real installation.
         real_chmod = shutil.which("chmod")
@@ -97,7 +121,7 @@ def qualify(directory: Path) -> dict:
             check=True, timeout=15, stdout=subprocess.DEVNULL)
         return {"ok": True, "source_revision": manifest["source_revision"], "bytes": manifest["size"],
             "clean_install": results[0] == 0, "upgrade": results[1] == 0,
-            "doctor": True, "skills": True, "frontend_bundle_contract": True,
+            "doctor": True, "skills": True, "frontend_bundle_contract": True, "frontend_http": True,
             "no_frontend_build_tools": True, "activation_failure_restored": True}
 
 

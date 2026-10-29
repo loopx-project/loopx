@@ -1,10 +1,8 @@
 """Update intent, progress and detached observation without live user state."""
 
 import argparse
-from contextlib import contextmanager
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
