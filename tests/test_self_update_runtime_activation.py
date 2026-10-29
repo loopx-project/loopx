@@ -44,6 +44,31 @@ class FakeVersionResponse:
         return self.body[:limit]
 
 
+def python_distribution_doctor(driver: str) -> dict[str, object]:
+    """A doctor report for an installation the Python package manager owns.
+
+    The default doctor fixture identifies a release snapshot, whose apply is
+    owned by install-windows.ps1 on Windows. A package-manager installation
+    names its installer instead, so the update runs through the Python driver.
+    """
+    doctor = doctor_payload()
+    doctor["package"] = {"install_kind": "python_distribution"}
+    doctor["install_freshness"].update(
+        {
+            "install_kind": "python_distribution",
+            "python_distribution_installer": "pipx" if driver == "python_pipx" else "pip",
+        }
+    )
+    return doctor
+
+
+def update_owner_doctor(driver: str) -> dict[str, object]:
+    """The doctor report whose owner can actually run ``driver``."""
+    if driver == "archive_snapshot":
+        return doctor_payload()
+    return python_distribution_doctor(driver)
+
+
 def doctor_payload(
     *,
     installed_commit: str | None = INSTALLED_COMMIT,
@@ -938,8 +963,13 @@ def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_up
 ])
 def test_update_preserves_selected_route_through_install_and_readback(tmp_path, monkeypatch, driver):
     registry, runtime = tmp_path / "project/.loopx/registry.json", tmp_path / "selected runtime"
-    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
-    payload["install_lifecycle"].update(execution_driver=driver)
+    # The archive driver installs a source build; the Python drivers upgrade
+    # the environment the package manager already owns.
+    payload = build_update_plan(
+        build_from_source=driver == "archive_snapshot",
+        action="apply",
+        doctor_payload=update_owner_doctor(driver),
+    )
     calls, installer_env = [], {}
     monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
@@ -1018,8 +1048,7 @@ def test_archive_readback_and_activation_follow_installer_bin_owner(
 @pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
 def test_python_distribution_activation_ignores_archive_bin_override(tmp_path, monkeypatch, driver):
     monkeypatch.setenv("LOOPX_BIN_DIR", str(tmp_path / "custom/bin"))
-    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
-    payload["install_lifecycle"].update(execution_driver=driver)
+    payload = build_update_plan(action="apply", doctor_payload=update_owner_doctor(driver))
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
     with (
         mock.patch("loopx.self_update.subprocess.run", return_value=passed),
