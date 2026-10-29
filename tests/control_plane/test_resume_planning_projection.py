@@ -11,7 +11,10 @@ from loopx.control_plane.testing.canary_harness import write_fixture_registry, r
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 
-from loopx.control_plane.todos.resume_planning import project_todo_resume_planning
+from loopx.control_plane.todos.resume_planning import (
+    build_referenced_todo_resume_planning_request,
+    project_todo_resume_planning,
+)
 from loopx.control_plane.todos.quota_summary import select_quota_todo_summary
 
 
@@ -51,6 +54,27 @@ def waiting(todo_id: str, **fields: object) -> dict:
 
 def ids(items: list[dict]) -> list[str]:
     return [item["todo_id"] for item in items]
+
+
+def test_referenced_request_deduplicates_lanes_and_keeps_full_payload_local() -> None:
+    row = waiting(
+        "todo_shared",
+        content_revision="sha256:synthetic-full-projection",
+    )
+    request, payloads = build_referenced_todo_resume_planning_request({
+        "items": [row],
+        "first_open_items": [row],
+        "deferred_items": [row],
+    })
+
+    assert request["schema_version"] == "todo_resume_planning_request_v1"
+    assert len(request["records"]) == 1
+    assert request["sources"]["items"] == [0]
+    assert request["sources"]["first_open_items"] == [0]
+    assert request["sources"]["deferred_items"] == [0]
+    assert request["records"][0]["payload"]["_loopx_resume_record_ref"] == 0
+    assert "content_revision" not in request["records"][0]["payload"]
+    assert payloads[0]["content_revision"] == row["content_revision"]
 
 
 def test_claim_priority_and_exclusion_are_independent_of_display_priority() -> None:
@@ -239,9 +263,9 @@ def test_quota_composes_capacity_and_visibility_in_one_request_per_source(monkey
     original = quota_selection.effect_runtime_result
     calls = []
 
-    def record(method, params):
+    def record(method, params, **kwargs):
         calls.append(method)
-        return original(method, params)
+        return original(method, params, **kwargs)
 
     monkeypatch.setattr(quota_selection, "effect_runtime_result", record)
     summary = select_quota_todo_summary(

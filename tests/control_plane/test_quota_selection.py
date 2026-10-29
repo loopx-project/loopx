@@ -58,6 +58,69 @@ def test_agent_execution_still_respects_claim_and_exclusion():
     assert result["claim_scope"]["other_agent_claimed_open_count"] == 1
 
 
+@pytest.mark.parametrize("gate_scope", [False, True])
+def test_large_quota_history_uses_snapshot_without_losing_scope(
+    monkeypatch, gate_scope,
+):
+    from loopx.control_plane import effect_runtime
+
+    observed_sizes = []
+    original = effect_runtime._request_with_info
+
+    def observe(info, **kwargs):
+        if kwargs["method"] == "todo.quota_planning.project":
+            observed_sizes.append(len(json.dumps(
+                kwargs["params"], separators=(",", ":")
+            ).encode()))
+        return original(info, **kwargs)
+
+    monkeypatch.setattr(effect_runtime, "_request_with_info", observe)
+    history = [
+        item(
+            f"todo_history_{index}",
+            status="done",
+            task_class="advancement_task",
+            note="Synthetic historical evidence. " * 180,
+            index=index + 1,
+        )
+        for index in range(2500)
+    ]
+    tail = [
+        item("todo_tail_gate", blocks_agent="agent-b", index=2501),
+        item(
+            "todo_peer", task_class="advancement_task",
+            claimed_by="agent-a", index=2502,
+        ),
+        item(
+            "todo_owned", task_class="advancement_task",
+            claimed_by="agent-b", index=2503,
+        ),
+    ]
+    source = summary(history + tail)
+    source.update(
+        done_count=len(history), open_count=len(tail), first_open_items=tail,
+    )
+
+    result = summarize_user_todos_for_quota(
+        source,
+        agent_identity={"agent_id": "agent-b"},
+        filter_user_gate_blocks_agent=gate_scope,
+    )
+
+    # Unique historical payloads cannot be reduced below the inline wire limit
+    # without dropping facts. Use the existing digest-verified local snapshot
+    # transport rather than raising or truncating.
+    assert observed_sizes and max(observed_sizes) > effect_runtime.MAX_REQUEST_BYTES
+    assert [row["todo_id"] for row in result["gate_open_items"]] == [
+        "todo_tail_gate"
+    ]
+    assert [row["todo_id"] for row in result["first_executable_items"]] == (
+        [] if gate_scope else ["todo_owned"]
+    )
+    if not gate_scope:
+        assert result["claim_scope"]["other_agent_claimed_open_count"] == 1
+
+
 @pytest.mark.parametrize("agent", [None, "agent-b"])
 def test_route_replan_visibility_counts_before_budget_without_granting_execution(agent):
     own = [item(f"todo_route_{i}", task_class="advancement_task", claimed_by="agent-b",

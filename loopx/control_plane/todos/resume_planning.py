@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -18,6 +19,19 @@ _SOURCE_KEYS = (
     "items", "backlog_items", "first_open_items", "deferred_items",
     "deferred_resume_candidates", "resume_blocked_items", "monitor_open_items",
     "current_agent_claimed_monitor_items", "claimed_monitor_open_items",
+)
+
+_REFERENCE_REQUEST_SCHEMA = "todo_resume_planning_request_v1"
+_PAYLOAD_REFERENCE_KEY = "_loopx_resume_record_ref"
+# These are the only payload facts read by resume_planning.ts and the shared
+# resume-condition evaluator.  Full compact payloads remain in Python and are
+# restored after the typed projection returns.
+_REFERENCE_PAYLOAD_FIELDS = (
+    "index", "text", "todo_id", "role", "status", "archive_state",
+    "source_section", "task_class", "claimed_by", "task_repository",
+    "next_due_at", "expires_at", "resume_when", "resume_monitor_generation",
+    "material_change_generation", "resume_condition", "resume_ready",
+    "blocked_retry",
 )
 
 
@@ -81,6 +95,82 @@ def build_todo_resume_planning_request(
             if available_capabilities is not None else None
         ),
     }
+
+
+def build_referenced_todo_resume_planning_request(
+    value: Any, *, agent_id: str | None = None, item_limit: int = 5,
+    available_capabilities: Any = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Encode one semantic snapshot without repeating full payloads per lane.
+
+    The ordinary v0 builder remains the compatibility contract for callers that
+    inspect or rewrite its source rows.  Quota planning uses this referenced v1
+    wire and rehydrates the typed result from the returned payload table.
+    """
+    request = build_todo_resume_planning_request(
+        value,
+        agent_id=agent_id,
+        item_limit=item_limit,
+        available_capabilities=available_capabilities,
+    )
+    records: list[dict[str, Any]] = []
+    payloads: list[dict[str, Any]] = []
+    references: dict[str, int] = {}
+    sources: dict[str, list[int]] = {}
+    for source_name, source_rows in request["sources"].items():
+        source_refs: list[int] = []
+        for row in source_rows:
+            # Equal normalized records are semantically interchangeable.  Use
+            # their exact JSON form instead of Todo id alone so conflicting
+            # historical facts remain separate and are still diagnosed.
+            identity = json.dumps(
+                row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            reference = references.get(identity)
+            if reference is None:
+                reference = len(records)
+                references[identity] = reference
+                payload = dict(row.get("payload") or {})
+                payloads.append(payload)
+                wire_payload = {
+                    key: payload[key]
+                    for key in _REFERENCE_PAYLOAD_FIELDS
+                    if key in payload
+                }
+                wire_payload[_PAYLOAD_REFERENCE_KEY] = reference
+                records.append({**row, "payload": wire_payload})
+            source_refs.append(reference)
+        sources[source_name] = source_refs
+    return (
+        {
+            **request,
+            "schema_version": _REFERENCE_REQUEST_SCHEMA,
+            "sources": sources,
+            "records": records,
+        },
+        payloads,
+    )
+
+
+def rehydrate_todo_resume_planning_result(
+    value: Any, payloads: list[dict[str, Any]],
+) -> Any:
+    """Replace private wire references with their complete compact payloads."""
+    if isinstance(value, list):
+        return [rehydrate_todo_resume_planning_result(item, payloads) for item in value]
+    if not isinstance(value, dict):
+        return value
+    projected = {
+        key: rehydrate_todo_resume_planning_result(item, payloads)
+        for key, item in value.items()
+        if key != _PAYLOAD_REFERENCE_KEY
+    }
+    reference = value.get(_PAYLOAD_REFERENCE_KEY)
+    if reference is None:
+        return projected
+    if type(reference) is not int or not 0 <= reference < len(payloads):
+        raise RuntimeError("TypeScript Todo resume planning record reference is invalid")
+    return {**payloads[reference], **projected}
 
 
 def project_todo_resume_planning(

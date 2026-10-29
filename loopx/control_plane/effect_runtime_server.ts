@@ -29,6 +29,7 @@ const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
   "todo.read",
+  "todo.quota_planning.project",
   "collaboration.inbox.read",
   "collaboration.delegation.inventory_page",
   "benchmark.trajectory.codex-usage",
