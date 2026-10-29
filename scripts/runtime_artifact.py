@@ -2,8 +2,8 @@
 """Build audited runtime + optional resources from one committed source revision.
 
 Keep runtime code, all skills/references, text documentation, developer smokes,
-and the exact frontend source/bundle contract. Only named presentation evidence
-directories are optional; this is not a whole-directory docs/examples deletion.
+and the exact CI-bound frontend bundle contract. Frontend development sources
+and named presentation media are optional; docs/examples text stays available.
 The archive is installed by the existing snapshot installer, without npm.
 """
 
@@ -23,7 +23,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from loopx.presentation.chat_bundle import source_digest, validate_bundle
-from loopx.cli_commands.update_artifact import SCHEMA, validate_manifest
+from loopx.cli_commands.update_artifact import RUNTIME_ARTIFACT_SCHEMA_VERSION, validate_manifest
 
 PATHS = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps/presentation",
          ".github", "README.md", "LICENSE", "pyproject.toml", "setup.py", "MANIFEST.in")
@@ -32,6 +32,7 @@ PATHS = ("loopx", "scripts", "skills", "docs", "man", "examples", "apps/presenta
 # Text/HTML/SVG and any exact frontend input remain in the runtime below.
 OPTIONAL_MEDIA_ROOTS = (
     "docs/assets/", "docs/development/assets/",
+    "docs/architecture/rfcs/", "docs/reference/assets/", "docs/reference/media/",
     "examples/personal-workspace-browser/evidence/",
     "examples/personal-workspace-browser/assets/",
     "examples/personal-workspace-browser/screenshots/",
@@ -75,7 +76,7 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
             content = source.extractfile(member).read()
             if member.name == "pyproject.toml":
                 version = tomllib.loads(content.decode())["project"]["version"]
-            optional = (member.name.startswith(OPTIONAL_MEDIA_ROOTS)
+            optional = member.name.startswith("apps/presentation/") or (member.name.startswith(OPTIONAL_MEDIA_ROOTS)
                 and Path(member.name).suffix.lower() in MEDIA_SUFFIXES
                 and member.name not in manifest["source_files"])
             sink = resources if optional else runtime
@@ -86,21 +87,25 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
             sink.addfile(member, io.BytesIO(content))
             inventory[group].append({"path": member.name, "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest()})
-        for name in sorted(manifest["files"]):
+        for name in sorted({*manifest["files"], "bundle-manifest.json"}):
             content = (root / "loopx/web/chat" / name).read_bytes()
             member = tarfile.TarInfo("loopx/web/chat/" + name)
             member.size, member.mode = len(content), 0o644
             runtime.addfile(member, io.BytesIO(content))
-        identity = json.dumps({"schema_version": SCHEMA, "source_revision": revision,
+            inventory["runtime"].append({"path": member.name, "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest()})
+        identity = json.dumps({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
             "package_version": version}).encode()
         member = tarfile.TarInfo("runtime-artifact.json")
         member.size, member.mode = len(identity), 0o644
         runtime.addfile(member, io.BytesIO(identity))
+        inventory["runtime"].append({"path": member.name, "bytes": len(identity),
+            "sha256": hashlib.sha256(identity).hexdigest()})
     if git.wait() != 0 or not version:
         raise ValueError("Git runtime archive failed")
     tag = f"runtime-{revision}" if channel == "main" else "v" + version
     archive = output / filename
-    result = validate_manifest({"schema_version": SCHEMA, "source_revision": revision,
+    result = validate_manifest({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
         "package_version": version, "channel": channel, "size": archive.stat().st_size,
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "urls": [f"https://github.com/{repository}/releases/download/{tag}/{filename}"],

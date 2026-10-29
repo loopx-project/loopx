@@ -178,9 +178,14 @@ def handle_update_command(
             progress.stop()
             payload = operation if getattr(args, "background", False) else observe(
                 operation["operation_id"], json_output=output_format(args) == "json")
-            print_payload(payload, output_format(args), lambda value: (
-                f"Update {value.get('operation_id')}: {value.get('operation_status', value.get('status', 'finished'))}\n"
-                f"{value.get('recommended_action', '')}"))
+            if getattr(args, "background", False):
+                renderer = lambda value: f"Update {value['operation_id']}: {value['status']}\nRead back with loopx update status --operation-id {value['operation_id']}"
+            elif upgrade:
+                from .support_control_upgrade import render_upgrade_markdown
+                renderer = render_upgrade_markdown
+            else:
+                renderer = render_update_plan_markdown
+            print_payload(payload, output_format(args), renderer)
             return 0 if payload.get("ok") else 1
         if args.rollback:
             payload = build_rollback_plan(release_id=args.rollback)
@@ -222,6 +227,13 @@ def handle_update_command(
             payload["installed_doctor_source"] = (
                 "explicit_json" if doctor_payload is not None else "current_runtime"
             )
+            if update_action is UpdateAction.APPLY:
+                selected = payload.get("source", {})
+                progress.report({"stage": "target", "target": {
+                    "channel": selected.get("ref"), "revision": selected.get("resolved_revision"),
+                    "version": selected.get("artifact", {}).get("package_version"),
+                    "distribution": selected.get("distribution"),
+                }})
             if update_action is UpdateAction.APPLY and payload.get("plan", {}).get(
                 "apply_supported"
             ):

@@ -969,7 +969,7 @@ def build_update_plan(
     if lifecycle["owner"] == "python_package_manager" and (ref or build_from_source or archive_url):
         reason = "The Python package manager owns this installation; choose main/source in a separate snapshot installation"
         payload.update(ok=not execute, error=reason, recommended_action=reason)
-        payload["plan"].update(apply_supported=False, blocked_reason=reason)
+        payload["plan"].update(apply_supported=False, blocked_reason=reason, mutates_release_install=False)
     return (_windows_console_update_refusal(payload) if execute else None) or payload
 
 
@@ -1271,8 +1271,21 @@ def execute_update_plan(
         "doctor_stderr_tail": doctor_result.stderr[-2000:],
         "installed_runtime_identity": _installed_readback(doctor_result) if doctor_result.returncode == 0 else {},
     }
+    try:
+        installed_freshness = json.loads(doctor_result.stdout).get("install_freshness", {})
+    except (ValueError, AttributeError):
+        installed_freshness = {}
+    if not isinstance(installed_freshness, dict):
+        installed_freshness = {}
+    # A host-material step can fail after a healthy candidate became active.
+    # Do not report "nothing changed" merely from the installer's exit code.
+    activation_observed = bool(doctor_result.returncode == 0 and source.get("resolved_revision")
+        and installed_freshness.get("manifest_source_git_commit") == source["resolved_revision"]
+        and installed_freshness.get("release_id")
+        and installed_freshness["release_id"] != payload.get("current", {}).get("release_id"))
+    execution["activation_observed"] = activation_observed
     extension_doctor_result = None
-    if install_result.returncode == 0 and doctor_result.returncode == 0:
+    if (install_result.returncode == 0 or activation_observed) and doctor_result.returncode == 0:
         progress("Validating enabled extensions")
         extension_doctor_result = subprocess.run(
             [
@@ -1299,15 +1312,15 @@ def execute_update_plan(
         )
     else:
         execution["extension_doctor_status"] = "skipped_release_update_failed"
-    runtime_ready = install_result.returncode == 0 and doctor_result.returncode == 0
+    runtime_ready = (install_result.returncode == 0 or activation_observed) and doctor_result.returncode == 0
     updated = dict(payload)
     updated["execution"] = execution
     updated["ok"] = (
-        runtime_ready
+        install_result.returncode == 0 and runtime_ready
         and extension_doctor_result is not None
         and extension_doctor_result.returncode == 0
     )
-    updated["changes_applied"] = install_result.returncode == 0
+    updated["changes_applied"] = install_result.returncode == 0 or activation_observed
     execution.update(
         restart_services_for_runtime_activation(
             changes_applied=updated["changes_applied"],

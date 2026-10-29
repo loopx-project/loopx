@@ -89,8 +89,9 @@ mirrors have been deployed or that any country's latency has been measured.
 
 The prebuilt runtime retains CLI/runtime code, skills and references, text
 documentation, developer smokes and the verified frontend. Named presentation
-videos/screenshots are in the accompanying optional resource archive and remain
-available in versioned online docs. The release inventory lists every retained
+videos/screenshots and frontend development sources are in the accompanying
+optional resource archive; illustrations remain available in versioned online
+docs. The release inventory lists every retained
 and optional file. Installers validate a candidate before activation and restore
 owned executable links on activation failure. Data-format migrations retain
 their independent receipts/backups; restoring an executable does not reverse

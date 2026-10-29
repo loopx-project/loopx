@@ -25,7 +25,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-SCHEMA = "loopx_runtime_artifact_v1"
+RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
 SHA = re.compile(r"[0-9a-f]{40}")
 HASH = re.compile(r"[0-9a-f]{64}")
 MAX_MANIFEST = 256 * 1024
@@ -60,7 +60,7 @@ def read_json(url: str) -> dict[str, Any]:
 
 
 def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> dict[str, Any]:
-    if value.get("schema_version") != SCHEMA:
+    if value.get("schema_version") != RUNTIME_ARTIFACT_SCHEMA_VERSION:
         raise ValueError("Unsupported runtime artifact metadata")
     if not SHA.fullmatch(str(value.get("source_revision", ""))):
         raise ValueError("Runtime artifact has no immutable source revision")

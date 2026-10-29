@@ -59,7 +59,7 @@ def server(body: bytes):
 
 
 def manifest(body: bytes, url: str):
-    return {"schema_version": update.SCHEMA, "source_revision": "a" * 40,
+    return {"schema_version": update.RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": "a" * 40,
         "package_version": "1.2.3", "channel": "main", "size": len(body), "sha256": hashlib.sha256(body).hexdigest(), "urls": [url]}
 
 
@@ -159,3 +159,30 @@ def test_real_installer_streams_only_explicit_events_and_bounds_diagnostics(tmp_
     assert result.returncode == 0
     assert events == [{"stage": "activate"}]
     assert len(result.stdout) <= 16384
+
+
+def test_bootstrap_inherits_snapshot_choice_without_taking_over_a_package_owner(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    binary = tmp_path / "bin"
+    scripts = tmp_path / "release/scripts"
+    scripts.mkdir(parents=True)
+    binary.mkdir()
+    (scripts / "loopx").touch()
+    entry = binary / "loopx"
+    entry.symlink_to(scripts / "loopx")
+    (scripts.parent / "release.json").write_text(json.dumps({"source": {
+        "repo": "example/fork", "ref": "main", "git_commit": "a" * 40}}))
+    monkeypatch.setenv("LOOPX_BIN_DIR", str(binary))
+    monkeypatch.setenv("LOOPX_UPDATE_REF_EXPLICIT", "0")
+    monkeypatch.setenv("LOOPX_UPDATE_REPO_EXPLICIT", "0")
+    monkeypatch.setattr(sys, "argv", ["update-artifact.py"])
+    selected = []
+    monkeypatch.setattr(update, "resolve_artifact", lambda repo, ref: selected.append((repo, ref)) or manifest(b"x", "https://example.com/runtime"))
+    monkeypatch.setattr(update, "install_artifact", lambda *_a, **_kw: (subprocess.CompletedProcess([], 0, "", ""), {}))
+    assert update.main() == 0
+    assert selected == [("example/fork", "main")]
+    entry.unlink()
+    entry.touch()  # pip/another installer owns a regular console entry.
+    assert update.main() == 1
+    assert len(selected) == 1

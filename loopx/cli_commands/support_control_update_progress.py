@@ -31,6 +31,7 @@ class UpdateProgress:
         self.rate = 0.0
         self.last_sample = (self.started, 0)
         self.durations: dict[str, float] = {}
+        self.target: dict | None = None
         self.stopped = threading.Event()
         self.lock = threading.RLock()
         self.thread: threading.Thread | None = None
@@ -39,6 +40,8 @@ class UpdateProgress:
         with self.lock:
             now = time.monotonic()
             details = event if isinstance(event, dict) else {"stage": event}
+            if isinstance(details.get("target"), dict):
+                self.target = details["target"]
             stage = str(details.get("stage", self.stage))
             if stage != self.stage:
                 self.durations[self.stage] = self.durations.get(self.stage, 0) + now - self.stage_started
@@ -67,13 +70,15 @@ class UpdateProgress:
         return {
             "schema_version": "loopx_update_progress_v1", "operation_id": self.operation_id,
             "pid": os.getpid(), "stage": self.stage, "status": "running",
+            "target": self.target,
             "received": self.received, "total": self.total,
             "bytes_per_second": round(self.rate, 1) if now - self.last_sample[0] < 5 else 0,
             "elapsed_seconds": round(now - self.started, 1),
             "stage_seconds": round(now - self.stage_started, 1),
             "last_progress_at": round(time.time() - (now - self.changed), 3),
             "updated_at": time.time(), "stalled": now - self.changed >= 10,
-            "stage_durations": {key: round(value, 3) for key, value in self.durations.items()},
+            "stage_durations": {key: round(value, 3) for key, value in {
+                **self.durations, self.stage: self.durations.get(self.stage, 0) + now - self.stage_started}.items()},
         }
 
     def _write(self) -> None:

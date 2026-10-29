@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 
@@ -40,6 +41,13 @@ def qualify(directory: Path) -> dict:
             LOOPX_RESOLVED_SOURCE_GIT_COMMIT=manifest["source_revision"], LOOPX_REF=manifest["channel"],
             LOOPX_PYTHON=sys.executable, LOOPX_USAGE_PING="0", LOOPX_UPDATE_EVENTS="1")
         (scratch / "home").mkdir()
+        tools = scratch / "tools"
+        tools.mkdir()
+        for name in ("npm", "npx"):
+            command = tools / name
+            command.write_text("#!/bin/sh\necho 'Frontend build tools must not run during runtime installation' >&2\nexit 91\n")
+            command.chmod(0o755)
+        env["PATH"] = str(tools) + os.pathsep + env.get("PATH", "")
         results = []
         for _ in range(2):
             result = subprocess.run(["bash", str(source / "scripts/install-local.sh")], env=env,
@@ -64,9 +72,28 @@ def qualify(directory: Path) -> dict:
         # committed archive; validate the exact Chat bundle through its owner.
         subprocess.run([sys.executable, str(release / "scripts/chat_bundle.py"), "verify", "--source"],
             env=env, check=True, stdout=subprocess.DEVNULL)
+        bundle = json.loads((release / "loopx/web/chat/bundle-manifest.json").read_text())
+        assert bundle["source_revision"] == manifest["source_revision"]
+        # Inject a post-switch executable failure at the manpage chmod step.
+        # Only a disposable candidate is touched, never a real installation.
+        real_chmod = shutil.which("chmod")
+        failing_chmod = tools / "chmod"
+        failing_chmod.write_text(f"#!{sys.executable}\n" +
+            "import os,subprocess,sys\nfrom pathlib import Path\n" +
+            f"subprocess.run([{real_chmod!r}, *sys.argv[1:]], check=True)\n" +
+            "if sys.argv[1] == '0644':\n" +
+            "    entry = Path(os.environ['LOOPX_BIN_DIR']) / 'loopx'\n" +
+            "    entry.resolve().chmod(0o644)\n")
+        failing_chmod.chmod(0o755)
+        failed = subprocess.run(["bash", str(source / "scripts/install-local.sh")], env=env,
+            text=True, capture_output=True, timeout=180)
+        if failed.returncode == 0 or cli.resolve() != release:
+            raise RuntimeError("Activation failure did not preserve the previous executable")
+        assert read("doctor", "--installation-only")["ok"]
         return {"ok": True, "source_revision": manifest["source_revision"], "bytes": manifest["size"],
             "clean_install": results[0] == 0, "upgrade": results[1] == 0,
-            "doctor": True, "skills": True, "frontend_source_contract": True}
+            "doctor": True, "skills": True, "frontend_bundle_contract": True,
+            "no_frontend_build_tools": True, "activation_failure_restored": True}
 
 
 if __name__ == "__main__":

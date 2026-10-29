@@ -45,7 +45,8 @@ def prepare_target(payload: dict[str, Any], *, freshness: dict, resolve_remote: 
     if target:
         source["target_status"] = "resolved"
         payload["source_commit_check"].update(status="available", target_commit=target,
-            matches_current=current == target)
+            matches_current=current == target,
+            reason="Target revision resolved before installation")
         payload["runtime_activation_qualification"] = runtime_activation_qualification(
             install_freshness=freshness, source=source, resolved_source_commit=target,
             selected_source_unresolved=False)
@@ -56,11 +57,15 @@ def prepare_target(payload: dict[str, Any], *, freshness: dict, resolve_remote: 
         reason = "Target is older, diverged or its lineage is unverified; inspect it and explicitly use --allow-downgrade if intended"
     if resolve_remote and reason:
         source["target_status"] = "blocked"
-        payload["plan"].update(apply_supported=False, blocked_reason=reason)
+        payload["plan"].update(apply_supported=False, blocked_reason=reason, mutates_release_install=False)
         payload["recommended_action"] = reason
         payload["error"] = reason
         payload["ok"] = not payload["execute_requested"]
         payload["next_action"] = {"kind": "review_update_target", "mutating": False,
             "requires_explicit_approval": False, "command": None, "reason": reason}
+    elif target and source["distribution"] == "runtime":
+        recommendation = "Target revision is already installed; apply revalidates it" if current == target else "Prebuilt target resolved; review the installation and activation result"
+        payload["recommended_action"] = recommendation
+        payload["next_action"]["reason"] = recommendation
     payload["plan"]["distribution"] = source["distribution"]
     return payload

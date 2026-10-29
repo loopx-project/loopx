@@ -192,14 +192,14 @@ def test_module_plan() -> None:
     assert f"Manifest package version tag: `{release_version_tag()}`" in rendered, rendered
 
 
-def test_default_source_uses_stable_ref() -> None:
+def test_installed_stable_channel_is_inherited() -> None:
     with mock.patch.dict(os.environ, {}, clear=True):
         payload = build_update_plan(doctor_payload=fake_doctor_payload())
     assert payload["source"]["ref"] == DEFAULT_UPDATE_REF == "stable", payload
     assert payload["source"]["channel"] == "github_archive_stable", payload
-    assert payload["source"]["ref_source"] == "default_stable", payload
+    assert payload["source"]["ref_source"] == "installed_manifest", payload
     assert "/tar.gz/stable" in payload["source"]["archive_url"], payload
-    assert payload["plan"]["install_command"] == "loopx update apply", payload
+    assert payload["plan"]["install_command"] == "loopx update apply --repo example/loopx --ref stable", payload
     assert "--archive-url" not in payload["plan"]["install_command"], payload
     default_env = _installer_env_for_source(
         payload["source"],
@@ -331,6 +331,7 @@ def test_execute_update_uses_persisted_release_python() -> None:
         (release_root / ".loopx-python").write_text(f"{missing_python}\n", encoding="utf-8")
         payload = build_update_plan(
             execute=True,
+            build_from_source=True,
             doctor_payload=fake_doctor_payload_for_release(release_root, home=home),
         )
         failed = subprocess.CompletedProcess(
@@ -446,6 +447,7 @@ def test_immutable_source_ref_qualifies_activation() -> None:
     ):
         activated = build_update_plan(
             repo="example/loopx",
+            build_from_source=True,
             ref=pinned,
             check_only=True,
             doctor_payload=immutable_fresh_doctor_payload(pinned),
@@ -460,6 +462,7 @@ def test_immutable_source_ref_qualifies_activation() -> None:
     other = TARGET_COMMIT
     unproven = build_update_plan(
         repo="example/loopx",
+        build_from_source=True,
         ref=other,
         check_only=True,
         doctor_payload=immutable_fresh_doctor_payload(other),
@@ -583,7 +586,7 @@ def test_cli_rollback_previous_with_temp_home() -> None:
 
 def main() -> int:
     test_module_plan()
-    test_default_source_uses_stable_ref()
+    test_installed_stable_channel_is_inherited()
     test_explicit_archive_url_reaches_installer()
     test_update_preview_uses_managed_download_path()
     test_execute_update_propagates_installer_download_failure()

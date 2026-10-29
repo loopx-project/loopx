@@ -109,3 +109,22 @@ def test_real_detached_worker_finishes_after_its_observer_exits(tmp_path):
     assert payload["status"] == "failed", payload
     assert payload["result"]["changes_applied"] is False
     assert payload["result"]["plan"]["apply_supported"] is False
+
+
+@pytest.mark.parametrize("switched", [True, False])
+def test_material_failure_reports_an_observed_switch_but_never_invents_one(monkeypatch, switched):
+    from loopx.self_update import execute_update_plan
+    plan = build_update_plan(action="apply", doctor_payload=doctor_payload(), build_from_source=True)
+    plan["source"]["resolved_revision"] = "1" * 40
+    readback = {"install_freshness": {"manifest_source_git_commit": "1" * 40,
+        "release_id": "new-release" if switched else "fixture"}}
+    monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
+    monkeypatch.setattr("loopx.self_update.run_archive_installer", lambda *_a, **_kw: (
+        subprocess.CompletedProcess([], 1, "", "host material failed"), {}))
+    monkeypatch.setattr("loopx.self_update.subprocess.run", lambda *_a, **_kw:
+        subprocess.CompletedProcess([], 0, json.dumps(readback), ""))
+    monkeypatch.setattr("loopx.runtime_activation.restart_managed_loopx_services", lambda: [])
+    result = execute_update_plan(plan)
+    assert result["ok"] is False
+    assert result["changes_applied"] is switched
+    assert result["execution"]["activation_observed"] is switched
