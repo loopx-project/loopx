@@ -4,7 +4,7 @@
 - **替代 / 关闭：** [个人事项持续跟进独立提案](personal-follow-through-v0.zh-CN.md)
 - **交付成熟度：** Partial；私人运行 profile、团队计划确认与 Todo 物化已交付，完整 M1–M4 未验收。
 - **作者 / 责任人：** LoopX 维护者、管家工程负责人
-- **创建 / 最近规范修订：** 2026-09-13 / 2026-10-28
+- **创建 / 最近规范修订：** 2026-09-13 / 2026-10-29
 - **实现基线：** `7eb4b7bb1661bd5eff63a8725a33169792d5964b`
 - **语言镜像：** [English](capable-manager-semantic-handoff-v0.md)
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[管家连续性](../../reference/protocols/manager-evidence-and-continuity-v0.md)、[Goal Vision/Replan](../../reference/protocols/goal-vision-replan-contract-v0.md)、[桌面入口](desktop-execution-frontends-v0.zh-CN.md)、[共享权威](shared-goal-authority-state-provider-v0.zh-CN.md)、[共享目标对齐/修订](shared-goal-alignment-and-governed-amendment-v0.zh-CN.md)、[TS 迁移](typescript-control-plane-migration-v0.zh-CN.md)
@@ -161,6 +161,13 @@ flowchart LR
 不消费专用 Core packet 视图。运行时持有的路由/revision/attempt 元数据复用这些请求
 记录，不形成另一套权限或交接账本。独立 peer Agent 仍保留各自受限的 Core 关系，
 不受这个同 Agent 内部角色划分限制。
+
+该 profile 的 C6/C8 [人机交互旅程](controller-executor-unified-contract-v0.zh-CN.md#human-interaction-during-execution)
+把语义返回延伸到最终答案之前：执行中可交流，主动报告有证据的实质变化，按任务选择
+丰富展现以帮助用户判断和纠偏。复用既有 request/revision、产物、受众和投递 owner，
+保留安静与去重汇报、可访问文本和来源/版本 readback。收到、处理与反馈实际采用分别
+记录；重连或迟到结果之后，后续工作和产物仍须证明已采用修订。不新增管家账本、发送
+权限或 C1 前置；现有 progress/steering 原语不能单独证明这条并发旅程合格。
 
 优先一次内聚替换，不用兼容包装长期保留两套判断。盘点所有 producer/reader，无损迁移、切换单 writer、删除被替代规则。必须复用有效契约和数据，不必复用每个类、JSON 目录和 prompt。
 

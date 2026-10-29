@@ -193,6 +193,11 @@ four already loaded pages with one verified scan; larger loaded views use more
 bounded windows. Refresh publishes only matching snapshots. No cross-request
 content/authorization cache is added; this does not qualify a faster initial read.
 
+For native-bound steward inventory, one fresh provider selection supplies both
+Session validation and Goal visibility at each opening/closing check. The read
+still revalidates before returning content; no observation is cached between
+checks or requests. Custom scope resolvers keep their existing validation path.
+
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
@@ -201,6 +206,10 @@ content/authorization cache is added; this does not qualify a faster initial rea
 核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
 默认每页 12 条；显式 `limit`（1–48）让刷新在一次核验中读取至多四个已加载页，更长列表
 分批读取，快照一致后一起展示。不新增跨请求内容或授权缓存，也不据此宣称首次读取已提速。
+
+原生绑定管家的每次读取，在开始和结束时各验证一次 provider 身份，同一检查点的
+会话和 Goal 范围复用该次选择；检查点及请求之间不缓存权限。自定义范围解析器沿用
+原验证路径。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current

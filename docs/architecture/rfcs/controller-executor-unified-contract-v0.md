@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-10-28
+- **Last normative revision:** 2026-10-29
 - **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
@@ -46,6 +46,10 @@ evidence belongs in a dated ledger when an implementation first produces it.
 5. Unification first qualifies the existing single-session path. Two-session
    execution remains opt-in until matched outcome and complete-cost evidence
    justifies adoption. This RFC launches no benchmark or privileged operation.
+6. While the executor works, the controller remains available to the user:
+   answer questions, proactively explain meaningful changes, present useful
+   artifacts and incorporate feedback into subsequent work. Qualify that
+   journey through C6/C8; session separation alone does not deliver it.
 
 ## 2. Problem and motivation
 
@@ -61,6 +65,14 @@ does not need to learn how to encode a Vision delta or debit a LoopX Turn.
 Separating that work may reduce distraction and repeated protocol input, but
 an extra controller can also lose constraints, add latency or over-coordinate.
 These are hypotheses to test, not benefits established by session separation.
+
+Long work also needs a continuing human conversation. The user should be able
+to understand progress, inspect results and correct direction while execution
+continues, without repeatedly asking for status. A controller that only forwards
+a final answer misses this product goal. Its reports and presentations must
+help the user judge the work, and feedback must reach actual later decisions
+and artifacts. Availability, a received message or an attractive preview alone
+does not establish that loop.
 
 ### Invariants
 
@@ -254,6 +266,45 @@ read current authority where required, and reconcile any already admitted
 result through the original identity. An executor summary cannot reconstruct
 missing control obligations. Conflicting or inaccessible required material
 holds dependent work; independent authorized work keeps its existing route.
+
+### Human interaction during execution
+
+In a supported two-session profile, executor activity must not block the
+controller's user conversation. Reuse the existing role-bound ordered queues,
+versioned requests, host observations and original-audience return path. A
+question or report does not start another business executor, interrupt an
+authorized attempt without cause, or create another Turn debit.
+
+| User result | Required behavior and evidence |
+| --- | --- |
+| Converse while work runs | Answer questions and expose already saved artifacts while the executor is busy. Distinguish the latest observed state, its source/version and unknown activity; do not invent percentage progress or infer acceptance from a model's completion claim. |
+| Receive useful changes proactively | Report important progress, new artifacts, risks, evidenced stalls and changes requiring a user decision, with their basis, impact and useful feedback request. Reuse configured event/delivery owners; coalesce duplicates and remain quiet without meaningful change. Do not add a polling model loop or a fixed reporting interval. |
+| Understand and compare the work | Select task-appropriate charts, relationship diagrams, timelines, option comparisons, screenshots or artifact previews. Keep a concise overview with reachable original evidence/version, uncertainty, accessible text and a readable fallback when media is unavailable. No requirement to generate every format for every update. |
+| See feedback affect execution | Preserve the original feedback and ordered revision through the existing request owner. Read back receipt, queued or clarification-needed handling, rejection with reasons, and actual adoption separately. Link adopted changes to the subsequent decision, work and artifact; an ACK or a revised brief is not proof of adoption. |
+
+The controller distinguishes a correction within admitted scope from a scope
+change needing fresh admission or missing authority. Apply revisions through
+the current owner before dependent dispatch or acceptance, retaining prior
+requirements and unresolved conflicting feedback. Do not silently treat the
+latest message as cancellation of earlier commitments. Where the current
+attempt cannot safely consume a correction, expose the pending revision and
+its actual consumption boundary; preserve the host's stop/fencing contract
+before any replacement attempt. Late results retain their original revision
+and evidence but cannot overwrite current requirements or settle different work.
+
+Use only the authorized conversation and audience. Presentation does not grant
+new channels, recipients or public disclosure. Reconnect/restart recovers
+pending feedback, attempt and delivery receipts before retry; neither lost
+report delivery nor a user question causes redispatch. Stop acknowledgement,
+host interruption and actual termination remain separately observable. Existing
+host/Core stops remain effective if the controller is unavailable.
+
+This is a C6/C8 product target, not a claim that current session or progress
+primitives qualify the journey. It adds no prerequisite to independent C1
+slices. In the later opt-in two-session evaluation, include reporting,
+presentation generation/delivery, both sessions' calls and cached/uncached
+input, material reads, recovery, latency and human attention in complete cost.
+No responsiveness SLA or efficiency benefit is presumed.
 
 ### Review freshness and recovery
 
@@ -759,6 +810,7 @@ by this document alone.
 | Role isolation and recovery | Controller/executor crash windows, duplicate dispatch, late result, revision change, lease expiry and stop under actual host tools | No executor Core access; no stale result adoption or hidden business executor |
 | Semantic adoption | Original requirements → controller decision → actual executor work → independent verification → accepted result and original-audience return | Read receipt, valid JSON or successful replan alone cannot pass |
 | Intelligent mediation | Coherent delegation, changed/contrary evidence and result interpretation across ordinary continuation, shared-constraint change, controller loss and a small-task counterexample | Explain the actual decision consequence and retained obligations; fewer queries or a shorter handoff cannot pass |
+| Human interaction during execution | C6/C8 journey below through the real supported host and packaged conversation | Controller responsiveness, proactive delivery and feedback adoption require separate evidence; no inference from routing ACKs or previews |
 | Shared production paths | Real CLI and supported File/SQLite paths; real isolated PostgreSQL suite when authority persistence changes; packaged App heartbeat and benchmark worker reuse | No live Goal corruption; unsupported/unrun hosts stay unqualified |
 | Outcome and cost benefit | Matched current single-session, unified single-session and unified two-session arms with fixed task/model/policy/budget/evaluator | Report uncertainty, failures and counterexamples; no claim from prompt bytes alone |
 
@@ -771,6 +823,23 @@ a diagnostic reference arm, not a second permanent destination. Compare the new
 full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
+
+Qualify [human interaction during execution](#human-interaction-during-execution)
+on the same long-running work, rather than disconnected chat demonstrations:
+
+| Scenario | Decisive observation |
+| --- | --- |
+| Executor busy; user asks or inspects an artifact | Controller responds from current observed evidence and serves the saved artifact before task completion, without a second executor or an unnecessary interruption. |
+| Meaningful change, then no change and duplicate events | A useful report reaches the authorized audience without repeated user prompting; unchanged/duplicate observations do not produce repeated reports. Record actual delivery and cost, not a promised interval. |
+| Continuous or conflicting feedback | Each revision and its handling remain attributable; subsequent work/artifacts prove what was adopted. Pending, rejected, conflicting and authority-dependent changes stay explicit. |
+| Stop races correction or result | Current revision and scope govern acceptance; acknowledgement is distinct from actual host termination, and unknown/in-flight effects remain visible. |
+| Disconnect, restart, lost reply or delayed/duplicate result | Recover original queues, revisions and receipts; no lost correction, duplicate dispatch/debit or stale overwrite. Retry only unresolved delivery/effects. |
+| Rich view, missing media, stale evidence or wrong audience | A task-appropriate comparison/preview supports a user judgment and feedback; source/version and unknowns are readable, accessible text remains usable, and unauthorized delivery is refused. |
+
+Exercise the supported managed and attached App heartbeat journeys separately;
+an unsupported host stays explicit. Qualify installed behavior separately from
+packaged fixtures. Preserve the original-quota single-session gate, then measure
+the added interaction and presentation costs in the optional two-session arm.
 
 ### C1 baseline boundary and reuse inventory
 
@@ -856,6 +925,13 @@ internal packet selection as a user task. Reuse shared typed projections and
 configuration precedence; do not create an independent controller console or
 duplicate provider/model settings.
 
+C6/C8 own the [execution-time conversation and reporting journey](#human-interaction-during-execution).
+Reuse existing Chat/Lark artifact, activity, feedback and delivery projections
+within each supported audience; these sinks do not become work authority.
+Readback must distinguish report delivery, feedback handling, actual adoption
+and independent acceptance. Keep a failed report recoverable without replaying
+the underlying work.
+
 Observe captures, request/attempt/role/generation, current revisions, effect
 receipts and cost coverage in existing diagnostics. Give operators actionable
 recovery without raw private transcripts. Notifications remain separate from
@@ -876,9 +952,9 @@ are stable design references, not claims that a canonical Todo is complete.
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
-| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange | Complete source delivery, local executor autonomy, enforced Core isolation, corrective exchange and independently accepted outcome; return to qualified single-session profile for new work on rollback |
+| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, corrective exchange, actual feedback adoption through ordered revisions and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
 | **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
-| **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, Stop and artifact return | Packaged managed and supported attached heartbeat journeys, including unavailable host and late results; installed qualification separate; no new packet-format toggle |
+| **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, proactive evidence-based reports, task-appropriate rich views, feedback/readback, Stop and artifact return | Packaged managed and supported attached heartbeat journeys from §9, including unavailable host, late results, quiet/deduplicated reports, accessible fallback, audience denial and recovery; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
 
 The existing native context entry now supports a bounded C2 precursor: complete

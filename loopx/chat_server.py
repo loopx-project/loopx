@@ -59,7 +59,7 @@ from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
 from .extensions.lark.conversation_identity import observe_lark_conversation_identity
-from .extensions.lark.private_conversations import LarkPrivateConversations
+from .extensions.lark.private_conversations import LarkPrivateConversations, project_private_reply_history
 from .chat_loopx_mode import DelegationWakeService, handle_loopx_request
 from .capabilities.manager_context.roundtrip import (
     ReturnService,
@@ -95,7 +95,6 @@ from .extensions.lark.goal_channel import (
 )
 from .extensions.lark.goal_topic_connections import list_lark_apps
 from .extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
-from .extensions.lark.manager_routing import authorized_manager_goal_ids
 from .extensions.lark.cli_transport import CommandRunner
 from .extensions.runtime import (
     default_extension_state_file,
@@ -933,10 +932,16 @@ class ChatRequestHandler(
                 raise ValueError("message_limit must be between 1 and 200")
             self.server.runtime_controller.recover_exited_turn(session_id)
             snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
-            self._send_json(snapshot(
-                self.server.runtime_controller.coordination_runtime_root, self.server.chat_store, session_id,
+            payload = snapshot(
+                self.server.runtime_controller.coordination_runtime_root,
+                self.server.chat_store, session_id,
                 registry=self.server.registry_path, message_limit=message_limit,
-                message_cursor=query.get("message_cursor", [None])[0]))
+                message_cursor=query.get("message_cursor", [None])[0])
+            # The HTTP composition root joins provider history onto the selected page.
+            payload["messages"] = project_private_reply_history(
+                self.server.chat_store, self.server.chat_store.load_session(session_id) or {},
+                payload["messages"])
+            self._send_json(payload)
         except KeyError:
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:
@@ -1909,18 +1914,9 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
-    def manager_scope(session: dict[str, object]) -> list[str] | None:
-        if isinstance(session.get("steward_context"), dict):
-            bindings = server.runtime_controller.project_contexts.conversation_bindings
-            if bindings is None:
-                raise ValueError("Steward conversation bindings are unavailable")
-            return cast(list[str] | None, bindings.steward_scope(session))
-        return authorized_manager_goal_ids(
-            build_lark_goal_topic_runtime_snapshot(
-                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=server.runtime_controller.coordination_runtime_root,
-            registry_path=resolved_registry_path, executor_runtime_root=runtime_root,
-        )
+    from .presentation.request_control_api import bound_steward_inventory_scope, manager_source_scope_resolver
+    manager_scope = manager_source_scope_resolver(server,
+        registry_path=resolved_registry_path, executor_runtime_root=runtime_root)
 
     server.runtime_controller = ChatRuntimeController(
         store=server.chat_store,
@@ -1935,6 +1931,8 @@ def serve_chat(
         idle_timeout_sec=idle_timeout_sec,
         hard_timeout_sec=hard_timeout_sec,
     )
+    server.request_inventory_scope_resolver = bound_steward_inventory_scope(
+        server.runtime_controller, manager_scope_resolver=manager_scope)
     from .capabilities.native_chat.transports import install_conversation_transports
     install_conversation_transports(server, factories=external_conversation_factories,
         observe_group=lambda profile: observe_lark_conversation_identity(profile=profile, runner=server.lark_runner,

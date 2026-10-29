@@ -1,0 +1,119 @@
+name: Runtime snapshots
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/runtime-snapshots.yml"
+      - "scripts/runtime_artifact.py"
+      - "scripts/qualify_runtime_artifact.py"
+      - "scripts/install*.sh"
+      - "loopx/cli_commands/update*.py"
+      - "loopx/cli_commands/support_control_update*.py"
+      - "loopx/self_update*.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-snapshot-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    if: github.repository == 'loopx-project/loopx'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Prepare test environment
+        run: python -m pip install -e '.[test]'
+      - name: Qualify update transport and ownership
+        run: python -m pytest -q tests/test_update_artifact.py tests/test_update_operation.py tests/test_self_update_runtime_activation.py tests/test_archive_installer_commit_response.py
+      - name: Build qualified frontend
+        run: python scripts/chat_bundle.py ensure
+      - name: Build immutable runtime and resource inventory
+        run: python scripts/runtime_artifact.py --channel main
+      - name: Qualify clean installation and upgrade
+        run: python scripts/qualify_runtime_artifact.py dist/runtime > dist/runtime/qualification.json
+      - name: Freeze revision-addressed metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(python -c 'import json; print(json.load(open("dist/runtime/loopx-runtime.json"))["source_revision"])')"
+          cp dist/runtime/loopx-runtime.json "dist/runtime/loopx-runtime-${revision}.json"
+          mv dist/runtime/runtime-inventory.json "dist/runtime/runtime-inventory-${revision}.json"
+          mv dist/runtime/qualification.json "dist/runtime/qualification-${revision}.json"
+      - name: Attest exact runtime bytes and inventory
+        if: github.event_name != 'pull_request'
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/runtime/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: loopx-runtime
+          path: dist/runtime
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: loopx-runtime
+          path: runtime
+      - name: Publish immutable snapshot then channel pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(python -c 'import json; print(json.load(open("runtime/loopx-runtime.json"))["source_revision"])')"
+          # One dedicated channel release keeps developer snapshots out of
+          # product release history and bounded stable-predecessor discovery.
+          tag=runtime-main
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$revision" --prerelease --title "Latest qualified main runtime" --notes "Mutable channel metadata; revision-addressed archives and manifests are immutable. Stable users continue with PyPI or the stable runtime."
+          fi
+          # A retry reuses immutable bytes. Never clobber an immutable asset.
+          mkdir -p existing
+          for file in runtime/*; do
+            name="$(basename "$file")"
+            if [[ "$name" == loopx-runtime.json ]]; then continue; fi
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir existing >/dev/null 2>&1; then
+              cmp "$file" "existing/$name"
+            else
+              gh release upload "$tag" "$file" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
+          # Publication is serialized. A qualified ancestor is usable while a
+          # newer main is still building; never publish a non-main revision.
+          relation="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${revision}...main" --jq .status)"
+          if [[ "$relation" != ahead && "$relation" != identical ]]; then exit 1; fi
+          # Rerunning an older successful workflow may retain its immutable
+          # assets, but must not move the qualified main channel backwards.
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/commits/runtime-main" --jq .sha)"
+          promotion="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${current}...${revision}" --jq .status)"
+          if [[ "$promotion" == behind ]]; then exit 0; fi
+          if [[ "$promotion" != ahead && "$promotion" != identical ]]; then exit 1; fi
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/runtime-main" -f sha="$revision" -F force=false >/dev/null
+          gh release upload runtime-main runtime/loopx-runtime.json --repo "$GITHUB_REPOSITORY" --clobber
