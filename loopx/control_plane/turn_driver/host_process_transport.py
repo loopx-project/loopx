@@ -256,6 +256,21 @@ def _begin_host_process_record(record_path: Path | None, *, record_value: str,
     return record
 
 
+def _prepare_windows_launch(
+    containment: ExitStack, command: list[str],
+) -> tuple[Any, list[str], list[str]]:
+    """Own Windows IO resources; the TS bridge still owns launch observation."""
+    from .windows_host_job import WindowsHostJob
+    from ..runtime.private_permissions import protect_private_path
+
+    windows_job = containment.enter_context(WindowsHostJob())
+    report_directory = containment.enter_context(tempfile.TemporaryDirectory(prefix="loopx-host-launch-"))
+    protect_private_path(Path(report_directory), directory=True)
+    report_path = str(Path(report_directory) / "created.json")
+    relay = Path(__file__).with_name("windows_host_command.py")
+    return windows_job, [sys.executable, str(relay), report_path, *command], ["--windows-launch-status", report_path]
+
+
 def run_host_process(
     argv: Sequence[str],
     *,
@@ -298,15 +313,7 @@ def run_host_process(
         windows_job = None
         launch_report_arguments: list[str] = []
         if sys.platform == "win32":
-            from .windows_host_job import WindowsHostJob
-            windows_job = containment.enter_context(WindowsHostJob())
-            report_directory = containment.enter_context(tempfile.TemporaryDirectory(prefix="loopx-host-launch-"))
-            from ..runtime.private_permissions import protect_private_path
-            protect_private_path(Path(report_directory), directory=True)
-            report_path = str(Path(report_directory) / "created.json")
-            relay = Path(__file__).with_name("windows_host_command.py")
-            request["argv"] = [sys.executable, str(relay), report_path, *command]
-            launch_report_arguments = ["--windows-launch-status", report_path]
+            windows_job, request["argv"], launch_report_arguments = _prepare_windows_launch(containment, command)
         proc = subprocess.Popen(
             [
                 _node_executable(),
