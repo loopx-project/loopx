@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from types import SimpleNamespace
-from typing import Mapping, TypeVar
+from typing import Mapping, TypeVar, cast
 
 from .inventory import SourceFile
 
@@ -232,9 +232,9 @@ def _qualified_bindings(source: SourceFile, tree: ast.Module, owners: Mapping[st
                 if value is None and modules is not None and alias.name in symbols:
                     # One unrenamed re-export hop through a tracked module binds the
                     # same owner; only names that are owner symbols are followed.
-                    target = _tracked_module(module, modules)
-                    if target is not None and target.path != source.path:
-                        value = _reexported(target, alias.name, imports)
+                    reexport_source = _tracked_module(module, modules)
+                    if reexport_source is not None and reexport_source.path != source.path:
+                        value = _reexported(reexport_source, alias.name, imports)
                 if value is not None:
                     bindings[name] = value
                 else:
@@ -333,11 +333,11 @@ def _module_functions(source: SourceFile, tree: ast.Module) -> dict[str, ast.Fun
     # name some scope declares ``global`` and then stores is no longer reliably
     # the ``def`` above; binding a call to that ``def`` would report the original
     # body's returns for a function the module can swap at runtime.
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Global):
+    for global_node in ast.walk(tree):
+        if not isinstance(global_node, ast.Global):
             continue
-        scope = _enclosing_scope(tree, node)
-        for name in node.names:
+        scope = _enclosing_scope(tree, global_node)
+        for name in global_node.names:
             if name in defined and _stores_name(scope, name):
                 bound[name] += 1
     functions = {name: node for name, node in defined.items()
@@ -348,14 +348,14 @@ def _module_functions(source: SourceFile, tree: ast.Module) -> dict[str, ast.Fun
 
 def _index_value(node: ast.AST) -> str | int | None:
     if isinstance(node, ast.Constant) and type(node.value) in (str, int):
-        return node.value
+        return cast(str | int, node.value)
     if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
             and isinstance(node.operand, ast.Constant) and type(node.operand.value) is int):
         return -node.operand.value
     return None
 
 
-def _union(values: list[ast.AST]) -> ast.AST:
+def _union(values: list[ast.expr]) -> ast.expr:
     """Fold several definitions of one local into a finite selection node.
 
     The scan reports syntactic result possibilities, so a name written more than
@@ -497,7 +497,7 @@ def scan_python_production(
         if scope == '<module>':
             nested_names -= local_owner_names | {owner.split('::')[1] for owner in call_arguments
                                                    if owner.split('::')[0] == source.path}
-        import_bound = set()
+        import_bound: set[str] = set()
         for node in nodes:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 import_bound.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
@@ -526,7 +526,7 @@ def scan_python_production(
         local_bindings = {k: v for k, v in bindings.items() if k not in shadows}
         local_calls = {k: v for k, v in calls.items() if k not in shadows}
 
-        plain: dict[str, list[ast.AST]] = {}
+        plain: dict[str, list[ast.expr]] = {}
         for node in nodes:
             target = value = None
             if (isinstance(node, ast.Assign) and len(node.targets) == 1
@@ -536,7 +536,7 @@ def scan_python_production(
                     and node.value is not None):
                 target, value = node.target.id, node.value
             if target is not None:
-                plain.setdefault(target, []).append(value)
+                plain.setdefault(target, []).append(cast(ast.expr, value))
         declared = {name for node in nodes if isinstance(node, (ast.Global, ast.Nonlocal))
                     for name in node.names}
         # Every store of the name must be one of those plain writes, so a value
@@ -788,7 +788,7 @@ def scan_python_production(
                 blocked(reason)
             return set(values), bool(reasons)
 
-        def enum_object_value(node: ast.AST, seen: frozenset[str]) -> tuple[set[str], bool]:
+        def enum_object_value(node: ast.AST | None, seen: frozenset[str]) -> tuple[set[str], bool]:
             node, seen = bound(node, seen)
             if isinstance(node, ast.IfExp):
                 parts = [enum_object_value(value, seen) for value in (node.body, node.orelse)]
@@ -871,7 +871,7 @@ def scan_python_production(
         env = env if env is not None else environment(body, scope, parameters, call_shadows, own)
         blockers = env.blockers
 
-        def record(node: ast.AST | None, form: str, location: ast.AST) -> None:
+        def record(node: ast.AST | None, form: str, location: ast.expr | ast.stmt) -> None:
             # Reasons are read back by position: one scope's environment is
             # shared with same-module call resolution, which may nest inside.
             start = len(blockers)
