@@ -60,17 +60,22 @@ This adds one coarse request per complete completion classification, with no
 additional launch request. It preserves original Turn identity, effect order and
 once-only recovery; it does not establish a net efficiency improvement.
 
-The unmerged C1 complete binding now declares `hash_codec=context_source_numbers_v1`.
+The unmerged C1 complete binding now declares `hash_codec=context_source_numbers_v2`.
 Composition and complete consumers reuse the existing typed source identity to
 commit original numeric tokens alongside canonical JSON. Replan, capture and Host
 checks consume that same binding; missing/unsupported codecs or lost numeric
-transport reject before dependent work. Python derives the sparse tokens from
-its original input and applies source edits; it does not own another digest rule.
+transport reject before dependent work. The shared Python IO collector supplies
+tokens only for integral floats, signed zero and integers outside JavaScript's
+safe range. Ordinary fractional doubles need no repeated path/token metadata.
+Python applies source edits; it does not own another digest rule.
 These tokens retain the producer's numeric value/type encoding; exact byte layout
 and alternative numeric spellings remain the capture-byte check's responsibility.
-Historical v0 hashes and Turn keys retain their decoder. Older experimental C1
-bindings without this codec are unavailable for new execution, while their raw
-captures and pinned readers remain evidence. This is integrity checking, not
+Historical v0 hashes and Turn keys retain their decoder. The earlier experimental
+`context_source_numbers_v1` committed all float tokens; changing that identity
+requires this explicit codec transition. Old v1 bindings and bindings without a
+codec are unavailable for new execution, while raw captures remain unchanged and
+their pinned readers remain available for historical inspection. Do not migrate
+outstanding work by re-signing its source. This is integrity checking, not
 authentication or execution authority; the original-quota benefit gate stays open.
 The standalone complete-input adapter also uses the existing compact Host check;
 its unused full-source echo operation is retired. Model input still uses the
@@ -113,13 +118,16 @@ owner 校验。即使 journal 已保存完成 outcome，仍重新检查完整来
 恢复。完整完成分类每次新增一次粗粒度请求，启动检查不新增请求；原 Turn 身份、
 effect 顺序和一次恢复语义保持，不据此认定净效率提升。
 
-尚未合并的 C1 完整 binding 现声明 `hash_codec=context_source_numbers_v1`，组合与完整
+尚未合并的 C1 完整 binding 现声明 `hash_codec=context_source_numbers_v2`，组合与完整
 消费者复用既有 typed 来源身份，把原数值 token 与 canonical JSON 一起纳入承诺。
 Replan、capture 与 Host 检查消费同一 binding；缺失／不支持的 codec 或丢失原数值运输
-信息在依赖工作前拒绝。Python 只从原输入派生稀疏 token 并应用来源 edits，不新增
-digest 决策。Token 保留 producer 的数值／类型编码；精确字节布局与其他数值写法仍由
-capture 字节校验负责。历史 v0 hash 与 Turn key 保留原 decoder；缺少该 codec 的旧实验 C1
-binding 不可用于新执行，其原始 capture 和版本固定的 reader 仍保留为证据。完整性
+信息在依赖工作前拒绝。共用的 Python IO collector 只为整数值 float、带符号零及超出
+JavaScript 安全范围的整数提供 token；普通小数 double 不必重复携带路径／token。
+Python 应用来源 edits，不新增 digest 决策。Token 保留 producer 的数值／类型编码；
+精确字节布局与其他数值写法仍由 capture 字节校验负责。历史 v0 hash 与 Turn key 保留
+原 decoder；先前实验 `context_source_numbers_v1` 承诺全部 float token，这项身份变化
+通过显式 codec 升级区分。旧 v1 及缺少 codec 的 binding 不可用于新执行；原始 capture
+不变，历史检查使用对应版本固定的 reader，不通过重签来源迁移未完成工作。完整性
 校验不授予认证或执行权限；原 quota 的收益验收仍开放。
 独立完整输入 adapter 也复用既有紧凑 Host 检查，退役已无调用方的完整来源 echo
 operation；模型输入仍使用原来源，不增加验证请求或模型侧视图。

@@ -257,11 +257,13 @@ larger cold/output bytes and an open standalone numeric hash boundary. Preserve
 that counterevidence and the original outcome/full-cost gate; a working saved-file
 delta or once-only receipt does not establish long-horizon benefit.
 
-The subsequent [complete numeric-integrity checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.md)
-extends that existing source owner to the proposed complete binding and its actual
-readers, and retires the unused Host source echo. It preserves historical v0
-hashes and the earlier cost failures; a local response reduction does not close
-the remaining cutover, installed adoption or original-quota outcome/full-cost gaps.
+The [complete numeric-integrity checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.md)
+extends the existing source owner to complete consumers and removes the unused
+Host echo. The [sparse-transport integration](ledger/controller-executor-unified-contract-v0/2026-10-29-sparse-numeric-integration.md)
+then reuses the context collector and explicitly versions the changed experimental
+hash identity. Historical v0 hashes, pinned old readers and earlier cost failures
+remain. Component transport improvements do not close cutover, installed adoption
+or original-quota outcome/full-cost gaps.
 
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,

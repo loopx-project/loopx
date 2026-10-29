@@ -197,9 +197,10 @@ quota 成果/完整成本仍未闭合。
 以及尚开放的独立数值 hash 边界。保留这些反证和原成果/完整成本门；文件差分或一次
 结算回执可用，不证明长程收益。
 
-后续[完整契约数值完整性检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.zh-CN.md)
-把同一来源 owner 延伸到提议完整 binding 与真实 reader，并退役无用的 Host 来源 echo。
-保留历史 v0 hash 和先前成本失败；局部响应变小不结清剩余切换、安装采用及原 quota
+[完整契约数值完整性检查点](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.zh-CN.md)
+把同一来源 owner 延伸到完整消费者，并退役无用 Host echo；后续[稀疏运输整合](ledger/controller-executor-unified-contract-v0/2026-10-29-sparse-numeric-integration.zh-CN.md)
+继续复用 context collector，显式升级变化的实验 hash 身份。历史 v0 hash、固定版本的
+旧 reader 和先前成本失败均保留；组件运输改善不结清切换、安装采用或原 quota
 成果／完整成本缺口。
 
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
