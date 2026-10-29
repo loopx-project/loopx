@@ -98,8 +98,10 @@ class StewardMonitor:
             with self.controller.lock, commit():
                 host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
                 return self._native_poll(argv)
+        observed = host._observe(request["actor"])
         with self.controller.lock, exclusive_file_lock(self.bindings.path, operation="commit_steward_monitor"):
-            admitted = host._admit(request, turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
+            admitted = host._admit(request, observed=observed,
+                turn=self.controller.store.load_turn(turn["session_id"], turn["turn_id"]))
             if not context.get("authorization_scope_id") or admitted["observed_scope_id"] != context["authorization_scope_id"]:
                 raise ValueError("the portfolio scope changed after observation")
             return self._native_poll(argv)
