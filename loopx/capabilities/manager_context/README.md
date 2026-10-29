@@ -188,6 +188,10 @@ request/Goal/Agent identities. This is a refusal readback, not a readable brief,
 cancellation or completion. The App's warning glyph exposes that cause on demand;
 other unreadable sources remain unknown. Refresh rechecks the original owners;
 the read neither repairs historical receipts nor grants execution/return authority.
+Pages default to 12 rows. An explicit `limit` of 1–48 lets the App refresh up to
+four already loaded pages with one verified scan; larger loaded views use more
+bounded windows. Refresh publishes only matching snapshots. No cross-request
+content/authorization cache is added; this does not qualify a faster initial read.
 
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
@@ -195,6 +199,8 @@ the read neither repairs historical receipts nor grants execution/return authori
 来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
 具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
 核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
+默认每页 12 条；显式 `limit`（1–48）让刷新在一次核验中读取至多四个已加载页，更长列表
+分批读取，快照一致后一起展示。不新增跨请求内容或授权缓存，也不据此宣称首次读取已提速。
 
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current

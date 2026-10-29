@@ -1,6 +1,8 @@
 """Original steward requests, not inferred worker activity or a second ledger."""
 from urllib.parse import urlencode
 
+import pytest
+
 from test_chat_goal_amendment import api as api
 from test_goal_amendment_authority import source_goal as source_goal
 from test_chat_request_control import _source
@@ -213,7 +215,70 @@ def test_turn_locator_rereads_content_and_rejects_lost_identity(api):
     assert _inventory(api, route["session_id"])[1]["pending_count"] == 1
 
 
-def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, monkeypatch):
+def test_refresh_window_preserves_full_pages_and_source_checks(api, monkeypatch):
+    from loopx.presentation.request_control_api import RequestControlMixin
+
+    _, _, route = _source(api)
+    _, f, server = api
+    store = server.chat_store
+    session = store.load_session(route["session_id"])
+    expected_ids = {route["request_id"]}
+    for number in range(60):
+        turn, _ = store.create_turn(session["session_id"], client_turn_id=f"retained-{number}",
+            message=f"Inspect retained artifact {number}: " + "Keep the complete source and its unknowns. " * 30, origin="web")
+        receipt = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-a" if number % 2 else "agent-b"}, source_store=store)
+        expected_ids.add(receipt["request_id"])
+        store.update_turn(session["session_id"], turn["turn_id"], status="completed", response={"context_handoff_receipt": receipt})
+        store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    saved = {path: path.read_bytes() for path in _root(f["runtime"]).rglob("*.json")}
+    scope_read = RequestControlMixin._request_inventory_scope
+    verified = []
+    def observe_scope(reader, session_id):
+        verified.append(session_id)
+        return scope_read(reader, session_id)
+    monkeypatch.setattr(RequestControlMixin, "_request_inventory_scope", observe_scope)
+
+    rows, cursor, snapshots = [], 0, set()
+    while cursor is not None:
+        code, page = _inventory(api, route["session_id"], view="history", offset=cursor)
+        assert code == 200 and len(page["rows"]) <= 12
+        rows.extend(page["rows"])
+        snapshots.add(page["snapshot_digest"])
+        cursor = page["next_offset"]
+    assert len(rows) == len({row["request_id"] for row in rows}) == 61
+    assert {row["request_id"] for row in rows} == expected_ids
+    assert len(verified) == 12 and len(snapshots) == 1
+    verified.clear()
+    code, first = _inventory(api, route["session_id"], view="history", limit=48)
+    assert code == 200 and len(first["rows"]) == 48 and first["next_offset"] == 48
+    code, rest = _inventory(api, route["session_id"], view="history", offset=48, limit=24)
+    assert code == 200 and rest["next_offset"] is None
+    assert first["rows"] + rest["rows"] == rows
+    assert first["pending_count"] == rest["pending_count"] == first["matched"] == 61
+    assert first["snapshot_digest"] == rest["snapshot_digest"] == snapshots.pop()
+    assert first["coverage"] == rest["coverage"] == {"scan_complete": True, "unreadable": 0, "diagnostics": []}
+    assert len(verified) == 4, "Each window still verifies the source before and after its full scan"
+    assert {path: path.read_bytes() for path in saved} == saved
+
+
+def test_inventory_refresh_window_is_bounded_and_preserves_default_page(api):
+    _, _, route = _source(api)
+    for limit in (0, -1, 49, 1000, "12.5", "", "true"):
+        code, denied = _inventory(api, route["session_id"], limit=limit)
+        assert code == 400 and denied["error_code"] == "request_inventory_unavailable"
+        assert "rows" not in denied
+    call, _, server = api
+    server.selected_goal_id = None
+    code, denied = call(path="/api/chat/request-inventory?" + urlencode({"session_id": route["session_id"]}) + "&limit=12&limit=48")
+    assert code == 400 and "rows" not in denied
+    code, default = _inventory(api, route["session_id"])
+    assert code == 200 and len(default["rows"]) == 1
+    assert _inventory(api, route["session_id"], limit=12)[1]["rows"] == default["rows"]
+
+
+@pytest.mark.parametrize("limit", [12, 48])
+def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, monkeypatch, limit):
     from loopx.presentation.request_control_api import RequestControlMixin
 
     _, _, route = _source(api)
@@ -224,7 +289,7 @@ def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, 
         verified.append(session_id)
         return (observed, [], core) if len(verified) == 2 else (observed, goals, core)
     monkeypatch.setattr(RequestControlMixin, "_request_inventory_scope", observe_scope)
-    code, denied = _inventory(api, route["session_id"])
+    code, denied = _inventory(api, route["session_id"], limit=limit)
     assert code == 400 and denied["error_code"] == "request_inventory_unavailable"
     assert "rows" not in denied and "Check the current contract" not in str(denied)
 

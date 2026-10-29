@@ -231,7 +231,8 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     setBusy(true); setError(false); setNoSession(false);
     const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
     const sameScope = loadedScope.current === scope;
-    const pageCount = sameScope ? Math.max(1, pages.length) : 1;
+    const loadedRows = pages.reduce((count, page) => count + page.rows.length, 0);
+    const refreshRows = sameScope ? Math.max(12, Math.ceil(loadedRows / 12) * 12) : 12;
     // Keep verified rows during a same-source refresh, but never across scope
     // changes or a failed read. Publish refreshed pages together below.
     if (!sameScope) {setPages([]); loadedSource.current = null;}
@@ -249,14 +250,16 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
       loadedSource.current = source;
       const refreshed: ConversationRequestInventory[] = [];
       let cursor: number | null = offset;
-      const limit = offset ? 1 : sameSource ? pageCount : 1;
-      for (let index = 0; index < limit && cursor !== null; index++) {
-        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search);
+      const targetRows = offset ? 12 : sameSource ? refreshRows : 12;
+      // Each HTTP read verifies the whole inventory. Restore the loaded extent
+      // in bounded windows; opening and More still read one normal page.
+      for (let remaining = targetRows; remaining > 0 && cursor !== null; remaining -= 48) {
+        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search, Math.min(48, remaining));
         if (current !== generation.current) return;
         // Returns can reorder a live inventory. A stale More cursor gets one
         // fresh read; mixed snapshots during that read fail visibly for retry.
         if (offset && value.snapshot_digest !== pages[0]?.snapshot_digest) {void load(); return;}
-        if (index && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
+        if (refreshed.length && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
         if (value.next_offset !== null && value.next_offset <= cursor) throw new Error("Request paging did not advance.");
         refreshed.push(value); cursor = value.next_offset;
       }

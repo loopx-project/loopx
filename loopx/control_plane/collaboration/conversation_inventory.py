@@ -39,7 +39,9 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
     The caller supplies provider-validated Goal visibility and rechecks it after
     this read. A model/caller-supplied channel, path or source id is never used.
     """
-    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 12:
+    # Normal pages remain 12 rows. A refresh may restore four loaded pages
+    # together, reusing this read's full scan and authorization checks.
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 48:
         raise ValueError("invalid request page")
     if not isinstance(search, str) or len(search) > 200:
         raise ValueError("request search must be at most 200 characters")
