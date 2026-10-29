@@ -1450,6 +1450,16 @@ unknown-effect policy are unchanged; decoded expansion uses the existing
 64 MiB local-snapshot bound before copying records. This is internal transport,
 not a new capability, setting, authority source or installed-runtime claim.
 
+The resume-planning input uses a co-deployed v1 record table for repeated source
+lanes. It retains every v0 payload fact before typed decisions, rather than a
+consumer-specific field allowlist or a second Python restoration pass. Existing
+v0 callers remain valid; conflicting same-id facts are not merged. Both quota
+planning and its subsequent Vision-wait projection opt into the existing private,
+digest-verified local snapshot transport for unique histories beyond 2 MiB;
+the 64 MiB snapshot/expanded-response bounds and ordinary RPC limits remain.
+File/SQLite qualification must reach the public quota result, preserve the source
+and select tail work, not stop after the first oversized request is repaired.
+
 Current bounded delivery: shared-goal alignment and amendment admission use one
 `shared_goal_work_source.py` snapshot per decision, reusing the canonical Todo
 summary after promotion. The same provider read optionally supplies leases at
