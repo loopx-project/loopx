@@ -188,8 +188,12 @@ def _iter_composition_retry_rows(
 
     try:
         lines = log_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise RuntimeError(
+            "composition retry receipt journal is unreadable"
+        ) from error
     selected = lines if row_limit is None else lines[-max(0, row_limit) :]
     rows: list[dict[str, Any]] = []
     for line in selected:
