@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 from types import SimpleNamespace
 from typing import Mapping, TypeVar
 
@@ -137,20 +138,29 @@ def enum_members(source: SourceFile, symbol: str, *, strict: bool = False) -> di
     return result
 
 
+@lru_cache(maxsize=4096)
+def _field_mentions(source: SourceFile) -> frozenset[str]:
+    """Reuse parsed names, not another retained AST or a source-text filter."""
+    names: set[str] = set()
+    for node in ast.walk(_parsed(source)):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names.add(node.value)
+        elif isinstance(node, ast.keyword) and node.arg is not None:
+            names.add(node.arg)
+    return frozenset(names)
+
+
 def python_literal_uses(source: SourceFile, field: str) -> set[str]:
     """Literal writes and direct dispatch operands; not alias/data-flow proof."""
-    tree = _parsed(source)
-    nodes = list(ast.walk(tree))
-    # Inspect parsed names/keys, including escaped strings and normalized
-    # identifiers. Parse errors must still fail even when the field is absent.
-    if not any(
-        isinstance(node, ast.Name) and node.id == field
-        or isinstance(node, ast.Attribute) and node.attr == field
-        or isinstance(node, ast.Constant) and node.value == field
-        or isinstance(node, ast.keyword) and node.arg == field
-        for node in nodes
-    ):
+    # Parsing precedes absence: escaped keys and normalized identifiers count,
+    # and invalid syntax must fail even without a textual field mention.
+    if field not in _field_mentions(source):
         return set()
+    tree = _parsed(source)
 
     def reads(node: ast.AST) -> bool:
         if isinstance(node, ast.Name):
@@ -188,7 +198,7 @@ def python_literal_uses(source: SourceFile, field: str) -> set[str]:
     # conditions and does not inspect strings containing sample source text.
     rows = scan_python_production(source, field=field, enums={})
     result = set().union(*(row.values for row in rows))
-    for node in nodes:
+    for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
             for left, operator, right in zip(
                 [node.left, *node.comparators[:-1]], node.ops, node.comparators, strict=True,
@@ -407,6 +417,12 @@ def scan_python_production(
     call_arguments = call_arguments or {}
     calls = _qualified_bindings(source, tree, call_arguments, modules)
     return_paths = return_paths or {}
+    # Every output form needs a field, registered return or qualified owner.
+    # Keep enum results and builder arguments even when the field is absent.
+    if not bindings and not calls and not return_functions and (
+        not field or field not in _field_mentions(source)
+    ):
+        return []
     module_functions = _module_functions(source, tree)
     call_memo: dict[tuple[str, str], tuple[frozenset[str], tuple[str, ...]]] = {}
     environments: dict[tuple[int, str], SimpleNamespace] = {}
