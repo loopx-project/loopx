@@ -130,6 +130,15 @@ the existing context-delivery owner. C1 must converge the remaining composition
 and consumer assumptions, rather than introduce another capture service or
 rewrite already shared delta/native-resume logic.
 
+Journal persistence is an independent source-fidelity prerequisite. The proposed
+Python adapter carries finite original JSON text through the existing TypeScript
+journal owner, which retains its transition, lifetime, effect and lock checks
+before atomic publication. Integral floats, signed zero and unsafe integers
+retain their source values; native object callers keep their existing encoding.
+Historical hashes and receipts retain their codecs. JSON-string escaping adds
+request bytes, so qualify matched transport costs under unchanged limits. This
+slice does not qualify the unified writer/consumer cutover or net cost benefit.
+
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |

@@ -104,6 +104,13 @@ Quota capture 与 Turn journal capture 都调用
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
 
+Journal 持久化是独立的来源保真前置。本次提议由 Python adapter 传递有限数值的
+原始 JSON 文本，既有 TypeScript journal owner 在原子发布前继续执行状态转换、
+生命周期、effect 与锁检查。整值浮点、带符号零和非安全整数保留来源值；原生对象
+调用方保留已有编码。历史 hash 与回执保留原 codec。JSON 字符串转义会增加请求
+字节，须在原有限制下比较相同负载的传输成本；该切片不构成统一 writer/consumer
+切换或净成本收益的资格。
+
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |

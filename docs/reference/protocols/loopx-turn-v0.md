@@ -516,6 +516,21 @@ completed effects remain proved; other effects are unknown, not `false`. The
 writer's empty-map rejection is retained: no pending intent uses an absent field;
 committed history is carried by completed checkpoints, not retained intents.
 
+Python-origin journal snapshots carry finite original JSON text through that
+same TypeScript writer. The owner validates the decoded snapshot and publishes
+the original text atomically, preserving integral floats, signed zero and large
+integers in saved evidence. Direct object callers retain their existing JSON
+encoding; historical hash and receipt codecs are unchanged. Replay preserves the
+original file. This remains one RPC under the existing 2 MiB request limit;
+string escaping increases transport bytes and reduces available source headroom.
+It is a source-fidelity repair, not a latency or long-horizon benefit result.
+
+Python 来源的 journal 快照通过同一 TypeScript writer 传递有限数值的原始 JSON
+文本。owner 校验解码后的快照，再原子发布原文，保留证据中的整值浮点、带符号零
+和大整数。直接对象调用方保留已有 JSON 编码，历史 hash 和回执 codec 不变；重放
+保留原文件。仍为一次 RPC，沿用 2 MiB 请求上限；字符串转义增加传输字节、减少
+可容纳的来源正文。这是来源保真修复，不代表延迟或长程收益已得到验证。
+
 If executing `run-once` raises unexpectedly, its error response retains the
 original error and resume key, marks uncertain current-invocation `effects` as
 `null`, and adds `journal_observation` from this same read-only TS owner. Its
