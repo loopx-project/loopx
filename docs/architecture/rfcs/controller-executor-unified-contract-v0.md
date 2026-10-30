@@ -130,6 +130,34 @@ the existing context-delivery owner. C1 must converge the remaining composition
 and consumer assumptions, rather than introduce another capture service or
 rewrite already shared delta/native-resume logic.
 
+A separate native-presentation slice reuses the committed full recovery as its
+reader target, avoiding an unused second wire publication. Delta and unwrapped
+inputs retain their own immutable files and the same reader/lifecycle owners.
+On a matched 107,289-byte synthetic source, capture writes fall from 216,754 to
+107,289 bytes; full reader bytes and the 3,937-byte warm delta are unchanged.
+This qualifies only duplicate capture IO removal, not model-input reduction,
+complete cost, accepted outcomes or C1 writer/consumer cutover.
+For a small explicit output ceiling, native presentation can also omit repeated
+directory/selection commands while retaining the complete recovery command:
+append `--list` or `--select` to discover/read current facts without a baseline.
+The original 4,000-byte cold/warm/compaction cases retain their requirements,
+Stop, original identity and full recovery; this is transport qualification.
+
+Journal persistence is an independent source-fidelity prerequisite. The proposed
+Python adapter reuses context delivery's sparse number-token collector; both
+TypeScript consumers reuse one source-number validator. Journals remain JSON
+objects, with metadata only for integral floats, signed zero and unsafe integers.
+The journal owner restores these numbers before atomic publication and retains
+their distinctions in replay and immutable-plan comparisons. Ordinary native
+objects retain their encoding; historical receipts are not rewritten.
+
+The interim whole-JSON-string carrier failed the existing 2 MiB request boundary
+for a synthetic 1.55-million-character quoted body accepted by the object path.
+Keep that negative result: qualify the sparse replacement against the same
+workload and limit, including number-dense overhead. Neither this prerequisite
+nor a component byte saving qualifies the unified writer/consumer cutover or
+long-horizon net benefit.
+
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |

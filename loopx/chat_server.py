@@ -124,6 +124,7 @@ DEFAULT_CHAT_PORT = 8767
 DEFAULT_CHAT_PATH = "/chat/"
 DEFAULT_CHAT_STATUS_PATH = "/status.json"
 CHAT_CAPABILITIES_PATH = "/api/chat/capabilities"
+CHAT_READINESS_PATH = "/api/chat/readiness"
 CHAT_ENDPOINTS_PATH = "/api/chat/endpoints"
 CHAT_AGENT_MODEL_OPTIONS_PATH = "/api/chat/agent-model-options"
 CHAT_SESSIONS_PATH = "/api/chat/sessions"
@@ -1652,6 +1653,13 @@ class ChatRequestHandler(
             return
         if path == "/healthz":
             self._send_json({"ok": True})
+            return
+        if path == CHAT_READINESS_PATH:
+            # Readiness pairs the frontend with this loaded service artifact.
+            # Model/provider availability and original-conversation grants are
+            # separate fresh reads, never prerequisites for this cheap probe.
+            self._send_json({"ok": True, "schema_version": "loopx_chat_readiness_v1",
+                "state": "ready", "runtime_identity": self.server.runtime_identity})
             return
         if path == CHAT_CAPABILITIES_PATH:
             # The steward section is composed by its own owner so the model

@@ -86,6 +86,22 @@ try {
     await page.screenshot({path: resolve(output, 'read-failure.png')});
     await fixture('recover'); await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
     await rows(4);
+    await fixture('local-source-unavailable');
+    const denied = await fetch(`${ready.origin}/api/chat/request-inventory?session_id=${ready.session_id}`);
+    assert.equal(denied.status, 400);
+    assert.equal((await denied.json()).error_code, 'request_inventory_unavailable');
+    await dialog.getByRole('button', {name: '刷新委派', exact: true}).click(); await settled();
+    await dialog.getByRole('alert').waitFor(); await rows(0);
+    assert.equal(await trigger.getAttribute('aria-label'), '委派，— 条待跟进');
+    assert.equal(await dialog.locator('.conversation-requests-pagination').count(), 0);
+    // Changing the filter must not turn the same missing source into a new
+    // empty workspace, nor may an unsuccessful retry lose that distinction.
+    await search('builder'); await settled(); await dialog.getByRole('alert').waitFor();
+    await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
+    await dialog.getByRole('alert').waitFor(); await rows(0);
+    await fixture('local-source-recover');
+    await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled(); await rows(9);
+    await search('reviewer'); await rows(4);
     assert.equal((await fixture('inspect')).source_unchanged, true);
     await fixture('deliver'); await search('复核迁移说明中的示例'); await settled();
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();
@@ -126,9 +142,20 @@ try {
     await fixture('source-recover'); await page.getByRole('button', {name: 'Retry history', exact: true}).click();
     await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).click();
     await page.getByRole('searchbox', {name: 'Search delegations'}).waitFor();
+    const english = page.getByRole('dialog', {name: 'Delegations', exact: true});
+    await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(12);
+    // A real return changes ordering and the snapshot while More is reading.
+    // Rebuild from the beginning, but fulfill this click's requested extent;
+    // the parent message refresh must not replace it with the old page count.
+    await fixture('report-window');
+    const nextPage = english.getByRole('button', {name: 'More records', exact: true});
+    await nextPage.focus(); await page.keyboard.press('Enter'); await rows(13);
+    assert.equal(await english.getByRole('button', {name: 'More records', exact: true}).count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), '13 / 13 shown');
+    await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts.');
+    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery, changed-snapshot More and read-only receipts.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}

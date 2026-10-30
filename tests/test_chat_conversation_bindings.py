@@ -355,6 +355,70 @@ def test_app_steward_corrupt_legacy_configuration_never_falls_back(tmp_path):
     assert bindings.path.read_bytes() == before
 
 
+def test_app_steward_snapshot_does_not_wait_for_background_mutation(steward):  # noqa: F811
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "snapshot-original", "Read the workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    expected = {"binding_id": binding["binding_id"], "session_id": sid}
+    assert bindings.app_steward_target() == expected
+    before = capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()
+    held, release = threading.Event(), threading.Event()
+
+    def background_inspection():
+        with runtime.lock, exclusive_file_lock(bindings.path, operation="inspect_native_steward_turn"):
+            held.set()
+            assert release.wait(10)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        inspection = workers.submit(background_inspection)
+        try:
+            assert held.wait(2)
+            target = workers.submit(bindings.app_steward_target)
+            assert target.result(timeout=.75) == expected
+            assert not release.is_set(), "Snapshot discovery must complete while inspection is blocked"
+        finally:
+            release.set()
+            inspection.result(timeout=2)
+    assert (capture.read_bytes(), store.messages(sid), bindings.path.read_bytes()) == before
+
+
+@pytest.mark.parametrize("change", ["selection", "revocation"])
+def test_app_steward_snapshot_rechecks_grant_after_core_discovery(steward, monkeypatch, change):  # noqa: F811
+    store, runtime, provider, transport, binding, capture, _ = steward
+    event = provider.event("steward-app", "snapshot-race", "Read the workspace")
+    transport.admit("steward-app", event)
+    request = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    sid = request["session_id"]
+    assert runtime.wait_for_turn(session_id=sid, turn_id=request["turn_id"], timeout_sec=10)["status"] == "completed"
+    bindings = transport.bindings
+    bindings.select_app_steward(binding["binding_id"], expected_revision=bindings.read()["revision"])
+    before = capture.read_bytes(), store.messages(sid)
+    core = bindings._core
+
+    def change_after_discovery(operation, params, **kwargs):
+        result = core(operation, params, **kwargs)
+        if operation == "collaboration.conversation.local_sessions":
+            if change == "selection":
+                bindings.select_app_steward(None, expected_revision=bindings.read()["revision"])
+            else:
+                bindings.disconnect(binding["binding_id"], expected_revision=bindings.read()["revision"])
+        return result
+
+    monkeypatch.setattr(bindings, "_core", change_after_discovery)
+    with pytest.raises(ValueError, match="changed"):
+        bindings.app_steward_target()
+    assert (capture.read_bytes(), store.messages(sid)) == before
+
+
 def _request_for_event(transport, event):
     binding = transport._binding("notes-app")
     return transport.core.read_request(

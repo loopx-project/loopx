@@ -448,6 +448,9 @@ capture and return a small file reference, not an eager first page. The response
 names the delta/full `path`, digest and reader `command`; `recovery` names the
 current complete file. A file delta additionally carries `baseline_reference`.
 `index_command` lists current fields and `select_command` batches exact pointers.
+Under a smaller explicit ceiling, these shortcut commands may be omitted;
+append `--list` or `--select <pointer>` to `recovery.command` instead. Both
+operations address the current complete capture, including during delta delivery.
 The reference stays below 7900 serialized bytes (or the explicit smaller output
 ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
@@ -740,7 +743,9 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 不内联第一页。`path`、摘要与 `command` 指向当前差分或全量；`recovery` 指向当前
 完整文件；文件差分另带 `baseline_reference`。`index_command` 展示当前字段目录，
 `select_command` 批量选读精确路径。引用输出不超过 7900 序列化字节或调用者显式更小
-的上限；元数据放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
+的上限；较小预算下可省略这两个快捷命令，改在 `recovery.command` 后追加
+`--list` 或 `--select <pointer>`，差分投递时也直接读取当前完整捕获。
+元数据仍放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
 原始工具日志完整，不证明宿主保留给模型的字节也完整。
 
 原生 `captured_file` 基线来自校验后的前一完整文件，可差分复用所有未变字段，包括

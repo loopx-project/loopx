@@ -167,6 +167,7 @@ def test_full_budget_roundtrips_without_erasing_replan_or_partial_writes(tmp_pat
                               dry_run=False, autonomous_replan_recorded=False)
     assert rejected.returncode == 1
     assert "total_agent_vision uses 1801 chars; limit is 1800" in fixture.payload(rejected)["error"]
+    assert "usage: vision_patch=1120, path_delta=681, stride_decision=0, fallback_declarations=0" in fixture.payload(rejected)["error"]
     assert index.read_bytes() == before_index
     assert state.read_bytes() == before_state
 

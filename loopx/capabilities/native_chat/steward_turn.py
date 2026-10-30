@@ -232,10 +232,18 @@ class StewardTurnHost:
         session = self.store.load_session(original["session_id"])
         if not session or not session.get("codex_home") or not session.get("upstream_thread_id"):
             return None
+        history = session.get("upstream_context_history") or []
+        if not isinstance(history, list) or any(not isinstance(item, dict)
+                or not isinstance(item.get("thread_id"), str) or not item["thread_id"]
+                for item in history):
+            return None
+        # Context replacement retains native provenance on this same Session.
+        # Read the original refusal there; never resume a historical thread.
+        threads = [session["upstream_thread_id"], *(item["thread_id"] for item in reversed(history))]
         proof = CodexAppServerAdapter.failed_request_observation(codex_bin=self.controller.codex_bin,
             codex_home=Path(session["codex_home"]),
             model_auth_home=checked_session_home(self.controller.codex_home, session),
-            thread_ids=[session["upstream_thread_id"]], turn_id=original["upstream_turn_id"])
+            thread_ids=list(dict.fromkeys(threads)), turn_id=original["upstream_turn_id"])
         if (not proof or proof.get("only_original_user_item") is not True
                 or proof.get("codex_error_info") != "usageLimitExceeded" or proof.get("quota_available") is not True):
             return None

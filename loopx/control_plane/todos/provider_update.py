@@ -258,9 +258,9 @@ def update_canonical_todo_if_promoted(
         normalized_note = compact_todo_text(note)
         if normalized_note:
             patch["note"] = normalized_note
-    if claim_operation_id is not None and (completion_validation_revision is not None or monitor_observation is not None
+    if claim_operation_id is not None and (monitor_observation is not None
             or str((planning_intent or {}).get("status", "")).lower() == "done"):
-        raise ValueError("Claim execution progress does not change validators or observe Monitors; use todo complete for completion")
+        raise ValueError("Claim execution progress does not observe Monitors; use todo complete for completion")
     completion = None
     validation_revision = None
     if completion_validation_revision is not None:

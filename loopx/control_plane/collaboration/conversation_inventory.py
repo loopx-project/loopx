@@ -146,7 +146,9 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
     The caller supplies provider-validated Goal visibility and rechecks it after
     this read. A model/caller-supplied channel, path or source id is never used.
     """
-    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 12:
+    # Response windows may restore four loaded pages; authority observations
+    # below still retain at most one normal page of request guards at a time.
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 48:
         raise ValueError("invalid request page")
     if not isinstance(search, str) or len(search) > 200:
         raise ValueError("request search must be at most 200 characters")
@@ -158,8 +160,9 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
     # read another authority. Each source/Turn and request is reread below.
     # Keep each guard bounded to a page-sized batch so a long inventory does
     # not exclude Goal writers for the entire history scan.
-    batches = [(key, items[start:start + limit]) for key, items in groups.items()
-               for start in range(0, len(items), limit)]
+    batch_size = 12
+    batches = [(key, items[start:start + batch_size]) for key, items in groups.items()
+               for start in range(0, len(items), batch_size)]
     for (gid, _), requests in batches:
         start, failed = len(work_reads), 0
         try:

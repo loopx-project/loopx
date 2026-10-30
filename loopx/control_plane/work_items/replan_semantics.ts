@@ -542,8 +542,9 @@ export function projectReplanSemantics(value: unknown): JsonObject {
         received_context_id: strideDecision!.reference_context_id,
         replan_context: structuredClone(context),
         stride_control: strideControlContract(context, obligation.obligation_id),
-        instruction: "Read the complete returned replan_context and stride_control, including Goal acceptance, evidence, followthrough and applicable source reads. " +
-          "Reassess the decision against those facts before replacing its reference_context_id; copying the new id alone is not a review. " +
+        instruction: "The exact current review basis is available for progressive reading. Read the applicable Goal, acceptance, constraints, " +
+          "stride contract and decision-relevant facts; consult evidence and history when needed, without draining the whole file. " +
+          "Reassess against those facts before replacing reference_context_id; copying the new id alone is not a review. " +
           "Retry the original writeback with the same Goal, Agent, Turn and replan obligation and its original settlement identity. " +
           "This response grants no new execution or spend authority and commits no writeback. Do not start another Turn or blindly rerun admission. " +
           "If the basis changes again, the writer will reject again and return the then-current context.",

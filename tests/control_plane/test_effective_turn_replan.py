@@ -1,6 +1,7 @@
 """Receipt-backed cadence over an open Todo, through the real CLI and runtime."""
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -469,7 +470,20 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert transition["reason_code"] == "stride_review_basis_mismatch"
     assert transition["host_action"] == "read_current_replan_context"
     assert transition["next_cli_actions"] == []  # No unbound repeat of the rejected write.
-    recovery = transition["context_recovery"]
+    reference = transition["context_recovery"]
+    # A rejected write must not eagerly import historical acceptance/evidence
+    # into the model. Its exact write-time basis remains independently readable.
+    if os.name == "posix":
+        assert len(json.dumps(foreign, ensure_ascii=False).encode()) < 4096
+        from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+        saved, _, recovery = read_context_capture_file(reference["path"], reference["sha256"], private=True)
+        assert saved.stat().st_mode & 0o077 == 0
+        selected = call("quota", "context-read", "--capture-file", reference["path"],
+            "--capture-sha256", reference["sha256"], "--select", "/replan_context/core_goal/objective")
+        assert selected["ok"] and selected["eof"]
+        assert json.loads(selected["content"])["selections"][0]["value"] == recovery["replan_context"]["core_goal"]["objective"]
+    else:
+        recovery = reference
     current = recovery["replan_context"]
     assert recovery["received_context_id"] == rejected_reference
     assert current["obligation_id"] == obligation["obligation_id"]

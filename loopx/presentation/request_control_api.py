@@ -110,7 +110,7 @@ class RequestControlMixin:
 
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            if (set(query) - {"session_id", "view", "offset", "search"} or "session_id" not in query
+            if (set(query) - {"session_id", "view", "offset", "search", "limit"} or "session_id" not in query
                     or any(len(values) != 1 for values in query.values())):
                 raise ValueError("select one original conversation")
             view = query.get("view", ["unfinished"])[0]
@@ -146,7 +146,7 @@ class RequestControlMixin:
             result = read_conversation_requests(controller.coordination_runtime_root, self.server.registry_path,
                 self.server.chat_store, session, goal_ids=goals, core_goal_ids=core,
                 validate_source_session=validate_source, history=view == "history", offset=int(query.get("offset", ["0"])[0]),
-                search=query.get("search", [""])[0])
+                limit=int(query.get("limit", ["12"])[0]), search=query.get("search", [""])[0])
             for sid, proof in sources.items():
                 current, current_goals, current_core = self._request_inventory_scope(sid)
                 if (source_basis(current), current_goals, current_core) != proof:
