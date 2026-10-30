@@ -856,6 +856,11 @@ known pointer does not require another index round trip. Batch within the combin
 output budget, avoid overlapping parent/child selections, and inspect a missing
 pointer's parent before retrying the rejected batch. These are caller guidelines;
 selection validation, required reads and authority checks remain unchanged.
+Selection errors identify the original `--select` argument and, for a failed
+lookup, its token position (both 1-based). Sorting and duplicate elimination do
+not renumber arguments. Inspect the resolved prefix before that token in the
+same capture; malformed pointers need syntax repair first. Diagnostics never
+echo the pointer or task values, and no part of a rejected batch is delivered.
 
 The `context_capture_index_v1` view shares the digest-bound pagination contract.
 An expanded index includes its `list_depth`; `next_command` preserves the depth,
@@ -895,6 +900,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 `--select`，已知路径无须多查一轮目录。按合计输出预算分批，避免同时选择父节点和
 子节点；路径缺失时先查其父节点，再重试被拒绝的批次。这些是调用建议，不改变
 选择校验、必读要求或权限检查。
+选择错误会标明原始 `--select` 参数序号；查找失败时还会标明 token 序号，均从 1
+开始。排序和去重不改变参数编号。在同一 capture 中检查失败 token 前已解析的
+路径前缀；语法错误需先修正 pointer。错误信息不回显路径或任务正文，被拒绝的
+批次不会返回部分内容。
 
 `context_capture_index_v1` 沿用双摘要分页；展开的目录包含 `list_depth`，
 `next_command` 保留深度、路径和两个摘要。更改深度会拒绝旧视图的续读，目录 cursor
