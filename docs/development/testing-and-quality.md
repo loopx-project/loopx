@@ -618,7 +618,7 @@ the change only needs a few Python tests.
 | Validation scope / 验证范围 | Setup / 安装范围 |
 | --- | --- |
 | Selected Python unit tests using pytest, JSON Schema or YAML / 指定的基础 Python 单元测试 | `uv sync --extra test-core` |
-| Full Python suite, lint, integration tests or premerge / 完整 Python 测试、静态检查、集成测试或提交前验证 | `uv sync --extra test` |
+| Full Python suite, lint, integration tests or premerge / 完整 Python 测试、静态检查、集成测试或提交前验证 | `uv sync --extra test`; selected `semantic-vocabulary-drift-smoke.py` also needs root `npm ci --ignore-scripts` / 若选择全库语义检查，还需在根目录安装其 Node 依赖 |
 | Full control-plane TypeScript tests or coverage / 完整控制面 TypeScript 测试或覆盖率 | Root `npm ci` plus `uv sync --extra test` for Python subprocesses / 根目录 Node 依赖及测试子进程所需的 Python 环境 |
 | Control-plane typecheck / 控制面类型检查 | `npm ci` at the repository root / 仓库根目录 |
 | Dashboard build or browser tests / Dashboard 构建或浏览器测试 | `npm ci --prefix apps/presentation/dashboard`; browser tests also require their documented browser and backend setup / 浏览器测试另需其文档指定的浏览器与后端环境 |
@@ -778,11 +778,31 @@ installed-App health check. No model calls are involved.
 `--check` 会报错，旧清单路径已忽略。这属于需要 Git 和 Node 开发依赖的源码检查，
 不是安装版 App 健康检查，也不调用模型。
 
-Confirm the interpreter and imported checkout when diagnosing a mismatch:
+Inspect the interpreter and imported module when diagnosing a mismatch:
 
 ```bash
-uv run python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
+uv run --extra test python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
 ```
+
+This checks that invocation, not a console script launched elsewhere. An inherited
+`PYTHONPATH` can select an installed release before the worktree's editable package;
+running `python -c` at the repository root can mask that difference. For a source
+CLI on POSIX, pin this checkout for the command and its child imports:
+
+```bash
+PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" uv run --extra test python -m loopx.cli --format json version
+```
+
+Keep this override local to the validation subprocess, preserve unrelated settings,
+and record the actual source and argv. A matching version string alone is not
+source provenance. Isolated CLI test launchers should likewise pin the checkout;
+they must not accidentally qualify an installed release.
+
+上面的检查只说明该 Python 调用的来源，不能证明另一个 console script 的来源。
+继承的 `PYTHONPATH` 可能让已安装版本优先于 worktree；在仓库根目录执行 `python -c`
+又可能掩盖差异。源码验证使用上述模块入口，并仅在该子进程内把当前目录放到导入路径
+首位；保留其他设置，记录实际源码和 argv，不凭相同版本号判断来源。隔离 CLI 测试的
+启动器也应固定目标检出目录，避免误测安装版。
 
 Node-based TypeScript tests and browser smokes that launch Python use
 `scripts/test-python.mjs`. It honors an explicit `LOOPX_TEST_PYTHON` (then the
