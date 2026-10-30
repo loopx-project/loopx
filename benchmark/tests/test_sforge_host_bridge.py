@@ -66,4 +66,3 @@ def test_host_bridge_does_not_weaken_native_or_blind_endpoint_selection(tmp_path
     backend.blind_api_endpoint = ("192.0.2.1", 9090)
     assert [(ep.ip, ep.port) for ep in backend.create_network_isolation(None, endpoints, None)] == [
         ("192.0.2.1", 9090)]
-
