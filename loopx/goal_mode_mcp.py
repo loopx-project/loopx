@@ -52,6 +52,16 @@ class GoalModeMCPControlPlane:
     def bound_agent_id(self) -> str | None:
         return self.state().get("agent_id")
 
+    def _runtime_root_override(self) -> Path | None:
+        """Only an explicit transport root may suppress registry source routing."""
+        return None
+
+    def _runtime_root(self, registry_path: Path) -> Path:
+        """Resolve reads against the runtime used by this transport's CLI calls."""
+        from .paths import effective_runtime_root
+
+        return effective_runtime_root(registry_path, self._runtime_root_override())
+
     def goal_ref(self) -> dict[str, str] | None:
         value = self.state().get("goal_ref")
         if not isinstance(value, Mapping):
@@ -74,7 +84,7 @@ class GoalModeMCPControlPlane:
         from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
         from .control_plane.projects.registry_codec import load_registry
         from .paths import (default_registry_path, global_registry_path,
-                            resolve_runtime_root, select_default_runtime_root)
+                            select_default_runtime_root)
         from .registry import find_registry_goal
 
         selected = self.context()[1]
@@ -88,7 +98,7 @@ class GoalModeMCPControlPlane:
         goal = find_registry_goal(registry, goal_id)
         if goal is None:
             raise ValueError(f"{goal_id}: registry does not contain the Goal for Vision preflight")
-        runtime_root = resolve_runtime_root(registry, registry_path=registry_path)
+        runtime_root = self._runtime_root(registry_path)
         effective = resolve_todo_replan_cadence_goal(goal, runtime_root)
         return (effective.get("execution_profile") or {}).get("stride_strategy") == "evidence_conditioned_v1"
 
@@ -226,9 +236,6 @@ class GoalModeMCPControlPlane:
 
     def _original_work_turn(self, todo_id: str) -> str | None:
         """Resolve installed admission through the same owner used by the CLI."""
-        from pathlib import Path
-        from .history import load_registry
-        from .paths import resolve_runtime_root
         from .control_plane.goals.checkpoint_context_io import restore_default_turn_id
 
         goal_id, registry = self.context()
@@ -236,9 +243,7 @@ class GoalModeMCPControlPlane:
             return None  # Older host contracts retain their deterministic identity.
         path = Path(registry)
         return restore_default_turn_id(
-            runtime_root=resolve_runtime_root(
-                load_registry(path), None, registry_path=path
-            ),
+            runtime_root=self._runtime_root(path),
             registry_path=path,
             goal_id=goal_id,
             agent_id=self.bound_agent_id(),
@@ -252,9 +257,6 @@ class GoalModeMCPControlPlane:
     def _checkpoint_continuation(self, todo_id: str, turn_id: str | None) -> bool:
         if turn_id is None:
             return False
-        from pathlib import Path
-        from .history import load_registry
-        from .paths import resolve_runtime_root
         from .control_plane.quota.settlement import read_heartbeat_settlement
         from .control_plane.goals.checkpoint_context_io import (
             checkpoint_continuation_required,
@@ -262,7 +264,7 @@ class GoalModeMCPControlPlane:
 
         goal_id, registry = self.context()
         path = Path(registry)
-        root = resolve_runtime_root(load_registry(path), None, registry_path=path)
+        root = self._runtime_root(path)
         readback = read_heartbeat_settlement(
             root,
             goal_id=goal_id,
@@ -275,14 +277,20 @@ class GoalModeMCPControlPlane:
         return readback is not None and checkpoint_continuation_required(readback)
 
     def _stored_terminal_intent(self, todo_id: str, turn_id: str) -> bool:
-        from pathlib import Path
         from .todos import list_goal_todos
         from .control_plane.quota.settlement import SettlementIdentity
         from .control_plane.goals.checkpoint_context_io import _checkpoint_effect
 
         goal_id, registry = self.context()
+        path = Path(registry)
+        runtime_override = (
+            str(self._runtime_root(path)) if self._runtime_root_override() is not None else None
+        )
         todo = list_goal_todos(
-            registry_path=Path(registry), goal_id=goal_id, todo_id=todo_id
+            registry_path=path,
+            runtime_root_arg=runtime_override,
+            goal_id=goal_id,
+            todo_id=todo_id,
         ).get("todo")
         identity = SettlementIdentity(
             goal_id=goal_id,
@@ -460,16 +468,13 @@ class GoalModeMCPControlPlane:
             and completed.get("settlement_complete") is True
             and turn_id
         ):
-            from pathlib import Path
-            from .history import load_registry
-            from .paths import resolve_runtime_root
             from .control_plane.turn_driver.journal_store import (
                 reconcile_settled_turn_journal,
             )
 
             _, registry = self.context()
             path = Path(registry)
-            root = resolve_runtime_root(load_registry(path), None, registry_path=path)
+            root = self._runtime_root(path)
             reconcile_settled_turn_journal(
                 root,
                 registry_path=path,

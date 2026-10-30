@@ -16,6 +16,7 @@ from loopx.control_plane.coordination.local_authority import read_canonical_todo
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
 from loopx.control_plane.todos.list_readback import list_goal_todos
+from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 
 
 GOAL = "source-route-fixture"
@@ -103,6 +104,22 @@ def test_explicit_runtime_override_retains_its_diagnostic_meaning(routed):
     assert list_goal_todos(registry_path=registry, goal_id=GOAL)["todos"][0]["todo_id"] == "todo_source_0"
     assert list_goal_todos(registry_path=source, goal_id=GOAL)["todos"][0]["todo_id"] == "todo_source_0"
     assert diagnostics(registry, override=override)["error_diagnostics"] == []
+
+
+def test_mcp_terminal_intent_keeps_implicit_source_route(routed):
+    _, runtime, registry, shared, _, _ = routed
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL)
+    control = GoalModeMCPControlPlane(
+        GoalModeMCPConfig(
+            server_name="source-route-fixture",
+            runtime_profile="claude_code",
+            legacy_host_surface="claude_code",
+        ),
+        lambda: {"goal_id": GOAL, "agent_id": "agent-a", "registry": str(registry)},
+    )
+    assert control._stored_terminal_intent("todo_source_1", "original-turn") is False
+    assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL) == before
+    assert not (shared / "goals" / GOAL).exists(), "Reading must not create a second authority"
 
 
 @pytest.mark.parametrize("failure", ["missing", "unreadable", "wrong_goal"])

@@ -182,25 +182,56 @@ TOOL_NAME = "loopx_collaboration"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_checkpoint_snapshot_follows_registered_runtime_with_separate_chat_storage(provider, tmp_path, monkeypatch):
+@pytest.mark.parametrize("runtime_route", ["registered", "chat_local"])
+def test_checkpoint_snapshot_and_resume_follow_selected_chat_runtime(
+    provider, runtime_route, tmp_path, monkeypatch
+):
     registry, _, todo = native._fixture(provider, tmp_path, monkeypatch)
     control = _control(registry)
     assert json.loads(control.should_run()).get("delivery_result_context")
     result = json.loads(control.complete_task(todo, AGENT_ID, "Verified retained result.", no_follow_up=True))
     assert result["stage"] == "direction_pending", result
-    store = ChatSessionStore(tmp_path / "chat-only")
+    root = tmp_path / "runtime"
+    default_root = tmp_path / "unrelated-default-runtime"
+    monkeypatch.setattr("loopx.paths.select_default_runtime_root", lambda: default_root)
+    if runtime_route == "chat_local":
+        registration = json.loads(registry.read_text())
+        del registration["common_runtime_root"]
+        registry.write_text(json.dumps(registration))
+    store = ChatSessionStore(tmp_path / "chat-only" if runtime_route == "registered" else root)
     controller = ChatRuntimeController(store=store, codex_bin="unused-fixture-host", registry_path=registry)
     try:
         session = store.create_session(goal_id=GOAL_ID, agent_id="codex", channel_id=f"goal.{GOAL_ID}",
             upstream_thread_id="fixture-session", upstream_mode="chat", adapter_kind="codex_app_server")
         store.update_session(session["session_id"], native_goal={"status": "paused"},
             loopx_mode={"enabled": True, "paused": True, "settings": {"agent_id": AGENT_ID, "token_budget": 10000}})
-        assert controller.coordination_runtime_root == tmp_path / "runtime"
-        assert store.root.parent != controller.coordination_runtime_root
+        assert controller.coordination_runtime_root == root
+        assert (store.root.parent != root) == (runtime_route == "registered")
         observed = controller.loopx_mode.snapshot(session["session_id"])["coordinator_checkpoint"]
         assert observed["stage"] == "direction_pending" and observed["result_committed"] is True
         assert observed["quota_spent"] is False and observed["settlement_identity"] == result["settlement_identity"]
-        context = CoordinatorCheckpoints(registry, controller.coordination_runtime_root, GOAL_ID, AGENT_ID).read(todo)
+        checkpoint = CoordinatorCheckpoints(registry, controller.coordination_runtime_root, GOAL_ID, AGENT_ID)
+        context = checkpoint.read(todo)
         assert context["settlement_identity"] == result["settlement_identity"]
+        decision = {
+            "read_context_id": context["read_context_id"],
+            "vision_unchanged_reason": "The retained result and current obligations preserve the route.",
+        }
+        settled = checkpoint.resume(todo, decision)
+        assert settled["ok"] and settled["settlement_complete"], settled
+        assert settled["settlement_identity"] == result["settlement_identity"]
+        index = root / "goals" / GOAL_ID / "runs/index.jsonl"
+        ledger = index.read_bytes()
+        repeated = checkpoint.resume(todo, decision)
+        assert repeated["ok"] and repeated["settlement_identity"] == result["settlement_identity"]
+        assert index.read_bytes() == ledger
+        events = [json.loads(line) for line in index.read_text().splitlines()]
+        assert sum(event.get("classification") == "quota_slot_spent" for event in events) == 1
+        original = next(
+            row for row in read_canonical_todos_if_promoted(runtime_root=root, goal_id=GOAL_ID)["todos"]
+            if row["todo_id"] == todo
+        )
+        assert original["status"] == "done" and original["evidence"] == "Verified retained result."
+        assert not default_root.exists()
     finally:
         controller.close()

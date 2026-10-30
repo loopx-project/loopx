@@ -19,12 +19,15 @@ class _CheckpointControlPlane(GoalModeMCPControlPlane):
             legacy_host_surface="codex_cli",
         ), lambda: {"goal_id": goal_id, "agent_id": agent_id, "registry": str(registry)})
 
+    def _runtime_root_override(self) -> Path:
+        return self.root
+
     def run_cli(self, args, *, legacy_args=None):
         goal = load_goal_from_registry(self.registry, self.context()[0])
         if not goal:
             raise ValueError("Goal unavailable")
         prefix = [*_python_module_command("loopx.cli"), "--registry", str(self.registry),
-                  "--runtime-root", str(self.root), "--format", "json"]
+                  "--runtime-root", str(self._runtime_root(self.registry)), "--format", "json"]
         result = subprocess.run([*prefix, *args], cwd=goal["repo"],
             env=_pinned_release_environment(), stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", timeout=60)

@@ -15,8 +15,9 @@ from loopx.hosts.chat_coordinator_checkpoint import CoordinatorCheckpoints
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("runtime_route", ["registered", "chat_local"])
 def test_original_native_mcp_settlement_reconciles_managed_journal(
-    provider, tmp_path, monkeypatch
+    provider, runtime_route, tmp_path, monkeypatch
 ):
     registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
     project = state.parent
@@ -74,15 +75,19 @@ def test_original_native_mcp_settlement_reconciles_managed_journal(
         )["todos"]
         if t["todo_id"] == todo
     )
+    default_runtime = tmp_path / "unrelated-default-runtime"
+    monkeypatch.setattr("loopx.paths.select_default_runtime_root", lambda: default_runtime)
+    if runtime_route == "chat_local":
+        registration = json.loads(registry.read_text())
+        del registration["common_runtime_root"]
+        registry.write_text(json.dumps(registration))
     checkpoint = CoordinatorCheckpoints(registry, runtime, GOAL_ID, AGENT_ID)
     context = checkpoint.read(todo)
-    result = checkpoint.resume(
-        todo,
-        {
-            "read_context_id": context["read_context_id"],
-            "vision_unchanged_reason": "Current original result and obligation preserve the route.",
-        },
-    )
+    decision = {
+        "read_context_id": context["read_context_id"],
+        "vision_unchanged_reason": "Current original result and obligation preserve the route.",
+    }
+    result = checkpoint.resume(todo, decision)
     assert result["ok"] and result["settlement_complete"], result
     after = load_turn_journal(path)
     assert after["status"] == after["receipt"]["status"] == "committed", after[
@@ -118,6 +123,9 @@ def test_original_native_mcp_settlement_reconciles_managed_journal(
     index = runtime / "goals" / GOAL_ID / "runs/index.jsonl"
     ledger = index.read_bytes()
     original = path.read_bytes()
+    resumed = checkpoint.resume(todo, decision)
+    assert resumed["ok"] and resumed["settlement_identity"] == result["settlement_identity"]
+    assert ledger == index.read_bytes() and original == path.read_bytes()
     repeated = reconcile_settled_turn_journal(
         runtime,
         registry_path=registry,
@@ -125,6 +133,7 @@ def test_original_native_mcp_settlement_reconciles_managed_journal(
     )
     assert repeated["replayed"] and not repeated["appended"]
     assert ledger == index.read_bytes() and original == path.read_bytes()
+    assert not default_runtime.exists()
     foreign = {**result["settlement_identity"], "agent_id": "foreign"}
     with pytest.raises((ValueError, RuntimeError)):
         reconcile_settled_turn_journal(
