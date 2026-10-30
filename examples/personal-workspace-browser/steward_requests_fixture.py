@@ -3,7 +3,7 @@
 Pass a public synthetic status file for whole-workspace visual review. Runtime
 availability is display-only fixture metadata; POSTs cannot execute it. Requests,
 decisions and return delivery below use the production owners in a temp runtime.
-Commands on stdin: inspect, fault, fault-window, deliver-window, recover,
+Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
 deliver, source-unavailable, source-recover, local-source-unavailable,
 local-source-recover, stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
@@ -65,7 +65,7 @@ def main():
             "整理迁移后的回滚步骤", "补齐取消导出时的错误提示", "核对欧洲地区的税额精度",
             "检查超时后的安全重试", "复核下载文件中的版本信息", "检查月底跨时区的账期边界",
             "整理旧接口的调用方清单", "核对缺失凭证时的处理方式", "检查手机上的导出入口", "复核迁移说明中的示例"]
-        last_receipt = None
+        first_receipt = last_receipt = None
         for index in range(selected.requests):
             title = titles[index % len(titles)]
             if index >= len(titles):
@@ -77,6 +77,8 @@ def main():
                 "constraints": ["只检查本次产物；不发布、不联系外部人员。"], "inputs": [],
                 "acceptance": ["给出可回看的核验结论与下一步。"], "return_requirement": "将实际结论返回原管家会话。"}
             receipt = deliver(runtime, registry, session=session, turn=turn, request={**target, "brief": brief}, source_store=store)
+            if first_receipt is None:
+                first_receipt = receipt
             store.append_message(session["session_id"], role="user", text=title, turn_id=turn["turn_id"], origin="web")
             store.append_message(session["session_id"], role="assistant", text="已交给负责的 Agent，等待它返回实际结论。",
                 turn_id=turn["turn_id"], origin="web")
@@ -164,6 +166,11 @@ def main():
                 elif command == "fault-window":
                     server.fault_window = True
                 elif command == "deliver-window":
+                    server.deliver_window = True
+                elif command == "report-window":
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "已核对字段映射，原请求和检查依据保留。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"])
                     server.deliver_window = True
                 elif command == "recover":
                     server.fault = server.fault_window = server.deliver_window = False

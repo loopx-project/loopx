@@ -142,9 +142,20 @@ try {
     await fixture('source-recover'); await page.getByRole('button', {name: 'Retry history', exact: true}).click();
     await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).click();
     await page.getByRole('searchbox', {name: 'Search delegations'}).waitFor();
+    const english = page.getByRole('dialog', {name: 'Delegations', exact: true});
+    await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(12);
+    // A real return changes ordering and the snapshot while More is reading.
+    // Rebuild from the beginning, but fulfill this click's requested extent;
+    // the parent message refresh must not replace it with the old page count.
+    await fixture('report-window');
+    const nextPage = english.getByRole('button', {name: 'More records', exact: true});
+    await nextPage.focus(); await page.keyboard.press('Enter'); await rows(13);
+    assert.equal(await english.getByRole('button', {name: 'More records', exact: true}).count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), '13 / 13 shown');
+    await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts.');
+    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery, changed-snapshot More and read-only receipts.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}

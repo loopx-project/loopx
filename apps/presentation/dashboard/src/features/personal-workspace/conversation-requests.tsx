@@ -207,6 +207,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const [originalRevision, setOriginalRevision] = useState(0);
   const loadedScope = useRef<string | null>(null);
   const loadedSource = useRef<string | null>(null);
+  const requestedRows = useRef(12);
   const generation = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -217,6 +218,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   useEffect(() => {
     setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
     loadedScope.current = null; loadedSource.current = null;
+    requestedRows.current = 12;
   }, [sessionId, ownerFallback]);
   useEffect(() => {
     if (open) dialog.current?.showModal(); else dialog.current?.close();
@@ -233,7 +235,11 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
     const sameScope = loadedScope.current === scope;
     const loadedRows = pages.reduce((count, page) => count + page.rows.length, 0);
-    const refreshRows = sameScope ? Math.max(12, Math.ceil(loadedRows / 12) * 12) : 12;
+    // A fresh snapshot or parent refresh must retain the page requested by
+    // More, including while that read has not published its rows yet.
+    requestedRows.current = sameScope
+      ? Math.max(requestedRows.current, offset ? offset + 12 : Math.ceil(loadedRows / 12) * 12) : 12;
+    const refreshRows = requestedRows.current;
     // Keep verified rows during a same-source refresh, but never across scope
     // changes or a failed read. Publish refreshed pages together below.
     if (!sameScope) setPages([]);
@@ -252,7 +258,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         setPages([]); setNoSession(true); return;
       }
       const sameSource = loadedSource.current === source;
-      if (!sameSource) setPages([]);
+      if (!sameSource) {setPages([]); requestedRows.current = 12;}
       loadedSource.current = source;
       const refreshed: ConversationRequestInventory[] = [];
       let cursor: number | null = offset;
@@ -272,7 +278,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
       setPages(previous => offset ? [...previous, ...refreshed] : refreshed);
       if (!offset) setOriginalRevision(value => value + 1);
     } catch {
-      if (current === generation.current && !abort.signal.aborted) {setError(true); setPages([]);}
+      if (current === generation.current && !abort.signal.aborted) {requestedRows.current = 12; setError(true); setPages([]);}
     } finally {if (current === generation.current) setBusy(false);}
   }
   const page = pages[0], last = pages.at(-1);
@@ -292,10 +298,11 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const applySearch = (value: string) => {
     // Fence immediately, including the interval before the effect starts.
     generation.current++; requestAbort.current?.abort();
+    requestedRows.current = 12;
     setPages([]); setError(false); setBusy(true); setSearch(value.trim());
     setRevision(value => value + 1);
   };
-  const close = () => {generation.current++; requestAbort.current?.abort(); setBusy(false); setOpen(false); trigger.current?.focus();};
+  const close = () => {generation.current++; requestAbort.current?.abort(); requestedRows.current = 12; setBusy(false); setOpen(false); trigger.current?.focus();};
   return <div className="conversation-requests-entry">
     <button ref={trigger} type="button" onClick={() => {setHistory(false); setOpen(true); setRevision(value => value + 1);}}
       aria-haspopup="dialog" aria-label={zh ? `委派，${count} 条待跟进` : `Delegations, ${count} awaiting follow-up`}>
