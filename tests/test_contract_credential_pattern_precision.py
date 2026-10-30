@@ -128,3 +128,47 @@ def test_private_lark_tenant_urls_remain_blocked(tmp_path: Path, line: str) -> N
 
     assert len(payload["hits"]) == 1
     assert payload["hits"][0].endswith(": private_doc_url")
+
+
+# A provider token carries its issuer in the prefix, so no label says what it
+# is. The shapes come from the canonical public-safety owner instead of a
+# second list here: this rule gates repository publication, and a list that
+# recognized only some issuers certified the rest as public-safe.
+PROVIDER_TOKEN_SAMPLES = [
+    "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a",
+    "github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789",
+    "xoxb-" + "123456789012-abcdefghijkl",
+    "sk_live_" + "abcdefghijklmnopqrst",
+    "npm_" + "abcdefghijklmnopqrstuvwxyz",
+    "pypi-" + "abcdefghijklmnopqrst",
+    "AIza" + "SyD-1234567890abcdefghijklmnopqrstu",
+    "eyJ" + "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3",
+]
+
+
+@pytest.mark.parametrize("token", PROVIDER_TOKEN_SAMPLES)
+def test_unlabeled_provider_tokens_are_credential_errors(
+    tmp_path: Path,
+    token: str,
+) -> None:
+    payload = _scan_line(tmp_path, f"token {token}")
+
+    assert len(payload["hits"]) == 1
+    assert payload["hits"][0].endswith(": credential")
+    assert payload["credential_reference_hits"] == []
+
+
+def test_credential_rule_reuses_the_canonical_provider_shape_owner() -> None:
+    from loopx.public_safe_text import PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
+
+    assert (
+        PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
+        in contract.LEAK_RULES["credential"].pattern.pattern
+    )
+
+
+def test_a_short_provider_lookalike_stays_clean(tmp_path: Path) -> None:
+    payload = _scan_line(tmp_path, "token gh_preview, not a credential")
+
+    assert payload["hits"] == []
+    assert payload["credential_reference_hits"] == []
