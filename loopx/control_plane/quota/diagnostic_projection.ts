@@ -8,6 +8,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, sourceNumberTokens} from "../runtime_decode.ts";
 import {TODO_CANONICAL_READ_RECORD_FIELDS} from "../coordination/coordination_state_contract.ts";
 import {canonicalAuthorityJson, authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 
 type ProjectionPath = (string | number)[];
 type ProjectionChange = {path: ProjectionPath; value: unknown} |
@@ -33,12 +34,24 @@ export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
     (value: unknown, path: ProjectionPath) => string {
   if (supplied === undefined) return value => JSON.stringify(canonicalAuthorityJson(value));
   const tokens = sourceNumberTokens(source, supplied);
+  if (!tokens.length) return value => JSON.stringify([canonicalAuthorityJson(value), []]);
   const paths = contextObjectPaths(source);
+  const byPath = new Map(tokens.map(item => [JSON.stringify(item.path), item.token]));
   return (value, path) => {
-    const original = value !== null && typeof value === "object" ? paths.get(value) : undefined;
-    const prefix = original ?? path;
-    const relative = tokens.filter(item => prefix.every((key, i) => item.path[i] === key))
-      .map(item => [item.path.slice(prefix.length), item.token]);
+    const relative: [ProjectionPath, string][] = [];
+    // Follow retained objects, including containers moved by source edits.
+    // Removed carriers must not leave ghost numeric facts in the new digest.
+    const visit = (item: unknown, origin: ProjectionPath, target: ProjectionPath): void => {
+      if (item !== null && typeof item === "object") {
+        const original = paths.get(item) ?? origin;
+        if (Array.isArray(item)) item.forEach((child, i) => visit(child, [...original, i], [...target, i]));
+        else Object.entries(item).forEach(([key, child]) => visit(child, [...original, key], [...target, key]));
+      } else if (typeof item === "number") {
+        const token = byPath.get(JSON.stringify(origin));
+        if (token !== undefined && Object.is(JSON.parse(token), item)) relative.push([target, token]);
+      }
+    };
+    visit(value, path, []);
     // Sort encoded relative paths, so original object insertion order is not
     // mistaken for a content difference. Keep token strings separate from data.
     relative.sort((left, right) => authorityUnicodeCompare(JSON.stringify(left[0]), JSON.stringify(right[0])));
@@ -123,6 +136,64 @@ const DIAGNOSTIC_LANES = new Set([
   "recent_completed_advancement_items", "completed_without_successor_items",
   "other_agent_bound_user_action_items",
 ]);
+
+/** Complete contracts keep one literal copy of equal summary lanes. A reference
+ * names an array in this same signed document, never a fresh Todo read. Only
+ * registered lanes participate; counts, candidate collections and unknown fields
+ * retain their original values. Consumers resolve before applying display caps. */
+export function resolveQuotaSummaryLanes(payload: JsonObject): JsonObject {
+  let result = payload;
+  for (const role of ["agent", "user"] as const) {
+    const root = `${role}_todo_summary`, summary = jsonObject(payload[root]);
+    if (!summary || summary.schema_version !== undefined && summary.schema_version !== "todo_summary_v0") continue;
+    let expanded = summary;
+    for (const lane of DIAGNOSTIC_LANES) {
+      const key = `${lane}_ref`;
+      if (!Object.hasOwn(summary, key)) continue;
+      const reference = summary[key];
+      const prefix = `$.${root}.`;
+      const owner = typeof reference === "string" && reference.startsWith(prefix)
+        ? reference.slice(prefix.length) : "";
+      if (Object.hasOwn(summary, lane) || !DIAGNOSTIC_LANES.has(owner)
+          || !Array.isArray(summary[owner]) || Object.hasOwn(summary, `${owner}_ref`)) {
+        throw new EffectRuntimeRequestError("Todo summary lane reference requires one literal array in the same summary");
+      }
+      expanded = {...expanded, [lane]: summary[owner]};
+      delete expanded[key];
+    }
+    if (expanded !== summary) result = {...result, [root]: expanded};
+  }
+  return result;
+}
+
+export function referenceQuotaSummaryLanes(payload: JsonObject,
+    identity = contextSourceIdentity(payload)): JsonObject {
+  let result = resolveQuotaSummaryLanes(payload);
+  for (const role of ["agent", "user"] as const) {
+    const root = `${role}_todo_summary`, summary = jsonObject(result[root]);
+    if (!summary || summary.schema_version !== undefined && summary.schema_version !== "todo_summary_v0") continue;
+    const owners = new Map<string, string>();
+    let shared = summary;
+    // Retain the normally visible lane first. Full-source composition shares
+    // exact arrays, including any future item fields, without selecting work.
+    const preferred = role === "agent" ? "first_executable_items" : "first_open_items";
+    for (const lane of [preferred, ...DIAGNOSTIC_LANES].filter((key, index, keys) => keys.indexOf(key) === index)) {
+      const value = summary[lane];
+      if (!Array.isArray(value) || value.length === 0 || Object.hasOwn(summary, `${lane}_ref`)) continue;
+      const encoded = identity(value, [root, lane]);
+      const owner = owners.get(encoded);
+      if (!owner) { owners.set(encoded, lane); continue; }
+      const reference = `$.${root}.${owner}`;
+      const inlineBytes = Buffer.byteLength(JSON.stringify({[lane]: value}), "utf8");
+      const referenceBytes = Buffer.byteLength(JSON.stringify({[`${lane}_ref`]: reference}), "utf8");
+      if (inlineBytes <= referenceBytes) continue;
+      shared = {...shared, [`${lane}_ref`]: reference};
+      delete shared[lane];
+    }
+    if (shared !== summary) result = {...result, [root]: shared};
+  }
+  return result;
+}
 // The read codec adds these display fields to canonical records. Retain them
 // on visible items; they do not make a known diagnostic list a future schema.
 const ITEM_FIELDS = new Set<string>([...TODO_CANONICAL_READ_RECORD_FIELDS, "index", "content_revision"]);

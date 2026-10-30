@@ -787,6 +787,22 @@ are reconciled. Rollback likewise separates outstanding work from new admission.
 A version transition does not rewrite saved prompts, journals or source hashes
 as if they had always used the new contract.
 
+Code convergence is part of each migration slice, not only the final C9 cleanup.
+Both entrypoints must call the same semantic implementation for composition,
+reference validation, context reconstruction and settlement. Keep genuinely
+host-specific launch/observation mechanics in thin adapters; do not force their
+different lifecycles into a new general-purpose runner. The existing typed owners
+remain responsible for their respective decisions.
+
+For each slice, record the before/after callsites, shared owner, removed duplicate
+algorithm and remaining compatibility caller with its removal condition. Qualify
+both routes with the same independently authored semantic cases and their real
+transport/recovery tests. A wrapper that only delegates can be transitional;
+copying a rule into a newly named common module while leaving two implementations
+is not convergence. The next change to a shared rule should be made and tested in
+one owner and reach both routes. Do not make declining line counts an acceptance
+metric or remove unique host coverage to meet one.
+
 The first C1 PR must include the two production composition callsites above and
 at least one complete producer-to-final-input journey, with an explicit list of
 remaining readers. Qualifying that bounded slice does not enable the new writer
@@ -1160,3 +1176,11 @@ The directory is the index. A planning/source-inspection entry does not establis
 runtime delivery; live priorities and claims remain in the roadmap and canonical
 work. Keep historical entries append-only and refine the current normative plan
 here rather than treating a dated audit as a permanent execution queue.
+
+The [source-convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-30-c1-source-convergence.md)
+keeps the candidate's detailed chronology outside this normative plan. Integration
+preserves main's presentation/journal owners and shares numeric source identity
+and edit transport across acceptance, summaries, authoring and Vision. This does
+not qualify writer/consumer cutover, installed adoption or the original-quota
+accepted-outcome/full-cost comparison. Remaining reader retirement and negative
+cost observations keep C1 open.

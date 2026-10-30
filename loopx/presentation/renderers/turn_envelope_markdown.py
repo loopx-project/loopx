@@ -46,6 +46,10 @@ def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
     from ...control_plane.effect_program import reject_retired_quota_format
 
     reject_retired_quota_format(payload)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        # The complete contract has no separately selected Markdown facts.
+        # JSON escaping also keeps arbitrary source text inside this one block.
+        return "# LoopX Turn\n\n```json\n" + json.dumps(payload, ensure_ascii=False, indent=2) + "\n```"
     action_value = payload.get("action")
     user_value = payload.get("user")
     writeback_value = payload.get("writeback")

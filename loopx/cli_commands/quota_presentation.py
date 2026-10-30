@@ -9,7 +9,6 @@ from ..control_plane.quota.turn_envelope import build_turn_envelope
 from ..control_plane.quota.cli_projection import (
     compact_quota_monitor_poll_cli_payload,
     compact_quota_plan_cli_payload,
-    compact_quota_should_run_cli_payload,
 )
 
 from ..presentation.renderers.quota_event_markdown import (
@@ -75,23 +74,20 @@ def _project_quota_cli_payload(
         # A collection failure has no decided contract and must not reenter
         # its unavailable runtime. Decided refusals still need signed views.
         # Keep the decided diagnostic, including its original recovery/receipt.
-        if bool(getattr(args, "turn_envelope", False)):
+        if args.quota_command != "should-run" and bool(getattr(args, "turn_envelope", False)):
             return {**payload, "turn_envelope_skipped": "quota request failed; original diagnostic retained"}
         return payload
+    if args.quota_command == "should-run":
+        if (payload.get("schema_version") == "loopx_turn_envelope_v1"
+                and isinstance(payload.get("interaction_contract"), Mapping)):
+            return payload
+        raise EffectRuntimeRejected(
+            "should-run emission requires a composed complete decision; "
+            "historical captures require their explicit recovery reader"
+        )
     if not bool(getattr(args, "turn_envelope", False)):
         if args.quota_command in {"status", "plan"}:
             return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
-        if args.quota_command == "should-run":
-            if captured_decision_path and "vision" not in detail_sections:
-                from ..control_plane.quota.turn_envelope import _turn_envelope_result
-                payload = _turn_envelope_result("replan_cli_view", payload=payload)
-            return compact_quota_should_run_cli_payload(
-                payload,
-                include_todo_summary_detail="agent-todos" in detail_sections,
-                include_user_todo_summary_detail="user-todos" in detail_sections,
-                include_goal_boundary_detail="goal-boundary" in detail_sections,
-                include_vision_detail="vision" in detail_sections,
-            )
         if args.quota_command == "monitor-poll":
             return compact_quota_monitor_poll_cli_payload(
                 payload, include_decision_detail="decisions" in detail_sections,

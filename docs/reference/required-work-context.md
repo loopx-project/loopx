@@ -217,6 +217,13 @@ retains its complete body and declaration. Todo-less reads and the explicit
 reduces repeated binding observations without treating a shorter context as
 acceptance, authority or a measured model benefit.
 
+The complete Turn contract stores equal, nonempty registered Todo-summary lanes
+once when a local reference is smaller. A `<lane>_ref` names a literal array in
+the same signed summary. Equality preserves array order, original numeric source
+identity, JSON types and unknown item fields. Resolve references before display
+caps; ambiguous, missing, chained or foreign targets are rejected. Counts,
+candidate collections, selection, authority and settlement retain their owners.
+
 For enabled native quota with selected work, the same acceptance snapshot may
 include `outcome_context` navigation. `suggested_outcome_ids` prioritizes work
 connected through registered Todo relations, shared acceptance/source/evidence

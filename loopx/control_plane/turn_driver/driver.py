@@ -9,6 +9,7 @@ from typing import Any
 
 from ..agent_context import envelope_agent_context
 from ..effect_program import SettlementIdentity
+from ..effect_runtime import EffectRuntimeRejected
 from .subagent_host_adapter import (
     project_child_context_adapter,
     supported_child_context_modes,
@@ -34,6 +35,8 @@ LOOPX_ITERATION_CONTEXT_POLICY_SCHEMA_VERSION = (
     "loopx_iteration_context_policy_v0"
 )
 LOOPX_CHILD_HOST_OPERATION_SCHEMA_VERSION = "loopx_child_host_operation_v0"
+_ABSENT_WORK_CONTRACT = object()
+
 SUPPORTED_HOSTS = {"codex-cli", "codex-app-server", "claude-code", "dsh", "generic-cli"}
 SUPPORTED_EXECUTION_MODES = {"interactive-visible", "isolated-headless"}
 SUPPORTED_ITERATION_CONTEXT_POLICIES = {"fresh", "resume"}
@@ -71,9 +74,12 @@ def _historical_route_text(envelope: Mapping[str, Any]) -> dict[str, str]:
     Complete contracts do not accept these historical decoding hints.
     """
     signature = _mapping(envelope.get("action_signature"))
+    orchestration = _mapping(envelope.get("task_orchestration_contract"))
     return {"source_hash": str(signature.get("source_hash") or ""),
             "envelope_hash": str(signature.get("envelope_hash") or ""),
-            "effective_action": str(envelope.get("effective_action") or "")}
+            "effective_action": str(envelope.get("effective_action") or ""),
+            **({"primary_todo_id": str(orchestration.get("primary_todo_id") or "").strip()}
+               if "primary_todo_id" in orchestration else {})}
 
 
 def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
@@ -101,6 +107,67 @@ def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
     return _mapping(action.get("selected_todo"))
 
 
+def captured_todo_text_sha256(
+    envelope: Mapping[str, Any], *, todo_id: str,
+    work_contract: object = _ABSENT_WORK_CONTRACT,
+) -> str | None:
+    """Use the shared task-source owner; omitted contracts decode old journals."""
+    try:
+        result = _turn_envelope_result(
+            "captured_todo_text", envelope=dict(envelope), todo_id=todo_id,
+            **({"payload": work_contract} if work_contract is not _ABSENT_WORK_CONTRACT else {}),
+        )
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+    digest = result.get("sha256")
+    if digest is not None and not isinstance(digest, str):
+        raise RuntimeError("Turn captured task source hash must be a string or null")
+    return digest
+
+
+def read_turn_execution_context(
+    plan: Mapping[str, Any], envelope: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Read complete execution facts in one call; decode old journals as before."""
+    if "work_contract" in plan:
+        try:
+            result = _turn_envelope_result(
+                "execution_context", envelope=dict(envelope), payload=plan["work_contract"],
+            )
+        except EffectRuntimeRejected as exc:
+            raise ValueError(str(exc)) from exc
+        if result.get("sha256") is not None and not isinstance(result["sha256"], str):
+            raise RuntimeError("Turn captured task source hash must be a string or null")
+        return result
+    selected = selected_turn_todo(envelope)
+    return {
+        "selected_todo": selected,
+        "sha256": captured_todo_text_sha256(envelope, todo_id=str(selected.get("todo_id") or "")),
+        "effective_action": envelope.get("effective_action"),
+        "writeback": envelope.get("writeback") if isinstance(envelope.get("writeback"), dict) else {},
+        "replan_guard_scoped": "replan_action_packet" in envelope,
+        "replan_action_packet": envelope.get("replan_action_packet"),
+    }
+
+
+def turn_host_lineage(request: Mapping[str, Any]) -> dict[str, str]:
+    """Read identity from the complete owner, with historical request decoding."""
+    if "work_contract" in request:
+        from ..quota.turn_envelope import _turn_envelope_result
+
+        return _turn_envelope_result(
+            "complete_host_lineage", payload=request["work_contract"],
+            envelope=request.get("turn_envelope"),
+        )
+    envelope = _mapping(request.get("turn_envelope"))
+    todo = selected_turn_todo(envelope)
+    return {
+        "goal_id": str(envelope.get("goal_id") or "").strip(),
+        "agent_id": str(envelope.get("agent_id") or "").strip(),
+        "todo_id": str(todo.get("todo_id") or "").strip(),
+    }
+
+
 def _receipt_bound_scoped_identity(
     envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> SettlementIdentity | None:
@@ -119,32 +186,30 @@ def _receipt_bound_scoped_identity(
 def _turn_lineage(
     envelope: Mapping[str, Any],
     *,
-    selected_todo: Mapping[str, Any],
-    settlement_identity: SettlementIdentity | None = None,
+    work_contract: object = _ABSENT_WORK_CONTRACT,
     projection: Mapping[str, Any] | None = None,
+    settlement_identity: SettlementIdentity | None = None,
 ) -> dict[str, str]:
     resolved = projection if projection is not None else _turn_envelope_result(
-        "driver_lineage", envelope=dict(envelope), historical_route_text=_historical_route_text(envelope),
+        "driver_lineage", envelope=dict(envelope),
+        **({"payload": work_contract} if work_contract is not _ABSENT_WORK_CONTRACT else
+           {"historical_route_text": _historical_route_text(envelope)}),
     )
-    signature_document = resolved["action_signature"]
-    action = _mapping(signature_document.get("action"))
-    signature_document["action"] = {
-        **action,
-        "selected_todo": dict(selected_todo),
-    }
-    action_hash = "sha256:" + sha256(
-        json.dumps(
-            signature_document,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    signature = resolved["action_signature"]
+    selected_todo = _mapping(_mapping(signature.get("action")).get("selected_todo"))
+    if work_contract is _ABSENT_WORK_CONTRACT:
+        # Historical journals retain the exact decoder and JSON preimage.
+        identity = {"goal_id": envelope.get("goal_id"), "agent_id": envelope.get("agent_id"),
+                    "todo_id": selected_todo.get("todo_id")}
+    else:
+        identity = resolved
+    # Persisted Turn keys depend on Python's JSON number encoding. Keep this
+    # transport codec while the TS owner selects and validates identity facts.
     lineage = {
-        "goal_id": str(envelope.get("goal_id") or ""),
-        "agent_id": str(envelope.get("agent_id") or ""),
-        "todo_id": str(selected_todo.get("todo_id") or ""),
-        "action_hash": action_hash,
+        **{field: str(identity.get(field) or "") for field in ("goal_id", "agent_id", "todo_id")},
+        "action_hash": "sha256:" + sha256(json.dumps(
+            signature, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest(),
     }
     if settlement_identity is not None:
         if settlement_identity.request_subject is not None:
@@ -239,15 +304,23 @@ def reconcile_failed_turn_session_request(
     """Re-authorize a journaled host request against one current binding."""
 
     envelope = _mapping(request.get("turn_envelope"))
-    selected_todo = selected_turn_todo(envelope)
     try:
+        projection = _turn_envelope_result(
+            "driver_lineage", envelope=envelope,
+            **({"payload": request["work_contract"]} if "work_contract" in request else
+               {"historical_route_text": _historical_route_text(envelope)}),
+        )
+        selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
         settlement_identity = (None if selected_todo else _receipt_bound_scoped_identity(
             envelope, turn_instance_id=None,
         ))
+        lineage = _turn_lineage(
+            envelope, projection=projection,
+            work_contract=request.get("work_contract", _ABSENT_WORK_CONTRACT),
+            settlement_identity=settlement_identity,
+        )
     except (ValueError, RuntimeError) as exc:
         raise FailedTurnSessionRecoveryError("turn_lineage_missing", str(exc)) from exc
-    lineage = _turn_lineage(envelope, selected_todo=selected_todo,
-                            settlement_identity=settlement_identity)
     planned_session = _mapping(request.get("session"))
     session, session_error = _session_plan(
         route=LoopXTurnRoute.READY_FOR_HOST,
@@ -378,8 +451,9 @@ def build_loopx_turn_plan(
     iteration_context_policy: str = "resume",
     session_scope: str | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    work_contract: object = _ABSENT_WORK_CONTRACT,
 ) -> dict[str, Any]:
-    """Project a TurnEnvelope into a typed, side-effect-free host decision."""
+    """Project a checked Turn input into a typed, side-effect-free host decision."""
 
     if host not in SUPPORTED_HOSTS:
         raise ValueError(f"unsupported LoopX Turn host: {host}")
@@ -406,14 +480,19 @@ def build_loopx_turn_plan(
         assert_turn_envelope_consumer_version(envelope)
     except (ValueError, RuntimeError) as exc:
         contract_error = str(exc)
-    projection = _turn_envelope_result("driver_lineage", envelope=envelope,
-        historical_route_text=_historical_route_text(envelope))
+    # Check the complete source before route/session/transaction planning. Reuse
+    # the action-hash boundary rather than adding a separate identity call.
+    projection = _turn_envelope_result(
+        "driver_lineage", envelope=envelope,
+        **({"payload": work_contract} if work_contract is not _ABSENT_WORK_CONTRACT else
+           {"historical_route_text": _historical_route_text(envelope)}),
+    )
+    selected_todo = _mapping(_mapping(projection["action_signature"].get("action")).get("selected_todo"))
     route = (
         LoopXTurnRoute(projection["route"])
         if execution_context.ok and contract_error is None
         else LoopXTurnRoute.CONTRACT_ERROR
     )
-    selected_todo = selected_turn_todo(envelope)
     settlement_identity = None
     identity_error = None
     if route is LoopXTurnRoute.REPLAN_REQUIRED or (route is LoopXTurnRoute.READY_FOR_HOST and not selected_todo):
@@ -424,12 +503,20 @@ def build_loopx_turn_plan(
         except (ValueError, RuntimeError) as exc:
             identity_error = str(exc)
             route = LoopXTurnRoute.CONTRACT_ERROR
-        if (not selected_todo and identity_error is None
-                and (settlement_identity is None or (session_scope != "agent"
-                  and not (settlement_identity.request_subject is not None and iteration_context_policy == "fresh")))):
-            route = LoopXTurnRoute.BLOCKED
-    lineage = _turn_lineage(envelope, selected_todo=selected_todo,
-                            settlement_identity=settlement_identity, projection=projection)
+        if not selected_todo and identity_error is None:
+            if settlement_identity is None:
+                # Historical inputs without a work binding safely waited.
+                # Preserve that decoder without weakening complete ordinary
+                # work: its missing binding still fails session validation.
+                if (route is LoopXTurnRoute.REPLAN_REQUIRED
+                        or work_contract is _ABSENT_WORK_CONTRACT):
+                    route = LoopXTurnRoute.BLOCKED
+            elif (session_scope != "agent" and not (
+                settlement_identity.request_subject is not None and iteration_context_policy == "fresh"
+            )):
+                route = LoopXTurnRoute.BLOCKED
+    lineage = _turn_lineage(envelope, work_contract=work_contract, projection=projection,
+        settlement_identity=settlement_identity)
     session, session_error = _session_plan(
         route=route,
         lineage=lineage,
@@ -514,6 +601,8 @@ def build_loopx_turn_plan(
             else {}
         ),
     }
+    if work_contract is not _ABSENT_WORK_CONTRACT:
+        payload["work_contract"] = work_contract
     if child_operations:
         payload["child_operations"] = child_operations
         context = envelope_agent_context(

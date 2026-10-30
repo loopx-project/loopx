@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import loopx.cli_commands.quota as quota_command_module
+import loopx.cli_commands.quota_presentation as quota_presentation_module
 from loopx.cli_commands.quota import handle_quota_command
 from loopx.control_plane.quota.error_codes import QuotaCommandValidationError
 
@@ -44,6 +45,11 @@ def test_turn_envelope_renders_typed_failure_when_context_preparation_fails(
         quota_command_module, "prepare_quota_command_context", _fail_context
     )
 
+    def unexpected_renderer(*_args, **_kwargs):
+        raise AssertionError("A collection failure must not invoke runtime presentation")
+
+    monkeypatch.setattr(quota_presentation_module, "build_turn_envelope", unexpected_renderer)
+
     args = argparse.Namespace(
         quota_command="should-run",
         goal_id="synthetic-goal",
@@ -62,12 +68,12 @@ def test_turn_envelope_renders_typed_failure_when_context_preparation_fails(
     )
 
     # A typed validation failure returns the failure exit code, not a crash.
-    assert result in (0, 1)
+    assert result == 1
     payload = json.loads(out[-1])
     assert payload["ok"] is False
     assert payload.get("decision") == "skip"
     assert payload.get("error_code")
-    if turn_envelope:
-        # The envelope is additive; on a failure payload it degrades to the
-        # typed diagnostic instead of masking it with a renderer crash.
-        assert payload.get("turn_envelope_skipped") or payload.get("view") == "turn_envelope"
+    # The unified should-run writer has no alternate envelope presentation to
+    # skip. Keep the original failure rather than manufacturing a work contract.
+    assert "turn_envelope_skipped" not in payload
+    assert payload.get("schema_version") != "loopx_turn_envelope_v1"

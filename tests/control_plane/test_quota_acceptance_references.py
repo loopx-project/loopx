@@ -1,17 +1,27 @@
-"""Display sharing preserves the complete acceptance and executable decisions."""
+"""One complete acceptance survives composition, display and actual admission."""
 from copy import deepcopy
+from functools import partial
 import json
 
 import pytest
 
 from loopx.control_plane.quota.cli_projection import (
-    _reference_inline_goal_acceptance, compact_quota_should_run_cli_payload,
+    _reference_context, compact_quota_should_run_cli_payload,
 )
 from loopx.control_plane.quota.turn_envelope import (
-    build_turn_envelope, quota_action_signature_document,
+    build_turn_envelope, compose_turn_decision, quota_action_signature_document,
     turn_envelope_action_signature_document,
 )
 from test_replan_host_context_projection import _quota_payload
+
+
+_share_acceptance = partial(_reference_context, task_title=False, explore_guidance=False, goal_acceptance=True)
+
+@pytest.fixture(params=[partial(_reference_context, task_title=False,
+    explore_guidance=False, goal_acceptance=True), compose_turn_decision],
+                ids=["legacy-display", "complete-composition"])
+def share(request):
+    return request.param
 
 
 def acceptance():
@@ -37,13 +47,79 @@ def packet(with_context=True):
     return source
 
 
+@pytest.mark.parametrize("project", [partial(_reference_context, task_title=False,
+    explore_guidance=False, goal_acceptance=True), compact_quota_should_run_cli_payload,
+    compose_turn_decision], ids=["display", "cli", "complete"])
+@pytest.mark.parametrize("left,right", [(1, 1.0), (False, 0), (-0.0, 0),
+    (2**60, 2**60 + 1), (2**60, float(2**60))])
+def test_reference_transport_keeps_distinct_original_numbers_and_later_exact_owner(left, right, project):
+    source = packet(False)
+    first = source["planning_horizon"]["core_goal"]["acceptance_contract"]
+    second = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]
+    third = source["agent_todo_summary"]["goal_acceptance_contract"]
+    first["future"] = {"observation": left}
+    second["future"] = {"observation": right}
+    third["future"] = {"observation": right}
+    original = json.dumps(source, ensure_ascii=False)
+    result = project(source)
+    # Reuse the independent source-value oracle from the legacy reader tests:
+    # unequal numbers stay literal; later exact copies still share their owner.
+    actual = result["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    assert json.dumps(actual["acceptance_contract"]) == json.dumps(second)
+    assert "acceptance_contract_ref" not in actual
+    assert result["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
+        "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract")
+    assert json.dumps(source, ensure_ascii=False) == original
+    assert json.dumps(project(result)) == json.dumps(result)
+
+
+@pytest.mark.parametrize("value", [1.0, -0.0, 2**60 + 1, float(2**60), 0.000001])
+def test_complete_composition_keeps_original_numeric_facts_and_returns_only_edits(value, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    source = packet()
+    facts = {"scalar": value, "nested": [{"number": value}], "body": "Original supporting material. " * 2048}
+    source["future_facts"] = deepcopy(facts)
+    original, calls = json.dumps(source), []
+    real = turn_envelope.effect_runtime_result
+
+    def observed(*args, **kwargs):
+        result = real(*args, **kwargs)
+        calls.append((args[1], result))
+        return result
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_result", observed)
+    shared = compose_turn_decision(source)
+    assert json.dumps(shared["future_facts"]) == json.dumps(facts)
+    assert json.dumps(source) == original
+    assert len(calls) == 1
+    assert set(calls[0][1]) == {"changes"}
+    assert facts["body"] not in json.dumps(calls[0][1])
+    assert json.dumps(compose_turn_decision(shared)) == json.dumps(shared)
+
+
+@pytest.mark.parametrize("left,right", [(1, 1.0), (-0.0, 0), (2**60, 2**60 + 1)])
+def test_complete_summary_lanes_share_only_exact_original_numbers(left, right):
+    source = packet()
+    row = {"todo_id": "task-one", "text": "Keep the complete original task and evidence. " * 20}
+    first, second = [{**row, "future": [left]}], [{**row, "future": [right]}]
+    source["agent_todo_summary"] = {"schema_version": "todo_summary_v0",
+        "first_executable_items": first, "backlog_items": second, "claimed_open_items": deepcopy(second)}
+    shared = compose_turn_decision(source)
+    summary = shared["agent_todo_summary"]
+    assert json.dumps(summary["first_executable_items"]) == json.dumps(first)
+    assert json.dumps(summary["backlog_items"]) == json.dumps(second)
+    assert summary["claimed_open_items_ref"] == "$.agent_todo_summary.backlog_items"
+    assert json.dumps(compose_turn_decision(shared)) == json.dumps(shared)
+
+
 @pytest.mark.parametrize("with_context", [False, True])
-def test_exact_copies_share_one_complete_source_without_changing_signed_action(with_context):
+def test_exact_copies_share_one_complete_source_without_changing_signed_action(with_context, share):
     source = packet(with_context)
     original = deepcopy(source)
-    shared = _reference_inline_goal_acceptance(source)
+    shared = share(source)
     assert source == original
-    assert _reference_inline_goal_acceptance(shared) == shared
+    assert share(shared) == shared
     ref = ("$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract"
            if with_context else "$.planning_horizon.core_goal.acceptance_contract")
     assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == ref
@@ -64,7 +140,7 @@ def test_exact_copies_share_one_complete_source_without_changing_signed_action(w
 
 
 @pytest.mark.parametrize("change", ["revision", "scope", "failure", "type", "source"])
-def test_different_contracts_are_retained_in_full(change):
+def test_different_contracts_are_retained_in_full(change, share):
     source = packet(False)
     changed = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]
     if change == "revision":
@@ -77,54 +153,30 @@ def test_different_contracts_are_retained_in_full(change):
         changed["verification"]["passed"] = 0  # False == 0 in Python
     if change == "source":
         changed["sources"][0]["ref"] = "message:corrected"
-    shared = _reference_inline_goal_acceptance(source)
+    shared = share(source)
     assert shared["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"] == changed
     assert "acceptance_contract_ref" not in shared["autonomous_replan_obligation"]["replan_context"]["core_goal"]
 
 
 @pytest.mark.parametrize("missing", [None, {}, [], "unavailable"])
-def test_missing_or_malformed_carriers_never_create_dangling_references(missing):
+def test_missing_or_malformed_carriers_never_create_dangling_references(missing, share):
     source = packet()
     source["interaction_contract"]["agent_channel"]["work_context"] = missing
     source["planning_horizon"] = missing
     source["autonomous_replan_obligation"] = missing
-    shared = _reference_inline_goal_acceptance(source)
+    shared = share(source)
     assert shared["agent_todo_summary"]["goal_acceptance_contract"] == acceptance()
     assert "goal_acceptance_contract_ref" not in shared["agent_todo_summary"]
 
 
-def test_unavailable_context_is_not_used_even_if_it_retains_old_content():
+def test_unavailable_context_is_not_used_even_if_it_retains_old_content(share):
     source = packet()
     content = source["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]
     content["status"] = "unavailable"
-    shared = _reference_inline_goal_acceptance(source)
+    shared = share(source)
     assert shared["planning_horizon"]["core_goal"]["acceptance_contract"] == acceptance()
     assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == "$.planning_horizon.core_goal.acceptance_contract"
     assert build_turn_envelope(shared)["action"]["planning_horizon"]["core_goal"]["acceptance_contract"] == acceptance()
-
-
-@pytest.mark.parametrize("project", [_reference_inline_goal_acceptance, compact_quota_should_run_cli_payload])
-@pytest.mark.parametrize("left,right", [(1, 1.0), (False, 0), (-0.0, 0),
-    (2**60, 2**60 + 1), (2**60, float(2**60))])
-def test_reference_transport_keeps_distinct_original_numbers_and_later_exact_owner(left, right, project):
-    source = packet(False)
-    first = source["planning_horizon"]["core_goal"]["acceptance_contract"]
-    second = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]
-    third = source["agent_todo_summary"]["goal_acceptance_contract"]
-    first["future"] = {"observation": left}
-    second["future"] = {"observation": right}
-    third["future"] = {"observation": right}
-    original = json.dumps(source, ensure_ascii=False)
-    result = project(source)
-    # JS equality is insufficient to replace the second source. The third may
-    # still share its exact later owner, including original numeric spelling.
-    actual = result["autonomous_replan_obligation"]["replan_context"]["core_goal"]
-    assert json.dumps(actual["acceptance_contract"]) == json.dumps(second)
-    assert "acceptance_contract_ref" not in actual
-    assert result["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
-        "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract")
-    assert json.dumps(source, ensure_ascii=False) == original
-    assert json.dumps(project(result)) == json.dumps(result)
 
 
 @pytest.mark.parametrize("existing_owner", ["planning", "replan"])
@@ -134,7 +186,7 @@ def test_existing_reference_follows_its_relocated_complete_owner(existing_owner)
     owner = ("$.planning_horizon.core_goal.acceptance_contract" if existing_owner == "planning"
              else "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract")
     source["agent_todo_summary"]["goal_acceptance_contract_ref"] = owner
-    shared = _reference_inline_goal_acceptance(source)
+    shared = _share_acceptance(source)
     assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
         "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract")
     envelope = build_turn_envelope(shared)
@@ -148,12 +200,12 @@ def test_reference_visited_before_its_owner_is_retargeted_after_sharing():
     del core["acceptance_contract"]
     core["acceptance_contract_ref"] = "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract"
     original = json.dumps(source)
-    shared = _reference_inline_goal_acceptance(source)
+    shared = _share_acceptance(source)
     assert shared["planning_horizon"]["core_goal"]["acceptance_contract_ref"] == (
         "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract")
     assert shared["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()
     assert json.dumps(source) == original
-    assert _reference_inline_goal_acceptance(shared) == shared
+    assert _share_acceptance(shared) == shared
 
 
 @pytest.mark.parametrize("reference", ["$.planning_horizon.core_goal.acceptance_contract",
@@ -162,7 +214,7 @@ def test_unmoved_or_unknown_reference_is_not_inferred_or_rewritten(reference):
     source = packet(False)
     del source["agent_todo_summary"]["goal_acceptance_contract"]
     source["agent_todo_summary"]["goal_acceptance_contract_ref"] = reference
-    shared = _reference_inline_goal_acceptance(source)
+    shared = _share_acceptance(source)
     assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == reference
     assert shared["planning_horizon"]["core_goal"]["acceptance_contract"] == acceptance()
 
@@ -170,10 +222,10 @@ def test_unmoved_or_unknown_reference_is_not_inferred_or_rewritten(reference):
 def test_shared_acceptance_survives_delta_and_lost_baseline_recovery():
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
 
-    initial = _reference_inline_goal_acceptance(packet())
+    initial = _share_acceptance(packet())
     changed = packet()
     changed["reason"] = "New feedback retains original requirements and publication stops."
-    current = _reference_inline_goal_acceptance(changed)
+    current = _share_acceptance(changed)
     scope = dict(goal_id="fixture", agent_id="worker", session_id="session", context_epoch="one")
     baseline = prepare_context_delivery(initial, scope=scope, capture_id="one", surface="quota_packet")
     full = prepare_context_delivery(current, scope=scope, capture_id="two", surface="quota_packet")
@@ -183,7 +235,7 @@ def test_shared_acceptance_survives_delta_and_lost_baseline_recovery():
     for retained in (baseline, None):
         restored = restore_context_delivery(delta, baseline=retained, current=full)["context"]
         assert restored == current
-        assert _reference_inline_goal_acceptance(restored) == current
+        assert _share_acceptance(restored) == current
         assert restored["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()
 
 
@@ -249,3 +301,101 @@ def test_real_cli_reuses_complete_acceptance_for_selection_and_replan(tmp_path, 
     envelope = build_turn_envelope(selected)
     assert envelope["work_context"]["sources"][source_index]["content"]["goal_acceptance_contract"] == expected
     assert envelope["action_signature"]["matches"] is True
+
+
+@pytest.mark.parametrize("mutation", ["dangling", "cycle", "self", "unavailable"])
+def test_complete_readers_reject_dangling_or_cyclic_acceptance_even_with_valid_hash(mutation):
+    from test_complete_turn_decision import _resign_contract, _source_digest
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    contract = compose_turn_decision(packet())
+    envelope = build_turn_envelope(contract)
+    summary = contract["agent_todo_summary"]
+    if mutation == "dangling":
+        summary["goal_acceptance_contract_ref"] = "$.interaction_contract.agent_channel.work_context.sources[9].content.goal_acceptance_contract"
+    elif mutation == "self":
+        summary["goal_acceptance_contract_ref"] = "$.agent_todo_summary.goal_acceptance_contract"
+    elif mutation == "cycle":
+        summary["goal_acceptance_contract_ref"] = "$.planning_horizon.core_goal.acceptance_contract"
+        contract["planning_horizon"]["core_goal"]["acceptance_contract_ref"] = "$.agent_todo_summary.goal_acceptance_contract"
+    else:
+        sources = contract["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        sources.append(deepcopy(sources[0]))
+        sources[1]["content"]["status"] = "unavailable"
+        summary["goal_acceptance_contract_ref"] = "$.interaction_contract.agent_channel.work_context.sources[1].content.goal_acceptance_contract"
+    contract, _ = _resign_contract(contract)
+    for read in (
+        lambda: compose_turn_decision(contract),
+        lambda: build_turn_envelope(contract),
+        lambda: _turn_envelope_result("replan_view", payload=contract,
+            source_hash=_source_digest(contract), stage="review"),
+        lambda: _prompt({"work_contract": contract, "turn_envelope": envelope}),
+    ):
+        with pytest.raises(RuntimeError, match="acceptance reference"):
+            read()
+
+
+@pytest.mark.parametrize("status", [None, "loaded"])
+def test_historical_reference_to_later_loaded_source_keeps_full_material(status):
+    from test_complete_turn_decision import _source_digest
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
+    source = packet()
+    sources = source["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    sources.append(deepcopy(sources[0]))
+    sources[1]["content"]["status"] = status
+    sources[1]["content"]["goal_acceptance_contract"]["revision"] = 7
+    expected = deepcopy(sources[1]["content"]["goal_acceptance_contract"])
+    core = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    del core["acceptance_contract"]
+    core["acceptance_contract_ref"] = "$.interaction_contract.agent_channel.work_context.sources[1].content.goal_acceptance_contract"
+    contract = compose_turn_decision(source)
+    view = _turn_envelope_result("replan_view", payload=contract,
+        source_hash=_source_digest(contract), stage="review")
+    # The staged review indexes requirements, retaining the complete captured
+    # requirement source, revision and negative verification for exact readback.
+    assert view["core_goal"]["acceptance_contract"]["revision"] == 7
+    assert contract["interaction_contract"]["agent_channel"]["work_context"]["sources"][1]["content"]["goal_acceptance_contract"] == expected
+
+
+def test_shared_contract_survives_warm_delta_and_missing_baseline_recovery():
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+    initial = compose_turn_decision(packet())
+    changed = packet()
+    changed["reason"] = "New feedback retains the original requirements and stops."
+    current = compose_turn_decision(changed)
+    scope = dict(goal_id="fixture", agent_id="worker", session_id="session", context_epoch="one")
+    baseline = prepare_context_delivery(initial, scope=scope, capture_id="one", surface="complete_turn")
+    full = prepare_context_delivery(current, scope=scope, capture_id="two", surface="complete_turn")
+    delta = prepare_context_delivery(current, scope=scope, capture_id="two", surface="complete_turn",
+        baseline=baseline, retained={"complete": True, "target": baseline["target"]})
+    assert delta["mode"] == "delta"
+    for retained in (baseline, None):
+        restored = restore_context_delivery(delta, baseline=retained, current=full)["context"]
+        assert restored == current
+        assert compose_turn_decision(restored) == current
+        assert restored["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()
+
+
+@pytest.mark.parametrize("value", [{"revision": 1}, {"revision": 1.0}, {"value": -0.0},
+    {"note": "短"}, {"passed": False}])
+def test_small_identical_contracts_stay_inline_when_a_reference_would_cost_more(value, share):
+    source = packet(False)
+    source["planning_horizon"]["core_goal"]["acceptance_contract"] = deepcopy(value)
+    source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"] = deepcopy(value)
+    source["agent_todo_summary"]["goal_acceptance_contract"] = deepcopy(value)
+    shared = share(source)
+    assert json.dumps(shared["agent_todo_summary"]["goal_acceptance_contract"]) == json.dumps(value)
+    assert json.dumps(shared["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]) == json.dumps(value)
+
+
+@pytest.mark.parametrize("existing_owner", ["planning", "replan"])
+def test_existing_reference_follows_a_relocated_complete_owner(existing_owner, share):
+    source = packet()
+    del source["agent_todo_summary"]["goal_acceptance_contract"]
+    owner = ("$.planning_horizon.core_goal.acceptance_contract" if existing_owner == "planning"
+             else "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract")
+    source["agent_todo_summary"]["goal_acceptance_contract_ref"] = owner
+    shared = share(source)
+    assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
+        "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract")
+    assert compose_turn_decision(shared)["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()

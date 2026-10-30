@@ -333,7 +333,7 @@ def test_small_duplicate_rows_do_not_gain_reference_overhead(tmp_path):
     assert Path(recovery["path"]).name == "projection.json"
 
 
-def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptance_goal, tmp_path, monkeypatch):
+def test_public_quota_cli_keeps_signed_original_and_generic_evidence_reads(acceptance_goal, tmp_path, monkeypatch):
     workspace, document, cli, run = acceptance_goal
     original = {"outcome_id": "export", "owner_agent_id": "agent-a", "todo_ids": ["todo_export"],
         "objective": "Deliver the complete export.", "requirements": [
@@ -362,16 +362,22 @@ def test_public_quota_cli_delivers_required_view_and_original_evidence(acceptanc
         "--turn-instance-id", "original-turn")
     assert code == 0, {key: packet.get(key) for key in ("error", "error_code", "error_detail", "reason", "reason_code")}
     recovery = context._state(lifecycle)["recovery"]
-    assert Path(recovery["path"]).name == "required-context.json"
+    assert Path(recovery["path"]).name == "projection.json"
     required = json.loads(Path(recovery["path"]).read_bytes())
+    assert required["schema_version"] == "loopx_turn_envelope_v1"
+    assert "read_scope" not in required and "context_details" not in required
+    # A signed canonical decision cannot be rewritten as a partial scope view.
+    decision = json.loads((Path(recovery["path"]).parent / "decision.json").read_bytes())
+    assert required == decision
     source = next(row for row in required["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if row["source"] == "goal_acceptance")
     shown = source["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
     assert [row["description"] for row in shown["requirements"]] == [row["description"] for row in original["requirements"]]
-    assert "sources" not in shown and "on demand" in source["reason"]
-    details = required["context_details"]
-    code, page = run("quota", "context-read", "--capture-file", details["path"],
-        "--capture-sha256", details["sha256"], "--select", shown["supporting_material_pointer"] + "/sources",
+    assert shown["sources"] == sources
+    index = required["interaction_contract"]["agent_channel"]["work_context"]["sources"].index(source)
+    pointer = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/goal_acceptance_contract/outcome_requirements/outcomes/0/sources"
+    code, page = run("quota", "context-read", "--capture-file", recovery["path"],
+        "--capture-sha256", recovery["sha256"], "--select", pointer,
         "--page-bytes", "16000", "--max-page-output-bytes", "20000")
     assert code == 0 and page["eof"], page
     recovered = json.loads(page["content"])["selections"][0]["value"]

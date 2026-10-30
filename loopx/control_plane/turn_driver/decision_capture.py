@@ -60,6 +60,18 @@ class StagedTurnDecisionCapture:
             write_decision_capture(self.path, self.observation)
         return self.plan
 
+    def publish_for_host(
+        self, request: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Install the published original input without changing recovery bindings."""
+        plan = self.publish()
+        bound_request = {**request, "turn_envelope": plan["turn_envelope"]}
+        if isinstance(plan.get("work_contract"), Mapping):
+            bound_request["work_contract"] = dict(plan["work_contract"])
+        else:
+            bound_request.pop("work_contract", None)
+        return plan, bound_request
+
 
 def stage_turn_decision_capture(
     plan: Mapping[str, Any], *, journal_path: Path,
@@ -100,7 +112,14 @@ def stage_turn_decision_capture(
         # Legacy journals retain their recorded delivery/recovery route.
         reader_argv=current_loopx_cli_argv() if not existing_journal else None,
     )
-    return StagedTurnDecisionCapture({**plan, "turn_envelope": bound}, path, observation, existed)
+    restored = {**plan, "turn_envelope": bound}
+    if observation.get("schema_version") == "loopx_turn_envelope_v1":
+        restored["work_contract"] = observation
+    else:
+        # Historical observations retain their original input contract. Never
+        # pair an old capture with a freshly observed complete decision.
+        restored.pop("work_contract", None)
+    return StagedTurnDecisionCapture(restored, path, observation, existed)
 
 
 def prepare_turn_decision_capture(

@@ -102,7 +102,8 @@ def test_generated_json_commands_settle_original_turn_once(tmp_path, profile_arg
     assert rc == 0, full
     rc, envelope = _run_cli(registry, runtime, *args, "--turn-envelope")
     assert rc == 0, envelope
-    plan = envelope["writeback"]["settlement_plan"]
+    assert envelope["schema_version"] == full["schema_version"] == "loopx_turn_envelope_v1"
+    plan = envelope["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan == full["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"] == full["heartbeat_receipt"]["settlement_identity"]
     assert [step["kind"] for step in plan["ordered_steps"]] == [

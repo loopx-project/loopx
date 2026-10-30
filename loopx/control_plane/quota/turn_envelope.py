@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result, source_number_tokens
 from ..scheduler.execution_context import (
@@ -45,7 +45,7 @@ class TurnControllerInput:
         raise TypeError("Use build_turn_controller_input with the original quota source")
 
     def envelope(self) -> dict[str, Any]:
-        return json.loads(self.envelope_json)
+        return cast(dict[str, Any], json.loads(self.envelope_json))
 
 
 def _turn_envelope_result(
@@ -55,8 +55,12 @@ def _turn_envelope_result(
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
     request = {"operation": operation, **params}
-    if operation in {"context_delivery", "context_recovery"}:
-        tokens = source_number_tokens(params)
+    payload = params.get("payload")
+    complete = isinstance(payload, Mapping) and payload.get("schema_version") == "loopx_turn_envelope_v1"
+    token_source = payload if isinstance(payload, Mapping) else params
+    if complete or operation in {"reference_context", "reference_replan_authoring",
+            "reference_vision_continuation", "compose_complete", "context_delivery", "context_recovery"}:
+        tokens = source_number_tokens(token_source)
         if tokens:
             request["source_number_tokens"] = tokens
     try:
@@ -71,6 +75,7 @@ def _turn_envelope_result(
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)
+
 
 
 def assert_turn_envelope_consumer_version(envelope: Mapping[str, Any]) -> None:
@@ -107,6 +112,27 @@ def turn_envelope_replan_settlement_identity(
     return dict(identity)
 
 
+def compose_turn_decision(
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
+) -> dict[str, Any]:
+    """Transport complete source facts to the existing typed composition owner."""
+    resolution = resolve_scheduler_execution_context(scheduler_execution_context)
+    args = render_scheduler_execution_args(scheduler_execution_context=resolution) if resolution.ok and resolution.context is not None else ""
+    from .cli_projection import _apply_context_projection_changes
+
+    source = dict(payload)
+    result = _turn_envelope_result("compose_complete", payload=source,
+        scheduler_execution_args=args, source_edits=True)
+    return _apply_context_projection_changes(source, result)
+
+
+def assert_complete_turn_decision(payload: Mapping[str, Any]) -> None:
+    """Validate the original contract; keep its host binding and caller-owned bytes."""
+    _turn_envelope_result("complete_consumer", payload=dict(payload))
+
+
 def turn_envelope_scoped_settlement_identity(
     envelope: Mapping[str, Any], *, turn_instance_id: str | None,
 ) -> dict[str, Any] | None:
@@ -127,12 +153,15 @@ def build_turn_envelope(
 ) -> dict[str, Any]:
     """Project one full quota decision through the canonical TS transaction."""
 
-    return _build_turn_projection(payload, scheduler_execution_context=scheduler_execution_context,
+    return _build_turn_projection(payload,
+        scheduler_execution_context=scheduler_execution_context,
         captured_decision_path=captured_decision_path)
 
 
 def build_turn_controller_input(
-    payload: Mapping[str, Any], *, scheduler_execution_context: object = None,
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
 ) -> TurnControllerInput:
     """Build the managed controller's envelope and route in one existing RPC."""
     result = _build_turn_projection(payload,
@@ -149,15 +178,24 @@ def build_turn_controller_input(
 
 
 def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: object = None,
+    payload: Mapping[str, Any], *, scheduler_execution_context: (
+        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+    ) = None,
     captured_decision_path: str | None = None, operation: str = "build",
 ) -> dict[str, Any]:
+
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
-    scheduler_execution_args = ""
+    scheduler_execution_args: object = ""
     if resolution.ok and resolution.context is not None:
         scheduler_execution_args = render_scheduler_execution_args(
             scheduler_execution_context=resolution,
         )
+    # A captured complete contract already records the original host binding.
+    # Only transport that value when no caller override was supplied; TS checks
+    # its integrity and rejects an explicit conflicting binding.
+    if scheduler_execution_context is None and payload.get("schema_version") == "loopx_turn_envelope_v1":
+        binding = payload.get("contract_binding")
+        scheduler_execution_args = binding.get("scheduler_execution_args") if isinstance(binding, Mapping) else None
     return _turn_envelope_result(
         operation,
         payload=dict(payload),

@@ -84,6 +84,51 @@ def _envelope(
     }
 
 
+@pytest.mark.parametrize("primary, expected", [
+    (None, None), (False, None), (0, None), (" \t", None),
+    (" todo_other ", "todo_other"), (True, "True"), (1e-7, "1e-07"),
+    (["owner"], "['owner']"), ({"id": "owner"}, "{'id': 'owner'}"),
+    ("\x1c todo_other \x1f", "todo_other"), ("\u0085todo_other\u0085", "todo_other"),
+    ("\ufefftodo_other\ufeff", "\ufefftodo_other\ufeff"),
+])
+def test_planning_and_recovery_retain_historical_selected_work_codec(primary, expected):
+    """Old journal identity/hash encoding survives migration to the typed selector."""
+    from hashlib import sha256
+    from loopx.control_plane.quota.turn_envelope import turn_envelope_action_signature_document
+    from loopx.control_plane.turn_driver.driver import reconcile_failed_turn_session_request
+
+    for schema, mode in (("task_orchestration_contract_v2", "adaptive"),
+                         ("task_orchestration_contract_v1", "adaptive"),
+                         ("task_orchestration_contract_v2", "parallel")):
+        envelope = _envelope()
+        envelope["task_orchestration_contract"] = {
+            "schema_version": schema, "mode": mode, "primary_todo_id": primary,
+        }
+        selected = ({"todo_id": expected, "source": "task_orchestration_contract.primary_todo_id"}
+                    if expected is not None and schema == "task_orchestration_contract_v2" and mode == "adaptive"
+                    else envelope["action"]["selected_todo"])
+        signature = turn_envelope_action_signature_document(envelope)
+        signature["action"]["selected_todo"] = selected
+        action_hash = "sha256:" + sha256(json.dumps(signature, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="isolated-headless",
+                                     session_scope="todo", turn_instance_id="legacy-selected-work")
+        assert plan["route"]["selected_todo"] == selected
+        identity = {"lineage": {"goal_id": "fixture-goal", "agent_id": "codex-fixture",
+                               "todo_id": selected["todo_id"], "action_hash": action_hash},
+                    "host": "codex-cli", "execution_mode": "isolated-headless",
+                    "scheduler_owner": plan["host"]["scheduler_owner"], "session_action": "start_new",
+                    "turn_instance_id": "legacy-selected-work"}
+        assert plan["transaction"]["turn_key"] == "sha256:" + sha256(json.dumps(identity, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        binding = {"schema_version": LOOPX_TURN_SESSION_BINDING_SCHEMA_VERSION,
+                   "goal_id": "fixture-goal", "agent_id": "codex-fixture", "todo_id": selected["todo_id"]}
+        recovered = reconcile_failed_turn_session_request({"turn_envelope": envelope, "session": plan["session"]},
+                                                          session_binding=binding)
+        assert recovered["session"]["action"] == "resume"
+        assert recovered["session"]["binding_status"] == "failed_turn_recovery"
+
+
 def test_turn_plan_projects_ready_route_without_side_effects() -> None:
     envelope = _envelope()
 
@@ -3443,12 +3488,15 @@ raise SystemExit(0 if pathlib.Path("claimed-artifact.txt").is_file() else 9)
 @pytest.mark.parametrize(
     "result_kind", ["validated_progress", "repair_required", "replan_required"]
 )
+@pytest.mark.parametrize("verified_source", [False, True])
 def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     result_kind: str,
+    verified_source: bool,
 ) -> None:
-    from loopx.cli_commands.turn import build_turn_envelope as real_build_turn_envelope
+    from copy import deepcopy
+    from loopx.cli_commands.turn import compose_turn_decision as real_compose_turn_decision
     from loopx.cli_commands.turn_run_once import (
         refresh_state_run as real_refresh_state_run,
         spend_quota_slot as real_spend_quota_slot,
@@ -3493,19 +3541,28 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
     spend_workspace_paths: list[Path | None] = []
     refresh_todo_ids: list[str] = []
 
-    def adaptive_turn_envelope(*args: object, **kwargs: object) -> dict[str, object]:
-        envelope = real_build_turn_envelope(*args, **kwargs)
-        envelope["action"]["selected_todo"] = {
+    def adaptive_turn_decision(source: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
+        # Build the stale-selection scenario before signing either projection.
+        # The adaptive primary, not the provisional selection, owns writeback.
+        decision = deepcopy(source)
+        # This pre-orchestration selection is not a verified completion source.
+        # Preserve the historical unverified-selection case; claiming verified
+        # text for a different Todo must still reject in captured_todo_text_sha256.
+        if not verified_source:
+            decision["interaction_contract"]["agent_channel"]["work_context"].pop(
+                "selected_todo_text_verified", None
+            )
+        decision["selected_todo"] = {
             "todo_id": "todo_stale_selection",
             "text": "A stale pre-orchestration selection",
         }
-        envelope["task_orchestration_contract"] = {
+        decision["task_orchestration_contract"] = {
             "schema_version": "task_orchestration_contract_v2",
             "mode": "adaptive",
             "primary_todo_id": "todo_fixture0001",
             "eligible_child_lanes": [],
         }
-        return envelope
+        return real_compose_turn_decision(decision, **kwargs)
 
     def recording_refresh_state_run(*args: object, **kwargs: object) -> dict[str, object]:
         refresh_workspace_paths.append(kwargs.get("delivery_workspace_path"))
@@ -3516,7 +3573,10 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         spend_workspace_paths.append(kwargs.get("workspace_path"))
         return real_spend_quota_slot(*args, **kwargs)
 
+    host_calls: list[str] = []
+
     def fake_codex_host(request: dict[str, object], **_kwargs: object) -> dict[str, object]:
+        host_calls.append(str(request["turn_key"]))
         return {
             "schema_version": "loopx_turn_result_v0",
             "turn_key": request["turn_key"],
@@ -3536,8 +3596,8 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         fake_codex_host,
     )
     monkeypatch.setattr(
-        "loopx.cli_commands.turn.build_turn_envelope",
-        adaptive_turn_envelope,
+        "loopx.cli_commands.turn.compose_turn_decision",
+        adaptive_turn_decision,
     )
     monkeypatch.setattr(
         "loopx.cli_commands.turn_run_once.refresh_state_run",
@@ -3581,6 +3641,12 @@ def test_turn_run_once_cli_uses_built_in_codex_host_and_typed_writeback(
         )
 
     payload = json.loads(output.getvalue())
+    if verified_source:
+        assert exit_code == 1, payload
+        assert "Turn task source does not match" in payload["error"]
+        assert not host_calls and not refresh_workspace_paths and not spend_workspace_paths
+        return
+    assert len(host_calls) == 1
     assert exit_code == 0, payload
     assert payload["host"] == {"executable": "built-in", "kind": "codex-cli"}
     assert payload["effects"]["state_written"] is True

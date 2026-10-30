@@ -37,7 +37,7 @@ from .command_validation import (
     normalize_reward_memory_reflection_validation,
     reward_memory_reflection_digest,
 )
-from .driver import selected_turn_todo
+from .driver import selected_turn_todo, turn_host_lineage
 from .decision_capture import stage_turn_decision_capture
 from .execution_readback import execution_payload
 from .host_process_transport import run_host_process
@@ -171,6 +171,8 @@ def build_loopx_turn_host_request(plan: Mapping[str, Any]) -> dict[str, Any]:
             "stdout": "one public-safe JSON object",
         },
     }
+    if isinstance(plan.get("work_contract"), Mapping):
+        request["work_contract"] = dict(plan["work_contract"])
     goal_ref = plan.get("goal_ref")
     if isinstance(goal_ref, Mapping):
         request["goal_ref"] = dict(goal_ref)
@@ -305,13 +307,11 @@ def _normalize_host_path_delta(
             packet = result["agent_vision"]
             if not isinstance(packet, dict):
                 raise TypeError("cached agent_vision must be a JSON object")
-            envelope = plan.get("turn_envelope") or {}
+            lineage = turn_host_lineage(plan)
             agent_vision = normalize_goal_vision_packet(
-                packet,
-                goal_id=str(envelope.get("goal_id") or ""),
-                agent_id=str(envelope.get("agent_id") or "") or None,
+                packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
             )
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RuntimeError) as exc:
             errors.append(f"invalid cached agent_vision: {exc}")
     elif agent_vision_json:
         if len(agent_vision_json) > HOST_AGENT_VISION_JSON_MAX_CHARS:
@@ -324,17 +324,11 @@ def _normalize_host_path_delta(
                 packet = json.loads(agent_vision_json)
                 if not isinstance(packet, dict):
                     raise TypeError("agent_vision_json must decode to a JSON object")
-                envelope = (
-                    plan.get("turn_envelope")
-                    if isinstance(plan.get("turn_envelope"), dict)
-                    else {}
-                )
+                lineage = turn_host_lineage(plan)
                 agent_vision = normalize_goal_vision_packet(
-                    packet,
-                    goal_id=str(envelope.get("goal_id") or ""),
-                    agent_id=str(envelope.get("agent_id") or "") or None,
+                    packet, goal_id=lineage["goal_id"], agent_id=lineage["agent_id"] or None,
                 )
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            except (json.JSONDecodeError, TypeError, ValueError, RuntimeError) as exc:
                 errors.append(f"invalid agent_vision_json: {exc}")
 
     if path_delta_mode == "material_replan":
@@ -1161,20 +1155,26 @@ def _task_validation_stage(
 def _ensure_turn_settlement_plan(
     plan: Mapping[str, Any],
     transaction_plan: dict[str, Any],
-) -> None:
+) -> dict[str, str] | None:
+    # Check the complete source once before either new execution or journal
+    # recovery. Reuse this call-local identity below; never cache it across a
+    # host attempt, source replacement or another invocation.
+    lineage = turn_host_lineage(plan) if "work_contract" in plan else None
     if isinstance(transaction_plan.get("settlement_plan"), Mapping):
-        return
-    envelope = plan.get("turn_envelope")
-    if not isinstance(envelope, Mapping):
-        return
-    selected_todo = selected_turn_todo(envelope)
-    lineage = {
-        "goal_id": str(envelope.get("goal_id") or ""),
-        "agent_id": str(envelope.get("agent_id") or ""),
-        "todo_id": str(selected_todo.get("todo_id") or ""),
-    }
+        return lineage
+    if lineage is None:
+        # Preserve the historical decoder, including its exact string handling.
+        envelope = plan.get("turn_envelope")
+        if not isinstance(envelope, Mapping):
+            return None
+        selected_todo = selected_turn_todo(envelope)
+        lineage = {
+            "goal_id": str(envelope.get("goal_id") or ""),
+            "agent_id": str(envelope.get("agent_id") or ""),
+            "todo_id": str(selected_todo.get("todo_id") or ""),
+        }
     if not all(lineage.values()):
-        return
+        return lineage
     host = plan.get("host")
     host_fields = host if isinstance(host, Mapping) else {}
     built = build_loopx_turn_transaction_plan(
@@ -1195,6 +1195,7 @@ def _ensure_turn_settlement_plan(
     settlement_plan = built.get("settlement_plan")
     if isinstance(settlement_plan, Mapping):
         transaction_plan["settlement_plan"] = settlement_plan
+    return lineage
 
 
 def _typed_settlement_stage(
@@ -1433,6 +1434,20 @@ def _typed_settlement_stage(
     )
 
 
+def _prepare_host_invocation(
+    plan: Mapping[str, Any], *, host_argv: Sequence[str] | None,
+    host_runner: HostRunner | None,
+) -> tuple[list[str] | None, dict[str, str | int]]:
+    """Normalize the existing external or built-in transport before admission."""
+    if host_runner is not None and host_argv is not None:
+        raise ValueError("run-once accepts either host_argv or host_runner, not both")
+    if host_runner is None:
+        argv = normalize_host_argv(host_argv or [])
+        return argv, {"executable": Path(argv[0]).name, "argv_count": len(argv)}
+    planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
+    return None, {"executable": "built-in", "kind": str(planned_host.get("kind") or "codex-cli")}
+
+
 @single_executor_per_turn_lane(execution_payload)
 def run_loopx_turn_once(
     plan: Mapping[str, Any],
@@ -1464,22 +1479,11 @@ def run_loopx_turn_once(
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
 ) -> dict[str, Any]:
-    if host_runner is not None and host_argv is not None:
-        raise ValueError("run-once accepts either host_argv or host_runner, not both")
-    if host_runner is None:
-        argv = normalize_host_argv(host_argv or [])
-        host_projection = {"executable": Path(argv[0]).name, "argv_count": len(argv)}
-    else:
-        argv = None
-        planned_host = plan.get("host") if isinstance(plan.get("host"), dict) else {}
-        host_projection = {
-            "executable": "built-in",
-            "kind": str(planned_host.get("kind") or "codex-cli"),
-        }
+    argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner)
     transaction_plan = (
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )
-    _ensure_turn_settlement_plan(plan, transaction_plan)
+    settlement_lineage = _ensure_turn_settlement_plan(plan, transaction_plan)
     request = build_loopx_turn_host_request(plan)
     empty_effects = {
         "host_invoked": False,
@@ -1562,12 +1566,15 @@ def run_loopx_turn_once(
                     operation="turn_recovery_lifetime",
                 ):
                     pass
-            envelope = (
-                plan.get("turn_envelope")
-                if isinstance(plan.get("turn_envelope"), Mapping)
-                else {}
-            )
-            agent_id = str(envelope.get("agent_id") or "")
+            if settlement_lineage is not None:
+                agent_id = settlement_lineage["agent_id"]
+            else:
+                envelope = (
+                    plan.get("turn_envelope")
+                    if isinstance(plan.get("turn_envelope"), Mapping)
+                    else {}
+                )
+                agent_id = str(envelope.get("agent_id") or "")
             assessment = assess_existing_turn_recovery(
                 journal,
                 request,
@@ -1645,8 +1652,7 @@ def run_loopx_turn_once(
                     plan, waiting, execute=True, replayed=False, effects=empty_effects
                 )
         if capture is not None:
-            plan = capture.publish()
-            request = {**request, "turn_envelope": plan["turn_envelope"]}
+            plan, request = capture.publish_for_host(request)
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
                 recovery_decision,

@@ -935,6 +935,24 @@ def build_premerge_validation_gate(
     if py_compile is not None:
         direct_checks.append(py_compile)
 
+    # Compilation and function-size checks cannot show that a refactored
+    # execution entry still holds the lane across the actual host invocation.
+    # Reuse the public-entry regression rather than adding a second fence oracle.
+    if any(path in {
+        "loopx/control_plane/turn_driver/executor.py",
+        "loopx/control_plane/turn_driver/lane_fence.py",
+        "loopx/cli_commands/turn_run_once.py",
+        "tests/test_turn_lane_fence.py",
+    } for path in files):
+        direct_checks.append(_run_gate_check(
+            check_id="turn_lane_entrypoint",
+            argv=[sys.executable, "-m", "pytest", "-q", "tests/test_turn_lane_fence.py"],
+            reason="executing entrypoints retain the public single-executor fence",
+            execute=execute, timeout_seconds=timeout_seconds,
+            progress_callback=progress_callback, section="turn_lane_entrypoint",
+            check_index=1, check_count=1, repo_root=target_repo_root,
+        ))
+
     module_colocation = _module_ceiling_colocation_check(
         changed_files=files,
         base_ref=base_ref,

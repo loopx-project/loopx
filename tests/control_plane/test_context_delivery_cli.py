@@ -195,14 +195,24 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
+    assert guard["schema_version"] == "loopx_turn_envelope_v1"
     summary = guard["agent_todo_summary"]
-    assert [item["todo_id"] for item in summary["backlog_items"]] == ["todo_work_1"]
-    condition = summary["backlog_items"][0]["resume_condition"]
+    # The complete writer retains the original bounded source rows. It no
+    # longer emits the legacy display projection as its canonical decision.
+    assert [item["todo_id"] for item in summary["backlog_items"]] == [TODO_ID, "todo_work_1"]
+    condition = summary["backlog_items"][1]["resume_condition"]
     assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
     assert len(summary["first_executable_items"]) == 3
     candidates = guard["capability_gate"]["runnable_candidates"]
     assert {row["todo_id"] for row in candidates} == {row["todo_id"] for row in todos[:8]}
     assert all(row["title"].endswith("Final condition: stop before publication.") for row in candidates)
+    # The shared historical display owner still isolates the exceptional row;
+    # no resumed row expands known diagnostic siblings in that projection.
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+    displayed = compact_quota_should_run_cli_payload(deepcopy(guard))["agent_todo_summary"]
+    assert [item["todo_id"] for item in displayed["backlog_items"]] == ["todo_work_1"]
+    assert displayed["backlog_items"][0]["resume_condition"] == condition
+    assert len(displayed["first_executable_items"]) == 3
     assert state.read_bytes() == before and _spend_run_count(runtime) == 0
     code, detailed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", "todo_work_7", cwd=project)
@@ -385,8 +395,12 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
     assert source_ref not in json.dumps(warm["changes"])
     projection = json.loads((second / "projection.json").read_bytes())
     current = prepare_context_delivery(projection, scope=scope,
-        capture_id=warm["target"]["capture_id"], surface=surface)
-    assert restore_context_delivery(warm, baseline=cold, current=current)["context"] == projection
+        capture_id=warm["target"]["capture_id"], surface="complete_turn")
+    assert projection == json.loads((second / "decision.json").read_bytes())
+    assert projection["schema_version"] == "loopx_turn_envelope_v1"
+    assert current["target"] == warm["target"]
+    restored = restore_context_delivery(warm, baseline=cold, current=current)
+    assert restored["mode"] == "delta" and restored["context"] == projection
     assert len(json.dumps(warm)) < len(json.dumps(current))
     assert warm["recovery"]["path"] == str(second / "projection.json")
     assert warm["target"]["capture_id"] == hashlib.sha256((second / "decision.json").read_bytes()).hexdigest()
