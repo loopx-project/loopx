@@ -210,17 +210,22 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     assert json.loads(raw)["goal_id"] == GOAL_ID
 
     def complete_reader(view):
-        page = view
+        # Native delivery advertises a file; only its reader pages are content.
+        observed = bytearray()
         while True:
+            code, page = _run_cli(registry, runtime, "quota", "context-read",
+                "--capture-file", view["path"], "--capture-sha256", view["sha256"],
+                "--offset", str(len(observed)), "--page-bytes", "3072", cwd=project)
+            assert code == 0 and page["ok"], page
+            assert page["offset"] == len(observed)
+            observed.extend(page["content"].encode())
             subprocess.run(shlex.split(hook), input=json.dumps({**event,
                 "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)}),
                 text=True, cwd=project, capture_output=True, check=True)
             if page["eof"]:
                 break
-            code, page = _run_cli(registry, runtime, "quota", "context-read",
-                "--capture-file", view["path"], "--capture-sha256", view["sha256"],
-                "--offset", str(page["next_offset"]), "--page-bytes", "3072", cwd=project)
-            assert code == 0 and page["ok"], page
+            assert page["next_offset"] == len(observed)
+        assert hashlib.sha256(observed).hexdigest() == view["sha256"]
 
     complete_reader(wire)
     code, warm = _run_cli(registry, runtime, *args, cwd=project)

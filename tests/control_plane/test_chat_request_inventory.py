@@ -1,6 +1,8 @@
 """Original steward requests, not inferred worker activity or a second ledger."""
 from urllib.parse import urlencode
 
+import pytest
+
 from test_chat_goal_amendment import api as api
 from test_goal_amendment_authority import source_goal as source_goal
 from test_chat_request_control import _source
@@ -228,6 +230,205 @@ def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, 
     assert code == 400 and denied["error_code"] == "request_inventory_unavailable"
     assert "rows" not in denied and "Check the current contract" not in str(denied)
 
+
+def test_inventory_bounds_lifetime_guards_and_keeps_core_io_outside_them(api, monkeypatch):
+    from contextlib import contextmanager
+    from loopx.control_plane.collaboration import conversation_inventory as inventory
+    from loopx.presentation import request_control_api
+
+    _, _, route = _source(api)
+    _, f, server = api
+    session = server.chat_store.load_session(route["session_id"])
+    for number in range(12):
+        turn, _ = server.chat_store.create_turn(session["session_id"], client_turn_id=f"batch-{number}",
+            message=f"Check artifact {number}", origin="web")
+        delivered = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-a"}, source_store=server.chat_store)
+        server.chat_store.update_turn(session["session_id"], turn["turn_id"], status="completed",
+            response={"context_handoff_receipt": delivered})
+        server.chat_store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    original_scope, original_work = inventory.collaboration_goal_scope, inventory.read_linked_work
+    original_lock, original_receipts = inventory._request_lock, inventory.read_inbox_transaction
+    original_classify = request_control_api.conversation_scope
+    classifications = []
+
+    def classify(source):
+        classifications.append(source["session_id"])
+        return original_classify(source)
+
+    monkeypatch.setattr(request_control_api, "conversation_scope", classify)
+    held, batches, locked, receipt_batches = [], [], set(), []
+
+    @contextmanager
+    def scope(*args, **kwargs):
+        with original_scope(*args, **kwargs) as current:
+            held.append(current)
+            batches.append(0)
+            try:
+                yield current
+            finally:
+                held.pop()
+
+    original_entry = inventory._entry
+    def entry(*args, **kwargs):
+        assert held, "A request must retain the Goal lifetime guard"
+        batches[-1] += 1
+        return original_entry(*args, **kwargs)
+
+    def work(*args, **kwargs):
+        assert not held, "Core IO must not nest under a Goal lifetime guard"
+        return original_work(*args, **kwargs)
+
+    @contextmanager
+    def lock(root, request_id, *args, **kwargs):
+        with original_lock(root, request_id, *args, **kwargs):
+            locked.add(request_id)
+            try:
+                yield
+            finally:
+                locked.remove(request_id)
+
+    def receipts(root, request, **kwargs):
+        ids = {row["request_id"] for row in request["rows"]}
+        assert held and ids <= locked, "Receipt versions need every corresponding request lock"
+        receipt_batches.append(len(ids))
+        return original_receipts(root, request, **kwargs)
+
+    monkeypatch.setattr(inventory, "collaboration_goal_scope", scope)
+    monkeypatch.setattr(inventory, "_entry", entry)
+    monkeypatch.setattr(inventory, "read_linked_work", work)
+    monkeypatch.setattr(inventory, "_request_lock", lock)
+    monkeypatch.setattr(inventory, "read_inbox_transaction", receipts)
+    code, value = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and value["matched"] == value["pending_count"] == 13
+    assert value["coverage"] == {"scan_complete": True, "unreadable": 0, "diagnostics": []}
+    assert sum(batches) == 13 and len(batches) == 2 and max(batches) <= 12
+    assert sum(receipt_batches) == 13 and len(receipt_batches) == 2 and max(receipt_batches) <= 12
+    assert not locked, "A completed read must release every request lock"
+    # Two fresh boundaries and at most one additional pure projection for the
+    # unchanged source, independently of row count and on each HTTP read.
+    assert set(classifications) == {session["session_id"]} and 2 <= len(classifications) <= 3
+    first_count = len(classifications)
+    assert _inventory(api, route["session_id"], view="history")[0] == 200
+    assert 2 <= len(classifications) - first_count <= 3
+
+
+@pytest.mark.parametrize("failure", ["request_lock", "receipt"])
+def test_inventory_isolates_one_failed_request_and_rereads_on_recovery(api, monkeypatch, failure):
+    from contextlib import contextmanager
+    from loopx.control_plane.collaboration import conversation_inventory as inventory
+
+    _, _, route = _source(api)
+    _, f, server = api
+    store = server.chat_store
+    session = store.load_session(route["session_id"])
+    expected = {route["request_id"]: store.load_turn(route["session_id"], route["turn_id"])["message"]}
+    for number in range(2):
+        message = f"Review artifact {number}\n" + "Retain the complete source question.\n" * 80
+        turn, _ = store.create_turn(session["session_id"], client_turn_id=f"isolated-{number}", message=message, origin="web")
+        receipt = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-b"}, source_store=store)
+        store.update_turn(session["session_id"], turn["turn_id"], status="completed", response={"context_handoff_receipt": receipt})
+        store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+        expected[receipt["request_id"]] = message
+    broken = route["request_id"]
+    original_lock, original_receipts = inventory._request_lock, inventory.read_inbox_transaction
+
+    @contextmanager
+    def lock(root, request_id, *args, **kwargs):
+        if request_id == broken:
+            raise OSError("request lock unavailable")
+        with original_lock(root, request_id, *args, **kwargs):
+            yield
+
+    def receipts(root, request, **kwargs):
+        if any(row["request_id"] == broken for row in request["rows"]):
+            raise OSError("request receipt unavailable")
+        return original_receipts(root, request, **kwargs)
+
+    monkeypatch.setattr(inventory, "_request_lock" if failure == "request_lock" else "read_inbox_transaction",
+        lock if failure == "request_lock" else receipts)
+    saved = {path: path.read_bytes() for path in _root(f["runtime"]).rglob("*.json")}
+    code, partial = _inventory(api, session["session_id"], view="history")
+    assert code == 200 and partial["matched"] == partial["pending_count"] == 2
+    assert partial["coverage"] == {"scan_complete": True, "unreadable": 1, "diagnostics": []}
+    assert {row["request_id"]: row["source_question"] for row in partial["rows"]} == {
+        key: value for key, value in expected.items() if key != broken}
+    assert {path: path.read_bytes() for path in saved} == saved
+    monkeypatch.setattr(inventory, "_request_lock", original_lock)
+    monkeypatch.setattr(inventory, "read_inbox_transaction", original_receipts)
+    recovered = _inventory(api, session["session_id"], view="history")[1]
+    assert recovered["coverage"]["unreadable"] == 0 and recovered["matched"] == 3
+    assert {row["request_id"]: row["source_question"] for row in recovered["rows"]} == expected
+
+
+def test_inventory_reclassifies_changed_facts_for_the_same_source_session(api, monkeypatch):
+    _, _, route = _source(api)
+    _, _, server = api
+    original_load = server.chat_store.load_session
+    reads = []
+
+    def load(session_id):
+        session = original_load(session_id)
+        if session_id == route["session_id"]:
+            reads.append(session_id)
+            if len(reads) == 3:
+                # The source changed after discovery, then recovered before
+                # the closing read. Its row must still withhold the content.
+                return {**session, "goal_id": None}
+        return session
+
+    monkeypatch.setattr(server.chat_store, "load_session", load)
+    code, value = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and len(reads) >= 4
+    assert value["rows"] == [] and value["pending_count"] == 0
+    assert value["coverage"] == {"scan_complete": True, "unreadable": 1, "diagnostics": []}
+
+
+def test_inventory_rereads_goal_lifetime_between_batches(api, monkeypatch):
+    from contextlib import contextmanager
+    from loopx.control_plane.collaboration import conversation_inventory as inventory
+    from loopx.control_plane.goals.source_session_recreation import RecreateGoalRequest, recreate_goal_instance
+
+    _, _, route = _source(api)
+    _, f, server = api
+    session = server.chat_store.load_session(route["session_id"])
+    for number in range(12):
+        turn, _ = server.chat_store.create_turn(session["session_id"], client_turn_id=f"replace-{number}",
+            message=f"Check artifact {number}", origin="web")
+        delivered = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-a"}, source_store=server.chat_store)
+        server.chat_store.update_turn(session["session_id"], turn["turn_id"], status="completed",
+            response={"context_handoff_receipt": delivered})
+        server.chat_store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+    original_scope = inventory.collaboration_goal_scope
+    original_decide = inventory.decide_collaboration_lifecycle
+    calls, modes = [], []
+
+    @contextmanager
+    def scope(*args, **kwargs):
+        if calls:
+            replaced = recreate_goal_instance(RecreateGoalRequest(registry_path=f["registry"],
+                goal_id=f["ref"]["goal_id"], goal_instance_id=f["ref"]["goal_instance_id"], operation_id="replace-during-read"))
+            assert replaced["ok"]
+        with original_scope(*args, **kwargs) as current:
+            calls.append(current.current_goal_ref)
+            yield current
+
+    def decide(*args, **kwargs):
+        result = original_decide(*args, **kwargs)
+        modes.append(result.get("mode"))
+        return result
+
+    monkeypatch.setattr(inventory, "collaboration_goal_scope", scope)
+    monkeypatch.setattr(inventory, "decide_collaboration_lifecycle", decide)
+    code, value = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and len(calls) == 2
+    assert calls[0] == f["ref"] and calls[1] != f["ref"]
+    # The existing typed owner permits proven historical inspection after a
+    # replacement; it must observe the new lifetime rather than reuse the old.
+    assert modes == ["current_instance"] * 12 + ["historical_read"]
+    assert value["matched"] == 13 and value["coverage"] == {"scan_complete": True, "unreadable": 0, "diagnostics": []}
 
 def test_conflicting_receipt_is_diagnosable_but_does_not_authorize_content_or_controls(api):
     control, _, route = _source(api)

@@ -824,6 +824,13 @@ full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
 
+The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
+file deltas, capture refusal/recovery and once-only settlement. Source fidelity
+improves while cold and observer-output bytes grow on that workload. Exact-byte
+capture checks and standalone numeric hash integrity remain distinct; this
+engineering evidence does not establish net cost benefit or complete C1.
+
 Qualify [human interaction during execution](#human-interaction-during-execution)
 on the same long-running work, rather than disconnected chat demonstrations:
 
@@ -983,6 +990,13 @@ Separate shared-owner prerequisites, producer/capture cutover, reader recovery
 and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+Native launch rechecks use the original `SettlementIdentity` as their sole
+Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing
+`current_turn_host_launch_decision` owner; an observed replan packet is context,
+not an additional binding argument. This transport simplification can ship before
+wire cutover. Qualify real launch, refusal and replay against the same original
+identity; retain the current typed eligibility, Stop and settlement owners.
 
 The first **cutover** slice pairs the complete field/clause migration with a
 real single-session producer and consumer replacement. Start at the

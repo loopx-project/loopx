@@ -618,6 +618,12 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
 抵消 C1 回归。
 
+[打包来源对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
+固定 mainline quota 与 C1 候选版本，经真实 File/SQLite CLI 验证交付、文件差分、
+capture 拒绝/恢复及一次结算。本负载来源保真改善，冷态和观察器累计输出字节增加。
+精确字节 capture 校验与独立数值 hash 完整性仍是不同边界；这些工程证据不证明
+净成本收益，也不结清 C1。
+
 在同一长程工作上验收[执行期间的人机交互](#human-interaction-during-execution)，
 不能用脱离工作的独立聊天演示代替：
 
@@ -743,6 +749,12 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 共享 owner 前置、producer/capture 切换、reader 恢复与退役、采用及完整成本验收，
 可按独立可审查的边界拆分，在既有任务和 PR 中记录依赖。拆分交付不代表 C1 完成，
 也不豁免第 9 节相对原 quota 基线的验证。
+
+原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
+`codex-cli` 和 `codex-app-server` 都调用既有
+`current_turn_host_launch_decision` owner；观察到的 replan packet 是上下文，
+不再作为另一份绑定参数。这项运输简化可以先于 wire 切换交付。沿相同原身份验证真实
+启动、拒绝与重放，保留既有 typed 资格、Stop 和结算 owner。
 
 首个**切换**片必须把完整字段/条款迁移与真实单会话 producer、consumer 替换一起交付。
 从共享 quota emission 边界开始，同时追踪 attached heartbeat 交付与 Turn adapter，

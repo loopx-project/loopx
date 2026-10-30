@@ -118,10 +118,12 @@ def test_lifecycle_invalidates_and_recovers_current_capture_without_bodies(tmp_p
     if event_name == "SessionStart":
         body = result["hookSpecificOutput"]["additionalContext"]
         assert first["recovery"]["sha256"] in body and "quota context-read" in body
-        # The additional work-Turn/read-obligation distinction is intentional;
-        # this synthetic allowance is not a host output or context limit.
+        # The shared selection advice adds about 400 characters to recovery,
+        # avoiding mandatory discovery and duplicate/oversized read batches.
+        # Preserve identity/retention clauses; this is a synthetic regression
+        # allowance, not permission to raise any host output/context limit.
         assert "max_output_tokens=22000" in body and "max_output_tokens=24000" in body
-        assert payload["requirements"] not in body and len(body) < 2600
+        assert payload["requirements"] not in body and len(body) < 3100
     else:
         assert result == {}
     _, second = project(tmp_path, "two")

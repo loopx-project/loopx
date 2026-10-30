@@ -349,7 +349,7 @@ def build_fresh_turn_decision_owner(
 
 def current_turn_host_launch_decision(
     args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
-    identity: SettlementIdentity, replan_obligation_id: str | None,
+    identity: SettlementIdentity,
     planned_effective_action: object,
     scheduler_execution_context: Mapping[str, Any],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
@@ -361,6 +361,8 @@ def current_turn_host_launch_decision(
     The caller supplies the real receipt identity; a Host session or turn_key
     cannot reconstruct it. This read neither creates another receipt nor
     substitutes a newly selected task into the already planned Host request.
+    An observed replan packet is context, not a second settlement binding.
+    Both native callers transport the obligation recorded in this identity.
     """
     current = build_live_quota_should_run_decision(
         collect_turn_status_payload(args, registry_path=registry_path,
@@ -373,7 +375,7 @@ def current_turn_host_launch_decision(
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
         receipt_bound_todo_id=identity.todo_id or None,
-        receipt_bound_replan_obligation_id=replan_obligation_id,
+        receipt_bound_replan_obligation_id=identity.replan_obligation_id,
         turn_instance_id=identity.turn_instance_id,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         workspace_path=Path(args.project).expanduser().resolve(), goal_ref=goal_ref,

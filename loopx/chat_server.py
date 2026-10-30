@@ -960,8 +960,15 @@ class ChatRequestHandler(
                 turn, created = service.submit(session_id, **body)
                 return self._send_json({"ok": True, "session_id": session_id, "turn": turn, "created": created}, status=202)
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+            sources = query.get("calendar_task_sources", ["false"])
+            if sources not in (["true"], ["false"]):
+                raise ValueError("calendar_task_sources must be one true or false value")
+            include_sources = sources == ["true"]
+            if include_sources and (set(query) - {"calendar_task_sources", "agent_id", "operation_id"}
+                    or any(len(values) != 1 for values in query.values())):
+                raise ValueError("select one original managed Session and Agent for Task sources")
             self._send_json(service.inspect(session_id, agent_id=query.get("agent_id", [None])[0],
-                operation_id=query.get("operation_id", [None])[0]))
+                operation_id=query.get("operation_id", [None])[0], include_calendar_task_sources=include_sources))
         except KeyError:
             self._send_error("chat session was not found", status=404)
         except (TypeError, ValueError, RuntimeError) as exc:
@@ -1914,7 +1921,8 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
-    from .presentation.request_control_api import bound_steward_inventory_scope, manager_source_scope_resolver
+    from .presentation.request_control_api import bound_steward_inventory_scope
+    from .chat_lark_api import manager_source_scope_resolver
     manager_scope = manager_source_scope_resolver(server,
         registry_path=resolved_registry_path, executor_runtime_root=runtime_root)
 

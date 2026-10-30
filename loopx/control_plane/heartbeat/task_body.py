@@ -723,7 +723,7 @@ P0 blocked -> admitted P1/P2; quiet polls do not spend.
 {RUNTIME_CAPABILITY_PROJECTION_THIN_RULE}
 {SCHEDULER_HINT_THIN_RULE}
 {HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
-Todo done≠settled; no invented successor. Wait=open; projected monitor/continuation; re-enter guard.
+{HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE}
 `agent_read_required`: drain/read/triage before work; settle/ACK.
 
 P0 blocked: admitted P1/P2; no wait spend.

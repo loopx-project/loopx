@@ -182,6 +182,16 @@ Goal visibility are checked before and after reading. Original-Chat delivery
 and explicit peer-return consumption remain different receipt paths. The list
 does not mark reads, accept work, start an Agent or certify an overall outcome.
 Unreadable/missing sources and incomplete scans keep counts visibly partial.
+Within one inventory read, requests sharing an exact Goal lifetime reuse its
+held guard in batches of at most one page. Every request retains its own lock,
+source/Turn read, grant and typed receipt/lifecycle checks; each new batch
+observes the current Goal lifetime. Core linked-work IO runs after those guards
+are released. This reduces repeated fence IO without caching authorization
+between requests or pages; pagination and search still scan the bounded history.
+The pure conversation-identity projection is reused only while the complete
+host Session facts are identical within that read. Changed facts are classified
+again; live provider, grant, receipt and closing-source checks are not cached.
+
 When the typed lifecycle proves a matching original source/route but finds a
 conflicting handoff receipt, coverage includes at most 12 diagnostic
 request/Goal/Agent identities. This is a refusal readback, not a readable brief,
@@ -197,6 +207,12 @@ checks or requests. Custom scope resolvers keep their existing validation path.
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
+来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
+在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
+同一次读取中，完整宿主 Session 字段相同时复用纯身份分类；字段变化即重新分类，
+provider、授权、回执及结束时的来源检查仍实时执行。
+
 来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
 具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
 核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。

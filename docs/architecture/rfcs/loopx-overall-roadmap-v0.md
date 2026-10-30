@@ -212,6 +212,12 @@ host prompts. A common capture does not unify those consumers. Qualification
 checks source obligations through composition, reconstruction and actual final
 input; new-admission cutover stays separate from historical receipt replay.
 
+The [pinned packaged comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+qualifies C1 source/recovery behavior on real File/SQLite fixtures but records
+larger cold/output bytes and an open standalone numeric hash boundary. Preserve
+that counterevidence and the original outcome/full-cost gate; a working saved-file
+delta or once-only receipt does not establish long-horizon benefit.
+
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,
 replan/result authoring, executor exchange, benchmark reuse, packaged App

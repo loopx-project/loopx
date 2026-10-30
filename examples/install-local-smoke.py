@@ -57,7 +57,7 @@ def normal_turns_use_cli_interaction_contract(task_body: str) -> bool:
 def read_installed_workflow_skill(
     skill: Path, *, references: set[str]
 ) -> dict[str, str]:
-    """Read the installed entrypoint and its complete, self-contained procedures."""
+    """Read installed procedures and verify links stay in the declared bundle."""
     skill_root = skill.parent.resolve()
     documents = {"SKILL.md": skill.read_text(encoding="utf-8")}
     linked_references = {
@@ -81,8 +81,12 @@ def read_installed_workflow_skill(
             if "://" in destination or destination.startswith("#"):
                 continue
             resource = (document.parent / destination.split("#", 1)[0]).resolve()
-            assert resource.is_relative_to(skill_root), (document, destination)
+            bundle_root = skill_root.parent
+            assert resource.is_relative_to(bundle_root), (document, destination)
+            bundled_path = resource.relative_to(bundle_root)
+            assert bundled_path.parts[0] in {"loopx", *PACKAGED_HOST_SKILL_IDS}, (document, destination)
             assert resource.is_file(), (document, destination)
+            assert resource.read_bytes() == (REPO_ROOT / "skills" / bundled_path).read_bytes(), resource
     return documents
 
 
@@ -917,7 +921,7 @@ def main() -> int:
         assert "```sh\nLOOPX_TURN=<current_time_iso>\n" in payload["task_body"], payload
         assert "not a command-prefix assignment" in payload["task_body"], payload
         assert "obey projected replan/stop, never wake counts" in payload["task_body"], payload
-        assert "re-enter guard." in payload["task_body"], payload
+        assert "re-enter as instructed, do/verify authorized work." in payload["task_body"], payload
         assert "2 stalls->replan" not in payload["task_body"], payload
         assert "Exact monitor settlement=no refresh/spend" in payload["task_body"], payload
         assert "Admitted work: settlement_plan even if artifacts unchanged" in payload["task_body"], payload
