@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -416,6 +417,105 @@ else:
 """
 	completed = run_isolated_script(script)
 	assert completed.returncode == 0, completed.stderr
+
+
+QUOTA_AUTHORITY_AND_COMPOSITION_OWNERS = (
+	"loopx.status",
+	"loopx.quota",
+	"loopx.upgrade",
+	"loopx.cli_commands.lark_inbox",
+	"loopx.cli_commands.quota_context",
+	"loopx.control_plane.quota.live_decision",
+	"loopx.control_plane.quota.cli_projection",
+	"loopx.capabilities.explore",
+	"loopx.capabilities.periodic_report",
+	"loopx.capabilities.repository_change_window",
+	"loopx.capabilities.reward_memory",
+	"loopx.capabilities.turn_context",
+)
+# Interaction hooks, the live decision, host observation, and recall exist only
+# for should-run; accounting routes must not compose them.
+QUOTA_SHOULD_RUN_ONLY_OWNERS = (
+	"loopx.cli",
+	"loopx.upgrade",
+	"loopx.control_plane.quota.live_decision",
+	"loopx.capabilities.periodic_report.pending_intent",
+	"loopx.capabilities.repository_change_window",
+	"loopx.capabilities.turn_context",
+)
+
+
+def test_quota_handler_import_defers_owners_and_preserves_export_identity() -> None:
+	script = f"""
+from importlib import import_module
+import sys
+import loopx.cli_commands.quota as command
+
+for owner in {QUOTA_AUTHORITY_AND_COMPOSITION_OWNERS!r}:
+    assert owner not in sys.modules, owner
+for name, (module, attribute) in command._LAZY_EXPORTS.items():
+    assert name in dir(command), name
+    value = getattr(command, name)
+    assert value is getattr(import_module(module), attribute), name
+    assert getattr(command, name) is value, name
+try:
+    command.nonexistent_quota_handler_export
+except AttributeError:
+    pass
+else:
+    raise AssertionError("unknown quota handler exports must fail")
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("route", ["context-read", "replan-view"])
+def test_quota_pre_authority_routes_skip_authority_owners(tmp_path: Path, route: str) -> None:
+	registry, runtime = write_command_fixture(tmp_path)
+	capture = tmp_path / "decision.json"
+	capture.write_text("{\"ok\": true, \"goal_id\": \"perf-goal\"}\n", encoding="utf-8")
+	digest = hashlib.sha256(capture.read_bytes()).hexdigest()
+	arguments = {
+		"context-read": ["--capture-file", str(capture), "--capture-sha256", digest],
+		"replan-view": ["--decision-file", str(tmp_path / "missing.json"),
+			"--outcome-ref", "outcome", "--source-hash", digest],
+	}[route]
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"quota", route, *arguments]
+	selected = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", *QUOTA_AUTHORITY_AND_COMPOSITION_OWNERS))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == (0 if route == "context-read" else 1)
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert registry.read_bytes() == before
+	assert not runtime.exists()
+
+
+def test_quota_accounting_routes_skip_should_run_composition(tmp_path, monkeypatch) -> None:
+	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+
+	isolate_sqlite_runtime(tmp_path, monkeypatch)
+	registry, runtime = write_command_fixture(tmp_path)
+	state = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider="file")
+	base = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "quota"]
+	identity = ["--goal-id", "perf-goal", "--agent-id", "perf-agent"]
+	cases = [
+		(["spend-slot", "--slots", "1", "--source", "heartbeat", "--todo-id", "todo_cli_dispatch"], 0),
+		(["void-slot", "--void-generated-at", "2026-08-28T00:00:00+00:00",
+			"--reason-summary", "Checked fixture"], 1),
+		(["monitor-poll"], 1),
+	]
+	for arguments, expected_code in cases:
+		result = run_cli_main("loopx.entrypoint", [*base, *arguments, *identity],
+			forbidden_modules=QUOTA_SHOULD_RUN_ONLY_OWNERS)
+		assert result.returncode == expected_code, result.stderr
+		payload = json.loads(result.stdout)
+		assert payload["mode"] == arguments[0]
+		assert payload["ok"] is (expected_code == 0)
+		assert payload.get("appended") is not True
 
 
 def test_selected_parser_matches_full_help_and_diagnostics() -> None:
