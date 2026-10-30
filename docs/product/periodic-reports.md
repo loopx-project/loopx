@@ -39,6 +39,16 @@ reader. The six source links retain the recorded Task address in both formats.
 The fixed synthetic prose qualifies transport and reading mechanics, not live
 editorial quality or the address's availability. No layout or editor changed.
 
+New portfolio and local-Session editorial requests share the same time and
+content requirements. A Task completed after the period end remains a later
+state observation; only timestamped evidence inside `[start, end)` supports
+period progress. Older history, later changes, unknown times and unavailable
+views remain distinct. The author is asked to retain concrete outcomes,
+quantified comparisons, counterevidence and the responsible owner's next
+action, while stating shared limitations once. These are authoring requirements,
+not a semantic validator or proof of model compliance. Existing frozen requests
+and reports retain their original requirements and bytes.
+
 The public browser fixture also keeps the original private outbound owner
 running through its periodic source-history check. Its shared synthetic
 provider returns the stored messages with source-bound pagination and time
