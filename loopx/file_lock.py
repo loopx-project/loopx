@@ -40,6 +40,7 @@ def write_bytes_atomic(
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
+    replace_retry_seconds: float = 0,
 ) -> None:
     """Replace one file with `payload` through a same-directory temp file.
 
@@ -52,7 +53,7 @@ def write_bytes_atomic(
     untouched; an explicit `mode` is applied with chmod. `preserve_mode` keeps
     an existing destination's mode and wins over both.
     """
-    destination = Path(path).expanduser()
+    destination = windows_extended_path(Path(path).expanduser())
     destination.parent.mkdir(parents=True, exist_ok=True, mode=directory_mode or 0o777)
     if preserve_mode and destination.exists():
         mode = destination.stat().st_mode & 0o777
@@ -69,7 +70,17 @@ def write_bytes_atomic(
             os.fsync(handle.fileno())
         if mode is not None:
             os.chmod(temporary, mode)
-        os.replace(temporary, destination)
+        deadline = time.monotonic() + replace_retry_seconds
+        while True:
+            try:
+                os.replace(temporary, destination)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
         if fsync_directory and os.name == "posix":
             directory_fd = os.open(
                 destination.parent,
@@ -91,6 +102,7 @@ def write_json_atomic(
     preserve_mode: bool = False,
     directory_mode: int | None = None,
     fsync_directory: bool = False,
+    replace_retry_seconds: float = 0,
     indent: int | None = 2,
     sort_keys: bool = False,
     separators: tuple[str, str] | None = None,
@@ -116,6 +128,7 @@ def write_json_atomic(
         preserve_mode=preserve_mode,
         directory_mode=directory_mode,
         fsync_directory=fsync_directory,
+        replace_retry_seconds=replace_retry_seconds,
     )
 
 
@@ -345,7 +358,20 @@ def _write_holder_sidecar(holder_path: Path, record: dict[str, object]) -> None:
             holder_file.write("\n")
             holder_file.flush()
             os.fsync(holder_file.fileno())
-        os.replace(temporary_path, holder_path)
+        # A Windows reader may briefly deny DELETE sharing. Keep the old
+        # complete diagnostic until atomic replacement succeeds; persistent
+        # access denial still propagates within this bounded IO window.
+        deadline = time.monotonic() + 0.5
+        while True:
+            try:
+                os.replace(temporary_path, holder_path)
+                break
+            except OSError as error:
+                remaining = deadline - time.monotonic()
+                if (os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or remaining <= 0):
+                    raise
+                time.sleep(min(0.05, remaining))
     finally:
         temporary_path.unlink(missing_ok=True)
 

@@ -13,6 +13,7 @@ from typing import Any
 
 from ...boundary_authority import normalize_checkpointed_boundary_authority_entries
 from ...file_lock import exclusive_file_lock
+from ..runtime.private_permissions import protect_private_path
 from ...runtime import validate_goal_id_path_segment
 from ..content_digest import BARE_SHA256_PATTERN
 from ..projects.registry_codec import (
@@ -409,13 +410,13 @@ def _write_codex_cli_session(
         raise ValueError("Codex CLI returned an invalid session id")
     path = _session_path(runtime_root, lineage, session_scope)
     path.parent.mkdir(parents=True, exist_ok=True)
+    protect_private_path(path.parent, directory=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", dir=path.parent
     )
     temporary = Path(temporary_name)
     try:
-        if hasattr(os, "fchmod"):
-            os.fchmod(descriptor, 0o600)
+        protect_private_path(temporary)
         handle = os.fdopen(descriptor, "w", encoding="utf-8")
         descriptor = -1
         with handle:
@@ -459,7 +460,6 @@ def _write_codex_cli_session(
                 handle.flush()
                 os.fsync(handle.fileno())
         os.replace(temporary, path)
-        path.chmod(0o600)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
