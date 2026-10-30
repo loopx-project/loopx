@@ -94,7 +94,7 @@ def checkpoint_continuation_required(readback: Any) -> bool:
     })["required"]
 
 
-def replan_checkpoint_cli_actions(actions: list[str], readback: Any) -> list[str]:
+def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_prefix: str) -> list[str]:
     """Render the admitted checkpoint phases; the typed receipt owns policy.
 
     The generic replan command describes semantic authoring, but a default Turn
@@ -104,10 +104,11 @@ def replan_checkpoint_cli_actions(actions: list[str], readback: Any) -> list[str
     if not actions:
         return actions
     tokens = shlex.split(actions[0])
-    if "refresh-state" not in tokens or not checkpoint_continuation_required(readback):
+    prefix = [*shlex.split(command_prefix), "--format", "json"]
+    command_at = len(prefix)
+    if tokens[:command_at + 1] != [*prefix, "refresh-state"] or not checkpoint_continuation_required(readback):
         return actions
-    command_at = tokens.index("refresh-state")
-    prefix, arguments = tokens[:command_at], tokens[command_at + 1:]
+    arguments = tokens[command_at + 1:]
     initial = []
     context = [*prefix, "checkpoint-context", "--purpose", "supplement_checkpoint"]
     context_options = {"--goal-id", "--goal-instance-id", "--agent-id", "--todo-id",

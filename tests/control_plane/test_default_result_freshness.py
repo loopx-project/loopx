@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
+import subprocess
 import sys
 import pytest
 
@@ -28,11 +30,12 @@ def _default_fixture(provider, tmp_path, monkeypatch, *, handoff_mode="soft_clai
     return project, runtime, registry, state
 
 
+@pytest.mark.parametrize("program", ["candidate-cli", "refresh-state"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_projected_replan_commands_preserve_result_then_fresh_direction(provider, tmp_path, monkeypatch):
+def test_projected_replan_commands_preserve_result_then_fresh_direction(provider, program, tmp_path, monkeypatch):
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     from tests.control_plane.test_quota_settlement_cli import (
-        _bind_selected_replan_guard, _configure_selected_todo_replan_fixture,
+        REPO_ROOT, SELECTED_REPLAN_TODO_ID, _configure_selected_todo_replan_fixture,
         _initialize_fixture_authority,
     )
 
@@ -41,21 +44,53 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
     _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "projected-replan-original-turn"
-    guard = _bind_selected_replan_guard(registry, runtime, project, turn)
+    executables = project / "CLI entrypoints with spaces"
+    executables.mkdir()
+    if sys.platform == "win32":
+        launcher = executables / f"{program}.ps1"
+        python = sys.executable.replace("'", "''")
+        launcher.write_text(f"& '{python}' -m loopx.entrypoint @args\nexit $LASTEXITCODE\n", encoding="utf-8")
+        (executables / "checkpoint-context.ps1").write_text("exit 97\n", encoding="utf-8")
+    else:
+        launcher = executables / program
+        launcher.write_text(f"#!{sys.executable}\nfrom loopx.entrypoint import main\nraise SystemExit(main())\n", encoding="utf-8")
+        launcher.chmod(0o700)
+        sentinel = executables / "checkpoint-context"
+        sentinel.write_text(f"#!{sys.executable}\nraise SystemExit(97)\n", encoding="utf-8")
+        sentinel.chmod(0o700)
+    environment = {**os.environ, "PATH": str(executables) + os.pathsep + os.environ["PATH"],
+                   "PYTHONPATH": str(REPO_ROOT)}
+
+    def execute(command, **replacements):
+        tokens = shlex.split(command) if isinstance(command, str) else command
+        tokens = [str(replacements.get(token, token)) for token in tokens]
+        # Execute the emitted program and every global argument without repair.
+        if sys.platform == "win32":
+            from loopx.command_invocation import command_argv, resolve_command_path
+
+            executable = resolve_command_path(tokens[0], env=environment)
+            assert executable is not None, tokens
+            tokens = command_argv(executable, tokens[1:])
+        completed = subprocess.run(tokens, cwd=project, env=environment, capture_output=True, text=True)
+        assert completed.returncode != 97, "projection invoked the unrelated checkpoint-context executable"
+        return completed.returncode, json.loads(completed.stdout)
+
+    prefix = [program, "--cli-bin", program, "--registry", str(registry),
+              "--runtime-root", str(runtime), "--format", "json"]
+    rc, guard = execute([*prefix, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                         "--agent-id", AGENT_ID, "--todo-id", SELECTED_REPLAN_TODO_ID,
+                         "--turn-instance-id", turn])
+    if rc != 0:
+        assert rc == 1 and guard["action_selection_qualification"]["state"] == "deferred", guard
+        [selection] = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        rc, guard = execute(selection)
+    assert rc == 0, guard
     identity = guard["heartbeat_receipt"]["settlement_identity"]
     original_basis = guard["delivery_result_context"]
     admission = read_heartbeat_settlement(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID,
         todo_id=identity["todo_id"], turn_instance_id=turn, registry_path=registry).heartbeat_receipt
     actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     decision_path = project / "new direction.json"
-
-    def execute(command, **replacements):
-        for key, value in replacements.items():
-            command = command.replace(key, str(value))
-        tokens = shlex.split(command)
-        start = next(i for i, token in enumerate(tokens)
-                     if token in {"refresh-state", "checkpoint-context", "quota"})
-        return _run_cli(registry, runtime, *tokens[start:], cwd=project)
 
     # Run the advertised first action unchanged, before any direction is authored.
     rc, result = execute(actions[0])

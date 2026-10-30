@@ -1002,6 +1002,7 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
             result_work_context, result_work_context_exists,
         )
         from ..control_plane.quota.settlement import read_heartbeat_settlement
+        from ..control_plane.work_items.action_selection_contract import render_cli_command_prefix
 
         try:
             work_readback = read_heartbeat_settlement(runtime_root, goal_id=args.goal_id,
@@ -1028,7 +1029,9 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                     if interaction.get("mode") == "autonomous_replan":
                         channel = interaction["cli_channel"]
                         channel["next_cli_actions"] = replan_checkpoint_cli_actions(
-                            channel["next_cli_actions"], work_readback)
+                            channel["next_cli_actions"], work_readback,
+                            command_prefix=render_cli_command_prefix(
+                                registry_path=str(registry_path), runtime_root=str(runtime_root)))
         except (ValueError, OSError, RuntimeError) as error:
             admitted_receipt = payload.get("heartbeat_receipt")
             payload = quota_failure_payload(args, registry_path=registry_path,
