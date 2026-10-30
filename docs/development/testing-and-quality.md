@@ -1313,6 +1313,25 @@ fields; this does not introduce a new telemetry system or receipt gate.
 
 ### Budget Failure Decisions
 
+The thin heartbeat's 4,500-character presentation allowance did not cover the
+complete combination of a 320-character scope, all five runtime capability
+flags, Codex App transport and an explicit CLI route. The existing public CLI
+fixture with `/opt/loopx/qualified-tools/bin/loopx` emits 4,851 normalized body
+characters at `a36e01c32`; its instructions and command arguments are complete.
+Calibrate only this presentation allowance to 4,900, leaving 49 characters above
+that input. Retain the original over-budget observation and add the complete
+CLI combination plus an oversized-route negative case. Prompt text, capability
+flags, the visible Goal's 4,000-character host limit, existing JSON/body fixture
+ceilings, execution authority and frozen qualification results remain unchanged.
+This corrects diagnostic coverage; it is not an output reduction or a claim of
+model compliance, runtime recovery or lower cost.
+
+薄提示原 4,500 字符展示预算未覆盖完整能力与显式 CLI 路由的组合；同一公开夹具
+保留 320 字符 scope、五项能力和完整指令时为 4,851。仅将该展示预算校准为
+4,900，保留原超限记录，并加入完整组合及更长路由仍超限的反例。正文、参数、
+4,000 字符宿主硬边界、既有 JSON/正文夹具上限及执行权限不变；不据此声称节省
+输出、恢复运行或改善模型行为。
+
 The fixed visible-Goal host fixture's 3,200-character regression guard predates
 `1d5d2d0f6`, which adds the known Todo choice to the first current guard. On the
 same four host inputs at `b201da8ba`, substituting only the pre-change dispatch

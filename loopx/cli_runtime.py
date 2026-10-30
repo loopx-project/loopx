@@ -173,12 +173,12 @@ def resolve_cli_registry(
 	registry_was_configured = user_supplied_registry(raw_argv) or bool(
 		os.environ.get("LOOPX_REGISTRY")
 	)
-	if args.command == "quota" and getattr(args, "quota_command", None) == "context-read":
+	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
 
-		# The reader owns capture integrity and native-session scope. It cannot
-		# reach Goal authority, so default registry conflicts are unrelated.
-		if has_explicit_context_read_source(args):
+		# Captured readers own source validation (including missing references)
+		# and native-session scope; neither reaches live Goal authority.
+		if args.quota_command == "replan-view" or has_explicit_context_read_source(args):
 			return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
