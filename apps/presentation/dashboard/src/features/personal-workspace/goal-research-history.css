@@ -328,3 +328,9 @@
   .research-comparison-identities { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .research-comparison-side { display: block; margin-block-end: 4px; }
 }
+
+/* An empty history is one quiet line, not a panel. */
+.research-history-empty { align-items: center; gap: 10px; margin: 8px 0 14px; padding: 0; border: 0; background: transparent; }
+.research-history-empty > div { display: flex; align-items: center; gap: 6px; }
+.research-history-empty strong { color: var(--pw-muted); font-size: var(--text-caption); font-weight: 600; }
+.research-history-empty > button { margin-left: auto; min-height: 30px; padding: 0 10px; border: 1px solid var(--pw-line-strong); border-radius: var(--pw-r-control); background: var(--pw-card); color: var(--pw-text); font: inherit; font-size: var(--text-caption); cursor: pointer; }

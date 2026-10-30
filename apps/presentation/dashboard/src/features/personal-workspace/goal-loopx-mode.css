@@ -186,3 +186,13 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
   .goal-team-comparison-grid .goal-team-report { padding: 16px; }
   .goal-team-report .personal-md .is-h1 { font-size: var(--text-title); line-height: var(--leading-prose); }
 }
+
+/* Empty result sections are one row: title, state, refresh. */
+.goal-team-results:not(:has([data-result-catalog] li)),
+.goal-research-results:not(:has([data-result-catalog] li)) { padding: 0; margin: 0 0 10px; border: 0; border-bottom: 1px solid var(--pw-line); border-radius: 0; background: transparent; }
+.goal-team-results:not(:has([data-result-catalog] li)) > header,
+.goal-research-results:not(:has([data-result-catalog] li)) > header { align-items: center; padding: 8px 0; }
+.goal-team-results:not(:has([data-result-catalog] li)) > header h3,
+.goal-research-results:not(:has([data-result-catalog] li)) > header h3 { font-size: var(--text-body); line-height: var(--leading-body); }
+.goal-team-results:not(:has([data-result-catalog] li)) > header p,
+.goal-research-results:not(:has([data-result-catalog] li)) > header p { display: none; }
