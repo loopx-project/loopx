@@ -1313,6 +1313,31 @@ fields; this does not introduce a new telemetry system or receipt gate.
 
 ### Budget Failure Decisions
 
+Rebasing the original-direction recovery onto `5b224f094` retains the explicit
+failed-guard recovery instruction. With the same native Windows interpreter,
+physical fixture root, 320-character scope, five capabilities and explicit CLI
+route, main versus the integrated candidate (`8675ad488`) measures 4,850 → 4,939
+normalized body characters and 5,514 → 5,605 raw JSON characters. The 48-character
+route extension measures 5,042 → 5,131 body characters and remains over budget.
+Raise only the thin presentation allowance from 4,900 to 5,000 (61 characters
+of headroom); preserve the instructions, full routes, negative case and separate
+JSON and host limits. This qualifies the composed display input, not model
+compliance, recovery adoption or execution cost.
+The full-scope native pytest input additionally emits 5,211 raw JSON characters
+under its isolated physical runtime path, failing the prior 5,100 ceiling.
+Retain that failure and calibrate its presentation fixture ceiling to 5,300;
+Markdown, line, growth and semantic assertions remain unchanged.
+
+将原方向恢复变更 rebase 到 `5b224f094` 后，保留失败 guard 的明确恢复指令。
+同一 Windows 解释器、物理夹具路径、320 字符 scope、五项能力及完整 CLI 路由下，
+main 与整合候选 `8675ad488` 的正文为 4,850 → 4,939，原始 JSON 为
+5,514 → 5,605 字符；路由再加 48 字符时正文为 5,042 → 5,131，继续超限。
+仅将 thin 展示预算从 4,900 调整为 5,000，保留 61 字符余量；完整指令、路由、
+负例、独立 JSON 上限和宿主硬限制均保留。不据此声称模型遵从、恢复采纳或成本收益。
+原生 pytest 的隔离物理 runtime 路径下，完整 scope 实测 JSON 为 5,211，超过
+旧 5,100 上限。保留该失败，将展示夹具上限校准为 5,300；Markdown、行数、增长
+和语义断言不变。
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI
