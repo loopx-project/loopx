@@ -130,8 +130,9 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
 
 @contextmanager
 def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
-                  goal_admission=None, check_current_launch=None):
+                  goal_admission=None, check_current_launch=None, process_observation=None):
     process = None
+    scope_error = None
     try:
         if check_current_launch is not None and goal_admission is None:
             raise ValueError("current Host launch check requires its original Goal admission")
@@ -154,10 +155,27 @@ def child_process(command: list[str], *, env: dict[str, str], stdout, stderr,
                 # This affects the isolated child, never the parent or off mode.
                 umask=0o077 if os.name == "posix" and env.get("LOOPX_CONTEXT_DELIVERY") == "on" else -1,
             )
+        if process_observation is not None:
+            process_observation.started(process)
         yield process
+    except BaseException as exc:
+        scope_error = type(exc).__name__
+        raise
     finally:
         if process is not None:
-            _reap_child_process(process)
+            cleanup_error = None
+            try:
+                if process_observation is not None:
+                    process_observation.before_cleanup(process, scope_error)
+            finally:
+                try:
+                    _reap_child_process(process, process_observation=process_observation)
+                except BaseException as exc:
+                    cleanup_error = type(exc).__name__
+                    raise
+                finally:
+                    if process_observation is not None:
+                        process_observation.after_cleanup(process, cleanup_error)
 
 
 def heartbeat_launch_check(env, session_wake, *, original_quota=None):
@@ -176,9 +194,11 @@ def heartbeat_launch_check(env, session_wake, *, original_quota=None):
     return check
 
 
-def _reap_child_process(process):
+def _reap_child_process(process, *, process_observation=None):
     """Reap the process group created by child_process, including descendants."""
     try:
+        if process_observation is not None:
+            process_observation.signal_requested(signal.SIGINT)
         os.killpg(process.pid, signal.SIGINT)
     except ProcessLookupError:
         pass
@@ -187,6 +207,8 @@ def _reap_child_process(process):
     except subprocess.TimeoutExpired:
         pass
     try:
+        if process_observation is not None:
+            process_observation.signal_requested(signal.SIGKILL)
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
@@ -304,16 +326,27 @@ def native_goal_rounds(run_round, *, budget_seconds, continue_after_complete, cl
 
 
 def run_native_goal(
-    env: dict[str, str], execution: Execution, body: str, receipt: dict, stderr
+    env: dict[str, str], execution: Execution, body: str, receipt: dict, stderr,
+    *, process_evidence_path: Path | None = None,
 ) -> None:
     from loopx.capabilities.benchmark_toolkit.native_codex_goal import (
         NativeGoalConfig,
-        StdioNativeGoalTransport,
         compact_native_goal_receipt,
         native_goal_outcome,
         refresh_native_goal_status,
         run_native_goal_until_terminal,
     )
+    from loopx.capabilities.benchmark_toolkit.native_codex_process import (
+        NativeCodexProcessObservation, ObservedStdioNativeGoalTransport,
+        write_process_observation,
+    )
+
+    def publish_process(snapshot):
+        receipt["native_process"] = snapshot
+        if process_evidence_path is not None:
+            write_process_observation(process_evidence_path, snapshot)
+
+    process_observation = NativeCodexProcessObservation(publish_process)
 
     required_skills = ()
     if execution.uses_loopx:
@@ -337,9 +370,12 @@ def run_native_goal(
         required_skill_ids=required_skills,
     )
     with child_process(
-        [env["CODEX_BIN"], "app-server"], env=env, stdout=subprocess.PIPE, stderr=stderr
+        [env["CODEX_BIN"], "app-server"], env=env, stdout=subprocess.PIPE, stderr=stderr,
+        process_observation=process_observation,
     ) as process:
-        transport = StdioNativeGoalTransport(process, response_timeout_sec=120)
+        transport = ObservedStdioNativeGoalTransport(
+            process, observation=process_observation, response_timeout_sec=120,
+        )
 
         def run_round(suffix, timeout_sec):
             turn = run_native_goal_until_terminal(
@@ -572,7 +608,8 @@ def run_once(env: dict[str, str]) -> dict:
             return receipt
         with (wake / "stderr.log").open("w") as stderr:
             if execution.native_goal and stage == "execute":
-                run_native_goal(env, execution, body, receipt, stderr)
+                run_native_goal(env, execution, body, receipt, stderr,
+                                process_evidence_path=wake / "native-process.json")
             else:
                 pending = {}
                 if execution.mode == "turn" and stage == "execute":
