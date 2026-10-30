@@ -736,6 +736,22 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
     )
     assert not (project / ".codex" / "goals" / "windows-probe").exists()
 
+    todo_id = json.loads(todo.stdout)["todo_id"]
+
+    # Establish execution ownership before reading the work basis. Acquiring a
+    # different lease afterwards correctly invalidates that original read.
+    acquired = _run_loopx(
+        pwsh=pwsh,
+        launcher=launcher,
+        args=[
+            *common, "task-lease", "acquire", "--goal-id", "windows-probe",
+            "--todo-id", todo_id, "--owner", "windows-worker",
+            "--idempotency-key", "windows-writeback",
+        ],
+        env=launch_env,
+    )
+    assert acquired.returncode == 0, acquired.stderr or acquired.stdout
+
     quota = _run_loopx(
         pwsh=pwsh,
         launcher=launcher,
@@ -754,20 +770,6 @@ def test_windows_installer_promotes_release_and_runs_doctor(tmp_path: Path) -> N
     assert quota.returncode == 0, quota.stderr or quota.stdout
     quota_payload = json.loads(quota.stdout)
     assert quota_payload["should_run"] is True
-
-    todo_id = json.loads(todo.stdout)["todo_id"]
-
-    acquired = _run_loopx(
-        pwsh=pwsh,
-        launcher=launcher,
-        args=[
-            *common, "task-lease", "acquire", "--goal-id", "windows-probe",
-            "--todo-id", todo_id, "--owner", "windows-worker",
-            "--idempotency-key", "windows-writeback",
-        ],
-        env=launch_env,
-    )
-    assert acquired.returncode == 0, acquired.stderr or acquired.stdout
 
     def todo_command(action: str, *args: str) -> subprocess.CompletedProcess[str]:
         # Each invocation starts a fresh PowerShell process through the installed

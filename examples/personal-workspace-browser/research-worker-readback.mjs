@@ -99,7 +99,8 @@ export const researchWorkerReadbackScenario = {
             await page.screenshot({path: resolve(outputDir, `research-worker-${mode}-${locale}-${mobile ? "mobile" : "desktop"}.png`), animations: "disabled"});
             await region.locator("summary").click();
             assert.ok((await region.innerText()).includes(authority.obligation_id));
-            assert.match(await region.innerText(), /未绑定|Unbound/u);
+            await region.getByText(authority.turn_instance_id, {exact: true}).waitFor();
+            assert.doesNotMatch(await region.innerText(), /未绑定|Unbound/u);
             assert.equal(await region.evaluate(element => element.scrollWidth > element.clientWidth + 1), false);
             await region.getByRole("button", {name: zh ? "查看任务与依赖" : "View work and dependencies", exact: true}).click();
             await page.locator('[data-goal-panel="tasks"]:not([hidden])').waitFor();

@@ -653,7 +653,11 @@ def build_live_quota_should_run_decision(
         goal_id=goal_id,
         agent_id=agent_id,
     )
-    payload: dict[str, Any] = build_quota_should_run(
+    from .heartbeat_receipt import guard_source_for_turn
+    retained_source = guard_source_for_turn(runtime_root, goal_id=goal_id, agent_id=agent_id,
+        turn_instance_id=turn_instance_id, goal_ref=goal_ref) if agent_id and turn_instance_id else None
+    decision_status_payload = {**decision_status_payload, "_receipt_bound_semantic_source": (retained_source or {}).get("obligation")}
+    payload = build_quota_should_run(
         decision_status_payload,
         goal_id=goal_id,
         agent_id=agent_id,
@@ -753,15 +757,8 @@ def build_live_quota_should_run_decision(
             scheduler_execution_context=resolved_context,
             goal_ref=goal_ref,
         )
-    if (
-        receipt_bound_todo_id and agent_id and turn_instance_id
-        and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
-        and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
-        and (
-            receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
-            or _receipt_bound_recovery_required(payload, receipt_bound_todo_id)
-        )
-    ):
+    if _needs_receipt_settlement_recovery(payload, receipt_bound_todo_id, agent_id,
+        turn_instance_id, receipt_bound_replay_phase):
         # A verified writeback seals this Turn even while its Todo stays open
         # and selected. Let the existing typed owner project only the remaining
         # settlement; another delivery cannot replace the immutable writeback.
@@ -829,3 +826,16 @@ def build_live_quota_should_run_decision(
         hook_dispatch=turn_start_hook_dispatch, context_navigation=context_navigation,
         inline_goal_source=inline_goal_source)
     return payload
+
+
+def _needs_receipt_settlement_recovery(payload, receipt_bound_todo_id, agent_id, turn_instance_id, receipt_bound_replay_phase):
+    """Recognize the existing owner-proved pending settlement route."""
+    return bool(
+        receipt_bound_todo_id and agent_id and turn_instance_id
+        and receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED
+        and payload.get("effective_action") != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
+        and (
+            receipt_bound_replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING
+            or _receipt_bound_recovery_required(payload, receipt_bound_todo_id)
+        )
+    )

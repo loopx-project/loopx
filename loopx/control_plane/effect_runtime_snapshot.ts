@@ -1,6 +1,8 @@
 /** Private same-UID files for complete local facts that exceed the RPC wire.
  * The digest covers the bytes used by the typed owner; paths are never evidence. */
 import {createHash} from "node:crypto";
+import {execFile} from "node:child_process";
+import {fileURLToPath} from "node:url";
 import {constants} from "node:fs";
 import {lstat, open, type FileHandle} from "node:fs/promises";
 import {basename, dirname, isAbsolute} from "node:path";
@@ -19,11 +21,23 @@ async function privateFile(path: string, flags: number): Promise<FileHandle> {
       (parent.uid !== process.getuid() || (parent.mode & 0o077) !== 0))) {
     throw new Error("invalid private snapshot directory");
   }
-  if ((await lstat(path)).isSymbolicLink()) throw new Error("private snapshot is a symlink");
+  const entry = await lstat(path);
+  if (entry.isSymbolicLink()) throw new Error("private snapshot is a symlink");
+  if (process.platform === "win32") {
+    const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN;
+    if (!python || !isAbsolute(python)) throw new Error("private snapshot ACL helper unavailable");
+    // Fixed package-owned Win32 IO, not a caller-supplied executable or decision owner.
+    const helper = fileURLToPath(new URL("./runtime/private_permissions.py", import.meta.url));
+    await new Promise<void>((resolve, reject) => {
+      execFile(python, [helper, "--verify-snapshot", path],
+        {timeout: 5000, windowsHide: true, maxBuffer: 4096},
+        error => error ? reject(error) : resolve());
+    });
+  }
   const file = await open(path, flags | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || (process.getuid &&
+    if (!stat.isFile() || stat.dev !== entry.dev || stat.ino !== entry.ino || (process.getuid &&
         (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))) {
       throw new Error("invalid private snapshot file");
     }

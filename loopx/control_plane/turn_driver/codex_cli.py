@@ -41,6 +41,7 @@ from .executor import (
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
+from .host_candidate import render_checkpoint_prompt
 from .host_process_transport import HostOutputLines, run_host_process
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
@@ -195,6 +196,13 @@ def _has_subagent_topology(request: Mapping[str, Any] | None) -> bool:
 def codex_cli_result_schema(
     request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if request and request.get("phase") == "checkpoint_direction":
+        return {"type": "object", "additionalProperties": False, "properties": {
+            "read_context_id": {"type": "string"},
+            "agent_vision_json": {"type": "string"},
+            "vision_unchanged_reason": {"type": "string", "maxLength": 240},
+            "stop_reason": {"type": "string", "maxLength": 240},
+        }, "required": ["read_context_id", "agent_vision_json", "vision_unchanged_reason", "stop_reason"]}
     text_limits = dict(HOST_RESULT_TEXT_LIMITS)
     properties: dict[str, Any] = {
         "schema_version": {
@@ -324,6 +332,8 @@ def _prompt(request: Mapping[str, Any]) -> str:
     request_json = json.dumps(
         model_request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
+    if request.get("phase") == "checkpoint_direction":
+        return render_checkpoint_prompt(request)
     instructions = [
         "Execute exactly one bounded LoopX Turn in the current workspace.",
         ("Use turn_authority as the verified authority for this Turn. " if staged else "Use the TurnEnvelope as the source of truth. ")
@@ -340,6 +350,10 @@ def _prompt(request: Mapping[str, Any]) -> str:
     if staged:
         instructions.append(replan_prompt_instruction(authority))
     instructions.extend(request.get("capability_instructions") or ())
+    if request.get("delivery_result_context"):
+        instructions.append("Use delivery_result_context.basis as the requirements and dependencies read for this candidate. The adapter carries its original key with validation and submission.")
+    if request.get("result_revalidation"):
+        instructions.append("This is revalidation of a retained candidate on the original Turn. Compare it with the new basis, preserve valid artifacts, and implement only changes demanded by the new requirements before returning a fresh result.")
     boundary = _mapping(_mapping(request.get("turn_envelope")).get("boundary"))
     if boundary.get("checkpointed_boundary_authority"):
         instructions.append(

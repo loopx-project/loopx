@@ -389,12 +389,12 @@ def terminal_closeout_requirement(
     writeback_payload = (
         stored_writeback if isinstance(stored_writeback, Mapping) else {}
     )
-    observed_completion = terminal_payload.get("completion") or writeback_payload.get(
-        "completion"
-    )
+    observed_completion = journal.get("completion_intent") or terminal_payload.get("completion") or writeback_payload.get("completion")
     try:
         if not isinstance(observed_completion, Mapping):
             observed_completion = completion_intent(result)
+            if isinstance(journal, dict):
+                journal["completion_intent"] = dict(observed_completion)
         envelope = plan.get("turn_envelope")
         selected = selected_turn_todo(envelope) if isinstance(envelope, Mapping) else {}
         outcome = require_loopx_turn_completion_outcome(

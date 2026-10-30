@@ -40,6 +40,7 @@ def _git_command_output(path: Path, *args: str) -> str | None:
     try:
         result = subprocess.run(
             ["git", "-C", str(path), *args],
+            stdin=subprocess.DEVNULL,
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -135,6 +136,7 @@ def _git_origin_is_absent(path: Path) -> bool:
     try:
         result = subprocess.run(
             ["git", "-C", str(path), "config", "--get", "remote.origin.url"],
+            stdin=subprocess.DEVNULL,
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=1.5,
         )

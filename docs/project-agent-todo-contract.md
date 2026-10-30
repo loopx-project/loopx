@@ -645,6 +645,31 @@ relabeled `same_agent_non_delivery` to escape a contradictory internal ordering.
 This intentionally removes the old task-class-dependent CLI prerequisite while
 retaining declared validation, claim/lease checks, identity and terminal fences.
 
+For quota-admitted RESULT on qualified File/SQLite Todo authority, completion
+validation retains the original work identity, declared check and candidate.
+A durably passed check survives a later RESULT IO failure: retry the unchanged
+request to recover that outcome. Changed candidate evidence, actor, lease or
+declaration cannot reuse it. If execution may have started without a durable
+outcome, completion and replacement `delivery_result` reads fail closed until
+the original outcome is reconciled; a new read ID cannot erase that uncertainty.
+A known failed check remains retryable. Goal acceptance and terminal accounting
+remain independent gates; these qualified lanes do not certify an unqualified
+caller/provider combination. Legacy terminal closeout reuses the bound committed
+RESULT and original validation, requires the same original quota writeback/spend
+receipts, and recovers only the verified lease generation. A preflight abort must
+not carry its retired lock token into a new final verification. A held original
+fence may finish lease retirement after Todo commit; it cannot authorize a new
+lease or bypass changed ownership, declarations, candidate evidence or accounting.
+
+已准入的 File/SQLite RESULT 会保留原工作身份、声明和候选的验收结果。
+验收已持久成功、随后 RESULT 写入失败时，同一请求可恢复原结果。执行可能已开始但
+结果尚未持久化时，完成和替换 `delivery_result` 读取都会拒绝；须先核对原执行结果，
+不能用新的 read ID 消除不确定状态。已知失败的检查仍可重试；Goal 验收和 terminal
+结算仍是独立门槛，其他 caller/provider 的完整资格须另行证明。
+Legacy 收尾复用原已提交 RESULT 和验收，仍须原写回、扣额回执全部成立。
+预检关闭后，最终 fence 必须保存新锁 token；Todo 提交后丢响应，只能恢复原已验证
+fence 和 lease 世代，不得重领租约、恢复 claim 或绕过当前 ownership/accounting。
+
 This keeps the active checklist honest without making LoopX a heavyweight
 project-management state machine.
 
@@ -983,6 +1008,13 @@ condition with `todo update --clear-resume-when` before deliberately re-arming
 the same monitor wait.
 
 Use `todo supersede` when the current open todo should be retired and replaced:
+
+For work already admitted by a heartbeat, retain its original `--agent-id` and
+`--turn-instance-id` when superseding, together with any required execution lease.
+The atomic retirement keeps that Turn identity for post-result direction review
+and settlement; it does not run or pass the retired deliverable's validation.
+Finish the original Turn before selecting the successor. A later caller cannot
+claim an unscoped historical retirement or replay it as accepted completion.
 
 ```bash
 loopx todo supersede \

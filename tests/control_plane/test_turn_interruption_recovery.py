@@ -150,7 +150,7 @@ if os.environ.get('FAULT_BOUNDARY')=='tool':
     executable.write_text(
         executable.read_text()
         .replace("#!/usr/bin/env python3", "#!" + sys.executable)
-        .replace("prompt = sys.stdin.read()", "prompt = sys.stdin.read()\n" + injected)
+        .replace("marker = pathlib.Path(", injected + "\nmarker = pathlib.Path(")
     )
     base = f._base_argv(
         registry=registry,

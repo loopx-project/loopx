@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shlex
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -50,8 +50,10 @@ def test_real_host_reads_original_capture_after_source_change(
                                              todos=summary["agent_todos"]["items"]),
         state_path=state, provider=provider)
     executable = f._write_fake_codex(tmp_path)
-    source = executable.read_text().replace("#!/usr/bin/env python3", "#!" + sys.executable)
-    source = source.replace("prompt = sys.stdin.read()", 'prompt = sys.stdin.read()\npathlib.Path("received.txt").write_text(prompt)')
+    source_path = executable.with_suffix(".py") if os.name == "nt" else executable
+    source = source_path.read_text()
+    source = source.replace("marker = pathlib.Path(",
+        'pathlib.Path("received.txt").write_text(prompt)\nmarker = pathlib.Path(')
     if first_attempt_fails:
         source = source.replace("marker = pathlib.Path(",
             'failed = pathlib.Path("failed-once")\n'
@@ -61,7 +63,8 @@ def test_real_host_reads_original_capture_after_source_change(
             '    print("Selected model is at capacity. Please try a different model.", file=sys.stderr)\n'
             '    raise SystemExit(9)\n'
             'marker = pathlib.Path(')
-    executable.write_text(source)
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    executable = write_python_host_fixture(tmp_path / "captured-fake-codex", source)
     base = f._base_argv(registry=registry, runtime=runtime, workspace=workspace,
         codex_bin=executable, model=None, timeout_seconds=20,
         expected_marker=f._marker_value(1), turn_instance_id="original-observation")
@@ -83,7 +86,8 @@ def test_real_host_reads_original_capture_after_source_change(
     assert capture["turn_key"] == request["turn_key"]
     path = Path(capture["path"])
     original = path.read_bytes()
-    assert path.stat().st_mode & 0o077 == 0
+    if os.name != "nt":  # POSIX mode bits do not describe Windows ACLs.
+        assert path.stat().st_mode & 0o077 == 0
     if legacy_pretty:
         # Model an observation produced by the older writer. Recovery must
         # preserve those original bytes rather than rewriting its layout.
@@ -137,10 +141,14 @@ def test_real_host_reads_original_capture_after_source_change(
             path.write_bytes(original)
         code, recovered = f._run_cli([*replay, "--resume-turn-key", request["turn_key"],
                                       "--retry-failed-turn", "--execute"])
-        assert code == 0 and recovered["status"] == "committed", json.dumps(recovered)
+        # The original observation stays immutable, but SOURCE_B is now the
+        # authoritative requirement. A retry of old work must fail freshness
+        # before any debit; a new observation cannot silently replace it.
+        assert code == 1 and recovered["validation_stage"] == "result_freshness", recovered
         retried = json.loads((workspace / "received.txt").read_text().split("Turn request:\n", 1)[1])
         assert retried["turn_envelope"] == request["turn_envelope"]
-        assert path.read_bytes() == original
+        assert f._quota_spend_count(runtime) == 0 and path.read_bytes() == original
+        return
     code, repeated = f._run_cli([*replay, "--resume-turn-key", request["turn_key"], "--execute"])
     assert code == 0, repeated
     assert not any(repeated["effects"].values())

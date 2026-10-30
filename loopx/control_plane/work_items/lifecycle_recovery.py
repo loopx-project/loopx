@@ -14,15 +14,16 @@ def receipt_bound_lifecycle_candidate(
     agent_id: str | None,
     items: list[dict[str, Any]],
     derive: Callable[[dict[str, Any]], dict[str, Any] | None],
+    admitted_source: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     facts = project_replan_semantics({
         "operation": "lifecycle_source", "guard_recorded_at": guard_recorded_at,
-        "agent_id": agent_id, "items": items,
+        "agent_id": agent_id, "items": items, "obligation": admitted_source,
     })
     if not facts.get("items"):
         return None
     gaps = facts["items"]
-    source = derive({"completed_without_successor_items": gaps,
+    source = admitted_source or derive({"completed_without_successor_items": gaps,
                      "completed_without_successor_count": len(gaps)})
     if not source or source.get("obligation_id") != selected_obligation_id:
         return None

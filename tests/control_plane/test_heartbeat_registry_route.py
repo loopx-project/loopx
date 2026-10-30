@@ -225,6 +225,26 @@ def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_reg
             _route(step["command_template"], registry, runtime)
     assert cli._spend_run_count(runtime) == 0
 
+    # New default admissions validate the result before a post-result direction.
+    # Both returned read and write routes must survive the conflicting cwd too.
+    code, completed = _execute([
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "todo", "complete", "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
+        "--note", "Selected candidate independently verified.",
+        "--next-agent-todo", "Verify the remaining selected-authority work.",
+    ], project)
+    assert code == 0 and completed["completed"], json.dumps(completed)
+    code, direction = _execute([
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "checkpoint-context", "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
+        "--purpose", "first_delivery",
+    ], project)
+    assert code == 0 and direction["basis"]["todo"]["status"] == "done", direction
+    assert direction["settlement_identity"] == identity
+    assert cli._spend_run_count(runtime) == 0
+
     refresh = next(c for c in channel["next_cli_actions"] if "refresh-state" in c)
     replacements = {
         "<validated_progress>": "validated_progress", "<scale>": "implementation",
@@ -236,9 +256,10 @@ def test_cli_generated_guard_selection_and_settlement_ignore_conflicting_cwd_reg
         "--vision-state", "vision_on_track",
         "--vision-summary", "Keep validating the selected work.",
         "--vision-acceptance", "The same Turn settles once against the selected authority.",
+        "--checkpoint-read-context", direction["read_context_id"],
         "--no-global-sync", "--suppress-external-sinks",
     ], project)
-    assert code == 0 and refreshed["settlement_result"]["ok"], refreshed
+    assert code == 0 and refreshed["settlement_result"]["ok"], json.dumps(refreshed)
     spend = next(c for c in channel["next_cli_actions"] if "spend-slot" in c)
     for replay in (False, True):
         code, spent = _execute(shlex.split(spend)[1:], project)

@@ -1386,6 +1386,8 @@ export type LoopXModeSnapshot = {
   settings: Partial<LoopXModeSettings> & { execution_config?: string };
   native: { status: string; tokenBudget?: number; tokensUsed?: number };
   registered_agents: string[]; paused: boolean; recovery_required: boolean;
+  coordinator_checkpoint?: {stage: string; result_committed?: boolean; next_action?: string;
+    settlement_identity?: {todo_id?: string; turn_instance_id?: string}} | null;
   members: Array<{id: string; agent_id: string; todo_id: string | null}>;
   deliveries: Array<{operation_id: string; agent_id: string; todo_id: string | null; status: string}>;
   ingress: Array<{client_ingress_id: string; mode: string; status: string}>;

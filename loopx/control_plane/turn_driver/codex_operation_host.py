@@ -133,7 +133,7 @@ def run_codex_operation_host(
             model=model,
             reasoning_effort=reasoning_effort,
             resume_thread_id=binding["session_id"] if binding else None,
-            dynamic_tools=[operations.OPERATION_TOOL],
+            dynamic_tools=[] if request.get("phase") == "checkpoint_direction" else [operations.OPERATION_TOOL],
             host_config=host_config,
             launch_guard=lambda: launch_scope("codex_operation_process_launch"),
             response_timeout_sec=30 if timeout_seconds is None else min(timeout_seconds, 30),
@@ -142,7 +142,7 @@ def run_codex_operation_host(
         )
 
         selection.store(session.thread_id)
-        session.bound_tool_handler = operations.operation_tool_handler(
+        session.bound_tool_handler = None if request.get("phase") == "checkpoint_direction" else operations.operation_tool_handler(
             runtime_root=runtime_root,
             registry_path=registry_path,
             lineage=lineage,
@@ -163,7 +163,7 @@ def run_codex_operation_host(
             operations.operation_continuations(
                 runtime_root=runtime_root, registry_path=registry_path, lineage=lineage,
                 route=route, goal_ref=request.get("goal_ref"),
-            ) if (runtime_root / "chat" / "actions" / "actions.json").is_file() else []
+            ) if request.get("phase") != "checkpoint_direction" and (runtime_root / "chat" / "actions" / "actions.json").is_file() else []
         )
 
         def on_event(kind: str, event: dict[str, Any]) -> None:
@@ -183,7 +183,8 @@ def run_codex_operation_host(
                     recovery_kind="resume_session",
                 ) from exc
 
-        child_observer = native_child_observer(request, runtime_root=runtime_root, lineage=lineage,
+        child_observer = None if request.get("phase") == "checkpoint_direction" else native_child_observer(
+            request, runtime_root=runtime_root, lineage=lineage,
             registry_path=goal_admission.registry_path if goal_admission is not None else None)
 
         def observe_child(item: Mapping[str, Any]) -> None:
@@ -198,9 +199,11 @@ def run_codex_operation_host(
             else:
                 goal_admission.accept_result(record_child)
 
-        result = session.send(
-            _prompt(request)
-            + "\nUse loopx_operation for context/pending/prepare/inspect/consume/report. "
+        operation_prompt = (
+            ""
+            if request.get("phase") == "checkpoint_direction"
+            else (
+            "\nUse loopx_operation for context/pending/prepare/inspect/consume/report. "
             "Source conversations are not executor identity. context/pending/inspect do not require consumption. "
             "When the admitted task authorizes proposal preparation and supplies its terms, prepare may run before human confirmation or consume; "
             "prepare writes a canonical proposal, not a domain/external effect. execution_allowed=false is expected for prepare, not a reason to refuse it. "
@@ -212,7 +215,11 @@ def run_codex_operation_host(
             + ("\nCanonical confirmed operation continuations for this exact binding: "
                + json.dumps(continuations, sort_keys=True)
                + ". Inspect these locators through loopx_operation and consume once before any effect."
-               if continuations else ""),
+               if continuations else "")
+            )
+        )
+        result = session.send(
+            _prompt(request) + operation_prompt,
             output_schema=codex_cli_result_schema(request),
             on_event=on_event,
             turn_start_guard=lambda: launch_scope("codex_operation_turn_start"),

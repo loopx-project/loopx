@@ -19,21 +19,29 @@ export function requiresReentrySettlement(input: CoordinationTodoTerminalLifecyc
 /** Resolve historical quota identity from its durable receipt, never by parsing
  * an opaque completion key or treating missing history as unscoped work. */
 export async function verifyReentrySettlement(runtimeRoot: string,
-  input: CoordinationTodoTerminalLifecycleInput): Promise<void> {
+  input: Pick<CoordinationTodoTerminalLifecycleInput,
+    "goal_id" | "todo_id" | "actor_agent_id" | "requested_completion_turn_key">): Promise<void> {
   const {readQuotaSettlementSnapshot, readQuotaSettlementFromSnapshot,
     QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA} = await import("../quota/settlement_readback.ts");
   const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, input.goal_id);
   const event = snapshot.events.find(event => {
     const details = jsonObject(event.details);
     const identity = jsonObject(details?.settlement_identity);
-    return event.agent_id === input.actor_agent_id &&
-      (details?.settlement_effect_id === input.requested_completion_turn_key ||
+    // Managed Turns persist the opaque Turn key; interactive completions
+    // persist the full effect id. Resolve both from the original scoped event,
+    // then let quota readback prove the same writeback and spend receipts.
+    return event.goal_id === input.goal_id && event.agent_id === input.actor_agent_id &&
+      (details?.todo_id === input.todo_id || event.todo_id === input.todo_id ||
+        identity?.todo_id === input.todo_id) &&
+      (event.run_id === input.requested_completion_turn_key ||
+        details?.settlement_effect_id === input.requested_completion_turn_key ||
         identity?.effect_id === input.requested_completion_turn_key);
   });
   const turn = event?.run_id;
   if (typeof turn !== "string" || input.actor_agent_id === null ||
-      settlementIdentity({goal_id: input.goal_id, agent_id: input.actor_agent_id,
-        todo_id: input.todo_id, turn_instance_id: turn}).effect_id !== input.requested_completion_turn_key) {
+      (turn !== input.requested_completion_turn_key &&
+        settlementIdentity({goal_id: input.goal_id, agent_id: input.actor_agent_id,
+          todo_id: input.todo_id, turn_instance_id: turn}).effect_id !== input.requested_completion_turn_key)) {
     throw new AuthorityStoreProtocolError("Lifecycle closeout requires the original quota identity and settled receipts");
   }
   const readback = readQuotaSettlementFromSnapshot({schema_version: QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA,

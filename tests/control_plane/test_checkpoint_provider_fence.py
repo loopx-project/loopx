@@ -9,7 +9,7 @@ import sys
 import time
 
 import pytest
-from canonical_authority_fixture import advance_canonical_fixture_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import EffectRuntimeConflict
@@ -92,16 +92,19 @@ def _replace_source_goal(registry: Path, instance_id: str) -> None:
         transaction.commit(payload)
 
 
-def fixture(tmp_path, monkeypatch, provider):
+def fixture(tmp_path, monkeypatch, provider, *, first_delivery=False):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    project, runtime, registry, binding, delivery, original = _missing(tmp_path, provider=provider)
-    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todos = [{"schema_version": "todo_item_v0", "todo_id": name, "index": index,
         "role": "agent", "status": "open", "done": False, "text": f"Synthetic page work {name}",
         "task_class": "advancement_task", "archive_state": "active", "source_section": "Agent Todo",
         "claimed_by": AGENT_ID} for index, name in enumerate((TODO_ID, "todo_dependency", "todo_unrelated"), 1)]
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos, handoff_mode="hard_lease", leases=[])
-    advance_canonical_fixture_authority(runtime, GOAL_ID, projection, operation_id="fixture-checkpoint-fences")
+    def initialize(project, runtime, _registry):
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
+    project, runtime, registry, binding, delivery, original = _missing(
+        tmp_path, defer=first_delivery, historical=True, initialize=initialize)
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     for todo in todos:
         rc, lease = _run_cli(registry, runtime, "task-lease", "acquire", "--goal-id", GOAL_ID,
             "--todo-id", todo["todo_id"], "--owner", AGENT_ID,
@@ -111,7 +114,7 @@ def fixture(tmp_path, monkeypatch, provider):
     def read():
         return context_io.read_checkpoint_context(registry_path=registry, runtime_root_override=str(runtime),
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID, turn_instance_id=TURN_ID,
-            dependency_todo_ids=["todo_dependency"])
+            dependency_todo_ids=["todo_dependency"], purpose="first_delivery" if first_delivery else "supplement_checkpoint")
     return project, runtime, registry, state, read, original
 
 
@@ -157,6 +160,80 @@ def test_public_update_before_final_read_rejects_then_reread_succeeds(tmp_path, 
     replay = refresh(registry, runtime, fresh["read_context_id"])
     assert replay["idempotent_replay"] and index.read_bytes() == after
     assert result["settlement_identity"] == original["settlement_identity"]
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_runtime_directory_alias_commits_and_cold_replays_the_original_turn(tmp_path, monkeypatch, provider):
+    _, runtime, registry, _, read, original = fixture(tmp_path, monkeypatch, provider)
+    token = read()["read_context_id"]
+    alias = tmp_path / "runtime-alias"
+    if os.name == "nt":
+        import _winapi
+        _winapi.CreateJunction(str(runtime), str(alias))
+    else:
+        alias.symlink_to(runtime, target_is_directory=True)
+    try:
+        saved = refresh(registry, alias, token)
+        assert saved["appended"] and saved["vision_checkpoint"]["satisfied"], saved
+        assert Path(saved["json_path"]).parent == runtime.resolve() / "goals" / GOAL_ID / "runs"
+        assert saved["settlement_identity"] == original["settlement_identity"]
+        index = runtime / "goals" / GOAL_ID / "runs/index.jsonl"
+        artifacts = {Path(saved[key]): Path(saved[key]).read_bytes() for key in ("json_path", "markdown_path")}
+        before = index.read_bytes()
+        for root in (runtime, alias):
+            replay = refresh(registry, root, token)
+            assert replay["idempotent_replay"] and replay["settlement_identity"] == saved["settlement_identity"], replay
+        assert index.read_bytes() == before
+        assert all(path.read_bytes() == contents for path, contents in artifacts.items())
+        assert _spend_run_count(runtime) == 0
+    finally:
+        alias.rmdir() if os.name == "nt" else alias.unlink()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.skipif(os.name == "nt", reason="Windows held index handles reject directory replacement before the native identity guard; exercise this injection on POSIX")
+def test_replaced_artifact_directory_cannot_receive_the_checkpoint_append(tmp_path, monkeypatch, provider):
+    import shutil
+    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider)
+    token = read()["read_context_id"]
+    runs = runtime / "goals" / GOAL_ID / "runs"
+    before = (runs / "index.jsonl").read_bytes()
+    barrier = tmp_path / "directory-race"
+    barrier.mkdir()
+    effect = context_io.effect_runtime_result
+
+    def native(method, params, **kwargs):
+        if method != "goal.checkpoint_read_context.commit":
+            return effect(method, params, **kwargs)
+        child = start_probe({"mode": "checkpoint", "provider": provider, "barrier": str(barrier), "params": params})
+        try:
+            wait_for(barrier / "head-read", child)
+            retained = runs.with_name("runs-retained")
+            runs.rename(retained)
+            # Identical bytes do not make a replacement the directory whose
+            # identity was admitted before the provider head was acquired.
+            shutil.copytree(retained, runs)
+            assert (runs.stat().st_dev, runs.stat().st_ino) != (
+                retained.stat().st_dev, retained.stat().st_ino)
+            (barrier / "release").touch()
+            stdout, stderr = child.communicate(timeout=20)
+            assert child.returncode == 1, stdout + stderr
+            rejected = json.loads(stdout)
+            assert rejected["error_code"] == "checkpoint_commit_unknown", rejected
+            assert "read back the original Turn before retrying" in rejected["error"], rejected
+            raise RuntimeError("replaced directory refused at the checkpoint owner")
+        finally:
+            (barrier / "release").touch()
+            if child.poll() is None:
+                child.kill()
+                child.communicate()
+
+    monkeypatch.setattr(context_io, "effect_runtime_result", native)
+    with pytest.raises(RuntimeError, match="replaced directory refused"):
+        refresh(registry, runtime, token)
+    assert (runs / "index.jsonl").read_bytes() == before
+    assert (runs.with_name("runs-retained") / "index.jsonl").read_bytes() == before
     assert _spend_run_count(runtime) == 0
 
 
@@ -268,8 +345,9 @@ def test_existing_cli_maintenance_guard_precedes_provider_commit(tmp_path, monke
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tmp_path, monkeypatch, provider):
-    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider)
+@pytest.mark.parametrize("first_delivery", [False, True])
+def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tmp_path, monkeypatch, record_property, provider, first_delivery):
+    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider, first_delivery=first_delivery)
     context = read()
     barrier = tmp_path / "barrier"
     barrier.mkdir()
@@ -301,7 +379,9 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
             assert saved["ok"] and not saved["replayed"]
             assert json.loads((barrier / "runtime-replay").read_text())["replayed"]
             finish(writer)
-            assert json.loads((barrier / "provider-result").read_text())["status"] == "applied"
+            provider_result = json.loads((barrier / "provider-result").read_text())
+            assert provider_result["status"] == "applied"
+            record_property("provider_commit_elapsed_ms", provider_result["elapsed_ms"])
             return saved
         finally:
             (barrier / "release").touch()
@@ -311,7 +391,7 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
                     child.communicate()
 
     monkeypatch.setattr(context_io, "effect_runtime_result", native)
-    result = refresh(registry, runtime, context["read_context_id"])
+    result = refresh(registry, runtime, context["read_context_id"], first_delivery=first_delivery)
     assert result["vision_checkpoint"]["satisfied"] and len(observed) == 1
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=GOAL_ID)["provider_revision"] != observed[0]
     rows = [json.loads(line) for line in (runtime / f"goals/{GOAL_ID}/runs/index.jsonl").read_text().splitlines()]
@@ -320,7 +400,8 @@ def test_provider_transaction_cannot_commit_between_final_head_and_checkpoint(tm
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("first_delivery", [False, True])
+def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, monkeypatch, provider, first_delivery):
     """Provider contract: a transaction without the CLI's outer M protection.
 
     The reviewed implementation accepts this old checkpoint. The native save
@@ -328,7 +409,7 @@ def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, mon
     hold M before committing; this test does not pretend to reproduce that path.
     """
     from loopx import state_refresh
-    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider)
+    _, runtime, registry, _, read, _ = fixture(tmp_path, monkeypatch, provider, first_delivery=first_delivery)
     token = read()["read_context_id"]
     index = runtime / f"goals/{GOAL_ID}/runs/index.jsonl"
     before = index.read_bytes()
@@ -349,7 +430,7 @@ def test_provider_commit_after_python_check_is_revalidated_at_save(tmp_path, mon
     monkeypatch.setattr(state_refresh, "reserve_unique_run_paths", race)
     try:
         with pytest.raises(context_io.CheckpointReadContextRejected) as rejected:
-            refresh(registry, runtime, token)
+            refresh(registry, runtime, token, first_delivery=first_delivery)
         assert rejected.value.code == "checkpoint_read_context_stale"
         assert index.read_bytes() == before
     finally:

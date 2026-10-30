@@ -29,6 +29,28 @@ export function heartbeatReceiptDetails(event: JsonObject | null): JsonObject {
   return jsonObject(event?.details) ?? {};
 }
 
+/** Persisted admission, not a caller's completion opt-in. */
+export function resultFreshnessRequired(event: JsonObject | null): boolean {
+  const policy = heartbeatReceiptDetails(event).result_freshness;
+  if (policy === undefined) return false; // Historical admission is not rewritten.
+  if (policy !== "turn_result_freshness_required_v1") {
+    throw new EffectRuntimeRequestError("Result freshness admission is incomplete or unsupported",
+      "result_freshness_admission_unknown");
+  }
+  return true;
+}
+
+/** Direction cadence stays with the checkpoint owner; this selects transport. */
+export function checkpointContinuationRequired(event: JsonObject | null): boolean {
+  const mode = heartbeatReceiptDetails(event).checkpoint_continuation;
+  if (mode === undefined) return false;
+  if (mode !== "current_agent_v1") {
+    throw new EffectRuntimeRequestError("Checkpoint continuation admission is incomplete or unsupported",
+      "checkpoint_continuation_admission_unknown");
+  }
+  return true;
+}
+
 export function optionalHeartbeatString(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   return String(value).trim() || null;
@@ -80,6 +102,8 @@ export interface HeartbeatReceiptFact extends JsonObject {
   request_subject?: ExecutionRequestSubject | null;
   settlement_effect_id: string | null;
   closeout_required: boolean;
+  result_freshness?: unknown;
+  checkpoint_continuation?: unknown;
 }
 
 export function heartbeatReceiptFactFromEvent(
@@ -87,6 +111,8 @@ export function heartbeatReceiptFactFromEvent(
 ): HeartbeatReceiptFact {
   const eventDetails = heartbeatReceiptDetails(event);
   return {
+    result_freshness: eventDetails.result_freshness,
+    checkpoint_continuation: eventDetails.checkpoint_continuation,
     event_id: optionalHeartbeatString(event.event_id),
     run_id: optionalHeartbeatString(event.run_id),
     todo_id: optionalHeartbeatString(eventDetails.todo_id),
@@ -175,6 +201,18 @@ export function selectEffectiveHeartbeatReceipt<Value>(
   for (const entry of entries) {
     const binding = heartbeatReceiptBinding(goalId, agentId, entry.fact);
     if (binding) identities.set(binding.identity_key, entry.value);
+  }
+  const protectedIndex = entries.findIndex(entry => resultFreshnessRequired({details: entry.fact}));
+  const continuationIndex = entries.findIndex(entry => checkpointContinuationRequired({details: entry.fact}));
+  if (continuationIndex >= 0 && entries.slice(continuationIndex + 1).some(entry =>
+    heartbeatReceiptBinding(goalId, agentId, entry.fact) !== null &&
+    !checkpointContinuationRequired({details: entry.fact}))) {
+    throw receiptIdentityConflict("Checkpoint continuation admission cannot be downgraded");
+  }
+  if (protectedIndex >= 0 && entries.slice(protectedIndex + 1).some(entry =>
+    heartbeatReceiptBinding(goalId, agentId, entry.fact) !== null &&
+    !resultFreshnessRequired({details: entry.fact}))) {
+    throw receiptIdentityConflict("A protected Turn admission cannot be replaced by an unprotected receipt");
   }
   if (identities.size > 1) {
     throw receiptIdentityConflict(

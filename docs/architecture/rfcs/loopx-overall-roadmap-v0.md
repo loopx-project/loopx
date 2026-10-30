@@ -1439,6 +1439,52 @@ independent admission without weakening task-level validation. See the
 [acceptance contract](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0).
 This narrows a local recovery gap, not the full R1/R2 coordination acceptance.
 
+**R1 first delivery checkpoint.** New ordinary CLI/MCP/managed work admissions
+persist their original result basis before execution and enforce freshness at
+the existing Todo owner. Default identity acquisition restores the unfinished
+Turn; settled work releases a new work identity. Relevant Todo, dependencies,
+acceptance and source changes require candidate revalidation, while unrelated
+revisions do not. Original successful receipts survive response loss and cold
+recovery. Legacy Markdown is read-only and cannot authorize Todo mutations;
+File/SQLite and PostgreSQL result transactions retain their typed head/CAS owner. See the
+[operating protocol](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness).
+New supported admissions also persist the default current-Agent checkpoint
+continuation contract. Required checkpoints use the actual post-result, complete
+relevant frontier read; MCP returns it to the current tool caller, while managed execution
+resumes its original Host/session. Noncompletion outcomes retain their original
+receipt and use the existing supplement owner. Related direction changes require
+only a new direction judgment, preserving successful results and single spend.
+Definitively rejected progress writes retain their candidate for original-Turn
+revalidation. Ordinary direction preserves independent Agent lanes; original
+no-followup still requires the whole Goal. Supplementary direction includes
+registered primary Goal documents under the same registry fence. Chat treats
+unavailable observations as read failures with read-only recovery, not pending settlement.
+The source candidate retains classified direction stops and permits explicit
+original-Turn reentry under current launch gates; unknown historical stop
+records stay held. Receipt-bound replanning keeps its semantic ACK behind the
+fresh direction, and settled selected planning obligations are excluded from later work
+inference while ordinary progress retains original-Turn recovery. These are recovery mechanics, not evidence of new model utility.
+Ordinary terminal completion uses the existing same-Turn upgrade after checkpoint
+and spend. Historical result-only, explicit first-delivery and supplement Turns
+retain their persisted contract. Complete changed-frontier recovery, packaged
+frontend/Lark journeys, mixed-version rollback and live-model utility remain
+unfinished first-stage acceptance. Source-session remains lifecycle-only and
+ordinary Python PostgreSQL execution still lacks its service-owned factory.
+An independent reviewer needs a separately registered optional contract. These
+defaults do not close R1, certify Goal completion, establish distributed atomicity
+or demonstrate model-outcome gains.
+
+Recovery qualification now includes lost or damaged work-read receipts after
+original result commit and historical result-only terminal revalidation after a
+proved progress writeback, and an unfinished delegated Todo after Turn settlement.
+The native index proves the original work row even after a direction supplement.
+Sealed lifecycle recovery compares closeout at the canonical store's timestamp
+precision, preserving same-second admission/closeout without adopting old terminal work.
+Unknown commits and mismatched identities remain
+rejected. The packaged Chat recovery smoke uses the existing same-origin relay
+and an isolated Host profile; deterministic replay evidence does not qualify
+installed Lark, mixed-version rollback or live-model utility.
+
 **R1 transaction checkpoint.** Team-plan admission and whole-batch planning now live in `work_items/team_plan.ts`. Confirmation assigns all admitted lanes in one write with a durable operation receipt; identity is proposal + lane, never Todo text. File/SQLite authority uses the existing CAS and receipt owner; legacy Markdown writes the records and immutable receipt together under its existing fence and lock. Exact replay reads historical results even after a receiver changes, completes or deletes work. A precommit failure creates no lane prefix, and pending canonical display delivery requires recovery before Chat reports verified success. The card names partial assignments and gaps; quota/stop remain advisory and an explicit enforcement claim is rejected. Agent-originated settlement binds the same state basis at its journal's first write and re-reads it at settlement; a plan whose basis is missing or moved, or whose every lane is a gap, is a typed failed receipt that creates no Todo and replays unchanged.
 
 This closes the local assignment/retry portion of F4, not R1's collaboration acceptance. Registered receivers are assigned without being impersonated as authors; agent-originated settlement cannot assign another peer without owner confirmation. Assignment does not attest receiver adoption, a lease, execution, dependency consumption or independent acceptance. Do not add a second confirmation to ordinary already-authorized work. Gap resolution requires new explicit intent; replay must not silently extend the confirmed subset. The fingerprint binds current local state and canonical revision, not a full shared Goal-intent transaction. Local registry and active-state guards now remain held through the typed commit: native token claims survive caller exit, changed source bytes reject new assignments, and expired handoffs can only replay an exact committed receipt. Registry contention returns a retryable failure without creating work; canonical display recovery runs after the source guards release. Failed retry-safe Team Plan proposals retain their original review identity after Goal or manager workspace reload; retry revalidates current source facts and recovers existing assignments rather than generating a new proposal. Stale, gated and unsafe failures remain unavailable for this recovery, including in the already-open drawer. Chat recovery resolves the current registered Goal and source before receipt lookup; a removed Goal or unreadable bound source can block recovery. Canonical display recovery follows the current registered source, so this slice does not recover a deleted source binding. R2/R3/R4 still own executor qualification, receiver adoption/result return and shared intent/authorization; the cross-host Turn lease is not a plan barrier.

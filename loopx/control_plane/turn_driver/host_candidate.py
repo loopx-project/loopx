@@ -186,6 +186,9 @@ def extract_turn_authority(request: Mapping[str, Any]) -> dict[str, Any]:
             if key not in {"replan_action_packet", "replan_read_argv", "core_goal", "planning_horizon", "acceptance_index"}}
         authority["action_signature"] = signature
     authority.update(host_context_projection(request))
+    for field in ("delivery_result_context", "result_revalidation"):
+        if request.get(field) is not None:
+            authority[field] = request[field]
     return authority
 
 
@@ -292,6 +295,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         f"{replan_instruction}"
         f"{acceptance_instruction}"
         f"{work_instruction}"
+        "Use delivery_result_context as the actual requirements read for work. If result_revalidation is present, recheck its retained candidate against the new basis and reuse valid artifacts. These inputs grant no new permissions.\n"
         f"Turn authority JSON:\n{authority_json}\n\n"
         "When finished, return only one JSON object (no Markdown fence) with "
         "these public-safe fields:\n"
@@ -339,6 +343,21 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "iteration_failed."
             if authority.get("execution_profile") else ""
         )
+    )
+
+
+def render_checkpoint_prompt(request: Mapping[str, Any]) -> str:
+    """Continue this Agent on the exact post-outcome read, without work effects."""
+    return (
+        "Continue the current Agent's original Turn after its durable outcome. "
+        "Read checkpoint_context.basis and judge the current direction. Do not repeat implementation, "
+        "validation, Todo/Goal writes, quota spend, or scheduler actions. Return one JSON object with "
+        "the exact read_context_id and either a fresh Vision packet serialized as agent_vision_json "
+        "or an evidence-backed vision_unchanged_reason (<=240 chars) with empty agent_vision_json. "
+        "An unchanged reason requires the baseline in this basis. Use its vision_authoring contract. "
+        "A repeated conclusion is allowed; do not copy a pre-outcome decision. If permission, stop or unavailable "
+        "context prevents judging, return a bounded stop_reason with both decision fields empty. Otherwise leave stop_reason empty.\n" +
+        json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     )
 
 

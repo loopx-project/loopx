@@ -12,6 +12,7 @@ from loopx.control_plane.scheduler.execution_context import (
     ExecutionMode,
     HostSurface,
     SchedulerOwner,
+    SchedulerExecutionContextResolution,
     SchedulerRuntimeProfile,
     build_goal_runtime_continuation,
     render_scheduler_execution_args,
@@ -1188,6 +1189,31 @@ def test_first_class_runtime_profiles_round_trip_to_compact_args(
         render_scheduler_execution_args(scheduler_execution_context=resolution)
         == expected_args
     )
+
+
+def test_absent_scheduler_context_renders_no_host_even_after_resolution():
+    absent = resolve_scheduler_execution_context(None)
+    assert not absent.ok and absent.context is None
+    assert render_scheduler_execution_args(scheduler_execution_context=None) == ''
+    assert render_scheduler_execution_args(scheduler_execution_context=absent) == ''
+
+
+@pytest.mark.parametrize('context', [{}, {'host_surface': 'codex_app'},
+    {'host_surface': 'codex_app', 'scheduler_owner': 'none', 'execution_mode': 'interactive'}])
+def test_invalid_explicit_scheduler_context_is_not_rendered_as_absent(context):
+    for value in [context, resolve_scheduler_execution_context(context)]:
+        with pytest.raises(ValueError, match='invalid scheduler_execution_context'):
+            render_scheduler_execution_args(scheduler_execution_context=value)
+
+
+def test_typed_scheduler_resolution_without_supplied_metadata_retains_context():
+    resolved = scheduler_execution_context_for_runtime_profile(SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT)
+    typed = SchedulerExecutionContextResolution(context=resolved.context)
+    assert typed.supplied is None and typed.ok
+    assert render_scheduler_execution_args(scheduler_execution_context=typed) == " --codex-app"
+    rejected = SchedulerExecutionContextResolution(context=None, errors=("invalid owner",))
+    with pytest.raises(ValueError, match="invalid scheduler_execution_context"):
+        render_scheduler_execution_args(scheduler_execution_context=rejected)
 
 
 def test_codex_profile_does_not_admit_children_without_observed_spawn() -> None:

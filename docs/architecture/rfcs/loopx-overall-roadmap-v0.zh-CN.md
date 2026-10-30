@@ -940,6 +940,14 @@ lifecycle。
 见[验收合同](../../reference/goal-acceptance-observations.md#owner-authorized-contract-v0)。
 这修复局部恢复缺口，不代表 R1/R2 协同整体验收完成。
 
+**R1 首次交付检查点。** 新的普通 CLI/MCP/托管执行在工作前持久化原始结果依据，由现有 Todo owner 在提交时检查新鲜度。默认身份恢复未完成的 Turn；结算后才释放新的工作身份。相关 Todo、依赖、验收和来源变化要求重新验证候选结果，无关修订不会触发。成功回执支持响应丢失和冷恢复。Legacy Markdown 只读，不能授权 Todo 写入；File/SQLite 与 PostgreSQL 结果事务沿用类型化 head/CAS owner。见[操作协议](../../reference/protocols/goal-vision-replan-contract-v0.md#opt-in-first-delivery-freshness)。
+
+新的受支持准入还保存当前 Agent 的默认 checkpoint 续跑契约。需要检查点时读取结果提交后的完整相关任务前沿；MCP 返回给当前工具调用者，托管执行恢复原 Host/session。非完成结果保留原回执并使用现有补充 owner。相关方向变化只重做方向判断，保留成功结果和单次扣费。确定被拒的进度写回保留候选，在原 Turn 重验；普通方向保持独立 Agent lane 隔离，原 no-followup 仍要求全 Goal。补充方向在相同 registry fence 下包含注册的主 Goal 文档；Chat 将观察不可用显示为读取失败并提供只读恢复，不称为待结算。普通终态完成在 checkpoint 与扣费后使用同一 Turn 的升级路径。历史 result-only、显式 first-delivery 及 supplement Turn 沿用保存的契约。完整的前沿变化恢复、打包前端/Lark 旅程、混合版本回滚与真实模型效用仍是未完成的一阶段验收。Source-session 仍只支持生命周期；普通 Python PostgreSQL 执行仍缺少 service-owned factory。独立 reviewer 需要单独注册的可选契约。这些默认值不关闭 R1、不认证 Goal 完成，也不证明分布式原子性或模型收益。
+
+源码候选保留已分类的方向停止，并在当前派发门约束下支持原 Turn 显式重入；未知历史停止仍被阻断。回执绑定的重规划在新方向返回后才验收语义 ACK，已结算且验收所选规划义务的 Turn 不再与后续工作竞争，普通进度仍保留原 Turn 恢复。这些是恢复机制，不是新增模型效用证据。
+
+恢复资格还覆盖原结果提交后工作读取回执丢失或损坏、已有进度写回证明的历史 result-only 终态重验，以及 Turn 结算后尚未完成的委派 Todo。native index 在方向补充之后仍证明原工作记录。sealed 生命周期恢复按 canonical store 的时间精度比较关闭时刻，保留同秒准入/关闭，不采纳旧终态工作。未知提交和身份不匹配继续拒绝。打包 Chat 恢复烟测复用现有同源 relay 和隔离 Host profile；确定性重放证据不认证 installed Lark、混版本回滚或真实模型效用。
+
 **R1 事务检查点。** 团队计划准入与整批规划现在归 `work_items/team_plan.ts`。确认后，全部已准入 lane 与持久操作回执一次提交；身份由 proposal + lane 决定，不再由 Todo 文本决定。File/SQLite 权威复用现有 CAS 与回执 owner；legacy Markdown 在原有 fence 和锁内同时写入任务和不可变回执。同一操作重试只读历史结果，接收者后来修改、完成或删除任务也不会触发重建。提交前失败不会留下部分 lane；canonical 展示投递仍 pending 时，Chat 必须恢复后才能报告验证成功。卡片列出部分分配及缺口；quota/stop 是参考，显式强制声明会被拒绝。Agent 发起的结算在 journal 首次写入时绑定同一状态基线并在结算时重读；基线缺失或已变动、或全部 lane 均为缺口的计划，记录为类型化的失败回执，不创建 Todo，重放结果不变。
 
 这完成 F4 的本地分配/重试部分，不等于 R1 协同验收。注册接收者可以被分配任务，但不会被冒充为作者；Agent 发起的结算未经业主确认不能给另一 peer 分配任务。分配不证明接收者采纳、lease、执行、依赖消费或独立验收。普通已授权工作不应普遍增加第二次确认。解决缺口需要明确的新意图；重放不能静默扩展原确认子集。fingerprint 绑定当前本地状态与 canonical revision，不是完整共享 Goal 意图事务。本地 registry 与活动状态锁现在持续保护到类型化提交结束：native token claim 在调用进程退出后仍有效；源字节变化拒绝新分配；失效交接只能重放精确匹配的已提交回执。registry 竞争返回可重试失败，不创建任务；canonical 展示恢复在源锁释放后执行。允许安全重试的失败 Team Plan 提案在 Goal 或管家工作区刷新后仍保留原评审身份；重试重新核验当前源事实，并恢复已有分配，不生成新提案。stale、gated 和不允许安全重试的失败仍不提供此恢复入口，已打开的抽屉也遵循同一判定。Chat 恢复在查找回执前解析当前注册 Goal 与源绑定；Goal 被移除或绑定源不可读时可能阻断恢复。canonical 展示恢复使用当前注册源，本次修复不恢复已删除的源绑定。R2/R3/R4 仍负责执行器资格、接收者采纳/结果返回及共享意图/授权；跨主机 Turn lease 不是计划屏障。

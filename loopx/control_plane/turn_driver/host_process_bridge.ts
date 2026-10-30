@@ -1,10 +1,15 @@
 /** Private parent/child transport. EOF means the owning Python process left. */
 import {once} from "node:events";
-import {decodeHostProcessRequest, runHostProcess} from "./host_process.ts";
+import {readFile} from "node:fs/promises";
+import {decodeHostProcessRequest, observeHostLaunch, runHostProcess} from "./host_process.ts";
 const owner = new AbortController();
 // Private transport observations; none grants Goal or execution authority.
 type LaunchObservation = {kind: "ready"} | {kind: "not_launched"};
 const launchDeadline = process.argv[2] === "--guarded-launch" ? Number(process.argv[3]) : null;
+const launchReportIndex = process.argv.indexOf("--windows-launch-status");
+const launchReport = launchReportIndex < 0 ? null : process.argv[launchReportIndex + 1];
+if (launchReportIndex >= 0 && (!launchReport || process.platform !== "win32"))
+  throw new TypeError("invalid Windows Host launch report");
 if (launchDeadline !== null && (!Number.isFinite(launchDeadline) || launchDeadline <= 0))
   throw new TypeError("invalid guarded Host bridge deadline");
 const abort = () => {
@@ -45,12 +50,18 @@ process.stdin.on("data", (chunk: Buffer) => {
       delete raw.delegated_lease;
       const request = decodeHostProcessRequest(raw);
       // The owned process group is reported before either path can run unaccounted.
-      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit}));
+      let result;
+      if (lease === undefined) result = await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit});
       else {
         // Ordinary Hosts do not load canonical lease/provider modules.
         const {decodeDelegatedHostLease, runLeasedHostProcess} = await import("./leased_host_process.ts");
-        await emit(await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal, emit));
+        result = await runLeasedHostProcess(request, decodeDelegatedHostLease(lease), emit, owner.signal, emit);
       }
+      // Read only after supervision has completed. Missing/corrupt evidence
+      // fails the transport; business stdout cannot supply this observation.
+      if (launchReport && result.outcome === "exited")
+        result = observeHostLaunch(result, JSON.parse(await readFile(launchReport, "utf8")));
+      await emit(result);
     }
     catch { process.exitCode = 1; }
     finally { process.stdin.destroy(); }

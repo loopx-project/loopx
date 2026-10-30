@@ -629,6 +629,7 @@ class Delegations:
         path = self.path(operation_id)
         if self._read_stop(path) is not None:
             raise ValueError(DELEGATION_STOPPED_MESSAGE)
+        publish_committed = False
         try:
             with exclusive_file_lock(
                 path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT
@@ -649,12 +650,20 @@ class Delegations:
                                 else row["status"] not in DELEGATION_TERMINAL_STATUSES)
                 if should_spawn:
                     self._bound(row, require_active=True)
+                    publish_committed = delegation_validation.committed_revalidation_key(
+                        self, row, binding
+                    ) is not None
         except LockAcquireTimeoutError:
             # A live worker already owns the operation lock.  Observation is
             # sufficient; spawning another process cannot advance settlement.
             return self.read(operation_id)
         if should_spawn:
-            if prepared_source_request_id is None:
+            if publish_committed:
+                if prepared_source_request_id is None:
+                    self.execute(operation_id)
+                else:
+                    self.execute(operation_id, prepared_source_request_id=prepared_source_request_id)
+            elif prepared_source_request_id is None:
                 self._spawn(operation_id)
             else:
                 # Carry prepared CAS across startup; a delayed child only observes advanced work.
@@ -708,7 +717,9 @@ class Delegations:
                     self._record_turn_result(path, row, result, publish=False)
                     recovered = delegation_validation.recover_validated_settlement(self, path, row, binding)
         if recovered:
-            self._spawn(operation_id)
+            # Revalidation already ran its bounded CLI. Publish that original
+            # result before its MCP caller closes; no new Host work is started.
+            self.execute(operation_id)
         return self.read(operation_id)
 
     def _bound(
@@ -1201,6 +1212,7 @@ class Delegations:
             # The Turn's Host transport names the process group its supervisor owns.
             environment[HOST_PROCESS_RECORD_ENV] = str(host_record)
         if delegated_lease is None:
+            # This argv-only CLI must not inherit the MCP conversation's input pipe.
             completed = subprocess.run([*_python_module_command("loopx.cli"), *arguments],
                 cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
                 # Requests are entirely in argv; never inherit the caller's MCP/HTTP pipe.
@@ -1542,6 +1554,8 @@ class Delegations:
         if binding["todo_id"] is None:
             self._validate(binding)
             return  # Request validation never creates or completes a Todo.
+        if delegation_validation.original_task_completed(self, row, binding):
+            return
         lease = row.get("task_lease")
         if not isinstance(lease, dict):
             raise ValueError("delegation Todo completion requires its acquired task lease")
@@ -1609,6 +1623,17 @@ class Delegations:
         # Goal intent. Ordinary completion may precede its original Turn's
         # accounting (controller validation requires that order). Do not add
         # no-follow-up, which correctly requires already-settled receipts.
+        if delegation_validation.original_work_context(self, row, binding) is not None:
+            if "completion_read_context_id" not in row:
+                context = self._cli(binding, "checkpoint-context", "--goal-id", self.goal_id,
+                    "--agent-id", binding["agent_id"], "--todo-id", binding["todo_id"],
+                    "--turn-instance-id", self._turn_instance_id(row), "--purpose", "delivery_result")
+                row["completion_read_context_id"] = context["read_context_id"]
+                _write(self.path(row["identity"]["operation_id"]), row)
+            # This is a new work read, not a new Turn or direction judgment.
+            # Native completion independently verifies the retained candidate
+            # on this basis and rejects changes during that verification.
+            arguments += ["--delivery-read-context", row["completion_read_context_id"]]
         result = self._cli(binding, *arguments)
         if result.get("ok") is not True:
             raise ValueError(

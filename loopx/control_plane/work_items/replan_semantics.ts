@@ -126,6 +126,8 @@ function projectTurnTransition(request: JsonObject): JsonObject {
  * The selected obligation digest additionally binds Todo and completion identities.
  */
 function lifecycleSource(request: JsonObject): JsonObject {
+  const obligation = object(request.obligation);
+  if (Array.isArray(obligation.lifecycle_admission_items)) return admittedLifecycleSource(request, obligation);
   const agent = optionalNonEmptyString(request.agent_id, "agent_id");
   const admitted = typeof request.guard_recorded_at === "string"
     ? parseTodoTimestampMicros(request.guard_recorded_at) : null;
@@ -161,13 +163,55 @@ function lifecycleSource(request: JsonObject): JsonObject {
   return {items, settled};
 }
 
+function admittedLifecycleSource(request: JsonObject, obligation: JsonObject): JsonObject {
+  const triggers = Array.isArray(obligation.triggers) ? obligation.triggers.map(object) : [];
+  // New guards seal the original pending rows together with the obligation.
+  // Older guards retain their historical reconstruction path; no source is
+  // invented from a now-closed row or a newly observed timestamp.
+  let source = {items: [] as JsonObject[], settled: false};
+  if (Array.isArray(obligation.lifecycle_admission_items)) {
+    const admitted = obligation.lifecycle_admission_items.map(object);
+    const current = Array.isArray(request.items) ? request.items.map(object) : [];
+    const timestamp = typeof request.guard_recorded_at === "string"
+      ? parseTodoTimestampMicros(request.guard_recorded_at) : null;
+    const admissionSecond = timestamp === null ? null : timestamp / 1_000_000n * 1_000_000n;
+    const stable = ["todo_id", "index", "status", "done", "task_class", "archive_state",
+      "claimed_by", "last_actor_agent_id", "completed_at",
+      "completion_turn_key", "successor_todo_ids", "superseded_by"];
+    const items = triggers.map(trigger => current.find(item => item.todo_id === trigger.todo_id) ?? {});
+    const valid = timestamp !== null && triggers.length > 0 && triggers.length <= 3 &&
+      admitted.length === triggers.length && new Set(admitted.map(item => item.todo_id)).size === admitted.length &&
+      triggers.every((trigger, index) => {
+        const prior = admitted.find(item => item.todo_id === trigger.todo_id);
+        const item = items[index];
+        const completed = typeof prior?.completed_at === "string" ? parseTodoTimestampMicros(prior.completed_at) : null;
+        return prior !== undefined && current.filter(row => row.todo_id === trigger.todo_id).length === 1 &&
+          prior.status === "done" && prior.done === true && prior.task_class === "advancement_task" &&
+          (prior.archive_state ?? "active") === "active" && prior.claimed_by === request.agent_id &&
+          prior.last_actor_agent_id === request.agent_id && completed !== null && completed <= timestamp &&
+          prior.no_followup !== true && strings(prior.successor_todo_ids).length === 0 && !prior.superseded_by &&
+          stable.every(key => JSON.stringify(prior[key] ?? null) === JSON.stringify(item[key] ?? null)) &&
+          ((item.no_followup !== true && item.updated_at === prior.updated_at &&
+            item.completion_continuation === prior.completion_continuation &&
+            item.completion_recovery === prior.completion_recovery) ||
+           (item.no_followup === true && item.completion_continuation === "no_followup" &&
+            TODO_COMPLETION_RECOVERIES.some(recovery => recovery === item.completion_recovery) &&
+            (item.updated_at === prior.updated_at ||
+             (typeof item.updated_at === "string" && parseTodoTimestampMicros(item.updated_at) !== null &&
+              parseTodoTimestampMicros(item.updated_at)! >= admissionSecond!))));
+      });
+    source = {items: valid ? items : [], settled: valid && items.every(item => item.no_followup === true)};
+  }
+  return source;
+}
+
 function lifecycleObligation(request: JsonObject): JsonObject | null {
   const obligation = object(request.obligation);
   if (obligation.obligation_id !== request.selected_obligation_id ||
       obligation.resolution_mode !== "todo_lifecycle_settlement") return null;
+  const triggers = Array.isArray(obligation.triggers) ? obligation.triggers.map(object) : [];
   const source = lifecycleSource(request);
   const items = source.items as JsonObject[];
-  const triggers = Array.isArray(obligation.triggers) ? obligation.triggers.map(object) : [];
   if (items.length === 0 ||
       (typeof request.lifecycle_settled === "boolean" && request.lifecycle_settled !== source.settled) ||
       triggers.length !== Math.min(3, items.length) ||

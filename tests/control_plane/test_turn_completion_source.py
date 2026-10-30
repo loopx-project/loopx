@@ -19,9 +19,26 @@ from tests.control_plane import canonical_authority_fixture
 from tests.test_loopx_turn_driver import (
     _completion_host_and_validation_scripts,
     _turn_journal,
-    _turn_run_once_completion_argv,
+    _turn_run_once_completion_argv as _source_completion_argv,
     _write_live_fixture,
 )
+
+
+def _turn_run_once_completion_argv(project, runtime, registry, host_script, validation_script, *, turn_id=None):
+    # These source-witness regressions preserve the pre-freshness Turn contract.
+    # Default result/Agent continuation has its own real-provider regressions.
+    # Seed the supported historical receipt before execution, never downgrade
+    # an admission produced by the current default.
+    argv = _source_completion_argv(project, runtime, registry, host_script, validation_script)
+    code, preview = _cli([], *argv[:-1], *(["--turn-instance-id", turn_id] if turn_id else []))
+    assert code == 0, preview
+    from loopx.control_plane.quota.heartbeat_receipt import ensure_turn_heartbeat_settlement_receipt
+    from loopx.control_plane.quota.settlement import SettlementIdentity
+    ensure_turn_heartbeat_settlement_receipt(runtime, SettlementIdentity(
+        goal_id="loopx-turn-fixture", agent_id="codex-fixture", todo_id="todo_fixture0001",
+        turn_instance_id=turn_id or preview["resume_turn_key"]), semantic_replan_guard_scoped=True,
+        semantic_replan_obligation_id=None)
+    return argv
 
 
 @pytest.mark.parametrize(
@@ -207,6 +224,7 @@ def test_native_legacy_turn_recovers_history_but_cannot_complete_without_source(
     # Recovery reads the original accepted completion; it must not invoke the
     # lifecycle writer again after its execution lease was retired.
     assert len(results) == 1
+    assert _todo(prefix)["todo"]["completion_receipt_id"] == results[0]["completion_receipt_id"]
     recovered = _turn_journal(runtime)
     assert recovered["writeback"]["completion"] == {
         "todo_id": "todo_fixture0001", "continuation": "active_goal",
@@ -270,7 +288,7 @@ def _update(
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("change", ["requirements", "note", "other_todo"])
 @pytest.mark.parametrize("no_followup", [False, True])
-def test_native_turn_completion_checks_full_source_and_preserves_unrelated_changes(
+def test_historical_native_turn_completion_checks_full_source_and_preserves_unrelated_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
@@ -389,7 +407,7 @@ calls.write_text(calls.read_text() + "x" if calls.exists() else "x")""",
     )
     fresh_validator = validator.replace('== "completed"', '== "checksum:verified"')
     fresh = _turn_run_once_completion_argv(
-        project, runtime, registry, fresh_host, fresh_validator
+        project, runtime, registry, fresh_host, fresh_validator, turn_id="fresh-checksum-turn"
     )
     fresh_code, accepted = _cli(
         [], *fresh[:-1], "--turn-instance-id", "fresh-checksum-turn", "--execute"
@@ -411,7 +429,7 @@ calls.write_text(calls.read_text() + "x" if calls.exists() else "x")""",
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_native_turn_recovers_accepted_completion_before_checking_new_text(
+def test_historical_native_turn_recovers_accepted_completion_before_checking_new_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
@@ -502,6 +520,7 @@ def test_native_turn_recovers_accepted_completion_before_checking_new_text(
     # Recovery reads the original accepted completion; it must not invoke the
     # lifecycle writer again after its execution lease was retired.
     assert len(completions) == 1
+    assert _todo(prefix)["todo"]["completion_receipt_id"] == completions[0]["completion_receipt_id"]
     recovered = _turn_journal(runtime)
     assert recovered["writeback"]["completion"] == {
         "todo_id": "todo_fixture0001", "continuation": "active_goal",

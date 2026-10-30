@@ -13,6 +13,7 @@ import pytest
 from loopx.control_plane.coordination.cold_source_backup import (
     ColdSourceBackupError, read_cold_source_backup,
 )
+from loopx.control_plane.runtime.file_paths import windows_extended_path
 
 
 def backup(tmp_path: Path, unrelated: int = 0, unsafe: bool = False,
@@ -77,6 +78,24 @@ def test_scoped_proof_preserves_complete_artifact_checksums_below_transport_limi
     # The selected output may grow; unrelated header retention must not.
     assert len(scans) == 3
     assert max(len(scan.members) for scan in scans) <= 1
+
+
+@pytest.mark.parametrize("workspace_length", [240, 320])
+def test_nested_workspace_preserves_witness_and_removes_scratch_index(tmp_path, workspace_length):
+    manifest = backup(tmp_path)
+    archive = Path(json.loads(manifest.read_text())["execution"]["archive_path"])
+    before = manifest.read_bytes(), archive.read_bytes()
+    workspace = tmp_path
+    while len(str(workspace)) < workspace_length:
+        workspace /= "w" * min(64, max(1, workspace_length - len(str(workspace)) - 1))
+    windows_extended_path(workspace).mkdir(parents=True)
+    assert len(str(workspace)) >= workspace_length
+    witness = read_cold_source_backup(manifest, workspace=workspace,
+        source_paths=[tmp_path / "runtime/goals/example/state.md"])
+    assert witness["members"] == [{"archive_path": "runtime/goals/example/state.md",
+        "sha256": hashlib.sha256(b"retained source").hexdigest()}]
+    assert (manifest.read_bytes(), archive.read_bytes()) == before
+    assert list(windows_extended_path(workspace).iterdir()) == []
 
 
 @pytest.mark.parametrize("names", [("A.txt", "a.txt"), ("caf\u00e9.txt", "cafe\u0301.txt")])
@@ -205,6 +224,13 @@ def test_streaming_witness_rejects_symlink_ancestor_and_cycle(tmp_path):
     with pytest.raises(ValueError, match="member_unsafe"):
         read_cold_source_backup(unsafe_manifest("ancestor", [link, descendant]),
             source_paths=[tmp_path])
+
+    target = tarfile.TarInfo("root/target")
+    target.size = 1
+    safe = read_cold_source_backup(unsafe_manifest("safe-relative", [target, link]),
+        source_paths=[tmp_path])
+    assert safe["members"] == [{"archive_path": "root/target",
+        "sha256": hashlib.sha256(b"x").hexdigest()}]
 
     first = tarfile.TarInfo("root/a")
     first.type, first.linkname = tarfile.SYMTYPE, "b"

@@ -1313,6 +1313,31 @@ fields; this does not introduce a new telemetry system or receipt gate.
 
 ### Budget Failure Decisions
 
+Rebasing the original-direction recovery onto `5b224f094` retains the explicit
+failed-guard recovery instruction. With the same native Windows interpreter,
+physical fixture root, 320-character scope, five capabilities and explicit CLI
+route, main versus the integrated candidate (`8675ad488`) measures 4,850 → 4,939
+normalized body characters and 5,514 → 5,605 raw JSON characters. The 48-character
+route extension measures 5,042 → 5,131 body characters and remains over budget.
+Raise only the thin presentation allowance from 4,900 to 5,000 (61 characters
+of headroom); preserve the instructions, full routes, negative case and separate
+JSON and host limits. This qualifies the composed display input, not model
+compliance, recovery adoption or execution cost.
+The full-scope native pytest input additionally emits 5,211 raw JSON characters
+under its isolated physical runtime path, failing the prior 5,100 ceiling.
+Retain that failure and calibrate its presentation fixture ceiling to 5,300;
+Markdown, line, growth and semantic assertions remain unchanged.
+
+将原方向恢复变更 rebase 到 `5b224f094` 后，保留失败 guard 的明确恢复指令。
+同一 Windows 解释器、物理夹具路径、320 字符 scope、五项能力及完整 CLI 路由下，
+main 与整合候选 `8675ad488` 的正文为 4,850 → 4,939，原始 JSON 为
+5,514 → 5,605 字符；路由再加 48 字符时正文为 5,042 → 5,131，继续超限。
+仅将 thin 展示预算从 4,900 调整为 5,000，保留 61 字符余量；完整指令、路由、
+负例、独立 JSON 上限和宿主硬限制均保留。不据此声称模型遵从、恢复采纳或成本收益。
+原生 pytest 的隔离物理 runtime 路径下，完整 scope 实测 JSON 为 5,211，超过
+旧 5,100 上限。保留该失败，将展示夹具上限校准为 5,300；Markdown、行数、增长
+和语义断言不变。
+
 The thin heartbeat's 4,500-character presentation allowance did not cover the
 complete combination of a 320-character scope, all five runtime capability
 flags, Codex App transport and an explicit CLI route. The existing public CLI
@@ -1332,6 +1357,132 @@ model compliance, runtime recovery or lower cost.
 4,000 字符宿主硬边界、既有 JSON/正文夹具上限及执行权限不变；不据此声称节省
 输出、恢复运行或改善模型行为。
 
+Earlier pre-integration PR measurements (the source revisions below retain their own limits and failures):
+
+The thin heartbeat JSON failure carried by `8caaf678e` also reproduces after
+integrating main `c38b3a1a6`: 4,607 characters against the 4,600 fixture ceiling.
+At rebased head `9bea38cd4`, the ordinary thin dispatch rule matches that main. On the same public
+fixture, substituting only `HOST_LOOP_QUOTA_DISPATCH_RULE` from the immutable
+parent of `1d5d2d0f6` emits 4,544 characters. The complete current rule emits
+4,607, and replacing that rule in the current body produces the entire old
+body exactly: the sole 63-character change teaches a known Todo choice before
+the first current guard. This resolves the earlier unproven layout attribution;
+it is authored guidance, not unexplained path growth. The original pytest
+isolation namespace adds 51 emitted path characters to the default output
+(4,658); its supported 320-character scope adds another 289 (4,947). Capture
+those unmodified outputs rather than truncating scope or normalizing raw stdout.
+The initial 4,650 attempt failed both original tests and remains a failure.
+The broader agent-input suite exposed missing failed-preflight/guard guidance
+in ordinary thin and incomplete compact/brief peer guidance. Restore main's
+complete peer rule and explicit claim command in compact/brief. For ordinary
+thin, state no work/spend after failure, repair within authority and retry the
+original Turn. This adds 89 body characters, 90 in JSON: the complete supported
+fixture emits 5,037. Set its three JSON ceilings to 5,100 (63 headroom), retaining
+all earlier failures. A second CLI fixture with the same 320-character scope
+and three observed capabilities measures 4,485 -> 4,574 normalized characters;
+raise the generic thin presentation budget 4,500 -> 4,600 (26 headroom) rather
+than deleting those obligations. Align both exact metadata assertions with the
+owner, including the full-scope test's stale 4,200 expectation from before
+main's `7a2421ec89`. Keep full scope, within-budget and all independent authority,
+outcome-update and root-continuation assertions. Markdown also measures
+6,136 -> 6,225 with this 89-character clause: retain the 6,200 failure and set
+the three thin Markdown ceilings to 6,300 (75 headroom). Line, growth and
+native transport checks remain independent; the native Goal host limit stays
+4,000. These measured adjustments do not prove model adoption or premerge.
+
+thin heartbeat 的4,607>4,600在整合 main `c38b3a1a6` 后仍复现；其生产源码
+与该main相同。同一公开夹具仅换成 `1d5d2d0f6` 父版本的 dispatch 指引，
+输出为4,544；当前为4,607，正文除这63字符外逐字符一致。新增内容用于首次
+guard前传入已知Todo选择。pytest隔离目录另增加51个原始JSON路径字符，默认为
+4,658；已支持的320字符scope再增289，为4,947。初次4,650校准被两个原测试
+拒绝，失败保留；不缩短scope或归一化原始stdout。以上与main相同指重放后
+`9bea38cd4`的普通thin dispatch规则，后续检查发现普通thin缺少失败禁执行指引，compact/brief的peer
+简写也缺少完整规则。compact/brief恢复main的完整peer规则和claim命令；普通thin
+补充失败后不执行/扣费、权限内修复并重试原Turn。正文增加89字符，JSON增加90，
+完整夹具实测5,037，三个thin JSON预算设为5,100，留63字符。另一CLI夹具在同样
+320字符scope及三个已观察能力下，归一化正文4,485→4,574；通用thin展示预算
+4,500→4,600，留26字符，保留全部义务和历史失败。两处精确元数据断言随owner
+对齐，包括完整scope用例遗留的4,200预期（main的`7a2421ec89`已改为4,500）。
+完整scope、within-budget、权限、方向和根继续语义断言保留；Markdown实测
+6,136→6,225，正好增加该89字符条款，保留6,200失败，三个thin Markdown预算
+设为6,300，留75字符。行数、增长及原生传输检查独立，原生Goal宿主限制仍为4,000。这些调整不证明模型采纳
+或整体premerge通过。
+
+The next matched `c38b3a1a6` / `7d9bb6fe1` probe has 96 rows on each side;
+candidate absolute and semantic assertions pass. Its six thin differential
+growth failures are exactly the failed-guard clause: +90 JSON / +89 Markdown
+characters versus the existing 64 / 32 growth limits. Preserve those failures.
+Qualify only the first complete clause between the actual thin worker's guard
+code block and notification, with a
+96-character allowance (6 / 7 headroom); do not change absolute, line or
+later-growth limits. Missing no-work/spend, authority or original-Turn text,
+diagnostic/scope quotes, ambiguous old/new blocks, other surfaces and
+already-present clauses do not qualify.
+These observations extend the local output-test receipt, not runtime state or
+authority. The sequential samples took 139.9 / 290.2 seconds; this is neither
+a sustained performance result nor evidence of model-token savings.
+
+后续同负载 `c38b3a1a6` / `7d9bb6fe1` 各96行，候选绝对预算和语义断言通过；
+六个thin差分增长失败均为新增失败处理句：JSON +90、Markdown +89，原限制
+为64 / 32，失败保留。仅在实际thin worker的guard代码块与通知之间首次出现完整条款时允许96字符
+（余6 / 7）；不改绝对、行数或后续增长门。缺少禁工作/扣费、权限或原Turn任一
+含义、诊断区/scope引用、新旧块歧义、其他表面及已存在条款均不适用。这只扩展本地输出验证回执，
+不改变运行时状态或权限。顺序单次139.9 / 290.2秒不证明持续性能或模型token收益。
+
+Default freshness also adds the original read basis as a self-contained Host
+input. Its Todo text/title can equal the current work view while retaining a
+different provenance and integrity contract. The older whole-packet string
+count must not delete or alias that basis into a current snapshot. Keep the
+current work view's one-body assertion; independently compare the original
+context with its stored token's complete readback, including both text and
+title. Receipt-off packets retain the whole-packet assertion. This separates
+required snapshot cost from accidental display copies without a blanket
+three-copy allowance or a new projection protocol.
+
+默认freshness还交付独立、自包含的原始读依据；其Todo正文/标题可与当前工作视图
+相同，但来源与完整性契约不同。旧“整包字符串只出现一次”断言不能据此删除原依据
+或引用当前快照替代。保留当前工作视图正文一次的断言，另以原token的完整存储读回
+核对原依据（含正文与标题）；无receipt时仍检查整包。该调整区分必要快照成本与
+意外显示副本，不是统一允许三份，也不新增投影协议。
+
+The native first-admission qualification at `ff1c8a947` uses the same public
+fixture populations, interpreter, Node version, physical path layout and shared
+probe on target main `8caaf678e` and head. The three quota JSON outputs measure
+23,287→28,057 / 35,553→42,997 / 25,562→27,694 characters (small / crowded /
+multi-agent); a separate focused pytest small case measured 28,343. Preserve
+the original 25,000 / 42,000 / 26,500 ceiling failures. The added carriers bind
+the original Turn and work read, expose replan choices when selection is owed,
+and report the existing admission recall result. For the small case, compact
+field values add 857 characters for the heartbeat receipt, 2,052 for the work
+context and 1,745 for recall; the observed whole-output delta is 4,770, including
+field names, punctuation and other changed projections. These field costs use
+compact JSON, while the shared probe's standalone carrier metrics include
+normal JSON separators; do not mix their sums.
+
+Retain the complete decision clauses and identity/source facts. Calibrate only
+these synthetic JSON ceilings to 29,000 / 44,000 / 28,500, leaving 657 / 1,003 /
+806 characters above the largest observed case for each scenario. Markdown,
+line, per-Todo/fixed-growth, differential migration and production transport
+limits stay unchanged. The measurement-only 96-row comparison has no growth
+failures and 12 review signals; it does not certify absolute budgets or replace
+the enforced candidate tests. Both revisions also exceed the thin heartbeat
+fixture's existing 4,600-character ceiling by seven characters in this layout;
+that separate baseline gap remains open. One sequential full-probe pair took
+130.9/291.5 seconds, and the focused quota pair took 2.45/6.57, 1.67/4.98 and
+2.08/4.92 seconds. These are observed added costs, not a sustained latency or
+model-token qualification; no output saving is claimed.
+
+原生首次准入在同一公开负载与路径布局上的 quota JSON 为 small
+23,287→28,057、crowded 35,553→42,997、multi-agent 25,562→27,694 字符；
+另一次聚焦 pytest 的 small 为28,343。保留原25,000 / 42,000 / 26,500超限
+失败，仅将这三个合成 JSON 回归预算校准为29,000 / 44,000 / 28,500。
+新增内容承载原 Turn、原工作读依据、必要的重规划选择与已有 recall 结果；
+不删除决策条款，不改变 Markdown、行数、增长门、生产传输或执行权限。
+96行测量差分无增长失败、12项待复审，但不等于绝对预算已通过。两个版本在此
+布局的 thin heartbeat 均为4,607>4,600，该独立基线缺口继续保留。
+整批130.9/291.5秒及三个聚焦场景的新增耗时均保留，不据此宣称节省 token、
+持续性能达标或模型行为改善。
+
 The fixed visible-Goal host fixture's 3,200-character regression guard predates
 `1d5d2d0f6`, which adds the known Todo choice to the first current guard. On the
 same four host inputs at `b201da8ba`, substituting only the pre-change dispatch
@@ -1349,6 +1500,51 @@ This is no output reduction or model-compliance qualification.
 最大值从 3,199 变为 3,262。保留原 3,200 超限失败，仅将该固定测试的回归预算
 校准为 3,300，留 38 字符余量；不删指令，不改生产正文、4,000 宿主硬边界、
 长路径检查、执行权限或冻结资格结果，也不据此声称输出节省或模型遵从。
+
+The deterministic three-Turn Codex CLI smoke exceeded its 30-second outer test
+watchdog on Windows even at target main `544aa0fee`: 35.0 seconds versus 73.7
+seconds with the integrated freshness recovery. Both runs used the same Python
+interpreter and Node dependencies, isolated File fixtures, three committed
+transactions, one opaque session and an effect-free final replay. Preserve the
+head's additional cost and the timeout as evidence; this is not a performance
+improvement or latency qualification. The Windows-only outer watchdog is 120
+seconds; the POSIX 30-second limit, production Host timeouts, execution quota,
+three independent validations/debits and all session/replay assertions remain.
+An additional pair measured 16.8/74.4 seconds, but overlapped other validation;
+retain it as noisy evidence, not a controlled performance comparison. The
+repeat variation and the remaining head cost need separate performance work.
+
+同机 Windows 的确定性三 Turn Codex CLI smoke，在目标 main `544aa0fee` 已耗时
+35.0 秒，整合 freshness 恢复后的 head 为 73.7 秒，均使用同一 Python 解释器与
+Node 依赖、隔离 File fixture、三次提交、同一会话及无新增副作用的最终重放。
+保留 head 新增成本和原 30 秒超时，不宣称性能改善或延迟达标。仅将 Windows
+外层测试看门狗校准为 120 秒；POSIX 的 30 秒、生产 Host 超时、执行配额、三次
+独立验证与扣额以及全部会话和重放断言保持不变。
+另一次测得 16.8/74.4 秒，但与其他验证重叠，仅保留为带干扰的记录，不作为受控
+性能比较；重复测量波动与 head 剩余成本需要单独的性能验证。
+
+The following qualification belongs to the named historical revisions. It does
+not lower the newer target branch's existing 2,026-line baseline to 2,025.
+以下保留指定版本的历史资格，不将较新目标分支已有的 2,026 行基线降为 2,025。
+
+The freshness HTTP history composition measures 2,020 lines at `898363635` and
+2,025 at `3ed36655a`; `Any`/`dict[str, Any]` counts remain 25/0. The five lines
+join provider reply history onto the selected session page at the existing HTTP
+composition root. Moving that join into the shared session projection would
+couple the generic projection to a provider. Retain the join and its paging,
+private-history and recovery coverage; calibrate only `chat_server.py`'s reviewed
+line ceiling from 2,020 to 2,025, with no extra headroom. The default 2,000-line
+hotspot limit, other metric ceilings, runtime behavior and transport budgets
+stay unchanged. The original two unreviewed findings remain historical failures.
+The admission diagnostic instead separates byte measurement from quota-identity
+observation within its existing module; its 90-statement/60-decision limits and
+all identity, malformed-payload and growth assertions remain unchanged.
+
+freshness 的 HTTP 历史拼接在相同文件边界上为 2,020 → 2,025 行，两个类型计数仍为
+25/0。五行在既有 HTTP 组合处把 provider 回复历史接入当前分页；不为减少行数将
+provider 耦合下沉到通用投影。仅将此文件已审行数基线校准为 2,025，不额外放宽，
+保留分页、私有历史和恢复覆盖以及原失败记录。诊断函数则在原模块内分开成本测量与
+身份观察，90/60 复杂度上限及全部负例保持不变；这不改变准入、预算或执行权限。
 
 The actual-default model portfolio retains the complete capability candidate
 context required by the shared diagnostic projection. On the unchanged three
@@ -1400,6 +1596,51 @@ fixture 的 selected Todo 不在 runnable 集合，human gate 没有 selected To
 这些是压力成本，不是生产规模估计。保留原 fixture/失败，另用真实 producer、非重复
 要求、有意义备选项及末尾约束验证选择与后续工作；计入全部批读/恢复成本。新必读契约
 合格前，当前完整上下文 preflight 保持生效，不能靠删候选或首屏变小宣称收益。
+
+#### Original-Turn admission qualification
+
+Keep the first admitted result basis and its replay/settlement identity in the
+caller output. A matched native Windows measurement of main `f5e9be367` and
+candidate `9394b2395` used the unchanged File fixture, Python 3.11 and Node 22.22.3:
+These measurements belong to those source revisions; they do not qualify a
+different integrated head. Retain the target branch ceilings until a matched
+current-source probe supports recalibration.
+
+上述结果只属于指定版本，不能直接作为另一集成 head 的资格；在当前源码的匹配探针
+支持重新校准前，保留目标分支既有上限。
+
+| quota JSON scenario | main | candidate | Previous ceiling | Candidate proposal ceiling |
+| --- | ---: | ---: | ---: | ---: |
+| One Todo | 23,291 | 28,001 | 25,000 | 30,000 |
+| 36 Todos / 12 runs | 35,862 | 43,202 | 42,000 | 46,000 |
+| 18 Todos / three Agents | 25,852 | 27,984 | 25,500 | 29,500 |
+
+The failed Windows CI host emitted 28,334 characters for the one-Todo candidate;
+its main multi-Agent observation was already 25,975. Preserve both failures.
+The added information is the original read basis, causal admission/replan
+receipt, original-work progress readback and memory-call observation; the replan also carries the current planning
+choice. Do not remove these inputs to meet an older presentation ceiling.
+
+The differential permits only measured carrier growth on a matching first
+admission transition. It still rejects repeated growth, mismatched original
+identity, other surfaces, action changes and oversized carriers. Selector views
+must compare the same explicitly admitted Turn, rather than an unbound planning
+choice on one revision with a restored original Turn on the other. Status's
+original-work progress remains a readback, never Goal acceptance.
+
+The unchanged 96-row candidate completed its assertions in a diagnostic run;
+CLI calls alone took 250 seconds, exceeding the former 240-second child bound.
+A loaded Windows rerun exceeded 300 seconds; retain that timeout as a failure.
+The qualification child bound is 420 seconds, with 960 seconds for two children
+and checkout/cleanup. These are bounded test-batch limits, not a production
+latency qualification or a change to execution quota, product timeouts or the
+8,192-byte Turn Envelope diagnostic. Per-Todo growth, fixed replan growth,
+Markdown/line ceilings and complete action/semantic checks stay independent.
+
+原 Turn 验收保留首次读取依据、原身份、重规划来源和记忆调用状态。相同 Windows
+负载的新增成本及原失败如表所示；仅按实际内容核算一次迁移，不允许用新标记放宽
+重复增长或动作变化。展示 selector 必须比较同一已准入 Turn；测试批次时限不代表
+产品性能或 Goal 达成，也不改变执行配额、产品超时和生产 Envelope 诊断。
 
 Complete registry routes exposed an existing brief heartbeat regression on the
 unchanged 128-character-root fixture. Commit
@@ -2409,3 +2650,35 @@ ids, reason codes, digests, and public-safe semantic projections.
 
 禁止提交凭证、私有状态、原始 benchmark 材料、模型响应、本地绝对路径或生成日志。
 优先保留紧凑 fixture id、reason code、digest 和公开安全语义投影。
+
+### Recovery transport budget decision / 恢复运输层预算决策
+
+The recovery revision compares the same source-line and AST workload against
+target main `d52f2e153a0a5abb2f9c469ad78f0beccfe3aae8`:
+
+| Existing module | Target lines | Recovery candidate ceiling |
+| --- | ---: | ---: |
+| `chat_agent.py` | 2005 | 2032 |
+| `chat_runtime.py` | 2319 | 2322 |
+| `chat_store.py` | 2003 | 2006 |
+| `collaboration_mcp.py` | 2058 | 2083 |
+
+These exact ceilings retain 58 lines of active caller/receipt transport across
+four existing surfaces; none is unused scaffolding or duplicated policy.
+Splitting a 3-line binding into a new module would increase navigation without
+localizing a separate owner. The larger Turn executor instead moves preview,
+terminal recovery and work-input IO to their existing owners: its candidate is
+1882 lines, below the unchanged 2000-line ceiling. Function statement/decision
+limits remain unchanged. The cadence dependency exception covers only the
+existing configuration owner's read, not a second policy or authority owner;
+its retirement is explicit injection from the CLI/source composition boundary.
+Source ratios and a passing ratchet do not establish behavior parity: cold
+recovery, validation, Stop, quota, real providers and packaged entrypoints still
+need their independent checks.
+
+这次预算比较使用相同源码行数/AST 口径。四个既有调用界面共增加 58 行有效绑定运输，
+精确提高其已有 ceiling；没有删除有用指令，也没有因 3 行绑定另建无独立职责的模块。
+较大的执行器则实际拆回现有 owner，候选 1882 行，仍低于未放宽的 2000 行上限；
+函数语句数与决策数限制保持原值。cadence 例外只覆盖读取既有配置 owner，退休方向
+是从 CLI/source 组合根注入已解析配置，不允许新增政策或执行权。预算通过与代码量
+变化不证明行为保持，仍须独立执行冷恢复、验证、停止、额度、真实 provider 与打包入口。

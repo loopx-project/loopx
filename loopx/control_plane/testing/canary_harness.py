@@ -1,14 +1,37 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@contextmanager
+def temporary_canary_directory(*, prefix: str, dir: str | Path | None = None):
+    """Keep fixture cleanup valid for canonical Windows authority paths."""
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=dir) as name:
+        owned = Path(name).resolve()
+        try:
+            yield name
+        finally:
+            if os.name == 'nt':
+                from ..runtime.file_paths import windows_extended_path
+
+                # Cold-import receipts can exceed MAX_PATH. Delete only the
+                # exact directory we created, using the existing path adapter.
+                target = Path(name)
+                if target.is_symlink() or target.resolve() != owned:
+                    raise RuntimeError('Canary directory identity changed before cleanup')
+                shutil.rmtree(windows_extended_path(owned))
 
 
 def default_state_file(goal_id: str) -> str:
@@ -197,6 +220,7 @@ def import_fixture_authority(registry_path: Path, goal_id: str, *, provider: str
     Existing unpromoted/refusal fixtures opt in explicitly, never by default.
     """
     from ...state_backup import build_state_backup_plan, execute_state_backup_plan
+    from ..runtime.file_paths import windows_extended_path
 
     registry_path = registry_path.resolve()
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -228,7 +252,7 @@ def import_fixture_authority(registry_path: Path, goal_id: str, *, provider: str
     )["cold_import"]
     assert prepared["status"] == "prepared", prepared
     # Read the saved carrier rather than manufacturing a digest/target.
-    plan = json.loads(Path(prepared["plan_path"]).read_text(encoding="utf-8"))
+    plan = json.loads(windows_extended_path(Path(prepared["plan_path"])).read_text(encoding="utf-8"))
     assert plan["plan_sha256"] == prepared["plan_sha256"], plan
     applied = run_json_cli(
         *prefix, "apply-import", *identity,

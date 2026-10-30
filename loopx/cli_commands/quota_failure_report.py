@@ -80,6 +80,7 @@ def quota_failure_payload(
     error: Exception,
 ) -> dict[str, object]:
     command = args.quota_command
+    from ..control_plane.goals.checkpoint_context_io import CheckpointReadContextRejected
     lock_timeout_fields = lock_timeout_error_fields(error)
     verbose_debug = verbose_debug_fields(
         error, verbose=bool(getattr(args, "verbose", False))
@@ -234,6 +235,9 @@ def quota_failure_payload(
             payload["agent_id"] = error.agent_id
     elif isinstance(error, (LegacyCoordinationWriterFenced, LocalCoordinationAuthorityUnavailable)):
         payload.update(authority_failure)
+    elif isinstance(error, CheckpointReadContextRejected):
+        payload.update(error_code=error.code, reason=str(error), **error.payload,
+            recommended_action=error.payload["checkpoint_read_context"].get("recommended_action", str(error)))
     if lock_timeout_fields:
         payload["recommended_action"] = "inspect the lock holder before retrying"
     if command == "monitor-poll":

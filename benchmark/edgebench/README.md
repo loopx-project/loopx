@@ -793,3 +793,11 @@ the truth of supplied policy metadata. The recorded task/source hashes do not
 prove that metadata matches the private task configuration; that provenance
 still needs operator review. This is an S11/E2 terminal-report repair, with no
 change to native scoring, integrity qualification, or study promotion.
+
+## Freshness diagnostic evaluation
+
+The [combined regular-task and goal-change evaluation report](../../docs/research/freshness-regular-and-goal-change-evaluation.md)
+records the selected main and repaired freshness snapshots, original quality,
+available token/time costs, adoption observations and distinct terminal failures.
+It preserves invalid runs and unqualified countability; it is not a leaderboard
+submission, a repeated matched study or validation of a later integration head.

@@ -2045,3 +2045,155 @@ def test_objective_replan_cost_is_complete_once_and_carrier_scoped():
         assert _compare_row(base, {**head, "chars": 1769})["failures"]
     assert not observe(prior + " " + " ".join(reversed(clauses)))["objective_replan_after"]
     assert not observe(json.dumps({"prior": prior, "clauses": clauses}))["objective_replan_after"]
+
+@pytest.mark.parametrize("output_format", ["json", "markdown"])
+def test_failed_guard_guidance_cost_requires_complete_worker_clause_once(output_format):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+    from loopx.control_plane.testing.cli_output_semantics import continuation_instruction_observations as observe
+
+    clause = "Failed preflight/guard: no work/spend. Repair within authority; retry the original Turn."
+
+    def rendered(body="", note="", scope="registered peer"):
+        worker = f"Scope: {scope}\n```sh\nloopx quota should-run\n```\n{body}Lang=user; default=en."
+        if output_format == "json":
+            return json.dumps({"schema_version": "heartbeat_agent_input_v1", "task_body": worker, "note": note})
+        return f"# Heartbeat Automation Prompt\n\n````text\n{worker}\n````\n{note}"
+
+    base = _row(row_id=f"surface/heartbeat_prompt_thin/small/{output_format}",
+        surface_id="heartbeat_prompt_thin", format=output_format, chars=1000,
+        utf8_bytes=1000, compact_payload_chars=800 if output_format == "json" else None, lines=20,
+        continuation_instructions=observe(rendered()))
+    growth = 90 if output_format == "json" else 89
+    complete = observe(rendered(clause + "\n"))
+    head = {**base, "chars": 1000 + growth, "utf8_bytes": 1000 + growth,
+        "compact_payload_chars": 800 + growth if output_format == "json" else None,
+        "continuation_instructions": complete}
+    assert not _compare_row(base, head)["failures"]
+    assert _compare_row(base, head)["allowances"]["chars"] == 96
+    # Already-shipped guidance, partial obligations, metadata quotes and other
+    # surfaces cannot inherit this first complete transition's allowance.
+    assert _compare_row({**base, "continuation_instructions": complete}, head)["failures"]
+    for omitted in ("no work/spend. ", "within authority", "original Turn"):
+        partial = observe(rendered(clause.replace(omitted, "") + "\n"))
+        assert not partial["failed_guard_recovery_after"]
+        assert _compare_row(base, {**head, "continuation_instructions": partial})["failures"]
+    quoted = observe(rendered(note=clause))
+    assert not quoted["failed_guard_recovery_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": quoted})["failures"]
+    scoped = observe(rendered(scope="\n" + clause + "\n"))
+    assert not scoped["failed_guard_recovery_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": scoped})["failures"]
+    ambiguous = observe(rendered(scope="\n```\n" + clause + "\nLang=user;\n"))
+    assert ambiguous["failed_guard_recovery_before"] and ambiguous["failed_guard_recovery_after"]
+    assert _compare_row(base, {**head, "continuation_instructions": ambiguous})["failures"]
+    assert _compare_row(base, {**head, "chars": 1097})["failures"]
+    assert _compare_row(base, {**head, "lines": 23})["failures"]
+    for surface in ("status", "quota_should_run", "heartbeat_prompt_compact"):
+        wrong = f"surface/{surface}/small/{output_format}"
+        assert _compare_row({**base, "row_id": wrong}, {**head, "row_id": wrong})["failures"]
+
+
+def _admission_packet():
+    identity = {"schema_version": "quota_settlement_identity_v0", "goal_id": "fixture-goal",
+                "agent_id": "fixture-agent", "todo_id": "todo_fixture", "turn_instance_id": "work:original"}
+    return {"mode": "should-run", "goal_id": "fixture-goal",
+            "selected_todo": {"todo_id": "todo_fixture"}, "agent_identity": {"agent_id": "fixture-agent"},
+            "heartbeat_receipt": {"schema_version": "heartbeat_quota_receipt_v0", "status": "committed",
+                "turn_instance_id": "work:original", "result_freshness": "turn_result_freshness_required_v1",
+                "closeout_required": True, "settlement_identity": identity},
+            "first_delivery_progress": {"schema_version": "first_delivery_progress_v0",
+                "goal_completion_certified": False, "settlement_identity": dict(identity)},
+            "delivery_result_context": {"ok": True, "basis": {"todo": {"todo_id": "todo_fixture"}},
+                "read_context_id": "original-read", "settlement_identity": dict(identity)}}
+
+
+@pytest.mark.parametrize("status", ["committed", "replayed"])
+def test_native_admission_cost_requires_matching_committed_original_identity(status):
+    from loopx.control_plane.testing.cli_output_semantics import native_admission_observation
+    packet = _admission_packet()
+    packet["heartbeat_receipt"]["status"] = status
+    observed = native_admission_observation(packet)
+    assert observed["kind"] == "delivery_result"
+    assert observed["costs"]["delivery_result_context"]["chars"] == len(json.dumps(packet["delivery_result_context"]))
+    assert "original-read" not in json.dumps(observed)
+    for path, value in [(("heartbeat_receipt", "status"), "failed"),
+                        (("heartbeat_receipt", "turn_instance_id"), "work:other"),
+                        (("goal_id",), "other-goal"), (("agent_identity", "agent_id"), "other-agent"),
+                        (("selected_todo", "todo_id"), "todo_other"),
+                        (("delivery_result_context", "read_context_id"), ""),
+                        (("first_delivery_progress", "goal_completion_certified"), True),
+                        (("first_delivery_progress", "settlement_identity"), {}),
+                        (("delivery_result_context", "settlement_identity"), {})]:
+        damaged = copy.deepcopy(packet)
+        target = damaged
+        for part in path[:-1]:
+            target = target[part]
+        target[path[-1]] = value
+        assert native_admission_observation(damaged)["kind"] is None
+
+
+@pytest.mark.parametrize("kind", ["delivery_result", "replan", "unbound"])
+def test_native_admission_growth_is_measured_bounded_once_and_quota_json_only(kind):
+    from loopx.control_plane.testing.cli_output_semantics import native_admission_observation
+    packet = _admission_packet()
+    if kind != "delivery_result":
+        packet.pop("delivery_result_context")
+        packet.pop("first_delivery_progress")
+        receipt = packet["heartbeat_receipt"]
+        for field in ("result_freshness", "closeout_required", "settlement_identity"):
+            receipt.pop(field)
+        receipt["settlement_binding_owed"] = True
+        if kind == "replan":
+            receipt.update(semantic_replan_obligation_id="replan-original",
+                semantic_replan_source={"schema_version": "semantic_replan_source_v1"})
+            packet["autonomous_replan_obligation"] = {"obligation_id": "replan-original"}
+    packet["reward_memory_recall"] = {
+        "status": "disabled", "automatic_recall": False, "grants_new_action_authority": False,
+        "quota_spend_performed": False, "external_writes_performed": False,
+        "context": None, "provider_call_count": 0,
+    }
+    empty = {"mode": "should-run"}
+    before = native_admission_observation(empty)
+    after = native_admission_observation(packet)
+    assert after["kind"] == kind
+    base = _row(row_id="surface/quota_should_run/small/json", surface_id="quota_should_run", native_admission=before)
+    candidate = {**base, "native_admission": after}
+    growth = sum(value["chars"] for value in after["costs"].values())
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        candidate[metric] = base[metric] + growth
+    assert compare_cli_output_receipts(_receipt(base), _receipt(candidate))["ok"]
+    for mutated_base, mutated_candidate in [
+        (candidate, {**candidate, "chars": candidate["chars"] + growth}),
+        ({**base, "surface_id": "status"}, {**candidate, "surface_id": "status"}),
+        ({**base, "format": "markdown"}, {**candidate, "format": "markdown"}),
+        (base, {**candidate, "chars": candidate["chars"] + 10_000}),
+        (base, {**candidate, "action_signature_sha256": "changed-action"}),
+    ]:
+        assert not compare_cli_output_receipts(_receipt(mutated_base), _receipt(mutated_candidate))["ok"]
+    oversized = copy.deepcopy(candidate)
+    oversized["native_admission"]["costs"]["heartbeat_receipt"]["chars"] = 100_000
+    assert not compare_cli_output_receipts(_receipt(base), _receipt(oversized))["ok"]
+
+def test_first_delivery_status_cost_is_readback_only_and_one_time():
+    from loopx.control_plane.testing.cli_output_semantics import native_admission_observation
+    identity = _admission_packet()["heartbeat_receipt"]["settlement_identity"]
+    progress = {"schema_version": "first_delivery_progress_v0", "stage": "result_review_pending",
+                "settlement_identity": identity, "goal_completion_certified": False,
+                "result_committed": False, "quota_spent": False}
+    empty = {"attention_queue": {"items": [{"goal_id": "fixture-goal"}]}}
+    packet = copy.deepcopy(empty)
+    packet["attention_queue"]["items"][0]["first_delivery_progress"] = progress
+    before, after = native_admission_observation(empty), native_admission_observation(packet)
+    assert after["kind"] == "progress"
+    base = _row(native_admission=before)
+    grown = {**base, "native_admission": after}
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        grown[metric] = base[metric] + after["costs"]["first_delivery_progress"]["chars"]
+    assert compare_cli_output_receipts(_receipt(base), _receipt(grown))["ok"]
+    for change in [{"goal_completion_certified": True}, {"settlement_identity": {}}]:
+        damaged = copy.deepcopy(packet)
+        damaged["attention_queue"]["items"][0]["first_delivery_progress"].update(change)
+        assert native_admission_observation(damaged)["kind"] is None
+    assert not compare_cli_output_receipts(
+        _receipt(grown), _receipt({**grown, "chars": grown["chars"] + 1_000}),
+    )["ok"]

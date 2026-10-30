@@ -209,11 +209,11 @@ def _resolve_preview_settlement(
     result = readback.identity
     identity = result.value if result.failure is None else None
     if identity is not None:
-        result = readback.delivery
+        result = readback.spend_qualification
     return {
         "identity": identity,
         "result": result,
-        "delivery_run": result.value if result.failure is None else None,
+        "delivery_run": readback.delivery.value if result.failure is None else None,
         "delivery_workspace_causality": readback.workspace_causality,
         "reason": result.failure.reason if result.failure is not None else None,
         "writeback_committed": _receipt_committed(

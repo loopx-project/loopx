@@ -129,7 +129,7 @@ export const goalSuggestionsScenario = {
         await other.locator(".personal-goal-row").first().locator(".personal-goal-link").click();
         await other.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
         const vitals = (await other.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
-        assert.match(vitals, /0 等你决定|可选/, `the lane shows the item as optional: ${vitals}`);
+        assert.match(vitals, /另有 1 项可选/, `the lane shows the item as optional: ${vitals}`);
         // The work vital marks its unknown total; its help carries the partial counts.
         await other.getByTestId("goal-vitals").getByRole("button", { name: "工作 · 总数未知", exact: true }).focus();
         await other.getByRole("tooltip").getByText(/已列出 5 项中的 0 项/).waitFor();

@@ -446,14 +446,20 @@ def test_codex_cli_prompt_isolates_subagent_instructions_to_enabled_request() ->
 
 
 @pytest.mark.parametrize("sandbox", ["read-only", "workspace-write", "danger-full-access"])
+@pytest.mark.parametrize("long_runtime", [False, True], ids=["ordinary-runtime", "long-runtime"])
 def test_codex_cli_host_starts_then_resumes_opaque_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sandbox: str,
+    long_runtime: bool,
 ) -> None:
+    from loopx.control_plane.runtime.file_paths import windows_extended_path
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
     runtime_root = tmp_path / "runtime"
+    if long_runtime:
+        while len(str(runtime_root)) < 220:
+            runtime_root /= "runtime-" + "x" * 60
     project = tmp_path / "project"
     project.mkdir()
     first_request = _request()
@@ -535,7 +541,7 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
         "host",
         "session_id",
     }
-    session_paths = _session_files(runtime_root)
+    session_paths = _session_files(windows_extended_path(runtime_root))
     assert len(session_paths) == 1
     if os.name != "nt":  # POSIX mode bits do not express Windows ACLs.
         assert stat.S_IMODE(session_paths[0].stat().st_mode) == 0o600
@@ -1548,7 +1554,9 @@ def test_public_e2e_smoke_runs_n_transactions_on_one_session() -> None:
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        # Measured Windows base/head costs and retained failures are recorded
+        # in the budget guide; this is a test watchdog, not a latency SLO.
+        timeout=120 if os.name == "nt" else 30,
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
@@ -1642,13 +1650,17 @@ def test_default_turn_cli_rejects_stopped_source_behind_stale_global_mirror(
     original_mirror = mirror.read_bytes()
     executable, native_log = _fake_codex(tmp_path)
     native_launch = tmp_path / "native-launch.txt"
-    native_source = executable.read_text()
+    source_path = executable.with_suffix(".py") if os.name == "nt" else executable
+    native_source = source_path.read_text(encoding="utf-8")
     assert "args = sys.argv[1:]" in native_source
-    executable.write_text(native_source.replace(
-        "args = sys.argv[1:]",
-        f"pathlib.Path({str(native_launch)!r}).write_text('started\\n')\nargs = sys.argv[1:]",
-        1,
-    ))
+    executable = write_python_host_fixture(
+        source_path.with_suffix("") if os.name == "nt" else executable,
+        native_source.replace(
+            "args = sys.argv[1:]",
+            f"pathlib.Path({str(native_launch)!r}).write_text('started\\n')\nargs = sys.argv[1:]",
+            1,
+        ),
+    )
     monkeypatch.setenv("FAKE_CODEX_LOG", str(native_log))
     original_prompt = codex_cli._prompt
     stopped = []

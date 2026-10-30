@@ -6,6 +6,7 @@ import type {
   AuthorityStoreCommitResult,
   AuthorityStoreIdentityResult,
   AuthorityStoreLoadResult,
+  AuthorityStoreHead,
   AuthorityStoreReadFailure,
   AuthorityStoreReceiptResult,
   AuthorityStoreScanResult,
@@ -649,6 +650,44 @@ export class PostgreSqlAuthorityStore implements AuthorityStore {
       });
     } catch (error) {
       return readFailure(error);
+    }
+  }
+
+  /** Retain the store-incarnation and Goal-head locks through a synchronous
+   * external checkpoint append. No authority mutation or revision is created;
+   * as with local providers, SQL rollback cannot undo external run files. */
+  async withCheckpointHead(save: (head: AuthorityStoreHead, identity: string) => JsonObject): Promise<JsonObject> {
+    const connection = await this.connect();
+    let transactionOpen = false;
+    let releaseError: Error | undefined;
+    try {
+      await beginTenantTransaction(connection, this.tenantId, {readOnly: false});
+      transactionOpen = true;
+      // Match commitAuthority/rotation lock order; FOR SHARE excludes a Goal
+      // writer without serializing independent checkpoint readers or Goals.
+      await lockStoreIdentityTransaction(connection, "shared");
+      const identity = await requireStoreIdentity(connection);
+      const value = oneRow(await connection.query(`${SELECT_HEAD_SQL} FOR SHARE`,
+        [this.tenantId, this.goalId]), "checkpoint PostgreSQL authority head");
+      if (value === null) throw new AuthorityStoreProtocolError("checkpoint authority head is missing");
+      const head = decodeHeadRow(value);
+      if (head.head === null) throw new AuthorityStoreProtocolError("checkpoint authority head is missing");
+      const result = save({head: structuredClone(head.head), cursor: head.cursor,
+        provider_revision: providerRevisionToken(identity, head.provider_revision)}, identity);
+      if (result instanceof Promise) throw new AuthorityStoreProtocolError("checkpoint save must be synchronous");
+      const rollbackError = await rollback(connection);
+      transactionOpen = false;
+      if (rollbackError !== null) {
+        releaseError = rollbackError;
+        throw rollbackError;
+      }
+      return result;
+    } catch (error) {
+      if (transactionOpen) releaseError = (await rollback(connection)) ?? undefined;
+      else releaseError ??= asError(error);
+      throw error;
+    } finally {
+      await connection.release(releaseError);
     }
   }
 

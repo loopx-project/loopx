@@ -1,6 +1,7 @@
 """An ordinary request keeps its identity without inventing a canonical task."""
 # ruff: noqa: F811 - import the existing parametrized real-backend fixture
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -164,9 +165,11 @@ def ordinary_source(delegation_service, monkeypatch, request):
     root, runner, binding = _ordinary_binding(delegation_service)
     if getattr(request, "param", None) == "codex":
         from test_loopx_turn_codex_cli import _fake_codex
+        from tests.control_plane.host_process_fixture import write_python_host_fixture
         executable, log = _fake_codex(root)
         monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
-        host_source = executable.read_text().replace('output_path = pathlib.Path', f'''
+        source_path = executable.with_suffix(".py") if os.name == "nt" else executable
+        host_source = source_path.read_text(encoding="utf-8").replace('output_path = pathlib.Path', f'''
 from loopx.control_plane.collaboration.peers import read_inbox, return_result
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.capabilities.manager_context.roundtrip import report
@@ -180,7 +183,7 @@ for item in read_inbox(root / 'runtime', root / 'registry.json', {runner.goal_id
     else:
         report(root / 'runtime', {runner.goal_id!r}, 'analyst', item['request_id'], 'conclusion', '42')
 output_path = pathlib.Path''')
-        executable.write_text(host_source)
+        executable = write_python_host_fixture(source_path.with_suffix("") if os.name == "nt" else executable, host_source)
         config_data = json.loads(runner.config.read_text())
         config_data["bindings"][0]["host_args"] = ["--host", "codex-cli", "--codex-bin", str(executable)]
         runner.config.write_text(json.dumps(config_data))

@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import {syncBuiltinESMExports} from "node:module";
 import {existsSync} from "node:fs";
 import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {setTimeout as delay} from "node:timers/promises";
 import test from "node:test";
-import {decodeHostProcessRequest, runHostProcess, type HostProcessRequest} from "../../loopx/control_plane/turn_driver/host_process.ts";
+import {decodeHostProcessRequest, observeHostLaunch, runHostProcess, type HostProcessRequest} from "../../loopx/control_plane/turn_driver/host_process.ts";
 import {decodeDelegatedHostLease, runLeasedHostProcess} from "../../loopx/control_plane/turn_driver/leased_host_process.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {executeCoordinationTodoClaim} from "../../loopx/control_plane/coordination/todo_claim.ts";
@@ -17,6 +19,17 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 const request = (script: string, overrides: Partial<HostProcessRequest> = {}): HostProcessRequest => ({
   argv: [process.execPath, "-e", script], cwd: process.cwd(), input: "request\n",
   timeout_ms: 3000, drain_timeout_ms: 50, stdout_limit_bytes: 12000, ...overrides,
+});
+
+test("private target launch facts cannot fake success or replace cancellation", async () => {
+  const result = await runHostProcess(request("process.exit(7)"), async () => {});
+  assert.equal(result.outcome, "exited");
+  assert.deepEqual(observeHostLaunch(result, true), result);
+  assert.equal(observeHostLaunch(result, false).outcome, "spawn_failed");
+  assert.equal(observeHostLaunch(result, false).returncode, null);
+  assert.throws(() => observeHostLaunch(result, "false"), /invalid Host launch observation/);
+  const cancelled = {...result, outcome: "cancelled" as const};
+  assert.deepEqual(observeHostLaunch(cancelled, false), cancelled);
 });
 
 test("Host output is streamed with UTF-8 boundaries and stdin EOF", async () => {
@@ -38,6 +51,42 @@ test("null execution deadline waits for natural completion", async () => {
   assert.equal(text, "finished");
   assert.equal(result.outcome, "exited");
   assert.equal(result.returncode, 0);
+});
+
+test("completed Host is not reclassified as timeout during Windows cleanup", {skip: process.platform !== "win32"}, async t => {
+  const spawn = childProcess.spawn, timer = globalThis.setTimeout, clear = globalThis.clearTimeout;
+  let executionTimer: ReturnType<typeof setTimeout> | undefined;
+  let expire: (() => void) | undefined;
+  let cleanupStarted = false;
+  t.mock.method(globalThis, "setTimeout", (callback: () => void, ms: number) => {
+    const handle = timer(callback, ms);
+    if (ms === 5000) { executionTimer = handle; expire = callback; }
+    return handle;
+  });
+  t.mock.method(globalThis, "clearTimeout", (handle: ReturnType<typeof setTimeout>) => {
+    if (handle === executionTimer) expire = undefined;
+    return clear(handle);
+  });
+  t.mock.method(childProcess, "spawn", (...args: Parameters<typeof spawn>) => {
+    if (args[0] === "taskkill") {
+      cleanupStarted = true;
+      // Advance only the execution clock at the known cleanup boundary.
+      // The real Host, streams and Windows cleanup command are unchanged.
+      const pending = expire;
+      expire = undefined;
+      if (pending) queueMicrotask(pending);
+    }
+    return spawn(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  let stdout = "";
+  const result = await runHostProcess(request("process.stdout.write('{}')", {timeout_ms: 5000}),
+    async item => { if (item.kind === "stdout") stdout += item.text; });
+  assert.equal(cleanupStarted, true);
+  assert.equal(stdout, "{}");
+  assert.equal(result.returncode, 0);
+  assert.equal(result.outcome, "exited");
 });
 
 test("invalid requests and absent executables cannot be mistaken for success", async () => {

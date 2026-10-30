@@ -879,6 +879,10 @@ def _continuation_instruction_migration(
         # Measured warning appearance: +417/+419 chars and four lines. Preserve
         # the warning and its target; paired JSON proves the reviewed cause.
         chars, lines = max(chars, 448), 4
+    if row_id.startswith("surface/heartbeat_prompt_thin/") and migrated("failed_guard_recovery"):
+        # Same 96-row fixture: complete failed-guard guidance adds 90 JSON
+        # chars / 89 Markdown chars. No line, absolute or later-growth waiver.
+        chars += 96
     if not chars:
         return {}, []
     return {
@@ -939,6 +943,46 @@ def _turn_projection_migration(
     return {}, []
 
 
+def _native_admission_migration(
+    base: dict[str, Any], candidate: dict[str, Any],
+) -> tuple[dict[str, int], list[str]]:
+    """One-time measured cost of original-Turn admission, not general headroom."""
+    before, after = base.get("native_admission"), candidate.get("native_admission")
+    if (base.get("surface_id") not in {"quota_should_run", "status"}
+            or candidate.get("row_id") != base.get("row_id")
+            or base.get("format") != "json" or candidate.get("format") != "json"
+            or not isinstance(before, dict) or before.get("kind") is not None
+            or not isinstance(after, dict)):
+        return {}, []
+    carriers = {
+        "delivery_result": (("heartbeat_receipt", "delivery_result_context", "reward_memory_recall",
+                             "first_delivery_progress"), 6_400),
+        "replan": (("heartbeat_receipt", "reward_memory_recall", "planning_horizon", "action_portfolio"), 9_500),
+        "unbound": (("heartbeat_receipt", "reward_memory_recall"), 2_600),
+        "progress": (("first_delivery_progress",), 900),
+    }
+    if after.get("kind") not in carriers:
+        return {}, []
+    if (after["kind"] == "progress") != (base.get("surface_id") == "status"):
+        return {}, []
+    fields, ceiling = carriers[after["kind"]]
+    allowance = {}
+    for metric in ("chars", "utf8_bytes"):
+        try:
+            pairs = [(before["costs"][field][metric], after["costs"][field][metric]) for field in fields]
+        except (KeyError, TypeError):
+            return {}, []
+        if any(type(value) is not int or value < 0 for pair in pairs for value in pair):
+            return {}, []
+        growth = sum(max(new - old, 0) for old, new in pairs)
+        if growth > ceiling:
+            return {}, []
+        # Field names/separators and receipt clocks, not another context copy.
+        allowance[metric] = growth + 64
+    allowance.update(lines=0, compact_payload_chars=allowance["chars"])
+    return allowance, ["original-Turn admission carriers migrated; measured bounded one-time cost"]
+
+
 def _compare_row_growth(
     base: dict[str, Any], candidate: dict[str, Any], *,
     migration: _SchemaMigrationState,
@@ -963,6 +1007,8 @@ def _compare_row_growth(
     review_signals.extend(continuation_signals)
     context_allowance, context_signals = _turn_projection_migration(base, candidate)
     review_signals.extend(context_signals)
+    admission_allowance, admission_signals = _native_admission_migration(base, candidate)
+    review_signals.extend(admission_signals)
     deltas: dict[str, int | None] = {}
     allowances: dict[str, int | None] = {}
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
@@ -1006,6 +1052,7 @@ def _compare_row_growth(
             authoring_allowance.get(metric, 0),
             continuation_allowance.get(metric, 0),
             context_allowance.get(metric, 0),
+            admission_allowance.get(metric, 0),
         )
         # Thin installed prompts contain bilingual lifecycle instructions. A
         # small character-level clarification can cost three bytes per CJK

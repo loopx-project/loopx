@@ -1348,6 +1348,31 @@ class CodexChatAgentSession:
             )
         return False
 
+    def _queue_tool_after_pending_start(self, message: dict[str, Any]) -> bool:
+        if (
+            self.current_turn_id
+            or message.get("method") != "item/tool/call"
+            or _event_thread_id(message) != self.thread_id
+        ):
+            return False
+        turn_id = _event_turn_id(message)
+        if not turn_id:
+            return False
+        with self._pending_events.mutex:
+            pending_start = any(
+                event.get("method") == "turn/started"
+                and _event_thread_id(event) == self.thread_id
+                and _event_turn_id(event) == turn_id
+                for event in self._pending_events.queue
+            )
+        if not pending_start:
+            return False
+        # A control RPC can read the notification before the Goal driver binds
+        # its Turn. Keep the tool behind that notification; the normal gate
+        # still checks its identity and permission after the driver binds it.
+        self._pending_events.put(message)
+        return True
+
     def _request(
         self,
         method: str,
@@ -1415,6 +1440,8 @@ class CodexChatAgentSession:
                                     "Codex app-server returned an unreadable response."
                                 )
                             message = raw
+                            if self._queue_tool_after_pending_start(message):
+                                continue
                             if message.get("method") and self._check_server_gate(
                                 message
                             ):

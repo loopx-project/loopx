@@ -424,12 +424,16 @@ def _valid_completion_settlement(result: Mapping[str, Any]) -> bool:
         and (state.get("recovery") is None or state.get("recovery") in _RECOVERIES)
         and isinstance(updates, Mapping)
         and all(
-            key in {"completion_continuation", "completion_recovery", "completion_receipt_id"}
+            key in {"completion_continuation", "completion_requested_continuation", "completion_recovery", "completion_receipt_id"}
             and isinstance(value, str)
             for key, value in updates.items()
         )
         and updates.get("completion_continuation") == state.get("continuation")
         and updates.get("completion_recovery") == state.get("recovery")
+        and (
+            updates.get("completion_requested_continuation") is None
+            or updates["completion_requested_continuation"] in _CONTINUATIONS
+        )
         and (
             updates.get("completion_receipt_id") is None
             or (
@@ -526,6 +530,7 @@ def reduce_todo_completion_transaction(
     dry_run: bool,
     validation_receipt: Mapping[str, Any] | None = None,
     completion_policy_request: Mapping[str, Any] | None = None,
+    defer_no_followup: bool = False,
 ) -> dict[str, Any]:
     """Reduce one coarse completion request through the TS authority."""
 
@@ -547,6 +552,8 @@ def reduce_todo_completion_transaction(
                 else None
             ),
         }
+        if defer_no_followup:
+            params["defer_no_followup"] = True
         if completion_policy_request is not None:
             params["completion_policy_request"] = dict(completion_policy_request)
         result = effect_runtime_result("todo.completion.reduce", params)

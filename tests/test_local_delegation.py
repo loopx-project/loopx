@@ -30,14 +30,18 @@ from loopx.control_plane.collaboration.inbox import _read  # noqa: E402
 from loopx.control_plane.turn_driver.lane_fence import turn_lane_liveness, turn_lane_singleflight  # noqa: E402
 from loopx.file_lock import exclusive_file_lock, try_exclusive_file_lock  # noqa: E402
 from loopx.file_lock import lock_holder_host_label  # noqa: E402
+from tests.control_plane.host_checkpoint_fixture import checkpoint_fixture_script  # noqa: E402
 
 
-HOST = '''import json, os, sys, time
+HOST = checkpoint_fixture_script('''import json, os, sys, time
 from pathlib import Path
+from tests.control_plane.host_checkpoint_fixture import reply_to_checkpoint
 from loopx.control_plane.turn_driver.host_candidate import build_result
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import return_result
 request = json.load(sys.stdin)
+if reply_to_checkpoint(request):
+    raise SystemExit(0)
 workspace = Path.cwd()
 root = Path(sys.argv[1])
 envelope = request['turn_envelope']
@@ -58,7 +62,7 @@ if not (root / 'skip-adoption').exists():
     acknowledge(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'adopt', 'Independently checked the requested scope.')
     return_result(root / 'runtime', envelope['goal_id'], actor, delegation['request_id'], 'Independent member conclusion; host acceptance is separate.')
 print(json.dumps(build_result(request, {'result_kind':'validated_progress', 'classification':'artifact_written', 'summary':'Fixture host supplied output for independent verification.', 'next_action':'Return verified evidence.', 'work_evidence':['artifact:delegation-output'], 'validation_evidence':['check:independent-member-result']}, host_name='Fixture')))
-'''
+''')
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -293,9 +297,9 @@ def test_confirmed_wake_reaches_native_acceptance_through_real_delegation_and_tu
         f"counter = Path({str(native_starts)!r})\n"
         "counter.write_text(str(int(counter.read_text()) + 1 if counter.exists() else 1))\n"
     )
-    executable.write_text(FAKE_SERVER.replace('thread = "owned-app-server-thread"',
-        startup_probe + 'thread = "owned-app-server-thread"'))
-    executable.chmod(0o700)
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    executable = write_python_host_fixture(executable, FAKE_SERVER.replace(
+        'thread = "owned-app-server-thread"', startup_probe + 'thread = "owned-app-server-thread"'))
     config = json.loads(runner.config.read_text())
     binding = config["bindings"][0]
     binding["host_args"] = ["--host", "codex-cli", "--codex-bin", str(executable),

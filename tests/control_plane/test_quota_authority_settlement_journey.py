@@ -63,6 +63,22 @@ def _guard(project: Path, runtime: Path, registry: Path, *, turn_id: str = cli.T
     )
 
 
+def _assert_incomplete_goal_guard(project, runtime, registry, *, code_name):
+    code, guard = _guard(project, runtime, registry)
+    assert code != 0 and guard["should_run"] is False, guard
+    assert guard["error_code"] == code_name, guard
+    assert "loopx-project" in guard["recommended_action"], guard
+    assert cli._spend_run_count(runtime) == 0
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1
+    assert not list((runtime / "goals" / cli.GOAL_ID / "checkpoint-contexts").glob("*.json"))
+    readback = read_heartbeat_settlement(
+        runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID,
+        todo_id=cli.TODO_ID, turn_instance_id=cli.TURN_ID,
+    )
+    assert readback is not None and readback.identity.value is not None
+    return readback.identity.value.as_dict()
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("status", ["done", "blocked"])
 def test_stale_markdown_cannot_admit_terminal_or_blocked_work(tmp_path, provider, status):
@@ -81,14 +97,28 @@ def test_stale_markdown_cannot_admit_terminal_or_blocked_work(tmp_path, provider
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_exact_selection_reaches_work_beyond_display_limits(tmp_path, provider):
     project, runtime, registry, path, prefix = _source(tmp_path, provider=provider)
-    # Goal intent remains readable, while its bounded Todo display cannot
-    # supply the exact candidate from the canonical provider.
-    path.write_text(prefix)
+    original = None
+    if provider != "legacy":
+        path.unlink()
+        # Native Todo readback survives display loss. It cannot supply the
+        # separately owned Goal narrative that disappeared with the whole file.
+        listed = list_goal_todos(registry_path=registry, goal_id=cli.GOAL_ID,
+                                runtime_root_arg=str(runtime), todo_id=cli.TODO_ID)
+        assert listed["todo"]["todo_id"] == cli.TODO_ID
+        original = _assert_incomplete_goal_guard(
+            project, runtime, registry, code_name="checkpoint_goal_source_unavailable",
+        )
+        # The source owner restores the exact saved non-Todo document, without
+        # repopulating its Todo display or rewriting canonical authority.
+        path.write_text(prefix)
     code, guard = _guard(project, runtime, registry)
     assert code == 0, guard
     assert guard["decision"] == "run"
     assert guard["selected_todo"]["todo_id"] == cli.TODO_ID
     assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
+    if original is not None:
+        assert guard["heartbeat_receipt"]["settlement_identity"] == original
+        assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1
 
 
 def test_unmigrated_goal_cannot_select_work_from_markdown(tmp_path):
@@ -233,39 +263,65 @@ def test_semantic_progress_replay_keeps_original_turn_after_todo_wait(
         "--status", waiting_status, "--resume-when", resume_when, cwd=project,
     )
     assert code == 0 and updated["ok"] is True, json.dumps(updated)
-    code, recovery = cli._run_cli(
-        registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-        "--turn-instance-id", cli.TURN_ID, cwd=project,
+    protected_paths = [
+        runtime / "goals" / cli.GOAL_ID / "runs/index.jsonl",
+        *list((runtime / "goals" / cli.GOAL_ID / "checkpoint-contexts").glob("*.json")),
+    ]
+    before_rejection = {path: path.read_bytes() if path.exists() else None
+                        for path in protected_paths}
+    log_path = rollout_event_log_path(runtime, cli.GOAL_ID)
+    original_log = log_path.read_bytes()
+    code, refreshed = _refresh(
+        project, runtime, registry,
+        "--vision-state", "vision_on_track", "--vision-summary", "Continue current eligible work.",
+        "--vision-acceptance", "The waiting Todo remains open; the next Turn selects fresh work.",
     )
-    assert code == 0, recovery
-    channel = recovery["interaction_contract"]["cli_channel"]
-    plan = channel.get("settlement_plan")
-    assert plan is not None, recovery
-    assert plan["identity"] == original
-    assert not recovery["normal_delivery_allowed"]
-    assert not recovery.get("selected_todo")
-    assert channel["spend_allowed_now"] is False
-    commands = {step["kind"]: step["command_template"] for step in plan["ordered_steps"]}
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-    envelope = build_turn_envelope(recovery)
-    assert envelope["writeback"]["settlement_plan"] == plan
-    code, refused = cli._run_cli(
-        registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-        "--todo-id", "todo_ready_0", "--turn-instance-id", cli.TURN_ID, cwd=project,
+    assert code != 0, refreshed
+    assert cli._spend_run_count(runtime) == 0
+    assert {path: path.read_bytes() if path.exists() else None
+            for path in protected_paths} == before_rejection
+    # Explicitly requested sink suppression is a separate conservative pause;
+    # the existing contract retains it even if the later direction is rejected.
+    # No work, Vision, refresh or spend event may be appended with that pause.
+    after_log = log_path.read_bytes()
+    assert after_log.startswith(original_log)
+    appended = [json.loads(line) for line in after_log[len(original_log):].splitlines()]
+    assert len(appended) == 1
+    pause = appended[0]
+    assert (pause["event_kind"], pause["status"]) == ("refresh_external_delivery", "paused")
+    assert (pause["goal_id"], pause["agent_id"], pause["todo_id"], pause["run_id"]) == (
+        cli.GOAL_ID, cli.AGENT_ID, cli.TODO_ID, cli.TURN_ID,
     )
-    assert code == 1 and refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
-    refresh = commands["durable_writeback"].replace(
-        "<validated_progress>", "validated_progress",
-    ).replace("<scale>", "implementation").replace("<outcome>", "outcome_progress")
-    refresh += (
-        " --vision-state vision_on_track --vision-summary 'Continue current eligible work.'"
-        " --vision-acceptance 'The waiting Todo remains open; the next Turn selects fresh work.'"
-        " --no-global-sync --suppress-external-sinks"
+    assert pause.get("goal_ref") is None
+    import hashlib
+    expected_key = hashlib.sha256(json.dumps([
+        "refresh_external_delivery_v0", original["effect_id"], None,
+    ], separators=(",", ":")).encode()).hexdigest()
+    assert pause["details"] == {
+        "schema_version": "refresh_external_delivery_v0",
+        "settlement_effect_id": original["effect_id"],
+        "replan_obligation_id": None, "state": "paused", "resume_key": expected_key,
+    }
+    code, retry_rejected = _refresh(
+        project, runtime, registry,
+        "--vision-state", "vision_on_track", "--vision-summary", "Continue current eligible work.",
+        "--vision-acceptance", "The waiting Todo remains open; the next Turn selects fresh work.",
     )
-    code, refreshed = _execute(refresh, project, runtime, registry)
+    assert code != 0, retry_rejected
+    assert log_path.read_bytes() == after_log
+    assert {path: path.read_bytes() if path.exists() else None
+            for path in protected_paths} == before_rejection
+    # Preserve the validated nonterminal outcome, then judge against the new
+    # native wait/frontier using this original Turn's post-result read.
+    code, refreshed = _refresh(project, runtime, registry)
+    assert code == 0, refreshed
+    assert refreshed["vision_checkpoint"]["satisfied"] is False
+    binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+               "--turn-instance-id", cli.TURN_ID)
+    checkpoint_args = cli._default_checkpoint_args(
+        registry, runtime, binding, tmp_path, purpose="supplement_checkpoint",
+    )
+    code, refreshed = _refresh(project, runtime, registry, *checkpoint_args)
     assert code == 0, refreshed
     assert refreshed["vision_checkpoint"]["delivery_boundary"] == "semantic_closeout"
     assert refreshed["vision_checkpoint"]["satisfied"] is True
@@ -490,12 +546,10 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     assert code == 0 and migrated["status"] == "applied", migrated
     assert Path(migrated["backup_path"]).is_file()
     assert migrated["execution_authority_granted"] is False
-    goal_context = path.read_text().split("## Agent Todo")[0]
-    path.write_text(goal_context + "## Agent Todo\n\n")
-
-    code, guard = _guard(project, runtime, registry)
-    assert code == 0 and guard["decision"] == "run", guard
-    assert guard["heartbeat_receipt"]["settlement_identity"]["todo_id"] == cli.TODO_ID
+    path.unlink()  # Native Todo writes remain independent of the old display.
+    original = _assert_incomplete_goal_guard(
+        project, runtime, registry, code_name="checkpoint_goal_source_unavailable",
+    )
     update = ("todo", "update", "--todo-id", cli.TODO_ID, "--agent-id", cli.AGENT_ID,
               "--text", "Continue after policy migration")
     # A migrated owner may edit copy, but migration supplies no execution proof.
@@ -512,9 +566,40 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     code, updated = run(*update, "--task-lease-idempotency-key", lease_key,
                         "--task-lease-expected-version", version)
     assert code == 0 and updated["ok"] is True, updated
+    assert path.exists()  # Native projection repairs only its own Todo sections.
+    assert 'goal_source_completeness: "todo_projection_only"' in path.read_text()
+    assert _assert_incomplete_goal_guard(
+        project, runtime, registry, code_name="checkpoint_goal_source_incomplete",
+    ) == original
+    # The exact historical codec has the same incomplete meaning, even though
+    # earlier releases did not persist its new typed marker.
+    path.write_text(path.read_text().replace('goal_source_completeness: "todo_projection_only"\n', ""))
+    assert _assert_incomplete_goal_guard(
+        project, runtime, registry, code_name="checkpoint_goal_source_incomplete",
+    ) == original
+    # A skeleton for another Goal is still incomplete, rather than becoming a
+    # complete source merely because its ID differs from the current caller.
+    path.write_text(path.read_text().replace(
+        f'goal_id: "{cli.GOAL_ID}"', 'goal_id: "another-goal"',
+    ))
+    assert _assert_incomplete_goal_guard(
+        project, runtime, registry, code_name="checkpoint_goal_source_incomplete",
+    ) == original
+    path.write_text(prefix)  # Restore actual owner prose; no inferred Goal data.
+    code, guard = _guard(project, runtime, registry)
+    assert code == 0 and guard["decision"] == "run", guard
+    assert guard["heartbeat_receipt"]["settlement_identity"] == original
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1
 
     code, refreshed = _refresh(project, runtime, registry)
     assert code == 0, refreshed
+    if refreshed["vision_checkpoint"]["satisfied"] is False:
+        binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+                   "--turn-instance-id", cli.TURN_ID)
+        code, refreshed = _refresh(project, runtime, registry, *cli._default_checkpoint_args(
+            registry, runtime, binding, tmp_path, purpose="supplement_checkpoint",
+        ))
+        assert code == 0 and refreshed["vision_checkpoint"]["satisfied"] is True, refreshed
     command = refreshed["settlement_owed"]["command"]
     code, spent = _execute(command, project, runtime, registry)
     assert code == 0 and spent["appended"] is True, spent

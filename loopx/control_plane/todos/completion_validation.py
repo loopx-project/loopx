@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from json import loads as json_loads
 from pathlib import Path
 from typing import Any, cast
@@ -257,6 +257,7 @@ def _run_declared_completion_validation(
     task_repository: str | None = None,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
+    stdin: int | None = None,
 ) -> dict[str, Any] | None:
     """Run a todo's declared caller-approved validation command.
 
@@ -299,6 +300,7 @@ def _run_declared_completion_validation(
                     validation_argv=validation_argv,
                     validation_label=label,
                     timeout_seconds=timeout_seconds,
+                    stdin=stdin,
                 ),
             )
         return cast(
@@ -308,6 +310,7 @@ def _run_declared_completion_validation(
                 validation_command=str(validation_command),
                 validation_label=label,
                 timeout_seconds=timeout_seconds,
+                stdin=stdin,
             ),
         )
     except subprocess.TimeoutExpired:
@@ -363,6 +366,7 @@ def run_declared_completion_validation_effect(
     goal_id: str,
     delivery_workspace: Mapping[str, Any] | None = None,
     validation_workspace_path: Path | None = None,
+    stdin: int | None = None,
 ) -> dict[str, Any]:
     """Execute exactly one TypeScript-authorized validation effect.
 
@@ -414,6 +418,7 @@ def run_declared_completion_validation_effect(
         ),
         delivery_workspace=delivery_workspace,
         validation_workspace_path=validation_workspace_path,
+        stdin=stdin,
     )
     if receipt is None:
         raise RuntimeError("authorized validation effect produced no receipt")
@@ -495,6 +500,7 @@ def run_completion_validation_gate_with_source(
     goal_id: str,
     dry_run: bool,
     no_followup: bool = False,
+    defer_no_followup: bool = False,
     completion_turn_key: str | None = None,
     completion_identity_source: str | None = None,
     requested_has_successor: bool = False,
@@ -502,6 +508,7 @@ def run_completion_validation_gate_with_source(
     requested_successor_todo_ids: list[str] | None = None,
     completion_delivery_workspace: Mapping[str, Any] | None = None,
     completion_validation_workspace_path: Path | None = None,
+    admit_validation: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the caller-approved completion validation gate, OUTSIDE the mutation lock.
 
@@ -543,6 +550,7 @@ def run_completion_validation_gate_with_source(
         projection_source=projection_source,
         completion_turn_key=completion_turn_key,
         no_followup=no_followup,
+        defer_no_followup=defer_no_followup,
         dry_run=dry_run,
         completion_identity_source=completion_identity_source,
         goal_id=goal_id,
@@ -556,6 +564,8 @@ def run_completion_validation_gate_with_source(
     )
     completion_validation = None
     if transaction["decision"] == "execute_validation":
+        if admit_validation is not None:
+            admit_validation(transaction)
         effect = transaction["validation_effect"]
         completion_validation = run_declared_completion_validation_effect(
             effect=effect,
@@ -571,6 +581,7 @@ def run_completion_validation_gate_with_source(
             projection_source=projection_source,
             completion_turn_key=completion_turn_key,
             no_followup=no_followup,
+            defer_no_followup=defer_no_followup,
             dry_run=dry_run,
             completion_identity_source=completion_identity_source,
             goal_id=goal_id,

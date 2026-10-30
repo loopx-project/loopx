@@ -448,3 +448,16 @@ def test_objective_display_never_changes_canonical_authority(canonical_display, 
     code, result = _cli(registry, "list", "--goal-id", "goal-a")
     assert code == 0 and next(row for row in result["todos"] if row["role"] == "agent")["todo_id"] == "todo_active", result
     assert _read(runtime) == before
+def test_legacy_projection_codec_does_not_classify_owner_goal_prose():
+    from loopx.control_plane.todos.projection_document import (
+        is_legacy_todo_projection_skeleton, recovered_todo_projection_skeleton,
+    )
+    document = recovered_todo_projection_skeleton("codec-goal")
+    legacy = document.replace('goal_source_completeness: "todo_projection_only"\n', "")
+    assert is_legacy_todo_projection_skeleton(legacy, "codec-goal")
+    assert not is_legacy_todo_projection_skeleton(legacy, "different-goal")
+    # Exact old codec adaptation does not use a phrase/heading denylist.
+    for narrative in ("## Objective\nReal owner intent.\n",
+                      "## Objective\n" + "\n".join("> " + line for line in legacy.splitlines()) + "\n",
+                      "## Objective\n```markdown\n" + legacy + "\n```\n"):
+        assert not is_legacy_todo_projection_skeleton(legacy + narrative, "codec-goal")

@@ -13,6 +13,7 @@ import tempfile
 from typing import Any, TypeVar
 
 from ..content_digest import ENVELOPED_SHA256_PATTERN
+from ..runtime.file_paths import windows_extended_path
 from ...file_lock import exclusive_cross_runtime_file_lock
 from ...paths import GLOBAL_REGISTRY_FILENAME
 
@@ -180,7 +181,7 @@ def _decode_document(raw_bytes: bytes) -> _ProjectRegistryDocument:
 
 
 def _read_document(path: Path) -> _ProjectRegistryDocument:
-    return _decode_document(path.read_bytes())
+    return _decode_document(windows_extended_path(path).read_bytes())
 
 
 def load_project_registry(path: Path) -> dict[str, Any]:
@@ -217,6 +218,7 @@ def load_registry(
     """Load a project registry or an object-only global registry."""
 
     expanded = path.expanduser()
+    address = windows_extended_path(expanded)
     if source_snapshots is not None:
         # Capture callers must decode the same bytes that supply their IO
         # witness. Retain absence too; rereading could conceal A -> B -> A.
@@ -225,7 +227,7 @@ def load_registry(
             source = expanded.resolve()
             if source not in source_snapshots:
                 try:
-                    source_snapshots[source] = source.read_bytes()
+                    source_snapshots[source] = windows_extended_path(source).read_bytes()
                 except FileNotFoundError:
                     source_snapshots[source] = None
             # Witness the invoked alias too. Its saved link can change while
@@ -233,9 +235,9 @@ def load_registry(
             source_snapshots[route] = source_snapshots[source]
         raw = source_snapshots[route]
         return {} if raw is None else decode_registry_snapshot(expanded, raw)
-    if not expanded.exists():
+    if not address.exists():
         return {}
-    return decode_registry_snapshot(expanded, expanded.read_bytes())
+    return decode_registry_snapshot(expanded, address.read_bytes())
 
 
 def require_runtime_compatible_project_registry(
@@ -290,6 +292,7 @@ def _encode_document(
 
 
 def _atomic_write_bytes(path: Path, payload: bytes, *, mode: int | None) -> None:
+    path = windows_extended_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
         prefix=f".{path.name}.",
@@ -407,11 +410,12 @@ class ProjectRegistryTransaction:
     def remove(self) -> bool:
         if self._finished:
             raise RuntimeError("project registry transaction is already finished")
-        if not self._path.exists():
+        address = windows_extended_path(self._path)
+        if not address.exists():
             self._finished = True
             return False
-        self._path.unlink()
-        if self._path.exists():
+        address.unlink()
+        if address.exists():
             raise ProjectRegistryMutationError(
                 "project registry removal readback failed"
             )
@@ -419,19 +423,20 @@ class ProjectRegistryTransaction:
         return True
 
     def restore(self) -> None:
+        address = windows_extended_path(self._path)
         if self._existed:
             _atomic_write_bytes(
                 self._path,
                 self._document.raw_bytes,
                 mode=self._mode,
             )
-            if self._path.read_bytes() != self._document.raw_bytes:
+            if address.read_bytes() != self._document.raw_bytes:
                 raise ProjectRegistryRestoreError(
                     "project registry exact-byte restore did not verify"
                 )
         else:
-            self._path.unlink(missing_ok=True)
-            if self._path.exists():
+            address.unlink(missing_ok=True)
+            if address.exists():
                 raise ProjectRegistryRestoreError(
                     "new project registry could not be removed during restore"
                 )
@@ -453,10 +458,11 @@ def _registry_transaction(
         agent_id=agent_id,
         operation=operation,
     ):
-        existed = expanded.exists()
+        address = windows_extended_path(expanded)
+        existed = address.exists()
         if existed:
             document = _read_document(expanded)
-            mode = expanded.stat().st_mode & 0o777
+            mode = address.stat().st_mode & 0o777
         else:
             if create_document is None:
                 raise FileNotFoundError(

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..control_plane.todos.contract import decision_scope_metadata_value
 from ..file_lock import lock_timeout_error_fields
+from ..control_plane.goals.checkpoint_context_io import CheckpointReadContextRejected
 
 
 RolloutEventAppender = Callable[..., dict[str, object]]
@@ -57,7 +58,7 @@ def todo_error_payload(
     elif isinstance(exc, (TaskLeaseError, HandoffModeError, LegacyCoordinationWriterFenced, ShadowManagementError, ActiveStateAuthorityMutationError, LocalCoordinationAuthorityUnavailable)):
         payload["error_code"] = exc.code
         payload.update(exc.payload)
-    elif isinstance(exc, LocalCoordinationAuthorityRejection):
+    elif isinstance(exc, (LocalCoordinationAuthorityRejection, CheckpointReadContextRejected)):
         payload["error_code"] = exc.code
         payload["code"] = exc.code
         for key, value in exc.payload.items():
@@ -88,7 +89,7 @@ def append_todo_rollout_event(
     terminal_closeout = bool(
         turn_instance_id
         and args.todo_command == "complete"
-        and getattr(args, "no_follow_up", False)
+        and payload.get("completion_continuation") == "no_followup"
     )
     if (
         args.todo_command == "receipt"
@@ -136,7 +137,7 @@ def append_todo_rollout_event(
             "changed": bool(payload.get("changed")),
             "added": bool(payload.get("added")),
             "already_exists": bool(payload.get("already_exists")),
-            "no_followup": bool(getattr(args, "no_follow_up", False)),
+            "no_followup": payload.get("completion_continuation") == "no_followup",
             "completion_continuation": payload.get("completion_continuation"),
             "completion_recovery": payload.get("completion_recovery"),
             "mutation_authority": payload.get("mutation_authority"),

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...control_plane.runtime.file_paths import windows_extended_path
+from ...file_lock import write_json_atomic
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
 from ..context_providers.base import ContextProvider
@@ -130,7 +130,7 @@ def turn_outcome_ingest_sidecar_path(
 
 def _load_sidecar(path: Path) -> dict[str, Any] | None:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(windows_extended_path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:
@@ -144,19 +144,7 @@ def _load_sidecar(path: Path) -> dict[str, Any] | None:
 
 
 def _write_sidecar(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-    try:
-        if hasattr(os, "fchmod"):
-            os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-        os.replace(temporary, path)
-        path.chmod(0o600)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    write_json_atomic(path, payload, mode=0o600, sort_keys=True)
 
 
 def _replayed_completed_receipt(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -726,12 +714,12 @@ def reconcile_pending_turn_outcome_ingests(
             "status": "explicitly_disabled",
             "reason_code": "automatic_ingest_explicitly_disabled",
         }
-    directory = turn_outcome_ingest_sidecar_path(
+    directory = windows_extended_path(turn_outcome_ingest_sidecar_path(
         _goal_repo(registry_path, goal_id),
         goal_id=goal_id,
         agent_id=agent_id,
         source_event_id="placeholder",
-    ).parent
+    ).parent)
     if not directory.is_dir():
         return base | {"status": "empty"}
     pending_count = 0

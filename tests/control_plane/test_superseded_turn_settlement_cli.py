@@ -39,7 +39,7 @@ def _future_monitor(run, lease, *, link=True):
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("unscoped_first", [False, True])
 @pytest.mark.parametrize("direct_link", [False, True])
-def test_supersede_existing_future_monitor_settles_only_original_turn(
+def test_supersede_turn_binding_preserves_existing_future_monitor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
     unscoped_first: bool, direct_link: bool,
 ) -> None:
@@ -75,11 +75,32 @@ def test_supersede_existing_future_monitor_settles_only_original_turn(
     assert retired["settlement_identity"] == identity
     assert retired["changed"] is (not unscoped_first)
     assert not marker.exists()  # Superseding is not deliverable acceptance.
+    if not unscoped_first:
+        code, not_accepted = run("todo", "complete", "--goal-id", cli.GOAL_ID, *binding)
+        assert code == 1 and not_accepted.get("completed") is not True, not_accepted
+        assert not marker.exists()
+    code, direction = run("checkpoint-context", "--goal-id", cli.GOAL_ID, *binding,
+                          "--purpose", "first_delivery")
+    if unscoped_first:
+        # Legacy retirement carries no original Turn proof. A later caller must
+        # not adopt it merely because it now has an admitted heartbeat.
+        assert code == 1 and direction["error_code"] == "checkpoint_result_not_committed", direction
+        code, listed = run("todo", "list", "--goal-id", cli.GOAL_ID)
+        assert code == 0, listed
+        source = next(t for t in listed["todos"] if t["todo_id"] == cli.TODO_ID)
+        monitor = next(t for t in listed["todos"] if t["todo_id"] == monitor_id)
+        assert source.get("completion_turn_key") is None
+        assert source.get("completion_receipt_id") is None
+        assert monitor["status"] == "open" and monitor["next_due_at"] == due
+        assert cli._spend_run_count(runtime) == 0
+        return
+    assert code == 0 and direction["basis"]["todo"]["completion_turn_key"] == identity["effect_id"], direction
 
     refresh_args = (
         "refresh-state", "--goal-id", cli.GOAL_ID, *binding,
         "--classification", "original_window_superseded", "--delivery-batch-scale", "implementation",
         "--delivery-outcome", "outcome_progress", "--vision-state", "active",
+        "--first-delivery", "--checkpoint-read-context", direction["read_context_id"],
         "--vision-summary", "Retired an expired task while preserving its future observation.",
         "--vision-acceptance", "The future monitor remains open with its original due time.",
         "--no-global-sync", "--suppress-external-sinks",
@@ -109,6 +130,9 @@ def test_supersede_existing_future_monitor_settles_only_original_turn(
     monitor = next(t for t in listed["todos"] if t["todo_id"] == monitor_id)
     assert source["status"] == "done" and source["successor_todo_ids"] == [monitor_id]
     assert source["completion_continuation"] == "active_goal"
+    # Turn-scoped retirement is durable, but does not fabricate acceptance.
+    assert source.get("completion_turn_key") == (None if unscoped_first else identity["effect_id"])
+    assert source.get("completion_receipt_id") is None
     assert source["completion_validation_sha256"] == original["completion_validation_sha256"]
     assert source["required_write_scopes"] == original["required_write_scopes"]
     assert monitor["status"] == "open" and monitor["next_due_at"] == due

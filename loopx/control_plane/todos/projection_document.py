@@ -6,16 +6,33 @@ import json
 from .machine_region import TodoRegion, find_todo_regions, visible_markdown_lines
 
 
-def recovered_todo_projection_skeleton(goal_id: str) -> str:
-    """The display recovery codec; it does not restore missing Goal intent."""
+def _recovered_todo_projection_skeleton(goal_id: str, *, marked: bool) -> str:
     return (
-        f"---\ngoal_id: {json.dumps(goal_id, ensure_ascii=False)}\n---\n\n"
+        f"---\ngoal_id: {json.dumps(goal_id, ensure_ascii=False)}\n"
+        + ('goal_source_completeness: "todo_projection_only"\n' if marked else '')
+        + "---\n\n"
         "# Recovered Todo projection\n\n"
         "> Regenerated from canonical Todo authority. Non-Todo sections "
         "are not in this provider snapshot and were not recovered. "
         "This is a Todo projection, not a complete Goal-state restore.\n\n"
         "## Agent Todo\n"
     )
+
+
+def recovered_todo_projection_skeleton(goal_id: str) -> str:
+    """The display recovery codec; it does not restore missing Goal intent."""
+    return _recovered_todo_projection_skeleton(goal_id, marked=True)
+
+
+def is_legacy_todo_projection_skeleton(markdown: str, goal_id: str) -> bool:
+    """Recognize only the exact pre-marker codec, ignoring replaceable Todos.
+
+    This compatibility decoder never classifies arbitrary Goal prose by words
+    or headings. Additional owner narrative no longer matches this old codec.
+    """
+    expected = _recovered_todo_projection_skeleton(goal_id, marked=False)
+    return TodoProjectionDocument.parse(markdown).narrative.strip() == \
+        TodoProjectionDocument.parse(expected).narrative.strip()
 
 
 @dataclass(frozen=True)

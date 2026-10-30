@@ -286,6 +286,12 @@ def prepare_quota_command_context(
         registry_path=registry_path,
         runtime_root_override=runtime_root_arg,
     )
+    if command == "should-run" and not heartbeat_turn_id and args.agent_id and not args.dry_run:
+        from ..control_plane.goals.checkpoint_context_io import restore_default_turn_id
+
+        heartbeat_turn_id = restore_default_turn_id(runtime_root=runtime_root, registry_path=registry_path,
+            goal_id=args.goal_id, agent_id=args.agent_id, todo_id=getattr(args, "todo_id", None),
+            pending_only=True) or mint_turn_instance_id(prefix="work")
     if command == "monitor-poll" and args.execute and (args.todo_id or args.target_key):
         # A selected provider outage precedes unrelated status preparation.
         # An unmigrated source may still recover its original quota transaction;

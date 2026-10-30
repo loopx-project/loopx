@@ -10,6 +10,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -71,6 +72,91 @@ def test_rejected_launch_guard_keeps_nonexecution_evidence(tmp_path: Path, monke
             project=tmp_path, input_text="", timeout_seconds=5, launch_guard=stopped,
         )
     assert not marker.exists() and record.read_bytes() == before
+
+
+@pytest.mark.parametrize("guarded,guard_failure", [(False, False), (True, False), (True, True)])
+def test_setup_and_job_failure_still_release_guard_and_output(tmp_path: Path, monkeypatch, guarded, guard_failure):
+    """Real transport/Node bridge; synthetic Job IO is not native Windows qualification."""
+    from loopx.control_plane.turn_driver import host_process_transport as transport
+
+    setup_error = ValueError("synthetic setup failure")
+    job_error = OSError("synthetic Job observation failure")
+    guard_error = RuntimeError("synthetic guard release failure")
+    held, released, processes, scopes = [], [], [], []
+
+    class FailingJob:
+        def __enter__(self):
+            return self
+
+        def assign(self, process):
+            processes.append(process)
+
+        def finish(self):
+            raise job_error
+
+        def __exit__(self, *_exc):
+            pass
+
+    @contextmanager
+    def admission():
+        held.append(True)
+        try:
+            yield
+        finally:
+            held.pop()
+            released.append(True)
+            if guard_failure:
+                raise guard_error
+
+    def fail_setup(*_args, **_kwargs):
+        assert bool(held) is guarded
+        raise setup_error
+
+    def launch_guard():
+        scope = admission()
+        scopes.append(scope)
+        return scope
+
+    # Select only the transport's Windows branch, without changing the real
+    # platform used by subprocess, pathlib, pytest or the Node bridge.
+    monkeypatch.setattr(transport, "sys", SimpleNamespace(
+        platform="win32", executable=sys.executable, exc_info=sys.exc_info))
+    monkeypatch.setitem(sys.modules, "loopx.control_plane.turn_driver.windows_host_job",
+        SimpleNamespace(WindowsHostJob=FailingJob))
+    monkeypatch.setattr(transport, "_begin_host_process_record", fail_setup)
+    try:
+        with pytest.raises((OSError, RuntimeError)) as caught:
+            transport.run_host_process(
+                [sys.executable, "-c", "from pathlib import Path;Path('unexpected-host').touch()"],
+                project=tmp_path, input_text="", timeout_seconds=5,
+                launch_guard=launch_guard if guarded else None,
+            )
+        assert not held and released == ([True] if guarded else [])
+        assert len(processes) == 1
+        assert processes[0].poll() is not None
+        assert processes[0].stdout.closed
+        assert not (tmp_path / "unexpected-host").exists()
+        assert caught.value is (guard_error if guard_failure else job_error)
+        errors = []
+        error = caught.value
+        while error is not None:
+            errors.append(error)
+            error = error.__context__
+        assert job_error in errors and setup_error in errors
+    finally:
+        # Also clean the intentionally failing pre-fix run's real resources.
+        for scope in scopes:
+            try:
+                scope.__exit__(None, None, None)
+            except RuntimeError as error:
+                if error is not guard_error:
+                    raise
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
 
 
 def test_host_output_lines_bound_storage_and_use_lf() -> None:
@@ -177,6 +263,7 @@ def test_disappearing_python_owner_cancels_real_host(tmp_path: Path) -> None:
     ]
     launcher = f"""
 from pathlib import Path
+from types import SimpleNamespace
 from loopx.control_plane.turn_driver.host_process_transport import run_host_process
 run_host_process({host_argv!r}, project=Path({str(tmp_path)!r}), input_text='', timeout_seconds=30)
 """
@@ -238,17 +325,17 @@ def test_generic_host_timeout_stops_real_descendant(tmp_path: Path) -> None:
 
 
 def test_windows_transport_relay_preserves_argv_and_stdin(tmp_path: Path) -> None:
-    from loopx.control_plane.turn_driver.host_process_transport import _WINDOWS_COMMAND_RELAY
+    from loopx.control_plane.turn_driver import windows_host_command
 
-    # The relay is tested here on any OS; real .cmd resolution remains a Windows
-    # integration obligation. All args stay argv entries, not interpolated code.
+    # Exercise the real relay entry; .cmd interpretation is separately native
+    # Windows coverage. All arguments remain argv entries, not generated code.
     values = ["two words", "a&b", "%NAME%", 'one"quote', "界"]
     result = _run_host(
         {},
         argv=[
             sys.executable,
-            "-c",
-            _WINDOWS_COMMAND_RELAY,
+            str(Path(windows_host_command.__file__)),
+            str(tmp_path / "created.json"),
             sys.executable,
             "-c",
             "import json,sys;print(json.dumps({'args':sys.argv[1:],'input':json.load(sys.stdin)}))",
@@ -259,6 +346,7 @@ def test_windows_transport_relay_preserves_argv_and_stdin(tmp_path: Path) -> Non
     )
     assert result["ok"] is True
     assert result["value"] == {"args": values, "input": {}}
+    assert json.loads((tmp_path / "created.json").read_text()) is True
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group drain readback")

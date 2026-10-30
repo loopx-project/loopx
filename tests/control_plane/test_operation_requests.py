@@ -271,8 +271,8 @@ def test_codex_app_server_resolves_ref_and_freezes_profile_while_inline_remains_
         '        answer = {name: "" for name, schema in properties.items()',
     )
     assert server != FAKE_SERVER
-    executable.write_text(server)
-    executable.chmod(0o700)
+    from tests.control_plane.host_process_fixture import write_python_host_fixture
+    executable = write_python_host_fixture(executable, server)
     options = dict(runtime_root=store.root.parent.parent, registry_path=service.registry_path,
         project=tmp_path / "project", codex_bin=str(executable), model="test-model", reasoning_effort="xhigh",
         timeout_seconds=5, operation_request_file=source.path, operation_request_sha256=source.sha256)

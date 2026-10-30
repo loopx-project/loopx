@@ -75,6 +75,25 @@ def _write_journal(runtime_root: Path, journal: dict[str, Any]) -> Path:
     return path
 
 
+@pytest.mark.parametrize("mismatched_lineage", [False, True])
+def test_long_path_resume_reads_original_journal_and_checks_lineage(tmp_path, mismatched_lineage):
+    from loopx.control_plane.turn_driver.journal_store import load_loopx_turn_plan_from_journal, turn_journal_path
+    from loopx.file_lock import write_json_atomic
+
+    runtime = tmp_path
+    while len(str(runtime)) < 220:
+        runtime /= "runtime-" + "x" * 60
+    journal = _journal()
+    if mismatched_lineage:
+        journal["plan"]["transaction"]["turn_key"] = "sha256:" + "b" * 64
+    write_json_atomic(turn_journal_path(runtime, goal_id="fixture-goal", turn_key=TURN_KEY), journal)
+    if mismatched_lineage:
+        with pytest.raises(ValueError, match="mismatched turn lineage"):
+            load_loopx_turn_plan_from_journal(runtime, goal_id="fixture-goal", turn_key=TURN_KEY)
+    else:
+        assert load_loopx_turn_plan_from_journal(runtime, goal_id="fixture-goal", turn_key=TURN_KEY) == journal["plan"]
+
+
 def _run_inspection_cli(
     tmp_path: Path,
     *,

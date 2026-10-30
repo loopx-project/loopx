@@ -1,5 +1,6 @@
 """A deferred selection must expose a runnable recovery before settlement."""
 import json
+import os
 import shlex
 
 import pytest
@@ -97,9 +98,15 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     cli = resumed["interaction_contract"]["cli_channel"]
     assert cli["settlement_plan"]["identity"] == identity
     refresh = next(c for c in cli["next_cli_actions"] if "refresh-state" in c)
+    checkpoint_args = ()
     if binding == "todo":
+        rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", selected_id, "--turn-instance-id", turn,
+            "--purpose", "delivery_result")
+        assert rc == 0, context
+        assert context["basis"]["todo"]["todo_id"] == selected_id
         decision = tmp_path / "selection-replan-vision.json"
-        decision.write_text(
+        vision_text = (
             json.dumps(
                 {
                     "schema_version": "goal_vision_replan_contract_v0",
@@ -129,8 +136,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
                     },
                 }
             )
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
         refresh = refresh.replace(
             "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>",
@@ -140,7 +146,22 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
                        "<surface-id>": "accepted-artifact", "<hypothesis-id>": "adoption",
                        "<probe-kind>": "acceptance", "<evidence-id>": "evidence:readback"}.items():
         refresh = refresh.replace(key, value)
-    rc, result = _run_cli(registry, runtime, *_projected_cli_args(refresh, turn_instance_id=turn), cwd=project)
+    if binding == "todo":
+        # A replan result precedes its fresh direction; it must not complete
+        # the retained business Todo just to satisfy the checkpoint gate.
+        result_args = list(_projected_cli_args(refresh, turn_instance_id=turn))
+        vision_index = result_args.index("--agent-vision-json")
+        del result_args[vision_index:vision_index + 2]
+        rc, pending = _run_cli(registry, runtime, *result_args, cwd=project)
+        assert rc == 0 and pending["vision_checkpoint"]["replan_stage"] == "awaiting_direction", pending
+        rc, context = _run_cli(registry, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_ID, "--todo-id", selected_id, "--turn-instance-id", turn,
+            "--purpose", "supplement_checkpoint")
+        assert rc == 0, context
+        assert context["basis"]["todo"]["status"] == "open"
+        decision.write_text(vision_text, encoding="utf-8")
+        checkpoint_args = ("--checkpoint-read-context", context["read_context_id"])
+    rc, result = _run_cli(registry, runtime, *_projected_cli_args(refresh, turn_instance_id=turn), *checkpoint_args, cwd=project)
     assert rc == 0, result
     assert result["settlement_result"]["ok"]
     spend = next(c for c in cli["next_cli_actions"] if "spend-slot" in c)
@@ -461,6 +482,7 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Native context continuity requires POSIX")
 def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 

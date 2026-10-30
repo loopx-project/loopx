@@ -36,6 +36,7 @@ import {
 } from "./runtime_decode.ts";
 
 
+import type {LocalAuthorityProviderDependencies} from "./coordination/local_authority_provider.ts";
 import type {TurnJournalInspectionRequest} from "./turn_driver/turn_journal.ts";
 
 type EffectRuntimeHandler = (params: JsonObject) => unknown | Promise<unknown>;
@@ -55,6 +56,8 @@ function lazyHandler<Module>(
 
 export interface EffectRuntimeHandlerContext {
   fingerprint: string;
+  /** Embedding-service provider hooks; never supplied in Agent RPC params. */
+  readonly authorityProvider?: LocalAuthorityProviderDependencies;
   /** Physical publication path observed by the managed server, not its caller. */
   readonly infoPath?: string;
   requestShutdown: () => void;
@@ -268,6 +271,7 @@ export function createEffectRuntimeHandlers(
     ],
     ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
+    ["turn_journal.reconcile_settlement", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({reconcileTurnJournalSettlement}) => reconcileTurnJournalSettlement)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
     ["todo.completion_fence.evaluate", lazyHandler(() => import("./todos/completion_fence.ts"), ({evaluateTodoCompletionFence}) => evaluateTodoCompletionFence)],
@@ -363,9 +367,11 @@ export function createEffectRuntimeHandlers(
     ["work_item.delivery_response.project", lazyHandler(() => import("./work_items/delivery_history.ts"), ({projectDeliveryResponse}) => projectDeliveryResponse)],
     ["work_item.delivery_claim.validate", lazyHandler(() => import("./work_items/delivery_outcome.ts"), ({validateDeliveryClaim}) => validateDeliveryClaim)],
     ["goal.vision_checkpoint.evaluate", lazyHandler(() => import("./goals/vision_checkpoint.ts"), ({buildVisionCheckpoint}) => buildVisionCheckpoint)],
-    ["goal.checkpoint_read_context.resolve", lazyHandler(() => import("./goals/checkpoint_authority.ts"), ({resolveCheckpointReadContext}) => resolveCheckpointReadContext)],
-    ["goal.checkpoint_read_context.commit", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({commitCheckpoint}) => commitCheckpoint)],
+    ["goal.checkpoint_read_context.resolve", lazyHandler(() => import("./goals/checkpoint_authority.ts"), ({resolveCheckpointReadContext}) => params => resolveCheckpointReadContext(params, context.authorityProvider))],
+    ["goal.checkpoint_read_context.commit", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({commitCheckpoint}) => params => commitCheckpoint(params, context.authorityProvider))],
     ["goal.checkpoint_read_context.inspect_replay", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReplay}) => inspectCheckpointReplay)],
+    ["goal.checkpoint_read_context.inspect_attempt", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointAttempt}) => inspectCheckpointAttempt)],
+    ["goal.checkpoint_read_context.inspect_history", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReadHistory}) => inspectCheckpointReadHistory)],
     ["goal.vision_wait.coverage", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectVisionWaitCoverage}) => projectVisionWaitCoverage)],
     ["goal.vision_wait.project", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectGoalVisionWaitState}) => projectGoalVisionWaitState)],
     ["goal.shared_goal_alignment.project", lazyHandler(() => import("./goals/shared_goal_alignment.ts"), ({projectSharedGoalAlignment}) => projectSharedGoalAlignment)],
@@ -398,6 +404,7 @@ export function createEffectRuntimeHandlers(
     ["quota.spend.commit", lazyHandler(() => import("./quota/spend_commit.ts"), ({evaluateQuotaSpendCommit}) => evaluateQuotaSpendCommit)],
     ["quota.void.commit", lazyHandler(() => import("./quota/void_commit.ts"), ({evaluateQuotaVoidCommit}) => evaluateQuotaVoidCommit)],
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
+    ["quota.settlement.default_result_work", lazyHandler(() => import("./quota/settlement_readback.ts"), ({selectDefaultResultWorkTurn}) => selectDefaultResultWorkTurn)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),
@@ -446,6 +453,9 @@ export function createEffectRuntimeHandlers(
     ["coordination.local_authority.handoff_mode_set", lazyHandler(() => import("./coordination/handoff_mode_runtime.ts"), ({setLocalHandoffMode}) => setLocalHandoffMode)],
     ["coordination.local_authority.handoff_mode_migrate", lazyHandler(() => import("./coordination/handoff_mode_runtime.ts"), ({migrateLocalHandoffMode}) => migrateLocalHandoffMode)],
     ["coordination.local_authority.todo_terminal", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({terminalLifecycleLocalCoordinationTodo}) => terminalLifecycleLocalCoordinationTodo)],
+    ["turn.first_delivery.evaluate", lazyHandler(() => import("./turn_driver/first_delivery.ts"), ({evaluateFirstDelivery}) => evaluateFirstDelivery)],
+    ["turn.first_delivery.observe", lazyHandler(() => import("./turn_driver/first_delivery.ts"), ({observeFirstDelivery}) => observeFirstDelivery)],
+    ["goal.checkpoint_read_context.work_binding", lazyHandler(() => import("./goals/checkpoint_read_context.ts"), ({executeResultWorkBinding}) => executeResultWorkBinding)],
     ["coordination.local_authority.todo_archive", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({archiveLocalCoordinationTodos}) => archiveLocalCoordinationTodos)],
     ["coordination.local_authority.todo_archive_ack", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({acknowledgeLocalCoordinationTodoArchive}) => acknowledgeLocalCoordinationTodoArchive)],
     ["coordination.local_authority.todo_read", lazyHandler(() => import("./coordination/local_authority_read.ts"), ({readLocalCoordinationTodo}) => readLocalCoordinationTodo)],

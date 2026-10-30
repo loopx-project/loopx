@@ -1,5 +1,6 @@
 import {requirePromotionRegisteredAgents} from "./shadow_registry_source.ts";
 import {verifyReentrySettlement} from "./todo_terminal_reentry.ts";
+import {withTerminalDeliverySources, terminalDeliveryBasisCheck} from "./todo_delivery_context.ts";
 import {readPromotionReceipt, commitPromotionAndReadBack} from './promotion_receipt.ts';
 import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOperation, REVIEWED_PROMOTION_OPERATION_RESULT_SCHEMA} from './reviewed_promotion_plan.ts';
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
@@ -1332,17 +1333,19 @@ export async function terminalLifecycleLocalCoordinationTodo(
       requireAuthorityStoreId(todoId, "linked successor Todo id"));
     const successorIntents = input.successor_intents.map((intent, index) =>
       requireJsonObject(intent, `successor_intents[${index}]`));
-    return await withCanonicalWriter(root, goalId, input.dry_run === true, async () => {
+    return await withTerminalDeliverySources(root, goalId, input, async () => {
       const store = await openRuntimeStore(root, goalId, dependencies);
       sourceAuthority = sourceAuthorityFor(store);
       providerEvidence.source_authority = sourceAuthority;
       const researchEvidence = new ResearchTerminalEvidenceHost(root, goalId, requireJsonObject(input.registry_source, "registry source"));
       try {
-      return {...await executeCoordinationTodoTerminalLifecycle(store, {
+      const execute = () => executeCoordinationTodoTerminalLifecycle(store, {
         ...(input.expected_todo_text_sha256 === undefined ? {} : {
           expected_todo_text_sha256: input.expected_todo_text_sha256 === null ? null
             : requireAuthorityStoreId(input.expected_todo_text_sha256, "expected Todo text digest"),
         }),
+        ...(input.delivery_context == null || requireJsonObject(input.delivery_context, "delivery context").read_context_id == null ? {} : {delivery_read_context_id:
+          requireAuthorityStoreId(requireJsonObject(input.delivery_context, "delivery context").read_context_id, "delivery read context id")}),
         validation_source_provider_revision: input.validation_source_provider_revision == null
           ? null : requireAuthorityStoreId(input.validation_source_provider_revision, "validation source provider revision"),
         validation_declaration_sha256: input.validation_declaration_sha256 == null
@@ -1373,6 +1376,8 @@ export async function terminalLifecycleLocalCoordinationTodo(
         ...(input.claim_operation_id == null ? {} : {claim_operation_id: requireAuthorityStoreId(input.claim_operation_id, "claim_operation_id")}),
         allow_user_gate_auto_acquire: input.allow_user_gate_auto_acquire as boolean,
         requested_no_followup: input.requested_no_followup as boolean,
+        ...(input.defer_no_followup === undefined ? {} : {
+          defer_no_followup: requireBoolean(input.defer_no_followup, "defer_no_followup")}),
         requested_completion_identity_source:
           input.requested_completion_identity_source === null ||
             input.requested_completion_identity_source === undefined
@@ -1402,9 +1407,15 @@ export async function terminalLifecycleLocalCoordinationTodo(
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
       }, async () => await authoritySourcesCurrent() && researchEvidence.current(),
-        researchEvidence.qualify, request => verifyReentrySettlement(root, request)), ...providerEvidence};
+        researchEvidence.qualify, request => verifyReentrySettlement(root, request),
+        terminalDeliveryBasisCheck(root, input, store));
+      let result = await execute();
+      // Only retry an explicit rejected CAS; ambiguous effects retain identity.
+      for (let attempt = 1; input.delivery_context != null && attempt < 3 &&
+          result.conflict_kind === "provider_revision_mismatch"; attempt++) result = await execute();
+      return {...result, ...providerEvidence};
       } finally {await researchEvidence.close();}
-    }, {businessWrite: "todo_terminal"});
+    });
   } catch (error) {
     return {schema_version: COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA,
       status: "failed", changed: false,

@@ -1,20 +1,4 @@
-"""The host-adapter settlement plan step order has one registered vocabulary.
-
-`loopx/control_plane/turn_driver/host_todo_completion.ts` authors the ordered
-provider plan and `loopx/control_plane/host_adapter_settlement.py` validates the
-plan it receives against the same sequence. Until now the two sequences were
-private, hand-kept copies: the TypeScript one was a module-local `const`, the
-Python one a module-local `_STEP_KINDS`. Neither was exported, so the
-repository's semantic inventory could not see either carrier, and neither
-`loopx/semantics/vocabulary_v0.json` nor the drift smoke could tie them
-together. A divergence between them would have surfaced at runtime as
-`TypeScript host provider step order mismatch`, after the plan had already been
-accepted and partially executed.
-
-Both sequences are now registered owners of `host_adapter_settlement_step_kind`,
-so the drift smoke checks each of them against the registry on every run, and
-the tests below check the two against each other directly.
-"""
+"""Registered Host adapter step kinds and legal phase-specific plan orders."""
 
 from __future__ import annotations
 
@@ -46,7 +30,7 @@ def _typescript_step_kinds() -> tuple[str, ...]:
     return tuple(re.findall(r'"([^"]+)"', match.group(1)))
 
 
-def test_both_runtimes_carry_the_same_step_sequence() -> None:
+def test_both_runtimes_carry_the_same_step_kinds() -> None:
     """The plan the TypeScript owner writes must satisfy the Python transport."""
     assert _typescript_step_kinds() == tuple(HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE)
 
@@ -77,14 +61,24 @@ def _plan(step_kinds: list[str]) -> dict:
     return {"provider_id": "loopx_cli", "kind": "ordered_cli_sequence", "steps": steps}
 
 
-def test_the_transport_accepts_the_registered_order() -> None:
-    steps = _decode_provider_steps(_plan(list(HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE)))
-    assert [step.step_kind for step in steps] == list(HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE)
+@pytest.mark.parametrize("sequence", [
+    ["guard", "delivery_context"],
+    ["guard", "lifecycle_completion", "direction_context"],
+    ["guard", "lifecycle_completion", "durable_writeback", "quota_spend"],
+    ["guard", "lifecycle_completion", "durable_writeback", "quota_spend", "terminal_closeout"],
+])
+def test_the_transport_accepts_each_phase_order(sequence) -> None:
+    steps = _decode_provider_steps(_plan(sequence))
+    assert [step.step_kind for step in steps] == sequence
 
 
-def test_the_transport_rejects_a_plan_whose_step_order_drifts() -> None:
+@pytest.mark.parametrize("sequence", [
+    ["delivery_context", "guard"],
+    ["guard", "direction_context", "lifecycle_completion"],
+    ["lifecycle_completion", "guard", "durable_writeback", "quota_spend"],
+    ["guard", "lifecycle_completion", "quota_spend", "durable_writeback", "terminal_closeout"],
+])
+def test_the_transport_rejects_a_plan_whose_step_order_drifts(sequence) -> None:
     """The tripwire the registry now backs: a reordered plan is refused, not run."""
-    drifted = list(HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE)
-    drifted[0], drifted[1] = drifted[1], drifted[0]
     with pytest.raises(RuntimeError, match="step order mismatch"):
-        _decode_provider_steps(_plan(drifted))
+        _decode_provider_steps(_plan(sequence))

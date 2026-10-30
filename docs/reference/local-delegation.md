@@ -375,6 +375,15 @@ lost, readback exposes recovery and the team view offers **恢复原执行**. Re
 `revalidate` or using `resume` reconciles the original committed receipts without
 repeating Host work or quota spending.
 
+For an already committed original recheck, `resume` and `revalidate` perform
+its remaining native result publication before returning. This
+also covers a committed recheck whose result projection is still `turn_returned`.
+The MCP caller can close after that reply without leaving publication to a child
+worker tied to its process lifetime. Current completion validation, grants,
+ancestry and stop fences still apply; recovery can fail without publishing.
+Execution without a committed original recheck keeps the
+existing asynchronous worker path and may still return a pending state.
+
 Current grants, stop state and declared ancestry are checked again before
 revalidation or committed-result recovery. Restoring the task output alone
 does not restore unavailable source inputs.
@@ -395,6 +404,8 @@ reconciles its durable execution; it does not bypass the host's process policy.
 托管 CLI 子进程通过参数接收请求，不继承调用方的标准输入，MCP 等交互通道仍由原调用方持有。
 委派校验器同样读取 EOF，不消费对话输入；普通独立调用校验器仍保留原有的标准输入继承行为。
 宿主断连时若终止整个进程树（如 Windows MCP Job），重连后可沿原 operation 执行 `resume`，对账持久化执行，不绕过宿主进程策略。
+
+已提交的原重验结果会在 CLI/MCP 回复前完成剩余原生发布，仍受当前完成验收与权限、来源、stop 门约束；尚未提交的执行继续使用原异步 worker 路径，可能返回 pending。
 
 ## Source use and recheck
 
@@ -741,8 +752,15 @@ while it is unproven the stop stays `acknowledged` with
 `required_lease_release_unproven`, and an authority that cannot be read keeps
 it open with `lease_obligation_unproven`. If that host cannot be attributed, or its
 supervisor never finished cleaning up, the stop stays `acknowledged` and a
-later `stop` rereads it. On a platform without process groups the launched
-host cannot be proven drained at all, so `stop --execute` fails with an
+later `stop` rereads it. New Windows managed Host launches assign their control
+bridge to a non-breakaway kernel Job Object before sending the Host request.
+The transport closes the whole Job on owner loss and reads its active process
+count before returning; cold readback uses the original named Job, not a dead
+leader PID. Assignment or observation failure supplies no exit proof. TypeScript
+still owns the stop/lease decision. Historical Windows launches without that
+Job evidence retain their unsupported boundary; they are never upgraded from
+an old `finished` PID. On a platform without attributable process groups or
+Job containment the launched host cannot be proven drained, so `stop --execute` fails with an
 actionable error naming that boundary before writing a cancellation intent,
 acknowledging, signalling a worker, or releasing a lease. Repeating a refused
 request preserves the operation and any existing stop receipt unchanged. An
@@ -796,8 +814,12 @@ authority 路径恢复，stop 不会重建它。回执的 `lease.state` 为 `rel
 因此不会产生一份「已结算」却让成员 Todo 被租约阻塞到 TTL 的回执；在释放得到证明前，停止保持 `acknowledged`，原因为
 `required_lease_release_unproven`；权威无法读取时同样保持打开，原因为
 `lease_obligation_unproven`。host 无法归属或其 supervisor 未完成清理时，
-停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。在没有进程组的平台上，
-启动过的 host 根本无法被证明已收尾，因此 `stop --execute` 会以指明该平台边界的
+停止保持 `acknowledged`，之后再次调用 `stop` 会重新读取。新 Windows managed Host
+在发送 Host 请求前将控制 bridge 归入禁止 breakaway 的内核 Job Object；owner 消失时
+整组退出，返回前读取活动进程数，冷读回使用原 named Job，而非已退出的 leader PID。
+归组或观测失败不给退出证明，停止与租约判断仍由 TypeScript owner 负责。
+旧 Windows 执行没有 Job 证据时继续保持 unsupported，不能凭历史 `finished` PID 升级。
+没有可归属进程组或 Job containment 的执行无法证明已收尾，因此 `stop --execute` 会以指明该平台边界的
 可操作错误在写入停止意图、确认、发送信号或释放租约之前失败，重复拒绝不修改原记录。
 Host 记录尚未出现但 worker 仍活跃或无法归属时也拒绝；没有持有者且尚未启动的
 operation 仍可安全取消。`unknown` 表示持有者在确认前消失；其 Host 被证明已退出后，
@@ -1184,6 +1206,34 @@ paths, credential/endpoint configuration, or provider payloads.
 此检查不暴露解释器路径、凭据/endpoint 配置或 provider 原始数据。
 
 ### Inspect accepted evidence and return
+
+When an enabled Goal Chat coordinator has committed a result but its native
+direction checkpoint remains pending, the existing mode bar shows the retained
+result and **Continue review**. The current SDK conversation reads and judges
+fresh native facts; a finished SDK run does not settle the LoopX Todo or Goal.
+No owner copies a context token and no additional execution setting is added.
+The packaged checkpoint browser smoke drives that rendered control through the
+production owning HTTP route, reloads and checks the original result/session and
+single native settlement. Only its SDK transport and unrelated workspace shell
+are synthetic. This evidence does not establish live model decision quality,
+live Lark delivery or native Desktop rendering; see the
+[default freshness support and recovery boundary](protocols/goal-vision-replan-contract-v0.md#recovery-checks-and-support-boundary).
+
+The existing `loopx_collaboration` tool retains its name and action vocabulary.
+`read(operation_id=todo_id, brief={purpose:"first_delivery"})` reads the configured
+coordinator's original post-result checkpoint. `resume` uses that same Todo and
+`brief={purpose:"first_delivery", read_context_id, agent_vision}` or an authored
+`vision_unchanged_reason`. The native checkpoint and host Todo transaction owners
+reject stale inputs and retain the original result, Turn and single settlement.
+This does not grant completion of arbitrary open or foreign tasks. Existing
+member operations keep their original route; an existing member operation cannot
+be reinterpreted as a coordinator checkpoint. Pause, registration/configuration
+revocation, current Chat Turn binding, lease and independent acceptance still apply.
+
+中文：已保留的协调员结果若还待原生方向核验，运行栏显示“继续核验”。原 SDK
+对话读取新事实并判断，用户不用搬 token；SDK 本轮结束不代表 Todo 或 Goal 完成。
+沿用原工具的 read/resume 和原 Todo，通过 `brief.purpose=first_delivery` 明确选择
+协调员 checkpoint，不能借成员操作、旧判断或其他 Agent 的任务扩大权限。
 
 Enabled MCP exposes `inspect_execution_binding`; newly enrolled Goal Chat tools
 accept `action=inspect` with `binding_id`. Existing native thread schemas remain

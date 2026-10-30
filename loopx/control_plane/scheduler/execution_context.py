@@ -447,7 +447,12 @@ def render_scheduler_execution_args(
                 f"unsupported scheduler runtime profile: {runtime_profile}"
             ) from exc
         return _render_scheduler_runtime_profile_args(profile)
-    if scheduler_execution_context is None:
+    if scheduler_execution_context is None or (
+        isinstance(scheduler_execution_context, SchedulerExecutionContextResolution)
+        and scheduler_execution_context == resolve_scheduler_execution_context(None)
+    ):
+        # Resolution preserves an absent caller context. Rendering that absence
+        # must not infer a host or turn it into an invalid explicit empty config.
         return ""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
     if not resolution.ok or resolution.context is None:

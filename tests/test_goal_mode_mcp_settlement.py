@@ -171,7 +171,7 @@ def test_typescript_provider_plan_short_circuits_typed_completion_rejection() ->
     assert provider_calls[1][:2] == ["todo", "complete"]
 
 
-def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _write_fixture(tmp_path: Path, *, provider: str = "file") -> tuple[Path, Path]:
     project = tmp_path / "project"
     project.mkdir()
     state_file = project / "ACTIVE_GOAL_STATE.md"
@@ -218,7 +218,7 @@ def _write_fixture(tmp_path: Path) -> tuple[Path, Path]:
                             "registered_agents": [AGENT_ID],
                             "storage_target": {
                                 "schema_version": "loopx_new_goal_storage_target_v1",
-                                "provider": "file",
+                                "provider": provider,
                                 "handoff_mode": "soft_claim",
                             },
                         },
@@ -255,6 +255,7 @@ def _run_cli(registry: Path, *args: str) -> tuple[int, dict[str, object]]:
         capture_output=True,
         text=True,
     )
+    assert result.stdout.strip(), result.stderr
     return result.returncode, json.loads(result.stdout)
 
 
@@ -273,6 +274,40 @@ def _control(registry: Path) -> GoalModeMCPControlPlane:
     )
     control.command_prefix = lambda: [sys.executable, "-m", "loopx.cli"]
     return control
+
+
+
+def _complete_default_task(control, *args, **options):
+    """Fixture Agent consumes the actual returned post-result read, without opt-in."""
+    from tests.control_plane.host_checkpoint_fixture import checkpoint_decision
+    output = control.complete_task(*args, **options)
+    first = json.loads(output)
+    if first.get("stage") != "direction_pending":
+        return output
+    assert first["completed"] is True and first["settlement_complete"] is False
+    decision = checkpoint_decision(first["context"])
+    return control.complete_task(*args, **options, read_context_id=decision["read_context_id"],
+        agent_vision=decision.get("agent_vision"),
+        vision_unchanged_reason=decision.get("vision_unchanged_reason") or None)
+
+
+def test_real_mcp_unconnected_delivery_is_rejected_before_settlement(tmp_path: Path) -> None:
+    registry, state_file = _write_fixture(tmp_path)
+    registration = json.loads(registry.read_text(encoding="utf-8"))
+    registration["goals"][0]["adapter"].pop("status")
+    registry.write_text(json.dumps(registration), encoding="utf-8")
+    added = add_goal_todo(registry_path=registry, goal_id=GOAL_ID, role="agent",
+        text="Deliver the bounded fixture.", task_class="advancement_task", claimed_by=AGENT_ID)
+    before = state_file.read_bytes()
+
+    result = json.loads(_control(registry).complete_task(added["todo_id"], AGENT_ID, "Verified fixture."))
+
+    assert result["ok"] is False
+    assert result["settlement"]["failed_stage"] == "guard"
+    assert "delivery_not_allowed" in result["settlement"]["reason"]
+    assert state_file.read_bytes() == before
+    index = registry.parent / "runtime" / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    assert not index.exists() or not index.read_bytes()
 
 
 def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identity(
@@ -344,7 +379,7 @@ def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identit
     )
 
     control = _control(registry)
-    output = control.complete_task(
+    output = _complete_default_task(control,
         todo_id,
         AGENT_ID,
         "focused fixture validation passed",
@@ -387,7 +422,7 @@ def test_real_mcp_settlement_rejects_missing_writeback_then_commits_same_identit
     assert todo_by_id[str(successor_id)]["status"] == "open"
 
     replay = json.loads(
-        control.complete_task(
+        _complete_default_task(control,
             todo_id,
             AGENT_ID,
             "focused fixture validation passed",
@@ -428,9 +463,10 @@ def test_real_mcp_terminal_completion_closes_out_after_spend(
         claimed_by=AGENT_ID,
     )
     todo_id = str(added["todo_id"])
-
+    control = _control(registry)
+    assert json.loads(control.should_run())["delivery_result_context"]
     result = json.loads(
-        _control(registry).complete_task(
+        _complete_default_task(control,
             todo_id,
             AGENT_ID,
             "terminal fixture validation passed",
@@ -489,7 +525,7 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
     lost_after: str,
 ) -> None:
     """The real write commits, but its caller sees a failure: retry must not pay twice."""
-    registry, _ = _write_fixture(tmp_path)
+    registry, state_file = _write_fixture(tmp_path)
     added = add_goal_todo(
         registry_path=registry, goal_id=GOAL_ID, role="agent",
         text="Validate response-loss recovery.", task_class="advancement_task",
@@ -497,12 +533,16 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
     )
     control = _control(registry)
     original = control.run_cli
+    assert json.loads(control.should_run())["delivery_result_context"]
     injected = False
     bound_identity = None
+    completion_args = None
 
     def lose_once(args, **kwargs):
-        nonlocal injected, bound_identity
+        nonlocal injected, bound_identity, completion_args
         output = original(args, **kwargs)
+        if completion_args is None and args[:2] == ["todo", "complete"] and json.loads(output).get("ok"):
+            completion_args = tuple(args)
         step = {"lifecycle": ["todo", "complete"], "writeback": ["refresh-state"],
                 "spend": ["quota", "spend-slot"]}[lost_after]
         if not injected and args[:len(step)] == step and json.loads(output).get("ok"):
@@ -512,10 +552,10 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
         return output
 
     control.run_cli = lose_once
-    first = json.loads(control.complete_task(
+    first = json.loads(_complete_default_task(control,
         added["todo_id"], AGENT_ID, "recovery fixture check passed", no_follow_up=True,
     ))
-    assert injected and first["ok"] is False
+    assert injected and first["ok"] is False, first
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     readback = read_heartbeat_settlement(
         tmp_path / "runtime", goal_id=GOAL_ID, agent_id=AGENT_ID,
@@ -523,18 +563,34 @@ def test_real_mcp_completion_recovers_a_lost_mutation_response(
     )
     assert readback.replay_phase == ("settled" if lost_after == "spend" else "settlement_pending")
     if lost_after != "spend":
+        before_terminal = state_file.read_bytes()
         rc, terminal = _run_cli(
             registry, "todo", "complete", "--goal-id", GOAL_ID,
             "--todo-id", added["todo_id"], "--agent-id", AGENT_ID,
             "--turn-instance-id", bound_identity["turn_instance_id"],
             "--no-follow-up", "--evidence", "synthetic terminal intent",
         )
-        assert rc != 0 and terminal["settlement_blocked_completion"] is True
-    replay = json.loads(control.complete_task(
+        # Reusing the operation with different evidence is a changed request,
+        # not a replay. Recover the actual original request below.
+        assert rc == 1 and terminal["error_code"] == "coordination_operation_identity_mismatch", terminal
+        assert state_file.read_bytes() == before_terminal
+        assert completion_args is not None
+        rc, terminal = _run_cli(registry, *completion_args)
+        # The exact original replay retains the deferred terminal intent and
+        # cannot close the Goal or rewrite accepted evidence.
+        assert rc == 0 and terminal["ok"] is True, terminal
+        todo = next(row for row in parse_active_state_todos(
+            state_file.read_text(encoding="utf-8"))["agent_todos"]["items"]
+            if row["todo_id"] == added["todo_id"])
+        assert todo["status"] == "done" and todo["completion_continuation"] == "active_goal"
+        assert todo["completion_requested_continuation"] == "no_followup"
+        assert todo.get("no_followup") is not True and todo.get("completion_recovery") is None
+        assert state_file.read_bytes() == before_terminal
+    replay = json.loads(_complete_default_task(control,
         added["todo_id"], AGENT_ID, "recovery fixture check passed", no_follow_up=True,
     ))
     assert replay["ok"] is True
-    again = json.loads(control.complete_task(
+    again = json.loads(_complete_default_task(control,
         added["todo_id"], AGENT_ID, "recovery fixture check passed", no_follow_up=True,
     ))
     assert again["ok"] is True
@@ -554,17 +610,28 @@ def test_real_mcp_links_existing_successor_without_creating_another_todo(
         claimed_by=AGENT_ID,
     )["todo_id"]) for text in ("First accepted step.", "Already planned follow-up.")]
     control = _control(registry)
+    initial = json.loads(control.should_run())
+    assert initial["interaction_contract"]["agent_channel"]["selection_required"] is True, initial
+    rc, admitted = _run_cli(registry, "quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--runtime-profile", "claude_code", "--todo-id", ids[0],
+        "--turn-instance-id", initial["heartbeat_receipt"]["turn_instance_id"])
+    assert rc == 0, admitted
+    assert admitted["selected_todo"]["todo_id"] == ids[0], admitted
+    assert admitted.get("delivery_result_context"), admitted
     before = state_file.read_bytes()
-    rejected = json.loads(control.complete_task(
+    work = json.loads(control.should_run(revalidate_todo_id=ids[0]))
+    assert work.get("delivery_result_context"), work
+    assert work["delivery_result_context"]["settlement_identity"] == admitted["delivery_result_context"]["settlement_identity"]
+    rejected = json.loads(_complete_default_task(control,
         ids[0], AGENT_ID, "synthetic check passed", successor_todo_ids=[ids[1]], no_follow_up=True,
     ))
     assert rejected["ok"] is False
     assert state_file.read_bytes() == before
-    first = json.loads(control.complete_task(
+    first = json.loads(_complete_default_task(control,
         ids[0], AGENT_ID, "synthetic check passed", successor_todo_ids=[ids[1]],
     ))
     assert first["ok"] is True, first
-    replay = json.loads(control.complete_task(
+    replay = json.loads(_complete_default_task(control,
         ids[0], AGENT_ID, "synthetic check passed", successor_todo_ids=[ids[1]],
     ))
     assert replay["ok"] is True

@@ -28,7 +28,7 @@ def test_version_bound_retry_reads_existing_operation_after_input_changes(servic
     source = wait(runner)
     artifact = source["artifacts"][0]
     consumer_input = root / "reviewer/corrected/accepted-input.json"
-    consumer_input.write_text(artifact["text"])
+    consumer_input.write_bytes(artifact["text"].encode("utf-8"))
     dependency = {"ref": "accepted-input.json", "description": "Accepted analysis for synthesis",
                   "sha256": artifact["sha256"], "delegation": {
                       "operation_id": "analysis-1", "ref": artifact["ref"], "relation": "uses"}}
@@ -78,7 +78,7 @@ def test_result_use_requires_exact_accepted_input_and_survives_reconnect(service
     assert "adoptions" not in source and "dependencies" not in source
     artifact = source["artifacts"][0]
     consumer_input = root / "reviewer/corrected/accepted-input.json"
-    consumer_input.write_text(artifact["text"])
+    consumer_input.write_bytes(artifact["text"].encode("utf-8"))
     dependency = {"ref": "accepted-input.json", "description": "Accepted analysis for synthesis",
                   "sha256": artifact["sha256"], "delegation": {
                       "operation_id": "analysis-1", "ref": artifact["ref"], "relation": "uses"}}
@@ -138,7 +138,7 @@ def test_result_use_requires_exact_accepted_input_and_survives_reconnect(service
     assert runner.read("analysis-1")["adoptions"][0]["state"] == "unavailable"
     with pytest.raises(Exception, match="exact current uses input"):
         runner.adopt_result("analysis-1", "synthesis-1")
-    consumer_input.write_text(artifact["text"])
+    consumer_input.write_bytes(artifact["text"].encode("utf-8"))
     assert runner.read("analysis-1")["adoptions"][0]["state"] == "current"
     (root / "reviewer/corrected/output.json").write_text("{}")
     assert runner.read("analysis-1")["adoptions"][0]["state"] == "unavailable"

@@ -12,6 +12,31 @@ import pytest
 from loopx.capabilities.manager_context.roundtrip import report
 from loopx.control_plane.collaboration.inbox import acknowledge, pending
 from loopx.control_plane.collaboration.peers import read_inbox, request
+from loopx.control_plane.runtime.file_paths import windows_extended_path
+
+
+def chat_turn_records(store, session_id):
+    from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION
+
+    records = [json.loads(path.read_text(encoding="utf-8"))
+               for path in (store.sessions_root / session_id / "turns").glob("*.json")]
+    # Windows lock holder diagnostics also end in .json; count business Turns.
+    return [row for row in records if row.get("schema_version") == CHAT_TURN_SCHEMA_VERSION]
+
+
+def test_chat_turn_count_detects_a_real_additional_turn(tmp_path):
+    from loopx.chat_store import ChatSessionStore
+
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="fixture", channel_id="manager")
+    first, _ = store.create_turn(session["session_id"], client_turn_id="first", message="First", origin="web")
+    store.update_turn(session["session_id"], first["turn_id"], status="completed")
+    store.finalize_managed_turn_completion(session["session_id"], first["turn_id"])
+    second, _ = store.create_turn(session["session_id"], client_turn_id="second", message="Second", origin="web")
+    records = chat_turn_records(store, session["session_id"])
+    assert {row["turn_id"] for row in records} == {first["turn_id"], second["turn_id"]}
+    assert len(records) == 2
 
 
 @pytest.fixture
@@ -79,7 +104,7 @@ def test_legal_unicode_results_cannot_overflow_the_existing_receipt_bridge(excha
     from loopx.control_plane.collaboration.inbox import _write
 
     root, _, rid, healthy = exchange
-    entry = next((root / ".local/manager-context/entries").glob(f"*/{rid}.json"))
+    entry = next(windows_extended_path(root / ".local/manager-context/entries").glob(f"*/{rid}.json"))
     request_row = json.loads(entry.read_text())
     decision = json.loads((root / ".local/manager-context/decisions" / (rid + ".json")).read_text())
     result = json.loads((root / ".local/manager-context/replies" / rid / "conclusion.json").read_text())
@@ -175,7 +200,7 @@ def test_original_app_conversation_retains_readback_and_recovers_over_real_http(
         returned = [item for item in after["messages"] if item.get("origin") == "manager_followup"]
         assert len(returned) == 1 and returned[0]["turn_id"] == turn["turn_id"]
         assert returned[0]["return_delivery"]["status"] == "delivered"
-        assert len(list((store.sessions_root / session["session_id"] / "turns").glob("*.json"))) == 1
+        assert [row["turn_id"] for row in chat_turn_records(store, session["session_id"])] == [turn["turn_id"]]
     finally:
         server.shutdown()
         server.server_close()

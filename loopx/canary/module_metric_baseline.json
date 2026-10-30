@@ -31,12 +31,12 @@
       "dict_any_count": 0
     },
     "loopx/chat_agent.py": {
-      "lines": 2007
+      "lines": 2034
     },
     "loopx/chat_runtime.py": {
       "any_count": 37,
       "dict_any_count": 0,
-      "lines": 2333
+      "lines": 2336
     },
     "loopx/chat_server.py": {
       "any_count": 25,
@@ -44,7 +44,7 @@
       "lines": 2026
     },
     "loopx/chat_store.py": {
-      "lines": 2066
+      "lines": 2069
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,

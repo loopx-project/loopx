@@ -64,8 +64,13 @@ export async function runHostProcess(request: HostProcessRequest,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
   if (signal?.aborted) return {...base, outcome: "cancelled"};
-  const child = spawn(request.argv[0], request.argv.slice(1), {cwd: request.cwd,
-    stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true});
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    child = spawn(request.argv[0], request.argv.slice(1), {cwd: request.cwd,
+      stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true});
+  } catch {
+    return base;
+  }
   let outcome: HostProcessResult["outcome"] = "exited";
   let complete = true, forcedDrain = false, stdoutBytes = 0;
   let cleanup: Promise<void> | undefined;
@@ -156,6 +161,8 @@ export async function runHostProcess(request: HostProcessRequest,
   try {
     await exited;
     await reads;
+    // Execution and output observation have ended; cleanup still must finish.
+    if (deadline) clearTimeout(deadline);
     if (drainTimer) clearTimeout(drainTimer);
     await clean();
     return {...base, outcome, output_complete: complete};
@@ -165,4 +172,11 @@ export async function runHostProcess(request: HostProcessRequest,
     signal?.removeEventListener("abort", abort);
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
   }
+}
+
+/** Interpret a private launch fact without replacing timeout/cancellation. */
+export function observeHostLaunch(result: HostProcessResult, created: unknown): HostProcessResult {
+  if (typeof created !== "boolean") throw new TypeError("invalid Host launch observation");
+  return !created && result.outcome === "exited"
+    ? {...result, outcome: "spawn_failed", returncode: null, signal: null} : result;
 }
