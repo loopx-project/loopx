@@ -86,6 +86,22 @@ try {
     await page.screenshot({path: resolve(output, 'read-failure.png')});
     await fixture('recover'); await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
     await rows(4);
+    await fixture('local-source-unavailable');
+    const denied = await fetch(`${ready.origin}/api/chat/request-inventory?session_id=${ready.session_id}`);
+    assert.equal(denied.status, 400);
+    assert.equal((await denied.json()).error_code, 'request_inventory_unavailable');
+    await dialog.getByRole('button', {name: '刷新委派', exact: true}).click(); await settled();
+    await dialog.getByRole('alert').waitFor(); await rows(0);
+    assert.equal(await trigger.getAttribute('aria-label'), '委派，— 条待跟进');
+    assert.equal(await dialog.locator('.conversation-requests-pagination').count(), 0);
+    // Changing the filter must not turn the same missing source into a new
+    // empty workspace, nor may an unsuccessful retry lose that distinction.
+    await search('builder'); await settled(); await dialog.getByRole('alert').waitFor();
+    await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
+    await dialog.getByRole('alert').waitFor(); await rows(0);
+    await fixture('local-source-recover');
+    await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled(); await rows(9);
+    await search('reviewer'); await rows(4);
     assert.equal((await fixture('inspect')).source_unchanged, true);
     await fixture('deliver'); await search('复核迁移说明中的示例'); await settled();
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();

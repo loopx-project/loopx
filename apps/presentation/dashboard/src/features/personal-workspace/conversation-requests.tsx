@@ -216,7 +216,8 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const restorePagingFocus = useRef(false);
   useEffect(() => {
     setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
-  }, [sessionId]);
+    loadedScope.current = null; loadedSource.current = null;
+  }, [sessionId, ownerFallback]);
   useEffect(() => {
     if (open) dialog.current?.showModal(); else dialog.current?.close();
   }, [open]);
@@ -235,7 +236,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     const refreshRows = sameScope ? Math.max(12, Math.ceil(loadedRows / 12) * 12) : 12;
     // Keep verified rows during a same-source refresh, but never across scope
     // changes or a failed read. Publish refreshed pages together below.
-    if (!sameScope) {setPages([]); loadedSource.current = null;}
+    if (!sameScope) setPages([]);
     loadedScope.current = scope;
     try {
       let source = sessionId && sessionId !== "new-session-pending" ? sessionId : undefined;
@@ -244,7 +245,12 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         source = listed.sessions.find(row => row.channel_id === "manager")?.session_id;
       }
       if (current !== generation.current) return;
-      if (!source) {setPages([]); setNoSession(true); return;}
+      if (!source) {
+        // A vanished source is a failed read, not a new empty workspace. Keep
+        // its lineage across filters so retry continues to report the loss.
+        if (loadedSource.current) throw new Error("Previous steward source is unavailable.");
+        setPages([]); setNoSession(true); return;
+      }
       const sameSource = loadedSource.current === source;
       if (!sameSource) setPages([]);
       loadedSource.current = source;

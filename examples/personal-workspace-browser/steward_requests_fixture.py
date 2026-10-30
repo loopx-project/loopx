@@ -4,7 +4,8 @@ Pass a public synthetic status file for whole-workspace visual review. Runtime
 availability is display-only fixture metadata; POSTs cannot execute it. Requests,
 decisions and return delivery below use the production owners in a temp runtime.
 Commands on stdin: inspect, fault, fault-window, deliver-window, recover,
-deliver, source-unavailable, source-recover, stop. Window faults/returns apply
+deliver, source-unavailable, source-recover, local-source-unavailable,
+local-source-recover, stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
@@ -144,6 +145,8 @@ def main():
             raise AssertionError("An unselected steward must not read an external provider")
         install_conversation_transports(server, factories=(), observe_default=reject_provider)
         bindings = server.runtime_controller.project_contexts.conversation_bindings
+        local_session_path = store._session_path(session["session_id"])
+        local_session_bytes = local_session_path.read_bytes()
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         def source_hashes():
@@ -170,6 +173,10 @@ def main():
                     bindings.path.write_text("{", encoding="utf-8")
                 elif command == "source-recover":
                     bindings.path.unlink()
+                elif command == "local-source-unavailable":
+                    local_session_path.write_text("{invalid synthetic session", encoding="utf-8")
+                elif command == "local-source-recover":
+                    local_session_path.write_bytes(local_session_bytes)
                 elif command != "inspect":
                     raise ValueError("Unknown fixture command")
                 print(json.dumps({"event": command, "posts": server.posts, "inventory_reads": server.inventory_reads,
