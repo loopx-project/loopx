@@ -729,6 +729,16 @@ and a global `loopx` may resolve to a different installed source tree.
 与测试依赖；能否自动下载 Python 取决于下载配置与网络。系统 `python3` 可能过旧，
 全局 `loopx` 也可能指向另一个已安装版本。
 
+Fixtures that model a child without LoopX must isolate that child from an
+inherited source-checkout `PYTHONPATH`. Check imports with the same interpreter
+mode and environment as the command under test: an isolated `python -I` probe
+does not qualify a later ordinary child process. Scope environment cleanup to
+the fixture; retain the real negative command, recovery and settlement checks.
+
+模拟未安装 LoopX 的子进程时，fixture 必须隔离继承的源码 `PYTHONPATH`。
+导入探测应使用被测命令相同的解释器模式与环境：`python -I` 探测失败不能证明
+后续普通子进程也无法导入。环境清理仅限该 fixture，保留真实失败命令、恢复及结算断言。
+
 ```bash
 uv sync --extra test
 uv run --extra test python -m ruff check tests loopx/canary loopx/control_plane loopx/domain_packs loopx/presentation
