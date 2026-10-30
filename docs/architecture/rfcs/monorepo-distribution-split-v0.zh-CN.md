@@ -216,6 +216,11 @@ MemT 只使用这两个公开模块，不能直接 import executor 或其他内�
 也不复制决策。Core 缺失或不支持时延期重启；没有托管服务的路径仍不依赖 Core。
 import ratchet 只记录这一条受支持公开边；它不授予停止服务或增加其他内核 import 的权限。
 
+该栅栏的拒绝范围与那份观察一样窄：它持有入口准入锁，并在仍有非终态 Turn 时
+拒绝继续。待处理的入口收据是在 provider 投递之前预留的外部输入，因此还不是
+Turn，而该栅栏也不读取入口收据账本。于是只有一条待处理的 `loopx_queue` 或
+`loopx_inbox` 收据会被放行，而 queued Turn 会以 `chat_work_pending` 被拒绝。
+
 stdio relay 在父进程 EOF、SIGTERM 或 SIGINT 时取消所持进程组，并等待已有
 监督器完成回收再退出。POSIX 进程组行为与 Windows 尽力而为的进程树回收仍沿用
 原资格边界。这是进程监督，不是沙箱；操作者选择的工具只保有原先获准的效果。
@@ -505,6 +510,25 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   一个检查进程，保留字节 witness，不重新打开历史库写入进程。
 - **剩余：** 不关闭更广的 M1–M5 发行物与零私有 import 验收；D1–D4 仍未决。
   不改变打包方案或权威决策。
+
+### 2026-10-30 — Codex provider-routing 激活栅栏的边界
+
+- **基线：** `10c84d1c0c`。
+- **交付：** 第 5 节中 Codex provider-routing host 的接缝现在写明该栅栏实际
+  拒绝什么：它持有入口准入锁，并在仍有非终态 Turn 时拒绝继续。待处理的入口
+  收据是在 provider 投递之前预留的外部输入，因此还不是 Turn，而该栅栏也不
+  读取入口收据账本。
+- **边界修复：** 只有一条待处理的 `loopx_queue` 或 `loopx_inbox` 收据会被
+  放行，而 queued Turn 会以 `chat_work_pending` 被拒绝。该包的受支持依赖边仍是
+  唯一被 pin 的 `loopx.extensions.chat_service_guard` import；本条目不改变任何
+  import、权限、默认值或持久格式。
+- **证据：** `tests/test_chat_runtime_activation.py::
+  test_a_pending_ingress_receipt_alone_does_not_defer_the_restart` 与
+  `test_a_queued_turn_still_defers_the_restart_with_a_pending_ingress_receipt`
+  通过真实临时 Session 与 ingress store、针对真实栅栏，读出该边界的两侧。
+- **剩余：** 不关闭更广的 M1–M5 发行物与零私有 import 验收；D1–D4 仍未决。
+  待处理的入口收据仍不被该栅栏覆盖；要覆盖它是一次带自有验收的运行时变更，
+  而不是文档变更。
 
 ## 附录 B：决策日志
 

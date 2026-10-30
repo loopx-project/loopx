@@ -207,6 +207,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const [originalRevision, setOriginalRevision] = useState(0);
   const loadedScope = useRef<string | null>(null);
   const loadedSource = useRef<string | null>(null);
+  const requestedRows = useRef(12);
   const generation = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -216,7 +217,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const restorePagingFocus = useRef(false);
   useEffect(() => {
     setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
-  }, [sessionId]);
+    loadedScope.current = null; loadedSource.current = null;
+    requestedRows.current = 12;
+  }, [sessionId, ownerFallback]);
   useEffect(() => {
     if (open) dialog.current?.showModal(); else dialog.current?.close();
   }, [open]);
@@ -231,10 +234,15 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     setBusy(true); setError(false); setNoSession(false);
     const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
     const sameScope = loadedScope.current === scope;
-    const pageCount = sameScope ? Math.max(1, pages.length) : 1;
+    const loadedRows = pages.reduce((count, page) => count + page.rows.length, 0);
+    // A fresh snapshot or parent refresh must retain the page requested by
+    // More, including while that read has not published its rows yet.
+    requestedRows.current = sameScope
+      ? Math.max(requestedRows.current, offset ? offset + 12 : Math.ceil(loadedRows / 12) * 12) : 12;
+    const refreshRows = requestedRows.current;
     // Keep verified rows during a same-source refresh, but never across scope
     // changes or a failed read. Publish refreshed pages together below.
-    if (!sameScope) {setPages([]); loadedSource.current = null;}
+    if (!sameScope) setPages([]);
     loadedScope.current = scope;
     try {
       let source = sessionId && sessionId !== "new-session-pending" ? sessionId : undefined;
@@ -243,27 +251,34 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         source = listed.sessions.find(row => row.channel_id === "manager")?.session_id;
       }
       if (current !== generation.current) return;
-      if (!source) {setPages([]); setNoSession(true); return;}
+      if (!source) {
+        // A vanished source is a failed read, not a new empty workspace. Keep
+        // its lineage across filters so retry continues to report the loss.
+        if (loadedSource.current) throw new Error("Previous steward source is unavailable.");
+        setPages([]); setNoSession(true); return;
+      }
       const sameSource = loadedSource.current === source;
-      if (!sameSource) setPages([]);
+      if (!sameSource) {setPages([]); requestedRows.current = 12;}
       loadedSource.current = source;
       const refreshed: ConversationRequestInventory[] = [];
       let cursor: number | null = offset;
-      const limit = offset ? 1 : sameSource ? pageCount : 1;
-      for (let index = 0; index < limit && cursor !== null; index++) {
-        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search);
+      const targetRows = offset ? 12 : sameSource ? refreshRows : 12;
+      // Each HTTP read verifies the whole inventory. Restore the loaded extent
+      // in bounded windows; opening and More still read one normal page.
+      for (let remaining = targetRows; remaining > 0 && cursor !== null; remaining -= 48) {
+        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search, Math.min(48, remaining));
         if (current !== generation.current) return;
         // Returns can reorder a live inventory. A stale More cursor gets one
         // fresh read; mixed snapshots during that read fail visibly for retry.
         if (offset && value.snapshot_digest !== pages[0]?.snapshot_digest) {void load(); return;}
-        if (index && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
+        if (refreshed.length && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
         if (value.next_offset !== null && value.next_offset <= cursor) throw new Error("Request paging did not advance.");
         refreshed.push(value); cursor = value.next_offset;
       }
       setPages(previous => offset ? [...previous, ...refreshed] : refreshed);
       if (!offset) setOriginalRevision(value => value + 1);
     } catch {
-      if (current === generation.current && !abort.signal.aborted) {setError(true); setPages([]);}
+      if (current === generation.current && !abort.signal.aborted) {requestedRows.current = 12; setError(true); setPages([]);}
     } finally {if (current === generation.current) setBusy(false);}
   }
   const page = pages[0], last = pages.at(-1);
@@ -283,10 +298,11 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const applySearch = (value: string) => {
     // Fence immediately, including the interval before the effect starts.
     generation.current++; requestAbort.current?.abort();
+    requestedRows.current = 12;
     setPages([]); setError(false); setBusy(true); setSearch(value.trim());
     setRevision(value => value + 1);
   };
-  const close = () => {generation.current++; requestAbort.current?.abort(); setBusy(false); setOpen(false); trigger.current?.focus();};
+  const close = () => {generation.current++; requestAbort.current?.abort(); requestedRows.current = 12; setBusy(false); setOpen(false); trigger.current?.focus();};
   return <div className="conversation-requests-entry">
     <button ref={trigger} type="button" onClick={() => {setHistory(false); setOpen(true); setRevision(value => value + 1);}}
       aria-haspopup="dialog" aria-label={zh ? `委派，${count} 条待跟进` : `Delegations, ${count} awaiting follow-up`}>
