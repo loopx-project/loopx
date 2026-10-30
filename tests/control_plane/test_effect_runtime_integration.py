@@ -1250,6 +1250,121 @@ def test_locator_publication_failure_surfaces_safe_typed_startup_diagnostic(
         assert json.loads(lock_path.read_text()) == lock_owner
 
 
+def test_a_doomed_runtime_keeps_its_exact_code_after_the_ready_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A runtime that publishes after the ready budget keeps its exact code.
+
+    The managed runtime publishes its typed startup diagnostic when it gives
+    up, which for a live mutation lock happens after the TypeScript
+    mutation-lock budget. A host that stops waiting at the ready budget
+    discards that diagnostic and reports a generic timeout instead.
+    """
+
+    marker = "private-locator-fixture"
+    runtime_dir = tmp_path / marker
+    runtime_dir.mkdir(mode=0o700)
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: runtime_dir)
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    lock_path = Path(f"{info_path}.ts-effect.lock")
+    lock_owner = {"pid": os.getpid(), "token": "live-owner"}
+    lock_path.write_text(json.dumps(lock_owner), encoding="utf-8")
+    # The ready budget expires before the runtime has waited out the
+    # TypeScript mutation-lock budget, which is the case this covers.
+    monkeypatch.setattr(effect_runtime, "STARTUP_READY_TIMEOUT_SECONDS", 1.0)
+
+    published: list[bytes] = []
+    read_stderr = effect_runtime._read_startup_stderr
+
+    def capture(stream):
+        raw = read_stderr(stream)
+        if raw:
+            published.append(raw)
+        return raw
+
+    monkeypatch.setattr(effect_runtime, "_read_startup_stderr", capture)
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as raised:
+        effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+
+    assert raised.value.diagnostic_code == "mutation_lock_timeout"
+    assert "could not publish its startup locator" in str(raised.value)
+    assert published, "the runtime must publish its diagnostic before it exits"
+    envelopes = [
+        json.loads(line)
+        for line in published[-1].decode("utf-8").splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert envelopes[-1] == {
+        "schema_version": effect_runtime.EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION,
+        "code": "mutation_lock_timeout",
+        "message": str(raised.value),
+    }
+    assert marker not in published[-1].decode()
+    assert lock_owner["token"] not in published[-1].decode()
+    assert not info_path.exists(), "a failed publisher must not claim readiness"
+    assert json.loads(lock_path.read_text()) == lock_owner
+
+
+def test_a_runtime_that_never_publishes_still_reports_a_bounded_timeout(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The diagnostic grace window stays bounded and still times out.
+
+    A runtime that publishes nothing must not hold its caller open: the host
+    waits one bounded grace window, terminates the runtime and reports the
+    generic timeout.
+    """
+
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    fingerprint = "f" * 64
+    info_path = runtime_dir / "runtime.json"
+    clock = {"monotonic": 0.0}
+    terminated: list[bool] = []
+
+    class _RunningProcess:
+        def poll(self):
+            return None
+
+        def terminate(self) -> None:
+            terminated.append(True)
+
+    def sleep(seconds: float) -> None:
+        clock["monotonic"] += seconds
+
+    monkeypatch.setattr(effect_runtime, "_read_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(effect_runtime, "_node_executable", lambda: "node")
+    monkeypatch.setattr(
+        effect_runtime.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: _RunningProcess(),
+    )
+    monkeypatch.setattr(effect_runtime, "_read_startup_stderr", lambda _stream: b"")
+    monkeypatch.setattr(effect_runtime, "STARTUP_READY_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(effect_runtime, "STARTUP_POLL_SECONDS", 0.5)
+    monkeypatch.setattr(
+        effect_runtime,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: clock["monotonic"],
+            sleep=sleep,
+            time=time.time,
+        ),
+    )
+
+    with pytest.raises(effect_runtime.EffectRuntimeStartupError) as raised:
+        effect_runtime._start_runtime(fingerprint=fingerprint, info_path=info_path)
+
+    assert raised.value.diagnostic_code == "runtime_startup_timeout"
+    assert terminated, "a runtime that never publishes must be terminated"
+    assert clock["monotonic"] == pytest.approx(
+        effect_runtime.STARTUP_READY_TIMEOUT_SECONDS
+        + effect_runtime.STARTUP_DIAGNOSTIC_GRACE_SECONDS
+    )
+
+
 def test_runtime_ping_survives_denied_post_publication_chmod(
     tmp_path: Path,
     monkeypatch,
