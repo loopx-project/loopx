@@ -70,7 +70,6 @@ def test_global_cli_check_and_manager_read_the_original_provider(routed):
     expected = list_goal_todos(registry_path=source, goal_id=GOAL, json_references=True)
     code, actual = run_json_cli_result("todo", "list", "--goal-id", GOAL, registry_path=registry)
     assert code == 0, actual
-    assert actual.pop("_returncode") == 0  # Test harness metadata, outside the CLI payload.
     assert_todo_read_unchanged(actual, expected)
     assert actual["todo_count"] == 5
     assert {row["todo_id"] for row in actual["todos"]} == {f"todo_source_{i}" for i in range(5)}

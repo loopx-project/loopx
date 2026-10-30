@@ -14,7 +14,7 @@ from unittest import mock
 import pytest
 
 from loopx.chat_store import ChatSessionStore
-from loopx.chat_ingress import chat_runtime_activation_lock
+from loopx.chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
 from loopx.runtime_activation import restart_services_for_runtime_activation
 from loopx.self_update import execute_update_plan, render_update_plan_markdown
 
@@ -71,6 +71,58 @@ def content_hashes(root):
     }
 
 
+@pytest.mark.parametrize("state", ["queued", "running", "completed", "unknown"])
+def test_desktop_activation_uses_original_manager_and_accepted_work(services, monkeypatch, state):
+    from loopx import dashboard_launcher, runtime_activation
+    runtime, agents, calls = services
+    # A legitimate private bootstrap need not carry the release launcher's
+    # Python source text. The loaded manager and its explicit route own it.
+    (agents / "com.loopx.chat.plist").write_bytes(plistlib.dumps({"ProgramArguments": [
+        "/bin/zsh", "-c", shlex.join(["exec", "private-host", "--runtime-root", str(runtime), "chat"])]}))
+    store = ChatSessionStore(runtime)
+    sid = session(store)
+    turn, _ = store.create_queued_turn(sid, client_turn_id="original", message="retain this input")
+    store.update_turn(sid, turn["turn_id"], status=state)
+    before = content_hashes(store.root)
+    listening, signals = [True], []
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda *_a: "stale")
+    monkeypatch.setattr(dashboard_launcher, "_listener_pids", lambda _port: [12345] if listening[0] else [])
+    monkeypatch.setattr(dashboard_launcher, "_is_same_user_loopx_chat_process", lambda _pid: True)
+    monkeypatch.setattr(runtime_activation, "_managed_service_pid", lambda *_a, **_k: 12345)
+
+    def stop(pid, signal):
+        signals.append((pid, signal))
+        listening[0] = False
+    monkeypatch.setattr(runtime_activation.os, "kill", stop)
+    result = runtime_activation.activate_runtime_services(service="chat")
+    assert content_hashes(store.root) == before
+    assert result["readiness_verified"] is False
+    if state == "completed":
+        assert result["ok"] and result["status"] == "restart_requested"
+        assert len(signals) == 1 and signals[0][0] == 12345
+        assert calls == [["launchctl", "kickstart", f"gui/{runtime_activation.os.getuid()}/com.loopx.chat"]]
+    else:
+        assert not result["ok"] and result["status"] == "deferred"
+        assert result["reason"] == ("chat_state_unverified" if state == "unknown" else "chat_work_pending")
+        assert not signals and not calls
+
+
+def test_desktop_activation_rechecks_loaded_manager_before_signalling(services, monkeypatch):
+    from loopx import dashboard_launcher, runtime_activation
+    runtime, _agents, calls = services
+    ChatSessionStore(runtime)
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda *_a: "stale")
+    monkeypatch.setattr(dashboard_launcher, "_listener_pids", lambda _port: [12345])
+    monkeypatch.setattr(dashboard_launcher, "_is_same_user_loopx_chat_process", lambda _pid: True)
+    identities = iter([12345, 54321])
+    monkeypatch.setattr(runtime_activation, "_managed_service_pid", lambda *_a, **_k: next(identities))
+    with mock.patch.object(runtime_activation.os, "kill") as stop:
+        result = runtime_activation.activate_runtime_services(service="chat")
+    assert result["reason"] == "chat_state_unverified"
+    stop.assert_not_called()
+    assert not calls
+
+
 @pytest.mark.parametrize(
     "state", ["queued", "starting", "running", "completing", "interrupting"]
 )
@@ -110,6 +162,64 @@ def test_queue_without_an_active_pointer_still_defers_until_original_work_finish
     assert activate()["restart_status"] == "restarted"
     assert len(calls) == 2
     assert store.load_turn(sid, queued["turn_id"])["message"] == "later input"
+
+
+@pytest.mark.parametrize("mode", ["loopx_queue", "loopx_inbox"])
+def test_a_pending_ingress_receipt_alone_does_not_defer_the_restart(services, mode):
+    """The guard fences non-terminal Turns, not pending ingress receipts.
+
+    A pending ingress receipt reserves external input before the provider
+    delivers it, so it is not a Turn yet. The activation guard reads accepted
+    work through the Turn state, so a pending receipt on its own does not
+    defer the restart. This is the boundary the guard actually holds, not a
+    promise that pending receipts are covered.
+    """
+    runtime, _agents, calls = services
+    store = ChatSessionStore(runtime)
+    sid = session(store)
+    receipt, created = store.create_ingress_receipt(
+        sid,
+        client_ingress_id=f"client-{mode}",
+        mode=mode,
+        message="reserved input",
+    )
+    assert created is True
+    assert receipt["status"] == "pending"
+    assert chat_runtime_activation_state(runtime)["nonterminal_turns"] == 0
+
+    result = activate()
+    assert result["restart_status"] == "restarted"
+    assert len(calls) == 2
+
+
+def test_a_queued_turn_still_defers_the_restart_with_a_pending_ingress_receipt(
+    services,
+):
+    """The same receipt next to a non-terminal Turn still defers the restart.
+
+    The receipt alone does not defer; a queued Turn does. Recording both
+    sides keeps the guard's contract readable: it reads accepted work, and
+    only accepted work.
+    """
+    runtime, _agents, calls = services
+    store = ChatSessionStore(runtime)
+    sid = session(store)
+    receipt, created = store.create_ingress_receipt(
+        sid,
+        client_ingress_id="client-queued",
+        mode="loopx_queue",
+        message="reserved input",
+    )
+    assert created is True
+    store.create_queued_turn(
+        sid, client_turn_id="queued", message="later input"
+    )
+    assert chat_runtime_activation_state(runtime)["nonterminal_turns"] == 1
+
+    result = activate()
+    assert result["restart_status"] == "deferred"
+    assert result["restart_reason"] == "chat_work_pending"
+    assert not calls
 
 
 @pytest.mark.parametrize(

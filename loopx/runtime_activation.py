@@ -139,7 +139,10 @@ def managed_chat_activation_guard(
         yield
 
 
-def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float = 5.0) -> str:
+def replace_managed_loopx_chat(
+    host: str, port: int, *, timeout_seconds: float = 5.0,
+    restart_managed: bool = False,
+) -> str:
     """Replace the exact managed listener only while its accepted work is idle.
 
     The listener's live manager supplies its route, never the new command's
@@ -187,6 +190,17 @@ def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float =
             deadline = time.monotonic() + max(0.1, timeout_seconds)
             while time.monotonic() < deadline:
                 if pid not in _listener_pids(port):
+                    if restart_managed:
+                        # Keep the same ingress fence through the original
+                        # manager's restart. Desktop never starts a replacement
+                        # consumer or infers ownership from a Python template.
+                        started = subprocess.run(
+                            ["launchctl", "kickstart", f"gui/{os.getuid()}/{plist.stem}"],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=5,
+                        )
+                        if started.returncode != 0:
+                            raise RuntimeActivationFailed([], labels)
                     return existing
                 time.sleep(0.1)
             raise RuntimeError("the managed Chat listener did not stop after SIGTERM; no stronger signal was sent")
@@ -195,6 +209,39 @@ def replace_managed_loopx_chat(host: str, port: int, *, timeout_seconds: float =
     except (OSError, ValueError, plistlib.InvalidFileException, ExpatError,
             TimeoutError, subprocess.SubprocessError) as exc:
         raise RuntimeActivationDeferred("chat_state_unverified", labels) from exc
+
+
+def activate_runtime_services(*, service: str = "all", port: int = 8767) -> dict[str, Any]:
+    """Retry installed-service adoption without reinstalling or running work.
+
+    The desktop Chat caller uses the existing verified listener/manager/store
+    owner. A version mismatch is not permission to kill a busy worker.
+    Readiness and the selected artifact's identity still need a fresh HTTP read.
+    """
+    if service not in {"all", "chat"} or not 1 <= port <= 65535:
+        raise ValueError("select all or chat with a valid loopback port")
+    payload: dict[str, Any] = {
+        "schema_version": "loopx_runtime_service_activation_v1",
+        "service": service, "readiness_verified": False,
+    }
+    if sys.platform != "darwin":
+        return {**payload, "ok": False, "status": "unsupported",
+            "reason": "managed_service_activation_unavailable"}
+    try:
+        if service == "chat":
+            observed = replace_managed_loopx_chat("127.0.0.1", port, restart_managed=True)
+            status = "not_running" if observed == "unavailable" else "restart_requested"
+        else:
+            restarted = restart_managed_loopx_services()
+            payload["restarted_services"] = restarted
+            status = "restart_requested" if restarted else "not_running"
+        return {**payload, "ok": True, "status": status}
+    except RuntimeActivationDeferred as exc:
+        return {**payload, "ok": False, "status": "deferred", "reason": str(exc)}
+    except (RuntimeActivationFailed, OSError, ValueError, RuntimeError):
+        # Public diagnostics carry a coarse cause, never manager commands,
+        # local paths or the contents of accepted messages.
+        return {**payload, "ok": False, "status": "failed", "reason": "chat_service_unverified"}
 
 
 def restart_managed_loopx_services() -> list[str]:

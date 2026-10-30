@@ -432,6 +432,38 @@ Pending controlled Turns retain their identity across worker restarts. Core
 does not delete homes or session bindings, edit registries directly, or
 monkeypatch CLI internals.
 
+### Native Goal process observations
+
+New `native-goal` and `loopx-goal` worker executions also write
+`native-process.json` in the wake directory and include the same observation in
+`receipt.json.native_process`. No additional setting is required. The existing
+worker owns launch and cleanup; the benchmark capability observes its shared
+stdio transport without restarting the process or replaying requests.
+
+The snapshot retains PID, observation time and Linux process-start ticks when
+available; the first transport API failure (operation, exception type and message
+digest); process return code/signal before cleanup; requested cleanup signals;
+and the status observed after cleanup. Startup and failure observations are
+written immediately, with atomic owner-only snapshot replacement. Earlier
+edges stay in the snapshot. Task text, messages, command arguments, environment
+and stderr are not copied into it. A write failure is disclosed separately and
+does not replace the original runtime exception or prevent process cleanup.
+
+| Observation | Supported interpretation |
+| --- | --- |
+| Exit code or signal observed before cleanup | The child was already terminal; the code does not by itself establish root cause. |
+| Stream failure while return code is null | The exchange failed while child termination was unobserved; EOF alone is not proof of process death. |
+| Signal observed only after cleanup started | Cleanup may have contributed. Do not count this signal alone as a native crash. |
+| Exit code 0 with an unfinished transaction | Process exit is not proof of Goal completion. Preserve the protocol failure. |
+| Missing start ticks or missing final observation | Identity/terminal evidence remains incomplete; do not infer the missing fact from timestamps. |
+
+These records do not assert OOM, scorer validity, score countability or fault
+ownership. An abrupt worker kill may leave only the last successfully written
+snapshot. Final error accounting still needs the native transaction and run
+evidence. Historical attempts remain frozen and gain no retrospective proof;
+new experiment adoption requires the reviewed runner/source profile. Other
+worker modes retain their existing receipts and process behavior.
+
 ## Migration and qualification
 
 This is the native runtime bridge/adapter slice in the research program's

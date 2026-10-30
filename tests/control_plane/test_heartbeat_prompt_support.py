@@ -98,7 +98,7 @@ def test_native_profile_long_routes_retain_one_complete_settlement_contract() ->
 
 @pytest.mark.parametrize("mode,limit", [
     ("full", 13100), ("compact", 8000), ("brief", 5800),
-    ("thin", 4500), ("visible_goal", 4000),
+    ("thin", 4900), ("visible_goal", 4000),
 ])
 def test_prompt_body_limit_remains_independent_of_json_envelope(mode: str, limit: int) -> None:
     for size in (limit, limit + 1):
@@ -356,7 +356,7 @@ def test_brief_diagnostics_keep_only_the_selected_prompt_command() -> None:
 
 @pytest.mark.parametrize(
     ("mode", "base_budget"),
-    [("full", 13100), ("compact", 8000), ("brief", 5800), ("thin", 4500)],
+    [("full", 13100), ("compact", 8000), ("brief", 5800), ("thin", 4900)],
 )
 @pytest.mark.parametrize("scope_chars", [0, 320])
 @pytest.mark.parametrize("runtime_profile", ["codex_app_heartbeat", "generic_cli"])

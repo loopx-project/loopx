@@ -39,7 +39,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.todo_semantics import todo_item_task_class
-from ..todos.user_gate import open_todo_count
+from ..todos.user_gate import has_only_open_user_actions, open_todo_count
 from ..todos.write_hint import build_capability_resolution_writeback_actions
 from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
@@ -167,6 +167,14 @@ def user_channel_action_required(payload: dict[str, Any]) -> bool:
     if _user_gate_scope_projection_repair_active(payload):
         return False
     if _user_gate_notification_suppressed(payload):
+        return False
+    if (
+        has_only_open_user_actions(payload.get("user_todo_summary"))
+        and exact_blocked_successor_wait_state(payload)
+        and not _blocked_successor_wait_observation_required(payload)
+    ):
+        # A proven automatic wait is existing Agent work, not an empty lane
+        # owned by an unrelated optional notice. Keep actual gates unchanged.
         return False
     obligation = payload.get("autonomous_replan_obligation")
     if isinstance(obligation, dict) and obligation.get("required") is True:

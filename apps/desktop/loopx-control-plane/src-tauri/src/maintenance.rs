@@ -430,7 +430,15 @@ impl Maintenance {
                     Some("error" | "runtime_required" | "runtime_pairing_required")
                 );
                 if !runtime_error {
-                    self.publish("service_error", json!({"code":"service_start_failed"}));
+                    // These exact codes come from Core's activation receipt;
+                    // arbitrary service diagnostics remain private.
+                    let code = match error.as_str() {
+                        "chat_work_pending" => "chat_work_pending",
+                        "chat_state_unverified" => "chat_state_unverified",
+                        "chat_service_unverified" => "chat_service_unverified",
+                        _ => "service_start_failed",
+                    };
+                    self.publish("service_error", json!({"code":code}));
                 }
                 Err(error)
             }
@@ -2300,6 +2308,29 @@ mod tests {
         );
         assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
         assert_eq!(state.snapshot.lock().unwrap()["phase"], "ready");
+    }
+
+    #[test]
+    fn service_wait_keeps_only_the_coarse_activation_cause() {
+        for code in [
+            "chat_work_pending",
+            "chat_state_unverified",
+            "chat_service_unverified",
+        ] {
+            let state = Maintenance::default();
+            assert!(state.reconcile_services::<()>(|| Err(code.into())).is_err());
+            assert_eq!(state.snapshot.lock().unwrap()["details"]["code"], code);
+            assert_eq!(state.reconcile_services(|| Ok(())).unwrap(), Some(()));
+            assert_eq!(state.snapshot.lock().unwrap()["phase"], "ready");
+        }
+        let state = Maintenance::default();
+        assert!(state
+            .reconcile_services::<()>(|| Err("private manager command".into()))
+            .is_err());
+        assert_eq!(
+            state.snapshot.lock().unwrap()["details"]["code"],
+            "service_start_failed"
+        );
     }
 
     #[test]

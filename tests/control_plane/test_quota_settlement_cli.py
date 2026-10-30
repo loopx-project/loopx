@@ -2057,7 +2057,7 @@ def test_receipt_retry_keeps_open_vision_quiet_through_real_cli(
     if human_item == "user_action":
         assert waiting["interaction_contract"]["user_channel"]["non_gating_notice"] is True
         assert "response_plan" not in waiting["interaction_contract"]
-        assert waiting["scheduler_hint"]["reason_code"] == "blocked_wait"
+        assert waiting["scheduler_hint"]["reason_code"] == "interaction_agent_scope_wait"
         assert waiting["scheduler_hint"]["action"] != "backoff_waiting_for_user"
         assert waiting["scheduler_hint"]["pending_retry"]["due_at"] == closed["blocked_retry"]["due_at"]
     envelope = build_turn_envelope(waiting)
