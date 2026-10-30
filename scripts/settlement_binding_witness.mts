@@ -4,11 +4,12 @@
 // reports what the builder actually returns, including the rejection. The probe
 // inputs arrive on stdin so the registry cannot select an arbitrary callable --
 // the module and the function are fixed here, in tracked code.
-import {settlementIdentity, settlementIdentityPayload} from "../loopx/control_plane/effect_program.ts";
+import {settlementIdentity, settlementIdentityPayload, type ExecutionRequestSubject} from "../loopx/control_plane/effect_program.ts";
 
 type Probe = {
   todo_id?: string | null;
   replan_obligation_id?: string | null;
+  request_subject?: ExecutionRequestSubject | null;
 };
 
 const request = JSON.parse(await new Response(process.stdin).text()) as {probes: Probe[]};
@@ -19,6 +20,7 @@ const results = request.probes.map(probe => {
     turn_instance_id: "t",
     todo_id: probe.todo_id ?? null,
     replan_obligation_id: probe.replan_obligation_id ?? null,
+    ...(probe.request_subject == null ? {} : {request_subject: probe.request_subject}),
   };
   try {
     const identity = settlementIdentity(input);

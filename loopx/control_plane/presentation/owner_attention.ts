@@ -41,6 +41,32 @@ function readCoverage(raw: unknown): JsonObject | null {
     throw new Error("invalid owner attention coverage");
   return coverage;
 }
+
+/** Explanatory only: failures neither widen scope nor authorize a retry. */
+function sourceFailures(raw: unknown, unavailable?: Set<string>): JsonObject[] {
+  if (raw === undefined) return [...(unavailable ?? [])].sort()
+    .map(goal_id => ({goal_id, error_code: "source_unavailable"}));
+  const result = records(raw, "source_failures").map(row => {
+    const goal_id = requireNonEmptyString(row.goal_id, "source failure Goal");
+    if (typeof row.error_code !== "string" || !["canonical_authority_required", "source_unavailable"].includes(row.error_code))
+      throw new Error("unknown owner attention source failure");
+    return {goal_id, error_code: row.error_code};
+  });
+  const ids = identities(result.map(row => row.goal_id), "source failure Goal ids");
+  if (unavailable && (ids.size !== unavailable.size || [...ids].some(id => !unavailable.has(id))))
+    throw new Error("source failures must identify exactly the unavailable Goals");
+  return result.sort((a, b) => String(a.goal_id).localeCompare(String(b.goal_id)));
+}
+
+function storedSourceFailures(raw: unknown, coverage: JsonObject | null): JsonObject[] {
+  // Older writers can retain stale optional diagnostics. They must not make
+  // an otherwise valid receipt journal unavailable or stop its next refresh.
+  try {
+    const failures = sourceFailures(raw);
+    return failures.length === (coverage?.unavailable_goal_count ?? 0) ? failures : [];
+  } catch { return []; }
+}
+
 function active(row: JsonObject, goalId: string): boolean {
   if (row.goal_id != null && row.goal_id !== goalId) throw new Error("foreign owner Todo");
   // Reuse the existing attention owner, one source at a time. Its presentation
@@ -75,9 +101,11 @@ function readState(raw: unknown): JsonObject {
 export function ownerAttentionHealth(input: JsonObject): JsonObject {
   const state = readState(input.state);
   const rows = records(state.outbox, "outbox");
+  const coverage = readCoverage(state.source_coverage);
   return {available: true, enabled: state.enabled, revision: state.revision,
     last_checked_at: state.last_checked_at ?? null, error_code: state.error_code ?? null,
-    source_coverage: readCoverage(state.source_coverage),
+    source_coverage: coverage,
+    source_failures: storedSourceFailures(state.source_failures, coverage),
     pending_count: rows.filter(row => row.status === "pending").length,
     unconfirmed_count: rows.filter(row => row.status === "sending" || row.status === "unconfirmed").length,
     failed_count: rows.filter(row => row.status === "failed").length};
@@ -87,6 +115,7 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
   const state = readState(input.state);
   const goals = records(input.goals, "goals");
   const coverage = sourceCoverage(input, goals);
+  const failures = sourceFailures(input.source_failures, coverage.unavailable);
   const baselinePending = identities(state.baseline_pending_goal_ids ?? [], "baseline_pending_goal_ids");
   if (state.initialized !== true) for (const id of coverage.unavailable) baselinePending.add(id);
   const previous = records(state.subjects, "subjects");
@@ -143,6 +172,7 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
   }
   return {...state, initialized: true, subjects, outbox,
     error_code: coverage.unavailable.size ? "source_incomplete" : null,
+    source_failures: failures,
     baseline_pending_goal_ids: [...baselinePending].filter(id => coverage.unavailable.has(id)).sort(),
     source_coverage: {goal_count: coverage.scope.size, read_goal_count: coverage.read.size,
       unavailable_goal_count: coverage.unavailable.size}};

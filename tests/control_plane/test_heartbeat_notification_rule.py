@@ -127,12 +127,15 @@ def test_todo_closeout_does_not_invent_successors_or_skip_turn_settlement(tmp_pa
         assert "no invented successor" in body
         assert "settlement_plan" in body
         assert "projected monitor/continuation" in body
-        assert "keep open" in body or "Wait=open" in body
-        assert "no wait spend" in body.lower()
-        assert "continue only admitted work" in body or "admitted P1/P2" in body
+        assert "No useful independent work before an evidenced due time" in body
+        assert "--status deferred --resume-when resume_at:" in body
+        assert "settle original Turn, then yield to host scheduler" in body
+        assert "Fresh admission on resume" in body
+        assert "No spend for waiting alone" in body
+        assert "continue only admitted work" in body.lower() or "admitted P1/P2" in body
         for stale in ("Done -> successor first", "Done->successor",
                       "open + monitor_changed + successor", "wait->monitor+successor/work",
-                      "no-follow-up completion"):
+                      "no-follow-up completion", "Wait=open"):
             assert stale not in body
 
 
@@ -212,9 +215,9 @@ def test_language_policy_preserves_blocker_and_native_goal_continuation() -> Non
     brief = " ".join(render_brief_heartbeat_task_body(**kwargs).split())
     assert "settlement_plan.ordered_steps" in brief
     assert "preserve exact identities/effect ids and actual outcomes" in brief
-    assert "Wait: keep open; follow projected monitor/continuation" in brief
-    assert "continue only admitted work" in brief
-    assert "No wait spend" in brief
+    assert "Other waits: projected monitor/continuation" in brief
+    assert "continue only admitted work" in brief.lower()
+    assert "No spend for waiting alone" in brief
     assert "Finish Goal only on terminal no-follow-up" in brief
 
     for renderer in (

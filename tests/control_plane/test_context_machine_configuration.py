@@ -20,6 +20,42 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
+@pytest.mark.parametrize("unsafe", [None, "symlink", "public"])
+@pytest.mark.skipif(os.name != "posix", reason="Private POSIX file transport; other CLI hosts retain inline recovery")
+def test_rejected_context_snapshot_uses_private_generic_transport_without_native_activation(tmp_path, unsafe):
+    from loopx.cli_commands.context_machine import capture_context_recovery
+    from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    root = runtime / "context-delivery"
+    if unsafe == "symlink":
+        target = tmp_path / "other-owner"
+        target.mkdir()
+        root.symlink_to(target, target_is_directory=True)
+    elif unsafe == "public":
+        root.mkdir(mode=0o755)
+    value = {"current": {"goal": "Retain scope", "stop": "No new authority"},
+        "optional_evidence": "完整材料" * 20000}
+    result = capture_context_recovery(value, runtime_root=runtime)
+    if unsafe:
+        assert result["available"] is False and result["error_kind"] == "ValueError"
+        assert "path" not in result and "optional_evidence" not in result
+        assert (root.is_symlink() if unsafe == "symlink" else root.stat().st_mode & 0o077)
+        assert list((target if unsafe == "symlink" else root).iterdir()) == []
+    else:
+        path, raw, saved = read_context_capture_file(result["path"], result["sha256"], private=True)
+        assert saved == value and len(raw) > 200000
+        assert path.stat().st_mode & 0o077 == 0
+        assert path.parent.stat().st_mode & 0o077 == 0
+        assert "--list" in result["index_command"] and "--select" in result["select_command"]
+        # One immutable observation per rejection; publication cannot replace a
+        # different write-time basis or create/advance a native session baseline.
+        other = capture_context_recovery({**value, "current": {"goal": "Changed scope"}}, runtime_root=runtime)
+        assert other["path"] != result["path"] and other["sha256"] != result["sha256"]
+        assert read_context_capture_file(result["path"], result["sha256"], private=True)[2] == value
+        assert sorted(p.name for p in root.iterdir()) == sorted([path.parent.name, Path(other["path"]).parent.name])
+
 def configure(registry, runtime, root, mode):
     config = root / "context-setting.json"
     config.write_text(json.dumps({"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": mode}))
@@ -210,17 +246,22 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     assert json.loads(raw)["goal_id"] == GOAL_ID
 
     def complete_reader(view):
-        page = view
+        # Native delivery advertises a file; only its reader pages are content.
+        observed = bytearray()
         while True:
+            code, page = _run_cli(registry, runtime, "quota", "context-read",
+                "--capture-file", view["path"], "--capture-sha256", view["sha256"],
+                "--offset", str(len(observed)), "--page-bytes", "3072", cwd=project)
+            assert code == 0 and page["ok"], page
+            assert page["offset"] == len(observed)
+            observed.extend(page["content"].encode())
             subprocess.run(shlex.split(hook), input=json.dumps({**event,
                 "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)}),
                 text=True, cwd=project, capture_output=True, check=True)
             if page["eof"]:
                 break
-            code, page = _run_cli(registry, runtime, "quota", "context-read",
-                "--capture-file", view["path"], "--capture-sha256", view["sha256"],
-                "--offset", str(page["next_offset"]), "--page-bytes", "3072", cwd=project)
-            assert code == 0 and page["ok"], page
+            assert page["next_offset"] == len(observed)
+        assert hashlib.sha256(observed).hexdigest() == view["sha256"]
 
     complete_reader(wire)
     code, warm = _run_cli(registry, runtime, *args, cwd=project)

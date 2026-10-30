@@ -140,8 +140,9 @@ def find_loopx_turn_key_by_settlement_identity(
     *,
     goal_id: str,
     agent_id: str,
-    todo_id: str,
+    todo_id: str | None,
     turn_instance_id: str,
+    request_subject: Mapping[str, Any] | None = None,
 ) -> str | None:
     """Find one validated history; unreadable or conflicting history blocks retry."""
 
@@ -152,6 +153,7 @@ def find_loopx_turn_key_by_settlement_identity(
             "agent_id": agent_id,
             "todo_id": todo_id,
             "turn_instance_id": turn_instance_id,
+            **({"request_subject": dict(request_subject)} if request_subject is not None else {}),
         })
     except EffectRuntimeConflict as exc:
         # Preserve the public ambiguity exception; the native owner also

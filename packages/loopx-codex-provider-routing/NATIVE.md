@@ -21,8 +21,9 @@ inspected GPT instance, waits for exit and native idle, saves/switches the login
 then reopens that same route. It never addresses a shared bundle id or quits a
 different route. With the separate force permission below, a refused or timed-out
 normal quit can escalate against that same inspected instance. Otherwise those
-failures, or remaining CLI/file owners, leave credentials unchanged and pause
-automatic shutdowns until a check. Changed process ownership leaves credentials
+failures leave credentials unchanged and pause automatic shutdowns until a check.
+Remaining CLI/file owners wait without consuming that failure budget and resume
+automatically after the blocker releases. Changed process ownership leaves credentials
 unchanged and consumes the bounded retry budget.
 Without this additional permission it continues to wait for closed clients.
 It does not implement hot login replacement, job replay or
@@ -105,6 +106,40 @@ unreadable live Codex process into a proven exit.
 0.12.10 对进程枚举与文件检查之间新启动、或已独立证明退出的占用，最多进行三次
 只读重扫，再以稳定的新身份清单进入原受控重启流程。PID 复用、仍存活但身份不明及
 持续变化继续等待；重扫不重放退出、凭据事务或业务，也不扩大 VM 的重启权限。
+
+Version 0.12.11 checks for non-restartable holders before quitting the GPT App.
+An existing `other_clients_busy` pause is rechecked automatically; an unchanged
+unmanaged holder waits without repeatedly closing/reopening clients. Normal
+quit refusal, unknown effects and other exhausted failure budgets keep their
+existing recovery boundary. Only numeric read-only directory descriptors are
+excluded from auth consumers. A read-only regular file, missing descriptor type,
+directory writer or warm Codex process still blocks. The native slot owner's idle
+check rechecks these read-only exceptions, followed by another typed handle scan
+under its account locks. This does not restart a VM or claim to inspect a guest's
+cached login; a pinned auth file remains a hold.
+
+Before stopping a discovered Chat service, the provider uses LoopX's existing
+accepted-work reader and ingress lock for its explicit runtime. Queued work,
+including an orphan without an active Session pointer, completing work and
+unreadable state defer the entire handoff before App quit. A new/changed service
+cannot inherit the frozen restart set. The lock remains held through account
+readback and restoration. A standalone observer must run in the same upgraded
+LoopX environment to restart these services; missing Core support waits safely.
+An already loaded archive/bootstrap Core passes its import root to the native
+worker, including detached handoffs; the worker does not rely on its current
+directory to rediscover that owner.
+Prefer the serving App/Chat observer so normal LoopX updates also refresh it;
+retire any separately installed legacy watcher through its original manager.
+
+0.12.11 在退出 GPT App 前检查无法受控恢复的占用；原 `other_clients_busy` 暂停会
+自动重新检查，阻塞解除后无需手动换号。仅有数字 FD、只读且类型明确为目录的句柄
+不视为认证消费者；认证文件、写句柄、未知类型及缓存登录的 Codex 进程仍阻塞。
+原账号 owner 在事务锁内复查只读例外，并再次核验句柄；不重启 VM，也不据此声称
+已检查 guest 内的认证缓存。停止 Chat 前复用原在途任务读取与 ingress 锁，排队、
+completing 或不可读状态均在退出 App 前等待；恢复期间保持锁与原失败/未知回执。
+已加载的 archive/bootstrap Core 向原 native 子进程传递其加载路径，包含脱离父进程的
+换号任务，避免依赖工作目录或误用旧安装；没有加载 Core 的独立入口仍安全等待。
+观察器应随实际 LoopX 服务升级；独立旧 watcher 通过原管理器退役，避免占住唯一观察权。
 
 Each service's restoration intent is saved privately before unloading. Version
 0.12.7 waits up to five seconds for launchd to finish an acknowledged asynchronous

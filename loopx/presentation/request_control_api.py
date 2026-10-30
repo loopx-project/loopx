@@ -1,6 +1,9 @@
 """Source-owner request controls on the conversation that created the request."""
 from __future__ import annotations
 
+from collections.abc import Callable
+from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -35,6 +38,28 @@ def _operator_payload(value: Any) -> Any:
     return value
 
 
+def bound_steward_inventory_scope(
+    controller: Any, *, manager_scope_resolver: Callable[[dict[str, Any]], list[str] | None],
+) -> Callable[[dict[str, Any]], list[str] | None]:
+    """Reuse one fresh native selection for Session validation and Goal scope.
+
+    The server supplies its ordinary binding resolver. A later custom resolver
+    keeps the compatibility path; no provider observation survives this call.
+    """
+    def read(session):
+        if controller.manager_scope_resolver is not manager_scope_resolver:
+            return None
+        bindings = controller.project_contexts.conversation_bindings
+        if bindings is None:
+            raise ValueError("bound steward authority is unavailable")
+        selected = bindings.session_context(session["steward_context"], session=session)
+        controller.project_contexts.runtime_context(session, selected)
+        return list(selected["context"]["goal_ids"])
+    return read
+
+
+
+
 class RequestControlMixin:
     server: Any
     path: str
@@ -58,8 +83,12 @@ class RequestControlMixin:
         scope = conversation_scope(session)
         if scope["kind"] not in {"owner_portfolio", "owner_goal"} and not scope.get("bound_steward"):
             raise ValueError("request inventory requires an authorized steward conversation")
+        verified_goals = None
         if session.get("steward_context") is not None:
-            controller.project_contexts.session_context(session)
+            read_scope = getattr(self.server, "request_inventory_scope_resolver", None)
+            verified_goals = read_scope(session) if read_scope is not None else None
+            if verified_goals is None:
+                controller.project_contexts.session_context(session)
         selected = getattr(self.server, "selected_goal_id", None)
         if selected and scope.get("goal_ids") != [selected]:
             raise ValueError("request inventory is outside this Goal workspace")
@@ -68,7 +97,7 @@ class RequestControlMixin:
         else:
             if controller.manager_scope_resolver is None:
                 raise ValueError("current steward read scope is unavailable")
-            goals = controller.manager_scope_resolver(session)
+            goals = verified_goals if verified_goals is not None else controller.manager_scope_resolver(session)
             if not isinstance(goals, list):
                 raise ValueError("current steward read scope is unavailable")
             core = evidence_goal_scope(controller.coordination_runtime_root, session["channel_id"],
@@ -81,7 +110,7 @@ class RequestControlMixin:
 
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            if (set(query) - {"session_id", "view", "offset", "search"} or "session_id" not in query
+            if (set(query) - {"session_id", "view", "offset", "search", "limit"} or "session_id" not in query
                     or any(len(values) != 1 for values in query.values())):
                 raise ValueError("select one original conversation")
             view = query.get("view", ["unfinished"])[0]
@@ -89,8 +118,18 @@ class RequestControlMixin:
                 raise ValueError("invalid request inventory view")
             session, goals, core = self._request_inventory_scope(query["session_id"][0])
             controller = self.server.runtime_controller
+            source_bases = {}
             def source_basis(source):
-                return conversation_scope(source), source.get("steward_context")
+                # Reuse only the pure identity projection for identical host
+                # facts in this read. Keep all Session fields in the key so
+                # changed or newly supported inputs reach the typed owner.
+                sid = source["session_id"]
+                signature = json.dumps(source, sort_keys=True, separators=(",", ":"))
+                previous = source_bases.get(sid)
+                if previous is None or previous[0] != signature:
+                    previous = (signature, (conversation_scope(source), deepcopy(source.get("steward_context"))))
+                    source_bases[sid] = previous
+                return previous[1]
             # Provider identity belongs to a source, not to every historical row.
             # Keep this proof within one read and fence every observed source
             # again before returning any content. Receipt/grant IO stays live.
@@ -107,7 +146,7 @@ class RequestControlMixin:
             result = read_conversation_requests(controller.coordination_runtime_root, self.server.registry_path,
                 self.server.chat_store, session, goal_ids=goals, core_goal_ids=core,
                 validate_source_session=validate_source, history=view == "history", offset=int(query.get("offset", ["0"])[0]),
-                search=query.get("search", [""])[0])
+                limit=int(query.get("limit", ["12"])[0]), search=query.get("search", [""])[0])
             for sid, proof in sources.items():
                 current, current_goals, current_core = self._request_inventory_scope(sid)
                 if (source_basis(current), current_goals, current_core) != proof:

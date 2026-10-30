@@ -101,22 +101,31 @@ HEARTBEAT_TURN_BOOTSTRAP_RULE = (
     "Per wake, replace `<current_time_iso>` once. Run assignment and guard as separate "
     "statements in one shell, not a command-prefix assignment; reuse the value on retries."
 )
+HEARTBEAT_KNOWN_CHOICE_RULE = (
+    "Known new-Turn choice: add `--todo-id <id>` to first guard; otherwise "
+)
 HOST_LOOP_QUOTA_DISPATCH_RULE = (
-    "Quota: use selection_command when required; "
+    HEARTBEAT_KNOWN_CHOICE_RULE + "use selection_command when required; "
     "re-enter as instructed, do/verify authorized work. "
     "Settle with current settlement_plan.ordered_steps, else next_cli_actions; "
     "preserve exact identities/effect ids and actual outcomes. Never reconstruct "
     "static refresh/spend; ambiguous effects need readback/recovery, not blind retry."
 )
+HOST_LOOP_WAIT_RULE = (
+    "No useful independent work before an evidenced due time: save progress; "
+    "`todo update --status deferred --resume-when resume_at:<RFC3339> --reason ...` "
+    "settle original Turn, then yield to host scheduler, not model sleep/poll loops. "
+    "Fresh admission on resume. Other waits: projected monitor/continuation. "
+    "No spend for waiting alone."
+)
 HOST_LOOP_TODO_CLOSEOUT_RULE = (
     "Todo done does not settle the Turn. Complete it under its original declaration "
     "and current lease; no invented successor or --no-follow-up. Then follow the "
-    "current settlement plan. External wait: keep open; follow projected "
-    "monitor/continuation; continue only admitted work. No wait spend."
+    "current settlement plan. Continue only admitted work. " + HOST_LOOP_WAIT_RULE
 )
 HOST_LOOP_TODO_CLOSEOUT_COMPACT_RULE = (
-    "Todo done≠Turn settled; no invented successor/--no-follow-up. Wait: keep open; "
-    "follow projected monitor/continuation; continue only admitted work. No wait spend."
+    "Todo done≠Turn settled; no invented successor/--no-follow-up. "
+    "Continue only admitted work. " + HOST_LOOP_WAIT_RULE
 )
 CODEX_NATIVE_GOAL_UNCHANGED_WAIT_RULE = (
     "\n\nNative Codex `/goal` owns blocked state. Recheck quota at the "

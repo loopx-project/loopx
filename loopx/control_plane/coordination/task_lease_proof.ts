@@ -19,6 +19,7 @@ import {acceptanceWorkGuard} from "../goals/acceptance_contract.ts";
 import {leaseEpoch} from "../work_items/task_lease_acquire.ts";
 import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
 import {evaluateCoordinationTerminalFence, COORDINATION_TERMINAL_FENCE_REQUEST_SCHEMA} from "./todo_lifecycle_decision.ts";
+import {evaluateCoordinationTodoClaimDecision} from "./todo_claim.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 
 export interface TaskLeaseProof {
@@ -121,7 +122,7 @@ export function evaluateCanonicalTaskLeaseProof(input: {
 
 export type TodoUpdateLeaseRecovery = JsonObject & {
   action: "inspect_current_proof" | "reconcile_lease_owner" | "resolve_acquire_rejection" |
-    "resolve_lifecycle_edit" | "acquire_fresh_lease";
+    "resolve_lifecycle_edit" | "acquire_fresh_lease" | "claim_task";
   lease_state: "absent" | "active" | "released" | "expired";
   owner_relation: "none" | "same_owner" | "foreign_owner";
 };
@@ -251,7 +252,14 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
     return {...base, action: "resolve_lifecycle_edit", reason_code: editRejection.code,
       reason: "This edit changes leased work requirements or status. Use the owning lifecycle transition; reacquiring a lease alone cannot authorize this metadata edit."};
   }
-  if (todo.claimed_by !== input.actor_agent_id && !isBoundUserActionMetadataUpdate(todo, input)) {
+  const omittedProof = input.lease_idempotency_key == null && input.lease_expected_version == null;
+  const reclaimExpired = omittedProof && mode === "hard_lease" && leaseState === "expired" &&
+    evaluateCoordinationTodoClaimDecision(todo, {goal_id: input.goal_id, todo_id: input.todo_id,
+      claimed_by: input.actor_agent_id ?? "", actor_agent_id: input.actor_agent_id,
+      expected_role: input.expected_role, registered_agents: input.registered_agents,
+      operation_id: "recovery-probe", manage_execution: true, dry_run: true, now: input.now},
+      null, lease?.owner).status === "accepted";
+  if (todo.claimed_by !== input.actor_agent_id && !reclaimExpired && !isBoundUserActionMetadataUpdate(todo, input)) {
     return {...base, action: "reconcile_lease_owner",
       reason: "A leased update requires the actor to own the Todo claim. Reconcile ownership before acquiring execution authority."};
   }
@@ -280,6 +288,16 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   }
   if (dependency !== null) return {...base, action: "resolve_acquire_rejection",
     reason_code: dependency.code, reason: dependency.reason};
+  const managedRecovery = (): TodoUpdateLeaseRecovery => ({
+    action: "claim_task", lease_state: leaseState, owner_relation: ownerRelation,
+    todo_status: todo.status, claimed_by: todo.claimed_by ?? null,
+    execution_authority_granted: false,
+    reason: "Claim this Todo through the ordinary task operation, then retry with its returned claim_operation_id. Claim rechecks current eligibility and ownership; update and completion manage execution internally. Keep the returned reference on retries; it cannot revive expired or replaced execution.",
+    claim: {command: "loopx todo claim", cli_args: ["todo", "claim", "--goal-id", input.goal_id,
+      "--todo-id", input.todo_id, "--agent-id", input.actor_agent_id!, "--claimed-by", input.actor_agent_id!]},
+    retry: {command: "loopx todo update", requires_flags: ["--claim-operation-id"],
+      reference_source: "claim_operation_id_from_claim"},
+  });
   const retry = {command: "loopx todo update",
     requires_flags: ["--task-lease-idempotency-key", "--task-lease-expected-version"],
     proof_source: "current_owner_lease_readback"};
@@ -289,6 +307,7 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
       reason_code: repositoryRejection, reason: "Todo repository differs from its frozen execution grant. Reconcile the owning lifecycle; inspection cannot grant replacement authority."};
     const eligible = sameOwner && leaseOwnerRejection(facts.todo,
       input.actor_agent_id, input.registered_agents) === null;
+    if (mode === "hard_lease" && eligible && omittedProof) return managedRecovery();
     return {...base, action: eligible ? "inspect_current_proof" : "reconcile_lease_owner",
       reason: eligible
         ? "Inspect the active lease and retry with its current owner proof; do not acquire a competing execution."
@@ -299,7 +318,8 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   // This hypothetical fresh identity is never published or returned as proof.
   const key = lease?.idempotency_key === "recovery-probe" ? "recovery-probe-next" : "recovery-probe";
   const decision = decideTaskLeaseAcquire({handoff_mode: mode, registered_agents: input.registered_agents,
-    ...facts, command: {owner: input.actor_agent_id ?? "", idempotency_key: key,
+    ...facts, todo: reclaimExpired && facts.todo ? {...facts.todo, claimed_by: input.actor_agent_id} : facts.todo,
+    command: {owner: input.actor_agent_id ?? "", idempotency_key: key,
       ttl_seconds: 60, write_scopes: scopes, expected_version: lease?.version ?? 0}});
   const acceptance = acceptanceWorkGuard(head, input.goal_id, input.todo_id);
   const blocked = decision.outcome !== "apply" ? decision.code
@@ -308,6 +328,7 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
     return {...base, action: "resolve_acquire_rejection", reason_code: blocked,
       reason: "Current mode, Todo eligibility, acceptance or write scopes reject acquisition. Resolve that condition before retrying the edit; changing handoff mode is not a recovery shortcut."};
   }
+  if (omittedProof) return managedRecovery();
   return {...base, action: "acquire_fresh_lease",
     reason: "Inspect the current version, acquire a short lease with a fresh key, retry the edit with the returned proof, then release that lease. Acquisition revalidates current authority.",
     acquire: {command: "loopx task-lease acquire", goal_id: input.goal_id, todo_id: input.todo_id,

@@ -358,6 +358,8 @@ def test_native_source_failure_isolated_and_recovered_without_markdown_fallback(
     health = o.attention.health(o.binding["binding_id"])
     assert health["error_code"] == "source_incomplete" and health["last_checked_at"] is not None
     assert health["source_coverage"] == {"goal_count": 2, "read_goal_count": 1, "unavailable_goal_count": 1}
+    assert health["source_failures"] == [{"goal_id": "beta", "error_code":
+        "canonical_authority_required" if failure == "unmigrated" else "source_unavailable"}]
     assert "private source" not in json.dumps(health)
     monkeypatch.setattr(module, "list_goal_todos", native)
     if failure == "unmigrated":
@@ -365,8 +367,25 @@ def test_native_source_failure_isolated_and_recovered_without_markdown_fallback(
     assert o.attention.reconcile() == 1
     assert len(o.provider.writes) == before + 2 and "Recovered source" in o.provider.writes[-1][1]
     assert o.attention.health(o.binding["binding_id"])["error_code"] is None
+    assert o.attention.health(o.binding["binding_id"])["source_failures"] == []
     assert o.attention.reconcile() == 0 and len(o.provider.writes) == before + 2
     assert not o.capture.exists() and not o.store.list_sessions()
+
+
+@pytest.mark.parametrize("code", ["private://credentials", None])
+def test_source_diagnostics_do_not_publish_unknown_native_errors(owner, monkeypatch, code):
+    from loopx.extensions.lark import owner_attention as module
+    o = owner
+    o.configure()
+    o.tasks([], goal="alpha")
+    before = len(o.provider.writes)
+    monkeypatch.setattr(module, "list_goal_todos", lambda **_: {
+        "ok": False, "error_code": code, "error": "private source details"})
+    assert o.attention.reconcile() == 0
+    health = o.attention.health(o.binding["binding_id"])
+    assert health["source_failures"] == [{"goal_id": "alpha", "error_code": "source_unavailable"}]
+    assert "private" not in json.dumps(health)
+    assert not o.capture.exists() and len(o.provider.writes) == before
 
 
 def test_missing_pending_items_do_not_take_healthy_delivery_slots_or_lose_original_identity(owner, monkeypatch):

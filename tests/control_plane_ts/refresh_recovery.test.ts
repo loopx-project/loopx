@@ -41,6 +41,23 @@ test("digest uses JSON structure, not property insertion order", () => {
   assert.equal(first.vision_request_digest, second.vision_request_digest);
 });
 
+test("a verified missing blocked-replan qualification permits only an exact additive checkpoint", () => {
+  const retry = {...request, delivery_outcome: "outcome_gap", unchanged_reason: "Original source is unavailable."};
+  const original = {...prior, delivery_outcome: "outcome_gap",
+    vision_checkpoint: {...prior.vision_checkpoint, decision: "unchanged_with_reason", satisfied: true},
+    refresh_recovery: refreshRecovery(retry, null, false, undefined, false)};
+  assert.equal(refreshRecovery(retry, original, true, undefined, false).decision, "replay");
+  assert.equal(refreshRecovery(retry, original, true, undefined, false, true).decision, "supplement_checkpoint");
+  assert.equal(refreshRecovery({...retry, checkpoint_read_context_id: "fresh-read"},
+    original, true, undefined, false, true).decision, "supplement_checkpoint");
+  assert.equal(refreshRecovery(retry, original, true, undefined, true, true).decision, "reject");
+  for (const changed of [{...retry, unchanged_reason: "A different judgment"},
+    {...retry, delivery_outcome: "outcome_progress"}, {...retry, progress_observation: {result_class: "advanced"}},
+    {...retry, mutation: {next_action: "Start unrelated work"}}]) {
+    assert.equal(refreshRecovery(changed, original, true, undefined, false, true).decision, "reject");
+  }
+});
+
 test("checkpoint replay is bound to the read receipt used for the committed judgment", () => {
   const supplement = {...request, unchanged_reason: "Still applicable", checkpoint_read_context_id: "read-A"};
   const admitted = refreshRecovery(supplement, prior, true, "unknown", false);

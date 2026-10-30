@@ -18,9 +18,7 @@ import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 
 import type { JsonObject } from "../effect_program.ts";
 import { AGENT_SCOPE_FRONTIER_ACTIONS, AgentScopeFrontierAction } from "../agents/agent_scope_frontier.generated.ts";
-import { resumeConditionHasKnownPendingTarget } from "../todos/resume_condition.ts";
-import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
-import { monitorIsActive } from "../todos/summary_lanes.ts";
+import { pendingAutomaticResumeCondition } from "../goals/vision_wait_coverage.ts";
 import {compactTodoContextSource} from "../quota/context_delivery.ts";
 
 function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): JsonObject | null {
@@ -34,43 +32,21 @@ function exactBlockedSuccessorWait(request: JsonObject, monitorWait = false): Js
   return exact && wait ? wait : null;
 }
 
-function hasScheduledMonitorSource(condition: JsonObject): boolean {
-  const time = (value: unknown): number | null => {
-    const micros = typeof value === "string" ? parseTodoTimestampMicros(value) : null;
-    return micros === null ? null : Number(micros) / 1_000_000;
-  };
-  const observed = time(condition.evaluated_at), due = time(condition.target_next_due_at);
-  const expiry = time(condition.target_expires_at);
-  if (condition.clock_provider !== "runtime_clock" || observed === null || due === null ||
-      !(condition.target_archive_state === null || condition.target_archive_state === "active") ||
-      condition.target_expires_at !== null && expiry === null) return false;
-  // A Monitor must still be able to reach a poll. The ordinary quota owner
-  // retains due-work priority; an expired or unscheduled source cannot keep
-  // an unchanged external worker alive indefinitely.
-  return monitorIsActive({expiresAt: expiry}, observed) && monitorIsActive({expiresAt: expiry}, due);
-}
-
 /** Share the resume owner's source proof; a Turn binding retains supervision. */
 function pendingAutomaticSuccessor(request: JsonObject, wait: JsonObject): JsonObject | null {
   const receipt = jsonObject(request.heartbeat_receipt);
   const unbound = request.heartbeat_receipt == null || (!!receipt &&
     ["committed", "replayed"].includes(String(receipt.status)) &&
     !("settlement_identity" in receipt) && !("pending_action_selection" in receipt));
-  const condition = jsonObject(wait.resume_condition);
+  const count = wait.waiting_todo_count;
+  const complete = typeof count === "number" && Number.isSafeInteger(count) && count > 0 &&
+    (wait.pending_resume_count === undefined ? count === 1 : wait.pending_resume_count === count);
   if (unbound && typeof request.agent_id === "string" && !!request.agent_id &&
-      wait.agent_id === request.agent_id && wait.waiting_todo_count === 1 &&
-      ["open", "deferred"].includes(String(wait.selected_todo_status)) &&
-      (wait.selected_todo_claimed_by == null || wait.selected_todo_claimed_by === "" ||
-        wait.selected_todo_claimed_by === request.agent_id) &&
-      condition && ["resume_at", "todo_done", "monitor_changed"].includes(String(condition.kind))) {
-    try {
-      if (resumeConditionHasKnownPendingTarget(condition, {
-        todo_id: wait.selected_todo_id, resume_when: wait.resume_when,
-        resume_monitor_generation: wait.resume_monitor_generation,
-      }) && (condition.kind !== "monitor_changed" || hasScheduledMonitorSource(condition))) return condition;
-    } catch {
-      // An incomplete or malformed source proof cannot relax the contract.
-    }
+      wait.agent_id === request.agent_id && complete) {
+    return pendingAutomaticResumeCondition({todo_id: wait.selected_todo_id,
+      status: wait.selected_todo_status, claimed_by: wait.selected_todo_claimed_by,
+      resume_when: wait.resume_when, resume_monitor_generation: wait.resume_monitor_generation,
+      resume_condition: wait.resume_condition}, request.agent_id);
   }
   return null;
 }
@@ -770,6 +746,11 @@ export function selectedWorkTodoId(packet: JsonObject): string | null {
   return typeof selected.todo_id === "string" && selected.todo_id.trim() ? selected.todo_id : null;
 }
 
+// These are source-owned obligations; native material projection replaces only
+// this exact generated clause, preserving other independently applicable reads.
+export const FULL_OUTCOME_READ_GUIDANCE = "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+export const PROGRESSIVE_OUTCOME_READ_GUIDANCE = "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. Supporting source history, review reasoning and evidence references are available on demand from the same capture; read them when the next decision, verification or review depends on them. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard.";
+
 /** Generate the shared pre-work reads after final admission. Hosts consume this
  * list; transport projections must not independently infer requirements.
  * Python supplies registered source routing, never a second admission rule.
@@ -816,7 +797,7 @@ function interactionRequiredReads(request: JsonObject): JsonObject {
   if (request.goal_objective_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
     "goal_acceptance", "Use the canonical goal_objective before the older source text. Only if your adoption is missing/stale, review your own work, reconcile Todo/Vision changes, then use adopt-objective with your Agent id, exact revision/digest, own objective_work_digest and review_summary. New execution is held until your adoption. Other peers adopt independently; existing Turn settlement/release remains available. Preserve root acceptance, permissions and stops. Adopt once per objective revision, never per Turn or work/peer update. Reuse complete inline context without extra reads/writes.");
   if (checksPresent || request.goal_outcomes_present === true) add(`${prefix} --format json goal-acceptance inspect --goal-id ${goalArg}`,
-    "goal_acceptance", request.goal_outcomes_present === true ? "Read the full acceptance basis and any supporting outcomes with cumulative requirements, work links and sources. Preserve the original Goal and earlier requirements when applying direct user refinements. Before switching work or declaring completion, reconcile unmet outcome requirements with subsequent work; batch changed requirements/evidence reviews through refresh-state --goal-outcome-update-json or goal-acceptance refine. Reuse complete inline context; unchanged work needs no extra inspect/write. Agent review is distinct from independent checks. Scoped acceptance never replaces Goal intent. Changed requirements need a fresh guard." : "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.");
+    "goal_acceptance", request.goal_outcomes_present === true ? FULL_OUTCOME_READ_GUIDANCE : "Read full configured objective, non-goals and criteria with scope/revision. Scoped acceptance does not replace Goal intent or prove completion; Removed or changed checks require a fresh guard.");
   const todoId = hasReplan ? null : selectedWorkTodoId(request);
   if (todoId) add(`${prefix} --format json todo list --goal-id ${goalArg} --todo-id ${shellQuote(todoId)}`,
     "selected_todo", "Read full current requirements and status/claim. Require one matching active Todo; missing, ambiguous or changed work requires a fresh guard. A summary cannot replace this read.");

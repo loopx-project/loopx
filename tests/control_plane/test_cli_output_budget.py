@@ -1712,10 +1712,48 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         )
         payload = measurement["payload"]
         assert scope in payload["task_body"]
-        assert payload["interface_budget"]["max_chars"] == 4200
+        assert payload["interface_budget"]["max_chars"] == 4900
         assert payload["interface_budget"]["within_budget"] is True
         assert "refresh-state --goal-outcome-update-json" in payload["task_body"]
         assert "Local outcomes never replace root continuation, budget or stop criteria." in payload["task_body"]
+
+
+@pytest.mark.parametrize("route_padding, within_budget", [("", True), ("x" * 48, False)])
+def test_thin_budget_covers_complete_capability_and_cli_routes(
+    tmp_path: Path, route_padding: str, within_budget: bool,
+) -> None:
+    # Exercise the actual CLI composition, not a shortened instruction or an
+    # estimated sum. An oversized route must still report a budget failure.
+    with _stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry_path, state_file = _write_fixture(root, SCENARIOS[0])
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(
+            project=project, runtime=runtime, registry_path=registry_path,
+            state_file=state_file, output_format="json",
+        )["heartbeat_prompt_thin"]
+        scope = "x" * 320
+        command[command.index("--agent-scope") + 1] = scope
+        cli_route = f"/opt/loopx/{route_padding}qualified-tools/bin/loopx"
+        command.extend(["--codex-app", "--cli-bin", cli_route])
+        capabilities = ("shell", "filesystem", "network", "external_evidence_poll", "browser")
+        for capability in capabilities:
+            command.extend(["--available-capability", capability])
+        exit_code, text = _invoke_cli(command)
+        assert exit_code == 0, text
+        payload = json.loads(text)
+        body, budget = payload["task_body"], payload["interface_budget"]
+        assert scope in body and body.count(cli_route) >= 2
+        assert all(f"--available-capability {capability}" in body for capability in capabilities)
+        assert "--codex-app" in body and "--runtime-root" in body and "--registry" in body
+        assert "--todo-id <id>" in body and "settlement_plan.ordered_steps" in body
+        assert "ambiguous effects need readback/recovery, not blind retry" in body
+        assert "refresh-state --goal-outcome-update-json" in body
+        assert "Local outcomes never replace root continuation, budget or stop criteria." in body
+        # Preserve the historical 4,500-character failure as a characterized
+        # input; the allowance changes, not the complete emitted instructions.
+        assert budget["budget_char_count"] > 4500
+        assert budget["max_chars"] == 4900
+        assert budget["within_budget"] is within_budget
 
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:

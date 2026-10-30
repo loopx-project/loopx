@@ -139,6 +139,7 @@ def _build_turn_decision(
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    request_subject: Mapping[str, Any] | None = None,
 ) -> Callable[..., dict[str, Any]]:
     """Return the ``build_turn_decision`` every Turn owner resolves through.
 
@@ -200,6 +201,9 @@ def _build_turn_decision(
                 ),
             ),
         )
+        decision = _attach_request_settlement(decision, registry_path=registry_path,
+            runtime_root=runtime_root, goal_id=args.goal_id, agent_id=args.agent_id,
+            request_subject=request_subject, turn_instance_id=turn_instance_id, goal_ref=goal_ref)
         return _attach_original_replan_settlement(
             decision, registry_path=registry_path, runtime_root=runtime_root,
             goal_id=args.goal_id, agent_id=args.agent_id,
@@ -208,6 +212,28 @@ def _build_turn_decision(
         )
 
     return build_turn_decision
+
+
+def _attach_request_settlement(decision: dict[str, Any], *, registry_path: Path,
+        runtime_root: Path, goal_id: str, agent_id: str, request_subject,
+        turn_instance_id: str | None, goal_ref) -> dict[str, Any]:
+    """Use the collaboration owner for both initial and pre-Host request reads."""
+    if request_subject is None:
+        return decision
+    decision = effect_runtime_result("collaboration.delegation.request_decision", {
+        "decision": decision, "request_subject": dict(request_subject),
+    })
+    if decision.get("request_subject") is not None:
+        cli = decision["interaction_contract"]["cli_channel"]
+        cli["settlement_plan"] = build_turn_scoped_cli_settlement_plan(
+            goal_id=goal_id, agent_id=agent_id, request_subject=request_subject,
+            turn_instance_id=turn_instance_id,
+            command_prefix=shlex.join(["loopx", "--registry", str(registry_path), "--runtime-root", str(runtime_root)]),
+            scoped_cli_args="", lifecycle_actor_args="", goal_ref=goal_ref,
+        ).as_dict()
+        cli["next_cli_actions"] = [step["command_template"] for step in cli["settlement_plan"]["ordered_steps"]
+            if step["kind"] in ("durable_writeback", "quota_spend")]
+    return decision
 
 
 def apply_controller_advisory_primary(
@@ -249,10 +275,13 @@ class FreshTurnDecisionOwner:
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]]
     build_turn_decision: Callable[..., dict[str, Any]]
     requested_todo_id: str | None = None
+    request_subject: Mapping[str, Any] | None = None
 
     def resolve(self) -> dict[str, Any]:
         """Use an explicit eligible Todo, or preserve controller selection."""
 
+        if self.request_subject is not None:
+            return self.build_turn_decision()
         if self.requested_todo_id is None:
             return apply_controller_advisory_primary(self.build_turn_decision)
         decision = self.build_turn_decision(requested_action_todo_id=self.requested_todo_id)
@@ -275,6 +304,7 @@ def build_fresh_turn_decision_owner(
     runtime_root_arg: str | None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    request_subject: Mapping[str, Any] | None = None,
 ) -> FreshTurnDecisionOwner:
     """Read the live status and derive the shared decision inputs from it.
 
@@ -311,15 +341,15 @@ def build_fresh_turn_decision_owner(
             scheduler_execution_context=scheduler_execution_context,
             operator_inbox_urgency_projector=operator_inbox_urgency_projector,
             turn_start_hook_dispatch=turn_start_hook_dispatch,
-            goal_ref=goal_ref,
+            goal_ref=goal_ref, request_subject=request_subject,
         ),
-        requested_todo_id=getattr(args, "todo_id", None),
+        requested_todo_id=getattr(args, "todo_id", None), request_subject=request_subject,
     )
 
 
 def current_turn_host_launch_decision(
     args: argparse.Namespace, *, registry_path: Path, runtime_root: Path,
-    identity: SettlementIdentity, replan_obligation_id: str | None,
+    identity: SettlementIdentity,
     planned_effective_action: object,
     scheduler_execution_context: Mapping[str, Any],
     operator_inbox_urgency_projector: Callable[..., dict[str, Any]],
@@ -331,6 +361,8 @@ def current_turn_host_launch_decision(
     The caller supplies the real receipt identity; a Host session or turn_key
     cannot reconstruct it. This read neither creates another receipt nor
     substitutes a newly selected task into the already planned Host request.
+    An observed replan packet is context, not a second settlement binding.
+    Both native callers transport the obligation recorded in this identity.
     """
     current = build_live_quota_should_run_decision(
         collect_turn_status_payload(args, registry_path=registry_path,
@@ -343,7 +375,7 @@ def current_turn_host_launch_decision(
         operator_inbox_urgency_projector=operator_inbox_urgency_projector,
         bounded_research_frontier_projector=project_live_explore_composition_frontier,
         receipt_bound_todo_id=identity.todo_id or None,
-        receipt_bound_replan_obligation_id=replan_obligation_id,
+        receipt_bound_replan_obligation_id=identity.replan_obligation_id,
         turn_instance_id=identity.turn_instance_id,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         workspace_path=Path(args.project).expanduser().resolve(), goal_ref=goal_ref,
@@ -352,6 +384,10 @@ def current_turn_host_launch_decision(
             goal_id=identity.goal_id, agent_id=identity.agent_id,
         ),),
     )
+    current = _attach_request_settlement(current, registry_path=registry_path,
+        runtime_root=runtime_root, goal_id=identity.goal_id, agent_id=identity.agent_id,
+        request_subject=identity.request_subject,
+        turn_instance_id=identity.turn_instance_id, goal_ref=goal_ref)
     _attach_original_replan_settlement(current, registry_path=registry_path,
         runtime_root=runtime_root, goal_id=identity.goal_id, agent_id=identity.agent_id,
         turn_instance_id=identity.turn_instance_id, goal_ref=goal_ref,
@@ -375,9 +411,9 @@ def current_turn_host_launch_decision(
     route = plan["route"]
     if route.get("would_invoke_host") is not True:
         raise FirstPartyHostRuntimeRejected("goal_launch_not_allowed")
-    if selected_turn_todo(current_envelope).get("todo_id") != identity.todo_id:
+    if identity.request_subject is None and selected_turn_todo(current_envelope).get("todo_id") != identity.todo_id:
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
-    if identity.replan_obligation_id and plan["transaction"]["settlement_plan"]["identity"] != identity.as_dict():
+    if (identity.replan_obligation_id or identity.request_subject is not None) and plan["transaction"]["settlement_plan"]["identity"] != identity.as_dict():
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     return launch
 

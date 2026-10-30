@@ -615,6 +615,7 @@ def build_heartbeat_prompt(
             goal_id=goal_id,
             active_state=active_state_text,
             registry_path=str(registry_path) if registry_path is not None else None,
+            runtime_root=runtime_root,
             full=full,
             compact=compact,
             brief=brief,

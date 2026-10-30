@@ -150,6 +150,28 @@ _CONTEXT_CAPTURE_PAGE_END = (
     "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
+CONTEXT_CAPTURE_SELECTION_GUIDANCE = (
+    "For known required pointers, repeat --select in one call without listing again. "
+    "For unknown pointers, use --list on the nearest known parent; add --list-depth 2 "
+    "when nested discovery helps, expanding only needed branches. "
+    "Size batches against the combined output budget; avoid selecting both a parent and its children. "
+    "A missing pointer rejects the batch: inspect its parent in this capture before retrying. "
+)
+
+# A durable capture is a source library, not an instruction to import it all.
+CONTEXT_CAPTURE_NAVIGATION_GUIDANCE = (
+    "The complete decision is saved locally. Choose the sections needed for the current decision; "
+    "you do not need to read the whole file or drain all pages before working. "
+    + CONTEXT_CAPTURE_SELECTION_GUIDANCE +
+    "Read applicable goals, acceptance criteria, constraints and stop conditions before dependent work; "
+    "read the current operation/settlement contract before effects, and supporting evidence when verification needs it. "
+    "An index is navigation, not evidence of reading or fresh authority. "
+    "Keep the original Turn/capture/effect identities. After compaction recover only missing necessary facts "
+    "from this capture; never rerun admission or repeat effects just to recover context. "
+    "Saved-file deltas may use unread baseline files; this is not a claim of retained model input. "
+    "Selected/index reads never establish full model-context retention. "
+)
+
 # Native paging verifies capture bytes; the existing codec separately declares
 # its continuity basis. Generic/off readers retain their original obligations
 # without claiming that a native input observer exists.
@@ -187,7 +209,9 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  page_bytes: int | None = None,
                                  max_page_output_bytes: int | None = None,
                                  select: list[str] | None = None,
-                                 selection_sha256: str | None = None) -> str:
+                                 selection_sha256: str | None = None,
+                                 list_fields: bool = False,
+                                 list_depth: int | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -197,6 +221,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--list"] if list_fields else []),
+        *(["--list-depth", str(list_depth)] if list_depth is not None else []),
         *(argument for pointer in select or [] for argument in ("--select", pointer)),
         *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
         *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])
@@ -250,15 +276,18 @@ def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tupl
 
 
 def capture_context_projection(payload: dict[str, Any], *, directory: Path,
-                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE) -> dict[str, Any]:
+                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
+                               filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
-    projection = directory / "projection.json"
+    if filename not in ("projection.json", "required-context.json"):
+        raise ValueError("unsupported captured context filename")
+    projection = directory / filename
     write_decision_capture(projection, payload)
     digest = hashlib.sha256(projection.read_bytes()).hexdigest()
     return {
         "path": str(projection), "sha256": digest,
-        "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
-            "truncated or uncertain, use this full projection before dependent work. "
+        "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
+            "compaction alone does not require replay within an existing work Turn. "
             + read_guidance,
         "command": context_capture_read_command(projection, digest),
     }

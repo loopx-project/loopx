@@ -33,6 +33,7 @@ from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...entrypoint import pin_utf8_stdio
 from ...history import collect_history, validate_goal_id_path_segment
+from ...public_safe_text import IDENTITY_TOKEN_PATTERN as _PUBLIC_GOAL_ID_RE
 
 HISTORY_EXPORT_SCHEMA_VERSION = "loopx_history_conclusion_export_v0"
 
@@ -44,7 +45,6 @@ _MANIFEST_SCHEMA_VERSION = "loopx_history_conclusion_export_manifest_v0"
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 # Bounded ISO-8601-ish timestamp: digits, T/space, colon, dot, +/- and Z only.
 _TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.+\-]{1,20}Z?$")
-_PUBLIC_GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$")
 _SECRET_SHAPED_GOAL_ID_RE = re.compile(
     r"(?i)^(?:"
     r"gh[pousr]_[A-Za-z0-9]{20,}|"

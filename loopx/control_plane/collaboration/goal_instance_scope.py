@@ -177,6 +177,14 @@ def capture_collaboration_goal_ref(
         )
 
 
+class CollaborationLifecycleRejected(ValueError):
+    """Retain the typed refusal for authorized diagnostic readers."""
+
+    def __init__(self, decision: dict[str, Any]):
+        self.decision = decision
+        super().__init__(f"collaboration lifecycle rejected: {decision.get('code')}")
+
+
 def decide_collaboration_lifecycle(
     scope: CollaborationGoalScope,
     *,
@@ -206,7 +214,5 @@ def decide_collaboration_lifecycle(
     if not isinstance(result, dict):
         raise RuntimeError("collaboration lifecycle decision must be an object")
     if result.get("kind") == "reject":
-        raise ValueError(
-            f"collaboration lifecycle rejected: {result.get('code')}"
-        )
+        raise CollaborationLifecycleRejected(result)
     return result

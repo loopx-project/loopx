@@ -39,9 +39,9 @@ def test_only_preferred_available_source_is_projected(
     calls = []
     original = quota_selection.effect_runtime_result
 
-    def record(method, params):
+    def record(method, params, **kwargs):
         calls.append(method)
-        return original(method, params)
+        return original(method, params, **kwargs)
 
     monkeypatch.setattr(quota_selection, "effect_runtime_result", record)
     summary = quota_summary.select_quota_todo_summary(

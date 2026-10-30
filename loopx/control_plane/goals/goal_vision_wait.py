@@ -6,7 +6,7 @@ from typing import Any
 
 from ..effect_runtime import effect_runtime_result
 from ..todos.contract import normalize_todo_id
-from ..todos.resume_planning import build_todo_resume_planning_request
+from ..todos.resume_planning import build_referenced_todo_resume_planning_request
 
 GOAL_VISION_WAIT_STATE_SCHEMA_VERSION = "goal_vision_wait_state_v0"
 
@@ -100,8 +100,8 @@ def build_goal_vision_wait_state(
         "acceptance_gaps": acceptance_gaps or [],
         "selectable_advancement_count": selectable_advancement_count,
         "lineage_source_items": _vision_wait_lineage_rows(lineage_items),
-        "resume_planning_request": build_todo_resume_planning_request(planning_input, agent_id=agent_id),
-    })
+        "resume_planning_request": build_referenced_todo_resume_planning_request(planning_input, agent_id=agent_id),
+    }, large_local_snapshot=True)
     if result is not None and (
         not isinstance(result, dict)
         or result.get("schema_version") != GOAL_VISION_WAIT_STATE_SCHEMA_VERSION

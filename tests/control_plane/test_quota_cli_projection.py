@@ -17,6 +17,44 @@ from loopx.presentation.renderers.quota_markdown import (
 )
 
 
+@pytest.mark.parametrize("variant", ["known", "future-schema", "future-field", "mismatch", "negative", "unsafe"])
+def test_hidden_diagnostic_lane_counts_all_source_rows_once(variant):
+    counts = {"shown": 2, "total": 8}
+    source = {"schema_version": "quota_todo_summary_payload_compaction_v0",
+        "item_text_limit": 180,
+        "compacted_lanes": {"backlog_items": counts,
+            "first_executable_items": {"shown": 2, "total": 9}},
+        "future_fact": {"value": 2**60 + 1}}
+    if variant == "future-schema":
+        source["schema_version"] = "future_v1"
+    if variant == "future-field":
+        counts["pending"] = 3
+    if variant == "mismatch":
+        counts["shown"] = 1
+    if variant == "negative":
+        counts["total"] = -1
+    if variant == "unsafe":
+        counts["total"] = 2**60 + 1
+    summary = {"schema_version": "todo_summary_v0", "payload_compaction": source,
+        "backlog_items": _items(2, prefix="cold"),
+        "first_executable_items": _items(2, prefix="work")}
+    payload = {"agent_todo_summary": summary}
+    original = deepcopy(payload)
+    result = compact_quota_should_run_cli_payload(payload)
+    actual = result["agent_todo_summary"]
+    metadata = actual["payload_compaction"]
+    assert "backlog_items" not in actual
+    assert actual["first_executable_items"] == summary["first_executable_items"]
+    assert metadata["omitted_lanes"]["backlog_items"] == (8 if variant == "known" else 2)
+    expected = deepcopy(source)
+    if variant == "known":
+        del expected["compacted_lanes"]["backlog_items"]
+    assert metadata["source_projection"] == expected
+    assert compact_quota_should_run_cli_payload(result) == result
+    assert compact_quota_should_run_cli_payload(payload, include_todo_summary_detail=True) == payload
+    assert payload == original
+
+
 @pytest.mark.parametrize("variant", ["text", "title", "different", "short", "incomplete", "unverified",
     "unmatched", "ambiguous", "partial", "failed", "wrong-id", "wrong-selection", "duplicate", "existing-ref",
     "archived", "done", "boolean-id"])
@@ -1005,6 +1043,44 @@ def test_shared_diagnostics_preserve_unknown_lists_nested_fields_and_complete_it
     detailed = compact_quota_should_run_cli_payload(payload,
         include_todo_summary_detail=True, include_user_todo_summary_detail=True)
     assert detailed == payload
+
+
+@pytest.mark.parametrize("role", ["agent", "user"])
+@pytest.mark.parametrize("position", [1, 4, 7])
+@pytest.mark.parametrize("exception", ["resume", "future", "schema", "scalar"])
+def test_unfamiliar_diagnostic_row_does_not_expand_known_siblings(role, position, exception):
+    lane = "first_executable_items" if role == "agent" else "first_open_items"
+    rows = _items(8, prefix="known")
+    exceptional = {**rows[position], "resume_condition": {"schema_version": "todo_resume_condition_v0",
+        "resume_when": "todo_done:dependency", "satisfied": False, "target_todo_id": "dependency"}}
+    if exception == "future":
+        exceptional = {**rows[position], "future_control": {"stop": "Preserve the final constraint.", "epoch": 2**60 + 1}}
+    elif exception == "schema":
+        exceptional = {**rows[position], "schema_version": "future_todo_v1"}
+    elif exception == "scalar":
+        exceptional = None
+    rows[position] = exceptional
+    summary = {"schema_version": "todo_summary_v0", lane: rows, "backlog_items": rows,
+        "claim_scope": {"blocked_claimed_items": rows}, "todo_succession_warning": {"items": rows}}
+    payload = {f"{role}_todo_summary": summary, "capability_gate": {"runnable_candidates": rows},
+        "action_portfolio": {"suggested_actions": rows}, "planning_horizon": {"work_items": rows}}
+    original = deepcopy(payload)
+    projected = compact_quota_should_run_cli_payload(payload)
+    actual = projected[f"{role}_todo_summary"]
+    expected = rows[:3] + ([exceptional] if position >= 3 else [])
+    assert actual[lane] == expected
+    assert actual["backlog_items"] == [exceptional]
+    assert actual["claim_scope"]["blocked_claimed_items"] == [exceptional]
+    assert actual["todo_succession_warning"]["items"] == [exceptional]
+    omitted = actual["payload_compaction"]["omitted_lanes"]
+    assert omitted[lane] == len(rows) - len(expected)
+    assert omitted["backlog_items"] == omitted["claim_scope.blocked_claimed_items"] == 7
+    for key in ("capability_gate", "action_portfolio", "planning_horizon"):
+        assert projected[key] == original[key]
+    assert compact_quota_should_run_cli_payload(projected) == projected
+    assert compact_quota_should_run_cli_payload(payload, include_todo_summary_detail=True,
+        include_user_todo_summary_detail=True) == original
+    assert payload == original
 
 
 def test_readonly_plan_projects_all_rows_in_one_typed_call(monkeypatch):

@@ -136,6 +136,58 @@ def test_future_vision_wait_is_quiet_without_binding_or_poll(tmp_path, isolated_
     assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("optional_notice", [False, True])
+def test_multiple_future_waits_keep_the_original_unbound_turn_quiet(
+    tmp_path, isolated_effect, monkeypatch, provider, optional_notice,
+):
+    registry, runtime, state = fixture(tmp_path)
+    waiting_ids = [TODO, *(f"todo_scheduled_{index}" for index in range(6))]
+    with state.open("a", encoding="utf-8") as output:
+        for todo_id in waiting_ids[1:]:
+            output.write(
+                f"\n- [ ] [P1] Retain scheduled work {todo_id}.\n"
+                f"  <!-- loopx:todo todo_id={todo_id} status=deferred claimed_by={AGENT} "
+                f"task_class=advancement_task action_kind=validate resume_when={FUTURE} -->\n"
+            )
+        if optional_notice:
+            output.write(
+                "\n## User Todo / Owner Review Reading Queue\n\n"
+                "- [ ] [P2] Review the optional public draft.\n"
+                f"  <!-- loopx:todo todo_id=todo_optional_draft status=open "
+                f"task_class=user_action bound_agent={AGENT} -->\n"
+            )
+    vision = runtime / f"goals/{GOAL}/runs/vision.json"
+    run = json.loads(vision.read_text())
+    run["agent_vision"]["todo_delta"] = [f"retain:{todo_id}" for todo_id in waiting_ids]
+    vision.write_text(json.dumps(run), encoding="utf-8")
+    (vision.parent / "index.jsonl").write_text(
+        json.dumps({**run, "json_path": str(vision)}) + "\n", encoding="utf-8",
+    )
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    original = state.read_bytes()
+    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", "multiple-scheduled-waits")
+    for _ in range(2):
+        rc, guard = cli(registry, runtime, *args)
+        assert rc == 0, guard
+        assert guard["effective_action"] == "agent_scope_wait"
+        assert guard["vision_wait_state"]["waiting_todo_count"] == len(waiting_ids)
+        assert "settlement_identity" not in guard["heartbeat_receipt"]
+        contract = guard["interaction_contract"]
+        assert contract["agent_channel"]["must_attempt"] is False, contract
+        assert contract["agent_channel"]["quiet_noop_allowed"] is True, contract
+        assert contract["agent_channel"]["delivery_allowed"] is False
+        assert contract["user_channel"]["action_required"] is False
+        assert not any("monitor-poll" in action for action in contract["cli_channel"]["next_cli_actions"])
+        assert guard["scheduler_hint"]["action"] == "backoff_until_state_change"
+    assert state.read_bytes() == original
+    runs = [json.loads(line) for line in (vision.parent / "index.jsonl").read_text().splitlines()]
+    assert not any(run.get("classification") in ("quota_monitor_poll", "quota_slot_spent") for run in runs)
+
+
 def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     registry, runtime, state = fixture(tmp_path, "resume_at:2026-01-01T00:00:00Z")
     initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
@@ -152,6 +204,29 @@ def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     assert "vision_wait_state" not in guard
     assert guard["scheduler_hint"]["action"] == "run_now"
     assert all(limit is None for limit in guard["scheduler_hint"]["unchanged_poll"]["limits"].values())
+    assert state.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_automatic_wait_does_not_remove_a_real_user_gate(tmp_path, isolated_effect, provider):
+    registry, runtime, state = fixture(tmp_path)
+    with state.open("a", encoding="utf-8") as output:
+        output.write(
+            "\n## User Todo / Owner Review Reading Queue\n\n"
+            "- [ ] [P0] Approve the protected publication.\n"
+            f"  <!-- loopx:todo todo_id=todo_publication_gate status=open "
+            f"task_class=user_gate blocks_agent={AGENT} -->\n"
+        )
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    original = state.read_bytes()
+    rc, guard = cli(registry, runtime, "quota", "should-run", "--codex-app",
+                    "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", "gated-scheduled-work")
+    assert rc == 0, guard
+    contract = guard["interaction_contract"]
+    assert contract["user_channel"]["action_required"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["agent_channel"]["quiet_noop_allowed"] is False
+    assert contract["cli_channel"]["spend_allowed_now"] is False
     assert state.read_bytes() == original
 
 

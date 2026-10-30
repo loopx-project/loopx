@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -121,4 +122,56 @@ def test_windows_job_assignment_failure_launches_no_host(tmp_path: Path, monkeyp
     with pytest.raises(PermissionError, match="assignment rejected"):
         transport.run_host_process([sys.executable, "-c", f"from pathlib import Path;Path({str(marker)!r}).write_text('bad')"],
             project=tmp_path, input_text="", timeout_seconds=5)
+    assert not marker.exists()
+
+
+def test_windows_job_finish_failure_still_releases_launch_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.turn_driver.host_bridge_transport import GuardedHostBridge
+    from loopx.control_plane.turn_driver.windows_host_job import WindowsHostJob
+
+    record_path = tmp_path / "record-target"
+    record_path.mkdir()
+    marker = tmp_path / "host-must-not-run"
+    released = {"guard": False, "output": False}
+
+    @contextmanager
+    def launch_guard():
+        try:
+            yield
+        finally:
+            released["guard"] = True
+
+    original_close_output = GuardedHostBridge.close_output
+
+    def observe_close_output(self: GuardedHostBridge) -> None:
+        original_close_output(self)
+        released["output"] = self.output.closed
+
+    original_finish = WindowsHostJob.finish
+
+    def fail_after_job_cleanup(self: WindowsHostJob) -> None:
+        original_finish(self)
+        raise OSError("synthetic Job query failure")
+
+    monkeypatch.setattr(GuardedHostBridge, "close_output", observe_close_output)
+    monkeypatch.setattr(WindowsHostJob, "finish", fail_after_job_cleanup)
+
+    environment = {**os.environ, transport.HOST_PROCESS_RECORD_ENV: str(record_path)}
+    with pytest.raises(OSError, match="synthetic Job query failure"):
+        transport.run_host_process(
+            [
+                sys.executable,
+                "-c",
+                f"from pathlib import Path;Path({str(marker)!r}).write_text('bad')",
+            ],
+            project=tmp_path,
+            input_text="",
+            timeout_seconds=5,
+            environment=environment,
+            launch_guard=launch_guard,
+        )
+
+    assert released == {"guard": True, "output": True}
     assert not marker.exists()

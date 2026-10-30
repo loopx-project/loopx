@@ -7,8 +7,11 @@ import {readGoalAcceptanceLifecycle, sameExactGoalRef, parseWireExactGoalRef, ty
 
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {goalAcceptanceTodoDigest} from "./acceptance_work_basis.ts";
+import {projectRelations, todoRef} from "../work_items/planning_relations.ts";
+import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} from "../todos/resume_condition.ts";
 
 export const GOAL_OUTCOMES_SCHEMA = "loopx_goal_outcomes_v0";
+export const OUTCOME_CONTEXT_NAVIGATION_SCHEMA = "outcome_context_navigation_v1";
 interface Requirement extends JsonObject {id: string; description: string}
 interface ReviewItem extends JsonObject {id: string; conclusion: "met" | "unmet" | "uncertain"; evidence_refs: string[]; note: string}
 interface OutcomeReview extends JsonObject {basis_digest: string; items: ReviewItem[]}
@@ -228,6 +231,112 @@ export function projectGoalOutcomes(head: JsonObject, goalId: string, acceptance
             .filter(field => work.get(key)?.[field] !== undefined).map(field => [field, work.get(key)![field]]))}))}),
       work: o.todo_ids.map(key => ({todo_id: key, status: work.get(key)?.status ?? "missing"}))})),
     execution_authority_granted: false, goal_completion_assessed: false}, acceptance);
+}
+
+/** Suggest reading order from registered relationships, never reading obligations.
+ * Use the complete canonical work snapshot and the existing relation owner;
+ * the bounded planning horizon cannot establish this registered-relation closure.
+ * Unknown relationships widen suggestions, never force a full-file model read.
+ * Ownership alone neither establishes relevance nor proves independence.
+ */
+export function outcomeContextNavigation(head: JsonObject, goalId: string, agentId: string,
+  todoId: string, acceptance: JsonObject): JsonObject | null {
+  const declaration = acceptance.outcome_requirements as JsonObject | undefined;
+  if (!declaration || !Array.isArray(declaration.outcomes)) return null;
+  const outcomes = declaration.outcomes as JsonObject[];
+  const work = indexCoordinationProjectionTodos(head, goalId).todos;
+  const suggested = new Set<string>();
+  const related = new Set([todoId]);
+  const reasons = new Set<string>();
+  if (declaration.current_lifetime !== true) reasons.add("outcome_lifetime_unavailable");
+  if (!work.has(todoId) || !outcomes.some(o => (o.todo_ids as string[]).includes(todoId)))
+    reasons.add("selected_work_unbound");
+  if (Array.isArray(acceptance.criteria) && acceptance.criteria.length &&
+      (acceptance.scope as JsonObject | undefined)?.kind !== "selected_work")
+    reasons.add("goal_wide_acceptance");
+  const adjacency = new Map<string, Set<string>>();
+  const connect = (left: string, right: string) => {
+    for (const [from, to] of [[left, right], [right, left]]) {
+      const neighbors = adjacency.get(from) ?? new Set<string>();
+      neighbors.add(to); adjacency.set(from, neighbors);
+    }
+  };
+  const rows = [...work.values()].map(todo => ({todo_id: String(todo.todo_id),
+    successor_todo_ids: (todo.successor_todo_ids ?? []) as string[],
+    ...Object.fromEntries(["unblocks_todo_id", "superseded_by", "resume_when"]
+      .filter(key => typeof todo[key] === "string" && todo[key] !== "")
+      .map(key => [key, todo[key]]))}));
+  const sharedRefs = new Map<string, string>();
+  for (const relation of projectRelations(rows)) {
+    const target = todoRef(relation.to_ref);
+    if (target !== null) {
+      if (!work.has(target)) reasons.add("work_relation_unavailable");
+      else connect(relation.from_todo_id, target);
+    } else if (relation.relation === "resumes_when") {
+      // Exact external conditions may be shared without naming a Todo.
+      // No substring/prose matching or invented cross-Agent dependency.
+      const normalized = normalizeTodoResumeWhen({
+        schema_version: TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION, resume_when: relation.to_ref,
+      });
+      if (normalized === null) { reasons.add("work_relation_unavailable"); continue; }
+      const key = `${relation.relation}:${normalized}`;
+      const previous = sharedRefs.get(key);
+      if (previous) connect(previous, relation.from_todo_id);
+      else sharedRefs.set(key, relation.from_todo_id);
+    } else reasons.add("work_relation_unavailable");
+  }
+  const checkScope = acceptance.scope as JsonObject | undefined;
+  if (checkScope?.kind === "selected_work" && Array.isArray(checkScope.todo_ids)) {
+    const ids = checkScope.todo_ids as string[];
+    for (const key of ids) {
+      if (!work.has(key)) reasons.add("acceptance_work_unavailable");
+      else if (ids[0]) connect(ids[0], key);
+    }
+  }
+  const materialWork = new Map<string, string>();
+  for (const outcome of outcomes) {
+    const ids = outcome.todo_ids as string[];
+    if (!Array.isArray(ids) || !ids.length || ids.some(key => !work.has(key))) {
+      reasons.add("outcome_work_unavailable"); continue;
+    }
+    // One outcome may legitimately span several Agents' work. Ownership is
+    // not a substitute for its actual linked tasks or their shared acceptance.
+    for (const key of ids) connect(ids[0], key);
+    // A common declared request or evidence item may carry shared obligations
+    // or opposing interpretations. Expand its actual work without deciding
+    // relevance from descriptions or promoting either review to acceptance.
+    const refs = [...(outcome.sources as JsonObject[]).map(source => String(source.ref)),
+      ...(outcome.requirements as JsonObject[]).flatMap(r =>
+        ((r.agent_review as JsonObject | undefined)?.evidence_refs ?? []) as string[])];
+    for (const ref of refs) {
+      const previous = materialWork.get(ref);
+      if (previous) connect(previous, ids[0]);
+      else materialWork.set(ref, ids[0]);
+    }
+    // A failed/stale current observation cannot be hidden solely by ownership;
+    // its related work and complete evidence also need assessment.
+    if ((outcome.requirements as JsonObject[]).some(r => r.status === "failed" || r.status === "stale"))
+      suggested.add(String(outcome.id));
+    if (suggested.has(String(outcome.id))) for (const key of ids) related.add(key);
+  }
+  const queue = [...related];
+  for (let cursor = 0; cursor < queue.length; cursor++) for (const next of adjacency.get(queue[cursor]) ?? []) {
+    if (!related.has(next)) { related.add(next); queue.push(next); }
+  }
+  for (const outcome of outcomes) {
+    if ((outcome.todo_ids as string[]).some(key => related.has(key))) suggested.add(String(outcome.id));
+  }
+  if (reasons.size) for (const outcome of outcomes) suggested.add(String(outcome.id));
+  return {schema_version: OUTCOME_CONTEXT_NAVIGATION_SCHEMA, goal_id: goalId, agent_id: agentId, todo_id: todoId,
+    outcome_revision: declaration.revision,
+    acceptance_digest: canonicalAuthoritySha256(acceptance),
+    coverage_complete: reasons.size === 0, limitations: [...reasons].sort(),
+    suggested_outcome_ids: outcomes.filter(o => suggested.has(String(o.id))).map(o => o.id),
+    instruction: "Navigation from registered work relationships, not a reading gate or a proof of independence. " +
+      "Start with the suggested outcomes; inspect other criteria, shared constraints and contrary evidence when the decision needs them. " +
+      "All outcomes remain in goal_acceptance_contract. Use the same capture's generic field index and selectors for detail. " +
+      "Incomplete coverage calls for judgment and relevant expansion, not an automatic full-file read. " +
+      "Goal intent, required criteria, permissions, stops and verification obligations still apply."};
 }
 
 /** Re-use after the host observes oracle freshness; raw stored evidence cannot

@@ -402,13 +402,17 @@ def run_host_process(
                         proc.kill()
                         proc.wait()
             finally:
-                if windows_job is not None:
-                    windows_job.finish()
-                launch_scope.close()
-                if guarded is not None:
-                    guarded.close_output()
-                else:
-                    proc.stdout.close()
+                try:
+                    if windows_job is not None:
+                        windows_job.finish()
+                finally:
+                    try:
+                        launch_scope.close()
+                    finally:
+                        if guarded is not None:
+                            guarded.close_output()
+                        else:
+                            proc.stdout.close()
         if record is not None and result is not None and proc.returncode == 0:
             assert record_path is not None
             # The supervisor returned only after cleaning its group; the group is still re-read.

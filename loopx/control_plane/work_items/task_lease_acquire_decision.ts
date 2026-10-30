@@ -451,6 +451,42 @@ export function evaluateTaskLeaseWriteScopesOverlap(value: unknown): JsonObject 
   };
 }
 
+/** Literal segments before the first wildcard, folded for comparison. */
+function schedulingScopeRoot(scope: string): string {
+  const parts: string[] = [];
+  for (const part of scope.replace(/^\/+|\/+$/gu, "").split("/")) {
+    if (part.includes("*") || part.includes("?") || part.includes("[")) break;
+    parts.push(part);
+  }
+  return caseFold(parts.join("/"));
+}
+
+function schedulingScopePairOverlaps(left: string, right: string): boolean {
+  if (scopePairOverlaps(left, right)) return true;
+  const leftRoot = schedulingScopeRoot(left);
+  const rightRoot = schedulingScopeRoot(right);
+  return Boolean(leftRoot && rightRoot && (
+    leftRoot === rightRoot ||
+    leftRoot.startsWith(`${rightRoot}/`) ||
+    rightRoot.startsWith(`${leftRoot}/`)
+  ));
+}
+
+/**
+ * Quota scheduling keeps its own subtree rule: a literal scope owns the paths
+ * below it even without a trailing slash. That rule is wider than the canonical
+ * lease rule, so this entry point composes the two instead of restating the
+ * case fold or the glob matcher.
+ */
+export function evaluateQuotaSchedulingWriteScopesOverlap(value: unknown): JsonObject {
+  const input = requireJsonObject(value, "quota scheduling write-scope overlap");
+  const left = comparisonWriteScopes(decisionStringArray(input.left, "left"));
+  const right = comparisonWriteScopes(decisionStringArray(input.right, "right"));
+  const overlap = left.length > 0 && right.length > 0 &&
+    left.some((first) => right.some((second) => schedulingScopePairOverlaps(first, second)));
+  return {overlap};
+}
+
 function decisionBoolean(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") {
     throw new EffectRuntimeRequestError(`${label} must be a boolean`);

@@ -155,8 +155,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
             "crowded": {"json": 42_000, "markdown": 10_500},
-            # Matched canonical base/head both emit 24,820 JSON characters.
-            "multi_agent": {"json": 25_500, "markdown": 7_000},
+            # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
+            # this candidate both emit 25,836 JSON characters (96 matched
+            # surface/mode measurements, no semantic or route differences).
+            # Preserve complete decision facts; calibrate only this synthetic
+            # presentation ceiling. The historical 25,500 failure remains;
+            # line/growth guards and production transport limits are unchanged.
+            "multi_agent": {"json": 26_500, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 190},
@@ -307,12 +312,15 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            # Matched Linux output: JSON 3,649 -> 4,172 and Markdown
-            # 5,553 -> 6,076. The supported 320-char scope reaches 4,461
-            # JSON chars. Keep the full outcome guidance and Markdown guard.
-            "small": {"json": 4_500, "markdown": 6_200},
-            "crowded": {"json": 4_500, "markdown": 6_200},
-            "multi_agent": {"json": 4_500, "markdown": 6_200},
+            # Same fixed-path, 320-char scope workload at 9cae3b289 emitted
+            # 4,532 JSON / 6,648 Markdown chars; timed-wait guidance adds 321
+            # chars, retaining the original Turn, due time and fresh admission.
+            # All three scenarios now emit 4,853 / 6,969 chars and 63 Markdown
+            # lines. Preserve historical misses; retain complete instructions,
+            # the current 4,500 body allowance and unchanged line/growth guards.
+            "small": {"json": 5_000, "markdown": 7_100},
+            "crowded": {"json": 5_000, "markdown": 7_100},
+            "multi_agent": {"json": 5_000, "markdown": 7_100},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -765,12 +773,6 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         qualification="qualified_default",
         surface_id="todo_list",
         rationale="agent work-queue read path",
-    ),
-    CliOutputCommandClassification(
-        command_id="task-lease",
-        qualification="explicit_cold_path_exception",
-        surface_id=None,
-        rationale="explicit per-todo lease lifecycle command family",
     ),
     CliOutputCommandClassification(
         command_id="coordination-shadow",

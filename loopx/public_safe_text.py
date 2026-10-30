@@ -316,11 +316,16 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
 # Three validators each restated the same scheme list, and the canonical
 # public-safety owner had no counterpart, so a fourth caller had to invent one.
 REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
-SECRET_LIKE_SURFACE_PATTERN = re.compile(
-    r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
-    r"\b(?:access|api|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
-    r"\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
-    r"(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|"
+# The provider-issued credential shapes, as one alternation body shared by every
+# owner that has to recognize a token with no label at all. A prefix carries the
+# provider's own issuer identity, so the shape is self-describing and a caller
+# never has to guess a label; the length floor keeps ordinary prose out. Case
+# folding is left to the consumer's compile flags or inline `(?i)`, so this
+# string stays a plain alternation instead of owning one flag decision.
+#
+# Kept here rather than restated per caller: a scan that recognizes only some
+# issuers certifies the rest as public-safe, and copies drift (Refs #5136).
+PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
     r"\bgh[pousr]_[a-z0-9]{16,}\b|"
     r"\bgithub_pat_[a-z0-9_]{20,}|"
     r"\b(?:akia|asia)[a-z0-9]{16}\b|"
@@ -329,7 +334,15 @@ SECRET_LIKE_SURFACE_PATTERN = re.compile(
     r"\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|"
     r"\bnpm_[a-z0-9]{20,}|"
     r"\bpypi-[a-z0-9_-]{20,}|"
-    r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b|"
+    r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b"
+)
+SECRET_LIKE_SURFACE_PATTERN = re.compile(
+    r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
+    r"\b(?:access|api|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|"
+    + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
+    + r"|"
     r"\b(?:access|refresh)[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
     r"\b(?:password|secret)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
     r"-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY|"
@@ -343,6 +356,12 @@ PUBLIC_SAFE_REFERENCE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$"
 )
 COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+# One definition for "a compact token that must start with a letter". The
+# domain-state key validator and the ML-experiment public-token validator each
+# compiled this body under their own name; both now import this object, and
+# tests/control_plane/test_compact_identifier_shape_owner.py rejects a new local
+# copy. Each consumer keeps its own field names and error text.
+LETTER_LED_COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
 # One definition for "a compact, path-safe opaque identifier". Four contracts each
 # compiled this body under their own name -- the Chat action surface, the Chat
 # action store, a Goal reference validator and the BotMux runtime -- and a fifth
@@ -351,6 +370,21 @@ COMPACT_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 # a value this shape accepts is not yet a claim that the destination may publish
 # it.
 OPAQUE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,200}$")
+# One definition for "a compact label naming a provider, service or source". Five
+# contracts each compiled this body under their own name -- the service-ownership
+# projection, the Issue-Fix repository context and repository memory, the memory
+# provider that publishes them, and the reviewer-recommendation route -- and each
+# keeps its own field names and error text. The bound is the one those sites
+# already enforced: widening it to the 120-character identity shape below would
+# accept labels they reject today, so the two stay separate on purpose and
+# tests/control_plane/test_compact_identifier_shape_owner.py census both.
+COMPACT_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
+# One definition for "an identity token in a public-safe envelope", the shape
+# `loopx/capabilities/reliability_diagnostics/README.md` already documents for
+# `goal_id` and `session_id`. Three contracts compiled it locally -- the observer
+# envelope, the command-record projector and the OpenViking history export -- and
+# the envelope module remains the public name its own package imports.
+IDENTITY_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$")
 MODULE_QUALIFIED_SURFACE_PATTERN = re.compile(
     r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$"
 )

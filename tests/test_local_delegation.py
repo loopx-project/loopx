@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from threading import Event, get_ident
 
 import pytest
+from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -65,19 +66,14 @@ def service(tmp_path, request, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     # Each case owns a private server. Do not accumulate five-minute idle
     # runtimes across the delegation suite, including failed setup/test cases.
-    runtime_env = os.environ.copy()
-    run_cleanup = subprocess.run  # Tests may replace the shared module before teardown.
+    original_run = subprocess.run  # Tests may replace the shared module before teardown.
     def retire_runtime():
-        run_cleanup([
-            sys.executable, "-c",
-            "from pathlib import Path; import sys; "
-            "from loopx.control_plane.effect_runtime import _runtime_dir, restart_effect_runtime; "
-            "assert _runtime_dir().parent == Path(sys.argv[1]); "
-            "result = restart_effect_runtime(wait_for_exit=True); "
-            "assert result['status'] in {'stopped', 'not_running'}, result",
-            str(tmp_path),
-        ], cwd=Path(__file__).resolve().parents[1], env=runtime_env,
-            capture_output=True, text=True, timeout=30, check=True)
+        # Reap in the spawning parent: a cleanup subprocess cannot retire its
+        # sibling's zombie. The shared helper authenticates the publication path
+        # inside this private root, independent of later routing monkeypatches.
+        with pytest.MonkeyPatch.context() as cleanup:
+            cleanup.setattr(subprocess, "run", original_run)
+            stop_disposable_effect_runtimes(tmp_path)
     request.addfinalizer(retire_runtime)
     root = tmp_path / "team"
     demo.prepare(root, provider=request.param)
@@ -107,7 +103,7 @@ def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, m
     from types import SimpleNamespace
 
     from loopx.control_plane.effect_runtime import (
-        _runtime_dir, _serving_runtime_identity, restart_effect_runtime, effect_runtime_result,
+        _pid_is_alive, _runtime_dir, _serving_runtime_identity, restart_effect_runtime, effect_runtime_result,
     )
 
     cached, isolated = tmp_path / "cached", tmp_path / "isolated"
@@ -123,7 +119,7 @@ def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, m
         "from loopx.control_plane.effect_runtime import _runtime_dir; print(_runtime_dir())",
     ], text=True).strip()
     assert Path(child) == _runtime_dir()
-    effect_runtime_result("runtime.ping", {})
+    fixture_pid = effect_runtime_result("runtime.ping", {})["pid"]
     assert _serving_runtime_identity() is not None
     try:
         # Teardown targets the captured route, even if another test changed
@@ -141,6 +137,10 @@ def test_delegation_fixture_isolates_cached_and_child_runtime_routes(tmp_path, m
             finally:
                 restart_effect_runtime()
         assert _serving_runtime_identity() is None, "fixture must retire its private runtime before the next case"
+        assert not _pid_is_alive(fixture_pid), "locator retirement alone does not prove process exit"
+        if os.name == "posix":
+            with pytest.raises(ChildProcessError):
+                os.waitpid(fixture_pid, os.WNOHANG)
     finally:
         restart_effect_runtime()
 

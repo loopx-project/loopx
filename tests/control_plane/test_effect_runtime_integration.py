@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -33,8 +34,9 @@ _TODO_ID = "todo_fixture0001"
 
 
 @pytest.mark.parametrize("replacement", [False, True])
+@pytest.mark.parametrize("owns_group", [True, False] if os.name == "posix" else [False])
 def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
-    tmp_path, monkeypatch, replacement,
+    tmp_path, monkeypatch, replacement, owns_group,
 ):
     locator = tmp_path / "runtime.json"
     if replacement:
@@ -42,7 +44,7 @@ def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
     monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *a, **kw: {})
     with subprocess.Popen(
         [sys.executable, "-c", "import time; print('ready',flush=True); time.sleep(60)"],
-        stdout=subprocess.PIPE, text=True, start_new_session=os.name == "posix",
+        stdout=subprocess.PIPE, text=True, start_new_session=owns_group,
     ) as process:
         try:
             assert process.stdout.readline().strip() == "ready"
@@ -67,6 +69,50 @@ def test_fixture_shutdown_waits_for_process_exit_after_locator_turnover(
             if process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux thread-group leader exit")
+def test_fixture_shutdown_waits_for_writer_after_thread_group_leader_exits(tmp_path, monkeypatch):
+    witness = tmp_path / "written-after-stop"
+    monkeypatch.setattr(effect_runtime, "_request_with_info", lambda *a, **kw: {})
+    source = """
+import ctypes, os, pathlib, sys, threading
+def write_after_release():
+    print('ready', flush=True)
+    sys.stdin.readline()
+    pathlib.Path(sys.argv[1]).write_text('worker can still write')
+    os._exit(0)
+threading.Thread(target=write_after_release).start()
+ctypes.CDLL(None).pthread_exit(None)
+"""
+    with subprocess.Popen(
+        [sys.executable, "-c", source, str(witness)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True,
+    ) as process:
+        try:
+            assert process.stdout.readline().strip() == "ready"
+            state = Path(f"/proc/{process.pid}/stat")
+            deadline = time.monotonic() + 5
+            while state.read_text().rsplit(")", 1)[1].split()[0] != "Z":
+                assert time.monotonic() < deadline, "thread-group leader did not exit"
+                time.sleep(.01)
+            info = {"pid": process.pid, "token": "original"}
+            stopped = effect_runtime._stop_effect_runtime(
+                tmp_path / "retired-locator", info, timeout=.1, wait_for_process_exit=True,
+            )
+            assert stopped["status"] == "shutdown_pending"
+            assert effect_runtime._pid_is_alive(process.pid)
+            process.stdin.write("release\n")
+            process.stdin.flush()
+            process.wait(timeout=5)
+            assert witness.read_text() == "worker can still write"
+            assert effect_runtime._stop_effect_runtime(
+                tmp_path / "retired-locator", info, timeout=.1, wait_for_process_exit=True,
+            )["status"] == "stopped"
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
 
 
 def _effect_id(label: str) -> str:
@@ -1746,6 +1792,59 @@ def test_large_local_response_digest_failure_is_ambiguous(tmp_path: Path) -> Non
             request_id="request-1", timeout=10,
         )
     assert error.value.diagnostic_code == "runtime_response_ambiguous"
+
+
+def test_controller_snapshot_retains_private_file_and_method_guards(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import tempfile
+
+    from tests.test_loop_turn_loop_controller import _envelope
+
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    effect_runtime.effect_runtime_result("runtime.ping", {})
+    fingerprint = effect_runtime._runtime_fingerprint()
+    info = effect_runtime._read_info(effect_runtime._runtime_info_path(fingerprint), fingerprint=fingerprint)
+    assert info is not None
+    with tempfile.TemporaryDirectory(prefix="loopx-effect-", dir=tmp_path) as directory:
+        root = Path(directory)
+        params = root / "params.json"
+        sink = root / "response.json"
+        decision = _envelope(should_run=True)
+        decision["work_context"] = {"text": "G" * 2_420_000}
+        params.write_text(json.dumps({"operation": "disposition", "decision": decision, "receipt": None}))
+        sink.touch()
+        params.chmod(0o600)
+        sink.chmod(0o600)
+        ref = {"schema_version": "loopx_effect_runtime_snapshot_v0", "path": str(params),
+               "byte_count": params.stat().st_size, "sha256": hashlib.sha256(params.read_bytes()).hexdigest()}
+
+        def request(reference, method="turn.controller"):
+            return _raw_runtime_response(info, (json.dumps({
+                "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+                "token": info["token"], "request_id": "controller-snapshot", "method": method,
+                "params_ref": reference, "response_sink": str(sink),
+            }) + "\n").encode())
+
+        result = request(ref)
+        assert result["ok"] is True and result["result"]["value"]["disposition"] == "run_now"
+        for bad_ref in ({**ref, "sha256": "0" * 64}, {**ref, "byte_count": ref["byte_count"] - 1},
+                        {**ref, "byte_count": effect_runtime.MAX_LOCAL_SNAPSHOT_BYTES + 1},
+                        {**ref, "schema_version": "unsupported"}):
+            rejected = request(bad_ref)
+            assert rejected["ok"] is False and rejected["error"]["kind"] == "request_rejected"
+        rejected = request(ref, method="runtime.ping")
+        assert rejected["ok"] is False and "snapshot transport is unavailable" in rejected["error"]["message"]
+        if os.name != "nt":
+            params.chmod(0o644)
+            assert request(ref)["ok"] is False
+            params.chmod(0o600)
+            link = root / "link.json"
+            link.symlink_to(params)
+            assert request({**ref, "path": str(link)})["ok"] is False
+        assert request(ref)["ok"] is True
+    assert not root.exists()
+    effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
 @pytest.mark.parametrize("unit", [b"x", "界".encode()])

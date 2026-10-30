@@ -344,6 +344,8 @@ def build_state_refresh_record(
     if settlement_identity:
         record["settlement_identity"] = settlement_identity.as_dict()
         record["turn_instance_id"] = settlement_identity.turn_instance_id
+        if settlement_identity.request_subject is not None:
+            record["request_subject"] = dict(settlement_identity.request_subject)
         if settlement_identity.todo_id:
             record["todo_id"] = settlement_identity.todo_id
         if settlement_identity.replan_obligation_id:
@@ -782,10 +784,23 @@ def refresh_state_run(
     if explore_result is not None:
         from .capabilities.explore.result_writeback import normalize_result_attachment
         normalized_explore_result = normalize_result_attachment(explore_result)
+    request_work_id = None
+    if not todo_id and not normalized_replan_obligation_id and turn_instance_id and normalized_agent_id:
+        # Reuse only this exact committed guard. Missing input cannot select a
+        # Todo or manufacture a request; the original receipt owns restoration.
+        from .control_plane.quota.heartbeat_receipt import find_heartbeat_receipt, heartbeat_receipt_request_subject
+        request_registry = load_registry(registry_path)
+        request_runtime = resolve_runtime_root(request_registry, runtime_root_override, registry_path=registry_path)
+        request_receipt = find_heartbeat_receipt(request_runtime, goal_id=safe_goal_id,
+            agent_id=normalized_agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref)
+        request_subject = heartbeat_receipt_request_subject(request_receipt)
+        if request_subject is not None:
+            request_work_id = SettlementIdentity(goal_id=safe_goal_id, agent_id=normalized_agent_id,
+                todo_id=None, turn_instance_id=turn_instance_id, request_subject=request_subject).binding_id
     normalized_progress_observation = (
         normalize_progress_observation(
             progress_observation,
-            work_item_id=todo_id or normalized_replan_obligation_id,
+            work_item_id=todo_id or normalized_replan_obligation_id or request_work_id,
         )
         if progress_observation is not None
         else None
@@ -800,7 +815,7 @@ def refresh_state_run(
     turn_scoped_settlement_qualified = qualifies_turn_scoped_settlement(
         normalized_delivery_outcome,
         normalized_progress_observation,
-        work_item_id=todo_id,
+        work_item_id=todo_id or request_work_id,
         replan_obligation_id=normalized_replan_obligation_id,
     )
     # A refusal has to name the typed input the writer still owes; the diagnosis
@@ -811,7 +826,7 @@ def refresh_state_run(
         else explain_turn_scoped_settlement_gap(
             normalized_delivery_outcome,
             normalized_progress_observation,
-            work_item_id=todo_id,
+            work_item_id=todo_id or request_work_id,
             replan_obligation_id=normalized_replan_obligation_id,
         )
         or TURN_SCOPED_SETTLEMENT_GAP_FALLBACK

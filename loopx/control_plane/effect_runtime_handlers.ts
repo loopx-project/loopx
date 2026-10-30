@@ -7,6 +7,7 @@ import {
   settlementBindReduce,
   settlementReceipt,
   settlementIdentity,
+  executionRequestSubject,
   settlementIdentityPayload,
   settlementPlanPayload,
   settlementResultPayload,
@@ -103,6 +104,7 @@ function settlementIdentityInput(
       input.replan_obligation_id,
       `${label}.replan_obligation_id`,
     ),
+    ...(input.request_subject === undefined ? {} : {request_subject: executionRequestSubject(input.request_subject)}),
   };
 }
 
@@ -264,6 +266,7 @@ export function createEffectRuntimeHandlers(
       "turn_journal.inspect",
       lazyHandler(() => import("./turn_driver/turn_journal.ts"), ({interpretTurnJournal}) => (params) => interpretTurnJournal(turnJournalInspectionRequest(params))),
     ],
+    ["turn.controller", lazyHandler(() => import("./turn_driver/loop_controller.ts"), ({controllerRequest}) => controllerRequest)],
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
@@ -462,6 +465,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./coordination/legacy_writer_fence.ts"), ({checkLegacyCoordinationWriteAllowed}) => checkLegacyCoordinationWriteAllowed),
     ],
     ["task_lease.write_scopes.overlap", lazyHandler(() => import("./work_items/task_lease_acquire_decision.ts"), ({evaluateTaskLeaseWriteScopesOverlap}) => evaluateTaskLeaseWriteScopesOverlap)],
+    ["quota.task_orchestration.write_scope_overlap", lazyHandler(() => import("./work_items/task_lease_acquire_decision.ts"), ({evaluateQuotaSchedulingWriteScopesOverlap}) => evaluateQuotaSchedulingWriteScopesOverlap)],
     ["quota.monitor_poll.commit", lazyHandler(() => import("./quota/monitor_poll_commit.ts"), ({evaluateQuotaMonitorPollCommit}) => evaluateQuotaMonitorPollCommit)],
     ["presentation.decision_notice.project", lazyHandler(() => import("./presentation/decision_notice.ts"), ({projectDecisionNotice}) => projectDecisionNotice)],
     ["presentation.decision_notice.validate_references", lazyHandler(() => import("./presentation/decision_notice.ts"), ({validateDecisionNoticeReferences}) => validateDecisionNoticeReferences)],
@@ -609,6 +613,8 @@ export function createEffectRuntimeHandlers(
     ],
     ["collaboration.delegation.binding", lazyHandler(() => import("./collaboration/delegation.ts"), ({selectDelegationBinding}) => selectDelegationBinding)],
     ["collaboration.delegation.source_replay", lazyHandler(() => import("./collaboration/delegation.ts"), ({verifyDelegationSourceReplay}) => verifyDelegationSourceReplay)],
+    ["collaboration.delegation.request_decision", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationRequestDecision}) => delegationRequestDecision)],
+    ["collaboration.delegation.request_subject", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationRequestSubject}) => params => delegationRequestSubject(requiredObject(params.entry, "request entry"), requiredObject(params.binding, "binding"), params.expected))],
     ["collaboration.delegation.turn_context", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationTurnWorkContext}) => delegationTurnWorkContext)],
     ["turn.selection.rejection", lazyHandler(() => import("./turn_driver/selection_rejection.ts"), ({projectTurnSelectionRejection}) => projectTurnSelectionRejection)],
     ["collaboration.delegation.preflight", lazyHandler(() => import("./collaboration/delegation.ts"), ({delegationPreflight}) => delegationPreflight)],
