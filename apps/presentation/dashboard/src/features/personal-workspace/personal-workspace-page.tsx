@@ -2493,7 +2493,7 @@ export function PersonalWorkspacePage({
     }
     if ((retry || (intent === "steer" && steeringTurnId)) && conversationSessionId && callbacks.onSteerConversationTurn) {
       if (pendingImages.length) {
-        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
+        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持附件，附件和草稿已保留。" : "This turn accepts text instructions only. Attachments and draft retained.");
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
