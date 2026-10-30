@@ -98,7 +98,12 @@ try {
   await page.getByText("LoopX · 核验信息暂不可用",{exact:true}).waitFor({timeout:60000});
   assert.equal(await page.getByText("原执行尚未完成结算",{exact:false}).count(),0);
   const reread=page.getByRole("button",{name:"重新读取",exact:true});
+  const readsBeforeReread=requests.filter(row=>row.method==="GET").length;
   await reread.click();
+  await page.waitForFunction(()=>Array.from(document.querySelectorAll("button"))
+    .some(button=>button.textContent?.trim()==="重新读取" && !button.disabled));
+  assert.ok(requests.filter(row=>row.method==="GET").length>readsBeforeReread,
+    "Reread must complete a real owning-backend observation");
   assert.equal(writes().length,1,"Unavailable observation reread is not an execution request");
   const held=await command("inspect");
   assert.deepEqual(held.counts,{result:1,debit:1});assert.equal(held.dispatches.length,1);
