@@ -1157,7 +1157,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
   .personal-channel-header:has(~ .personal-channel-scroll[data-active-goal-view="tasks"] .is-list-view) { flex-wrap: wrap; }
   .personal-channel-header:has(~ .personal-channel-scroll[data-active-goal-view="tasks"] .is-list-view) .personal-channel-title { flex-basis: 100%; }
 }
-.personal-task-kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); flex: 1; gap: 12px; align-items: start; min-height: 0; }
+.personal-task-kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); flex: 1; gap: 12px; align-items: stretch; min-height: 0; }
 .personal-task-chat-receipt { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid #d8e2f8; border-radius: var(--pw-r-item); background: #f8faff; box-shadow: 0 1px 3px rgb(47 102 233 / 4%); }
 .personal-task-chat-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--pw-blue-soft); color: var(--pw-blue-ink); }
 .personal-task-chat-receipt > div { min-width: 0; }
@@ -2344,3 +2344,6 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-task-kanban .personal-task-card > button { padding: 10px 12px; }
 .personal-task-kanban .personal-task-lane-scroll > button > strong,
 .personal-task-kanban .personal-task-card > button > strong { font-size: var(--text-caption); line-height: 1.45; }
+
+/* The reason stays, but one line only. */
+.personal-home-goal-card > .personal-home-goal-reason { margin: 0; overflow: hidden; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); text-overflow: ellipsis; white-space: nowrap; }

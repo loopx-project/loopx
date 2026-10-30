@@ -234,6 +234,7 @@ function ManagerHomeBoard({
     <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
       <GoalIdentityMark goal={goal} />
       <strong className="personal-home-goal-title" title={goal.title}>{goalShortLabel(goal)}</strong>
+      <p className="personal-home-goal-reason" title={goal.needsYou ?? goal.nextSentence}>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
       <span className="personal-home-goal-meta">{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.agentLaneCount && goal.agentLaneCount > 1
         ? t("header.workAgentCount", { count: goal.agentLaneCount })
         : goal.agentLabel ?? goal.agentId}</span>
