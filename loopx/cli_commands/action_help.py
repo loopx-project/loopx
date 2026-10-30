@@ -23,7 +23,12 @@ class ActionHelp(argparse.Action):
             fields = set(allowed) | set(self.common_fields) | {self.dest}
             actions = [action for action in parser._actions if action.dest in fields]
             formatter = parser.formatter_class(prog=f"{parser.prog} {command}")
-            formatter.add_usage(None, actions, [])
+            # Option declarations below retain the complete action grammar.
+            # A second long list in usage only repeats it (and can itself be
+            # truncated before the descriptions). Keep parser-required inputs.
+            required = [action for action in actions if action.required]
+            optional = argparse.Action([], dest="options", metavar="options", nargs="?")
+            formatter.add_usage(None, [*required, optional], [])
             formatter.add_text("Options for this action. Conditional requirements and "
                                "state/authority checks still apply. Global --registry "
                                "and --runtime-root go before the command.")

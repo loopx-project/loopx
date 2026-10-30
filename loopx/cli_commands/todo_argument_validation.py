@@ -139,8 +139,8 @@ _TODO_ADD_UNSUPPORTED_FIELDS = (
 )
 _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 
-# The same strict subset drives validation and action help. Complex lifecycle
-# commands retain full help until their conditional grammar is centralized.
+# Read/claim subsets share validation and help. Update help reuses the mutable
+# field owner; other lifecycle commands retain full help until centralized.
 TODO_ACTION_FIELDS = {
     "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "state_file", "project", "dry_run"}),
     "receipt": frozenset({"operation_id"}),
@@ -149,6 +149,10 @@ TODO_ACTION_FIELDS = {
     "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
     "claim": frozenset({"role", "todo_id", "claimed_by", "agent_id", "state_file",
                         "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version", "project", "dry_run"}),
+    "update": frozenset(_TODO_UPDATE_MUTABLE_FIELDS) | frozenset({
+        "role", "todo_id", "agent_id", "state_file", "project", "dry_run", "authority_reason",
+        "claim_operation_id", "update_operation_id", "update_expected_provider_revision",
+    }),
 }
 
 
