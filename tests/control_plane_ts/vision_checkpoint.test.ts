@@ -193,7 +193,7 @@ test("structured replans have a bounded 1800-character budget including path evi
     }})), /path_delta.observed_reality uses 321 chars; limit is 320/);
     assert.throws(() => buildVisionCheckpoint(prepareRequest({agent_vision_packet: {
       ...packet, path_delta: {...packet.path_delta, changed: [character.repeat(35)]},
-    }})), /total_agent_vision uses 1801 chars; limit is 1800/);
+    }})), /total_agent_vision uses 1801 chars; limit is 1800; usage: vision_patch=1120, path_delta=681, stride_decision=0, fallback_declarations=0/);
   }
 });
 
