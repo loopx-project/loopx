@@ -9,6 +9,8 @@ import argparse
 import os
 from pathlib import Path
 import stat
+import tempfile
+from typing import Any
 
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 
@@ -38,6 +40,31 @@ def _private_transport_root(runtime_root: Path) -> str:
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError("machine context transport requires a private physical directory owned by this user")
     return str(root)
+
+
+def capture_context_recovery(value: dict[str, Any], *, runtime_root: Path) -> dict[str, Any]:
+    """Publish exact write-time facts through the existing generic file reader.
+
+    This does not present a delta, advance a native baseline or rerun admission.
+    A failed publication leaves the rejected operation and any earlier effects
+    unchanged; retry that same operation after repairing its private transport.
+    """
+    from ..control_plane.turn_driver.decision_capture import (
+        capture_context_projection, context_capture_read_command,
+    )
+
+    try:
+        directory = Path(tempfile.mkdtemp(prefix="recovery-", dir=_private_transport_root(runtime_root)))
+        reference = capture_context_projection(value, directory=directory, filename="required-context.json")
+        path, digest = Path(reference["path"]), reference["sha256"]
+        return {"path": str(path), "sha256": digest,
+            "index_command": context_capture_read_command(path, digest, list_fields=True, list_depth=2),
+            "select_command": context_capture_read_command(path, digest, select=["<pointer>"])}
+    except (OSError, ValueError) as error:
+        return {"available": False, "error_kind": type(error).__name__,
+            "instruction": "Repair the private context transport, then retry the original unchanged operation "
+                "to obtain its current recovery reference. Do not rerun admission, substitute an old capture, "
+                "or repeat an already committed effect."}
 
 
 def apply_context_machine_options(

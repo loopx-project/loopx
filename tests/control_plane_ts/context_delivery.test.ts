@@ -920,3 +920,60 @@ test("legacy quota fields are bound by the existing adapter, never caller data",
   // A direct codec call has no legacy binding and conservatively refreshes it.
   assert.deepEqual(inline(prepareContextDelivery(request), ["heartbeat_recommendation"]), value.heartbeat_recommendation);
 });
+
+test("verified file deltas inherit unchanged controls within an epoch without retained-input claims", () => {
+  const original = {ok: true, goal_id: "goal", controls: {stop: false, owner: "agent"},
+    opaque_control: "Unknown controls also remain available in the exact file. ".repeat(400)};
+  const baseline = full(original);
+  const nextScope = {...scope};
+  const current = {...original, controls: {...original.controls, stop: true}};
+  const args = {context: current, scope: nextScope, capture_id: "capture-2"};
+  const continuity = {basis: "captured_file", target: baseline.target, capture_bytes_verified: true};
+  const delta = prepareContextDelivery({...args, baseline, continuity});
+  assert.equal(delta.mode, "delta");
+  assert.equal(delta.continuity_basis, "captured_file");
+  assert.ok(JSON.stringify(delta).length < JSON.stringify(current).length / 3);
+  const restored = restoreContextDelivery({delivery: delta, baseline, current: prepareContextDelivery(args)});
+  assert.deepEqual(restored.context, current);
+  for (const key of ["goal_id", "agent_id", "session_id", "context_epoch", "continuity_generation"]) {
+    assert.equal(prepareContextDelivery({...args, scope: {...nextScope, [key]: "other"}, baseline, continuity}).mode, "full");
+  }
+  for (const invalid of [undefined, {...continuity, capture_bytes_verified: false}, {...continuity, target: {}}]) {
+    assert.equal(prepareContextDelivery({...args, baseline, continuity: invalid}).mode, "full");
+  }
+  const corrupted = {...delta, changes: {value: original}};
+  const fallback = restoreContextDelivery({delivery: corrupted, baseline, current: prepareContextDelivery(args)});
+  assert.equal(fallback.reason, "automatic_full_recovery");
+  assert.deepEqual(fallback.context, current);
+});
+
+test("file epochs survive ordinary resume but rotate once for an actual compaction", () => {
+  const state = {session_id: "native", cwd: "/workspace", context_epoch: "original",
+    recovery: {continuity_basis: "captured_file", target: {context_epoch: "original"}}, pending: {}};
+  const event = {hook_event_name: "SessionStart", source: "resume", session_id: "native", cwd: "/workspace"};
+  const resumed = updateNativeContextLifecycle({state, event, new_epoch: "unused", pages: []});
+  assert.equal(resumed.context_epoch, "original");
+  assert.equal(resumed.pending, undefined);
+  assert.equal(resumed.candidate, undefined);
+  const compacted = updateNativeContextLifecycle({state: resumed,
+    event: {...event, hook_event_name: "PostCompact"}, new_epoch: "next", pages: []});
+  assert.equal(compacted.context_epoch, "next");
+  const repeated = updateNativeContextLifecycle({state: compacted,
+    event: {...event, source: "compact"}, new_epoch: "do-not-rotate-again", pages: []});
+  assert.deepEqual(repeated, compacted);
+});
+
+test("file delta recovery preserves inherited numeric leaves across sibling edits", () => {
+  const original = {body: long, state: {number: 1, a: false, b: false, c: false}, array: [0, "old"]};
+  const current = {...original, state: {...original.state, a: true, b: true, c: true}, array: [0, "new"]};
+  const baseline = full(original), complete = full(current, "capture-2");
+  const delta = prepareContextDelivery({context: current, scope, capture_id: "capture-2", baseline,
+    continuity: {basis: "captured_file", target: baseline.target, capture_bytes_verified: true}});
+  assert.equal(delta.mode, "delta");
+  const changes = delta.changes as {changed: Record<string, JsonObject>};
+  assert.deepEqual(changes.changed.state, {values: {a: true, b: true, c: true}});
+  assert.deepEqual(changes.changed.array, {items: {"1": {value: "new"}}});
+  const restored = restoreContextDelivery({delivery: delta, baseline, current: complete});
+  assert.equal(restored.mode, "delta");
+  assert.deepEqual(restored.context, current);
+});

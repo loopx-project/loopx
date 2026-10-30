@@ -2,7 +2,7 @@ import {prepareClaimExecution} from "./claim_execution.ts";
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import {currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
-import {canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
+import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit } from "./authority_store.ts";
@@ -219,6 +219,7 @@ export function evaluateCoordinationTodoClaimDecision(
   todo: JsonObject,
   input: CoordinationTodoClaimInput,
   activeLeaseOwner?: string | null,
+  expiredLeaseOwner?: string | null,
 ): CoordinationTodoClaimDecision {
   const registered = input.registered_agents;
   const owner = input.claimed_by;
@@ -236,10 +237,12 @@ export function evaluateCoordinationTodoClaimDecision(
   const existing = typeof todo.claimed_by === "string" && todo.claimed_by.length > 0
     ? normalizeTodoAgent(todo.claimed_by, "todo.claimed_by")
     : null;
-  // Cross-agent transfer requires an explicit handoff transfer grant.
+  // A managed hard-lease claim can replace the matching expired holder.
+  // This fact is derived from canonical state, never a caller bypass flag.
+  // Other cross-agent transfer requires an explicit handoff transfer grant.
   // The grant binds source owner, target owner, todo id, revision, and
   // current continuation-note facts; it can only be produced by the handoff
-  // flow. Without a valid grant, foreign-owner claims are always rejected.
+  // flow. Without expiry or a valid grant, foreign-owner claims are rejected.
   // The final claim authority reuses the shared validateContinuationNote so
   // the prepared-note invariant is enforced in one place: an arbitrary JSON
   // note with matching hash is rejected because it lacks the typed marker,
@@ -264,7 +267,7 @@ export function evaluateCoordinationTodoClaimDecision(
         && registered.includes(owner);
     }
     const leasedByOther = activeLeaseOwner !== undefined && activeLeaseOwner !== null && activeLeaseOwner === existing;
-    if (leasedByOther || !grantValid) {
+    if (leasedByOther || !(grantValid || expiredLeaseOwner === existing)) {
       return decisionFailure(
         "claim_owner_mismatch",
         "Todo is already claimed by another agent",
@@ -530,13 +533,20 @@ async function executeClaimAttempt(
     return failure("invalid_replan_successor_claim", "A successor must be open advancement work with a concrete action/target and unchanged causal identity");
   }
   const activeLeaseOwner = projection.leases.get(input.todo_id);
-  const activeLeaseActive = activeLeaseOwner !== undefined && leaseIsActive(activeLeaseOwner, input.now);
-  const activeLeaseHolder = activeLeaseActive && activeLeaseOwner !== undefined && typeof activeLeaseOwner.owner === "string"
-    ? normalizeTodoAgent(activeLeaseOwner.owner, "lease.owner")
-    : null;
   let authority: ReturnType<typeof evaluateCoordinationTodoClaimDecision>;
   try {
-    authority = evaluateCoordinationTodoClaimDecision(todo, input, activeLeaseHolder);
+    const activeLeaseActive = activeLeaseOwner !== undefined && leaseIsActive(activeLeaseOwner, input.now);
+    const activeLeaseHolder = activeLeaseActive && activeLeaseOwner !== undefined && typeof activeLeaseOwner.owner === "string"
+      ? normalizeTodoAgent(activeLeaseOwner.owner, "lease.owner")
+      : null;
+    let expiredLeaseHolder: string | null = null;
+    if (head.head.handoff_mode === "hard_lease" && input.manage_execution === true && activeLeaseOwner) {
+      const retained = canonicalTaskLease(activeLeaseOwner, input.goal_id, input.todo_id);
+      if (retained.status === "active" && !leaseIsActive(retained, input.now)) {
+        expiredLeaseHolder = normalizeTodoAgent(retained.owner, "lease.owner");
+      }
+    }
+    authority = evaluateCoordinationTodoClaimDecision(todo, input, activeLeaseHolder, expiredLeaseHolder);
   } catch (error) {
     return failure(
       "invalid_coordination_todo_claim",

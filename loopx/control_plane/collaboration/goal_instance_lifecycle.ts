@@ -61,6 +61,7 @@ export type CollaborationLifecycleDecision =
       | "route_instance_mismatch"
       | "historical_mutation_forbidden"
       | "initial_delivery_unproved";
+    delivery_proof_reason?: "handoff_receipt_conflict";
   }>;
 
 function operation(value: unknown): CollaborationOperation {
@@ -302,6 +303,19 @@ function decideExactLifecycle(
   }
 }
 
+function withOriginalRequestDiagnostic(
+  decision: CollaborationLifecycleDecision,
+  raw: JsonObject,
+  selectedOperation: CollaborationOperation,
+): CollaborationLifecycleDecision {
+  if (selectedOperation === "original_request_inspect" && decision.kind === "reject"
+      && decision.code === "initial_delivery_unproved"
+      && proveCommittedRequest(raw.initial_delivery).reason === "handoff_receipt_conflict") {
+    return { ...decision, delivery_proof_reason: "handoff_receipt_conflict" };
+  }
+  return decision;
+}
+
 export function decideCollaborationLifecycle(
   value: unknown,
 ): CollaborationLifecycleDecision {
@@ -314,7 +328,9 @@ export function decideCollaborationLifecycle(
   const selectedOperation = operation(raw.operation);
   if (raw.profile_id === null) {
     if (requiresRequestProof(selectedOperation) && !requestProof(raw, selectedOperation)) {
-      return { kind: "reject", code: "initial_delivery_unproved" };
+      return withOriginalRequestDiagnostic(
+        { kind: "reject", code: "initial_delivery_unproved" }, raw, selectedOperation,
+      );
     }
     return { kind: "legacy" };
   }
@@ -322,5 +338,7 @@ export function decideCollaborationLifecycle(
     return { kind: "reject", code: "unsupported_profile" };
   }
   const facts = lifecycleFacts(raw, selectedOperation);
-  return "operation" in facts ? decideExactLifecycle(facts) : facts;
+  return withOriginalRequestDiagnostic(
+    "operation" in facts ? decideExactLifecycle(facts) : facts, raw, selectedOperation,
+  );
 }

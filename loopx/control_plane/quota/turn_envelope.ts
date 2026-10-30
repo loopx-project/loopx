@@ -1465,7 +1465,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
-    return jsonObject(request.diagnostics) ? contextProjectionChanges(source, payload) : payload;
+    // References and diagnostic caps share one edit transport. Untouched facts
+    // stay in the original caller, including numbers JSON.parse cannot retain.
+    return contextProjectionChanges(source, payload);
   }
   if (operation === "build") return buildTurnEnvelope(request);
   if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);

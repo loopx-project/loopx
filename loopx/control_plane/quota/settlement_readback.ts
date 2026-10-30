@@ -34,6 +34,7 @@ import {
 import {
   isBoundedBlockedRetry,
   isAcceptedBlockedReplanWriteback,
+  isUnqualifiedBlockedReplanWriteback,
   qualifySettlementHistory,
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
@@ -1321,6 +1322,9 @@ function readQuotaSettlementFromRequest(
       run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
+    writeback.failure === null && spendRun === null && spendEvent === null &&
+      semanticReplanGuard.selected_obligation_id === identity.replan_obligation_id &&
+      isUnqualifiedBlockedReplanWriteback(writebackRun, identity),
   );
   // A non-material poll need not appear as findWriteback's advancement run.
   // Its exact committed observation still fences an incompatible unavailable

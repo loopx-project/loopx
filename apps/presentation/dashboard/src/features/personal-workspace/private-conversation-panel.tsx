@@ -179,6 +179,14 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
             : row.owner_attention.last_checked_at === null ? (zh ? "等待首次后台检查" : "Waiting for the first background check")
             : Date.now() / 1000 - row.owner_attention.last_checked_at > 120 ? (zh ? "后台检查尚未恢复，请确认管家服务正在运行。" : "Background checks have not resumed. Check that the steward service is running.")
             : (zh ? `后台自动检查中 · 待发 ${row.owner_attention.pending_count}` : `Background checks active · ${row.owner_attention.pending_count} pending`)}</p> : null}
+          {row.owner_attention.enabled && row.owner_attention.source_failures?.length ? <details>
+            <summary>{zh ? "查看不可读的 Goal" : "View unavailable Goals"}</summary>
+            <ul>{row.owner_attention.source_failures.map(source => <li key={source.goal_id} style={{overflowWrap: "anywhere"}}>
+              <strong>{source.goal_id}</strong>{" · "}{source.error_code === "canonical_authority_required"
+                ? (zh ? "原生待办数据尚未迁移；需由项目维护者先备份并迁移。" : "Native Todo data has not been migrated. The project maintainer must back up and migrate it first.")
+                : (zh ? "来源暂不可读；将自动重查，请检查原项目来源状态。" : "The source is unavailable and will be checked again. Check the original project source.")}
+            </li>)}</ul>
+          </details> : null}
           {row.owner_attention.unconfirmed_count > 0 ? <p role="status">{zh ? "有通知发送结果尚未确认；服务只恢复原回执，不重复发送。" : "A notification receipt is unconfirmed; the service recovers the original receipt without resending."}</p> : null}
         </> : <p role="status">{zh ? "自动通知状态尚未确认，请刷新后重试。" : "Automatic notification state is unavailable. Refresh to retry."}</p>}
       </div> : null}

@@ -115,46 +115,17 @@ def validate_model_catalog(model_catalog: Path, model: str) -> dict:
         )
     return entry
 
-def prepare_codex_home(
-    home: Path,
-    *,
-    execution: Execution,
-    workspace: Path,
-    model: str,
-    effort: str,
-    base_url: str,
-    api_key: str,
-    wire_api: str,
-    skills: Path | None,
-    web_search: str = "disabled",
-    model_catalog: Path | None = None,
-    model_catalog_destination: Path | None = None,
-) -> None:
-    """Materialize fixed inputs once; never delete sessions between iterations.
+def codex_settings(
+    *, execution: Execution, workspace: Path, model: str, effort: str,
+    base_url: str, wire_api: str, web_search: str = "disabled",
+    model_catalog: Path | None = None, model_catalog_destination: Path | None = None,
+) -> str:
+    """Render fixed settings for the worker and its fresh checkpoint receiver.
 
-    A different effective configuration requires a different trial. Secrets are
-    kept out of the settings identity and may rotate without resetting history.
-
-    ``model_catalog`` is required for slugs Codex does not ship built-in
-    (e.g. gateway aliases such as ``gpt-5.6-sol``). Without a catalog entry
-    Codex treats the model as unknown and offers a reduced tool surface, and
-    the ``web_search`` setting has no effect. A catalog entry is not
-    capability-only: it can select a tool mode and carry ``model_messages``
-    that become prompt content. Entries whose tool mode would strip the
-    function-tool surface (for example ``code_mode_only``, which makes the
-    real client send ``tools: []``) are rejected before a trial; qualify a
-    pinned binary/catalog pair at the first-request boundary with
-    ``benchmark.runtime.toolface`` before relying on the rendered tools.
-    Host-side installers may set ``model_catalog_destination`` to the absolute
-    guest path where those validated catalog bytes are staged. It affects only
-    rendering; the host source must still pass the same validation.
+    Rendering does not create a home, change a session or handle credentials.
     """
     if not model or not effort:
         raise ValueError("model and effort are required")
-    if base_url and not api_key:
-        raise ValueError("custom provider requires OPENAI_API_KEY")
-    if not base_url and not (home / "auth.json").is_file():
-        raise ValueError("provide a gateway and API key, or stage CODEX_AUTH_JSON_PATH")
     if wire_api not in {"responses", "chat"}:
         raise ValueError("unsupported provider wire_api")
     if web_search not in {"disabled", "cached", "live"}:
@@ -165,8 +136,7 @@ def prepare_codex_home(
         model_catalog is None or not model_catalog_destination.is_absolute()
     ):
         raise ValueError("catalog destination requires a validated catalog and an absolute guest path")
-    home.mkdir(parents=True, exist_ok=True)
-    settings = "\n".join(
+    return "\n".join(
         [
             f"model = {json.dumps(model)}",
             f"model_reasoning_effort = {json.dumps(effort)}",
@@ -213,6 +183,54 @@ def prepare_codex_home(
         )
         + [""]
     )
+
+
+def prepare_codex_home(
+    home: Path,
+    *,
+    execution: Execution,
+    workspace: Path,
+    model: str,
+    effort: str,
+    base_url: str,
+    api_key: str,
+    wire_api: str,
+    skills: Path | None,
+    web_search: str = "disabled",
+    model_catalog: Path | None = None,
+    model_catalog_destination: Path | None = None,
+) -> None:
+    """Materialize fixed inputs once; never delete sessions between iterations.
+
+    A different effective configuration requires a different trial. Secrets are
+    kept out of the settings identity and may rotate without resetting history.
+
+    ``model_catalog`` is required for slugs Codex does not ship built-in
+    (e.g. gateway aliases such as ``gpt-5.6-sol``). Without a catalog entry
+    Codex treats the model as unknown and offers a reduced tool surface, and
+    the ``web_search`` setting has no effect. A catalog entry is not
+    capability-only: it can select a tool mode and carry ``model_messages``
+    that become prompt content. Entries whose tool mode would strip the
+    function-tool surface (for example ``code_mode_only``, which makes the
+    real client send ``tools: []``) are rejected before a trial; qualify a
+    pinned binary/catalog pair at the first-request boundary with
+    ``benchmark.runtime.toolface`` before relying on the rendered tools.
+    Host-side installers may set ``model_catalog_destination`` to the absolute
+    guest path where those validated catalog bytes are staged. It affects only
+    rendering; the host source must still pass the same validation.
+    """
+    if not model or not effort:
+        raise ValueError("model and effort are required")
+    if base_url and not api_key:
+        raise ValueError("custom provider requires OPENAI_API_KEY")
+    if not base_url and not (home / "auth.json").is_file():
+        raise ValueError("provide a gateway and API key, or stage CODEX_AUTH_JSON_PATH")
+    settings = codex_settings(
+        execution=execution, workspace=workspace, model=model, effort=effort,
+        base_url=base_url, wire_api=wire_api, web_search=web_search,
+        model_catalog=model_catalog, model_catalog_destination=model_catalog_destination,
+    )
+    home.mkdir(parents=True, exist_ok=True)
     config = home / "config.toml"
     if config.exists() and config.read_text(encoding="utf-8") != settings:
         raise ValueError("Codex settings changed within a trial; use a new trial")

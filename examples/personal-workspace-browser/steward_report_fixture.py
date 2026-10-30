@@ -1,7 +1,7 @@
 """Disposable packaged UI + native HTTP/Core fixture; model/provider are synthetic.
 
 Run with the project's development dependencies and --output-dir outside Git.
-The two control files change synthetic provider readiness or start the existing
+Control files change synthetic provider readiness or start the existing
 host wake/outbound owners. No real account, Goal, workspace or listener is used.
 """
 from __future__ import annotations
@@ -22,11 +22,16 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--baseline-assets-dir", type=Path)
     parser.add_argument("--invalid-editorial", action="store_true", help="Return a known invalid synthetic report to inspect owner cancellation and retained failure.")
-    parser.add_argument("--managed-session", action="store_true", help="Exercise ordinary Goal Session native work with the existing task validator, instead of a scheduled report.")
-    parser.add_argument("--managed-report", action="store_true", help="Configure a calendar report for an existing local Agent Session through the packaged Goal settings.")
+    parser.add_argument("--host-failure", action="store_true", help="Fail the synthetic native model before an editorial result; retain the original window without retry authority.")
+    journey = parser.add_mutually_exclusive_group()
+    journey.add_argument("--managed-session", action="store_true", help="Exercise ordinary Goal Session native work with the existing task validator, instead of a scheduled report.")
+    journey.add_argument("--managed-report", action="store_true", help="Configure a calendar report for an existing local Agent Session through the packaged Goal settings.")
+    journey.add_argument("--managed-calendar-task", choices=("file", "sqlite"), help="Repeat a completed, independently validated Task through the real calendar and packaged Goal settings.")
     args = parser.parse_args()
-    if args.managed_session and args.managed_report:
-        parser.error("select one managed Session fixture journey")
+    if args.host_failure and (args.invalid_editorial or args.managed_session or args.managed_calendar_task):
+        parser.error("select the pre-editorial report failure journey alone")
+    if args.invalid_editorial and (args.managed_session or args.managed_calendar_task):
+        parser.error("editorial failure requires a report journey")
     repo = Path(__file__).resolve().parents[2]
     sys.path[:0] = [str(repo), str(repo / "tests")]
     from test_native_steward_private import steward
@@ -47,13 +52,32 @@ def main() -> None:
         data = next(fixture)
         store, runtime, provider, transport, binding, capture, workspace = data
         managed_session = None
-        if args.managed_report:
+        local_owner = None
+        if args.managed_calendar_task:
+            import pytest
+            from test_managed_session_calendar_tasks import setup_task
+            from loopx.configure_goal import configure_goal
+            from loopx.capabilities.native_chat.session_calendar_tasks import SessionCalendarTasks
+            monkeypatch = pytest.MonkeyPatch()
+            managed_session, actor, _, capture, task_workspace, configuration = setup_task(
+                data, root, monkeypatch, args.managed_calendar_task)
+            sid, managed = managed_session["session_id"], transport.managed_steward
+            local_tasks = SessionCalendarTasks(runtime)
+            local_owner = local_tasks
+            managed_todo_id = configuration["task"]["source_todo_id"]
+            configuration = {**configuration, "schedule": {**configuration["schedule"], "start_date": "2999-01-01"}}
+            configure_goal(registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+                periodic_report_configuration={**configuration, "enabled": False}, execute=True)
+            artifact = task_workspace / "total.json"
+            artifact.unlink()  # The next period must produce and validate its own artifact.
+        elif args.managed_report:
             import pytest
             from test_native_steward_reports import configured_local_report
             from loopx.configure_goal import configure_goal
             monkeypatch = pytest.MonkeyPatch()
             managed_session, local_reports, configuration, managed_todo_id = configured_local_report(
                 data, root, monkeypatch, "sqlite", start_date="2999-01-01")
+            local_owner = local_reports
             sid = managed_session["session_id"]
             actor = local_reports.selected(sid)["actor"]
             managed = transport.managed_steward
@@ -73,7 +97,23 @@ def main() -> None:
             actor = managed.prepare(binding["binding_id"], session_id=sid, execute=True,
                 expected_plan_id=plan["plan_id"])["actor"]
             install_model(data, root, sid)
+        if managed_session:
+            from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports
+            # A seed helper also prepares a private steward. This journey uses
+            # the returned local Session, not that separate preparation actor.
+            local_owner = local_owner or ManagedSessionReports(runtime)
+            sid = managed_session["session_id"]
+            actor = local_owner.selected(sid)["actor"]
         transport.reconcile()
+        if args.host_failure:
+            from loopx.chat_agent import CodexChatAgentError
+            from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+            def fail_report(_adapter, _prompt, event_sink):
+                event_sink("turn.started", {"upstream_turn_id": "synthetic-unknown-report"})
+                raise CodexChatAgentError("Synthetic report host failure.")
+
+            CodexAppServerAdapter.start_turn = fail_report
         if args.invalid_editorial:
             helper = root / "report_model.py"
             helper.write_text(helper.read_text().replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
@@ -106,31 +146,104 @@ def main() -> None:
             "fixture_pid": os.getpid(),
             "binding_id": binding["binding_id"], "session_id": sid,
             **({"managed_session_id": managed_session["session_id"], "goal_id": actor["goal_id"],
-                "managed_todo_id": managed_todo_id} if managed_session else {})}))
+                "managed_todo_id": managed_todo_id} if managed_session else {}),
+            **({"authority_provider": args.managed_calendar_task,
+                "calendar_task_configuration": configuration} if args.managed_calendar_task else {})}))
         wake, outbound, delivery = None, None, None
+        owner_start_count = 0
+        restart_tokens = set()
+        restart_refusals = set()
         try:
             while not stop.wait(.2):
                 server.assets_dir = current_assets if (output / "use-current-assets").exists() else baseline_assets
                 provider.owner_ready = not (output / "provider-unavailable").exists()
-                if wake is None and (output / "start-existing-owners").exists():
+                owners_stopped = (output / "stop-existing-wake").exists()
+                if owners_stopped and wake:
+                    wake.close()
+                    wake = None
+                restart_file = output / "restart-runtime"
+                restart_token = restart_file.read_text().strip() if restart_file.is_file() else None
+                if (args.managed_calendar_task and restart_token
+                        and restart_token not in restart_tokens | restart_refusals):
+                    with runtime.lock:
+                        restart_busy = (not owners_stopped or store.load_session(sid).get("active_turn_id")
+                            or any(not done.is_set() for done in runtime.turn_done_events.values()))
+                    if restart_busy:
+                        restart_refusals.add(restart_token)
+                        (output / "restart-rejected.json").write_text(json.dumps({
+                            "operation": restart_token, "reason": "stop_wake_and_await_original_work",
+                            "session_id": sid, "runtime_restarted": False, "synthetic_only": True}))
+                if (args.managed_calendar_task and restart_token
+                        and restart_token not in restart_tokens | restart_refusals):
+                    # Disposable QA only: reconstruct the normal controller over
+                    # its original physical state, never reseed the fixture or
+                    # retain a second wake/model owner across the restart.
+                    from loopx.chat_actions import ChatActionService
+                    from loopx.chat_action_store import ChatActionStore
+                    from loopx.chat_runtime import ChatRuntimeController
+                    from loopx.chat_store import ChatSessionStore
+                    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+                    history, prior_session = store.messages(sid), store.load_session(sid)
+                    prior_calls, prior_writes = capture.read_bytes(), list(provider.writes)
+                    server.shutdown()
+                    old_runtime = runtime
+                    old_runtime.close()
+                    store = ChatSessionStore(store.root.parent)
+                    runtime = ChatRuntimeController(store=store, codex_bin=old_runtime.codex_bin,
+                        project_contexts=old_runtime.project_contexts, registry_path=old_runtime.registry_path)
+                    transport = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                        runner=provider, cli_bin="lark-cli")
+                    runtime.manager_scope_resolver = transport.bindings.steward_scope
+                    transport.core.actions = ChatActionService(store=ChatActionStore(store.root / "actions"),
+                        registry_path=runtime.registry_path, chat_store=store, runtime_controller=runtime,
+                        workspace_roots=[workspace])
+                    local_tasks = SessionCalendarTasks(runtime)
+                    local_owner = local_tasks
+                    server.chat_store, server.runtime_controller = store, runtime
+                    server.lark_private_conversations = transport
+                    server.action_service, server.action_store = transport.core.actions, transport.core.actions.store
+                    threading.Thread(target=server.serve_forever, daemon=True).start()
+                    assert old_runtime.closed.is_set()
+                    assert store.load_session(sid) == prior_session and store.messages(sid) == history
+                    assert local_owner.selected(sid)["actor"] == actor
+                    assert capture.read_bytes() == prior_calls and provider.writes == prior_writes
+                    restart_tokens.add(restart_token)
+                    (output / "restart-readback.json").write_text(json.dumps({
+                        "operation": restart_token, "runtime_restarts": len(restart_tokens),
+                        "session_id": sid, "actor": actor, "message_count": len(history),
+                        "prior_runtime_closed": True, "history_and_identity_preserved": True,
+                        "model_or_delivery_replayed": False, "synthetic_only": True}))
+                if wake is None and not owners_stopped and (output / "start-existing-owners").exists():
                     wake = DelegationWakeService(runtime, interval=.1).start()
-                    if not args.managed_report:
+                    owner_start_count += 1
+                    if not (args.managed_report or args.managed_calendar_task) and outbound is None:
                         outbound = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {},
                             runtime_root=runtime.coordination_runtime_root, runtime_controller=runtime,
                             private_conversations=transport)
                         delivery = threading.Thread(target=outbound._reconcile_private)
                         delivery.start()
+                calendar_health = local_tasks.health(sid) if args.managed_calendar_task else None
                 (output / "observed.json").write_text(json.dumps({
-                    "report": local_reports.health(sid) if args.managed_report else StewardReports(runtime).health(binding["binding_id"]),
-                    "same_actor": local_reports.selected(sid)["actor"] == actor if args.managed_report else managed.health(binding["binding_id"])["session_id"] == actor["session_id"],
+                    "report": local_reports.health(sid) if args.managed_report else None if args.managed_calendar_task else StewardReports(runtime).health(binding["binding_id"]),
+                    "same_actor": local_owner.selected(sid)["actor"] == actor if local_owner else managed.health(binding["binding_id"])["session_id"] == actor["session_id"],
                     "history_prefix_retained": store.messages(sid)[:len(before_messages)] == before_messages,
                     "model_call_count": sum(json.loads(line).get("method") == "turn/start"
                         for line in capture.read_bytes()[len(before_calls):].splitlines()),
                     "provider_writes": len(provider.writes),
+                    "private_outbound_alive": delivery.is_alive() if delivery else None,
+                    "private_ingress": transport.ingress.health(binding["binding_id"]),
+                    "provider_history_pages": sum("+chat-messages-list" in call for call in provider.calls),
+                    "existing_wake_owner_running": wake is not None,
+                    "existing_wake_owner_starts": owner_start_count,
+                    "runtime_restarts": len(restart_tokens),
+                    "runtime_restart_rejections": len(restart_refusals),
                     **({"managed_source_present": artifact.exists(),
                         "managed_session": store.load_session(managed_session["session_id"])} if args.managed_session else {}),
                     **({"managed_report": True,
                         "managed_session": store.load_session(managed_session["session_id"])} if args.managed_report else {}),
+                    **({"calendar_task": calendar_health,
+                        "calendar_artifact": json.loads(artifact.read_text()) if calendar_health.get("completion_verified") else None,
+                        "managed_session": store.load_session(sid)} if args.managed_calendar_task else {}),
                     "synthetic_only": True}, ensure_ascii=False))
         finally:
             if wake:

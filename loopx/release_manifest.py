@@ -155,7 +155,7 @@ def build_release_manifest(
     archive_url = source_env.get("LOOPX_ARCHIVE_URL") or source_metadata.get("archive_url")
     archive_sha256 = source_env.get("LOOPX_ARCHIVE_SHA256") or source_metadata.get("archive_sha256")
     repo = source_env.get("LOOPX_REPO") or source_metadata.get("repo")
-    ref = source_env.get("LOOPX_REF") or source_metadata.get("ref")
+    ref = source_env.get("LOOPX_UPDATE_CHANNEL") or source_env.get("LOOPX_REF") or source_metadata.get("ref")
     source_kind = "github_archive" if archive_url else (source_metadata.get("kind") or "local_checkout")
     promotion_mode = source_env.get("LOOPX_PROMOTION_MODE") or source_metadata.get("promotion_mode")
     skills_root = release_root / "skills"

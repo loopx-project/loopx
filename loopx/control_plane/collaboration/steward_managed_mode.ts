@@ -43,10 +43,22 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       && coverage.discovered === null && coverage.verified === 0 && coverage.complete === false
       && context.authorization_scope_id === undefined;
   }
+  // A provider identity read may fail inside the original read-only context
+  // collector, before it publishes any context. Retained legacy errors have no
+  // typed failure code: require the collector's exact phase independently of
+  // the error, plus the strict no-effect evidence below. Current binding and
+  // provider verification still run before a new carrier can be accepted.
+  const identityRefused = original.error_code === "runtime_error"
+    && original.error === "the selected App identity could not be verified"
+    && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
+    && Array.isArray(basis.contexts) && basis.contexts.length === 0
+    && Array.isArray(basis.phases) && basis.phases.length === 1
+    && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
+    && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused)
+      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused || identityRefused)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
@@ -84,6 +96,16 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
   const lineage = requireJsonObject(receipt.lineage, "original report lineage");
   const keys = Object.keys(request).filter(key => key !== "report_quota_recovery");
   const accepting = params.turn == null && params.report_settlement_recovery == null;
+  const history = session.upstream_context_history ?? [];
+  if (!Array.isArray(history)) throw new EffectRuntimeRequestError("invalid native context provenance");
+  const nativeThreads = [session.upstream_thread_id, ...history.map(value => {
+    const item = requireJsonObject(value, "native context provenance");
+    if (item.manager_context_version !== null && (!Number.isSafeInteger(item.manager_context_version)
+        || Number(item.manager_context_version) < 0)) {
+      throw new EffectRuntimeRequestError("invalid native context provenance");
+    }
+    return requireNonEmptyString(item.thread_id, "original native context thread");
+  })];
   if (request.work_kind !== "report" || prior.work_kind !== "report" || prior.report_quota_recovery !== undefined
       || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
       || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
@@ -107,7 +129,7 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || ["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].some(key => inspection[key] !== true)
       || inspection.journal_status !== "failed"
       || ![null, true].includes(recorded.host_invoked as null | boolean)
-      || observation.thread_id !== session.upstream_thread_id || typeof observation.thread_id !== "string" || !observation.thread_id
+      || !nativeThreads.includes(observation.thread_id) || typeof observation.thread_id !== "string" || !observation.thread_id
       || observation.turn_id !== original.upstream_turn_id || observation.only_original_user_item !== true
       || observation.codex_error_info !== "usageLimitExceeded" || observation.quota_available !== true
       || typeof observation.quota_observed_at !== "number" || !Number.isFinite(observation.quota_observed_at)

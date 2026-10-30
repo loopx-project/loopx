@@ -367,7 +367,13 @@ def probe_quota_run_decision_production(vocabulary: dict[str, Any]) -> list[Prod
 SETTLEMENT_IDENTITY_LINE = 408
 QUOTA_RUN_DECISION_SITE = 'loopx/control_plane/quota/run_decision.ts::resolveQuotaRunDecision'
 
+def _probe_turn_routes(vocabulary: dict[str, Any]) -> list[Production]:
+    from .turn_contract_witness import probe_route_production
+    return probe_route_production()
+
+
 INPUT_WITNESSES: dict[str, Callable[[dict[str, Any]], list[Production]]] = {
+    'loopx/control_plane/turn_driver/driver.py::_typed_route': _probe_turn_routes,
     QUOTA_RUN_DECISION_SITE: probe_quota_run_decision_production,
     'loopx/control_plane/turn_driver/transaction.py::_result_kind': probe_turn_result_input_domain,
     'loopx/control_plane/turn_driver/loop_controller.py::decide_loop_disposition': _probe_controller_domain,

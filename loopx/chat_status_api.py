@@ -53,15 +53,21 @@ from .status_server import (
 from .control_plane.todos.list_readback import list_goal_todos
 
 
-def _status_runtime_root(server: Any) -> str | None:
-    """Registered work follows the same authority as the Chat coordinator."""
+def goal_read_runtime_root(server: Any) -> str | None:
+    """Keep registry source routing; Chat storage is only an unbound fallback."""
+    registry = _discovery_registry(server.registry_path)
+    if registry.get("common_runtime_root"):
+        # Passing the coordinator's resolved root as an explicit override
+        # suppresses the collector's per-Goal source_registry routing. A
+        # global directory may contain Goals owned by different runtimes.
+        return None
     controller = getattr(server, "runtime_controller", None)
     root = getattr(controller, "coordination_runtime_root", None)
     return str(root) if root is not None else server.runtime_root_override
 
 
 def _goal_task_map(server: Any, goal_id: str) -> dict[str, Any] | None:
-    runtime_root = _status_runtime_root(server)
+    runtime_root = goal_read_runtime_root(server)
     source_read_at = now_utc_iso()
     try:
         listed = list_goal_todos(
@@ -205,7 +211,7 @@ class ChatStatusRequestMixin(ExtensionPresentationRequestMixin):
             )
             return
         try:
-            status_runtime_root = _status_runtime_root(self.server)
+            status_runtime_root = goal_read_runtime_root(self.server)
             registry = {}
             if views is not None or requested_goals is not None or delivery_review:
                 # Discovery reads only metadata. Full status/runtime reads keep

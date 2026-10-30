@@ -239,28 +239,6 @@ def _lane_id(todo_id: str, *, index: int) -> str:
     return f"branch_{index}_{todo_id.removeprefix('todo_')}"
 
 
-def _lease_command(
-    *,
-    goal_id: str,
-    todo_id: str,
-    agent_id: str | None,
-    write_scopes: Sequence[str],
-) -> str | None:
-    owner = normalize_todo_claimed_by(agent_id)
-    if not owner:
-        return None
-    parts = [
-        "loopx task-lease acquire",
-        f"--goal-id {goal_id}",
-        f"--todo-id {todo_id}",
-        f"--owner {owner}",
-        f"--idempotency-key branch-plan:{goal_id}:{todo_id}",
-    ]
-    for scope in write_scopes:
-        parts.append(f"--write-scope {scope}")
-    return " ".join(parts)
-
-
 def _claim_command(*, goal_id: str, todo_id: str, agent_id: str | None) -> str | None:
     owner = normalize_todo_claimed_by(agent_id)
     if not owner:
@@ -523,6 +501,7 @@ def build_explore_todo_branch_plan(
             branch_index = len(selected)
             role = "primary" if branch_index == 0 else "speculative"
             selected_in_lane = selected_by_resource_lane.get(resource_lane, 0) + 1
+            claim_command = _claim_command(goal_id=goal_id, todo_id=todo_id, agent_id=normalized_agent)
             selected_candidate = {
                 **candidate,
                 "selection_status": "selected",
@@ -533,19 +512,7 @@ def build_explore_todo_branch_plan(
                     "verify and write back before keeping this branch; discard or convert "
                     "to successor todo if evidence does not advance the exploration"
                 ),
-                "suggested_commands": [
-                    command
-                    for command in (
-                        _claim_command(goal_id=goal_id, todo_id=todo_id, agent_id=normalized_agent),
-                        _lease_command(
-                            goal_id=goal_id,
-                            todo_id=todo_id,
-                            agent_id=normalized_agent,
-                            write_scopes=scopes,
-                        ),
-                    )
-                    if command
-                ],
+                "suggested_commands": [claim_command] if claim_command else [],
             }
             assignment = resource_assignment(
                 resource_portfolio,

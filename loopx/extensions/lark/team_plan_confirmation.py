@@ -26,6 +26,7 @@ from .card_callback import (
     read_callback_card_content as _read_callback_card_content,
     update_callback_card as _update_callback_card,
 )
+from .event_collector_runtime import EVENT_DIAGNOSTIC_PREFIX
 from .goal_channel_contracts import (
     binding_for_goal,
     bindings_for_goal,
@@ -64,7 +65,6 @@ from .presentation.team_plan import (
 
 
 TEAM_PLAN_CALLBACK_RECEIPT_SCHEMA_VERSION = "lark_team_plan_callback_receipt_v0"
-_EVENT_DIAGNOSTIC_PREFIX = "[event] "
 
 ProcessFactory = Callable[[list[str]], Any]
 ReviewCallbackHandler = Callable[[Mapping[str, Any]], Mapping[str, Any]]
@@ -191,7 +191,7 @@ def start_team_plan_review_callback_stream(
             if local_stop.is_set() or parent_stop.is_set():
                 return
             stripped = callback_line.strip()
-            if stripped.startswith(_EVENT_DIAGNOSTIC_PREFIX):
+            if stripped.startswith(EVENT_DIAGNOSTIC_PREFIX):
                 continue
             try:
                 callback_event = json.loads(callback_line)

@@ -475,9 +475,14 @@ This contract authorizes only the runner-owned
 the authorization id and digest and carry the same non-empty subset of declared
 variable names. Shell `env`, `printenv`, and filtered enumeration remain credential
 probes: even an absolute executable path can be replaced by an exported shell
-function. The runner must still attest `provider_credential_shell_excluded=true`; an
-undeclared name, mismatched typed result, provider credential value, or missing
-isolation attestation remains disqualifying. The receipt publishes only the
+function. When no task-environment contract is declared, a probe that exposes no
+credential value is retained as a restricted-access suspicion for post-run review;
+the probe alone does not disqualify the run. Once an exact contract is declared,
+broad environment enumeration or any access outside the typed operation violates
+that contract and remains disqualifying. The runner must still attest
+`provider_credential_shell_excluded=true`; an undeclared name, mismatched typed
+result, observed provider credential value, or missing isolation attestation remains
+disqualifying. The receipt publishes only the
 authorization id and digest, purpose, counts and a digest of sorted variable names.
 Raw names and values remain in the private trajectory. The declaration must be
 derived from the immutable benchmark task contract; the toolkit validates its bounded
@@ -527,8 +532,8 @@ Qualification rejects a run when it detects any of the following:
 - post-run agent confirmation that restricted answer, out-of-scope task-source,
   hidden-test, verifier, other-trial, or controller-private material was both
   disclosed and causally used during solving or validation;
-- host escape, credential probing outside an exact task-environment contract,
-  credential exposure, or shell network access;
+- confirmed host escape, credential exposure, shell network access, or environment
+  access that violates a declared exact task-environment contract;
 - malformed or incomplete ATIF tool evidence;
 - missing runner authority or any required runtime isolation attestation.
 

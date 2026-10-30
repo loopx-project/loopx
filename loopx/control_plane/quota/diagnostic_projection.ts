@@ -5,19 +5,16 @@
  * decision. This projection grants no admission or execution authority.
  */
 import type {JsonObject} from "../effect_program.ts";
-import {jsonObject} from "../runtime_decode.ts";
+import {jsonObject, sourceNumberTokens} from "../runtime_decode.ts";
 import {TODO_CANONICAL_READ_RECORD_FIELDS} from "../coordination/coordination_state_contract.ts";
-import {canonicalAuthorityJson} from "../coordination/authority_store_codec.ts";
+import {canonicalAuthorityJson, authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 
 type ProjectionPath = (string | number)[];
 type ProjectionChange = {path: ProjectionPath; value: unknown} |
   {path: ProjectionPath; from: ProjectionPath} | {path: ProjectionPath; remove: true};
 
-/** Return only display edits, never round-trip unrelated source facts through
- * JavaScript numbers. References address the immutable input, including bodies
- * moved into source_projection. Python applies these edits without policy. */
-export function contextProjectionChanges(source: JsonObject, projected: JsonObject): JsonObject {
-  const paths = new WeakMap<object, ProjectionPath>(), changes: ProjectionChange[] = [];
+function contextObjectPaths(source: JsonObject): WeakMap<object, ProjectionPath> {
+  const paths = new WeakMap<object, ProjectionPath>();
   const index = (value: unknown, path: ProjectionPath): void => {
     if (value === null || typeof value !== "object" || paths.has(value)) return;
     paths.set(value, path);
@@ -25,14 +22,48 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
     else Object.entries(value).forEach(([key, item]) => index(item, [...path, key]));
   };
   index(source, []);
-  const visit = (before: unknown, after: unknown, path: ProjectionPath): void => {
+  return paths;
+}
+
+/** Sparse IO number spellings distinguish facts already rounded by JSON.parse.
+ * This is source identity for pure projection, not a second decision owner or
+ * a new hash codec. Native JS callers need no metadata. Never copy full bodies
+ * just to decide whether two registered carriers can share their source. */
+export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
+    (value: unknown, path: ProjectionPath) => string {
+  if (supplied === undefined) return value => JSON.stringify(canonicalAuthorityJson(value));
+  const tokens = sourceNumberTokens(source, supplied);
+  const paths = contextObjectPaths(source);
+  return (value, path) => {
+    const original = value !== null && typeof value === "object" ? paths.get(value) : undefined;
+    const prefix = original ?? path;
+    const relative = tokens.filter(item => prefix.every((key, i) => item.path[i] === key))
+      .map(item => [item.path.slice(prefix.length), item.token]);
+    // Sort encoded relative paths, so original object insertion order is not
+    // mistaken for a content difference. Keep token strings separate from data.
+    relative.sort((left, right) => authorityUnicodeCompare(JSON.stringify(left[0]), JSON.stringify(right[0])));
+    return JSON.stringify([canonicalAuthorityJson(value), relative]);
+  };
+}
+
+/** Return only display edits, never round-trip unrelated source facts through
+ * JavaScript numbers. References address the immutable input, including bodies
+ * moved into source_projection. Python applies these edits without policy. */
+export type ProjectionSourceValues = WeakMap<object, Map<string, ProjectionPath>>;
+
+export function contextProjectionChanges(source: JsonObject, projected: JsonObject,
+    sourceValues?: ProjectionSourceValues): JsonObject {
+  const paths = contextObjectPaths(source), changes: ProjectionChange[] = [];
+  const visit = (before: unknown, after: unknown, path: ProjectionPath, parent?: object): void => {
+    const original = parent && sourceValues?.get(parent)?.get(String(path.at(-1)));
+    if (original) { changes.push({path, from: original}); return; }
     if (Object.is(before, after)) return;
     const from = after !== null && typeof after === "object" ? paths.get(after) : undefined;
     if (from) { changes.push({path, from}); return; }
     if (Array.isArray(after)) {
       const old = Array.isArray(before) ? before : [];
       if (!Array.isArray(before)) changes.push({path, value: []});
-      after.forEach((value, i) => visit(old[i], value, [...path, i]));
+      after.forEach((value, i) => visit(old[i], value, [...path, i], after));
       // Remove from the end so earlier indices retain their original meaning.
       for (let i = old.length - 1; i >= after.length; i--) changes.push({path: [...path, i], remove: true});
     } else if (jsonObject(after)) {
@@ -41,11 +72,31 @@ export function contextProjectionChanges(source: JsonObject, projected: JsonObje
       for (const key of Object.keys(old))
         if (!Object.hasOwn(after as JsonObject, key)) changes.push({path: [...path, key], remove: true});
       for (const [key, value] of Object.entries(after as JsonObject))
-        visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key]);
+        visit(Object.hasOwn(old, key) ? old[key] : undefined, value, [...path, key], after as object);
     } else changes.push({path, value: after});
   };
   visit(source, projected, []);
   return {changes};
+}
+
+/** Compare a pure edit result using the same original number spellings.
+ * References are IO lineage, not an alternate context/hash or decision owner. */
+export function contextProjectionIdentity(source: JsonObject, projected: JsonObject,
+    supplied?: unknown, sourceValues?: ProjectionSourceValues): string {
+  if (supplied === undefined) return JSON.stringify(canonicalAuthorityJson(projected));
+  // Validate every supplied path/token before deriving identities from it.
+  contextSourceIdentity(source, supplied);
+  const tokens = supplied as [ProjectionPath, string][];
+  const result: [ProjectionPath, string][] = [];
+  const edits = contextProjectionChanges(source, projected, sourceValues).changes as ProjectionChange[];
+  for (const edit of edits) {
+    if (!("from" in edit)) continue;
+    for (const [path, token] of tokens) {
+      if (edit.from.every((key, i) => path[i] === key))
+        result.push([[...edit.path, ...path.slice(edit.from.length)], token]);
+    }
+  }
+  return contextSourceIdentity(projected, result)(projected, []);
 }
 
 const AGENT_LIMITS: Readonly<Record<string, number>> = {

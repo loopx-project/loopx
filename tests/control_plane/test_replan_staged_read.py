@@ -165,7 +165,7 @@ def assert_explore_entry_and_writer(source, entry, writer):
     assert "result_attachment_template" not in graph
     # These obligations apply BEFORE choosing or executing work, not at closeout.
     assert "Read measurement_feedback before repeating a measured route" in graph["result_writeback_guidance"]
-    assert "keep the active task lease through refresh-state" in graph["result_writeback_guidance"]
+    assert "keep its claimed execution through refresh-state" in graph["result_writeback_guidance"]
     assert "Keep raw logs local." in graph["result_writeback_guidance"]
     assert "Capture is optional, not a settlement obligation." in graph["result_writeback_guidance"]
     assert "never invent a shared version" in graph["result_writeback_guidance"]

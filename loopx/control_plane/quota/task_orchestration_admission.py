@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from typing import Any
 
 from ..agents.capability_gate import missing_required_capabilities
 from ..agents.runtime_model import peer_work_key, select_peer_for_work
+from ..effect_runtime import effect_runtime_result
 from ..todos.contract import (
     normalize_required_capabilities,
     normalize_required_write_scopes,
@@ -472,37 +472,19 @@ def _write_scopes_conflict(
     left: _NormalizedAdmissionLane,
     right: _NormalizedAdmissionLane,
 ) -> bool:
+    """Consume the scheduling overlap decision owned by the canonical lease module."""
+
     if not left.required_write_scopes or not right.required_write_scopes:
         return False
     if left.effective_repository != right.effective_repository:
         return False
-    return any(
-        _scope_patterns_overlap(left_scope, right_scope)
-        for left_scope in left.required_write_scopes
-        for right_scope in right.required_write_scopes
+    decision = effect_runtime_result(
+        "quota.task_orchestration.write_scope_overlap",
+        {
+            "left": list(left.required_write_scopes),
+            "right": list(right.required_write_scopes),
+        },
     )
-
-
-def _scope_patterns_overlap(left: str, right: str) -> bool:
-    if left == right or fnmatchcase(left, right) or fnmatchcase(right, left):
-        return True
-    left_prefix = _scope_static_prefix(left)
-    right_prefix = _scope_static_prefix(right)
-    return bool(
-        left_prefix
-        and right_prefix
-        and (
-            left_prefix == right_prefix
-            or left_prefix.startswith(f"{right_prefix}/")
-            or right_prefix.startswith(f"{left_prefix}/")
-        )
-    )
-
-
-def _scope_static_prefix(scope: str) -> str:
-    parts: list[str] = []
-    for part in str(scope or "").strip("/").split("/"):
-        if any(marker in part for marker in ("*", "?", "[")):
-            break
-        parts.append(part)
-    return "/".join(parts)
+    if not isinstance(decision, dict) or not isinstance(decision.get("overlap"), bool):
+        raise RuntimeError("quota scheduling write-scope decision shape mismatch")
+    return bool(decision["overlap"])

@@ -33,6 +33,29 @@ def outcome(document):
     return document["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"][0]
 
 
+def test_full_native_reference_reuses_the_committed_recovery(tmp_path, monkeypatch):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.turn_driver import decision_capture
+
+    setup(tmp_path, monkeypatch)
+    original, full = project(tmp_path, payload=payload())
+    recovery = full["recovery"]
+    saved = Path(recovery["path"]).read_bytes()
+
+    def unexpected_publication(*args, **kwargs):
+        pytest.fail("Full presentation must reuse its already committed recovery")
+
+    monkeypatch.setattr(decision_capture, "write_decision_capture", unexpected_publication)
+    view = native_context_capture_view(full, Path(recovery["path"]).parent,
+        context_directory=str(tmp_path))
+    assert (view["path"], view["sha256"]) == (recovery["path"], recovery["sha256"])
+    assert Path(view["path"]).read_bytes() == saved
+    pages = read_pages(tmp_path, full)
+    assert json.loads("".join(page["content"] for page in pages)) == full["context"]
+    details = full["context"]["context_details"]
+    assert json.loads(Path(details["path"]).read_bytes()) == original
+
+
 def test_cold_warm_and_repeated_compaction_keep_requirements_without_replaying_material(tmp_path, monkeypatch):
     event = setup(tmp_path, monkeypatch)
     original = payload()
@@ -76,8 +99,10 @@ def test_cold_warm_and_repeated_compaction_keep_requirements_without_replaying_m
         assert "Do not replay read context or rerun admission solely" in result["hookSpecificOutput"]["additionalContext"]
         assert "Previous failure" not in json.dumps(result)
     _, fresh = project(tmp_path, "fresh", payload={**original, "stop": "Stop all delivery."})
-    assert fresh["mode"] == "full" and fresh["context"]["stop"] == "Stop all delivery."
-    assert fresh["context"]["capability_gate"] == original["capability_gate"]
+    assert fresh["mode"] == "full"
+    current = json.loads(Path(fresh["recovery"]["path"]).read_bytes())
+    assert current["stop"] == "Stop all delivery."
+    assert current["capability_gate"] == original["capability_gate"]
     assert json.loads(Path(archive["path"]).read_bytes()) == original
 
 
@@ -122,7 +147,17 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
             key: journal[key] for key in ("path", "sha256")}
         argv = shlex.split(view["recovery"]["command"])
         if output_limit is not None:
+            assert len((json.dumps(view, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
             assert int(argv[argv.index("--max-page-output-bytes") + 1]) <= output_limit
+            # Discovery and selection remain usable from the complete current
+            # recovery, independently of optional shortcut command fields.
+            code, index = _run_cli(registry, runtime, *argv[argv.index("quota"):], "--list", cwd=tmp_path)
+            assert code == 0 and index["ok"], index
+            fields = json.loads(index["content"])["selections"][0]["fields"]
+            assert {"/stop", "/heartbeat_receipt"} <= {field["pointer"] for field in fields}
+            code, selected = _run_cli(registry, runtime, *argv[argv.index("quota"):], "--select", "/stop", cwd=tmp_path)
+            assert code == 0 and selected["ok"], selected
+            assert json.loads(selected["content"])["selections"][0]["value"] == original["stop"]
         pages, combined = [], b""
         while True:
             code, recovered = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=tmp_path)
@@ -148,11 +183,14 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
         deliver(tmp_path, event, recovered)
         assert context._state(tmp_path)["candidate"]["capture_file"] == view["recovery"]["path"]
         code, warm = _run_cli(registry, runtime, *command, cwd=tmp_path)
-        assert code == 0 and warm["target"]["context_epoch"] == view["target"]["context_epoch"], warm
+        assert code == 0 and warm["ok"], warm
+        if "target" in warm:
+            assert warm["target"]["context_epoch"] == view["target"]["context_epoch"]
         check_recovery(warm)
         context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
         code, compacted = _run_cli(registry, runtime, *command, cwd=tmp_path)
-        assert code == 0 and compacted["mode"] == "full", compacted
+        assert code == 0 and compacted["ok"], compacted
+        assert compacted["mode"] == "full"
         check_recovery(compacted)
     assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
 

@@ -9,8 +9,11 @@ Contents:
 ## Before Spending Automatic Compute
 
 Before autonomous delivery, use the current host activation's registry route
-and read the full successful admission packet. A recurring host does this through
-its fresh loader body; these diagnostic forms do not replace that body:
+and read the successful admission response. When it delivers a saved capture,
+follow its navigation guidance and read the current requirements, boundaries and
+operation contract needed for the work; do not drain unrelated evidence merely
+to begin. A recurring host does this through its fresh loader body; these
+diagnostic forms do not replace that body:
 
 ```bash
 loopx --format json --registry <GLOBAL_REGISTRY> quota should-run --goal-id <STABLE_GOAL_ID>

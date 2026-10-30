@@ -12,6 +12,7 @@ import {
 } from "./resume_condition.ts";
 
 export const RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v0";
+export const REFERENCED_RESUME_PLANNING_REQUEST = "todo_resume_planning_request_v1";
 export const RESUME_PLANNING_RESULT = "todo_resume_planning_v0";
 const DEFERRED_POLICY = "quota may wake the current peer only for ready deferred todos " +
   "claimed by that agent or unclaimed; other-agent deferred todos remain " +
@@ -186,12 +187,18 @@ function resolveCapacity(items: readonly Item[], source: readonly Item[], capabi
   });
 }
 
-function decodeSources(value: unknown): Record<SourceKey, Item[]> {
+function decodeSources(value: unknown, records: Item[] | null = null): Record<SourceKey, Item[]> {
   const rawSources = requireJsonObject(value, "sources");
   const sources = {} as Record<SourceKey, Item[]>;
   for (const key of SOURCE_KEYS) {
     if (!Array.isArray(rawSources[key])) throw new EffectRuntimeRequestError(`${key} must be an array`);
-    sources[key] = rawSources[key].map(item);
+    sources[key] = records === null ? rawSources[key].map(item) : rawSources[key].map((value) => {
+      const reference = requireInteger(value, `${key} record reference`);
+      if (reference < 0 || reference >= records.length) {
+        throw new EffectRuntimeRequestError(`${key} record reference is out of range`);
+      }
+      return records[reference];
+    });
   }
   return sources;
 }
@@ -295,10 +302,19 @@ function blockedVisibility(resumeBlocked: Item[], monitorItems: Item[], options:
  * No mutation, claim, lease grant, monitor poll, or recovery effect is emitted. */
 export function projectTodoResumePlanning(value: unknown): JsonObject {
   const request = requireJsonObject(value, "resume planning request");
-  if (request.schema_version !== RESUME_PLANNING_REQUEST) {
+  if (request.schema_version !== RESUME_PLANNING_REQUEST &&
+      request.schema_version !== REFERENCED_RESUME_PLANNING_REQUEST) {
     throw new EffectRuntimeRequestError("resume planning schema mismatch");
   }
-  const sources = decodeSources(request.sources);
+  const records = request.schema_version === REFERENCED_RESUME_PLANNING_REQUEST
+    ? (() => {
+      if (!Array.isArray(request.records)) {
+        throw new EffectRuntimeRequestError("resume planning records must be an array");
+      }
+      return request.records.map(item);
+    })()
+    : null;
+  const sources = decodeSources(request.sources, records);
   diagnoseSources(sources);
   const display: DisplayOptions = {
     agent: optionalNonEmptyString(request.agent_id, "agent_id"),

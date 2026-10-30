@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
 from .file_lock import exclusive_file_lock
-
-
-_DOMAIN_STATE_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,79}$")
+from .public_safe_text import (
+    LETTER_LED_COMPACT_TOKEN_PATTERN as _DOMAIN_STATE_TOKEN_RE,
+)
 
 
 def _domain_state_token(value: str, *, field: str) -> str:

@@ -239,12 +239,14 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     scope = dict(goal_id=GOAL_ID, agent_id=AGENT_ID, session_id=profile, context_epoch="epoch-a")
     full = prepare_context_delivery(context, scope=scope, capture_id="capture-a")
     assert full["mode"] == "full" and full["context"] == context
+    assert json.dumps(full["context"], sort_keys=True) == json.dumps(context, sort_keys=True)
     warm = prepare_context_delivery(context, scope=scope, capture_id="capture-b",
         baseline=full, retained={"complete": True, "target": full["target"]})
     assert warm["mode"] == "delta"
     assert len(json.dumps(warm).encode()) < len(json.dumps(full).encode()) / 2
     current = prepare_context_delivery(context, scope=scope, capture_id="capture-b")
-    assert restore_context_delivery(warm, baseline=full, current=current)["context"] == context
+    restored = restore_context_delivery(warm, baseline=full, current=current)
+    assert json.dumps(restored["context"], sort_keys=True) == json.dumps(context, sort_keys=True)
     turn_full = prepare_context_delivery(turn_context, scope=scope, capture_id="turn-capture")
     turn_delta = prepare_context_delivery(turn_context, scope=scope, capture_id="turn-capture",
         baseline=full, retained={"complete": True, "target": full["target"]})
@@ -274,8 +276,10 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
             assert body not in json.dumps(delta["changes"], ensure_ascii=False)
         restored = restore_context_delivery(delta, baseline=first, current=next_capture)
         assert restored["mode"] == "delta" and restored["context"] == projection
+        assert json.dumps(restored["context"], sort_keys=True) == json.dumps(projection, sort_keys=True)
         missing = restore_context_delivery(delta, baseline=None, current=next_capture)
         assert missing["mode"] == "full" and missing["context"] == projection
+        assert json.dumps(missing["context"], sort_keys=True) == json.dumps(projection, sort_keys=True)
     # Neither native source state, the signed decision nor settlement is changed
     # by presentation, warm reuse or recovery. A new capture is not an admission.
     assert state.read_bytes() == before_source
@@ -438,7 +442,7 @@ def test_optional_capture_projection_failure_falls_back_without_hiding_source(tm
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("output_limit", [None, 7900])
-def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(tmp_path, monkeypatch, provider, output_limit):
+def test_native_context_cli_without_retention_exposes_files_and_preserves_receipt(tmp_path, monkeypatch, provider, output_limit):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
     from test_quota_settlement_cli import _heartbeat_receipt_count
 
@@ -476,33 +480,32 @@ def test_native_context_cli_without_retention_stays_full_and_preserves_receipt(t
             page = read_context_capture(args)
             assert page["ok"]
 
-    for _ in range(2):
+    for attempt in range(2):
         rc, wire = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-full",
             "--decision-output-root", str(captures), "--context-delivery", "on", "--codex-context-dir", str(root),
             *([] if output_limit is None else ["--max-page-output-bytes", str(output_limit)]), cwd=project)
-        assert rc == 0 and wire["mode"] == "full", wire
-        assert "Native input observation independently verifies" not in wire["instruction"]
-        assert "Native input observation independently verifies" not in wire["recovery"]["instruction"]
-        # Consume the advertised first page and continuation, not another guard.
-        observed = consume(wire)
-        assert hashlib.sha256(observed).hexdigest() == wire["sha256"]
-        assert json.loads(observed) == json.loads(Path(wire["recovery"]["path"]).read_text())
+        assert rc == 0 and wire["ok"], wire
+        assert len(json.dumps(wire, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+        assert "content" not in wire and "eof" not in wire and "context" not in wire
+        if attempt == 0:
+            assert wire["mode"] == "full"
+        # Autonomous readers can choose the current full file directly, whether
+        # the advertised transport is full or delta. No hook/read ACK is needed.
+        args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
+        assert args.max_page_output_bytes == limit
+        observed = consume(read_context_capture(args))
+        assert hashlib.sha256(observed).hexdigest() == wire["recovery"]["sha256"]
         assert json.loads(observed)["heartbeat_receipt"]["turn_instance_id"] == "native-full"
-        assert "context" not in wire
-        if output_limit is None:
-            assert wire["eof"] and wire["content"].encode() == observed
-        else:
-            assert not wire["eof"]
-            recovery_args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
-            assert recovery_args.max_page_output_bytes == limit
+        if output_limit is not None:
             rc, projected = _run_cli(registry, runtime, "quota", "context-project", "--codex-app",
                 "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "native-full",
                 "--capture-file", wire["recovery"]["path"], "--capture-sha256", wire["recovery"]["sha256"],
                 "--decision-output-root", str(projection_root), "--context-delivery", "on",
                 "--codex-context-dir", str(root), "--max-page-output-bytes", str(limit), cwd=project)
-            assert rc == 0 and projected["mode"] == "full", projected
-            assert consume(projected) == observed
+            assert rc == 0 and projected["ok"], projected
+            args = build_parser().parse_args(shlex.split(projected["recovery"]["command"])[1:])
+            assert consume(read_context_capture(args)) == observed
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original
 
@@ -539,7 +542,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         return view
 
     def consume(view):
-        page, observed = view, b""
+        page = read_context_capture(build_parser().parse_args(shlex.split(view["recovery"]["command"])[1:]))
+        observed = b""
         while True:
             assert page["offset"] == len(observed)
             observed += page["content"].encode()
@@ -548,7 +552,7 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
             if page["eof"]:
                 break
             page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
-        assert hashlib.sha256(observed).hexdigest() == view["sha256"]
+        assert hashlib.sha256(observed).hexdigest() == view["recovery"]["sha256"]
         return json.loads(observed)
 
     first = guard("native-work-first")
@@ -568,7 +572,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         "--source", "heartbeat", "--execute", cwd=project)
     assert rc == 0 and spent["ok"], spent
     original = Path(first["recovery"]["path"]).read_bytes()
-    context.codex_context_hook(str(root), {**event, "source": "resume"})
+    context.codex_context_hook(str(root), {**event, "hook_event_name": "PreCompact"})
+    context.codex_context_hook(str(root), {**event, "source": "compact"})
     assert "candidate" not in context._state(root)
 
     current = guard("native-work-next")
@@ -628,8 +633,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert printed[0]["heartbeat_receipt"] == original["heartbeat_receipt"]
         assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
     else:
-        assert len(printed) == 1 and printed[0]["eof"] is True
-        assert json.loads(printed[0]["content"]) == {"native_projection": original}
+        assert len(printed) == 1 and "content" not in printed[0]
+        assert json.loads(Path(printed[0]["path"]).read_text()) == {"native_projection": original}
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 
@@ -742,6 +747,9 @@ def test_native_large_pages_do_not_depend_on_shell_environment(tmp_path, monkeyp
     page = native_context_capture_view({"requirements": '汉🙂"\\\t\n' * 12000,
         "last": "Stop before publication."}, tmp_path)
     original = Path(page["path"]).read_bytes()
+    assert "content" not in page
+    assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+    page = read_context_capture(build_parser().parse_args(shlex.split(page["command"])[1:]))
     limit = 64000
     assert len(page["content"].encode()) > 32000
     assert len(json.dumps(page, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= limit
@@ -795,3 +803,132 @@ def test_default_json_reader_and_generated_recovery_use_large_pages(tmp_path):
             assert len(page["content"].encode()) > 32000
             args = parser.parse_args(shlex.split(page["next_command"])[1:])
         assert collected == raw and calls <= 10
+
+
+@pytest.mark.parametrize("number", [1, 1.0, -0.0, 2**60 + 1, float(2**60),
+    1e-7, 1e-6, 0.1, 1.0000000000000002, 5e-324, -5e-324,
+    sys.float_info.min, sys.float_info.max])
+def test_context_codec_keeps_original_numbers_through_full_delta_and_recovery(tmp_path, monkeypatch, number):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    original = {"registry": {"body": "Preserve original evidence. " * 600, "measurement": number},
+        "current_control": {"measurement": number, "state": "original"}}
+    current = deepcopy(original)
+    current["current_control"]["state"] = "current"
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    warm = prepare_context_delivery(current, capture_id="after", baseline=first,
+        retained={"complete": True, "target": first["target"]}, **args)
+    assert warm["mode"] == "delta"
+    for baseline in [first, None]:
+        restored = restore_context_delivery(warm, baseline=baseline, current=full)
+        assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)
+
+
+@pytest.mark.parametrize("before,after", [(1, 1.0), (0, -0.0), (2**60, 2**60 + 1)])
+def test_context_codec_rejects_numeric_delta_collisions(tmp_path, monkeypatch, before, after):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    original = {"registry": {"body": "Keep numeric evidence distinct. " * 600, "measurement": before}}
+    current = deepcopy(original)
+    current["registry"]["measurement"] = after
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    warm = prepare_context_delivery(current, capture_id="after", baseline=first,
+        retained={"complete": True, "target": first["target"]}, **args)
+    assert warm["mode"] == "delta"
+    assert warm["changes"] is not None
+    restored = restore_context_delivery(warm, baseline=first, current=full)
+    assert restored["mode"] == "delta"
+    assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    # Neither omission nor a normalized-equivalent numeric literal is the
+    # exact current evidence, even when the legacy JS digest is unchanged.
+    for replacement in [None, {"changed": {"registry": {"changed": {"measurement": {"value": before}}}}}]:
+        damaged = deepcopy(warm)
+        damaged["changes"] = replacement
+        recovered = restore_context_delivery(damaged, baseline=first, current=full)
+        assert recovered["mode"] == "full"
+        assert json.dumps(recovered["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+
+
+@pytest.mark.parametrize("continuity", ["native_hook_assumption", "captured_file"])
+def test_context_numeric_source_reordering_and_grouped_literals(tmp_path, monkeypatch, continuity):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
+    body = "Keep source numbers, original ordering and metadata. " * 400
+    original = {"registry": {"body": body, "observations": [1.0, -0.0, 2**60 + 1]},
+        "current_control": {"a": 1.0, "b": -0.0, "c": 2**60 + 1}}
+    current = {"registry": {"body": body, "observations": [2**60 + 1, 1.0, -0.0]},
+        "current_control": {"a": -0.0, "b": 2**60 + 1, "c": 1.0}}
+    args = dict(scope=scope, surface="quota_packet")
+    first = prepare_context_delivery(original, capture_id="before", **args)
+    full = prepare_context_delivery(current, capture_id="after", **args)
+    delta = prepare_context_delivery(current, capture_id="after", baseline=first,
+        continuity={"basis": continuity, "capture_bytes_verified": True, "target": first["target"]}, **args)
+    assert delta["mode"] == "delta" and delta["continuity_basis"] == continuity
+    restored = restore_context_delivery(delta, baseline=first, current=full)
+    assert restored["mode"] == "delta"
+    assert json.dumps(restored["context"], sort_keys=True) == json.dumps(current, sort_keys=True)
+    assert json.dumps(first["context"], sort_keys=True) == json.dumps(original, sort_keys=True)
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), -float("inf")])
+def test_context_nonfinite_numbers_are_rejected_before_rpc(monkeypatch, number):
+    from loopx.control_plane.quota import turn_envelope
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Non-finite evidence must not enter the codec")
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_result", unexpected)
+    with pytest.raises(ValueError, match="finite"):
+        prepare_context_delivery({"nested": [{"measurement": number}]},
+            scope={}, capture_id="invalid")
+
+
+def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path, monkeypatch):
+    """Count both sides of the real RPC, including full and recovery paths."""
+    from loopx.control_plane.quota import turn_envelope
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    original_rpc = turn_envelope.effect_runtime_result
+    costs = []
+
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"),
+            allow_nan=False).encode())
+
+    def measured_rpc(method, params, **kwargs):
+        result = original_rpc(method, params, **kwargs)
+        costs.append(size(params) + size(result))
+        return result
+
+    monkeypatch.setattr(turn_envelope, "effect_runtime_result", measured_rpc)
+    totals, source_sizes = [], []
+    for fraction in (False, True):
+        costs.clear()
+        before = {"registry": {"values": [i + 0.5 if fraction else i for i in range(1000)]}}
+        after = deepcopy(before)
+        after["registry"]["values"][-1] += 1
+        args = dict(scope=dict(goal_id="fixture", agent_id="reader", session_id="native",
+            context_epoch="epoch"), surface="quota_packet")
+        first = prepare_context_delivery(before, capture_id="before", **args)
+        current = prepare_context_delivery(after, capture_id="after", **args)
+        delta = prepare_context_delivery(after, capture_id="after", baseline=first,
+            continuity={"basis": "captured_file", "capture_bytes_verified": True,
+                "target": first["target"]}, **args)
+        assert delta["mode"] == "delta"
+        assert json.dumps(first["context"]) == json.dumps(before)
+        for baseline in (first, None):
+            restored = restore_context_delivery(delta, baseline=baseline, current=current)
+            assert json.dumps(restored["context"]) == json.dumps(after)
+        assert len(costs) == 5
+        totals.append(sum(costs))
+        source_sizes.append(size(before) + size(after))
+    # Fractions need more JSON digits, not per-element identity metadata.
+    # Allow payload growth plus 25% structural headroom over the matched
+    # safe-integer workload; count complete requests and results, not deltas alone.
+    assert totals[1] / totals[0] <= 1.25 * source_sizes[1] / source_sizes[0]

@@ -24,7 +24,7 @@ HOST_TODO_COMPLETION_REDUCTION_SCHEMA_VERSION = (
     "loopx_host_todo_completion_reduction_v0"
 )
 _RUNTIME_METHOD = "turn.host_todo_completion.evaluate"
-_STEP_KINDS = (
+HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE = (
     "guard",
     "lifecycle_completion",
     "durable_writeback",
@@ -279,7 +279,7 @@ def _decode_provider_steps(value: Any) -> tuple[_ProviderStep, ...]:
         or len(raw_steps) not in {4, 5}
     ):
         raise RuntimeError("TypeScript host provider plan shape mismatch")
-    expected = _STEP_KINDS[: len(raw_steps)]
+    expected = HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE[: len(raw_steps)]
     steps: list[_ProviderStep] = []
     for index, raw in enumerate(raw_steps):
         if not isinstance(raw, Mapping) or raw.get("step_kind") != expected[index]:

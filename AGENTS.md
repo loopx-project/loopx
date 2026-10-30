@@ -197,6 +197,11 @@ public docs and commit/push workflows):
 5. Split by reviewer logic: runtime/API behavior, public docs/protocol notes,
    and focused validation/cleanup. Push reviewable batches as branch PRs.
 
+Before staging generated media or capture manifests, follow
+[visual evidence retention](docs/development/documentation-layout.md#visual-evidence-retention).
+Attach PR evidence; commit only assets with a current consumer or an explicit
+versioned fixture contract.
+
 ### Merge Authority And Validation
 
 Before approval or merge, read the repository-kept

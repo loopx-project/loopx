@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-10-28
+- **Last normative revision:** 2026-10-29
 - **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
@@ -46,6 +46,10 @@ evidence belongs in a dated ledger when an implementation first produces it.
 5. Unification first qualifies the existing single-session path. Two-session
    execution remains opt-in until matched outcome and complete-cost evidence
    justifies adoption. This RFC launches no benchmark or privileged operation.
+6. While the executor works, the controller remains available to the user:
+   answer questions, proactively explain meaningful changes, present useful
+   artifacts and incorporate feedback into subsequent work. Qualify that
+   journey through C6/C8; session separation alone does not deliver it.
 
 ## 2. Problem and motivation
 
@@ -61,6 +65,14 @@ does not need to learn how to encode a Vision delta or debit a LoopX Turn.
 Separating that work may reduce distraction and repeated protocol input, but
 an extra controller can also lose constraints, add latency or over-coordinate.
 These are hypotheses to test, not benefits established by session separation.
+
+Long work also needs a continuing human conversation. The user should be able
+to understand progress, inspect results and correct direction while execution
+continues, without repeatedly asking for status. A controller that only forwards
+a final answer misses this product goal. Its reports and presentations must
+help the user judge the work, and feedback must reach actual later decisions
+and artifacts. Availability, a received message or an attractive preview alone
+does not establish that loop.
 
 ### Invariants
 
@@ -117,6 +129,34 @@ Native context delivery and explicit host handoff also reuse that module and
 the existing context-delivery owner. C1 must converge the remaining composition
 and consumer assumptions, rather than introduce another capture service or
 rewrite already shared delta/native-resume logic.
+
+A separate native-presentation slice reuses the committed full recovery as its
+reader target, avoiding an unused second wire publication. Delta and unwrapped
+inputs retain their own immutable files and the same reader/lifecycle owners.
+On a matched 107,289-byte synthetic source, capture writes fall from 216,754 to
+107,289 bytes; full reader bytes and the 3,937-byte warm delta are unchanged.
+This qualifies only duplicate capture IO removal, not model-input reduction,
+complete cost, accepted outcomes or C1 writer/consumer cutover.
+For a small explicit output ceiling, native presentation can also omit repeated
+directory/selection commands while retaining the complete recovery command:
+append `--list` or `--select` to discover/read current facts without a baseline.
+The original 4,000-byte cold/warm/compaction cases retain their requirements,
+Stop, original identity and full recovery; this is transport qualification.
+
+Journal persistence is an independent source-fidelity prerequisite. The proposed
+Python adapter reuses context delivery's sparse number-token collector; both
+TypeScript consumers reuse one source-number validator. Journals remain JSON
+objects, with metadata only for integral floats, signed zero and unsafe integers.
+The journal owner restores these numbers before atomic publication and retains
+their distinctions in replay and immutable-plan comparisons. Ordinary native
+objects retain their encoding; historical receipts are not rewritten.
+
+The interim whole-JSON-string carrier failed the existing 2 MiB request boundary
+for a synthetic 1.55-million-character quoted body accepted by the object path.
+Keep that negative result: qualify the sparse replacement against the same
+workload and limit, including number-dense overhead. Neither this prerequisite
+nor a component byte saving qualifies the unified writer/consumer cutover or
+long-horizon net benefit.
 
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
@@ -254,6 +294,45 @@ read current authority where required, and reconcile any already admitted
 result through the original identity. An executor summary cannot reconstruct
 missing control obligations. Conflicting or inaccessible required material
 holds dependent work; independent authorized work keeps its existing route.
+
+### Human interaction during execution
+
+In a supported two-session profile, executor activity must not block the
+controller's user conversation. Reuse the existing role-bound ordered queues,
+versioned requests, host observations and original-audience return path. A
+question or report does not start another business executor, interrupt an
+authorized attempt without cause, or create another Turn debit.
+
+| User result | Required behavior and evidence |
+| --- | --- |
+| Converse while work runs | Answer questions and expose already saved artifacts while the executor is busy. Distinguish the latest observed state, its source/version and unknown activity; do not invent percentage progress or infer acceptance from a model's completion claim. |
+| Receive useful changes proactively | Report important progress, new artifacts, risks, evidenced stalls and changes requiring a user decision, with their basis, impact and useful feedback request. Reuse configured event/delivery owners; coalesce duplicates and remain quiet without meaningful change. Do not add a polling model loop or a fixed reporting interval. |
+| Understand and compare the work | Select task-appropriate charts, relationship diagrams, timelines, option comparisons, screenshots or artifact previews. Keep a concise overview with reachable original evidence/version, uncertainty, accessible text and a readable fallback when media is unavailable. No requirement to generate every format for every update. |
+| See feedback affect execution | Preserve the original feedback and ordered revision through the existing request owner. Read back receipt, queued or clarification-needed handling, rejection with reasons, and actual adoption separately. Link adopted changes to the subsequent decision, work and artifact; an ACK or a revised brief is not proof of adoption. |
+
+The controller distinguishes a correction within admitted scope from a scope
+change needing fresh admission or missing authority. Apply revisions through
+the current owner before dependent dispatch or acceptance, retaining prior
+requirements and unresolved conflicting feedback. Do not silently treat the
+latest message as cancellation of earlier commitments. Where the current
+attempt cannot safely consume a correction, expose the pending revision and
+its actual consumption boundary; preserve the host's stop/fencing contract
+before any replacement attempt. Late results retain their original revision
+and evidence but cannot overwrite current requirements or settle different work.
+
+Use only the authorized conversation and audience. Presentation does not grant
+new channels, recipients or public disclosure. Reconnect/restart recovers
+pending feedback, attempt and delivery receipts before retry; neither lost
+report delivery nor a user question causes redispatch. Stop acknowledgement,
+host interruption and actual termination remain separately observable. Existing
+host/Core stops remain effective if the controller is unavailable.
+
+This is a C6/C8 product target, not a claim that current session or progress
+primitives qualify the journey. It adds no prerequisite to independent C1
+slices. In the later opt-in two-session evaluation, include reporting,
+presentation generation/delivery, both sessions' calls and cached/uncached
+input, material reads, recovery, latency and human attention in complete cost.
+No responsiveness SLA or efficiency benefit is presumed.
 
 ### Review freshness and recovery
 
@@ -759,6 +838,7 @@ by this document alone.
 | Role isolation and recovery | Controller/executor crash windows, duplicate dispatch, late result, revision change, lease expiry and stop under actual host tools | No executor Core access; no stale result adoption or hidden business executor |
 | Semantic adoption | Original requirements → controller decision → actual executor work → independent verification → accepted result and original-audience return | Read receipt, valid JSON or successful replan alone cannot pass |
 | Intelligent mediation | Coherent delegation, changed/contrary evidence and result interpretation across ordinary continuation, shared-constraint change, controller loss and a small-task counterexample | Explain the actual decision consequence and retained obligations; fewer queries or a shorter handoff cannot pass |
+| Human interaction during execution | C6/C8 journey below through the real supported host and packaged conversation | Controller responsiveness, proactive delivery and feedback adoption require separate evidence; no inference from routing ACKs or previews |
 | Shared production paths | Real CLI and supported File/SQLite paths; real isolated PostgreSQL suite when authority persistence changes; packaged App heartbeat and benchmark worker reuse | No live Goal corruption; unsupported/unrun hosts stay unqualified |
 | Outcome and cost benefit | Matched current single-session, unified single-session and unified two-session arms with fixed task/model/policy/budget/evaluator | Report uncertainty, failures and counterexamples; no claim from prompt bytes alone |
 
@@ -771,6 +851,30 @@ a diagnostic reference arm, not a second permanent destination. Compare the new
 full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
+
+The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
+file deltas, capture refusal/recovery and once-only settlement. Source fidelity
+improves while cold and observer-output bytes grow on that workload. Exact-byte
+capture checks and standalone numeric hash integrity remain distinct; this
+engineering evidence does not establish net cost benefit or complete C1.
+
+Qualify [human interaction during execution](#human-interaction-during-execution)
+on the same long-running work, rather than disconnected chat demonstrations:
+
+| Scenario | Decisive observation |
+| --- | --- |
+| Executor busy; user asks or inspects an artifact | Controller responds from current observed evidence and serves the saved artifact before task completion, without a second executor or an unnecessary interruption. |
+| Meaningful change, then no change and duplicate events | A useful report reaches the authorized audience without repeated user prompting; unchanged/duplicate observations do not produce repeated reports. Record actual delivery and cost, not a promised interval. |
+| Continuous or conflicting feedback | Each revision and its handling remain attributable; subsequent work/artifacts prove what was adopted. Pending, rejected, conflicting and authority-dependent changes stay explicit. |
+| Stop races correction or result | Current revision and scope govern acceptance; acknowledgement is distinct from actual host termination, and unknown/in-flight effects remain visible. |
+| Disconnect, restart, lost reply or delayed/duplicate result | Recover original queues, revisions and receipts; no lost correction, duplicate dispatch/debit or stale overwrite. Retry only unresolved delivery/effects. |
+| Rich view, missing media, stale evidence or wrong audience | A task-appropriate comparison/preview supports a user judgment and feedback; source/version and unknowns are readable, accessible text remains usable, and unauthorized delivery is refused. |
+
+Exercise the supported managed and attached App heartbeat journeys separately;
+an unsupported host stays explicit. Qualify installed behavior separately from
+packaged fixtures. Preserve the original-quota single-session gate, then measure
+the added interaction and presentation costs in the optional two-session arm.
 
 ### C1 baseline boundary and reuse inventory
 
@@ -797,6 +901,27 @@ information and failure consequences.
 | Captured replan review, acceptance detail and writeback readers | Separate decision facts from later authoring format while retaining the original identity and all required meaning. Bound reads to the same capture; count every required stage, error and recovery. A missing/stale reference must not trigger a new guard or authorize work. |
 | Full/delta/resume delivery | Reuse the existing continuity owner after composition. Establish exact semantic reconstruction and required material availability before action; charge cold fallback and lost-baseline recovery. |
 | Scheduler, admission and settlement identities | One authoritative instance before capture; transport must preserve host ownership, original Turn and once-only effects. Repeated representations do not justify weakening their checks. |
+
+A standalone late move of acceptance sharing is not automatically a useful
+prerequisite. A controlled source-level substitution against main
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` moved only that rule from the local
+CLI compactor into the existing `reference_context` call. On the same synthetic
+fixture with 100 distinct requirements, serialized projection input grew from
+102,680 to 344,010 bytes; the 102,189-byte caller-visible output stayed equal.
+The ordinary path still made one projection call; all-details delivery changed
+from local sharing to one call. These are projection-parameter measurements,
+not framed traffic, latency, model billing or the integrated C1 comparison.
+Retain this negative result rather than declaring a net efficiency win.
+
+Repair relocated acceptance aliases at the current compatibility owner without
+that extra transport. Existing aliases must follow only inline owners actually
+moved by the projection, including aliases visited before their owner. Preserve
+complete values, original numeric types, carrier order and existing size checks;
+never infer arbitrary reference chains or rewrite saved captures. The complete
+C1 composition must absorb this rule at its source-owning boundary and retire
+the Python compatibility algorithm with its callers, rather than repeatedly
+shipping all acceptance copies across another bridge. Writer/consumer cutover
+and the original-quota outcome/full-cost gate remain open.
 
 A fixed-source synthetic replan audit of candidate `895f38fc5` illustrates why
 the boundary matters. With stride off and no capture staging, the raw source was
@@ -856,6 +981,13 @@ internal packet selection as a user task. Reuse shared typed projections and
 configuration precedence; do not create an independent controller console or
 duplicate provider/model settings.
 
+C6/C8 own the [execution-time conversation and reporting journey](#human-interaction-during-execution).
+Reuse existing Chat/Lark artifact, activity, feedback and delivery projections
+within each supported audience; these sinks do not become work authority.
+Readback must distinguish report delivery, feedback handling, actual adoption
+and independent acceptance. Keep a failed report recoverable without replaying
+the underlying work.
+
 Observe captures, request/attempt/role/generation, current revisions, effect
 receipts and cost coverage in existing diagnostics. Give operators actionable
 recovery without raw private transcripts. Notifications remain separate from
@@ -876,10 +1008,19 @@ are stable design references, not claims that a canonical Todo is complete.
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
-| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange | Complete source delivery, local executor autonomy, enforced Core isolation, corrective exchange and independently accepted outcome; return to qualified single-session profile for new work on rollback |
+| **C6 — Controller/executor exchange; C2–C5** | Manager/request + host owners: reuse versioned semantic requests and result return; replace schema-constrained executor work with natural-language work/material exchange; keep user interaction available during execution | Complete sources, local autonomy, Core isolation, corrective exchange, actual feedback adoption through ordered revisions and independently accepted outcome; busy, conflict, stop and late-result cases in §9; return new work to qualified single-session profile on rollback |
 | **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
-| **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, Stop and artifact return | Packaged managed and supported attached heartbeat journeys, including unavailable host and late results; installed qualification separate; no new packet-format toggle |
+| **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, proactive evidence-based reports, task-appropriate rich views, feedback/readback, Stop and artifact return | Packaged managed and supported attached heartbeat journeys from §9, including unavailable host, late results, quiet/deduplicated reports, accessible fallback, audience denial and recovery; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
+
+The existing native context entry now supports a bounded C2 precursor: complete
+captures remain on disk, the normal response exposes file navigation, and exact
+file deltas do not require model retention. After compaction the next work Turn
+establishes a new full saved baseline, without an immediate full reread.
+Required facts still precede dependent decisions; admission and settlement are
+unchanged. This does not qualify C1's unified producer/consumer cutover or the
+matched effectiveness/full-cost result in §9. Rollback uses the existing
+context-delivery off path; staged material composition remains separately owned.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
@@ -898,6 +1039,13 @@ Separate shared-owner prerequisites, producer/capture cutover, reader recovery
 and retirement, and adoption/full-cost qualification where each boundary is
 independently reviewable. Record dependencies in the existing tasks and PRs.
 Splitting delivery does not close C1 or waive §9's original quota-baseline test.
+
+Native launch rechecks use the original `SettlementIdentity` as their sole
+Todo/obligation binding. Both `codex-cli` and `codex-app-server` call the existing
+`current_turn_host_launch_decision` owner; an observed replan packet is context,
+not an additional binding argument. This transport simplification can ship before
+wire cutover. Qualify real launch, refusal and replay against the same original
+identity; retain the current typed eligibility, Stop and settlement owners.
 
 The first **cutover** slice pairs the complete field/clause migration with a
 real single-session producer and consumer replacement. Start at the

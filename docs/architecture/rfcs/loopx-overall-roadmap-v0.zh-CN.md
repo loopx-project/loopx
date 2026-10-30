@@ -150,10 +150,22 @@ Controller 会话的[智能中介作用](controller-executor-unified-contract-v0
 仍归各自 owner。以保留义务及后续验收成果，对照 controller 新增完整成本验收，不能
 用查询次数或文本体积代替。
 
+C6/C8 还拥有[执行期间人机交互](controller-executor-unified-contract-v0.zh-CN.md#human-interaction-during-execution)
+产品目标：executor 忙时 controller 对话不被阻塞；有实质变化时主动循证汇报，并按任务
+提供丰富展现，反馈可追踪到后续工作和产物。经既有 session/request/projection owner
+验收安静/去重汇报、受众限制、可访问降级及 revision/Stop/恢复竞态。这是提议成果，
+不证明当前 runtime 合格，也不增加独立 C1 工作的 gate。保留单会话先行对照，在后续
+opt-in 组中计入全部汇报、展现和人工注意力成本。
+
 C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 覆盖 quota emission、直接生产契约的 Turn 入口和最终 native/structured host prompt。
 共享 capture 不表示这些消费者已统一。资格检查须追踪来源义务经过组合、重建到实际
 最终输入；新准入切换与历史回执重放分别处理。
+
+[固定版本的打包对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
+在真实 File/SQLite fixture 验证 C1 来源/恢复行为，同时记录更大的冷态/累计输出，
+以及尚开放的独立数值 hash 边界。保留这些反证和原成果/完整成本门；文件差分或一次
+结算回执可用，不证明长程收益。
 
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback

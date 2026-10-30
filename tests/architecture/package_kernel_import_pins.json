@@ -3,6 +3,9 @@
   "baseline_commit": "70bc98198ce9e8c33e461cc41fe77243d713dcf0",
   "note": "Exact pin of every `loopx.*` module imported by a co-located package. Pre-existing private edges remain migration debt. The supported-host-integration decision in the monorepo-distribution-split RFC Section 5 permits MemT's two public integration imports; it does not permit private kernel imports. Remove an entry in the PR that removes the import. Adding an entry needs a recorded design decision.",
   "imports": {
+    "loopx-codex-provider-routing": [
+      "loopx.extensions.chat_service_guard"
+    ],
     "loopx-ark-turn": [
       "loopx.control_plane.turn_driver.host_candidate",
       "loopx.file_lock"

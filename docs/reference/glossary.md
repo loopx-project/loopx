@@ -121,6 +121,15 @@ Authority handoff mode between agents.
 - typescript: [`HANDOFF_MODES`](../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts).
 - Values / 值: `legacy`, `soft_claim`, `hard_lease`.
 
+## host_adapter_settlement_step_kind
+
+Ordered provider steps of one host-adapter settlement plan. The TypeScript owner authors the plan and the Python transport validates the plan it receives against the same sequence, so the two runtimes must carry the same order. Distinct from settlement_step_kind: that vocabulary names the turn settlement phases, whose validation phase is never executed, while every kind here is a command the host adapter runs.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- python: [`HOST_ADAPTER_SETTLEMENT_STEP_SEQUENCE`](../../loopx/control_plane/host_adapter_settlement.py).
+- typescript: [`HOST_ADAPTER_SETTLEMENT_STEP_KINDS`](../../loopx/control_plane/turn_driver/host_todo_completion.ts).
+- Values / 值: `guard`, `lifecycle_completion`, `durable_writeback`, `quota_spend`, `terminal_closeout`.
+
 ## loop_disposition
 
 Pure controller verdict for the outer loop after combining the last Turn receipt with the fresh route.
