@@ -59,7 +59,11 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
             result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
                 "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
                 "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
-        elif instruction:
+        elif instruction or (offset == 0 and output_limit is not None):
+            # A digest-bound native reference may be read in a fresh shell
+            # without its session lookup. Deliver paging obligations with the
+            # first bounded page rather than repeating them in file metadata.
+            # Historical unbounded readers retain their exact wire shape.
             result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
@@ -203,6 +207,18 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
 
 
+def _capture_read_reference(value: dict[str, Any], *, page_bytes: int,
+                            output_bytes: int) -> dict[str, str]:
+    """Keep file identity and the budgeted reader at the transport boundary.
+
+    Navigation lives on the outer view; complete paging obligations accompany
+    the actual reader response. Neither belongs in every nested file reference.
+    """
+    return {"path": value["path"], "sha256": value["sha256"],
+        "command": context_capture_read_command(Path(value["path"]), value["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
+
+
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 context_directory: str | None = None,
                                 metadata: dict[str, Any] | None = None,
@@ -232,24 +248,20 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     if max_page_output_bytes is not None:
         output_bytes = min(output_bytes, max_page_output_bytes)
         page_bytes = min(page_bytes, output_bytes)
-    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+    reference = _capture_read_reference(reference, page_bytes=page_bytes, output_bytes=output_bytes)
     result = {"ok": True, **(metadata or {}), "mode": mode, **reference,
         **({"target": target} if target else {})}
-    if max_page_output_bytes is not None and isinstance(result.get("recovery"), dict):
-        recovery = result["recovery"]
-        result["recovery"] = {**recovery, "command": context_capture_read_command(
-            Path(recovery["path"]), recovery["sha256"], page_bytes=page_bytes,
-            max_page_output_bytes=output_bytes)}
+    if isinstance(result.get("recovery"), dict):
+        result["recovery"] = _capture_read_reference(result["recovery"],
+            page_bytes=page_bytes, output_bytes=output_bytes)
     # Persist first. A normal guard returns a small reference, never an eager
     # page that can be cut by an unrelated Host/history budget. The optional
     # delta remains readable in full; navigation always addresses current facts.
     current = projected.get("recovery") if projected.get("schema_version") == "context_delivery_v1" else reference
     current = current or reference
     current_path = Path(current["path"])
-    result.setdefault("recovery", {"path": str(current_path), "sha256": current["sha256"],
-        "command": context_capture_read_command(current_path, current["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes)})
+    result.setdefault("recovery", _capture_read_reference(current,
+        page_bytes=page_bytes, output_bytes=output_bytes))
     current_raw = current_path.read_bytes()
     current_document = json.loads(current_raw)
     if projected.get("continuity_basis") == "captured_file":
@@ -340,14 +352,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             output_bytes = min(output_bytes, output_limit)
             page_bytes = min(page_bytes, output_bytes)
 
-        def recovery_reference(value: dict[str, Any]) -> dict[str, str]:
-            # Preserve the caller's read budget on success and failure without
-            # duplicating instructions already carried by the outer view.
-            return {"path": value["path"], "sha256": value["sha256"],
-                "command": context_capture_read_command(Path(value["path"]), value["sha256"],
-                    page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
-
-        full_reference = recovery_reference(full_reference)
+        full_reference = _capture_read_reference(full_reference,
+            page_bytes=page_bytes, output_bytes=output_bytes)
         reference = dict(full_reference)
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=args.codex_context_root, create=True)
@@ -378,7 +384,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             # Native publication owns the complete required view. Keep its
             # committed recovery even if optional wire/inline delivery fails;
             # the input capture digest below remains the original identity.
-            full_reference = recovery_reference(projected["recovery"])
+            full_reference = _capture_read_reference(projected["recovery"],
+                page_bytes=page_bytes, output_bytes=output_bytes)
             reference = dict(full_reference)
         native_view = native_context_capture_view(projected, cache, context_directory=directory,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,
