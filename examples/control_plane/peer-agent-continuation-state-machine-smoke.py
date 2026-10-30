@@ -33,7 +33,7 @@ def run_cli(*args: str, registry_path: Path, runtime: Path, cwd: Path) -> dict:
         *args,
         registry_path=registry_path,
         runtime_root=runtime,
-        cwd=REPO_ROOT,
+        cwd=cwd,
     )
 
 
