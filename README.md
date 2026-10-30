@@ -37,6 +37,14 @@ $loopx speed up this project's slowest workflow; compare approaches and verify t
 
 Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
 
+**New to LoopX?** Start with the [first bug-fixing loop](docs/guides/first-bugfix-loop.md):
+reproduce a bug in a small Python project, let the Agent fix it, then check the patch.
+
+- **Use your own project:** follow the [coding agent guide](docs/guides/long-running-coding-agents.md)
+  to set up your host and resume work across sessions.
+- **Use the App:** follow the [illustrated Workspace guide (中文)](docs/guides/personal-workspace-user-guide.md)
+  to manage projects, conversations and results.
+
 ## 📰 News
 
 <!-- Curate major product/architecture releases, research findings, consequential

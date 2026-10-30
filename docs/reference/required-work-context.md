@@ -34,6 +34,11 @@ relations and authority revision without repeating the body. If no other
 canonical fields need a source record, `work_context.selected_todo_authority`
 carries the source and revision. When the view is bounded, the full canonical
 detail remains in `work_context.sources`.
+The ordinary CLI shares exact acceptance copies within one response. Existing
+references follow their complete inline owner when that projection relocates it,
+including an owner visited later. Different revisions, types, failures and
+sources stay distinct. This adds no source read or authority, admission or
+settlement change; saved captures retain their original contents.
 Registered Goal state uses the existing writer's strict generated-region
 ownership. When every recognized Todo region is explicitly marked, the source
 adapter delivers **all other text verbatim** in `work_context.sources`: Goal
@@ -579,6 +584,9 @@ all-Goal adoption, actual solver costs or outcome benefit.
 
 普通 Heartbeat/quota 默认在 `agent_channel.work_context` 返回完整选定 Todo、
 启用的验收与当前 Agent 相关的 User Todo，附带来源和修订，不需要开启 TurnEnvelope。
+普通 CLI 在同一响应内共享完全相同的验收副本。已有引用跟随本次投影迁移的完整
+内联 owner，包括后访问的 owner；不同修订、类型、失败和来源分别保留。不增加来源
+读取，不改变权限、准入或结算；已存 capture 保留原始内容。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
 显式标记时，`work_context.sources` 原样携带区域外的全部文字，保留目标、frontmatter、
 任意章节、注释、历史和末尾停止条件。`excluded_todo_regions` 保留每段的角色、行区间

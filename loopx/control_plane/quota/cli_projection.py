@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from .decision_summary import compact_quota_decision
 from .should_run_packet import reference_duplicate_fallback_guidance
@@ -504,7 +504,21 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
         ("agent_todo_summary", "goal_acceptance_contract"),
     ])
     carriers: dict[str, str] = {}
+    relocated: dict[str, str] = {}
+    references: list[tuple[tuple[str | int, ...], str]] = []
     result = payload
+
+    def writable_parent(path: tuple[str | int, ...]) -> dict[str, Any]:
+        nonlocal result
+        # Copy only the affected spine; never mutate caller-owned facts.
+        result = dict(result)
+        target: Any = result
+        for part in path[:-1]:
+            child = target[part]
+            target[part] = list(child) if isinstance(child, list) else dict(child)
+            target = target[part]
+        return cast(dict[str, Any], target)
+
     for path in paths:
         parent: Any = result
         for part in path[:-1]:
@@ -516,6 +530,9 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
                 parent = None
                 break
         field = str(path[-1])
+        existing = parent.get(field + "_ref") if isinstance(parent, dict) else None
+        if isinstance(existing, str):
+            references.append((path, existing))
         value = parent.get(field) if isinstance(parent, dict) else None
         if not isinstance(value, dict) or not value or field + "_ref" in parent:
             continue
@@ -523,21 +540,23 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
         # the complete content, including revision, scope, failures and sources.
         encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
         reference = carriers.get(encoded)
+        own_ref = "$" + "".join(
+            f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
         if reference is None:
-            carriers[encoded] = "$" + "".join(
-                f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
+            carriers[encoded] = own_ref
             continue
         if len(encoded) <= len(reference) + 8:
             continue
-        # Copy only the affected spine, so callers retain their original facts.
-        result = dict(result)
-        target: Any = result
-        for part in path[:-1]:
-            child = target[part]
-            target[part] = list(child) if isinstance(child, list) else dict(child)
-            target = target[part]
+        target = writable_parent(path)
         del target[field]
         target[field + "_ref"] = reference
+        relocated[own_ref] = reference
+    # Retarget only references to owners actually moved by this projection.
+    # A later owner can move after an earlier alias was visited; a second pass
+    # keeps both directions direct without following arbitrary input chains.
+    for path, reference in references:
+        if reference in relocated:
+            writable_parent(path)[str(path[-1]) + "_ref"] = relocated[reference]
     return result
 
 

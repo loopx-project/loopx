@@ -874,6 +874,27 @@ information and failure consequences.
 | Full/delta/resume delivery | Reuse the existing continuity owner after composition. Establish exact semantic reconstruction and required material availability before action; charge cold fallback and lost-baseline recovery. |
 | Scheduler, admission and settlement identities | One authoritative instance before capture; transport must preserve host ownership, original Turn and once-only effects. Repeated representations do not justify weakening their checks. |
 
+A standalone late move of acceptance sharing is not automatically a useful
+prerequisite. A controlled source-level substitution against main
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` moved only that rule from the local
+CLI compactor into the existing `reference_context` call. On the same synthetic
+fixture with 100 distinct requirements, serialized projection input grew from
+102,680 to 344,010 bytes; the 102,189-byte caller-visible output stayed equal.
+The ordinary path still made one projection call; all-details delivery changed
+from local sharing to one call. These are projection-parameter measurements,
+not framed traffic, latency, model billing or the integrated C1 comparison.
+Retain this negative result rather than declaring a net efficiency win.
+
+Repair relocated acceptance aliases at the current compatibility owner without
+that extra transport. Existing aliases must follow only inline owners actually
+moved by the projection, including aliases visited before their owner. Preserve
+complete values, original numeric types, carrier order and existing size checks;
+never infer arbitrary reference chains or rewrite saved captures. The complete
+C1 composition must absorb this rule at its source-owning boundary and retire
+the Python compatibility algorithm with its callers, rather than repeatedly
+shipping all acceptance copies across another bridge. Writer/consumer cutover
+and the original-quota outcome/full-cost gate remain open.
+
 A fixed-source synthetic replan audit of candidate `895f38fc5` illustrates why
 the boundary matters. With stride off and no capture staging, the raw source was
 21,461 compact UTF-8 JSON bytes, the original quota CLI projection 20,543, and
