@@ -75,3 +75,53 @@ def test_colon_prefixed_unix_paths_keep_the_existing_boundary() -> None:
         "ok": False,
         "warnings": ["absolute local path"],
     }
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4",
+        "github_pat_11ABCDEFG0" + "a1B2c3D4e5F6",
+        "AKIA" + "7Q2Z3XJ5V6N8W1PL",
+        "ASIA" + "7Q2Z3XJ5V6N8W1PL",
+        "xoxb-" + "123456789-abcdef",
+        "AIzaSyA" + "1234567890abcdefghij",
+        "sk_live_51H8" + "aBcDeFgHiJkL",
+        "npm_" + "a1B2c3D4e5F6g7H8i9J0",
+        "pypi-AgEIcHlwaS5vcmc" + "AAAAAAAAAA",
+        "eyJhbGciOiJIUzI1NiJ9" + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0" + ".SflKxwRJSMeKKF2QT4f",
+    ],
+)
+def test_unlabeled_provider_tokens_fail_the_boundary_scan(token: str) -> None:
+    text = f"CI log fragment: pushed with {token} to the registry mirror"
+
+    assert public_safety.scan_public_boundary_text(text) == {
+        "ok": False,
+        "warnings": ["provider token"],
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "npm run build && npm test",
+        "gh pr list --limit 5",
+        "AWS key ids start AKIA and ASIA, then sixteen more characters",
+        "pypi- prefix alone is not a token",
+        "sk-proj-abcdefghijklmnop is an OpenAI project key shape",
+    ],
+)
+def test_ordinary_prose_and_unclaimed_shapes_stay_public(text: str) -> None:
+    assert public_safety.scan_public_boundary_text(text) == {
+        "ok": True,
+        "warnings": [],
+    }
+
+
+def test_labeled_credential_assignment_keeps_its_own_warning() -> None:
+    text = "deploy used access_token=ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4"
+
+    result = public_safety.scan_public_boundary_text(text)
+
+    assert result["ok"] is False
+    assert result["warnings"] == ["credential assignment", "provider token"]

@@ -355,7 +355,7 @@ def quota_decision_transport_failure_payload(
     }
     if saved is not None and saved.is_file():
         payload["captured_decision"] = {"path": str(saved)}
-    for key in ("heartbeat_receipt", "rollout_event"):
+    for key in ("heartbeat_receipt", "rollout_event", "host_poll_receipt"):
         if key in committed:
             payload[key] = committed[key]
     return payload

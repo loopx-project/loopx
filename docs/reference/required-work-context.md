@@ -39,6 +39,11 @@ references follow their complete inline owner when that projection relocates it,
 including an owner visited later. Different revisions, types, failures and
 sources stay distinct. This adds no source read or authority, admission or
 settlement change; saved captures retain their original contents.
+Vision-audit and replan-authoring mirrors reuse that local serialization
+identity. Boolean/number values, integer/integral-float representations and
+signed zero remain distinct when their original JSON encodings differ. Key
+order alone does not prevent sharing. This adds no model read or runtime round
+trip; distinct source facts retain their complete instructions.
 Registered Goal state uses the existing writer's strict generated-region
 ownership. When every recognized Todo region is explicitly marked, the source
 adapter delivers **all other text verbatim** in `work_context.sources`: Goal
@@ -590,6 +595,9 @@ all-Goal adoption, actual solver costs or outcome benefit.
 普通 CLI 在同一响应内共享完全相同的验收副本。已有引用跟随本次投影迁移的完整
 内联 owner，包括后访问的 owner；不同修订、类型、失败和来源分别保留。不增加来源
 读取，不改变权限、准入或结算；已存 capture 保留原始内容。
+Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 JSON 编码不同的
+布尔／数值、整数／整值浮点表示及带符号零分别保留；仅键顺序不同仍可共享。不增加
+模型补读或 runtime 往返；不同来源事实保留完整指引。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
 显式标记时，`work_context.sources` 原样携带区域外的全部文字，保留目标、frontmatter、
 任意章节、注释、历史和末尾停止条件。`excluded_todo_regions` 保留每段的角色、行区间
@@ -848,6 +856,11 @@ known pointer does not require another index round trip. Batch within the combin
 output budget, avoid overlapping parent/child selections, and inspect a missing
 pointer's parent before retrying the rejected batch. These are caller guidelines;
 selection validation, required reads and authority checks remain unchanged.
+Selection errors identify the original `--select` argument and, for a failed
+lookup, its token position (both 1-based). Sorting and duplicate elimination do
+not renumber arguments. Inspect the resolved prefix before that token in the
+same capture; malformed pointers need syntax repair first. Diagnostics never
+echo the pointer or task values, and no part of a rejected batch is delivered.
 
 The `context_capture_index_v1` view shares the digest-bound pagination contract.
 An expanded index includes its `list_depth`; `next_command` preserves the depth,
@@ -887,6 +900,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 `--select`，已知路径无须多查一轮目录。按合计输出预算分批，避免同时选择父节点和
 子节点；路径缺失时先查其父节点，再重试被拒绝的批次。这些是调用建议，不改变
 选择校验、必读要求或权限检查。
+选择错误会标明原始 `--select` 参数序号；查找失败时还会标明 token 序号，均从 1
+开始。排序和去重不改变参数编号。在同一 capture 中检查失败 token 前已解析的
+路径前缀；语法错误需先修正 pointer。错误信息不回显路径或任务正文，被拒绝的
+批次不会返回部分内容。
 
 `context_capture_index_v1` 沿用双摘要分页；展开的目录包含 `list_depth`，
 `next_command` 保留深度、路径和两个摘要。更改深度会拒绝旧视图的续读，目录 cursor

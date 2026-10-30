@@ -311,6 +311,12 @@ def _emit_quota_result(
 
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": current_loopx_cli_argv()}
+    if args.quota_command == "should-run" and context is not None:
+        # Capture the one liveness observation with the decision that produced
+        # it. Presentation and evidence recovery must not record it again.
+        attach_host_poll_receipt(
+            context.status_payload, args, payload, registry_path=registry_path,
+        )
     try:
         capture_decision(capture_directory, payload)
         if (payload.get("ok") is False and context_delivery_enabled and capture_directory
@@ -343,13 +349,10 @@ def _emit_quota_result(
             str(capture_directory / "decision.json") if capture_directory is not None else None
         ),
     )
-    if args.quota_command == "should-run" and context is not None:
-        attach_host_poll_receipt(
-            context.status_payload,
-            args,
-            payload,
-            registry_path=registry_path,
-        )
+    if args.quota_command == "should-run" and "host_poll_receipt" in captured_payload:
+        # Legacy envelope presentation omits this source field. Preserve its
+        # existing visible receipt by copying the observation, not polling.
+        payload["host_poll_receipt"] = captured_payload["host_poll_receipt"]
     succeeded = bool(payload.get("ok"))
     # Handoff releases the immutable original before any presentation. Native
     # actual-input observation owns its projection when explicitly selected;

@@ -130,6 +130,15 @@ the existing context-delivery owner. C1 must converge the remaining composition
 and consumer assumptions, rather than introduce another capture service or
 rewrite already shared delta/native-resume logic.
 
+Optional host polling is part of that original observation. The source-fidelity
+slice records `--record-host-poll` once before capture and reuses its receipt in
+ordinary CLI, envelope and native-context delivery. Recovery reads do not poll
+again. A later capture/handoff failure retains the already-recorded observation
+in its error response; it does not imply missing admission or authorize replay.
+Default-off behavior and unreadable receipt diagnostics remain unchanged. This
+repairs capture completeness, not the unified writer/consumer cutover or a
+long-horizon cost-benefit result.
+
 A separate native-presentation slice reuses the committed full recovery as its
 reader target, avoiding an unused second wire publication. Delta and unwrapped
 inputs retain their own immutable files and the same reader/lifecycle owners.
@@ -912,6 +921,15 @@ The ordinary path still made one projection call; all-details delivery changed
 from local sharing to one call. These are projection-parameter measurements,
 not framed traffic, latency, model billing or the integrated C1 comparison.
 Retain this negative result rather than declaring a net efficiency win.
+
+The compatibility owner also uses one local JSON serialization identity for
+acceptance, Vision-audit and replan-authoring sharing. Python's ordinary value
+equality must not turn distinct booleans/numbers, integer/float representations
+or signed zero into an alias to another observation. Exact copies still share
+one in-response owner, including after key reordering; different facts remain
+complete. This repairs source fidelity without another projection RPC. It does
+not qualify the unified writer, final consumers or original-quota outcome/cost
+benefit.
 
 Repair relocated acceptance aliases at the current compatibility owner without
 that extra transport. Existing aliases must follow only inline owners actually

@@ -104,6 +104,12 @@ Quota capture 与 Turn journal capture 都调用
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
 
+可选 host poll 也是该次原始观测的一部分。来源保真切片在 capture 前仅记录一次
+`--record-host-poll`，普通 CLI、envelope 与原生上下文交付复用同一回执；恢复读取不再
+轮询。后续 capture/handoff 失败的错误响应仍携带已记录观测，不表示缺少准入，也不
+授权重放。默认关闭行为和不可读回执诊断不变。这只修复 capture 完整性，不代表统一
+writer/consumer 切换或长程成本收益已取得资格。
+
 独立的原生展示切片复用已提交的完整恢复原件作为 reader 目标，避免再次发布未使用的
 wire 副本。Delta 与未包装输入仍保留各自的不可变文件，reader/lifecycle owner 不变。
 同一 107,289 字节合成来源的 capture 写入从 216,754 降为 107,289 字节；完整 reader
@@ -690,6 +696,12 @@ compactor：精确共享、省略和延后读取的信息与失败后果各不�
 输出仍为相同的 102,189 字节。普通路径仍调用一次；全部 detail 开启时由本地共享变为
 一次请求。这些是投影参数测量，不是带协议包装的流量、延迟、模型计费或完整 C1 对照。
 保留此负结果，不能宣称净效率收益。
+
+兼容 owner 也为验收、Vision audit 和 replan authoring 共享复用一份本地 JSON 序列化
+身份。不能用 Python 普通值相等，把不同布尔／数值、整数／浮点表示或带符号零替换成
+另一条观测的别名。完全相同的副本仍共享同一响应内的 owner，包括键顺序不同的情况；
+不同事实保留全文。这修复来源保真，不增加投影 RPC；不代表统一 writer、最终消费者
+或相对原 quota 的成果／完整成本收益已经合格。
 
 先在当前兼容 owner 修复被迁移的验收引用，不引入上述额外传输。已有别名只跟随本次
 投影实际迁移的内联 owner，包括先访问别名、后迁移 owner 的情况。保留完整值、原始
