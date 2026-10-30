@@ -2,6 +2,7 @@
 from pathlib import Path
 from typing import Any
 
+from ...chat_attachments import require_text_document_route
 from ...attached_session import enqueue_attached_agent_turn
 from ...chat_store import CHAT_SESSION_MODE_ATTACHED
 from ...control_plane.collaboration import conversation_scope
@@ -14,6 +15,7 @@ def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, messa
     session = controller.store.load_session(session_id)
     if session is None or session.get("status") == "closed":
         raise KeyError("chat session was not found")
+    require_text_document_route(session, attachments, origin=origin)
     bound = session.get("steward_context") or session.get("project_context") or {}
     if bound.get("audience") in {"bound_owner", "bound_group"}:
         if external_agent_target is not None:

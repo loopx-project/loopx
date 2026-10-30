@@ -4,6 +4,9 @@ Only the model transport is synthetic. Source/Chat roots, File/SQLite state,
 binding/source admission, request/revision/result stores and HTTP are real.
 """
 import json
+import subprocess
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -78,6 +81,70 @@ def requester_agenda(f, agent="builder"):
     observed = dispatch_turn_start_hooks([turn_start_hook(f["root"], f["registry"], "delivery", agent)])
     assert observed["failures"] == []
     return observed["contexts"][0]["content"]["unfinished_delegations"]
+
+
+def test_original_conversation_cli_keeps_the_source_goal_instance(project_peer, tmp_path):
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    f = project_peer
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.runtime_controller = f["store"], f["runtime"]
+    server.runtime_root, server.registry_path = f["root"], f["registry"]
+    server.selected_goal_id, server.verbose = None, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    parameters_file = tmp_path / "original-conversation.json"
+
+    def invoke(parameters, *, operation="discover", instance=INSTANCE_A):
+        parameters_file.write_text(json.dumps(parameters))
+        command = [sys.executable, "-m", "loopx.cli", "--registry", str(f["registry"]),
+            "--runtime-root", str(f["root"]), "manager-inbox", "original-conversation",
+            "--goal-id", "delivery", "--agent-id", "builder",
+            "--conversation-operation", operation, "--conversation-file", str(parameters_file),
+            "--chat-url", f"http://127.0.0.1:{server.server_port}"]
+        if instance is not None:
+            command.extend(["--goal-instance-id", instance])
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        return result.returncode, json.loads(result.stdout)
+
+    parent = {"parent_request_id": f["body"]["parent_request_id"]}
+    sid = f["session"]["session_id"]
+    try:
+        code, unavailable = invoke(parent)
+        assert code == 0 and unavailable["ok"], unavailable
+        assert unavailable["recipients"] == []
+        code, inferred = invoke(parent, instance=None)
+        assert code == 0 and inferred["recipients"] == []
+        code, refused = invoke(parent, instance="ginst_" + "b" * 32)
+        assert code != 0 and not refused["ok"], refused
+        code, forged = invoke({**parent, "requester": f["body"]["requester"]})
+        assert code != 0 and not forged["ok"]
+        assert f["service"].management_view(sid)["requests"] == []
+        assert f["store"].queued_turns(sid) == []
+
+        allow(f)
+        code, discovered = invoke(parent)
+        assert code == 0 and discovered["recipients"][0]["recipient"] == f["body"]["recipient"]
+        code, received = invoke({k: v for k, v in f["body"].items() if k != "requester"},
+            operation="request")
+        assert code == 0 and received["recipient"]["session_id"] == sid, received
+        completed = f["runtime"].wait_for_turn(session_id=sid, turn_id=received["turn_id"], timeout_sec=15)
+        assert completed["status"] == "completed", completed
+        returned = read_inbox(f["root"], f["registry"], "delivery", "builder",
+            caller_goal_ref=f["ref"])["peer_returns"]["items"][0]
+        assert returned["text"] == "Verified original project result."
+        assert returned["decision"] == "adopt"
+        code, inspected = invoke({"recipient": f["body"]["recipient"],
+            "request_id": received["request_id"], "control": "inspect", "parameters": {}},
+            operation="control")
+        assert code == 0 and inspected["request_control"]["revision"] == 1, inspected
+        assert f["store"].load_session(sid)["goal_id"] is None
+        packets = [json.loads(line) for line in f["capture"].read_text().splitlines()]
+        assert sum(packet.get("method") == "turn/start" for packet in packets) == 1
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
 
 
 def test_original_project_has_explicit_grant_and_returns_through_requester_inbox(project_peer):

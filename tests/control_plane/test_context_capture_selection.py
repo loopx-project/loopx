@@ -263,3 +263,16 @@ def test_cli_rejects_invalid_depth_before_authority(tmp_path, options):
     assert code != 0 and page["ok"] is False
     assert "list-depth" in page["reason"]
     assert not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("pointer,token", [("/rows/0/missing", 3), ("/rows/9", 2)])
+def test_cli_missing_batch_pointer_identifies_original_argument_without_source_leak(tmp_path, pointer, token):
+    path, raw, _ = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    code, result = _run_cli(registry, runtime, "quota", "context-read",
+        "--capture-file", str(path), "--capture-sha256", hashlib.sha256(raw).hexdigest(),
+        "--select", "/rows", "--select", "/rows", "--select", pointer, cwd=tmp_path)
+    assert code != 0 and result["ok"] is False and "content" not in result
+    assert f"--select argument 3, token {token}" in result["reason"]
+    assert pointer not in result["reason"] and "stop if unavailable" not in json.dumps(result)
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()

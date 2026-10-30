@@ -27,6 +27,57 @@ TURN_A = f"sha256:{'a' * 64}"
 TURN_B = f"sha256:{'b' * 64}"
 
 
+@pytest.mark.parametrize("number", [1, 1.0, -0.0, 2**60 + 1, float(2**60), 1e-7])
+def test_journal_retains_original_numbers_through_native_commit_and_replay(tmp_path, number):
+    journal = _journal(None, TURN_A)
+    journal["plan"]["original_evidence"] = {"values": [number, {"number": number}], "text": "1.0"}
+    path = tmp_path / "turn.json"
+    write_turn_journal_checkpoint(path, journal)
+    expected = json.dumps(journal["plan"]["original_evidence"], sort_keys=True)
+    assert json.dumps(json.loads(path.read_text())["plan"]["original_evidence"], sort_keys=True) == expected
+    original = path.read_bytes()
+    write_turn_journal_checkpoint(path, journal)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("before,after", [(1, 1.0), (-0.0, 0), (2**60 + 1, 2**60 + 2), (float(2**60), 2**60)])
+def test_journal_immutable_plan_distinguishes_original_numeric_facts(tmp_path, before, after):
+    journal = _journal(None, TURN_A)
+    journal["plan"]["measurement"] = before
+    path = tmp_path / "turn.json"
+    write_turn_journal_checkpoint(path, journal)
+    original = path.read_bytes()
+    journal["plan"]["measurement"] = after
+    with pytest.raises(EffectRuntimeConflict, match="plan is immutable"):
+        write_turn_journal_checkpoint(path, journal)
+    assert path.read_bytes() == original
+
+
+def test_journal_preserves_numbers_without_double_escaping_large_quoted_evidence(tmp_path):
+    journal = _journal(None, TURN_A)
+    evidence = {"body": ('line "value"\n' * 130_000)[:1_550_000], "number": 2**60 + 1}
+    journal["plan"]["original_evidence"] = evidence
+    path = tmp_path / "turn.json"
+    write_turn_journal_checkpoint(path, journal)
+    assert json.loads(path.read_text())["plan"]["original_evidence"] == evidence
+
+
+@pytest.mark.parametrize("number", [float("nan"), float("inf"), float("-inf")])
+def test_journal_nonfinite_source_is_rejected_before_transport(tmp_path, monkeypatch, number):
+    from loopx.control_plane.turn_driver import turn_journal_runtime
+
+    def unexpected_request(*args, **kwargs):
+        pytest.fail("nonfinite journal reached the runtime")
+
+    monkeypatch.setattr(turn_journal_runtime, "effect_runtime_result", unexpected_request)
+    journal = _journal(None, TURN_A)
+    journal["plan"]["measurement"] = number
+    path = tmp_path / "turn.json"
+    with pytest.raises(ValueError, match="finite"):
+        write_turn_journal_checkpoint(path, journal)
+    assert not path.exists()
+
+
 def _registry_payload(path: Path, instance_id: str) -> dict[str, Any]:
     return {
         "schema_version": "0.2",

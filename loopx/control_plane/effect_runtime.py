@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -84,6 +86,31 @@ CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
+
+
+def source_number_tokens(value: object) -> list[list[Any]]:
+    """Carry numeric IO spellings that a JavaScript number cannot distinguish.
+
+    This is transport metadata, not a hash codec or a projection policy.
+    Fractional doubles and safe integers keep their existing object transport.
+    """
+    tokens: list[list[Any]] = []
+
+    def visit(item: object, path: list[str | int]) -> None:
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Context source numbers must be finite")
+        if (isinstance(item, float) and item.is_integer()
+                or type(item) is int and abs(item) > 2**53 - 1):
+            tokens.append([path, json.dumps(item, allow_nan=False)])
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                visit(child, [*path, key])
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, [*path, index])
+
+    visit(value, [])
+    return tokens
 
 
 class _RuntimeSourceChanged(RuntimeError):
@@ -280,42 +307,38 @@ def _control_plane_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _scan_runtime_source_files(root: Path) -> tuple[str, ...]:
-    files: list[str] = []
+def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
+    snapshot: list[tuple[str, int, int, int]] = []
     for directory, child_directories, filenames in os.walk(root):
         child_directories.sort()
         relative_directory = os.path.relpath(directory, root)
         if relative_directory == ".":
             relative_directory = ""
-        files.extend(
-            Path(relative_directory, filename).as_posix()
-            for filename in sorted(filenames)
-            if Path(filename).suffix in _RUNTIME_SOURCE_SUFFIXES
-            and Path(directory, filename).is_file()
-        )
-    return tuple(sorted(files))
-
-
-def _runtime_file_snapshot(
-    root: Path,
-    files: tuple[str, ...],
-) -> _RuntimeSourceSnapshot:
-    return tuple(
-        (
-            relative,
-            (metadata := (root / relative).stat()).st_mtime_ns,
-            metadata.st_ctime_ns,
-            metadata.st_size,
-        )
-        for relative in files
-    )
+        for filename in sorted(filenames):
+            dot = filename.rfind(".")
+            if dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES:
+                continue
+            source = Path(directory, filename)
+            try:
+                metadata = source.stat()
+            except OSError:
+                # Preserve pathlib's missing-file and platform-specific error policy.
+                if not source.is_file():
+                    continue
+                raise
+            except ValueError:
+                continue
+            if stat.S_ISREG(metadata.st_mode):
+                snapshot.append((Path(relative_directory, filename).as_posix(),
+                    metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
+    return tuple(sorted(snapshot))
 
 
 def _runtime_source_snapshot(root: Path | None = None) -> _RuntimeSourceSnapshot:
     """Return cheap metadata that invalidates the packaged-source hash."""
 
     source_root = (root or _control_plane_root()).resolve()
-    return _runtime_file_snapshot(source_root, _scan_runtime_source_files(source_root))
+    return _scan_runtime_source_snapshot(source_root)
 
 
 def _runtime_source_files(root: Path | None = None) -> tuple[str, ...]:
@@ -815,7 +838,6 @@ def _request_with_info(
     }
     with ExitStack() as stack:
         response_sink: Path | None = None
-        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if large_local_snapshot:
             if method not in LOCAL_SNAPSHOT_METHODS:
                 raise EffectRuntimeRejected(
@@ -846,6 +868,8 @@ def _request_with_info(
                     "sha256": hashlib.sha256(params_bytes).hexdigest(),
                 }
                 encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        else:
+            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if len(encoded) > MAX_REQUEST_BYTES:
             raise EffectRuntimeRejected(
                 "TypeScript Effect runtime request is oversized",

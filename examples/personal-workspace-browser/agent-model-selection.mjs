@@ -122,7 +122,7 @@ export const agentModelSelectionScenario = {
       const actionTrigger = page.getByLabel("添加附件与快捷操作", {exact: true});
       const sendsBeforeMenu = api.turnRequests.length;
       await actionTrigger.click();
-      await page.getByRole("button", {name: "添加图片", exact: true}).waitFor();
+      await page.getByRole("button", {name: "添加附件", exact: true}).waitFor();
       const actionPanel = await page.locator(".personal-composer-actions-panel").boundingBox();
       const inputFrame = await page.locator(".personal-channel-composer").boundingBox();
       assert.ok(actionPanel && inputFrame && actionPanel.y + actionPanel.height <= inputFrame.y + 1,

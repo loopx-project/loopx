@@ -27,6 +27,7 @@ import {goalHierarchyScenario} from "./personal-workspace-browser/goal-hierarchy
 import {configurationBackupScenario} from "./personal-workspace-browser/configuration-backup.mjs";
 import {attentionUserActionScenario} from "./personal-workspace-browser/attention-user-action.mjs";
 import {prReviewAgentOrderScenario} from "./personal-workspace-browser/pr-review-agent-order.mjs";
+import {conversationDocumentRequestScenario} from "./personal-workspace-browser/conversation-document-request.mjs";
 import {conversationImageRequestScenario} from "./personal-workspace-browser/conversation-image-request.mjs";
 import {externalEvidenceReadbackScenario} from "./personal-workspace-browser/external-evidence-readback.mjs";
 import {exploreCompositionOwnerScenario} from "./personal-workspace-browser/explore-composition-owner.mjs";
@@ -156,6 +157,7 @@ scenarioCatalog.push(firstGoalHomeLiveScenario);
 scenarioCatalog.push(goalSuggestionsScenario);
 scenarioCatalog.push(goalSuggestionsLiveScenario);
 scenarioCatalog.push(managedAgentSessionsScenario);
+scenarioCatalog.push(conversationDocumentRequestScenario);
 const requestedScenario = process.env.LOOPX_PERSONAL_WORKSPACE_SCENARIO;
 scenarioCatalog.push(completedHistoryIsolationScenario);
 scenarioCatalog.push(agentModelSelectionScenario);

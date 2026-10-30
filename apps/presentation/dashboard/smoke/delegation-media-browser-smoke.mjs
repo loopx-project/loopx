@@ -14,6 +14,7 @@ await mkdir(output, {recursive: true});
 const fixturePath = resolve(repo, 'examples/personal-workspace-browser/steward_requests_fixture.py');
 const command = testPythonCommand(`import runpy; runpy.run_path(${JSON.stringify(fixturePath)}, run_name="__main__")`, {repoRoot: repo});
 const child = spawn(command.command, [...command.args, '--status-file', resolve(repo, 'examples/status.example.json'),
+  '--requests', '61',
   ...(process.env.LOOPX_MEDIA_ASSETS ? ['--assets-dir', process.env.LOOPX_MEDIA_ASSETS] : [])],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: '0'}, stdio: ['pipe', 'pipe', 'pipe']});
 let stderr = '';
@@ -75,7 +76,8 @@ try {
   });
   await page.goto(ready.origin + '/chat/');
   await page.getByRole('navigation', {name: '管家视图'}).getByRole('button', {name: /^(Chat|对话)$/}).click();
-  await page.getByText('复核迁移说明中的示例', {exact: true}).filter({visible: true}).first().waitFor();
+  const returnedTitle = '检查月底跨时区的账期边界 · 记录 61';
+  await page.getByText(returnedTitle, {exact: true}).filter({visible: true}).first().waitFor();
   // Let the stored manager admission settle before opening its modal. That
   // source transition deliberately closes readers opened on fallback state.
   await page.waitForTimeout(1000);
@@ -90,7 +92,9 @@ try {
   await page.setViewportSize({width: 1440, height: 1000});
   await input.fill('核对账单导出的字段映射');
   await dialog.getByRole('button', {name: '搜索', exact: true}).click();
-  const row = dialog.locator('.conversation-request-row');
+  const originalRow = container => container.locator('.conversation-request-row')
+    .filter({has: page.getByText('核对账单导出的字段映射', {exact: true})});
+  const row = originalRow(dialog);
   await row.locator(':scope > summary').click();
   const original = row.getByText('原对话', {exact: true});
   await original.click();
@@ -164,32 +168,36 @@ try {
     const english = page.getByRole('dialog', {name: 'Delegations', exact: true});
     await english.getByRole('searchbox', {name: 'Search delegations'}).fill('核对账单导出的字段映射');
     await english.getByRole('button', {name: 'Search', exact: true}).click();
-    await english.locator('.conversation-request-row > summary').first().click();
-    await english.getByText('Original conversation', {exact: true}).click();
+    const englishOriginal = originalRow(english);
+    await englishOriginal.locator(':scope > summary').click();
+    await englishOriginal.getByText('Original conversation', {exact: true}).click();
     await english.getByRole('img', {name: '原始图一.png', exact: true}).waitFor();
     const inspection = await inspect();
     assert.equal(inspection.source_unchanged, true); assert.equal(inspection.posts, 0);
     await page.setViewportSize({width: 1440, height: 1000});
 
-    // The loaded second page and its open reader survive refresh as a unit.
+    // More than one 48-row response window is needed. Keep the earliest
+    // original and the native return readable across the complete refresh.
     const settled = () => page.waitForFunction(() => document.querySelector('.conversation-requests-body')?.getAttribute('aria-busy') === 'false');
     const rows = count => page.waitForFunction(expected => document.querySelectorAll('.conversation-request-row').length === expected
       && document.querySelector('.conversation-requests-body')?.getAttribute('aria-busy') === 'false', count);
     const refresh = english.getByRole('button', {name: 'Refresh delegations', exact: true});
     await english.getByRole('button', {name: 'Clear', exact: true}).click(); await rows(12);
     await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(12);
-    await english.getByRole('button', {name: 'More records', exact: true}).click(); await rows(13);
-    const secondPage = english.locator('.conversation-request-row').filter({hasText: '核对账单导出的字段映射'});
+    for (const count of [24, 36, 48, 60, 61]) {
+      await english.getByRole('button', {name: 'More records', exact: true}).click(); await rows(count);
+    }
+    const secondPage = originalRow(english);
     await secondPage.locator(':scope > summary').click();
     await secondPage.getByText('Original conversation', {exact: true}).click();
     await secondPage.getByRole('img', {name: '原始图一.png', exact: true}).waitFor();
-    const nativeRow = english.locator('.conversation-request-row').filter({hasText: '复核迁移说明中的示例'});
+    const nativeRow = english.locator('.conversation-request-row').filter({has: page.getByText(returnedTitle, {exact: true})});
     await nativeRow.locator(':scope > summary').click();
     await nativeRow.getByText('Original conversation', {exact: true}).click();
     await nativeRow.locator('article').first().waitFor();
     let inventoryMode = 'hold', releasePage, sawPage;
     await page.route('**/api/chat/request-inventory?*', async route => {
-      if (new URL(route.request().url()).searchParams.get('offset') !== '12') return route.continue();
+      if (new URL(route.request().url()).searchParams.get('offset') !== '48') return route.continue();
       const response = await route.fetch();
       if (inventoryMode === 'hold') {sawPage(); await new Promise(resolve => releasePage = resolve);}
       if (inventoryMode === 'drift') {
@@ -204,9 +212,9 @@ try {
     await refresh.click(); await held;
     const focusedInput = english.getByRole('searchbox', {name: 'Search delegations'});
     await focusedInput.focus();
-    assert.equal(await english.locator('.conversation-request-row').count(), 13, 'Do not publish a half-refreshed inventory');
+    assert.equal(await english.locator('.conversation-request-row').count(), 61, 'Do not publish a half-refreshed inventory');
     assert.equal(await secondPage.getByText('Original conversation', {exact: true}).evaluate(node => node.parentElement.open), true);
-    releasePage(); await rows(13);
+    releasePage(); await rows(61);
     assert.equal(await focusedInput.evaluate(node => node === document.activeElement), true, 'Refreshing evidence must not steal focus');
     assert.ok(Math.abs(await scroll.evaluate(node => node.scrollTop) - beforeScroll) <= 1, 'Keep same-source reading position');
     inventoryMode = 'normal';
@@ -214,7 +222,7 @@ try {
     // browser response enrichment. The same open reader must show its body.
     child.stdin.write('deliver\n'); assert.equal((await next()).event, 'deliver');
     const delivered = '已核对本次迁移说明与示例，版本一致，原始检查结果已保留。';
-    await refresh.click(); await rows(13);
+    await refresh.click(); await rows(61);
     await nativeRow.getByText(delivered, {exact: true}).waitFor();
     assert.equal(await secondPage.getByText('Original conversation', {exact: true}).evaluate(node => node.parentElement.open), true);
     await nativeRow.getByText(delivered, {exact: true}).scrollIntoViewIfNeeded();
@@ -228,12 +236,12 @@ try {
     inventoryMode = 'normal'; await english.getByRole('button', {name: 'Retry', exact: true}).click(); await rows(12);
     // A source/query change while an original read is in flight cannot carry
     // its private evidence into the new result, even if the response arrives.
-    const sourceRow = english.locator('.conversation-request-row').filter({hasText: '复核迁移说明中的示例'});
+    const sourceRow = english.locator('.conversation-request-row').filter({has: page.getByText(returnedTitle, {exact: true})});
     await sourceRow.locator(':scope > summary').click(); mode = 'delayed';
     const late = new Promise(resolve => observed = resolve);
     await sourceRow.getByText('Original conversation', {exact: true}).click(); await late;
     await english.getByRole('searchbox', {name: 'Search delegations'}).fill('reviewer');
-    await english.getByRole('button', {name: 'Search', exact: true}).click(); await rows(4);
+    await english.getByRole('button', {name: 'Search', exact: true}).click(); await rows(12);
     release(); mode = 'images'; await page.unroute('**/api/chat/request-inventory?*');
     assert.equal(await english.locator('article').count(), 0);
     assert.equal(await english.locator('img').count(), 0);

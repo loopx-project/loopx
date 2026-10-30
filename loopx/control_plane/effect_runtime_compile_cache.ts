@@ -24,8 +24,9 @@ interface RetirementWatchdog {
 }
 
 async function locatorRetirement(locator: RuntimeLocator): Promise<() => Promise<void>> {
-  // Load before flushing so normal process exit cannot write newly compiled
-  // helpers back into a namespace its caller has already removed.
+  // The main thread loads this before flushing so normal process exit cannot
+  // write newly compiled helpers into a namespace its caller already removed.
+  // The cache-disabled worker can load it only when retirement is needed.
   const { withFileMutationLock } = await import("./effect_runtime_io.ts");
   return () => withFileMutationLock(locator.infoPath, async () => {
     let published: Record<string, unknown>;
@@ -56,7 +57,9 @@ async function exitAfterRetirement(retire: () => Promise<void>): Promise<void> {
 }
 
 async function superviseCache(data: RetirementWatchdog): Promise<void> {
-  const retire = await locatorRetirement(data.locator);
+  // A ready cache-free supervisor needs no cleanup IO yet. Loading those
+  // helpers first can exhaust startup's allowance and force main-thread exit.
+  const retire = async () => (await locatorRetirement(data.locator))();
   const state = new Int32Array(data.state);
   parentPort!.once("message", () => {
     setTimeout(() => {

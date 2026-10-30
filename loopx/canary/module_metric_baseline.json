@@ -41,7 +41,7 @@
     "loopx/chat_server.py": {
       "any_count": 25,
       "dict_any_count": 0,
-      "lines": 2026
+      "lines": 2034
     },
     "loopx/chat_store.py": {
       "lines": 2066
