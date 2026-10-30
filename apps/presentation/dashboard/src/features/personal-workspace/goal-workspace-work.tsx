@@ -161,7 +161,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   const quietWork = digest.work.coverage === "complete" && digest.work.total === 0
     && digest.needsYou.availability === "ok" && digest.needsYou.blocking === 0
     && digest.needsYou.optional === 0 && !attention.length;
-  const hasRail = Boolean(attentionContent) || !quietWork;
+  const hasRail = !quietWork;
   useEffect(() => {
     const node = inventory.current;
     if (!node) {setInventoryAvailable(false); return;}
@@ -209,6 +209,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
     </aside>;
   const documentContent = <div className="goal-workspace-document" ref={readingDocument} key="document">
       {brief}
+      {attentionContent}
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
         <header className="goal-now-header"><h2><span className="goal-stage-n">03</span>{zh ? "当前工作" : "Now"}</h2>
           {digest.work.coverage !== "complete" || !digest.work.groups.length ? <ContextHelp icon={digest.work.coverage !== "complete" ? CircleHelp : Info}
@@ -239,7 +240,6 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </section>
     </div>;
   const railContent = hasRail ? <div className="goal-workspace-rail" data-testid="goal-workspace-inline-rail" key="rail">
-      {attentionContent}
       {!quietWork ? <details className="goal-workspace-inventory" ref={inventory} open={inventoryOpen} onToggle={event => setInventoryOpen(event.currentTarget.open)}>
         <summary><List size={17} aria-hidden/><span>{zh ? "全部工作" : "All work"}</span><ChevronDown size={15} aria-hidden/></summary>
         {inventoryAvailable && inventoryOpen && !railOpen ? rail("inline") : null}

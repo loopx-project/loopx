@@ -407,12 +407,12 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-manager-greeting strong { font-size: var(--text-heading); line-height: var(--leading-heading); letter-spacing: -0.01em; }
 .personal-manager-greeting p { margin: 0; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-proposal-explainer { padding: 10px 12px; border-radius: var(--pw-r-item); background: var(--pw-blue-soft); color: var(--pw-text); font-size: var(--text-caption); line-height: var(--leading-caption); }
-.personal-home-board { display: grid; gap: 24px; min-width: 0; container-type: inline-size; }
+.personal-home-board { display: grid; gap: var(--pw-s-4); min-width: 0; container-type: inline-size; }
 .personal-home-lanes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; min-width: 0; }
 .personal-brief-date { color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-.personal-brief { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); align-items: start; gap: 24px; min-width: 0; }
+.personal-brief { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--pw-s-4); min-width: 0; }
 .personal-brief:has(> .personal-brief-tile:nth-child(4)) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.personal-brief-tile { display: grid; grid-template-rows: auto auto; gap: 12px; min-width: 0; padding: 0; border: 0; background: transparent; }
+.personal-brief-tile { display: grid; grid-template-rows: auto auto; gap: var(--pw-s-3); flex: 1 1 240px; min-width: 0; padding: 0; border: 0; background: transparent; }
 .personal-brief-tile > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--pw-line); }
 .personal-brief-tile > header span { color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); font-weight: 500; }
 .personal-brief-tile > header b { color: var(--pw-text); font-size: var(--text-display); font-weight: 600; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
@@ -443,7 +443,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-brief-tile > footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); border-top: 1px solid var(--pw-line); padding-top: 8px; }
 .personal-brief-tile > footer button { min-height: 44px; padding: 4px 0; background: transparent; border: 0; color: var(--pw-text); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .personal-brief-tile > footer button:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: 3px; }
-.personal-home-section-title { margin: 10px 0 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 500; }
+.personal-home-section-title { margin: var(--pw-s-2) 0 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 500; }
 
 @media (max-width: 720px) {
   .personal-brief, .personal-brief:has(> .personal-brief-tile:nth-child(4)) { grid-template-columns: 1fr; }
@@ -2314,7 +2314,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-settings-scope-hint { margin: 4px 0 0; max-width: 72ch; color: var(--pw-muted); font-size: var(--text-caption); line-height: 1.55; }
 
 /* Run band: one segment per recent run, colour is outcome. */
-.personal-runband { grid-column: 1 / -1; display: grid; gap: 9px; padding-bottom: 14px; border-bottom: 1px solid var(--pw-line); }
+.personal-runband { flex: 1 1 100%; display: grid; gap: 9px; padding-bottom: 14px; border-bottom: 1px solid var(--pw-line); }
 .personal-runband-track { display: flex; align-items: stretch; gap: 2px; height: 20px; }
 .personal-runband-seg { flex: 1 1 0; min-width: 4px; border-radius: 2px; background: #dcdad1; }
 .personal-runband-seg.is-done { background: #4f9d69; }
