@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -57,7 +56,7 @@ def _turn_envelope_result(
 
     request = {"operation": operation, **params}
     if operation in {"context_delivery", "context_recovery"}:
-        tokens = _source_number_tokens(params)
+        tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
     try:
@@ -72,30 +71,6 @@ def _turn_envelope_result(
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)
-
-
-def _source_number_tokens(value: object) -> list[list[Any]]:
-    """Transport sparse numeric source identity; no carrier or sharing policy."""
-    tokens: list[list[Any]] = []
-
-    def visit(item: object, path: list[str | int]) -> None:
-        if isinstance(item, float) and not math.isfinite(item):
-            raise ValueError("Context source numbers must be finite")
-        # Fractional doubles retain their identity through JSON/JavaScript.
-        # Only integral floats (including signed zero) and unsafe integers
-        # can become indistinguishable from a different Python source number.
-        if (isinstance(item, float) and item.is_integer()
-                or type(item) is int and abs(item) > 2**53 - 1):
-            tokens.append([path, json.dumps(item, allow_nan=False)])
-        elif isinstance(item, Mapping):
-            for key, child in item.items():
-                visit(child, [*path, key])
-        elif isinstance(item, (list, tuple)):
-            for index, child in enumerate(item):
-                visit(child, [*path, index])
-
-    visit(value, [])
-    return tokens
 
 
 def assert_turn_envelope_consumer_version(envelope: Mapping[str, Any]) -> None:

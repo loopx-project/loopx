@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import secrets
 import socket
@@ -85,6 +86,31 @@ CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
+
+
+def source_number_tokens(value: object) -> list[list[Any]]:
+    """Carry numeric IO spellings that a JavaScript number cannot distinguish.
+
+    This is transport metadata, not a hash codec or a projection policy.
+    Fractional doubles and safe integers keep their existing object transport.
+    """
+    tokens: list[list[Any]] = []
+
+    def visit(item: object, path: list[str | int]) -> None:
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Context source numbers must be finite")
+        if (isinstance(item, float) and item.is_integer()
+                or type(item) is int and abs(item) > 2**53 - 1):
+            tokens.append([path, json.dumps(item, allow_nan=False)])
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                visit(child, [*path, key])
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, [*path, index])
+
+    visit(value, [])
+    return tokens
 
 
 class _RuntimeSourceChanged(RuntimeError):
