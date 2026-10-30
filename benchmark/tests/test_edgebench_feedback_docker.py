@@ -93,6 +93,62 @@ def test_native_execution_disposition_uses_real_docker_exit(tmp_path, agent_imag
         backend.client.close()
 
 
+def test_host_bridge_pin_reaches_only_the_native_allowed_port(tmp_path, agent_image):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from sforge.harness.network_isolation import build_allowed_endpoints
+    from benchmark.runtime.sforge_backend import RecordingDockerBackend
+
+    backend = RecordingDockerBackend(log_dir=tmp_path / "collected",
+        logger=logging.getLogger("bridge-route-smoke"), oauth_proxy=True,
+        docker_host_bridge=True)
+    handle = backend.create_container(agent_image.id, "host-bridge-" + uuid.uuid4().hex[:10],
+        extra_hosts={"host.docker.internal": "host-gateway"}, cpu_limit=1, mem_limit="256m")
+    backend.start_container(handle)
+    gateway = backend.get_container_gateway_ip(handle)
+
+    class Response(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"synthetic-bridge-service")
+
+        def log_message(self, *args):
+            pass
+
+    servers, policy = [], None
+    try:
+        for _ in range(2):
+            server = ThreadingHTTPServer((gateway, 0), Response)
+            servers.append(server)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        ports = [server.server_port for server in servers]
+        handle.raw.reload()
+        assert f"host.docker.internal:{gateway}" in handle.raw.attrs["HostConfig"]["ExtraHosts"]
+
+        def get(port):
+            source = ("import urllib.request; "
+                "opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+                f"print(opener.open('http://host.docker.internal:{port}',timeout=2).read().decode())")
+            return backend.exec_run(handle, ["python3", "-c", source], user="agent")
+
+        assert all(get(port).exit_code == 0 for port in ports)
+        endpoints = build_allowed_endpoints(f"http://host.docker.internal:{ports[0]}",
+                                            None, gateway, backend.logger)
+        policy = backend.create_network_isolation(handle, endpoints, backend.logger)
+        policy.apply()
+        allowed = get(ports[0])
+        assert allowed.exit_code == 0 and allowed.output.strip() == "synthetic-bridge-service"
+        assert get(ports[1]).exit_code != 0, "the routing option must not add an allowed port"
+    finally:
+        if policy is not None:
+            policy.cleanup()
+        backend.cleanup_container(handle)
+        backend.client.close()
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+
+
 def test_sforge_checkpoint_declaration_is_a_private_guest_artifact(tmp_path, agent_image, monkeypatch):
     from sforge.harness.config import SForgeConfig
     from benchmark.runtime.sforge import SForgeWorker, BenchmarkCodex
