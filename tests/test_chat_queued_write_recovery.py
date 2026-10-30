@@ -61,6 +61,7 @@ def transient_reader(path, monkeypatch):
             assert not worker.is_alive()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows file sharing boundary")
 def test_transient_windows_reader_preserves_complete_atomic_chat_state(tmp_path, monkeypatch):
     path = tmp_path / "turn.json"
     path.write_text('{"status":"queued"}')
@@ -71,6 +72,7 @@ def test_transient_windows_reader_preserves_complete_atomic_chat_state(tmp_path,
     assert not list(tmp_path.glob("*.tmp"))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows file sharing boundary")
 def test_persistent_windows_reader_keeps_original_and_cleans_temporary(tmp_path):
     path = tmp_path / "turn.json"
     path.write_text('{"status":"queued"}')
@@ -127,6 +129,7 @@ def test_json_serialization_failure_cleans_temporary(tmp_path):
     assert path.read_text() == '{}' and not list(tmp_path.glob("*.tmp"))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows file sharing boundary")
 @pytest.mark.parametrize("operation", ["start", "resume"])
 @pytest.mark.parametrize("cold", [False, True], ids=["same-controller", "cold-controller"])
 def test_original_operation_recovers_queued_after_failed_start_fact(mode, monkeypatch, operation, cold):  # noqa: F811 - imported pytest fixture
