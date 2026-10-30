@@ -149,6 +149,7 @@ class QuotaSettlementReadback:
     writeback: SettlementResult[dict[str, Any]]
     spend: SettlementResult[dict[str, Any]]
     delivery: SettlementResult[dict[str, Any]]
+    spend_qualification: SettlementResult[dict[str, Any]]
     settlement: SettlementResult[dict[str, Any]]
     terminal_closeout: SettlementResult[dict[str, Any]]
     terminal_settlement: SettlementResult[dict[str, Any]]
@@ -442,6 +443,7 @@ def read_heartbeat_settlement(
         writeback=_readback_result(payload.get("writeback")),
         spend=_readback_result(payload.get("spend")),
         delivery=_readback_result(payload.get("delivery")),
+        spend_qualification=_readback_result(payload.get("spend_qualification")),
         settlement=_readback_result(payload.get("settlement")),
         terminal_closeout=_readback_result(payload.get("terminal_closeout")),
         terminal_settlement=_readback_result(payload.get("terminal_settlement")),

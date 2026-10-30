@@ -274,6 +274,11 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
     return {status: "none"};
   }
   const progress = jsonObject(request.settlement_progress);
+  if (progress?.schema_version === "quota_settlement_progress_v0" &&
+      progress.state === "direction_pending" && progress.next_step === "durable_writeback") {
+    return boundRecovery(request, "durable_writeback",
+      "The original result is retained, but its direction checkpoint is still pending. Read its post-result checkpoint context and supplement only that direction under the original Turn before spending. Do not repeat the result, its mutations or implementation.");
+  }
   const writebackRequired = progress?.schema_version === "quota_settlement_progress_v0" &&
       progress.next_step === "durable_writeback" &&
       (progress.state === "writeback_required" || progress.state === "writeback_receipt_required");

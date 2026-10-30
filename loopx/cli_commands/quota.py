@@ -998,7 +998,7 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
     """Restore the original captured input after a successful quota guard."""
     if args.quota_command == "should-run" and heartbeat_turn_id and payload.get("ok") is True:
         from ..control_plane.goals.checkpoint_context_io import (
-            TurnResultWork, replan_checkpoint_cli_actions, result_work_required,
+            TurnResultWork, pending_checkpoint_cli_actions, replan_checkpoint_cli_actions, result_work_required,
             result_work_context, result_work_context_exists,
         )
         from ..control_plane.quota.settlement import read_heartbeat_settlement
@@ -1014,6 +1014,16 @@ def _restore_quota_work_input(args, payload, *, heartbeat_turn_id, heartbeat_rec
                 payload["work_input_restored"] = result_work_context_exists(runtime_root, work_readback.identity.value)
                 committed = heartbeat_receipt_existing is not None and TurnResultWork(
                     registry_path, runtime_root, work_readback.identity.value, goal_ref).result_committed()
+                if (work_readback.progress or {}).get("state") == "direction_pending":
+                    interaction = payload["interaction_contract"]
+                    channel = interaction["cli_channel"]
+                    channel["next_cli_actions"] = pending_checkpoint_cli_actions(work_readback,
+                        command_prefix=render_cli_command_prefix(
+                            registry_path=str(registry_path), runtime_root=str(runtime_root)), goal_ref=goal_ref)
+                    channel.update(spend_allowed_now=False, spend_after_validation=True)
+                    interaction["agent_channel"]["primary_action"] = payload["recommended_action"] = (
+                        "Result retained; read the original Turn's post-result context and complete its direction before spending."
+                    )
                 if committed:
                     payload["result_committed"] = True
                     progress = payload.get("first_delivery_progress")

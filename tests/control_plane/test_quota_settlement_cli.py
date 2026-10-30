@@ -905,6 +905,27 @@ def test_gitless_goal_refresh_and_quota_spend_settle_end_to_end(
     }
     assert str(project) not in json.dumps(refresh["delivery_workspace"])
 
+    # Retention alone cannot end the quota cycle while direction is pending.
+    pending_rc, pending = _run_cli(registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        "--source", "heartbeat", "--execute", *binding, cwd=project)
+    assert pending_rc == 1 and pending["appended"] is False, pending
+    assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
+    context_rc, context = _run_cli(registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        "--purpose", "supplement_checkpoint", *binding, cwd=project)
+    assert context_rc == 0, context
+    direction = project / "direction.json"
+    direction.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
+        "state": "vision_patch_proposed", "vision_patch": {"acceptance_summary": "Verify the retained local candidate."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The local candidate can advance the task.",
+            "observed_reality": "The retained candidate has a verified local workspace identity.",
+            "retained": ["The original candidate and task."], "evidence_refs": [f"todo:{TODO_ID}"]}}), encoding="utf-8")
+    direction_rc, supplemented = _run_cli(registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID,
+        *binding, "--classification", "gitless_validated_progress", "--delivery-batch-scale", "implementation",
+        "--delivery-outcome", "outcome_progress", "--checkpoint-read-context", context["read_context_id"], "--agent-vision-json", str(direction),
+        "--no-global-sync", "--suppress-external-sinks", cwd=project)
+    assert direction_rc == 0 and supplemented["vision_checkpoint"]["satisfied"] is True, supplemented.get("error") or supplemented
+    assert "end" not in json.loads(cycles_path.read_text())["cycles"][0]
+
     spend_rc, spend = _run_cli(
         registry_path,
         runtime,

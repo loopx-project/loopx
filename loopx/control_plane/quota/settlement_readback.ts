@@ -39,6 +39,7 @@ import {
   isCommittedMonitorPollEffect,
   isAcceptedProgressWriteback,
   isAcceptedReplanWriteback,
+  isAcceptedSettlementDirection,
   isCapabilityRetirementWriteback,
   receiptBoundMonitorPhase,
   receiptBoundReplayPhase,
@@ -132,7 +133,7 @@ interface ResultBundle extends JsonObject {
 }
 
 type SettlementProgressState = "identity_required" | "writeback_required" |
-  "writeback_receipt_required" | "spend_required" | "spend_receipt_required" | "settled";
+  "writeback_receipt_required" | "direction_pending" | "spend_required" | "spend_receipt_required" | "settled";
 
 function settlementScope(
   runtimeRootValue: unknown,
@@ -163,6 +164,7 @@ function settlementProgress(
   writebackRun: JsonObject | null, spendRun: JsonObject | null,
   spendSource: unknown = "heartbeat",
   noSpendKind: "typed_blocked_writeback_no_spend" | "capability_duty_retired_no_spend" | null = null,
+  directionPending = false,
 ): JsonObject {
   const source = spendSource ?? "heartbeat";
   if (source !== "heartbeat" && source !== "visible-goal") {
@@ -171,12 +173,13 @@ function settlementProgress(
   const state: SettlementProgressState = identity.failure ? "identity_required"
     : writeback.failure ? (writebackRun ? "writeback_receipt_required" : "writeback_required")
     : noSpendKind ? "settled"
+    : directionPending ? "direction_pending"
     : spend.failure ? (spendRun ? "spend_receipt_required" : "spend_required")
     : "settled";
   return {
     schema_version: "quota_settlement_progress_v0", state,
     next_step: identity.failure ? "validation" : writeback.failure ? "durable_writeback"
-      : noSpendKind ? null : spend.failure ? "quota_spend" : null,
+      : noSpendKind ? null : directionPending ? "durable_writeback" : spend.failure ? "quota_spend" : null,
     quota_spend_source: source,
     ...(noSpendKind ? {
       closeout_kind: noSpendKind,
@@ -1070,6 +1073,7 @@ function failedReadback(
     writeback: bundle(downstreamFailure),
     spend: bundle(downstreamFailure),
     delivery: bundle(downstreamFailure),
+    spend_qualification: bundle(downstreamFailure),
     settlement: bundle(downstreamFailure),
     terminal_closeout: bundle(terminalFailure),
     terminal_settlement: bundle(downstreamFailure),
@@ -1265,7 +1269,15 @@ function readQuotaSettlementFromRequest(
     : blockedNoSpend ? "typed_blocked_writeback_no_spend" : null;
   const terminalCloseout = terminalResult(identity, completionEvent);
   const withWriteback = settlementBindReduce(identityResult, writeback);
-  const settled = noSpendKind ? withWriteback : settlementBindReduce(withWriteback, spend);
+  const directionPending = writeback.failure === null && noSpendKind === null &&
+    !isAcceptedSettlementDirection(writebackRun, identity, heartbeatReceipt, semanticReplanGuard.selected_obligation_id);
+  // Keep writeback readable for a post-result context. Debit, replay closeout
+  // and terminal settlement must also preserve the original direction duty.
+  const spendQualification = directionPending ? settlementBindReduce(withWriteback, settlementFailed<JsonObject>({
+    kind: "writeback_rejected", step_kind: "durable_writeback",
+    reason: "The original Turn still owes its direction checkpoint. Read checkpoint-context and supplement that same result before spending.",
+  })) : withWriteback;
+  const settled = noSpendKind ? spendQualification : settlementBindReduce(spendQualification, spend);
   const terminalSettlement = settlementBindReduce(settled, terminalCloseout);
   const monitorPoll = committedMonitorPollFromSnapshot(
     snapshot,
@@ -1312,7 +1324,7 @@ function readQuotaSettlementFromRequest(
     supersede_receipt_present: supersedeEvent?.status === "done" &&
       optionalString(supersedeEvent.todo_id) === identity.todo_id,
     durable_writeback_present: writeback.failure === null,
-    quota_spend_present: spend.failure === null,
+    quota_spend_present: spend.failure === null && !directionPending,
     no_spend_closeout_present: noSpendKind !== null,
   });
 
@@ -1347,11 +1359,13 @@ function readQuotaSettlementFromRequest(
     writeback: bundle(writeback),
     spend: bundle(spend),
     delivery: bundle(withWriteback),
+    // Qualification carries receipts/failure, not another copy of the result.
+    spend_qualification: bundle(spendQualification.failure === null ? {...spendQualification, value: {}} : spendQualification),
     settlement: bundle(settled),
     terminal_closeout: bundle(terminalCloseout),
     terminal_settlement: bundle(terminalSettlement),
     progress: settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
-      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind),
+      receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind, directionPending),
     workspace_causality: workspaceCausality,
     semantic_replan_guard: semanticReplanGuard,
     writeback_run: writebackRun,

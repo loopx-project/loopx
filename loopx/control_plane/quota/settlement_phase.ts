@@ -4,6 +4,30 @@ import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { isCanonicalTodoId } from "../todos/identity.ts";
 import { isBlockedLifecycleWait, isCausalBlockedWait, isMonitorUnavailableWait } from "./blocked_wait.ts";
 import { isTurnScopedSettlementOutcome } from "../work_items/delivery_outcome.ts";
+import { checkpointContinuationRequired } from "./heartbeat_receipt_identity.ts";
+
+/** A retained result is readable before its direction is accepted. Only the
+ * original admission can require that checkpoint; historical receipts keep
+ * their policy, and a real not-required decision needs no direction append. */
+export function isAcceptedSettlementDirection(
+  value: unknown, identity: SettlementIdentity, receipt: Record<string, unknown> | null,
+  selectedObligation: unknown,
+): boolean {
+  if (!checkpointContinuationRequired(receipt)) return true;
+  const run = jsonObject(value), checkpoint = jsonObject(run?.vision_checkpoint);
+  if (checkpoint?.schema_version !== "vision_checkpoint_v0" ||
+      checkpoint.agent_id !== identity.agent_id || checkpoint.satisfied !== true) return false;
+  const notRequired = checkpoint.required === false && checkpoint.decision === "not_required";
+  const context = jsonObject(checkpoint.read_context);
+  if (!notRequired && (typeof checkpoint.required !== "boolean" ||
+      !["patched", "unchanged_with_reason"].includes(String(checkpoint.decision)) ||
+      context?.ok !== true || typeof context.read_context_id !== "string" || !context.read_context_id)) return false;
+  if (selectedObligation === null) return true;
+  const ack = jsonObject(run?.autonomous_replan_ack), semantic = jsonObject(ack?.semantic_delta);
+  return ack?.schema_version === "autonomous_replan_ack_v0" && ack.recorded === true &&
+    semantic?.schema_version === "replan_semantic_delta_v0" && semantic.accepted === true &&
+    semantic.obligation_id === selectedObligation;
+}
 
 function retryDelayIsBounded(seconds: number): boolean {
   return Number.isFinite(seconds) && seconds >= 60 && seconds <= 30 * 60;

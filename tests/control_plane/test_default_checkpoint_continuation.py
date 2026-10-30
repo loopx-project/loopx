@@ -30,6 +30,16 @@ def _fixture(provider, tmp_path, monkeypatch, *, validation_command_json=None):
     return registry, state, todo['todo_id']
 
 
+def _assert_pending_direction_cannot_spend(registry, runtime, identity):
+    receipts = runtime / 'goals' / identity.goal_id
+    before = {name: (receipts / name).read_bytes() for name in ('runs/index.jsonl', 'rollout-event-log.jsonl')}
+    rc, denied = _run_cli(registry, 'quota', 'spend-slot', '--goal-id', identity.goal_id,
+        '--agent-id', identity.agent_id, '--todo-id', identity.todo_id,
+        '--turn-instance-id', identity.turn_instance_id, '--source', 'heartbeat', '--execute')
+    assert rc == 1 and denied['appended'] is False, denied
+    assert {name: (receipts / name).read_bytes() for name in before} == before
+
+
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
 @pytest.mark.parametrize('terminal', [False, True, 'stored', 'cold_explicit'])
 def test_default_mcp_uses_scoped_post_result_basis_and_original_turn(provider, terminal, tmp_path, monkeypatch):
@@ -204,6 +214,7 @@ def test_direction_retry_keeps_input_response_binding_and_result(provider, chang
         return {'read_context_id': context['read_context_id'], 'vision_unchanged_reason': 'Current evidence preserves the route.'}
     driver = CurrentAgentCheckpoint(registry, tmp_path / 'runtime', state, identity, decide)
     decided = driver.continue_direction({})
+    _assert_pending_direction_cannot_spend(registry, tmp_path / 'runtime', identity)
     if change == 'related':
         state.write_text(state.read_text(encoding='utf-8') + '\n## Acceptance\nRevised obligation.\n', encoding='utf-8')
     elif change == 'display':
@@ -232,8 +243,9 @@ def test_direction_retry_keeps_input_response_binding_and_result(provider, chang
 
 
 @pytest.mark.parametrize('failure', ['timeout', 'stop'])
-def test_direction_failure_retains_result_and_respects_existing_host_budget(failure, tmp_path, monkeypatch):
-    registry, state, todo = _fixture('file', tmp_path, monkeypatch)
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_direction_failure_retains_result_and_respects_existing_host_budget(provider, failure, tmp_path, monkeypatch):
+    registry, state, todo = _fixture(provider, tmp_path, monkeypatch)
     control = _control(registry)
     json.loads(control.should_run())
     first = json.loads(control.complete_task(todo, AGENT_ID, 'Candidate verified.', next_agent_todo='Verify remaining work.'))
@@ -252,6 +264,7 @@ def test_direction_failure_retains_result_and_respects_existing_host_budget(fail
     receipt = json.loads(_receipt_path(tmp_path / 'runtime', identity).read_text())
     assert receipt['decision_basis']['todo']['status'] == 'done'
     assert 'current_agent_decision' not in receipt
+    _assert_pending_direction_cannot_spend(registry, tmp_path / 'runtime', identity)
 
 
 @pytest.mark.parametrize('kind', ['validated_progress', 'repair_required', 'replan_required', 'wait'])

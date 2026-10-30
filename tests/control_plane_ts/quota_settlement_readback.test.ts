@@ -22,7 +22,7 @@ import {
   acquireFileMutationLock,
   releaseFileMutationLock,
 } from "../../loopx/control_plane/effect_runtime_io.ts";
-import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait } from "../../loopx/control_plane/quota/blocked_wait.ts";
+import { BLOCKED_WAIT_REQUEST_SCHEMA, prepareBlockedWait, projectReceiptBoundWait, RECEIPT_BOUND_WAIT_REQUEST_SCHEMA } from "../../loopx/control_plane/quota/blocked_wait.ts";
 import { evaluateTodoResumeConditions, TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION } from "../../loopx/control_plane/todos/resume_condition.ts";
 import {
   projectSemanticReplanGuard,
@@ -483,6 +483,68 @@ function request(runtimeRoot: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test("retained results stay readable while original direction qualifies debit and recovery", async t => {
+  const pending = {schema_version: "vision_checkpoint_v0", agent_id: agentId,
+    required: true, satisfied: false, decision: "missing_required", replan_stage: "awaiting_direction"};
+  const accepted = {...pending, satisfied: true, decision: "patched", replan_stage: "direction_committed",
+    read_context: {ok: true, read_context_id: "original-direction"}};
+  const obligation = "replan-0000000000000001";
+  const ack = {schema_version: "autonomous_replan_ack_v0", recorded: true,
+    semantic_delta: {schema_version: "replan_semantic_delta_v0", accepted: true, obligation_id: obligation}};
+  for (const row of [
+    {name: "pending", checkpoint: pending, allowed: false},
+    {name: "pending with an old debit", checkpoint: pending, spend: true, allowed: false},
+    {name: "checkpoint absent", allowed: false},
+    {name: "truthy satisfaction", checkpoint: {...accepted, satisfied: "true"}, allowed: false},
+    {name: "other Agent", checkpoint: {...accepted, agent_id: "peer"}, allowed: false},
+    {name: "direction read missing", checkpoint: {...accepted, read_context: null}, allowed: false},
+    {name: "fresh direction", checkpoint: accepted, allowed: true},
+    {name: "genuinely not required", checkpoint: {schema_version: "vision_checkpoint_v0", agent_id: agentId,
+      required: false, satisfied: true, decision: "not_required"}, allowed: true},
+    {name: "not required still unsatisfied", checkpoint: {...pending, required: false, decision: "not_required"}, allowed: false},
+    {name: "semantic ACK missing", checkpoint: accepted, obligation, allowed: false},
+    {name: "semantic ACK other obligation", checkpoint: accepted, obligation,
+      ack: {...ack, semantic_delta: {...ack.semantic_delta, obligation_id: "replan-0000000000000002"}}, allowed: false},
+    {name: "accepted original semantic obligation", checkpoint: accepted, obligation, ack, allowed: true},
+    {name: "historical admission", checkpoint: pending, historical: true, allowed: true},
+    {name: "historical debit", checkpoint: pending, historical: true, spend: true, allowed: true},
+  ]) await t.test(row.name, async () => {
+    const root = await fixture({writeback: true, spend: row.spend,
+      visionCheckpoint: row.checkpoint, autonomousReplanAck: row.ack});
+    try {
+      const path = join(root, "goals", goalId, "rollout-event-log.jsonl");
+      const events = (await readFile(path, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      const guard = events.find(event => event.event_kind === "quota_should_run");
+      if (!row.historical) guard.details.checkpoint_continuation = "current_agent_v1";
+      if (row.obligation) guard.details.semantic_replan_obligation_id = row.obligation;
+      await writeFile(path, events.map(event => JSON.stringify(event)).join("\n") + "\n");
+      const before = await readFile(path, "utf8");
+      const readback = await readQuotaSettlement(request(root));
+      assert.equal(requireJsonObject(requireJsonObject(readback.delivery, "delivery").result, "result").failure, null);
+      const qualification = requireJsonObject(requireJsonObject(readback.spend_qualification, "qualification").result, "result");
+      assert.equal(qualification.failure === null, row.allowed);
+      assert.equal(requireJsonObject(readback.progress, "progress").state,
+        row.allowed ? row.spend ? "settled" : "spend_required" : "direction_pending");
+      assert.equal(requireJsonObject(readback.progress, "progress").next_step,
+        row.allowed ? row.spend ? null : "quota_spend" : "durable_writeback");
+      if (!row.allowed) {
+        const recovery = projectReceiptBoundWait({schema_version: RECEIPT_BOUND_WAIT_REQUEST_SCHEMA,
+          goal_id: goalId, agent_id: agentId, todo_id: todoId, turn_instance_id: turnId,
+          settlement_progress: readback.progress, todos: [{todo_id: todoId, role: "agent",
+            task_class: "advancement_task", status: "open", archive_state: "active", claimed_by: agentId}]});
+        assert.equal(requireJsonObject(recovery.recovery, "recovery").repair, "durable_writeback");
+        const obligation = requireJsonObject(recovery.obligation, "obligation");
+        assert.equal(obligation.delivery_allowed, false);
+        assert.notEqual(obligation.spend_allowed_now, true);
+      }
+      assert.equal(readback.spend_run !== null, row.spend === true);
+      assert.equal(await readFile(path, "utf8"), before);
+      const identity = requireJsonObject(requireJsonObject(readback.identity, "identity").result, "result");
+      assert.equal(requireJsonObject(identity.value, "identity value").turn_instance_id, turnId);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+});
 
 test("work inference excludes only settled selected planning, preserving ordinary progress recovery", async () => {
   for (const planned of [false, true]) {

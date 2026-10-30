@@ -32,16 +32,20 @@ def _default_fixture(provider, tmp_path, monkeypatch, *, handoff_mode="soft_clai
 
 @pytest.mark.parametrize("program", ["candidate-cli", "refresh-state"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_projected_replan_commands_preserve_result_then_fresh_direction(provider, program, tmp_path, monkeypatch):
+@pytest.mark.parametrize("validator", [False, True])
+def test_projected_replan_commands_preserve_result_then_fresh_direction(provider, program, validator, tmp_path, monkeypatch):
     from loopx.control_plane.quota.settlement import read_heartbeat_settlement
     from tests.control_plane.test_quota_settlement_cli import (
         REPO_ROOT, SELECTED_REPLAN_TODO_ID, _configure_selected_todo_replan_fixture,
         _initialize_fixture_authority,
+        _configure_completion_validation_todo,
     )
 
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
+    if validator:
+        _configure_completion_validation_todo(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "projected-replan-original-turn"
     executables = project / "CLI entrypoints with spaces"
@@ -103,6 +107,23 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
     assert not retained.writeback_run.get("autonomous_replan_ack", {}).get("recorded")
     spend = next(c for c in actions if "spend-slot" in c)
     assert _spend_run_count(runtime) == 0
+    # A separate CLI process restores the original admission, not a new Turn.
+    rc, recovered = execute([*prefix, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                            "--agent-id", AGENT_ID, "--todo-id", identity["todo_id"],
+                            "--turn-instance-id", turn])
+    assert rc == 0, recovered
+    cold_actions = recovered["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    (project / "cold-reentry.json").write_text(json.dumps(recovered), encoding="utf-8")
+    receipts = runtime / "goals" / GOAL_ID
+    before = {name: (receipts / name).read_bytes() for name in ("runs/index.jsonl", "rollout-event-log.jsonl")}
+    rc, premature = execute(spend)
+    assert rc == 1 and premature["appended"] is False, premature
+    assert {name: (receipts / name).read_bytes() for name in before} == before
+    assert _spend_run_count(runtime) == 0
+    assert "settlement_owed" not in recovered or recovered["settlement_owed"]["kind"] != "quota_spend"
+    assert "checkpoint-context" in shlex.split(cold_actions[0])
+    assert len(cold_actions) == 3, cold_actions
+    actions = [actions[0], *cold_actions]
     rc, context = execute(actions[1])
     assert rc == 0 and context["settlement_identity"] == identity, context
     assert context["basis"]["todo"]["status"] == "open"
@@ -123,6 +144,15 @@ def test_projected_replan_commands_preserve_result_then_fresh_direction(provider
     }
     rc, direction = execute(actions[2], **replacements)
     assert rc == 0 and direction["autonomous_replan_ack"]["recorded"], direction
+    # Recover only from durable facts if the caller loses that response.
+    rc, after_direction = execute([*prefix, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+                                  "--agent-id", AGENT_ID, "--todo-id", identity["todo_id"],
+                                  "--turn-instance-id", turn])
+    assert rc == 0, after_direction
+    assert after_direction["heartbeat_receipt"]["settlement_identity"] == identity
+    [remaining] = after_direction["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    assert "spend-slot" in shlex.split(remaining), remaining
+    spend = remaining
     rc, spent = execute(spend)
     assert rc == 0 and spent["appended"], spent
     assert execute(spend)[1]["appended"] is False

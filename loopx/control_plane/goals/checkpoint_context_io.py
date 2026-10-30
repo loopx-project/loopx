@@ -136,6 +136,36 @@ def replan_checkpoint_cli_actions(actions: list[str], readback: Any, *, command_
             shlex.join(direction), *actions[1:]]
 
 
+def pending_checkpoint_cli_actions(readback: Any, *, command_prefix: str,
+                                   goal_ref: Mapping[str, Any] | None = None) -> list[str]:
+    """Render the typed owner's pending direction through existing CLI phases.
+
+    Omitted mutation/progress options retain the immutable original result.
+    Only the post-result read and the Agent's fresh decision are new work.
+    """
+    from ..quota.effect_program import (
+        SettlementStepKind, build_turn_scoped_cli_settlement_plan, settlement_step_command,
+    )
+
+    identity = readback.identity.value
+    plan = build_turn_scoped_cli_settlement_plan(
+        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
+        replan_obligation_id=identity.replan_obligation_id, turn_instance_id=identity.turn_instance_id,
+        command_prefix=command_prefix, scoped_cli_args=f" --agent-id {shlex.quote(identity.agent_id)}",
+        lifecycle_actor_args="", goal_ref=goal_ref,
+        quota_spend_source=readback.progress["quota_spend_source"],
+    ).as_dict()
+    # A supplement need not repeat the original outcome's optional fields.
+    # Fill required command fields from that verified run, never new defaults.
+    run = readback.writeback_run
+    writeback = settlement_step_command(plan, SettlementStepKind.DURABLE_WRITEBACK)
+    tokens = [str({"<validated_progress>": run["classification"], "<scale>": run["delivery_batch_scale"],
+                   "<outcome>": run["delivery_outcome"]}.get(token, token)) for token in shlex.split(writeback)]
+    return replan_checkpoint_cli_actions([
+        shlex.join(tokens), settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND),
+    ], readback, command_prefix=command_prefix)[1:]
+
+
 def result_work_read_id(root: Path, identity: SettlementIdentity) -> str:
     """Restore the admitted work token; a writeback must never mint a new read."""
     try:
