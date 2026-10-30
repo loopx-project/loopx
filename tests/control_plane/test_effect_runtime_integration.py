@@ -2008,3 +2008,53 @@ def test_invalid_remote_error_envelope_fails_as_bounded_internal_error() -> None
     assert isinstance(error, effect_runtime.EffectRuntimeInternalError)
     assert error.diagnostic_code == "invalid_error_envelope"
     assert "/private/path" not in str(error)
+
+
+def test_measure_effect_runtime_startup_cost(tmp_path: Path) -> None:
+    """Print the Effect runtime startup costs on this host (diagnostic).
+
+    The Windows lane reports `runtime_startup_timeout` where the typed
+    `mutation_lock_timeout` diagnostic is expected. The Python ready budget is
+    15s and the TypeScript mutation-lock budget is 5s; the missing number is
+    what the runtime server actually costs to start on the host that runs the
+    lane. This prints the measurements and never asserts, so it cannot fail a
+    lane.
+    """
+    ready_dir = tmp_path / "ready"
+    ready_dir.mkdir(mode=0o700, parents=True)
+    effect_runtime._runtime_dir = lambda: ready_dir
+    start = time.monotonic()
+    effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+    ready_seconds = time.monotonic() - start
+
+    locked_dir = tmp_path / "locked"
+    locked_dir.mkdir(mode=0o700, parents=True)
+    effect_runtime._runtime_dir = lambda: locked_dir
+    info_path = effect_runtime._runtime_info_path(effect_runtime._runtime_fingerprint())
+    Path(f"{info_path}.ts-effect.lock").write_text(
+        json.dumps({"pid": os.getpid(), "token": "startup-measurement-fixture"}),
+        encoding="utf-8",
+    )
+    start = time.monotonic()
+    try:
+        effect_runtime.effect_runtime_result("runtime.ping", {}, retry_safe=False)
+        code = "no-error"
+    except effect_runtime.EffectRuntimeStartupError as exc:
+        code = str(exc.diagnostic_code)
+    lock_seconds = time.monotonic() - start
+    line = (
+        "STARTUP_MEASURE platform=%r ready_seconds=%.3f live_lock_seconds=%.3f "
+        "live_lock_code=%r ready_budget=%r mutation_lock_budget=5.0"
+        % (
+            os.name,
+            ready_seconds,
+            lock_seconds,
+            code,
+            effect_runtime.STARTUP_READY_TIMEOUT_SECONDS,
+        )
+    )
+    # pytest runs without -s in CI, so stdout is captured and never shown.
+    # Fail deliberately with the measurement in the message so the number is
+    # readable from the job log. This file is a diagnostic, not a
+    # qualification.
+    raise AssertionError(line)
