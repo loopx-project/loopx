@@ -11,11 +11,14 @@ import sys
 from benchmark.runtime.context_delivery import preflight_context_instruction
 
 
-def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path):
+def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path, monkeypatch):
     capture = tmp_path / "captured decision.json"
     source = {
+        "ok": True,
         "goal_id": "synthetic-recovery",
         "agent_id": "synthetic-worker",
+        "agent_identity": {"agent_id": "synthetic-worker"},
+        "heartbeat_receipt": {"turn_instance_id": "synthetic-turn"},
         "work": {"criteria": ["Preserve the original decision identity"]},
         "optional_evidence": "supporting material " * 12000,
     }
@@ -42,6 +45,8 @@ def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path
     cli.chmod(0o700)
     unusable_context = tmp_path / "unavailable-context"
     unusable_context.write_text("Not a native context directory")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
     instruction = preflight_context_instruction(
         {
             "LOOPX_CLI": str(cli),
@@ -69,14 +74,23 @@ def test_projection_failure_keeps_original_capture_selectively_readable(tmp_path
     # authority. Its original hash-bound reader remains the recovery surface.
     refused = invoke(commands[0])
     assert refused.returncode != 0
-    discovery = invoke(commands[1])
+    refused_payload = json.loads(refused.stdout)
+    assert refused_payload["ok"] is False
+    assert refused_payload["error_code"] == "quota_decision_transport_failed"
+    assert "--list" in shlex.split(refused_payload["recovery"]["command"])
+    assert "Choose the sections needed for the current decision" in refused_payload["instruction"]
+    assert "do not drain unrelated optional material" in refused_payload["instruction"]
+    assert "Follow next_command through eof" not in refused_payload["instruction"]
+
+    recovery = shlex.split(refused_payload["recovery"]["command"])
+    discovery = invoke(recovery)
     assert discovery.returncode == 0, discovery.stderr
     index = json.loads(discovery.stdout)
     assert index["ok"] and index["sha256"] == digest and index["eof"]
     assert json.loads(index["content"])["schema_version"] == "context_capture_index_v1"
     assert len(discovery.stdout.encode()) < len(raw) // 5
 
-    reader = commands[1][:commands[1].index("context-read") + 1]
+    reader = recovery[:recovery.index("context-read") + 1]
     branch = invoke([
         *reader, "--capture-file", str(capture), "--capture-sha256", digest,
         "--list", "--select", "/work",
