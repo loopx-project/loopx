@@ -85,6 +85,44 @@ can accept the resulting artifact.
 
 ## Lifecycle and readback
 
+Cloud builtin tools are explicitly disabled by default; an omitted declaration
+does not reliably disable provider defaults. To allow bash and other sandbox
+tools, add `--sandbox-builtins` or `"sandbox_builtins": true` to the operator
+profile. This mode permits temporary sandbox computation, file writes and
+unrestricted outbound networking. Enable it only when the operator authorizes
+that network access; it is not a no-egress or side-effect-free mode. It
+does not classify shell commands by substring or claim that bash is read-only.
+
+Before creating a Session, the adapter checks that the selected Environment is
+cloud-hosted with no injected variables, startup script, package installation
+or configured output storage. It applies a Session-only networking override:
+`unrestricted`, no resource mounts and no Vault access. The frozen Session must
+read back that exact network policy and the credential/resource restrictions
+before input is sent. The shared Environment is never changed.
+Missing or different readback refuses the attempt. Trusted local custom MCP tools
+retain their separate host permissions; this cloud policy does not isolate them.
+
+Runtime builtin calls require the selected root thread, an observed `allow`
+permission and correlated results before a candidate can be returned. Receipts
+retain tool names and input/result hashes, not raw commands or outputs. Calls
+before the input ACK, undeclared builtin calls and conflicting/orphan results
+refuse the attempt and retire its known resources. The combined call limit is
+an observation ceiling for cloud tools: they may already have executed before
+the adapter sees the event. The execution deadline and cleanup still apply.
+
+The input ACK must identify the root thread, and every candidate message must
+explicitly match it. A custom tool call or a builtin call/result invalidates
+earlier candidate text. Completion requires a new candidate after the latest
+tool outcome; an error may be followed by a fresh `repair_required` candidate.
+Tool failure alone neither validates an earlier result nor forbids repair.
+
+`--doctor` reports configuration only and always leaves
+`sandbox_enforcement_verified` false. SDK wire fixtures qualify this adapter's
+requests and refusals, not live sandbox enforcement. Before enabling this mode
+in production, qualify the provider's actual selected network policy, no-secret/no-mount
+behavior and cleanup with an authorized disposable cloud attempt. Configuration
+readback alone cannot establish that all builtin tools have no external effect.
+
 Each attempt creates its own cloud Agent definition and session using the
 selected model and exact tool declarations, then deletes both with readback.
 The frozen session snapshot must match the model/tool selection and contain no
@@ -97,7 +135,17 @@ usage for reconciliation. Raw model thinking/events and credentials are not
 stored. Provider usage is separate from LoopX quota; unavailable usage stays
 unknown, and rejected work can still cost tokens.
 
-Mutating provider requests are not automatically retried. A duplicate exact
+Enabled-builtin receipts from before `sandbox_tools_v3` remain inspectable and
+cleanable with their original options, but their candidates cannot be replayed
+or their sessions resumed under the unrestricted policy. Disabled-mode v2
+receipts retain their original replay semantics. Changing builtin mode binds a different
+configuration; it cannot retarget or rerun an existing Turn key. Keep stopped
+attempts and their unknown usage instead of resetting them to retry input.
+
+The SDK does not automatically retry mutating provider requests. Resource
+retirement may retry a rejected DELETE after the bounded ownership/stop checks
+described below; creation, model input and interrupt are never resent by that
+recovery. A duplicate exact
 request may reuse a completed candidate after resource cleanup; a conflicting
 request or incomplete prior attempt cannot silently start another model run.
 An interrupted running attempt with a confirmed original input and no uncertain
@@ -120,9 +168,27 @@ loopx-ark-turn <same-options> --cleanup-turn-key "$TURN_KEY"
 
 Inspection is local and credential-free. Cleanup retries deletion of known
 attempt-owned resources without launching a model or repeating a local tool.
-It returns success only after absence is confirmed. A lost create response
+If Session deletion returns HTTP 400, it verifies the exact Session and Agent
+binding before stopping a still-running attempt with `user.interrupt`. The
+interrupt is attempted at most once per receipt, including when its response
+is lost. It then waits with a bounded deadline and three status reads for
+idle/terminated before retrying deletion. An interrupt ACK does not prove
+stoppage or absence; an unresolved Session keeps its Agent definition intact.
+The normal successful deletion path is unchanged. This recovery applies to
+both builtin-enabled and disabled profiles.
+
+It returns success only after absence is confirmed. An accepted input whose
+ACK lacks the required root thread remains unqualified: its event ID is retained,
+its known resources are retired, and neither the input nor candidate is replayed.
+A lost create response
 leaves `unknown_creation=reconcile_required`: use the private receipt's exact
 resource label to inspect the provider account and resolve ownership manually.
+An explicit creation rejection (HTTP 400, 401, 403, 404 or 422) records only
+the phase and status code, then retires already acknowledged resources. It
+does not rewind the attempt or retry creation. Timeout, conflict, rate-limit,
+server errors and lost responses remain uncertain; earlier unknown receipts
+are not reclassified. Raw provider error bodies are not stored. A rejected
+configuration does not qualify sandbox enforcement or backend compatibility.
 The adapter cannot safely adopt an unknown resource or declare it absent.
 Keep that attempt blocked; do not delete arbitrary matching resources or edit
 the receipt to make replay look successful. A completed candidate remains
