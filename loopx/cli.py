@@ -185,6 +185,10 @@ from .cli_commands.goal_amendment_proposal import (
     handle_goal_amendment_proposal_command,
     register_goal_amendment_proposal_command,
 )
+from .cli_commands.anti_entropy import (
+    handle_anti_entropy_command,
+    register_anti_entropy_commands,
+)
 from .cli_commands.reliability_diagnostics import (
     handle_reliability_diagnostics_command,
     register_reliability_diagnostics_commands,
@@ -284,6 +288,8 @@ def build_parser() -> LoopXArgumentParser:
     register_canary_commands(sub, add_subcommand_format)
 
     register_capability_commands(sub, add_subcommand_format)
+
+    register_anti_entropy_commands(sub, add_subcommand_format)
 
     register_reliability_diagnostics_commands(sub, add_subcommand_format)
 
@@ -491,6 +497,16 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if capability_result is not None:
         return capability_result
+
+    anti_entropy_result = handle_anti_entropy_command(
+        args,
+        registry_path=registry_path,
+        runtime_root_arg=args.runtime_root,
+        output_format=output_format,
+        print_payload=print_payload,
+    )
+    if anti_entropy_result is not None:
+        return anti_entropy_result
 
     reliability_diagnostics_result = handle_reliability_diagnostics_command(
         args,
