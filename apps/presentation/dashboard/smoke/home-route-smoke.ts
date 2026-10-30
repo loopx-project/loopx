@@ -32,6 +32,10 @@ const designSource = readFileSync("design.md", "utf8");
 
 excludes(routerSource, 'view: z.enum(["ops", "share"])', "legacy dual-view routing removed");
 excludes(routerSource, 'chatRoute', "legacy standalone chat route removed");
+includes(routerSource, 'path: "/design/local-dashboard"', "temporary local dashboard design route");
+includes(routerSource, "<DashboardPage search={search} navigate={navigate}/>", "shared dashboard route adapter");
+excludes(dashboardSource, "dashboardRoute.useSearch()", "dashboard search is provided by its route adapter");
+excludes(dashboardSource, "dashboardRoute.useNavigate()", "dashboard navigation is provided by its route adapter");
 includes(dashboardSource, 'data-testid="personal-goal-home"', "personal workspace route");
 includes(dashboardSource, "<PersonalWorkspacePage", "personal workspace rendering");
 includes(dashboardSource, "buildPersonalHomeModel(payload, rows,", "public-safe workspace projection");

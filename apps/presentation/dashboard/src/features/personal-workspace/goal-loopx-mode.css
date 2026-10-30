@@ -140,6 +140,11 @@ li[data-check="blocked"] .goal-team-check-pill { border-color: transparent; back
 .goal-team-comparison-grid .goal-team-report .personal-md { font-size: var(--text-body); line-height: var(--leading-prose); }
 .goal-team-results { width: min(960px, 100%); margin: 16px auto 24px; padding: 24px; border: 1px solid var(--pw-line, #ebebeb); border-radius: 12px; background: var(--pw-surface, #fff); color: var(--pw-text, #171717); }
 .goal-team-results > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+/* A results card with nothing in it is one row, not a large empty panel. */
+.goal-team-results:not(:has([data-result-catalog] li)),
+.goal-research-results:not(:has([data-result-catalog] li)) { padding: 14px 18px; margin: 12px auto; }
+.goal-team-results:not(:has([data-result-catalog] li)) .goal-team-results-layout,
+.goal-research-results:not(:has([data-result-catalog] li)) .goal-team-results-layout { display: none; }
 .goal-team-results h3 { font-size: var(--text-lead); line-height: var(--leading-lead); font-weight: 600; margin: 0; }
 .goal-team-results p { font-size: var(--text-caption); line-height: var(--leading-caption); color: var(--pw-muted); }
 .goal-team-results [role="alert"] { color: var(--pw-red, #b42318); }

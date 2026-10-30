@@ -82,6 +82,7 @@ import type {
   WorkspaceImageAttachment,
   WorkspaceModel,
   WorkspaceRun,
+  WorkspaceRunHistoryEntry,
   WorkspaceHomeOnboarding,
   WorkspaceSystemHealth,
   WorkspaceConversationDirectory,
@@ -91,8 +92,9 @@ import type {
 import { goalHasExecutionSummary, goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
 import { goalWorkKind } from "./goal-activity";
 import { WorkspaceActionForm, type WorkspaceActionDraft } from "./workspace-action-form";
-import { GoalActivityChip, GoalIdentityMark } from "./goal-activity-view";
+import { GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
+import { goalShortLabel } from "./goal-display";
 // Loaded on demand: settings and their editors are a separate chunk that
 // arrives when the owner first opens Settings, not on every workspace visit.
 const ContentProductionResults = lazy(() => import("./content-production-results").then(module => ({default: module.ContentProductionResults})));
@@ -188,6 +190,8 @@ function ManagerHomeBoard({
   operations,
   onSelectOperation,
   onViewAllOperations,
+  timeline,
+  runs,
 }: {
   goals: WorkspaceGoal[];
   attention: WorkspaceAttention[];
@@ -206,6 +210,8 @@ function ManagerHomeBoard({
   operations: WorkspaceActionPreview[];
   onSelectOperation: (proposal: WorkspaceActionPreview) => void;
   onViewAllOperations: () => void;
+  timeline?: WorkspaceTimelineItem[];
+  runs?: WorkspaceRunHistoryEntry[];
 }) {
   const { locale, t } = useWorkspaceI18n();
   const currentGoals = goals.filter((goal) => goal.activationState === "active");
@@ -226,12 +232,13 @@ function ManagerHomeBoard({
   });
   const goalCard = (goal: WorkspaceGoal) => (
     <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
-      <span className="personal-home-goal-title"><GoalIdentityMark goal={goal} /><strong>{goal.title}</strong></span>
-      <span className="personal-home-goal-meta">{goal.agentLaneCount && goal.agentLaneCount > 1
+      <GoalIdentityMark goal={goal} />
+      <strong className="personal-home-goal-title" title={goal.title}>{goalShortLabel(goal)}</strong>
+      <span className="personal-home-goal-meta">{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.agentLaneCount && goal.agentLaneCount > 1
         ? t("header.workAgentCount", { count: goal.agentLaneCount })
         : goal.agentLabel ?? goal.agentId}</span>
-      <p>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
-      <footer>{goal.loadState ? <span>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</span> : <GoalActivityChip goal={goal} />}<small title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small></footer>
+      <span className="personal-home-goal-state">{goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : goal.state}</span>
+      <small className="personal-home-goal-time" title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small>
     </button>
   );
   return (
@@ -243,23 +250,19 @@ function ManagerHomeBoard({
             <AlertCircle size={15} />
             <strong>{t("home.systemHealth", { summary: systemHealth.summary })}</strong>
             {systemHealth.freshnessWarning ? <small>（{systemHealth.freshnessWarning}）</small> : null}
+            {systemHealth.issues.length > 0 || systemHealth.diagnostics?.length ? (
+              <details className="personal-system-health-diagnostics">
+                <summary>{t("home.health.diagnostics")}</summary>
+                <ul>
+                  {systemHealth.issues.map((issue, idx) => <li key={`issue-${idx}`}>{issue}</li>)}
+                  {(systemHealth.diagnostics ?? []).map((line, idx) => <li key={`diag-${idx}`}>{line}</li>)}
+                </ul>
+              </details>
+            ) : null}
+            {systemHealth.retryable && onRetrySource ? (
+              <button className="personal-system-health-retry" data-testid="personal-source-retry" onClick={onRetrySource} type="button">{t("home.health.retry")}</button>
+            ) : null}
           </div>
-          {systemHealth.issues.length > 0 ? (
-            <ul className="personal-system-health-issues">
-              {systemHealth.issues.map((issue, idx) => (
-                <li key={idx}>{issue}</li>
-              ))}
-            </ul>
-          ) : null}
-          {systemHealth.diagnostics?.length ? (
-            <details className="personal-system-health-diagnostics">
-              <summary>{t("home.health.diagnostics")}</summary>
-              <ul>{systemHealth.diagnostics.map((line, idx) => <li key={idx}>{line}</li>)}</ul>
-            </details>
-          ) : null}
-          {systemHealth.retryable && onRetrySource ? (
-            <button className="personal-system-health-retry" data-testid="personal-source-retry" onClick={onRetrySource} type="button">{t("home.health.retry")}</button>
-          ) : null}
         </div>
       ) : null}
       {onboarding?.kind === "no_goals" && goals.length === 0 ? (
@@ -297,7 +300,7 @@ function ManagerHomeBoard({
       </section> : null}
       {goals.some((goal) => !goal.loadState) ? <ManagerBrief goals={goals} onSelectGoal={onSelectGoal}
         attention={attention} onSelectAttention={onSelectAttention}
-        operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} /> : null}
+        operations={operations} onSelectOperation={onSelectOperation} onViewAllOperations={onViewAllOperations} timeline={timeline} runs={runs} /> : null}
       {onboarding?.kind === "no_goals" && goals.length === 0 ? null : <h2 className="personal-home-section-title">{t("home.allGoals")}</h2>}
       <div className="personal-home-lanes">
         {activeHomeLanes.filter((lane) => active[lane.key].length > 0).map((lane) => (
@@ -3044,7 +3047,7 @@ export function PersonalWorkspacePage({
                 onboarding={model.onboarding} onRequestGoalCreate={readOnly ? undefined : requestGoalCreate} onSuggestRequest={readOnly ? undefined : suggestReply}
                 runtimeReadiness={readOnly ? undefined : runtimeReadiness} recheckingRuntimes={recheckingRuntimes} onRecheckRuntimes={callbacks.onRecheckRuntimes ? recheckRuntimes : undefined}
                 operations={actionReadback.isError ? [] : homeOperations} onSelectOperation={proposal => setSelection({kind: "proposal", item: proposal})}
-                onViewAllOperations={() => setSelectedGoalTab("chat")} />
+                onViewAllOperations={() => setSelectedGoalTab("chat")} timeline={model.timeline ?? []} runs={model.recentRuns ?? []} />
             ) : (
               <ChannelTimeline key={`${selectionScope}:${conversationKey}:${selectedAgentId}`} {...timelineReading} readOnly={readOnly}
                 emptyState={originalConversation && (originalSourceUnresolved
@@ -3282,6 +3285,8 @@ export function PersonalWorkspacePage({
       )}
       sidebar={(
         <GoalSidebar
+          attentionNotifications={hostReadOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
+          onToggleAttentionNotifications={hostReadOnly ? undefined : updateAttentionNotifications}
           key={`${statusSourceControl?.activeSource.statusUrl ?? "/status.json"}:${rootGoalId ?? ""}`}
           rootGoalId={rootGoalId}
           onChangeGoalRoot={onChangeGoalRoot}

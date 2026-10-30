@@ -19,7 +19,7 @@ import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { hasGoalFailureStatus } from "../../../../../loopx/control_plane/presentation/goal_failure_status.js";
 
-import { dashboardRoute } from "../router";
+import type { dashboardRoute } from "../router";
 import {
   QueueItem,
   RunGoal,
@@ -2963,6 +2963,16 @@ function PersonalGoalHome({
     sourceIsReady && !progress?.errors[item.goalId], goalTitles.get(item.goalId),
   );
   const normalizedModel = normalizePersonalHomeModel(model);
+  const recentRuns = (payload.run_history.recent_runs ?? [])
+    .map((record) => ({
+      at: record.generated_at,
+      classification: record.classification ?? null,
+      goalId: record.goal_id,
+      goalTitle: goalTitles.get(record.goal_id) ?? record.goal_id,
+      id: `${record.goal_id}:${record.generated_at}:${record.classification ?? ""}`,
+      status: /block|fail|error|timeout|refus/i.test(record.classification ?? "") ? "failed" as const : "completed" as const,
+    }))
+    .sort((a, b) => a.at.localeCompare(b.at));
   const workspaceModel = {
     ...normalizedModel,
     goals: normalizedModel.goals.map((goal) => ({
@@ -2976,6 +2986,7 @@ function PersonalGoalHome({
       loading: periodicReportLoading,
     },
     timeline: workspaceTimeline,
+    recentRuns,
   };
   return (
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
@@ -3362,9 +3373,12 @@ function StatusRequestView({
 }
 
 
-export function DashboardPage() {
-  const search = dashboardRoute.useSearch();
-  const navigate = dashboardRoute.useNavigate();
+type DashboardPageProps = {
+  search: ReturnType<typeof dashboardRoute.useSearch>;
+  navigate: ReturnType<typeof dashboardRoute.useNavigate>;
+};
+
+export function DashboardPage({ search, navigate }: DashboardPageProps) {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [progress, setProgress] = useState<WorkspaceProgress | null>(null);
   const progressiveAbortRef = useRef<AbortController | null>(null);

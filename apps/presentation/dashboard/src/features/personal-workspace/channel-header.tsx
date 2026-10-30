@@ -254,6 +254,7 @@ export function ChannelHeader({
         {selectedGoal?.loadState ? <p role="status">{t(selectedGoal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</p> : null}
       </div>
       {selectedGoal ? (
+        <>
         <div className="personal-goal-navigation">
         <nav aria-label={t("header.goalView")} className="personal-goal-tabs">
           <button aria-current={selectedGoalTab === "overview" ? "page" : undefined} onClick={() => onSelectGoalTab("overview")} type="button">{t("header.overview")}</button>
@@ -262,9 +263,10 @@ export function ChannelHeader({
           <button aria-current={selectedGoalTab === "chat" ? "page" : undefined} onClick={() => onSelectGoalTab("chat")} type="button">{t("header.chat")}</button>
           <button aria-current={selectedGoalTab === "files" ? "page" : undefined} onClick={() => onSelectGoalTab("files")} type="button">{t("header.files")}</button>
         </nav>
-        {researchControl}
         {runtimeControl}
         </div>
+        {researchControl ? <div className="personal-goal-subnav">{researchControl}</div> : null}
+        </>
       ) : !scopeUnavailable ? (
         <nav aria-label={t("header.managerView")} className="personal-goal-tabs">
           <button aria-current={!managerChatOpen ? "page" : undefined} onClick={onReturnManagerHome} type="button">{t("header.managerOverview")}</button>

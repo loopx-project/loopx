@@ -488,6 +488,16 @@ export type WorkspaceHomeOnboarding = {
   diagnostics: string[];
 };
 
+/** One recorded Goal run from the status payload's run history. */
+export type WorkspaceRunHistoryEntry = {
+  at: string;
+  classification: string | null;
+  goalId: string;
+  goalTitle: string;
+  id: string;
+  status: "completed" | "failed";
+};
+
 export type WorkspaceModel = {
   blockingTodoCount: number;
   goalNotifications?: WorkspaceGoalNotification[];
@@ -500,6 +510,7 @@ export type WorkspaceModel = {
   onboarding?: WorkspaceHomeOnboarding;
   systemHealth?: WorkspaceSystemHealth;
   timeline?: WorkspaceTimelineItem[];
+  recentRuns?: WorkspaceRunHistoryEntry[];
   attentionHistory?: WorkspaceAttention[];
   userTodos: WorkspaceAttention[];
   workers?: WorkspaceWorker[];

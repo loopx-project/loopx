@@ -1306,6 +1306,43 @@ async function main() {
       throw new Error(`Failed waiting for personal-goal-home: ${error.message}; body=${diagnostic.slice(0, 1000)}; pageErrors=${pageErrors.join(" | ")}`);
     }
 
+    await page.goto(`${baseUrl}/design/local-dashboard?statusUrl=/${fixtureName}`, { waitUntil: "networkidle" });
+    await page.waitForSelector('[data-testid="personal-goal-home"]', { timeout: 10_000 });
+    const designBody = await page.locator("body").innerText();
+    const designRequired = [
+      "GOALS",
+      "LoopX 管家",
+      "需要你",
+      "Showcase user gate safe side path",
+      "Showcase creator operator",
+      "LoopX meta",
+    ];
+    const missingDesignCopy = designRequired.filter((text) => !designBody.includes(text));
+    if (missingDesignCopy.length) {
+      throw new Error(`Design dashboard route lost Manager copy: ${missingDesignCopy.join(", ")}`);
+    }
+    await page.screenshot({
+      path: resolve(visualOutputDir, "design-local-dashboard-home-top.png"),
+      fullPage: false,
+      animations: "disabled",
+    });
+    await page.locator(".personal-goal-list .personal-goal-link").first().click();
+    const designGoalTabs = page.getByRole("navigation", { name: "Goal 视图" });
+    await designGoalTabs.waitFor({ state: "visible", timeout: 10_000 });
+    await designGoalTabs.getByRole("button", { name: "任务", exact: true }).click();
+    await page.locator(".personal-task-kanban").waitFor({ state: "visible", timeout: 10_000 });
+    const designUrl = new URL(page.url());
+    if (designUrl.pathname !== "/design/local-dashboard"
+      || !designUrl.searchParams.get("goalId")
+      || designUrl.searchParams.get("view") !== "tasks"
+      || designUrl.searchParams.get("statusUrl") !== `/${fixtureName}`) {
+      throw new Error(`Design dashboard route lost workspace search state: ${page.url()}`);
+    }
+    if (process.env.LOOPX_DESIGN_ROUTE_SMOKE_ONLY === "1") {
+      console.log("dashboard-design-route-smoke ok");
+      return;
+    }
+
     if (process.env.LOOPX_NATIVE_CHILD_SMOKE_ONLY === "1") {
       for (const [label, target] of [["desktop", page],
         ["mobile", await browser.newPage({ isMobile: true, viewport: { width: 390, height: 900 } })]]) {

@@ -224,20 +224,23 @@ export function GoalTasksView({
     <section aria-label={t("header.tasks")} className={`personal-task-board${listView ? " is-list-view" : ""}`} tabIndex={-1} ref={boardRef}>
       <header className="personal-task-view-toolbar">
         <div><strong>{t("header.tasks")}</strong></div>
+        <label className="personal-task-search"><Search size={16} aria-hidden/><input type="search" maxLength={256} value={query}
+          aria-label={zh ? "搜索当前已列出的任务" : "Search listed tasks"} placeholder={zh ? "搜索任务" : "Search tasks"}
+          onChange={event => changeBrowse({query: event.target.value}, true)}/></label>
+        <label className="personal-task-filter">
+          <span className="sr-only">{zh ? "任务状态筛选" : "Task state filters"}</span>
+          <select aria-label={zh ? "任务状态筛选" : "Task state filters"} value={filter}
+            onChange={event => changeBrowse({filter: event.target.value as GoalWorkBrowseState["filter"]})}>
+            {(Object.keys(filterLabels) as GoalWorkBrowseState["filter"][]).map(value => <option key={value} value={value}>{filterLabels[value]}</option>)}
+          </select>
+          <ChevronDown aria-hidden size={14} />
+        </label>
+        {query || selectedLaneId !== "all" || filter !== "all" ? <button className="personal-task-clear" type="button" onClick={() => changeBrowse({query: "", owner: "all", filter: "all"})}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
         <div className="personal-task-view-switch" role="group" aria-label={t("tasks.viewLabel")}>
           <button type="button" aria-pressed={listView} onClick={() => changeBrowse({view: "list"})}>{t("tasks.listView")}</button>
           <button type="button" aria-pressed={!listView} onClick={() => changeBrowse({view: "board"})}>{t("tasks.boardView")}</button>
         </div>
       </header>
-      <div className="personal-task-browse-controls">
-        <label className="personal-task-search"><Search size={16} aria-hidden/><input type="search" maxLength={256} value={query}
-          aria-label={zh ? "搜索当前已列出的任务" : "Search listed tasks"} placeholder={zh ? "搜索任务" : "Search tasks"}
-          onChange={event => changeBrowse({query: event.target.value}, true)}/></label>
-        <div className="personal-task-filters" role="group" aria-label={zh ? "任务状态筛选" : "Task state filters"}>
-          {(Object.keys(filterLabels) as GoalWorkBrowseState["filter"][]).map(value => <button key={value} type="button" aria-pressed={filter === value} onClick={() => changeBrowse({filter: value})}>{filterLabels[value]}</button>)}
-          {query || selectedLaneId !== "all" || filter !== "all" ? <button type="button" onClick={() => changeBrowse({query: "", owner: "all", filter: "all"})}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
-        </div>
-      </div>
       {selectedHidden ? <p className="personal-task-selection-note" role="status">{zh ? "所选任务不在当前筛选范围中，详情仍保留。" : "The selected task is outside these filters. Its details are retained."}
         <button type="button" onClick={() => changeBrowse({query: "", owner: "all", filter: "all"})}>{zh ? "显示所选任务" : "Show selected task"}</button></p> : null}
       {agentLanes.length > 1 || selectedLaneId !== "all" || goal.agentTodos.some(todo => !todo.claimedBy) ? (
@@ -290,7 +293,7 @@ export function GoalTasksView({
             </button>
           );
         })}
-        {!attentionItems.length ? <ContextHelp label={locale === "zh-CN" ? "暂无待确认任务" : "No tasks awaiting confirmation"} icon={CircleHelp}><p className="personal-task-empty">{t("tasks.emptyConfirm")}</p></ContextHelp> : null}
+        {!attentionItems.length ? <p className="personal-task-empty">{t("tasks.emptyConfirm")}</p> : null}
       </TaskLane> : null}
       {filter !== "done" ? <TaskLane listView={listView} count={openAgentTodos.length} label={t("tasks.pendingAndRunning")} tone="progress">
         {openAgentTodos.map((todo) => {
@@ -331,7 +334,7 @@ export function GoalTasksView({
             </div>
           );
         })}
-        {!openAgentTodos.length ? <ContextHelp label={locale === "zh-CN" ? "暂无运行记录" : "No run records"} icon={CircleHelp}><p className="personal-task-empty">{t("tasks.emptyRunning")}</p></ContextHelp> : null}
+        {!openAgentTodos.length ? <p className="personal-task-empty">{t("tasks.emptyRunning")}</p> : null}
       </TaskLane> : null}
       {filter === "all" ? <TaskLane listView={listView} count={scheduleItems.length} label={t("tasks.scheduled")} tone="schedule">
         {scheduleItems.map((item) => (
@@ -339,7 +342,7 @@ export function GoalTasksView({
             <span>◷</span><strong>{item.schedule.label}</strong><small>{item.schedule.status === "paused" ? t("schedule.paused") : t("schedule.active")}</small>
           </button>
         ))}
-        {!scheduleItems.length ? <ContextHelp label={locale === "zh-CN" ? "暂无定时任务" : "No schedules"} icon={CircleHelp}><p className="personal-task-empty">{t("tasks.emptySchedules")}</p></ContextHelp> : null}
+        {!scheduleItems.length ? <p className="personal-task-empty">{t("tasks.emptySchedules")}</p> : null}
       </TaskLane> : null}
       {filter === "all" || filter === "done" ? <CompletedTaskLane searchable key={`${goal.goalId}:${selectedLaneId}`} goal={goal} agentId={selectedLaneId || "all"} unassignedOnly={selectedLaneId === ""} seed={doneAgentTodos} query={query} refreshRevision={historyRefreshRevision} enabled={historyEnabled && historyActive && boardVisible} listView={listView} onSelect={onSelect} selectedTodoId={selectedTodoId} /> : null}
       </div>

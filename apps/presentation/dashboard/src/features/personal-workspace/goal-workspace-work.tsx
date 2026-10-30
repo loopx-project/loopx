@@ -210,7 +210,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   const documentContent = <div className="goal-workspace-document" ref={readingDocument} key="document">
       {brief}
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
-        <header className="goal-now-header"><h2>{zh ? "当前工作" : "Now"}</h2>
+        <header className="goal-now-header"><h2><span className="goal-stage-n">03</span>{zh ? "当前工作" : "Now"}</h2>
           {digest.work.coverage !== "complete" || !digest.work.groups.length ? <ContextHelp icon={digest.work.coverage !== "complete" ? CircleHelp : Info}
             label={zh ? (digest.work.coverage !== "complete" ? "工作覆盖未确认" : "暂无当前工作") : (digest.work.coverage !== "complete" ? "Work coverage unconfirmed" : "No current work")}>
             <p>{digest.work.coverage !== "complete" ? (zh ? `已列出 ${digest.work.listedOpen} 项，当前快照的总数或覆盖范围不完整。` : `${digest.work.listedOpen} items listed; the snapshot's total or coverage is incomplete.`)
