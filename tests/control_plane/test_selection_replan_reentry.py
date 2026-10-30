@@ -420,6 +420,12 @@ def test_first_inline_result_has_matching_turn_envelope(tmp_path, discovery):
     rc, envelope = _run_cli(registry, runtime, *guard,
                             "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
     assert rc == 0, envelope
+    from loopx.control_plane.quota.turn_envelope import _turn_envelope_result, build_turn_envelope
+    assert envelope["schema_version"] == "loopx_turn_envelope_v1"
+    assert _turn_envelope_result("complete_consumer", payload=envelope)["ok"]
+    # C1's public writer emits the complete contract. The historical executor
+    # adapter must still derive the same first-call action from that source.
+    envelope = build_turn_envelope(envelope)
     assert envelope["action_signature"]["matches"] is True
     contract = envelope["contract_capsule"]["interaction_contract"]
     assert contract["mode"] == "autonomous_replan"

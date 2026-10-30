@@ -41,7 +41,6 @@ from ..control_plane.turn_driver import (
     inspect_loopx_turn_journal,
     run_codex_cli_host,
     run_loopx_turn_once,
-    selected_turn_todo,
 )
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
@@ -52,7 +51,8 @@ from .turn_decision import collect_turn_status_payload, current_turn_host_launch
 from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
 from .turn_post_writeback import drain_committed_turn_post_writeback_hooks
-from .turn_todo_writeback import captured_todo_text_sha256, write_turn_validated_completion
+from ..control_plane.turn_driver.driver import read_turn_execution_context
+from .turn_todo_writeback import write_turn_validated_completion
 
 EXACT_SETTLEMENT_READBACK_NOT_FOUND = (
     "exact settlement readback unexpectedly returned not-found"
@@ -92,10 +92,9 @@ def execute_turn_run_once(
             native_task_validator=native_task_validator,
             validator_builder=build_loopx_turn_command_validator,
         )
-        selected_todo = selected_turn_todo(envelope)
-        expected_todo_text_sha256 = captured_todo_text_sha256(
-            envelope, todo_id=str(selected_todo.get("todo_id") or "")
-        )
+        execution_context = read_turn_execution_context(payload, envelope)
+        selected_todo = execution_context["selected_todo"]
+        expected_todo_text_sha256 = execution_context["sha256"]
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -133,13 +132,10 @@ def execute_turn_run_once(
             and persisted_effect_id != settlement_identity.effect_id
         ):
             raise ValueError("Turn settlement identity effect_id is inconsistent")
-        stable_envelope: Mapping[str, Any] = (
-            envelope if isinstance(envelope, Mapping) else {}
-        )
-        replan_guard_scoped = "replan_action_packet" in stable_envelope
+        replan_guard_scoped = execution_context["replan_guard_scoped"]
         replan_obligation_id = (
             replan_obligation_id_from_packet(
-                stable_envelope.get("replan_action_packet")
+                execution_context["replan_action_packet"]
             )
             if replan_guard_scoped
             else None
@@ -198,11 +194,7 @@ def execute_turn_run_once(
             if event_payload.get("rollout_event_log_error"):
                 raise OSError(f"failed to persist {event_kind} settlement receipt")
 
-        writeback_contract = (
-            envelope.get("writeback")
-            if isinstance(envelope.get("writeback"), dict)
-            else {}
-        )
+        writeback_contract = execution_context["writeback"]
         delivery_workspace_path = (
             project
             if isinstance(
@@ -803,7 +795,7 @@ def execute_turn_run_once(
             def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
                 return current_turn_host_launch_decision(args, registry_path=current_registry,
                     runtime_root=runtime_root, identity=settlement_identity,
-                    planned_effective_action=payload["turn_envelope"].get("effective_action"),
+                    planned_effective_action=execution_context["effective_action"],
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                     turn_start_hook_dispatch=turn_start_hook_dispatch, goal_ref=goal_ref)
@@ -827,7 +819,7 @@ def execute_turn_run_once(
                 return current_turn_host_launch_decision(
                     args, registry_path=current_registry, runtime_root=runtime_root,
                     identity=settlement_identity,
-                    planned_effective_action=payload["turn_envelope"].get("effective_action"),
+                    planned_effective_action=execution_context["effective_action"],
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
                     # Keep this Turn's already dispatched required reads at launch.
@@ -881,19 +873,10 @@ def execute_turn_run_once(
                 turn_envelope: Mapping[str, Any],
             ) -> dict[str, str] | None:
                 session_scope = str((payload.get("session", {}).get("context_policy") or {}).get("binding_scope") or "todo")
-                return (
-                    codex_cli_session_binding(
-                        runtime_root,
-                        turn_envelope,
-                        goal_admission=goal_admission,
-                        session_scope=session_scope,
-                    )
-                    if goal_admission is not None
-                    else codex_cli_session_binding(
-                        runtime_root,
-                        turn_envelope,
-                        session_scope=session_scope,
-                    )
+                return codex_cli_session_binding(
+                    runtime_root, turn_envelope, goal_admission=goal_admission,
+                    session_scope=session_scope,
+                    **({"work_contract": payload["work_contract"]} if "work_contract" in payload else {}),
                 )
 
             session_binding_resolver = resolve_built_in_session_binding
@@ -907,7 +890,8 @@ def execute_turn_run_once(
 
                 def resolve_dsh_operation_session(envelope: Mapping[str, Any]) -> dict[str, str] | None:
                     return codex_cli_session_binding(
-                        runtime_root, envelope, goal_admission=goal_admission, host="dsh"
+                        runtime_root, envelope, goal_admission=goal_admission, host="dsh",
+                        **({"work_contract": payload["work_contract"]} if "work_contract" in payload else {}),
                     )
 
                 session_binding_resolver = resolve_dsh_operation_session
@@ -932,7 +916,7 @@ def execute_turn_run_once(
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
-            replan_packet = stable_envelope.get("replan_action_packet")
+            replan_packet = execution_context["replan_action_packet"]
             capability_guard = (
                 replan_packet.get("capability_guard")
                 if isinstance(replan_packet, Mapping)

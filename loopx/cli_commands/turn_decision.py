@@ -33,7 +33,7 @@ from ..capabilities.periodic_report.pending_intent import (
 from ..control_plane.quota.live_decision import build_live_quota_should_run_decision
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.turn_envelope import (
-    TurnControllerInput, build_turn_controller_input, build_turn_envelope,
+    TurnControllerInput, build_turn_controller_input, build_turn_envelope, compose_turn_decision,
 )
 from ..control_plane.quota.settlement import SettlementIdentity, build_turn_scoped_cli_settlement_plan
 from ..control_plane.quota.heartbeat_receipt import (
@@ -42,7 +42,7 @@ from ..control_plane.quota.heartbeat_receipt import (
     heartbeat_receipt_settlement_todo_id,
 )
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
-from ..control_plane.turn_driver.driver import build_loopx_turn_plan, selected_turn_todo
+from ..control_plane.turn_driver.driver import build_loopx_turn_plan
 from ..control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     scheduler_execution_context_for_turn,
@@ -171,6 +171,7 @@ def _build_turn_decision(
     ) -> dict[str, Any]:
         decision = build_live_quota_should_run_decision(
             status_payload,
+            inline_goal_source=True,
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             available_capabilities=args.available_capabilities,
@@ -364,6 +365,9 @@ def current_turn_host_launch_decision(
     An observed replan packet is context, not a second settlement binding.
     Both native callers transport the obligation recorded in this identity.
     """
+    # A replan observation may accompany a Todo-bound Turn. Only the recorded
+    # settlement identity can bind admission to an obligation; passing the
+    # observed obligation as well would erase the original Todo selection.
     current = build_live_quota_should_run_decision(
         collect_turn_status_payload(args, registry_path=registry_path,
                                     runtime_root_arg=str(runtime_root)),
@@ -398,20 +402,23 @@ def current_turn_host_launch_decision(
     if (current.get("should_run") is not True
             or current.get("effective_action") != planned_effective_action):
         return launch
-    current_envelope = build_turn_envelope(
+    current_contract = compose_turn_decision(
         current, scheduler_execution_context=scheduler_execution_context,
+    )
+    current_envelope = build_turn_envelope(
+        current_contract, scheduler_execution_context=scheduler_execution_context,
     )
     # Reuse the existing side-effect-free Host route projection, including
     # delivery, user-gate and protocol checks. No plan/session is persisted.
     plan = build_loopx_turn_plan(
         current_envelope, host=args.host, execution_mode=args.execution_mode,
         scheduler_owner=args.scheduler_owner, turn_instance_id=identity.turn_instance_id,
-        goal_ref=goal_ref,
+        goal_ref=goal_ref, work_contract=current_contract,
     )
     route = plan["route"]
     if route.get("would_invoke_host") is not True:
         raise FirstPartyHostRuntimeRejected("goal_launch_not_allowed")
-    if identity.request_subject is None and selected_turn_todo(current_envelope).get("todo_id") != identity.todo_id:
+    if identity.request_subject is None and (plan["route"].get("selected_todo") or {}).get("todo_id") != identity.todo_id:
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")
     if (identity.replan_obligation_id or identity.request_subject is not None) and plan["transaction"]["settlement_plan"]["identity"] != identity.as_dict():
         raise FirstPartyHostRuntimeRejected("current_turn_selection_changed")

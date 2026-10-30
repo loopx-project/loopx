@@ -18,6 +18,69 @@ also covers the direct Turn producer and final host prompts. Quota CLI output
 parity alone does not qualify those consumers. Historical v0 decoding remains
 separate from switching new admissions to a future unified version.
 
+The C1 native candidate reuses advisory outcome navigation and the generic
+same-capture selector. Its existing native planner and full/delta encoder retain
+their two calls; the retired mandatory scoped-reading wrapper adds no third
+owner. IO publishes current original recovery before planning and commits the
+required artifact before publishing delivery. Full views page their existing
+immutable capture; only deltas need a separate encoded file. This changes neither
+the model-facing page contract nor historical decoding, default activation,
+execution or settlement authority.
+The candidate's `turn run-once` also reads selection, task commitment, admitted
+action and replan/writeback conditions together from the checked complete source.
+It reuses the task-source boundary call and existing effect projection. The old
+adapter remains for integrity checks and unmigrated consumers, with its execution
+decoder used only for requests that omit the complete contract. Invalid supplied
+contracts never fall back. This does not qualify full adapter retirement or
+outcome/full-cost benefit over original quota.
+New structured Host preparation also consumes that complete source instead of
+flattening the legacy authority layout. Executable-action and admitted-replan
+facts retain their typed owner; Codex boundary guidance uses the complete source.
+The original capture metadata and historical-only decoder remain supported.
+This changes no complete model input, effect owner or cross-attempt freshness rule.
+Codex CLI and operation-equipped app-server input preparation share one complete
+source check for prompt and result schema within that launch. The internal reply
+returns resolved metadata without echoing the source. Standalone consumers and
+post-execution result conversion still validate independently; no cross-attempt
+cache or new model-facing contract is introduced.
+Within the C1 candidate, planning and failed-session recovery consume ordinary
+and adaptive selection in the existing checked action-hash preimage. They reuse
+the typed work owner; Python preserves historical JSON/number encoding without
+selecting work again. Historical primary-ID scalar/whitespace hints are not trimmed again and cannot override a
+complete source. Other v0 readers remain until their own migration and recovery
+qualification; no extra model-facing field or bridge call is introduced.
+
+The native launch check now reuses the planner's selected work. CLI preparation
+and post-validation completion classification share the existing execution-context
+reader in `turn_driver/driver.py`, backed by the typed source owner. Completion
+classification rechecks complete source/projection integrity even when its outcome
+is already saved in the journal; malformed supplied input cannot use historical
+fallback. Historical omission retains its decoder and accepted-receipt recovery.
+This adds one coarse request per complete completion classification, with no
+additional launch request. It preserves original Turn identity, effect order and
+once-only recovery; it does not establish a net efficiency improvement.
+
+The unmerged C1 complete binding now declares `hash_codec=context_source_numbers_v2`.
+Composition and complete consumers reuse the existing typed source identity to
+commit original numeric tokens alongside canonical JSON. Replan, capture and Host
+checks consume that same binding; missing/unsupported codecs or lost numeric
+transport reject before dependent work. The shared Python IO collector supplies
+tokens only for integral floats, signed zero and integers outside JavaScript's
+safe range. Ordinary fractional doubles need no repeated path/token metadata.
+Python applies source edits; it does not own another digest rule.
+These tokens retain the producer's numeric value/type encoding; exact byte layout
+and alternative numeric spellings remain the capture-byte check's responsibility.
+Historical v0 hashes and Turn keys retain their decoder. The earlier experimental
+`context_source_numbers_v1` committed all float tokens; changing that identity
+requires this explicit codec transition. Old v1 bindings and bindings without a
+codec are unavailable for new execution, while raw captures remain unchanged and
+their pinned readers remain available for historical inspection. Do not migrate
+outstanding work by re-signing its source. This is integrity checking, not
+authentication or execution authority; the original-quota benefit gate stays open.
+The standalone complete-input adapter also uses the existing compact Host check;
+its unused full-source echo operation is retired. Model input still uses the
+original source, with no extra validation request or model-facing view.
+
 中文：本页记录当前版本。[统一契约提案](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 的终态是一份包含差分交付能力的完整契约，取消线上 quota/envelope 格式选择；
 历史捕获保留原 schema 与签名。本次文档更新不新增 CLI 开关。
@@ -26,6 +89,48 @@ separate from switching new admissions to a future unified version.
 RFC 的 [C1 消费链替换](../../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 还覆盖直接生产契约的 Turn 入口和最终 host prompt；仅 quota CLI 输出等价不能验收
 这些消费者。历史 v0 解码与新准入切换到未来统一版本分别处理。
+
+C1 的 native 候选复用成果建议导航和通用同 capture selector。既有原生 planner 与
+full/delta encoder 保持两次调用；已退役的强制 scoped-reading wrapper 不增加第三个
+owner。IO 在规划前发布当前原始恢复引用，并在发布交付前落盘所需产物。全文视图直接
+分页已有不可变 capture，只有 delta 需要额外编码文件；模型侧分页契约、历史 decoder、
+默认激活、执行及结算权限均不改变。
+候选 `turn run-once` 也在同一次经过校验的完整来源读取中获得选定工作、正文摘要、
+已准入动作及 replan／写回条件，复用正文来源的边界调用与既有效果投影。旧 adapter
+仍供完整性校验和未迁移消费者使用；只有缺省完整契约的请求使用旧执行 decoder，
+显式无效契约不回退。完整 adapter 退役及优于原 quota 的成果／完整成本收益仍未资格。
+新结构化 Host 准备也直接消费完整来源，不再展开旧 authority 布局；可执行行动与
+已准入 replan 事实仍由既有 typed owner 提供，Codex 边界指导读取完整来源。
+原 capture 元数据和仅用于历史请求的 decoder 保留；完整模型输入、effect 归属及
+跨 attempt 新鲜度规则不变。
+Codex CLI 与启用 operation tools 的 app-server 在一次启动的输入准备中，让提示词
+与结果 schema 共用完整来源校验；内部响应只返回已解析元数据，不原样回传来源。
+独立消费者与执行后的结果转换仍各自校验，不引入跨 attempt 缓存或新的模型侧契约。
+在 C1 候选中，规划与失败会话恢复从已有、经校验的动作 hash preimage 消费普通及
+自适应主任务选择，复用 typed 工作 owner；Python 只保留历史 JSON／数字编码，
+不再重新选择。历史 primary-ID scalar／空白提示不再重复 trim，也不能覆盖完整来源；其他 v0 reader
+须各自完成迁移及恢复资格后退役，不新增模型侧字段或 bridge 调用。
+
+原生启动检查现在复用 planner 已返回的选中工作。CLI 准备与任务验证后的完成分类
+共用 `turn_driver/driver.py` 中的既有 execution-context reader，由 typed 来源
+owner 校验。即使 journal 已保存完成 outcome，仍重新检查完整来源／投影一致性；
+显式无效输入不能走历史回退。省略完整输入的历史请求保留 decoder 和已接受回执
+恢复。完整完成分类每次新增一次粗粒度请求，启动检查不新增请求；原 Turn 身份、
+effect 顺序和一次恢复语义保持，不据此认定净效率提升。
+
+尚未合并的 C1 完整 binding 现声明 `hash_codec=context_source_numbers_v2`，组合与完整
+消费者复用既有 typed 来源身份，把原数值 token 与 canonical JSON 一起纳入承诺。
+Replan、capture 与 Host 检查消费同一 binding；缺失／不支持的 codec 或丢失原数值运输
+信息在依赖工作前拒绝。共用的 Python IO collector 只为整数值 float、带符号零及超出
+JavaScript 安全范围的整数提供 token；普通小数 double 不必重复携带路径／token。
+Python 应用来源 edits，不新增 digest 决策。Token 保留 producer 的数值／类型编码；
+精确字节布局与其他数值写法仍由 capture 字节校验负责。历史 v0 hash 与 Turn key 保留
+原 decoder；先前实验 `context_source_numbers_v1` 承诺全部 float token，这项身份变化
+通过显式 codec 升级区分。旧 v1 及缺少 codec 的 binding 不可用于新执行；原始 capture
+不变，历史检查使用对应版本固定的 reader，不通过重签来源迁移未完成工作。完整性
+校验不授予认证或执行权限；原 quota 的收益验收仍开放。
+独立完整输入 adapter 也复用既有紧凑 Host 检查，退役已无调用方的完整来源 echo
+operation；模型输入仍使用原来源，不增加验证请求或模型侧视图。
 
 Preview it explicitly:
 
@@ -538,37 +643,43 @@ work context 中已加载的来源，其次保留 planning horizon 或第一份�
 签名覆盖的 work context，拒绝缺失或不可用来源。这只证明展示成本下降，尚不证明
 上游读取减少、模型采用或完整任务效率提升。
 
-Known Todo diagnostic lanes share `quota/diagnostic_projection.ts` through the
-existing coarse context call. Read-only status/plan projects all rows in one
-call, rather than a call per Goal or lane. Unknown lists, fields, versions and
-complex nested item content remain full; field recognition reuses the canonical
-Todo contract. Retained items, capability candidates, portfolio text, planning
-horizon and selected-work sources are not shortened. Explicit detail returns the
-original summaries. Upstream compaction remains visible as `source_projection`.
-Status/plan adds one projection request; Agent/vision detail still needs one
-when the User summary remains compact. Explicit full Todo roles bypass that
-diagnostic request. These transport costs must be included in comparisons.
+Known Todo diagnostic lanes use `quota/diagnostic_projection.ts` in the same
+coarse legacy context call and in scoped native model-context composition.
+Read-only `quota status`/`plan` projects its entire row collection in one call.
+Unknown lists, nested fields and complete retained items survive; no suffix
+heuristic removes future obligations. A known lane with unknown item fields,
+an unknown item version or complex nested content stays full; field recognition
+reuses the canonical Todo contract. Capability candidates, portfolio text,
+planning horizon and full selected-work sources remain complete. Explicit
+legacy detail preserves the original summaries. Legacy detail commands observe
+current state; they cannot recover an earlier decision. A scoped native
+summary's `full_detail_capture_ref` resolves to `source_capture`; read that
+immutable original file with its digest, without repeating a command per lane. Upstream summary-compaction metadata remains available
+as `source_projection`; this reader restores captured diagnostics, not omitted
+canonical records. Full/delta baselines and context-loss recovery contain the
+exact delivered presentation. Unscoped native/failure fallback retains the
+original complete input. This is presentation reuse, not default promotion or
+proof of model retention, reduced total cost or better accepted outcomes.
+
 Diagnostic replies carry only display edits and references to the immutable
 input. The Python adapter applies them to its original facts, preserving float
 spelling, negative zero, large-integer precision and relocated upstream metadata.
 Reference-only callers keep their existing transport; no Python compaction
 decision is reintroduced. The read codec's `content_revision` is recognized as
 known display metadata and remains on retained items.
-The legacy detail command observes current state and cannot recover an earlier
-decision. The scoped native consumer and original-capture reference are a separate
-[controller integration proposal](https://github.com/loopx-project/loopx/pull/7430),
-which reuses this same owner. This does not change admission, claims, leases,
-settlement or native context defaults; it does not qualify net efficiency gains.
 
-中文：已知 Todo 诊断列表通过既有粗粒度上下文调用复用同一 typed owner；只读
-status/plan 整批行只调用一次，不逐 Goal 或列表调用。未知列表、字段、版本和
-复杂嵌套条目保留全文，字段识别复用规范 Todo 契约；保留条目、候选、portfolio
-正文、规划视野和当前工作来源不截短，详情返回原摘要，上游压缩信息保留于
-`source_projection`。旧详情命令读取当前状态，不能恢复历史决定。
-status/plan 新增一次投影请求；Agent/vision 详情若仍压缩 User 摘要，也需一次；
-显式展开两类 Todo 则跳过诊断投影。这些传输成本须计入比较。scoped 原生
-消费者及同 capture 引用属于单独的 controller 集成提案 #7430，复用同一 owner。
-此处不改准入、claim、lease、结算或原生默认，也不代表完整效率收益通过。
+中文：已登记的 Todo 诊断列表由 `quota/diagnostic_projection.ts` 统一投影，旧 CLI
+复用同一次上下文调用，scoped 原生输入在同一组合调用中采用；只读 status/plan
+整批行只调用一次。未知列表、嵌套字段和保留条目的完整字段不删除，不按名称后缀
+推测新义务。已知列表含未知条目字段、未知版本或复杂嵌套内容时保留全文，字段识别
+复用规范 Todo 契约。候选、portfolio 正文、规划视野和完整当前工作来源保持；旧详情选项
+保留完整原摘要。旧详情命令读取当前状态，不能恢复过去的决定；scoped 原生摘要
+的 `full_detail_capture_ref` 指向已有 `source_capture`，据原文件和 digest 补读，
+不逐列表重复完整命令。上游压缩信息保留于
+`source_projection`，恢复的是已捕获诊断，不是来源本已省略的规范记录。full/delta
+基线及上下文丢失恢复都使用实际交付的完整 presentation；未 scoped 或失败回退仍
+保留原完整输入。此处只证明展示代码复用，不代表默认转正、模型保持、完整成本
+下降或验收成果提高。
 诊断回复只传展示变更及不可变输入的引用；Python adapter 在原始事实上应用，
 保留浮点表示、负零、大整数精度及迁移后的上游元数据。仅引用的旧调用方保持
 原传输行为，不重新引入 Python 裁剪决定。读取 codec 已有的 `content_revision`

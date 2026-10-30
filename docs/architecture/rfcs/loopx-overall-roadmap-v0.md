@@ -212,11 +212,58 @@ host prompts. A common capture does not unify those consumers. Qualification
 checks source obligations through composition, reconstruction and actual final
 input; new-admission cutover stays separate from historical receipt replay.
 
+The [packaged C1 heartbeat checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-28-packaged-heartbeat.md)
+preserves required source and same-capture settlement semantics on isolated
+File/SQLite. Its diagnostic follow-through reuses one typed owner and removes the
+Python duplicates; [#7557](https://github.com/loopx-project/loopx/pull/7557) is merged,
+and #7430 reuses its repaired module. Historical complete-Goal and scoped-prose reuse
+improved cold, warm and recovery stdout against the original quota baseline when
+both arms include all mandatory reads. Earlier negative warm cohorts and the
+integration's existing v4 budget failure remain recorded; optional all-peer reads
+still add cost. [#7575](https://github.com/loopx-project/loopx/pull/7575) is merged
+as an independently usable native complete-Goal/reuse slice: warm input improves,
+while cold and recovery incur extra overhead. C1 adopts that shared implementation
+and now references identical Todo-summary lanes within the same complete capture;
+the original v4 budget still fails. Continue C1 on remaining real consumers,
+writer cutover and reader retirement with complete unknown-field/obligation
+preservation. These engineering observations do not promote defaults or qualify
+model-token, complete-cost or actual decision/outcome benefit.
+
+C1 now retires its unmerged mandatory outcome-reading plan and scoped wrapper,
+reusing merged #7560's advisory navigation and the generic same-capture selector.
+Merged #7643 preserves original values through the existing edit transport.
+The [navigation convergence checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-navigation-convergence.md)
+keeps signed contracts complete and main's recovery-before-planning ordering;
+#7627's merged file-first delivery is adopted through that existing owner. The old
+fused native-call saving does not apply to this integration. Numeric hash identity,
+writer/caller retirement and original-quota outcomes/full cost remain open.
+The [journal source-fidelity prerequisite](ledger/controller-executor-unified-contract-v0/2026-10-29-journal-source-fidelity.md)
+is split into normal #7657 and reused by C1. Its original-number preservation
+does not qualify a new hash codec or a positive full-cost comparison. The
+[context source-fidelity slice](ledger/controller-executor-unified-contract-v0/2026-10-29-context-source-fidelity.md)
+is independently proposed as normal #7661, preserving original numbers through
+cold/delta/full recovery via the same TS owner. C1 reuses it; unchanged historical
+hashes, remaining consumer bridges and original-quota full-cost acceptance stay open.
+
+The same integration codec now adopts merged [#7528](https://github.com/loopx-project/loopx/pull/7528)
+for exact relocated evidence with literal current overrides, including scoped
+context. The ledger records smaller relocation-only deltas alongside the still
+negative ordinary-warm byte comparison; this is shared-owner adoption, not a
+second encoder or default promotion.
+
 The [pinned packaged comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
 qualifies C1 source/recovery behavior on real File/SQLite fixtures but records
 larger cold/output bytes and an open standalone numeric hash boundary. Preserve
 that counterevidence and the original outcome/full-cost gate; a working saved-file
 delta or once-only receipt does not establish long-horizon benefit.
+
+The [complete numeric-integrity checkpoint](ledger/controller-executor-unified-contract-v0/2026-10-29-complete-numeric-integrity.md)
+extends the existing source owner to complete consumers and removes the unused
+Host echo. The [sparse-transport integration](ledger/controller-executor-unified-contract-v0/2026-10-29-sparse-numeric-integration.md)
+then reuses the context collector and explicitly versions the changed experimental
+hash identity. Historical v0 hashes, pinned old readers and earlier cost failures
+remain. Component transport improvements do not close cutover, installed adoption
+or original-quota outcome/full-cost gaps.
 
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,

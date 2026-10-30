@@ -19,9 +19,10 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
-from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
+from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _run_cli, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import (
     local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
+    native_capture_wire,
 )
 from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
@@ -304,16 +305,20 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= (native_guard_output_bytes or 64000)
             read_commands[name] = descriptor["command"]
             # The public native CLI now shares context-project's paged reader.
-            # Keep the independent full-wire oracle separate from its page view.
-            wire_file = Path(descriptor["path"]).parent / "delivery.json"
-            wires[name] = json.loads(wire_file.read_text())
+            # Keep saved-byte/state oracles separate from actual page input.
+            # Full views page their existing capture; only deltas need a wire.
+            context_root = home / "loopx-context" if host == "benchmark" else lifecycle
+            if shared_root:
+                context_root /= hashlib.sha256(descriptor["target"]["session_id"].encode()).hexdigest()
+            recovery = json.loads((context_root / "session.json").read_bytes())["recovery"]
+            wires[name] = native_capture_wire(descriptor, recovery=recovery)
             assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" or resume_loss else "delta")
             assert "Native input observation independently verifies" not in descriptor["instruction"]
             if name == "warm" and not resume_loss and "content" in descriptor:
                 assert json.dumps(wires[name]["instruction"]).encode() in descriptor["content"].encode()
             capture = Path(wires[name]["recovery"]["path"]).parent / "decision.json"
             snapshots.append((capture, capture.read_bytes()))
-            read_paths[name] = Path(wires[name]["recovery"]["path"]) if wires[name]["mode"] == "full" else wire_file
+            read_paths[name] = Path(descriptor["path"])
             if "content" not in descriptor:
                 # File-first delivery is a reference, not an already-read page.
                 # Discover the read from model-visible output, never from the
@@ -588,7 +593,6 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 # checked first readback through the real CLI, rather than
                 # reusing a stale guard/Turn from resumed history to obtain an
                 # artificially eligible warm packet.
-                from test_quota_settlement_cli import _run_cli
                 expected = hashlib.sha256(read_paths["cold"].read_text().rstrip("\n").encode()).hexdigest()
                 assert stages["cold_readback_sha256"] == expected
                 artifact = project / "native-context-readback.txt"
@@ -688,7 +692,8 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
     projection = Path(wires["warm"]["recovery"]["path"])
     assert hashlib.sha256(projection.read_bytes()).hexdigest() == wires["warm"]["recovery"]["sha256"]
     current = prepare_context_delivery(json.loads(projection.read_bytes()), scope={k: wires["warm"]["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-        capture_id=wires["warm"]["target"]["capture_id"], surface=surface)
+        capture_id=wires["warm"]["target"]["capture_id"], surface="complete_turn")
+    assert current["target"] == wires["warm"]["target"]
     baseline = wires["cold"]
     if resumed and qualified_resume and not resume_loss:
         assert wires["warm"]["base"] == baseline["target"]
@@ -700,13 +705,17 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
         assert current["target"]["context_epoch"] != baseline["target"]["context_epoch"]
         baseline = prepare_context_delivery(baseline["context"], scope={
             k: current["target"][k] for k in ("goal_id", "agent_id", "session_id", "context_epoch")},
-            capture_id=baseline["target"]["capture_id"], surface=surface)
+            capture_id=baseline["target"]["capture_id"], surface="complete_turn")
         assert baseline["target"] == wires["warm"]["base"]
     restored = restore_context_delivery(wires["warm"], baseline=baseline, current=current)
     assert restored["context"] == current["context"] and restored["mode"] == wires["warm"]["mode"]
-    for document in (wires["cold"]["context"], current["context"]):
-        context = (document["work_context"] if surface == "turn_envelope" else
-                   document["interaction_contract"]["agent_channel"]["work_context"])
+    # Both CLI spellings now emit the same complete contract. Compare every
+    # reconstructed fact with its original capture, not two compact views.
+    for document, (_, raw) in zip((wires["cold"]["context"], current["context"]), snapshots, strict=True):
+        original = json.loads(raw)
+        assert document == original
+        assert document["schema_version"] == "loopx_turn_envelope_v1"
+        context = document["interaction_contract"]["agent_channel"]["work_context"]
         selected = next(source["content"]["todo"] for source in context["sources"]
                         if source["source"] == "selected_todo")
         assert selected["todo_id"] == TODO_ID and selected["text"] == body

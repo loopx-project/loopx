@@ -643,7 +643,6 @@ test("declared outcomes remain required reads without enabled checks after a wor
   assert.ok(!off.some(read => read.source === "goal_acceptance"));
 });
 
-
 test("full original Goal delivery fulfills its read without excluding legacy text", () => {
   const text = "Original intent\nUnknown section\n停止条件：不得发布。\n";
   const read = {source: "goal_state", command: "cat -- goal.md", ordering: "before_work"};

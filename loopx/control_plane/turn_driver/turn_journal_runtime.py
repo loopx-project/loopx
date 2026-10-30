@@ -172,6 +172,7 @@ def write_turn_journal(
 
     request: dict[str, Any] = {
         "path": path,
+        # TS owns validation, transitions and publication over the native object.
         "journal": dict(journal),
         "expected_effect_id": expected_effect_id,
     }

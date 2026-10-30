@@ -273,8 +273,13 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         )
         assert rc == 0, envelope
         assert envelope["replan_action_packet"]["planning_guidance"] == selected["replan_action_packet"]["planning_guidance"]
-        assert envelope["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
-        assert envelope["writeback"]["settlement_plan"] == plan
+        # Both CLI spellings now emit the same complete contract. Historical
+        # adapters still reconstruct the authoring body from that capture.
+        assert envelope["schema_version"] == selected["schema_version"] == "loopx_turn_envelope_v1"
+        assert envelope["replan_action_packet"]["writeback_contract"] == contract
+        assert envelope["interaction_contract"]["cli_channel"]["settlement_plan"] == plan
+        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+        assert build_turn_envelope(envelope)["replan_action_packet"]["writeback_contract"]["vision_authoring"] == authoring
     vision_path = tmp_path / "periodic-vision.json"
     vision = json.loads(json.dumps(authoring["minimal_example"]))
     vision["vision_patch"] = {"acceptance_summary": "Original acceptance remains open."}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -13,6 +14,7 @@ from loopx_memt_turn.config import AdapterError
 from loopx_memt_turn.host import run
 
 from memt_fixtures import turn, with_tools
+from tests.control_plane.test_turn_host_decision_capture import complete_host_request as complete_host_request
 
 
 def execute(config, request=None):
@@ -194,3 +196,54 @@ def test_receipt_is_not_a_transcript_or_credential_log(config, provider):
     execute(config)
     receipts = [json.loads(path.read_text()) for path in Path(config.state_dir).rglob("*.json")]
     assert not any("input_ids" in receipt or "responses" in receipt for receipt in receipts)
+
+
+def test_complete_cli_input_without_exact_lifetime_cannot_open_memory(config, provider, complete_host_request):
+    request, _ = complete_host_request
+    assert "goal_ref" not in request
+    with pytest.raises(AdapterError, match="exact_goal_instance_required"):
+        execute(config, request)
+    assert provider.requests == []
+    assert not Path(config.state_dir).exists()
+
+
+def test_lifecycle_only_profile_cannot_supply_an_executable_turn(tmp_path):
+    from tests.control_plane.test_turn_host_decision_capture import _fixture_module
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    fixture = _fixture_module()
+    _, runtime, _, legacy = fixture._write_fixture(tmp_path, turn_count=2)
+    registration = json.loads(legacy.read_text())
+    registration.update(schema_version="0.2", registry_role="project-local", profile_id="source_session_v1",
+        projects=[], session_bindings=[], session_receipts=[], lifetime_receipts=[], retired_goal_instances=[])
+    registration["goals"][0].update(goal_instance_id="ginst_" + "a" * 32, execution_authority=False)
+    registry = legacy.with_name("source-registry.json")
+    with source_session_registry_transaction(registry, operation="optional_host_fixture", create=lambda: registration) as tx:
+        tx.commit(registration)
+    before = registry.read_bytes()
+    code, rejected = fixture._run_cli(["--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "turn", "plan", "--goal-id", fixture.GOAL_ID,
+        "--agent-id", fixture.AGENT_ID, "--host", "generic-cli", "--iteration-context", "fresh"])
+    assert code == 1 and rejected["ok"] is False
+    assert "lifecycle-only profile" in rejected["error"]
+    assert registry.read_bytes() == before
+    assert not list(runtime.rglob("decisions/*.json"))
+    assert fixture._quota_spend_count(runtime) == 0
+
+
+@pytest.mark.parametrize("mutation", ["source", "version", "binding", "missing"])
+def test_complete_cli_input_rejects_corruption_before_memory(config, provider, complete_host_request, mutation):
+    original, _ = complete_host_request
+    request = copy.deepcopy(original)
+    if mutation == "source":
+        request["work_contract"]["goal_id"] = "different-goal"
+    elif mutation == "version":
+        request["work_contract"]["schema_version"] = "unsupported-contract"
+    elif mutation == "binding":
+        request["work_contract"]["contract_binding"]["scheduler_execution_args"] = "different-host"
+    else:
+        request["work_contract"] = None
+    with pytest.raises(ValueError, match="complete Turn contract rejected"):
+        execute(config, request)
+    assert provider.requests == []
+    assert not Path(config.state_dir).exists()

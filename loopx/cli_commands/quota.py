@@ -58,6 +58,7 @@ from ..control_plane.quota.settlement_cli import (
     reconcile_existing_heartbeat_receipt_for_turn,
     render_existing_heartbeat_receipt_payload,
 )
+from ..control_plane.quota.turn_envelope import compose_turn_decision
 from ..quota import (
     build_quota_plan,
     record_quota_monitor_poll,
@@ -311,6 +312,22 @@ def _emit_quota_result(
 
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
             "replan_read_argv": current_loopx_cli_argv()}
+    if args.quota_command == "should-run" and context is not None:
+        attach_host_poll_receipt(
+            context.status_payload,
+            args,
+            payload,
+            registry_path=registry_path,
+        )
+    # A decided refusal has the same complete contract as an admission. `ok`
+    # still controls exit status and host handoff; composition grants no work.
+    if args.quota_command == "should-run" and isinstance(payload.get("interaction_contract"), Mapping):
+        payload = compose_turn_decision(payload, scheduler_execution_context=context.scheduler_context if context is not None else None)
+    if args.quota_command == "should-run":
+        # Validate new decisions before durable capture or host handoff. This
+        # projection is identity for complete decisions and early diagnostics.
+        payload = _project_quota_cli_payload(payload, args, detail_sections,
+            context.scheduler_context if context is not None else None)
     try:
         capture_decision(capture_directory, payload)
         if (payload.get("ok") is False and context_delivery_enabled and capture_directory
@@ -336,19 +353,13 @@ def _emit_quota_result(
         decision_identity = (str(payload.get("goal_id") or ""),
             str(agent.get("agent_id") or "") if isinstance(agent, Mapping) else str(args.agent_id or ""))
     captured_payload = payload
-    payload = _project_quota_cli_payload(
-        payload, args, detail_sections,
-        context.scheduler_context if context is not None else None,
-        captured_decision_path=(
-            str(capture_directory / "decision.json") if capture_directory is not None else None
-        ),
-    )
-    if args.quota_command == "should-run" and context is not None:
-        attach_host_poll_receipt(
-            context.status_payload,
-            args,
-            payload,
-            registry_path=registry_path,
+    if args.quota_command != "should-run":
+        payload = _project_quota_cli_payload(
+            payload, args, detail_sections,
+            context.scheduler_context if context is not None else None,
+            captured_decision_path=(
+                str(capture_directory / "decision.json") if capture_directory is not None else None
+            ),
         )
     succeeded = bool(payload.get("ok"))
     # Handoff releases the immutable original before any presentation. Native
@@ -361,7 +372,7 @@ def _emit_quota_result(
         payload = project_captured_context(payload, directory=capture_directory,
             request=delivery_request[0], capture_id=delivery_request[1],
             goal_id=decision_identity[0], agent_id=decision_identity[1],
-            surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet")
+            surface="complete_turn" if captured_payload.get("schema_version") == "loopx_turn_envelope_v1" else ("turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"))
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         import hashlib
@@ -373,7 +384,7 @@ def _emit_quota_result(
                 root=getattr(args, "codex_context_root", None), create=True)
             payload = project_codex_context(payload, directory=directory,
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
-                surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
+                surface="complete_turn" if captured_payload.get("schema_version") == "loopx_turn_envelope_v1" else ("turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet"),
                 capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
             recovery = payload.get("recovery")
             if recovery is None:
@@ -548,10 +559,7 @@ def handle_quota_command(
                 inline_goal_source=native_context_activation(args)["enabled"],
                 available_capabilities=args.available_capabilities,
                 include_scheduler_detail="scheduler" in detail_sections,
-                include_agent_todo_detail=(
-                    "agent-todos" in detail_sections
-                    and not bool(getattr(args, "turn_envelope", False))
-                ),
+                include_agent_todo_detail="agent-todos" in detail_sections,
                 codex_app_current_rrule=args.app_automation_current_rrule,
                 registry_path=registry_path,
                 runtime_root=runtime_root,
@@ -574,10 +582,7 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
-                context_navigation=(
-                    native_context_activation(args)["enabled"]
-                    and not bool(getattr(args, "turn_envelope", False))
-                ),
+                context_navigation=native_context_activation(args)["enabled"],
                 goal_ref=goal_ref,
             )
             _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)

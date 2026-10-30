@@ -20,12 +20,13 @@ from ..projects.registry_codec import (
     require_runtime_compatible_project_registry,
 )
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
-from .driver import selected_turn_todo, session_identity_fields
+from .driver import session_identity_fields, turn_host_lineage
 
 CODEX_CLI_SESSION_SCHEMA_VERSION = "loopx_codex_cli_session_v1"
 MANAGED_CLI_SESSION_SCHEMA_VERSION = "loopx_managed_cli_session_v1"
 SESSION_ID_MAX_CHARS = 256
 _UNCHECKED_SESSION_DOCUMENT = object()
+_ABSENT_WORK_CONTRACT = object()
 
 
 def _host_session_schema(host: str) -> str:
@@ -37,13 +38,7 @@ def _host_session_schema(host: str) -> str:
 
 
 def _lineage(request: Mapping[str, Any], *, session_scope: str | None = None) -> dict[str, str]:
-    envelope = request.get("turn_envelope") or {}
-    todo = selected_turn_todo(envelope)
-    lineage = {
-        "goal_id": str(envelope.get("goal_id") or "").strip(),
-        "agent_id": str(envelope.get("agent_id") or "").strip(),
-        "todo_id": str(todo.get("todo_id") or "").strip(),
-    }
+    lineage = turn_host_lineage(request)
     if session_scope is None:
         session = request.get("session") or {}
         policy = session.get("context_policy") or {}
@@ -169,11 +164,15 @@ def codex_cli_session_binding(
     runtime_root: Path,
     turn_envelope: Mapping[str, Any],
     *,
+    work_contract: object = _ABSENT_WORK_CONTRACT,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     session_scope: str = "todo",
     host: str = "codex-cli",
 ) -> dict[str, str] | None:
-    lineage = _lineage({"turn_envelope": dict(turn_envelope)}, session_scope=session_scope)
+    request: dict[str, Any] = {"turn_envelope": dict(turn_envelope)}
+    if work_contract is not _ABSENT_WORK_CONTRACT:
+        request["work_contract"] = work_contract
+    lineage = _lineage(request, session_scope=session_scope)
     session = select_codex_cli_session(
         runtime_root,
         lineage=lineage,
