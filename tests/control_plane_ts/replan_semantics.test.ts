@@ -557,13 +557,14 @@ test("only a bound original receipt can select the source-derived legacy obligat
 });
 
 
-test("canonical no-follow-up restores only its exact admitted review and still owes Vision", () => {
+for (const recovery of ["same_turn_terminal_closeout", "lifecycle_reentry_terminal_closeout"]) {
+test(`${recovery} restores only its exact admitted review and still owes Vision`, () => {
   const id = "replan-1111111111111111", agent = "synthetic-agent";
   const row = {todo_id: "todo_original", text: "Verify independent source", status: "done", done: true,
     task_class: "advancement_task", claimed_by: agent, last_actor_agent_id: agent,
     completed_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:01Z",
     completion_turn_key: "original-completion", no_followup: true, completion_continuation: "no_followup",
-    completion_recovery: "lifecycle_reentry_terminal_closeout"};
+    completion_recovery: recovery};
   const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
     triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
       completion_turn_key: row.completion_turn_key, agent_id: agent}]};
@@ -602,6 +603,7 @@ test("canonical no-follow-up restores only its exact admitted review and still o
   assert.throws(() => projectReplanSemantics({...request,
     selected_obligation_id: "replan-2222222222222222"}), /identity conflicts/);
 });
+}
 
 test("lifecycle reconstruction restores completion order before its trigger bound", () => {
   const agent = "synthetic-agent";

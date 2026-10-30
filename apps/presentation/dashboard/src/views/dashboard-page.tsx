@@ -2628,7 +2628,7 @@ function PersonalGoalHome({
           : payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
           : payloadError?.delivery_state === "not_delivered" && payloadError.turn_replay_safe === true && !submittedTurnId
-            ? `${locale === "zh-CN" ? "请求未提交；草稿和图片已保留，可以修改后重新发送。" : "Request not submitted. Draft and images retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
+            ? `${locale === "zh-CN" ? "请求未提交；草稿和附件已保留，可以修改后重新发送。" : "Request not submitted. Draft and attachments retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
           : preparationFailed
             ? `${locale === "zh-CN" ? "尚未提交请求。连接执行器失败，可以重新发送。" : "Request not submitted. Could not connect to the executor; you can send again."}\n\n${error instanceof Error ? error.message : ""}`
           : error instanceof Error

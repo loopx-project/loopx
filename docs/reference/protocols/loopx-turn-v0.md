@@ -516,6 +516,24 @@ completed effects remain proved; other effects are unknown, not `false`. The
 writer's empty-map rejection is retained: no pending intent uses an absent field;
 committed history is carried by completed checkpoints, not retained intents.
 
+Python-origin journal snapshots remain JSON objects through that same TypeScript
+writer. They reuse context delivery's sparse numeric IO metadata and validator
+to preserve integral floats, signed zero and unsafe integers before atomic
+publication. Replay and immutable-plan comparison distinguish these source
+numbers; refusals retain the original file. Ordinary objects without metadata
+retain their encoding and operation identity; historical receipts are not
+rewritten. This remains one RPC under the existing 2 MiB request limit and avoids
+double escaping evidence text. Metadata still costs bytes for number-dense
+sources. Source fidelity and transport checks do not establish latency or
+long-horizon benefit.
+
+Python 来源的 journal 快照仍经同一 TypeScript writer 传递 JSON 对象，复用
+context delivery 的稀疏数值 IO 元数据与校验器，在原子发布前保留整值浮点、带
+符号零和非安全整数。重放与不可变 plan 比较区分这些来源数值；拒绝时保留原
+文件。无元数据的普通对象保留已有编码与操作身份，不改写历史回执。仍为一次
+RPC，沿用 2 MiB 请求上限，避免证据正文的双重转义；数值密集来源仍有元数据
+字节成本。来源保真与传输检查不代表延迟或长程收益已得到验证。
+
 If executing `run-once` raises unexpectedly, its error response retains the
 original error and resume key, marks uncertain current-invocation `effects` as
 `null`, and adds `journal_observation` from this same read-only TS owner. Its

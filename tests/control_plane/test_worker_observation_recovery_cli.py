@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+import loopx
 from canonical_authority_fixture import isolate_sqlite_runtime
 from research_worker_readback_fixture import AGENT, GOAL, _write_authority
 from loopx.control_plane.quota.host_poll_receipts import (
@@ -22,7 +23,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 def _worker_fixture(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    monkeypatch.setenv("PYTHONPATH", str(REPO))
+    # Subprocesses exercise this owner's installation, including wheel tests.
+    monkeypatch.setenv("PYTHONPATH", str(Path(loopx.__file__).resolve().parent.parent))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "worker-state"))
     runtime, _ = _write_authority(tmp_path, provider=provider)
     registry = tmp_path / "registry.json"
@@ -47,17 +49,140 @@ def _run_worker(runtime, registry, count, host, agent):
     ], cwd=host.parent / "project", capture_output=True, text=True, timeout=120)
 
 
-def _poll(runtime, registry, agent, *, record=False):
+def _poll(runtime, registry, agent, *, record=False, extra=(), profile="generic_cli"):
     result = subprocess.run([
         sys.executable, "-m", "loopx.cli", "--registry", str(registry),
         "--runtime-root", str(runtime), "--format", "json",
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", agent,
-        "--runtime-profile", "generic_cli", *(["--record-host-poll"] if record else []),
+        "--runtime-profile", profile, *(["--record-host-poll"] if record else []), *extra,
     ], cwd=registry.parent / "project", capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
     assert payload["ok"] is True, payload
     return payload
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("wire", ["quota", "envelope", "native"])
+@pytest.mark.parametrize("observation", ["recorded", "unreadable", "off"])
+def test_original_capture_retains_the_emitted_poll_observation(
+    tmp_path, monkeypatch, provider, wire, observation,
+):
+    """One liveness observation must survive original-evidence recovery."""
+    import hashlib
+
+    runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
+    receipt = receipt_path_for_goal({"id": GOAL}, tmp_path / "project" / "ACTIVE_GOAL_STATE.md")
+    damaged = b'{"schema_version":"unknown","worker_observations":{"unresolved":true}}'
+    if observation == "unreadable":
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_bytes(damaged)
+    capture = tmp_path / "original-capture"
+    options = ["--turn-instance-id", "capture-poll", "--decision-output-dir", str(capture),
+               "--context-delivery", "on" if wire == "native" else "off"]
+    if wire == "envelope":
+        options.append("--turn-envelope")
+    if wire == "native":
+        native = tmp_path / "native-context"
+        native.mkdir(mode=0o700)
+        options.extend(["--codex-context-dir", str(native)])
+    emitted = _poll(runtime, registry, AGENT, record=observation != "off", extra=options,
+                    profile="codex_app_heartbeat" if wire == "native" else "generic_cli")
+    original = (capture / "decision.json").read_bytes()
+    source = json.loads(original)
+    assert source["quota"]["spent_slots"] == 0
+    assert not count.exists(), "A poll or evidence read must not dispatch the Host"
+    if observation == "off":
+        assert "host_poll_receipt" not in source
+        assert "host_poll_receipt" not in emitted
+        assert not receipt.exists()
+        return
+    if observation == "recorded":
+        stored = json.loads(receipt.read_bytes())
+        expected = {"recorded": True, "poll_count": 1,
+                    "last_poll_at": stored["last_poll_at"],
+                    "expected_continuation": stored["expected_continuation"]}
+        assert stored["poll_count"] == 1
+    else:
+        expected = {"recorded": False,
+                    "error": "host poll receipt is unreadable; repair its source before updating observations"}
+        assert receipt.read_bytes() == damaged
+    assert source["host_poll_receipt"] == expected
+    before = receipt.read_bytes()
+    if wire == "native":
+        # Read precisely the immutable recovery view published to this caller.
+        reader = shlex.split(emitted["recovery"]["command"])
+    elif wire == "envelope":
+        from loopx.control_plane.quota.turn_envelope import build_turn_envelope
+
+        # Replan readers bind the full observation, including this receipt.
+        # Their hash changes without changing the selected work or debit.
+        without_poll = {key: value for key, value in source.items() if key != "host_poll_receipt"}
+        prior = build_turn_envelope(without_poll)
+        actual = emitted["action_signature"]
+        for key in ("decision", "should_run", "effective_action"):
+            assert emitted[key] == prior[key]
+        assert emitted["writeback"]["settlement_identity"] == prior["writeback"]["settlement_identity"]
+        assert actual["source_decision_hash"] != prior["action_signature"]["source_decision_hash"]
+        assert actual == build_turn_envelope(source)["action_signature"]
+        review = subprocess.run(shlex.split(emitted["replan_action_packet"]["review"]),
+                                check=True, capture_output=True, text=True, timeout=90)
+        assert json.loads(review.stdout)["source_hash"] == actual["source_decision_hash"]
+        reader = shlex.split(emitted["detail_ref"]["full_decision"])
+    else:
+        reader = [sys.executable, "-m", "loopx.cli", "--format", "json", "quota", "context-read",
+                  "--capture-file", str(capture / "decision.json"),
+                  "--capture-sha256", hashlib.sha256(original).hexdigest()]
+    if wire == "envelope":
+        recovered = json.loads(subprocess.run(reader, check=True, capture_output=True).stdout)
+        assert recovered["host_poll_receipt"] == expected
+    else:
+        page = subprocess.run([*reader, "--select", "/host_poll_receipt"],
+                              check=True, capture_output=True, text=True, timeout=90)
+        recovered = json.loads(page.stdout)
+        assert recovered["ok"] is True and recovered["eof"] is True
+        assert json.loads(recovered["content"])["selections"][0]["value"] == expected
+    if wire != "native":
+        assert emitted["host_poll_receipt"] == expected
+    assert receipt.read_bytes() == before, "Recovery must not record a second poll"
+    assert (capture / "decision.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_failed_capture_discloses_the_already_recorded_poll(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    from unittest.mock import patch
+
+    from loopx.cli import main
+    from loopx.cli_commands import quota, quota_capture
+
+    runtime, registry, count, _ = _worker_fixture(tmp_path, monkeypatch, provider)
+    original_capture = quota_capture.capture_decision
+
+    def failed_publication(directory, payload):
+        # Only the capture publisher fails; admission and receipt IO are real.
+        with patch.object(quota_capture.os, "replace", side_effect=OSError("synthetic capture outage")):
+            original_capture(directory, payload)
+
+    monkeypatch.setattr(quota, "capture_decision", failed_publication)
+    monkeypatch.chdir(tmp_path / "project")
+    capture = tmp_path / "failed-capture"
+    code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                 "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+                 "--runtime-profile", "generic_cli", "--turn-instance-id", "capture-failure",
+                 "--record-host-poll", "--decision-output-dir", str(capture),
+                 "--context-delivery", "off"])
+    failed = json.loads(capsys.readouterr().out)
+    assert code == 1 and failed["status"] == "decision_transport_failed"
+    assert failed["should_run"] is False and "captured_decision" not in failed
+    assert failed["heartbeat_receipt"]["turn_instance_id"] == "capture-failure"
+    receipt = receipt_path_for_goal({"id": GOAL}, tmp_path / "project" / "ACTIVE_GOAL_STATE.md")
+    stored = json.loads(receipt.read_bytes())
+    assert stored["poll_count"] == 1
+    assert failed["host_poll_receipt"] == {"recorded": True, "poll_count": 1,
+        "last_poll_at": stored["last_poll_at"], "expected_continuation": stored["expected_continuation"]}
+    assert not list(capture.iterdir()) and not count.exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

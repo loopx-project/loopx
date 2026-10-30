@@ -12,23 +12,30 @@ export function capturedContextSelection(request: JsonObject): JsonObject {
   if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 1 || depth > 8
       || request.list_depth !== undefined && request.list_fields !== true)
     throw new EffectRuntimeRequestError("list-depth requires --list and an integer from 1 to 8");
-  const pointers = [...new Set(selectors as string[])].sort();
+  // Keep caller positions before canonical sorting/deduplication. Diagnostics
+  // identify a failed address without echoing possibly sensitive keys or values.
+  const argumentsByPointer = new Map<string, number>();
+  (selectors as string[]).forEach((pointer, index) => {
+    if (!argumentsByPointer.has(pointer)) argumentsByPointer.set(pointer, index + 1);
+  });
+  const pointers = [...argumentsByPointer.keys()].sort();
   const selections = pointers.map(pointer => {
+    const argument = `--select argument ${argumentsByPointer.get(pointer)}`;
     if (pointer !== "" && !pointer.startsWith("/") || /~(?:[^01]|$)/.test(pointer))
-      throw new EffectRuntimeRequestError("context selection requires RFC 6901 pointers");
+      throw new EffectRuntimeRequestError(`context selection requires RFC 6901 pointers (${argument}; positions are 1-based)`);
     const tokens = pointer === "" ? [] : pointer.slice(1).split("/").map(token => token.replace(/~1/g, "/").replace(/~0/g, "~"));
     const path: (string | number)[] = [];
     let value: unknown = context;
     for (const token of tokens) {
       if (Array.isArray(value)) {
         if (!/^(0|[1-9][0-9]*)$/.test(token) || !Number.isSafeInteger(Number(token)) || Number(token) >= value.length)
-          throw new EffectRuntimeRequestError("context selection array index is missing or invalid");
+          throw new EffectRuntimeRequestError(`context selection array index is missing or invalid (${argument}, token ${path.length + 1}; positions are 1-based)`);
         path.push(Number(token));
         value = value[Number(token)];
       } else if (value !== null && typeof value === "object" && Object.hasOwn(value, token)) {
         path.push(token);
         value = (value as JsonObject)[token];
-      } else throw new EffectRuntimeRequestError("context selection pointer does not exist");
+      } else throw new EffectRuntimeRequestError(`context selection pointer does not exist (${argument}, token ${path.length + 1}; positions are 1-based)`);
     }
     // Return the verified address, not a JS-number-coerced copy of the value.
     // The file adapter retains original JSON values and owns byte serialization.

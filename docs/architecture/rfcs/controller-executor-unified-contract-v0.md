@@ -130,6 +130,43 @@ the existing context-delivery owner. C1 must converge the remaining composition
 and consumer assumptions, rather than introduce another capture service or
 rewrite already shared delta/native-resume logic.
 
+Optional host polling is part of that original observation. The source-fidelity
+slice records `--record-host-poll` once before capture and reuses its receipt in
+ordinary CLI, envelope and native-context delivery. Recovery reads do not poll
+again. A later capture/handoff failure retains the already-recorded observation
+in its error response; it does not imply missing admission or authorize replay.
+Default-off behavior and unreadable receipt diagnostics remain unchanged. This
+repairs capture completeness, not the unified writer/consumer cutover or a
+long-horizon cost-benefit result.
+
+A separate native-presentation slice reuses the committed full recovery as its
+reader target, avoiding an unused second wire publication. Delta and unwrapped
+inputs retain their own immutable files and the same reader/lifecycle owners.
+On a matched 107,289-byte synthetic source, capture writes fall from 216,754 to
+107,289 bytes; full reader bytes and the 3,937-byte warm delta are unchanged.
+This qualifies only duplicate capture IO removal, not model-input reduction,
+complete cost, accepted outcomes or C1 writer/consumer cutover.
+For a small explicit output ceiling, native presentation can also omit repeated
+directory/selection commands while retaining the complete recovery command:
+append `--list` or `--select` to discover/read current facts without a baseline.
+The original 4,000-byte cold/warm/compaction cases retain their requirements,
+Stop, original identity and full recovery; this is transport qualification.
+
+Journal persistence is an independent source-fidelity prerequisite. The proposed
+Python adapter reuses context delivery's sparse number-token collector; both
+TypeScript consumers reuse one source-number validator. Journals remain JSON
+objects, with metadata only for integral floats, signed zero and unsafe integers.
+The journal owner restores these numbers before atomic publication and retains
+their distinctions in replay and immutable-plan comparisons. Ordinary native
+objects retain their encoding; historical receipts are not rewritten.
+
+The interim whole-JSON-string carrier failed the existing 2 MiB request boundary
+for a synthetic 1.55-million-character quoted body accepted by the object path.
+Keep that negative result: qualify the sparse replacement against the same
+workload and limit, including number-dense overhead. Neither this prerequisite
+nor a component byte saving qualifies the unified writer/consumer cutover or
+long-horizon net benefit.
+
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |
@@ -873,6 +910,36 @@ information and failure consequences.
 | Captured replan review, acceptance detail and writeback readers | Separate decision facts from later authoring format while retaining the original identity and all required meaning. Bound reads to the same capture; count every required stage, error and recovery. A missing/stale reference must not trigger a new guard or authorize work. |
 | Full/delta/resume delivery | Reuse the existing continuity owner after composition. Establish exact semantic reconstruction and required material availability before action; charge cold fallback and lost-baseline recovery. |
 | Scheduler, admission and settlement identities | One authoritative instance before capture; transport must preserve host ownership, original Turn and once-only effects. Repeated representations do not justify weakening their checks. |
+
+A standalone late move of acceptance sharing is not automatically a useful
+prerequisite. A controlled source-level substitution against main
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` moved only that rule from the local
+CLI compactor into the existing `reference_context` call. On the same synthetic
+fixture with 100 distinct requirements, serialized projection input grew from
+102,680 to 344,010 bytes; the 102,189-byte caller-visible output stayed equal.
+The ordinary path still made one projection call; all-details delivery changed
+from local sharing to one call. These are projection-parameter measurements,
+not framed traffic, latency, model billing or the integrated C1 comparison.
+Retain this negative result rather than declaring a net efficiency win.
+
+The compatibility owner also uses one local JSON serialization identity for
+acceptance, Vision-audit and replan-authoring sharing. Python's ordinary value
+equality must not turn distinct booleans/numbers, integer/float representations
+or signed zero into an alias to another observation. Exact copies still share
+one in-response owner, including after key reordering; different facts remain
+complete. This repairs source fidelity without another projection RPC. It does
+not qualify the unified writer, final consumers or original-quota outcome/cost
+benefit.
+
+Repair relocated acceptance aliases at the current compatibility owner without
+that extra transport. Existing aliases must follow only inline owners actually
+moved by the projection, including aliases visited before their owner. Preserve
+complete values, original numeric types, carrier order and existing size checks;
+never infer arbitrary reference chains or rewrite saved captures. The complete
+C1 composition must absorb this rule at its source-owning boundary and retire
+the Python compatibility algorithm with its callers, rather than repeatedly
+shipping all acceptance copies across another bridge. Writer/consumer cutover
+and the original-quota outcome/full-cost gate remain open.
 
 A fixed-source synthetic replan audit of candidate `895f38fc5` illustrates why
 the boundary matters. With stride off and no capture staging, the raw source was

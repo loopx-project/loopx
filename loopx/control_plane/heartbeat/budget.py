@@ -23,7 +23,10 @@ INTERFACE_BUDGET_CHARS = {
     # The same generic CLI + 320-char scope with explicit runtime also needs
     # 5,715 chars; retain those routes instead of shortening the instructions.
     "brief": 5_800,
-    "thin": 4_500,
+    # Full runtime capability flags plus an explicit CLI route and 320-char
+    # scope emit 4,851 normalized chars with unchanged guidance. Keep that
+    # supported combination; this is not a transport or execution limit.
+    "thin": 4_900,
     "visible_goal": 4_000,
 }
 NATIVE_GOAL_HOST_MAX_CHARS = INTERFACE_BUDGET_CHARS["visible_goal"]

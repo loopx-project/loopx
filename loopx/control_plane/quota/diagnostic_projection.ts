@@ -5,10 +5,9 @@
  * decision. This projection grants no admission or execution authority.
  */
 import type {JsonObject} from "../effect_program.ts";
-import {jsonObject} from "../runtime_decode.ts";
+import {jsonObject, sourceNumberTokens} from "../runtime_decode.ts";
 import {TODO_CANONICAL_READ_RECORD_FIELDS} from "../coordination/coordination_state_contract.ts";
 import {canonicalAuthorityJson, authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
-import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 
 type ProjectionPath = (string | number)[];
 type ProjectionChange = {path: ProjectionPath; value: unknown} |
@@ -33,30 +32,7 @@ function contextObjectPaths(source: JsonObject): WeakMap<object, ProjectionPath>
 export function contextSourceIdentity(source: JsonObject, supplied?: unknown):
     (value: unknown, path: ProjectionPath) => string {
   if (supplied === undefined) return value => JSON.stringify(canonicalAuthorityJson(value));
-  if (!Array.isArray(supplied)) throw new EffectRuntimeRequestError("context source number tokens must be an array");
-  const tokens: {path: ProjectionPath; token: string}[] = [], seen = new Set<string>();
-  for (const entry of supplied) {
-    if (!Array.isArray(entry) || entry.length !== 2 || !Array.isArray(entry[0]) || !entry[0].length ||
-        typeof entry[1] !== "string" || !/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(entry[1])) {
-      throw new EffectRuntimeRequestError("invalid context source number token");
-    }
-    const path: ProjectionPath = entry[0], token: string = entry[1];
-    let value: unknown = source;
-    for (const key of path) {
-      if (value === null || typeof value !== "object" ||
-          !(Array.isArray(value) ? typeof key === "number" && Number.isSafeInteger(key) && key >= 0
-            : typeof key === "string") || !Object.hasOwn(value, key)) {
-        throw new EffectRuntimeRequestError("context source number token path is unavailable");
-      }
-      value = (value as Record<string | number, unknown>)[key];
-    }
-    const key = JSON.stringify(path);
-    if (seen.has(key) || typeof value !== "number" || !Number.isFinite(value) || !Object.is(JSON.parse(token), value)) {
-      throw new EffectRuntimeRequestError("context source number token differs from input");
-    }
-    seen.add(key);
-    tokens.push({path, token});
-  }
+  const tokens = sourceNumberTokens(source, supplied);
   const paths = contextObjectPaths(source);
   return (value, path) => {
     const original = value !== null && typeof value === "object" ? paths.get(value) : undefined;

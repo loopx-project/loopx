@@ -931,6 +931,7 @@ export type ChatReplyContext = {
   };
 };
 
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type ChatImageAttachment = {
   data_url: string;
   id: string;

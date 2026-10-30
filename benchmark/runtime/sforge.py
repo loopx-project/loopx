@@ -20,7 +20,7 @@ from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZO
 from benchmark.edgebench.feedback import FEEDBACK_MODES
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
 
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, prepare_codex_home
+from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, codex_settings, prepare_codex_home
 from .codex_offline import CodexOffline, MODEL_CATALOG_REMOTE, stage_portable_python
 from .harbor import (
     BenchmarkCodex, _CONTROL, _CODEX_HOME, _PYTHON, _SCHEDULER_STATE, _SRC,
@@ -317,7 +317,24 @@ class SForgeWorker(CodexAgent):
             )
             asyncio.run(self.runtime.install(self.environment))
             if self.warm_start is not None:
-                research_paths = asyncio.run(self.warm_start.stage(self.environment, self.cwd))
+                route_settings = {}
+                if runtime_base_url:
+                    worker_env = self.runtime._worker_env(cwd=self.cwd)
+                    route_settings = {
+                        "provider_base_url": runtime_base_url,
+                        "effective_config": codex_settings(
+                            execution=self.runtime.execution, workspace=Path(self.cwd),
+                            model=worker_env["MODEL_NAME"], effort=worker_env["REASONING_EFFORT"],
+                            base_url=runtime_base_url,
+                            wire_api=worker_env["CODEX_WIRE_API"],
+                            web_search=worker_env["LOOPX_WEB_SEARCH"],
+                            model_catalog=self.runtime._model_catalog_source,
+                            model_catalog_destination=(Path(MODEL_CATALOG_REMOTE)
+                                if self.runtime._model_catalog_staged else None),
+                        ).encode("utf-8"),
+                    }
+                research_paths = asyncio.run(self.warm_start.stage(
+                    self.environment, self.cwd, **route_settings))
                 self._warm_command("workspace", user="root")
                 result = backend.exec_run(handle,
                     ["chown", "-R", "-P", "agent:agent", self.cwd, *research_paths], user="root")

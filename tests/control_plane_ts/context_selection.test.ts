@@ -55,3 +55,18 @@ test("bounded depth discovers nested addresses in one batch without values", () 
     assert.throws(() => evaluateTurnEnvelope({...request, list_depth}));
   assert.throws(() => evaluateTurnEnvelope({...request, list_fields: false, list_depth: 2}));
 });
+
+
+test("selection failures identify original argument and token without echoing content", () => {
+  const context = {z: true, rows: [{stop: "private-value"}]};
+  for (const [pointer, token] of [["/rows/0/missing", 3], ["/rows/9", 2], ["/rows/01", 2], ["/rows/0/stop/x", 4]] as const) {
+    assert.throws(() => select(context, ["/z", "/z", pointer]), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, new RegExp(`--select argument 3, token ${token}`));
+      assert.ok(!error.message.includes("private-value") && !error.message.includes(pointer));
+      assert.ok(error.message.length < 240);
+      return true;
+    });
+  }
+  assert.throws(() => select(context, ["/z", "secret-".repeat(1000)]), /--select argument 2/);
+});

@@ -104,6 +104,33 @@ Quota capture 与 Turn journal capture 都调用
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
 
+可选 host poll 也是该次原始观测的一部分。来源保真切片在 capture 前仅记录一次
+`--record-host-poll`，普通 CLI、envelope 与原生上下文交付复用同一回执；恢复读取不再
+轮询。后续 capture/handoff 失败的错误响应仍携带已记录观测，不表示缺少准入，也不
+授权重放。默认关闭行为和不可读回执诊断不变。这只修复 capture 完整性，不代表统一
+writer/consumer 切换或长程成本收益已取得资格。
+
+独立的原生展示切片复用已提交的完整恢复原件作为 reader 目标，避免再次发布未使用的
+wire 副本。Delta 与未包装输入仍保留各自的不可变文件，reader/lifecycle owner 不变。
+同一 107,289 字节合成来源的 capture 写入从 216,754 降为 107,289 字节；完整 reader
+字节及 3,937 字节的 warm delta 均不变。这只验证重复 capture IO 的消除，不证明模型
+输入减少、完整成本收益、成果验收或 C1 writer/consumer 切换。
+显式小预算下，原生展示还可省略重复的目录/选读快捷命令，保留完整恢复命令；
+在其后追加 `--list` 或 `--select`，无须基线即可发现或读取当前事实。
+原有 4,000 字节冷态、温态及压缩恢复用例保留完整要求、Stop、原身份和完整恢复；
+这属于传输验证。
+
+Journal 持久化是独立的来源保真前置。本次提议由 Python adapter 复用 context
+delivery 的稀疏数值 token 收集器；两个 TypeScript 消费者复用同一来源数值校验器。
+Journal 继续传递 JSON 对象，仅为整值浮点、带符号零和非安全整数增加元数据。
+Journal owner 在原子发布前恢复这些数值，并在重放与不可变 plan 比较中保留其
+区别。普通原生对象保留已有编码，不改写历史回执。
+
+中间的完整 JSON 字符串方案，在合成的 155 万字符带引号正文上超过既有 2 MiB
+请求边界；原对象路径能够接收同一负载。保留这一负面结果：稀疏替代须在相同
+负载与上限下比较，包括数值密集时的元数据开销。该前置或组件字节减少，都不
+构成统一 writer/consumer 切换或长程净收益的资格。
+
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |
@@ -661,6 +688,27 @@ compactor：精确共享、省略和延后读取的信息与失败后果各不�
 | 捕获后的 replan review、验收详情和 writeback reader | 区分决策事实与后续 authoring 格式，同时保留原身份和全部必要含义。读取绑定同一 capture；计入每个必需阶段、错误和恢复。引用缺失／过期不能重新 guard 或授权工作。 |
 | Full/delta/resume 交付 | 在 composition 后复用既有 continuity owner。行动前验证精确语义重建与必要材料可用；计入冷回退及丢失基线的恢复。 |
 | Scheduler、准入与结算身份 | Capture 前只有一份权威实例；传输保留真实 host owner、原 Turn 与一次性 effects。重复表示不构成削弱检查的理由。 |
+
+单独后移验收共享不自动构成有价值的前置切片。以主线
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` 为基线的 source-level 受控替换，
+只把该规则从本地 CLI compactor 移到已有 `reference_context` 调用。同一份含 100 条
+不同要求的合成 fixture 中，序列化投影输入从 102,680 增至 344,010 字节，调用者可见
+输出仍为相同的 102,189 字节。普通路径仍调用一次；全部 detail 开启时由本地共享变为
+一次请求。这些是投影参数测量，不是带协议包装的流量、延迟、模型计费或完整 C1 对照。
+保留此负结果，不能宣称净效率收益。
+
+兼容 owner 也为验收、Vision audit 和 replan authoring 共享复用一份本地 JSON 序列化
+身份。不能用 Python 普通值相等，把不同布尔／数值、整数／浮点表示或带符号零替换成
+另一条观测的别名。完全相同的副本仍共享同一响应内的 owner，包括键顺序不同的情况；
+不同事实保留全文。这修复来源保真，不增加投影 RPC；不代表统一 writer、最终消费者
+或相对原 quota 的成果／完整成本收益已经合格。
+
+先在当前兼容 owner 修复被迁移的验收引用，不引入上述额外传输。已有别名只跟随本次
+投影实际迁移的内联 owner，包括先访问别名、后迁移 owner 的情况。保留完整值、原始
+数值类型、carrier 顺序和现有大小判断；不推断任意引用链，不重写已存 capture。
+完整 C1 composition 应在持有来源的边界吸收该规则，并随调用方退役 Python 兼容
+算法，不能把所有验收副本反复传过另一条 bridge。Writer／consumer 切换和原 quota
+成果／完整成本门继续保持开放。
 
 候选 `895f38fc5` 的固定 source 合成 replan 审计说明了边界的影响。关闭 stride 且不做
 capture 分阶段时，原始 source 为 21,461 个紧凑 UTF-8 JSON 字节，原 quota CLI

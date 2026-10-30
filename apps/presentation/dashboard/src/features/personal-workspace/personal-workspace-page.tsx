@@ -1,3 +1,4 @@
+import {DocumentAttachment, isTextDocument} from "./document-attachment";
 import {AlertCircle, Bot, CalendarClock, CircleHelp, FileText, ListPlus, MessageCircleQuestion, Paperclip, Plus, RefreshCw, Send, X} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {readSettingsRoute, writeSettingsRoute} from "./workspace-settings-route";
@@ -903,13 +904,22 @@ function workspaceProposal(proposal: TypedActionProposal, t: WorkspaceTranslate)
 }
 
 const acceptedImageTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const documentMime = (file: File) => /\.md$/i.test(file.name) ? "text/markdown" : /\.txt$/i.test(file.name) ? "text/plain" : null;
 const maxImageAttachmentBytes = 5 * 1024 * 1024;
 const maxImageAttachmentCount = 4;
 // Project refs are alphanumeric, so this value can never name a workspace.
 const stewardScopeValue = "@steward";
 const maxImageAttachmentTotalBytes = 12 * 1024 * 1024;
 
-function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
+async function readImageAttachment(file: File, t: WorkspaceTranslate): Promise<WorkspaceImageAttachment> {
+  const mime = documentMime(file);
+  if (mime) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const text = new TextDecoder("utf-8", {fatal: true, ignoreBOM: true}).decode(bytes);
+    if (text.includes("\0")) throw new Error("UTF-8 text required; binary files are not supported.");
+    const dataUrl = `data:${mime};base64,${btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(""))}`;
+    return {dataUrl, id: crypto.randomUUID(), mimeType: mime, name: file.name, size: bytes.length};
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error(t("composer.imageReadError", { name: file.name })));
@@ -2455,7 +2465,7 @@ export function PersonalWorkspacePage({
     const queue = retry?.delivery === "queue" || (!retry && intent === "send" && Boolean(queueTurnId));
     if (queue && conversationSessionId && callbacks.onQueueConversationTurn) {
       if (retry && JSON.stringify(pendingImages) !== JSON.stringify(retry.attachments ?? [])) {
-        setImageAttachmentError(locale === "zh-CN" ? "待确认消息的图片不能替换；原请求与当前图片已保留。" : "Unconfirmed images cannot be replaced. Original request and current images retained.");
+        setImageAttachmentError(locale === "zh-CN" ? "待确认消息的附件不能替换；原请求与当前附件已保留。" : "Unconfirmed attachments cannot be replaced. Original request and current attachments retained.");
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: queueTurnId!, text: message,
@@ -2483,7 +2493,7 @@ export function PersonalWorkspacePage({
     }
     if ((retry || (intent === "steer" && steeringTurnId)) && conversationSessionId && callbacks.onSteerConversationTurn) {
       if (pendingImages.length) {
-        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持图片，图片和草稿已保留。" : "This turn accepts text instructions only. Images and draft retained.");
+        setImageAttachmentError(locale === "zh-CN" ? "本轮追加指令暂不支持附件，附件和草稿已保留。" : "This turn accepts text instructions only. Attachments and draft retained.");
         return;
       }
       const request = retry ?? { sessionId: conversationSessionId, turnId: steeringTurnId!, text: message, id: crypto.randomUUID() };
@@ -2567,8 +2577,12 @@ export function PersonalWorkspacePage({
     if (!files?.length) return;
     const available = maxImageAttachmentCount - imageAttachments.length;
     const selected = Array.from(files).slice(0, Math.max(0, available));
-    const invalid = selected.find((file) => !acceptedImageTypes.has(file.type));
+    const invalid = selected.find((file) => !acceptedImageTypes.has(file.type) && !documentMime(file));
     const oversized = selected.find((file) => file.size > maxImageAttachmentBytes);
+    if (selected.some(file => documentMime(file) && file.size > 48_000)) {
+      setImageAttachmentError(locale === "zh-CN" ? "文本文件和消息共用 64KB 限额，请缩小文件。" : "Documents and message share a 64KB limit. Choose a smaller file.");
+      return;
+    }
     if (available <= 0) {
       setImageAttachmentError(t("composer.imageCountError", { count: maxImageAttachmentCount }));
       return;
@@ -2587,6 +2601,13 @@ export function PersonalWorkspacePage({
     }
     try {
       const loaded = await Promise.all(selected.map((file) => readImageAttachment(file, t)));
+      const envelope = {message: composer, attachments: [...imageAttachments, ...loaded].map(file => ({
+        name: file.name, size: file.size, id: file.id, mime_type: file.mimeType,
+        ...(isTextDocument(file.mimeType) ? {data_url: file.dataUrl} : {}),
+      }))};
+      if (new TextEncoder().encode(JSON.stringify(envelope)).length > 63_000) {
+        throw new Error(locale === "zh-CN" ? "文本文件和消息共用 64KB 限额，请缩小文件。" : "Documents and message share a 64KB limit. Choose a smaller file.");
+      }
       setImageAttachments((current) => [...current, ...loaded].slice(0, maxImageAttachmentCount));
       setImageAttachmentError(files.length > selected.length ? t("composer.imageCountError", { count: maxImageAttachmentCount }) : null);
     } catch (error) {
@@ -3144,7 +3165,7 @@ export function PersonalWorkspacePage({
             }} /> : null}
             {imageAttachments.length ? <div className="personal-composer-images" aria-label={t("composer.imagesPending")}>{imageAttachments.map((attachment) => (
               <figure key={attachment.id}>
-                <img alt={attachment.name} src={attachment.dataUrl} />
+                <>{isTextDocument(attachment.mimeType) ? <DocumentAttachment {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} src={attachment.dataUrl} />}</>
                 <button aria-label={t("composer.sentImageAlt", { name: attachment.name })} onClick={() => setImageAttachments((current) => current.filter((item) => item.id !== attachment.id))} type="button"><X size={13} /></button>
               </figure>
             ))}</div> : null}
@@ -3185,18 +3206,18 @@ export function PersonalWorkspacePage({
             <div
               className="personal-channel-composer"
               onDragOver={(event) => {
-                if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) {
+                if ([...event.dataTransfer.items].some((item) => item.kind === "file")) {
                   event.preventDefault();
                 }
               }}
               onDrop={(event) => {
-                const images = [...event.dataTransfer.files].filter((file) => file.type.startsWith("image/"));
+                const images = [...event.dataTransfer.files];
                 if (!images.length) return;
                 event.preventDefault();
                 void selectImages(images);
               }}
             >
-              <input accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
+              <input accept="image/png,image/jpeg,image/webp,image/gif,.md,.txt" aria-label={t("composer.imagePicker")} className="personal-composer-file-input" disabled={Boolean(workspaceConversations?.entryGate) || steering || (sending && !queueTurnId) || imageAttachments.length >= maxImageAttachmentCount} multiple onChange={(event) => void selectImages(event.target.files)} ref={imageInputRef} type="file" />
               <textarea
                 disabled={Boolean(workspaceConversations?.entryGate)}
                 id="personal-conversation-composer"
