@@ -161,7 +161,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   const quietWork = digest.work.coverage === "complete" && digest.work.total === 0
     && digest.needsYou.availability === "ok" && digest.needsYou.blocking === 0
     && digest.needsYou.optional === 0 && !attention.length;
-  const hasRail = !quietWork;
+  const hasRail = false;
   useEffect(() => {
     const node = inventory.current;
     if (!node) {setInventoryAvailable(false); return;}
@@ -207,6 +207,10 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </div>}
       <footer className="goal-work-scope"><time dateTime={digest.observedAt}>{new Date(digest.observedAt).toLocaleTimeString(locale)}</time><ContextHelp label={zh ? "工作统计范围" : "Work count scope"}><p>{zh ? "统计仅覆盖此 Goal；任务与历史可能分批载入。" : "Counts cover this Goal; tasks and history may be loaded in bounded pages."}</p>{railTab === "activity" && !activity.length ? <p>{zh ? "当前时间线尚无已完成或返回的记录。" : "No completed work or returned results in this timeline."}</p> : null}</ContextHelp></footer>
     </aside>;
+  const inventoryContent = quietWork ? null : <details className="goal-workspace-inventory" ref={inventory} open={inventoryOpen} onToggle={event => setInventoryOpen(event.currentTarget.open)}>
+    <summary><List size={15} aria-hidden/><span>{zh ? "全部工作" : "All work"}</span><ChevronDown size={15} aria-hidden/></summary>
+    {inventoryAvailable && inventoryOpen && !railOpen ? rail("inline") : null}
+  </details>;
   const documentContent = <div className="goal-workspace-document" ref={readingDocument} key="document">
       {brief}
       {attentionContent}
@@ -238,13 +242,9 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
         {visited.has("board") || lens === "board" ? <div hidden={lens !== "board"}>{board}</div> : null}
         {visited.has("map") || lens === "map" ? <div hidden={lens !== "map"}>{map}</div> : null}
       </section>
+      {inventoryContent ? <div className="goal-workspace-rail goal-workspace-rail-inline">{inventoryContent}</div> : null}
     </div>;
-  const railContent = hasRail ? <div className="goal-workspace-rail" data-testid="goal-workspace-inline-rail" key="rail">
-      {!quietWork ? <details className="goal-workspace-inventory" ref={inventory} open={inventoryOpen} onToggle={event => setInventoryOpen(event.currentTarget.open)}>
-        <summary><List size={17} aria-hidden/><span>{zh ? "全部工作" : "All work"}</span><ChevronDown size={15} aria-hidden/></summary>
-        {inventoryAvailable && inventoryOpen && !railOpen ? rail("inline") : null}
-      </details> : null}
-    </div> : null;
+  const railContent = null;
   return <div className={`goal-workspace-composition${hasRail ? " has-rail" : ""}${attentionFirst ? " is-attention-first" : ""}`} ref={composition}>
     {attentionFirst ? [railContent, documentContent] : [documentContent, railContent]}
     <dialog className="goal-work-rail-dialog" aria-label={zh ? "全部工作" : "All work"} ref={dialog} onCancel={event => {event.preventDefault(); onCloseRail();}}>
