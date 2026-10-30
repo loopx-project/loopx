@@ -1712,7 +1712,7 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         )
         payload = measurement["payload"]
         assert scope in payload["task_body"]
-        assert payload["interface_budget"]["max_chars"] == 4200
+        assert payload["interface_budget"]["max_chars"] == 4500
         assert payload["interface_budget"]["within_budget"] is True
         assert "refresh-state --goal-outcome-update-json" in payload["task_body"]
         assert "Local outcomes never replace root continuation, budget or stop criteria." in payload["task_body"]

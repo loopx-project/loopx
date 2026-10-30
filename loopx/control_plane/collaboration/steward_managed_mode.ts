@@ -43,10 +43,22 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       && coverage.discovered === null && coverage.verified === 0 && coverage.complete === false
       && context.authorization_scope_id === undefined;
   }
+  // A provider identity read may fail inside the original read-only context
+  // collector, before it publishes any context. Retained legacy errors have no
+  // typed failure code: require the collector's exact phase independently of
+  // the error, plus the strict no-effect evidence below. Current binding and
+  // provider verification still run before a new carrier can be accepted.
+  const identityRefused = original.error_code === "runtime_error"
+    && original.error === "the selected App identity could not be verified"
+    && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
+    && Array.isArray(basis.contexts) && basis.contexts.length === 0
+    && Array.isArray(basis.phases) && basis.phases.length === 1
+    && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
+    && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused)
+      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused || identityRefused)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null

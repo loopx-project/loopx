@@ -39,6 +39,16 @@ reader. The six source links retain the recorded Task address in both formats.
 The fixed synthetic prose qualifies transport and reading mechanics, not live
 editorial quality or the address's availability. No layout or editor changed.
 
+The public browser fixture also keeps the original private outbound owner
+running through its periodic source-history check. Its shared synthetic
+provider returns the stored messages with source-bound pagination and time
+windows; it does not replace history with an empty successful response.
+The observation includes worker liveness, history-page count and ingress
+coverage so a background exception cannot be mistaken for a completed journey.
+File and SQLite regressions retain all 55 synthetic uncaptured sources without
+admitting or replying to them. These qualify test mechanics; live delivery,
+account switching and an unknown-effect failed production window remain separate.
+
 | Packaged answer reader | Narrow answer reader |
 | --- | --- |
 | ![A recorded Task address in the full report](../assets/personal-workspace/steward-reports/local-citations/packaged-reader-desktop.png) | ![The same source link and report at 390 pixels](../assets/personal-workspace/steward-reports/local-citations/packaged-reader-narrow.png) |
@@ -275,8 +285,12 @@ idle pump can create one separately correlated Chat continuation. It preserves
 the failed request and uses the same native observation identity and deadline.
 For a bound steward, this also covers a portfolio read explicitly refused
 because its authorization snapshot changed. The exact original failure and a
-single empty `external_authorization_changed` context must both be present;
-other runtime errors or missing, conflicting or unreadable context do not qualify.
+single empty `external_authorization_changed` context must both be present.
+An App identity read that fails before context publication can also qualify,
+but only with its exact original error, one recorded `manager_context` phase,
+no published context and the independent no-effect checks below. The current
+provider must verify successfully before acceptance; a matching error alone,
+other runtime errors or missing, conflicting or unreadable evidence do not qualify.
 The shared typed admission requires an untouched observation-only request, an
 available original worker lock, complete event/history reads and no pending or
 committed native poll receipt. It rechecks current authority, lease generation
@@ -366,6 +380,17 @@ burst. Later changes and newly registered Goals retain ordinary discovery.
 Failure to enumerate scope or verify the original owner, App, grant or route
 still pauses delivery. The panel distinguishes a fresh partial-source check
 from a stale worker or a delivery error; unknown receipts remain visible.
+
+Expand **View unavailable Goals** in that setting to identify each missing
+source. A native `canonical_authority_required` result asks the project's
+maintainer to back up and migrate its Todo authority; other read failures stay
+generic and are checked again. Only the Goal identity and an allowlisted error
+code enter this health view. Private exception text and paths are not displayed.
+This diagnosis never migrates a Goal, changes its grant, or resends a notice.
+
+在同一设置中展开“查看不可读的 Goal”，可逐项定位缺失来源。原生待办尚未迁移时，
+需由该项目维护者先备份并迁移；其他读取失败只提示暂不可读，服务会继续检查。
+页面不显示原始异常或私有路径，也不会据此迁移项目、扩权或重发通知。
 
 The packaged fixture
 `apps/presentation/dashboard/smoke/owner-attention-source-fixture.py` uses real
@@ -616,6 +641,14 @@ records retirement separately from publication. Restoring the same plan does
 not replay the failed attempt; a later due window can progress. A changed future
 plan is also allowed after retirement. Unknown model outcomes and partial or
 unknown sends cannot take this exit; they keep the original recovery boundary.
+
+Execution failure is visible even when it happens before an editorial response:
+the original steward and managed Session health expose `execution_failed` for
+the exact current actor, window and subscription revision. The steward settings
+show the retained failed execution instead of “Not generated”; the next calendar
+deadline is not a promise that the held window can run. This observation grants
+no cancellation, retirement or retry. A correlated quota continuation that
+succeeds clears the current failure projection while retaining its failed predecessor.
 
 | Cancelled failure on the original settings page | Narrow retained-failure state |
 | --- | --- |
@@ -978,14 +1011,69 @@ The existing Goal capability configuration transaction accepts:
 Replace the example with the actual existing identities and requested time.
 Prepare through `/api/chat/goal-configuration/preview`, then apply the same
 body and its `expected_plan_revision` through
-`/api/chat/goal-configuration/apply`. The existing Goal settings JSON editor
-uses this transaction; read back the saved configuration and the managed
-Session's `scheduled_task` inspection. A stale preview or changed identity is
+`/api/chat/goal-configuration/apply`. Read back the saved configuration and the
+managed Session's `scheduled_task` inspection. A stale preview or changed identity is
 rejected. This is an explicit Goal override: a machine default cannot enroll
 another conversation. `session-task` is a calendar execution mode, not a report
 renderer preset; it does not invoke the progress-report source or editorial
 format. Task descriptions, scripts and validation argv cannot be supplied in
 this configuration.
+
+The current generic Goal editor does **not** register the `task` field. Its
+form drops that source from the draft, and its JSON editor rejects unregistered
+fields. It therefore cannot yet configure or edit this Task mode end to end;
+the HTTP contract above and the read-only source catalog are partial product
+delivery. Do not mistake a preconfigured fixture for a completed Task picker or
+natural-language journey. Missing, empty, non-object or command-bearing Task
+input is rejected as HTTP 400 before Session source inspection, without changing
+the subscription, creating a window or invoking work. It does not infer a source
+from an older configuration.
+
+当前通用 Goal 编辑器尚未登记 `task` 字段：表单会在草稿中丢失原来源，JSON 编辑器也
+拒绝未登记字段，因此完整任务配置界面仍未交付。上述 HTTP 合同和只读来源目录只是
+阶段能力，预配置的合成场景不代表已完成 Task 选择器或自然语言旅程。缺失、空值、
+非对象或夹带命令的 Task 输入在读取 Session 来源前即以 HTTP 400 拒绝，不改订阅、
+不创建窗口、不执行业务，也不从旧配置推断来源。
+
+For reproducible packaged checks, run the existing disposable browser fixture:
+
+```sh
+uv run --extra test python examples/personal-workspace-browser/steward_report_fixture.py \
+  --managed-calendar-task sqlite --output-dir /tmp/loopx-calendar-task-qa
+```
+
+Use `file` instead of `sqlite` for the other native backend. `ready.json` names
+the isolated HTTP URL, original Session, completed source and future disabled
+configuration. The model computes an independently validated synthetic sum;
+no real identity or private provider is attached. The `start-existing-owners`
+control starts the real idle wake owner. `stop-existing-wake` stops only that
+owner; removing it resumes the same stored state through a new wake-service
+instance. `observed.json` records artifact, completion, retained history and
+actual post-setup model calls. This qualifies neither live-model understanding,
+complete Chat-process restart nor production delivery.
+
+Callers can discover eligible references on demand with
+`GET /api/chat/sessions/<original-session-id>/native-turn?calendar_task_sources=true`.
+The `calendar_task_sources` view reads the original Goal's canonical completed
+history, including archived Tasks, and applies the same original Agent and
+independent argv-declaration checks used when configuring execution. It returns
+Task references, display titles, validation digests and archive state, without
+installing commands or copying validators into the configuration. Open work,
+other Agents' work, report generation and generated calendar periods are not
+offered as repeating sources. A missing, changed or unreadable declaration
+fails this read visibly; it is not represented as an empty valid list.
+Ordinary inspection omits this optional catalog. Repeated discovery does not
+configure a subscription, wake an Agent, create a Task, invoke a model, spend
+quota or send a message. Configuration and every due execution still recheck
+the original source; a displayed reference grants no launch authority.
+
+调用方可在原会话的 `native-turn` 读取中显式加入
+`calendar_task_sources=true`，发现同一 Agent 可重复执行的已完成 Task，包含已归档项。
+此只读视图复用原生已完成历史和执行入口的验收声明检查；返回原引用、显示标题、
+验收摘要和归档状态，不传入新命令。未完成任务、其它 Agent 的任务、报告生成和
+已生成的日历窗口不会成为候选。声明缺失、变化或不可读时明确失败，不伪装为空列表。
+普通状态读取不加载此目录；重复发现不会启用计划、唤醒 Agent、创建 Task、调用模型、
+扣额或发消息。保存配置和每次到期执行仍重新核验原来源。
 
 At the first due boundary, the original idle Chat pump freezes the source
 Task's declaration into the existing cadence attempt. It creates one finite

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -55,6 +56,10 @@ def _turn_envelope_result(
     """Call the coarse TS owner and fail closed on transport shape drift."""
 
     request = {"operation": operation, **params}
+    if operation in {"context_delivery", "context_recovery"}:
+        tokens = _source_number_tokens(params)
+        if tokens:
+            request["source_number_tokens"] = tokens
     try:
         result = effect_runtime_result("quota.turn_envelope.evaluate", request)
     except EffectRuntimeRejected as error:
@@ -67,6 +72,30 @@ def _turn_envelope_result(
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)
+
+
+def _source_number_tokens(value: object) -> list[list[Any]]:
+    """Transport sparse numeric source identity; no carrier or sharing policy."""
+    tokens: list[list[Any]] = []
+
+    def visit(item: object, path: list[str | int]) -> None:
+        if isinstance(item, float) and not math.isfinite(item):
+            raise ValueError("Context source numbers must be finite")
+        # Fractional doubles retain their identity through JSON/JavaScript.
+        # Only integral floats (including signed zero) and unsafe integers
+        # can become indistinguishable from a different Python source number.
+        if (isinstance(item, float) and item.is_integer()
+                or type(item) is int and abs(item) > 2**53 - 1):
+            tokens.append([path, json.dumps(item, allow_nan=False)])
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                visit(child, [*path, key])
+        elif isinstance(item, (list, tuple)):
+            for index, child in enumerate(item):
+                visit(child, [*path, index])
+
+    visit(value, [])
+    return tokens
 
 
 def assert_turn_envelope_consumer_version(envelope: Mapping[str, Any]) -> None:
@@ -196,11 +225,14 @@ def prepare_context_delivery(
     Unsupported hosts omit retention and keep complete delivery. A candidate is
     not an ACK. Confirmed input and native delivery assumptions stay distinct.
     """
-    return _turn_envelope_result("context_delivery", context=dict(context),
-        scope=dict(scope), capture_id=capture_id, surface=surface,
+    from .cli_projection import _apply_context_projection_changes
+
+    source = dict(context=dict(context), scope=dict(scope), capture_id=capture_id, surface=surface,
         baseline=dict(baseline) if baseline is not None else None,
         retained=dict(retained) if retained is not None else None,
         continuity=dict(continuity) if continuity is not None else None)
+    result = _turn_envelope_result("context_delivery", **source, source_edits=True)
+    return _apply_context_projection_changes(source, result)
 
 
 def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str, Any], *,
@@ -218,6 +250,9 @@ def restore_context_delivery(
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Validate/reconstruct or return the same-capture full body without effects."""
-    return _turn_envelope_result("context_recovery", delivery=dict(delivery),
-        baseline=dict(baseline) if baseline is not None else None,
+    from .cli_projection import _apply_context_projection_changes
+
+    source = dict(delivery=dict(delivery), baseline=dict(baseline) if baseline is not None else None,
         current=dict(current))
+    result = _turn_envelope_result("context_recovery", **source, source_edits=True)
+    return _apply_context_projection_changes(source, result)

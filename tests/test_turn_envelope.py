@@ -1007,7 +1007,7 @@ def test_modern_envelope_does_not_bypass_host_signature_check(corruption: str) -
 
 
 @pytest.mark.parametrize("has_packet", [False, True])
-def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_packet: bool) -> None:
+def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_packet: bool, monkeypatch) -> None:
     from loopx.cli_commands.quota import _project_quota_cli_payload
     from argparse import Namespace
 
@@ -1026,8 +1026,13 @@ def test_envelope_fallback_preserves_typed_failure_with_or_without_packet(has_pa
             _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
         assert failure == before
         return
+
+    def unexpected_envelope(*_args, **_kwargs):
+        pytest.fail("A collection failure cannot reenter its unavailable runtime")
+
+    monkeypatch.setattr("loopx.cli_commands.quota_presentation.build_turn_envelope", unexpected_envelope)
     rendered = _project_quota_cli_payload(failure, Namespace(turn_envelope=True), frozenset(), None)
-    assert "interaction_contract must be an object" in rendered.pop("turn_envelope_skipped")
+    assert rendered.pop("turn_envelope_skipped") == "quota request failed; original diagnostic retained"
     assert rendered == before
     assert failure == before
 

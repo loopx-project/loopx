@@ -227,3 +227,102 @@ def test_inventory_withholds_all_content_when_closing_source_scope_changes(api, 
     code, denied = _inventory(api, route["session_id"])
     assert code == 400 and denied["error_code"] == "request_inventory_unavailable"
     assert "rows" not in denied and "Check the current contract" not in str(denied)
+
+
+def test_conflicting_receipt_is_diagnosable_but_does_not_authorize_content_or_controls(api):
+    control, _, route = _source(api)
+    _, f, server = api
+    store = server.chat_store
+    turn = store.load_turn(route["session_id"], route["turn_id"])
+    original_response = turn["response"]
+    source = _root(f["runtime"])
+    saved = {path: path.read_bytes() for path in source.rglob("*.json")}
+    store.update_turn(route["session_id"], route["turn_id"], response={"context_handoff_receipt": {
+        **original_response["context_handoff_receipt"], "request_id": "b" * 64, "agent_id": "agent-b"}})
+    code, partial = _inventory(api, route["session_id"], view="history")
+    assert code == 200 and partial["rows"] == [] and partial["pending_count"] == 0
+    assert partial["coverage"] == {"scan_complete": True, "unreadable": 1, "diagnostics": [{
+        "request_id": route["request_id"], "goal_id": f["ref"]["goal_id"], "agent_id": "agent-a",
+        "code": "initial_delivery_unproved", "reason": "handoff_receipt_conflict"}]}
+    assert turn["message"] not in str(partial) and "Check the current contract" not in str(partial)
+    assert control()[0] == 400
+    for operation in ["revise", "cancel", "recover"]:
+        assert control({**route, "operation": operation, "execute": True, "parameters": {}})[0] == 400
+    assert {path: path.read_bytes() for path in saved} == saved
+    # Only restore the synthetic fixture's original source evidence. Inventory
+    # itself cannot repair or invent that evidence, nor retain an old refusal.
+    store.update_turn(route["session_id"], route["turn_id"], response=original_response)
+    recovered = _inventory(api, route["session_id"], view="history")[1]
+    assert recovered["coverage"] == {"scan_complete": True, "unreadable": 0, "diagnostics": []}
+    assert recovered["rows"][0]["request_id"] == route["request_id"]
+    assert partial["snapshot_digest"] != recovered["snapshot_digest"]
+
+
+def test_a_later_handoff_does_not_cancel_the_conflicting_original_request(api):
+    _, _, route = _source(api)
+    _, f, server = api
+    store = server.chat_store
+    session = store.load_session(route["session_id"])
+    turn = store.load_turn(route["session_id"], route["turn_id"])
+    later = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+        request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-b"}, source_store=store)
+    assert later["request_id"] != route["request_id"]
+    store.update_turn(route["session_id"], route["turn_id"], response={"context_handoff_receipt": later})
+    source = _root(f["runtime"])
+    saved = {path: path.read_bytes() for path in source.rglob("*.json")}
+    value = _inventory(api, route["session_id"], view="history")[1]
+    assert [row["request_id"] for row in value["rows"]] == [later["request_id"]]
+    assert value["pending_count"] == 1 and value["coverage"]["unreadable"] == 1
+    assert value["coverage"]["diagnostics"][0]["request_id"] == route["request_id"]
+    assert {path: path.read_bytes() for path in saved} == saved
+
+
+def test_conflict_diagnostics_do_not_disclose_a_changed_source_or_scope(api, monkeypatch):
+    from loopx.presentation.request_control_api import RequestControlMixin
+
+    _, _, route = _source(api)
+    _, f, server = api
+    store = server.chat_store
+    turn = store.load_turn(route["session_id"], route["turn_id"])
+    store.update_turn(route["session_id"], route["turn_id"], response={"context_handoff_receipt": {
+        **turn["response"]["context_handoff_receipt"], "request_id": "b" * 64}})
+    scope_read = RequestControlMixin._request_inventory_scope
+    reads = []
+    def changed_scope(reader, session_id):
+        observed, goals, core = scope_read(reader, session_id)
+        reads.append(session_id)
+        return (observed, [], core) if len(reads) == 2 else (observed, goals, core)
+    monkeypatch.setattr(RequestControlMixin, "_request_inventory_scope", changed_scope)
+    code, denied = _inventory(api, route["session_id"])
+    assert code == 400 and "coverage" not in denied and route["request_id"] not in str(denied)
+    monkeypatch.setattr(RequestControlMixin, "_request_inventory_scope", scope_read)
+    from loopx.control_plane.collaboration.inbox import _read, _write
+    path = next(_root(f["runtime"]).glob("entries/*/" + route["request_id"] + ".json"))
+    _write(path, {**_read(path), "source_id": "web:another-source"})
+    partial = _inventory(api, route["session_id"])[1]
+    assert partial["coverage"]["unreadable"] == 1 and partial["coverage"]["diagnostics"] == []
+
+
+def test_conflict_diagnostic_window_does_not_reduce_the_unreadable_count(api):
+    _, _, route = _source(api)
+    _, f, server = api
+    store = server.chat_store
+    session = store.load_session(route["session_id"])
+    turns = [store.load_turn(route["session_id"], route["turn_id"])]
+    for number in range(12):
+        turn, _ = store.create_turn(session["session_id"], client_turn_id=f"conflict-{number}",
+            message=f"Review retained export {number}", origin="web")
+        receipt = deliver(f["runtime"], f["registry"], session=session, turn=turn,
+            request={"goal_id": f["ref"]["goal_id"], "agent_id": "agent-a"}, source_store=store)
+        store.update_turn(session["session_id"], turn["turn_id"], status="completed", response={"context_handoff_receipt": receipt})
+        store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+        turns.append(store.load_turn(session["session_id"], turn["turn_id"]))
+    for turn in turns:
+        store.update_turn(session["session_id"], turn["turn_id"], response={"context_handoff_receipt": {
+            **turn["response"]["context_handoff_receipt"], "request_id": "b" * 64}})
+    value = _inventory(api, session["session_id"], view="history")[1]
+    assert value["coverage"]["unreadable"] == 13 and len(value["coverage"]["diagnostics"]) == 12
+    assert value["rows"] == [] and value["matched"] == value["pending_count"] == 0
+    later_page = _inventory(api, session["session_id"], view="history", offset=1)[1]
+    assert later_page["coverage"] == value["coverage"]
+    assert later_page["snapshot_digest"] == value["snapshot_digest"]

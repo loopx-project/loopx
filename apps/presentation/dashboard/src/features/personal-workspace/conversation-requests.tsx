@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from "react";
-import {ChevronRight, ListChecks, RefreshCw, X} from "lucide-react";
+import {ChevronRight, CircleAlert, ListChecks, RefreshCw, X} from "lucide-react";
 import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
 import {z} from "zod";
 import {fetchConversationRequests, type ConversationRequest, type ConversationRequestInventory} from "../../data/conversation-requests";
@@ -211,6 +211,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const requestAbort = useRef<AbortController | null>(null);
+  const moreButton = useRef<HTMLButtonElement>(null);
+  const pageCountStatus = useRef<HTMLSpanElement>(null);
+  const restorePagingFocus = useRef(false);
   useEffect(() => {
     setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
   }, [sessionId]);
@@ -264,6 +267,14 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     } finally {if (current === generation.current) setBusy(false);}
   }
   const page = pages[0], last = pages.at(-1);
+  useEffect(() => {
+    if (!busy && restorePagingFocus.current) {
+      restorePagingFocus.current = false;
+      if (document.activeElement === document.body || document.activeElement === moreButton.current) {
+        (moreButton.current ?? pageCountStatus.current)?.focus({preventScroll: true});
+      }
+    }
+  }, [busy]);
   const unknown = page && (!page.coverage.scan_complete || page.coverage.unreadable > 0);
   const rows = [...new Map(pages.flatMap(value => value.rows).map(row => [row.request_id, row])).values()];
   const recipients = [...new Set(rows.map(row => `${row.goal_id}\n${row.agent_id}`))];
@@ -302,14 +313,12 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
       </form>
       <div className="conversation-requests-body" aria-busy={busy}>
         {error ? <p role="alert">{zh ? "委派记录暂时无法核验。" : "Delegation records cannot be verified."} <button type="button" onClick={() => setRevision(value => value + 1)}>{zh ? "重试" : "Retry"}</button></p> : null}
-        {unknown ? <p role="status">{zh ? "部分记录未能读取，数量与列表尚不完整。" : "Some records could not be read. Counts and list are incomplete."}</p> : null}
         {busy && !rows.length ? <p role="status">{zh ? "正在读取委派…" : "Loading delegations…"}</p> : null}
         {!busy && noSession ? <p>{zh ? "尚无可读取的管家会话。" : "No readable steward conversation yet."}</p> : null}
         {!busy && !noSession && !error && page && !unknown && !rows.length ? <p>{search
           ? (zh ? "未找到匹配的委派。" : "No matching delegations.")
           : history ? (zh ? "暂无委派记录。" : "No delegation records.")
             : (zh ? "当前没有待跟进的委派。" : "No delegations awaiting follow-up.")}</p> : null}
-        {!busy && !error && page && search && rows.length ? <p role="status">{zh ? `匹配 ${page.matched} 条${unknown ? "（部分记录）" : ""}` : `${page.matched} matches${unknown ? " (partial records)" : ""}`}</p> : null}
         {recipients.map(recipient => {const [goal, agent] = recipient.split("\n"); return <section key={recipient} className="conversation-requests-group">
           <h3>{agent}<span>{goal}</span></h3>
           {rows.filter(row => row.goal_id === goal && row.agent_id === agent).map(row => <details key={row.request_id} className="conversation-request-row">
@@ -333,8 +342,26 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
             </div>
           </details>)}
         </section>;})}
-        {last?.next_offset !== null && last?.next_offset !== undefined ? <button type="button" disabled={busy} onClick={() => void load(last.next_offset!)}>{zh ? "更多记录" : "More records"}</button> : null}
       </div>
+      {page && !error ? <footer className="conversation-requests-pagination">
+        <div><span ref={pageCountStatus} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true">{zh
+          ? `已显示 ${rows.length} / ${page.matched}${unknown ? "+" : ""}`
+          : `${rows.length} / ${page.matched}${unknown ? "+" : ""} shown`}</span>
+          {unknown ? <ContextHelp icon={CircleAlert} label={zh ? "部分委派无法核验" : "Some delegations cannot be verified"}>
+            <p>{page.coverage.unreadable > 0 ? (zh ? `${page.coverage.unreadable} 条记录未能核验。` : `Unverified records: ${page.coverage.unreadable}. `) : ""}
+              {zh ? "数量与列表仍不完整。" : "Counts and list remain incomplete."}
+              {!page.coverage.scan_complete ? (zh ? " 历史扫描尚未完整。" : " The history scan is incomplete.") : ""}</p>
+            {page.coverage.diagnostics.length ? <>
+              <p>{zh ? "原委派记录与来源对话回执指向不同委派；原记录已保留，尚不能判定取消或完成。" : "The source conversation's receipt points to a different delegation. The original records are retained; cancellation or completion cannot be established."}</p>
+              <ul>{page.coverage.diagnostics.map(item => <li key={item.request_id}>
+                {item.agent_id} · {item.goal_id}<br/><code>{item.request_id}</code>
+              </li>)}</ul>
+            </> : null}
+            {page.coverage.unreadable > page.coverage.diagnostics.length ? <p>{zh ? "其它读取缺口未在此列出。" : "Other read gaps are not listed here."}</p> : null}
+          </ContextHelp> : null}
+        </div>
+        {last?.next_offset !== null && last?.next_offset !== undefined ? <button ref={moreButton} type="button" aria-disabled={busy} onClick={event => {if (!busy) {restorePagingFocus.current = document.activeElement === event.currentTarget; void load(last.next_offset!);}}}>{zh ? "更多记录" : "More records"}</button> : null}
+      </footer> : null}
     </dialog>
   </div>;
 }

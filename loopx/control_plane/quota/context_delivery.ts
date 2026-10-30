@@ -1,3 +1,5 @@
+import {contextSourceIdentity, contextProjectionChanges, contextProjectionIdentity,
+  type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 /** Presentation of immutable quota, Turn and work-context captures. No admission or state writes.
  * Confirmed final input and explicit native-hook continuity assumptions remain
@@ -330,7 +332,8 @@ function freshPaths(context: JsonObject, surface: Surface, legacyQuotaFields: re
 
 /** Group complete CURRENT literals, not baseline references. Keep the cheaper
  * ordinary edit when grouping would grow metadata; both containers share this rule. */
-function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path}>, size: (value: unknown) => number): Delta {
+function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path}>, size: (value: unknown) => number,
+    sourceValues?: ProjectionSourceValues): Delta {
   const children = Object.entries("items" in delta ? delta.items : delta.changed ?? {});
   const values = children.filter(([, child]) => "value" in child);
   if (values.length < 2) return delta;
@@ -340,10 +343,35 @@ function groupCurrentValues(delta: Exclude<Delta, {value: unknown} | {from: Path
     values: Object.fromEntries(values.map(([key, child]) => [key, (child as {value: unknown}).value])),
   };
   if (!("items" in grouped) && !Object.keys(nested).length) delete grouped.changed;
+  if (sourceValues) {
+    const origins = new Map<string, Path>();
+    for (const [key, child] of values) {
+      const path = sourceValues.get(child)?.get("value");
+      if (path) origins.set(key, path);
+    }
+    if (origins.size) sourceValues.set(grouped.values!, origins);
+  }
   return size(grouped) < size(delta) ? grouped : delta;
 }
 
-function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | null {
+type SourceComparison = {identity: ReturnType<typeof contextSourceIdentity>;
+  before: Path; after: Path; values?: ProjectionSourceValues};
+
+function changeTree(before: unknown, after: unknown, forced: Path[], preserveFileNumbers = false,
+    source?: SourceComparison): Delta | null {
+  const same = (a: unknown, b: unknown, aPath: Path, bPath: Path): boolean =>
+    a === undefined || b === undefined ? a === b : source
+      ? source.identity(a, [...source.before, ...aPath]) === source.identity(b, [...source.after, ...bPath])
+      : equal(a, b);
+  const copy = <T>(value: T): T => source?.values ? value : clone(value);
+  const literal = (value: unknown, path: Path): Delta => {
+    const result = {value: copy(value)};
+    if (source?.values && typeof value === "number")
+      source.values.set(result, new Map([["value", [...source.after, ...path]]]));
+    return result;
+  };
+  const identity = (value: unknown, path: Path, side: "before" | "after"): string => source
+    ? digest(source.identity(value, [...source[side], ...path])) : digest(value);
   // Contexts have passed strict JSON digest validation; patch containers remain
   // immutable after sizing. Reuse child sizes within this one tree calculation.
   const sizes = new WeakMap<object, number>();
@@ -366,6 +394,26 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
   };
   const exact = new Set(forced.map(pathKey)), ancestors = new Set<string>();
   for (const path of forced) for (let i = 0; i < path.length; i++) ancestors.add(pathKey(path.slice(0, i)));
+  // Saved files distinguish 1 from 1.0 and positive from negative zero even
+  // when this bridge cannot. The adapter rejects changed source tokens.
+  // Preserve unchanged numeric leaves without rewriting their parents or
+  // relocating a normalized numeric subtree from another file location.
+  const numericSubtrees = new Set<string>(), inheritedNumbers = new Set<string>();
+  const numericPaths = (a: unknown, b: unknown, path: Path): void => {
+    if (typeof a === "number" && Number.isInteger(a)) {
+      for (let i = 0; i <= path.length; i++) {
+        const key = pathKey(path.slice(0, i));
+        numericSubtrees.add(key);
+        if (Object.is(a, b)) inheritedNumbers.add(key);
+      }
+    } else if (Array.isArray(a)) {
+      a.forEach((value, i) => numericPaths(value, Array.isArray(b) ? b[i] : undefined, [...path, i]));
+    } else if (jsonObject(a)) {
+      for (const [key, value] of Object.entries(a as JsonObject))
+        numericPaths(value, jsonObject(b)?.[key], [...path, key]);
+    }
+  };
+  if (preserveFileNumbers) numericPaths(before, after, []);
   // Binding or source reordering can relocate already-read authoring. Index
   // exact strings and structured subtrees from the immutable base. A target
   // with current descendants needs literal overrides, never a bare reference.
@@ -379,7 +427,7 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         strings.set(value, reference);
     } else if (Array.isArray(value) || jsonObject(value)) {
       const reference = {from: path}, valueSize = size(value);
-      if (bytes(reference) < size({value})) {
+      if (!numericSubtrees.has(pathKey(path)) && bytes(reference) < size({value})) {
         const bucket = subtrees.get(valueSize) ?? {candidates: []};
         bucket.candidates.push({reference, value});
         subtrees.set(valueSize, bucket);
@@ -391,8 +439,8 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
   index(before, []);
   const visit = (a: unknown, b: unknown, path: Path, relocate = true): Delta | null => {
     const key = pathKey(path);
-    if (exact.has(key)) return {value: clone(b)};
-    if (!ancestors.has(key) && equal(a, b)) return null;
+    if (exact.has(key)) return literal(b, path);
+    if (!ancestors.has(key) && same(a, b, path, path)) return null;
     if (typeof b === "string" && strings.has(b)) return clone(strings.get(b)!);
     let reference: {from: Path} | undefined;
     let overlay: Delta | undefined;
@@ -406,13 +454,13 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
       if (bucket && !bucket.indexed) {
         bucket.indexed = new Map();
         for (const candidate of bucket.candidates) {
-          const hash = digest(candidate.value), previous = bucket.indexed.get(hash);
+          const hash = identity(candidate.value, candidate.reference.from, "before"), previous = bucket.indexed.get(hash);
           if (!previous || bytes(candidate.reference) < bytes(previous.reference)) bucket.indexed.set(hash, candidate);
         }
       }
-      const reusable = bucket?.indexed?.get(digest(b));
+      const reusable = bucket?.indexed?.get(identity(b, path, "after"));
       // Size and hash lookup are indices: exact equality remains the oracle.
-      if (reusable && equal(reusable.value, b)) {
+      if (reusable && same(reusable.value, b, reusable.reference.from, path)) {
         if (!ancestors.has(key)) reference = reusable.reference;
         else if (relocate) {
           // Compare against this exact body at its new location. Disabling
@@ -432,7 +480,7 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         if (child) changed.push([field, child]);
       }
       const removed = Object.keys(old).filter(field => !Object.hasOwn(next, field));
-      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})}, size);
+      delta = groupCurrentValues({changed: Object.fromEntries(changed), ...(removed.length ? {removed} : {})}, size, source?.values);
     } else if ((Array.isArray(a) || a === undefined) && Array.isArray(b)) {
       const old = a as unknown[] | undefined;
       const items: [string, Delta][] = [];
@@ -440,11 +488,11 @@ function changeTree(before: unknown, after: unknown, forced: Path[]): Delta | nu
         const child = visit(old?.[i], value, [...path, i], relocate && !overlay);
         if (child) items.push([String(i), child]);
       });
-      delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})}, size);
-    } else delta = {value: clone(b)};
+      delta = groupCurrentValues({items: Object.fromEntries(items), ...(old?.length !== b.length ? {length: b.length} : {})}, size, source?.values);
+    } else delta = literal(b, path);
     // Sizing does not publish a value. Copy only a replacement that is chosen,
     // rather than every unchanged subtree and every discarded ancestor value.
-    let result = size(delta) < size({value: b}) ? delta : {value: clone(b)};
+    let result = inheritedNumbers.has(key) || size(delta) < size({value: b}) ? delta : literal(b, path);
     if (reference && size(reference) < size(result)) result = clone(reference);
     return overlay && size(overlay) < size(result) ? overlay : result;
   };
@@ -522,13 +570,24 @@ function surfaceOf(value: unknown): Surface {
   return value as Surface;
 }
 
+/** The ordinary Python IO path applies this existing edit format to its
+ * original values. Direct JS callers retain detached JSON results. */
+function publish(request: JsonObject, result: JsonObject, values: ProjectionSourceValues): JsonObject {
+  if (request.source_edits !== true) return result;
+  const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
+  return contextProjectionChanges(source, result, values);
+}
+
 /** Hosts may confirm final-input retention, or explicitly select the native
  * hook delivery assumption. These bases are distinct; neither grants authority. */
 export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const values: ProjectionSourceValues = new WeakMap();
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
   const full = (reason: string): JsonObject => ({schema_version: VERSION, mode: "full", target,
-    ancestry: 0, reason, context: clone(context)});
+    ancestry: 0, reason, context: request.source_edits === true ? context : clone(context)});
+  const fullResult = (reason: string): JsonObject => publish(request, full(reason), values);
   const baseline = jsonObject(request.baseline), retained = jsonObject(request.retained);
   const continuity = jsonObject(request.continuity);
   const binding = jsonObject(baseline?.target), prior = jsonObject(baseline?.context);
@@ -536,17 +595,30 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   const assumed = !retained && continuity?.basis === "native_hook_assumption"
     && continuity.capture_bytes_verified === true
     && equal(continuity.target, binding);
-  if (!binding || !prior || (!confirmed && !assumed) || !compatible(binding, target)
-      || binding.context_digest !== digest(prior)) return full("baseline_unavailable");
+  // File comparison is exact artifact reconstruction, not a retention claim.
+  // A Host must verify its immutable base within the current context epoch.
+  const fileBacked = !retained && continuity?.basis === "captured_file"
+    && continuity.capture_bytes_verified === true && equal(continuity.target, binding);
+  if (!binding || !prior || (!confirmed && !assumed && !fileBacked) || !compatible(binding, target)
+      || binding.context_digest !== digest(prior)) return fullResult("baseline_unavailable");
   const depth = baseline?.ancestry;
-  if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return full("full_refresh_due");
+  if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return fullResult("full_refresh_due");
   const before = freshPaths(prior, surface, legacyQuotaFields, binding), after = freshPaths(context, surface, legacyQuotaFields, target);
-  if (!before.valid || !after.valid) return full("source_not_reusable");
-  const changes = changeTree(prior, context, after.paths);
+  if (!fileBacked && (!before.valid || !after.valid)) return fullResult("source_not_reusable");
+  const changes = changeTree(prior, context, fileBacked ? [] : after.paths, fileBacked,
+    {identity, before: ["baseline", "context"], after: ["context"],
+      ...(request.source_edits === true ? {values} : {})});
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,
     ancestry: Number(depth) + 1, changes,
-    ...(assumed ? {continuity_basis: "native_hook_assumption"} : {}),
-    instruction: "Current controls are inline even when unchanged. Other fields inherit the "
+    ...(fileBacked ? {continuity_basis: "captured_file"} : assumed ? {continuity_basis: "native_hook_assumption"} : {}),
+    instruction: fileBacked ? "This is an exact difference between saved files, not proof of retained model context. "
+      + "Use the baseline file for inherited fields or select necessary facts directly from the current full file. "
+      + "Choose the relevant changes and details; you need not read the entire baseline or delta. "
+      + "Unchanged fields, including controls, are inherited from the verified baseline file; all current constraints remain binding. "
+      + "Before dependent work recover any missing necessary facts from the current file. This view grants no authority. "
+      + "value replaces; from copies from the immutable baseline and edit patches that copy; values assigns fields; "
+      + "changed/items recurse, removed deletes keys, length sets array length. "
+      : "Current controls are inline even when unchanged. Other fields inherit the "
       + (assumed ? "exact baseline under the native-hook continuity assumption" : "confirmed baseline")
       + "; all requirements remain binding. "
       + (assumed ? "After reading this delta completely, use it with the retained model context. "
@@ -559,13 +631,13 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
       + "Values assigns complete fields (exact indices with items); changed/items recurse, removed deletes object keys, length sets array length. "
       + "Within the same work Turn, compaction alone requires neither another guard nor replay of already-read context. "
       + "Continue from the working brief and original work/settlement identity; missing facts use same-capture recovery."};
-  if (bytes(delta) >= bytes(full("delta_not_smaller"))) return full("delta_not_smaller");
-  if (!equal(applyTree(prior, changes), context)) return full("reconstruction_failed");
+  if (bytes(delta) >= bytes(full("delta_not_smaller"))) return fullResult("delta_not_smaller");
+  if (!equal(applyTree(prior, changes), context)) return fullResult("reconstruction_failed");
   // Native consumers page the wire before they can use its baseline. Deliver
   // the existing basis and interpretation before the potentially large tree;
   // do not duplicate them in a second host instruction or change strict IO.
-  return assumed ? {schema_version: VERSION, mode: "delta",
-    continuity_basis: delta.continuity_basis, instruction: delta.instruction, ...delta} : delta;
+  return publish(request, assumed || fileBacked ? {schema_version: VERSION, mode: "delta",
+    continuity_basis: delta.continuity_basis, instruction: delta.instruction, ...delta} : delta, values);
 }
 
 /** Validate the exact change tree against the immutable CURRENT capture before
@@ -578,23 +650,31 @@ export function restoreContextDelivery(request: JsonObject, legacyQuotaFields: r
   if (current.mode !== "full" || current.schema_version !== VERSION || target.projection_version !== VERSION || target.context_digest !== digest(currentContext)) {
     throw new Error("current full capture is invalid");
   }
-  const fallback = (): JsonObject => ({...clone(current), reason: "automatic_full_recovery", ancestry: 0});
+  const identity = contextSourceIdentity(request, request.source_number_tokens);
+  const values: ProjectionSourceValues = new WeakMap();
+  const copy = <T>(value: T): T => request.source_edits === true ? value : clone(value);
+  const fallback = (): JsonObject => publish(request,
+    {...copy(current), reason: "automatic_full_recovery", ancestry: 0}, values);
   try {
     const surface = surfaceOf(target.surface);
     const delivery = requireJsonObject(request.delivery, "delivery"), baseline = requireJsonObject(request.baseline, "baseline");
     const base = requireJsonObject(baseline.target, "baseline target"), context = requireJsonObject(baseline.context, "baseline context");
+    const fileBacked = delivery.continuity_basis === "captured_file";
     if (delivery.schema_version !== VERSION || delivery.mode !== "delta" || !equal(delivery.target, target)
         || !equal(delivery.base, base) || !compatible(base, target) || base.context_digest !== digest(context)
         || !Number.isSafeInteger(baseline.ancestry) || Number(baseline.ancestry) < 0
         || delivery.ancestry !== Number(baseline.ancestry) + 1 || Number(delivery.ancestry) > MAX_ANCESTRY) return fallback();
     const before = freshPaths(context, surface, legacyQuotaFields, base), after = freshPaths(currentContext, surface, legacyQuotaFields, target);
-    if (!before.valid || !after.valid) return fallback();
-    const expected = changeTree(context, currentContext, after.paths);
+    if (!fileBacked && (!before.valid || !after.valid)) return fallback();
+    const expected = changeTree(context, currentContext, fileBacked ? [] : after.paths, fileBacked,
+      {identity, before: ["baseline", "context"], after: ["current", "context"],
+        ...(request.source_edits === true ? {values} : {})});
     // Also rejects omitted unchanged controls, redundant/conflicting edits,
     // malformed array indices/lengths and unsupported operations before applying.
-    if (!equal(delivery.changes, expected)) return fallback();
+    if (contextProjectionIdentity(request, {changes: delivery.changes}, request.source_number_tokens, values)
+        !== contextProjectionIdentity(request, {changes: expected}, request.source_number_tokens, values)) return fallback();
     const result = applyTree(context, expected);
     if (!equal(result, currentContext)) return fallback();
-    return {...clone(delivery), context: result};
+    return publish(request, {...copy(delivery), context: copy(currentContext)}, values);
   } catch { return fallback(); }
 }

@@ -431,19 +431,27 @@ def test_registered_kernel_producer_coverage_cannot_be_removed(name):
         smoke['check_coverage_floor'](registry)
 
 
-@pytest.mark.parametrize('metadata,name', [
-    ('call_producers', 'loop_disposition'),
-    ('call_producers', 'agent_scope_frontier_action'),
-    ('call_producers', 'turn_result_kind'),
-    ('return_paths', 'turn_route'),
-    ('return_paths', 'turn_result_kind'),
-])
-def test_explicit_output_evidence_cannot_be_removed_or_redirected(metadata, name):
+@pytest.mark.parametrize('metadata', ['call_producers', 'return_paths'])
+def test_explicit_output_evidence_cannot_be_removed_or_redirected(metadata):
+    """Every vocabulary that carries explicit output evidence must keep it.
+
+    The anchored vocabularies are read from the registry instead of being
+    written out here. Evidence that moves to another vocabulary, or is retired
+    together with its owner, then changes what this case proves instead of
+    leaving it silently vacuous.
+    """
     smoke = runpy.run_path(str(SMOKE))
     registry = copy.deepcopy(smoke['load_registry']())
-    registry['vocabularies'][name][metadata] = {}
-    with pytest.raises(smoke['Drift'], match='anchored output evidence'):
-        smoke['check_coverage_floor'](registry)
+    anchored = sorted(
+        name for name, vocabulary in registry['vocabularies'].items()
+        if vocabulary.get(metadata)
+    )
+    assert anchored, f"no vocabulary carries {metadata} evidence to protect"
+    for name in anchored:
+        mutated = copy.deepcopy(registry)
+        mutated['vocabularies'][name][metadata] = {}
+        with pytest.raises(smoke['Drift'], match='anchored output evidence'):
+            smoke['check_coverage_floor'](mutated)
 
 
 @pytest.mark.parametrize('name', [
@@ -599,7 +607,7 @@ def test_generated_domain_accepts_true_kernel_comparison() -> None:
     # Recovery registers one additional cross-runtime vocabulary without
     # claiming a qualified producer scan for its offline observations.
     assert "state_recovery_component_state" not in domain.walked
-    assert domain.outside_by_tier == (("cross_runtime", 22),)
+    assert domain.outside_by_tier == (("cross_runtime", 23),)
 
 
 def test_canonical_domain_rejects_old_kernel_only_universe() -> None:
@@ -623,7 +631,7 @@ def test_domain_membership_change_requires_regenerated_prose() -> None:
     with pytest.raises(smoke["Drift"], match="canonical producer-domain projection"):
         smoke["check_formal_model"](registry["formal_model"], registry)
     projected = smoke["producer_domain_prose"](registry)
-    assert "23 cross_runtime" in projected["F1_producer_closedness.statement"]
+    assert "24 cross_runtime" in projected["F1_producer_closedness.statement"]
     assert "5 kernel and 0 outside" in projected["universes.vocabularies"]
 
 
@@ -769,7 +777,7 @@ def test_adding_a_vocabulary_forces_the_declared_domain_to_move() -> None:
         "meaning": "probe", "tier": "cross_runtime", "status": "canonical",
         "owners": {"python": None, "typescript": None}, "values": ["probe_value"],
     }
-    with pytest.raises(smoke["Drift"], match="the registry holds 29"):
+    with pytest.raises(smoke["Drift"], match="the registry holds 30"):
         smoke["check_formal_model"](registry["formal_model"], registry)
 
 
@@ -989,8 +997,8 @@ def test_retired_lease_registry_entry_cannot_return_as_fake_compatibility():
 def test_native_lifecycle_relation_keeps_the_live_owner_and_verification_boundary():
     smoke = runpy.run_path(str(SMOKE))
     registry = smoke['load_registry']()
-    assert registry['coverage_floor']['vocabularies'] == 28
-    assert registry['coverage_floor']['owner_symbols'] == 54
+    assert registry['coverage_floor']['vocabularies'] == 29
+    assert registry['coverage_floor']['owner_symbols'] == 56
     assert registry['coverage_floor']['relations'] == 9
     relation = next(row for row in registry['relations']['subsets']
                     if row['name'] == 'task_lease_lifecycle_decision_operation')

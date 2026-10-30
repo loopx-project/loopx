@@ -131,6 +131,11 @@ async function copyHomepage(siteDir, base) {
   await cp(buildDir, siteDir, { force: true, recursive: true });
   await rm(buildDir, { force: true, recursive: true });
   await copyFile(resolve(repoRoot, installerScriptPath), resolve(siteDir, "install.sh"));
+  const bootstrap = run(resolveTestPython(), ["-c",
+    "from loopx.cli_commands.update_artifact import standalone_source; print(standalone_source(), end='')"], {
+    capture: true, cwd: repoRoot,
+  });
+  await writeFile(resolve(siteDir, "update-artifact.py"), bootstrap, "utf8");
 }
 
 async function copyPublicSiteRoutes(siteDir) {

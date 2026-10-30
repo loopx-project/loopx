@@ -21,7 +21,7 @@ from .todo_semantics import (
     todo_item_task_class, todo_projection_sort_key,
     todo_summary_monitor_writeback_supported,
 )
-from .resume_planning import build_todo_resume_planning_request
+from .resume_planning import build_referenced_todo_resume_planning_request
 from .handoff_note import todo_read_source
 from .user_gate import is_user_gate_todo_item
 from .route_continuation import build_todo_route_continuation_facts
@@ -151,6 +151,12 @@ def project_quota_planning(
         raw = value.get(key)
         return [encode(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
+    resume_request = build_referenced_todo_resume_planning_request(
+        value,
+        agent_id=agent,
+        item_limit=8,
+        available_capabilities=(available_capabilities or []) if resolve_capacity else None,
+    )
     try:
         wire = effect_runtime_result("todo.quota_planning.project", {
             "schema_version": "todo_quota_planning_request_v4",
@@ -161,8 +167,7 @@ def project_quota_planning(
                 "excluded": normalize_todo_excluded_agents(gate.get("excluded_agents"))}
                 for gate in handoff_gates],
             "source_contract": _closure_source_facts(value),
-            "resume": build_todo_resume_planning_request(value, agent_id=agent, item_limit=8,
-                available_capabilities=(available_capabilities or []) if resolve_capacity else None),
+            "resume": resume_request,
             "selection": {
                 "observed_at": observed_at,
                 "available": normalize_required_capabilities(available_capabilities),
@@ -177,7 +182,7 @@ def project_quota_planning(
                 "frontier_revision_index": value.get("advancement_frontier_revision_index"),
                 "diagnostic_limit": 3, "backlog_limit": 8, "visibility_limit": 16,
             },
-        })
+        }, large_local_snapshot=True)
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
     result = _decode_quota_planning_wire(wire)

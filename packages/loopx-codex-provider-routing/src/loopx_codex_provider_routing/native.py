@@ -69,13 +69,23 @@ def policy(request: dict) -> dict:
 def host(adapter: dict, operation: str, **parameters) -> dict:
     receipt = parameters.pop("handoff_receipt", None)
     command = [sys.executable, "-m", "loopx_codex_provider_routing.native_host"]
+    environment = None
+    core = sys.modules.get("loopx")
+    if core is not None and getattr(core, "__file__", None):
+        # An archive/private bootstrap can load Core through sys.path alone.
+        # Its detached child must use that same loaded owner, not an older
+        # installation (or no Core) discovered from the child's working dir.
+        environment = os.environ.copy()
+        root = str(Path(core.__file__).resolve().parent.parent)
+        inherited = environment.get("PYTHONPATH")
+        environment["PYTHONPATH"] = root + (os.pathsep + inherited if inherited else "")
     request = json.dumps({"adapter": adapter, "operation": operation, **parameters})
     if receipt:
         # Closing the calling native App must not close this continuation or
         # its result channel. All native sub-operations have bounded waits.
         process = subprocess.Popen([*command, "--result-file", receipt], stdin=subprocess.PIPE,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   text=True, start_new_session=True)
+                                   text=True, start_new_session=True, env=environment)
         try:
             process.communicate(request, timeout=150)
         except subprocess.TimeoutExpired:
@@ -87,7 +97,8 @@ def host(adapter: dict, operation: str, **parameters) -> dict:
         if packet.get("ok") is not True:
             raise HostError(packet.get("code", "native_unavailable"))
         return packet["result"]
-    result = subprocess.run(command, input=request, capture_output=True, text=True, timeout=150)
+    result = subprocess.run(command, input=request, capture_output=True, text=True, timeout=150,
+                            env=environment)
     if len(result.stdout) > 131072:
         raise HostError("native_unavailable")
     try:
@@ -279,7 +290,12 @@ class NativeAccounts:
                 # Only status/readback runs while paused; unchanged selection
                 # must not retry usage refresh, client shutdown or switching.
                 if state.get("failure_count", 0) >= 3 and not refresh and not manual_slot:
-                    return self._projection(state)
+                    if state.get("code") != "other_clients_busy":
+                        return self._projection(state)
+                    # Legacy busy pauses are safe to recheck: the native host
+                    # now resolves remaining owners BEFORE any client quit.
+                    # A released blocker must not require a manual account swap.
+                    state["failure_count"] = 0
                 # Inspect the active account even when it is not an authorized
                 # destination. Candidates stay strictly inside the allowlist.
                 slots = list(dict.fromkeys([native["active_slot"], *state["policy"]["slots"]]))
@@ -336,10 +352,10 @@ class NativeAccounts:
                 code = error.code if isinstance(error, HostError) else "native_unavailable"
                 # Unrelated/remaining owners still require a safe-boundary wait.
                 # Other repeated failures stop automatic attempts until Refresh.
-                failures = state.get("failure_count", 0) + (code not in ("waiting_for_idle", "handoff_pending"))
-                if code in ("other_clients_busy", "client_quit_refused", "client_quit_timeout"):
+                failures = state.get("failure_count", 0) + (code not in ("waiting_for_idle", "other_clients_busy", "handoff_pending"))
+                if code in ("client_quit_refused", "client_quit_timeout"):
                     failures = 3  # Do not repeatedly close/reopen a refused client.
-                state.update(action=code if code in ("waiting_for_idle", "selection_changed", "adapter_changed", "client_quit_refused", "client_quit_timeout", "client_changed", "handoff_pending") else "unavailable",
+                state.update(action="waiting_for_idle" if code == "other_clients_busy" else code if code in ("waiting_for_idle", "selection_changed", "adapter_changed", "client_quit_refused", "client_quit_timeout", "client_changed", "handoff_pending") else "unavailable",
                              code=code, retry_at=self.clock() + (5 if code == "handoff_pending" else min(300, 60 * 2 ** min(failures, 3))), failure_count=failures)
                 if manual_slot:
                     state["last_operation_id"] = operation_id

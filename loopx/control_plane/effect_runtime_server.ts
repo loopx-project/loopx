@@ -29,6 +29,8 @@ const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
 // Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
   "todo.read",
+  "todo.quota_planning.project",
+  "goal.vision_wait.project",
   "collaboration.inbox.read",
   "collaboration.delegation.inventory_page",
   "benchmark.trajectory.codex-usage",
@@ -43,6 +45,7 @@ const LOCAL_SNAPSHOT_METHODS = new Set([
   "quota.settlement.read",
   "quota.spend.commit",
   "quota.turn_envelope.evaluate",
+  "turn.controller",
   "goal.checkpoint_read_context.resolve",
   "goal.checkpoint_read_context.commit",
   "goal.checkpoint_read_context.inspect_replay",

@@ -3,7 +3,7 @@
 from . import _read, _root, _hash
 from .tracking import _entry, _receipt
 from .roundtrip import reply_status
-from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
+from ...control_plane.collaboration.source_chat_observation import original_delivery_facts, is_source_chat_host
 from ...chat import redact_local_paths
 from ...control_plane.collaboration import conversation_scope
 from ...control_plane.collaboration.goal_instance_scope import (
@@ -52,7 +52,8 @@ def project_collaboration(store, root, session_id, messages, *, registry, contex
         try:
             route = _read(path)
             client = route.get("client_turn_id")
-            if route.get("session_id") != session_id or client not in missing_clients:
+            if (route.get("session_id") != session_id or client not in missing_clients
+                    or not is_source_chat_host(root, route, store)):
                 continue
             recovered.setdefault(client, []).append(route)
         except (OSError, ValueError, TypeError):
@@ -87,6 +88,9 @@ def project_collaboration(store, root, session_id, messages, *, registry, contex
                     scope=scope,
                 )
                 route = _read(_root(root) / "roundtrips" / (row["request_id"] + ".json"))
+                if not is_source_chat_host(root, route, store):
+                    result.append(message)
+                    continue
                 lifetime = decide_collaboration_lifecycle(
                     scope, operation="original_request_inspect", record=row, route=route,
                     initial_delivery=original_delivery_facts(row, route, turn, source_id=row["source_id"]),

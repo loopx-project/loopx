@@ -11,6 +11,17 @@ import pytest
 
 from loopx.control_plane.turn_driver import codex_context as context
 from tests.control_plane.test_codex_context_lifecycle import setup, project, read_pages
+from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+
+
+def assert_file_delta(wire, previous, expected):
+    baseline = {"schema_version": "context_delivery_v1", "mode": "full", "ancestry": 0,
+        "target": previous["target"], "context": json.loads(Path(previous["path"]).read_text())}
+    assert wire["mode"] == "delta" and wire["continuity_basis"] == "captured_file"
+    restored = restore_context_delivery(wire, baseline=baseline,
+        current={"schema_version": "context_delivery_v1", "mode": "full", "ancestry": 0,
+                 "target": wire["target"], "context": expected})
+    assert restored["mode"] == "delta" and restored["context"] == expected
 
 
 def append(path, kind, payload):
@@ -83,14 +94,13 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
     assert result == {} and context._state(tmp_path)["context_epoch"] == before["context_epoch"]
     current = {**payload, "heartbeat_receipt": {"turn_instance_id": "second"}}
     _, wire = project(tmp_path, "second", payload=current)
-    assert wire["mode"] == "delta"
-    assert wire["changes"]["values"]["heartbeat_receipt"] == current["heartbeat_receipt"]
+    assert_file_delta(wire, before["recovery"], current)
 
 
 @pytest.mark.parametrize("single_page", [False, True])
 @pytest.mark.parametrize("lose_first", [False, True])
 @pytest.mark.parametrize("code_mode", [False, True])
-def test_compact_full_recovery_becomes_next_resume_baseline(tmp_path, monkeypatch, single_page, lose_first, code_mode):
+def test_compact_recovery_preserves_turn_but_next_turn_starts_new_file_baseline(tmp_path, monkeypatch, single_page, lose_first, code_mode):
     from argparse import Namespace
     from loopx.cli_commands.quota_capture import read_context_capture
 
@@ -143,9 +153,9 @@ def test_compact_full_recovery_becomes_next_resume_baseline(tmp_path, monkeypatc
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     current = {**payload, "heartbeat_receipt": {"turn_instance_id": "after-compact"}}
     _, wire = project(tmp_path, "after-compact", payload=current)
-    assert wire["mode"] == ("full" if lose_first else "delta")
-    if not lose_first:
-        assert wire["changes"]["values"]["heartbeat_receipt"] == current["heartbeat_receipt"]
+    # Reading the old Turn's recovery cannot seed the new epoch. Even an exact
+    # read is a recovery of prior work, not the next Turn's current baseline.
+    assert wire["mode"] == "full" and wire["context"] == current
 
 
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
@@ -197,16 +207,19 @@ def test_unqualified_native_version_cannot_retain_resume_baseline(tmp_path, monk
     before = context._state(tmp_path)
     assert "native_resume" not in before["candidate"]
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
-    assert context._state(tmp_path)["context_epoch"] != before["context_epoch"]
+    assert "candidate" not in context._state(tmp_path)
+    assert context._state(tmp_path)["context_epoch"] == before["context_epoch"]
     _, wire = project(tmp_path, "second", payload=payload)
-    assert wire["mode"] == "full" and wire["context"] == payload
+    assert_file_delta(wire, before["recovery"], payload)
 
 
 def test_incomplete_native_read_cannot_gain_resume_continuity(tmp_path, monkeypatch):
     event, _, payload = observed_read(tmp_path, monkeypatch, complete=False)
-    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    before = context._state(tmp_path)
+    assert context.codex_context_hook(str(tmp_path), {**event, "source": "resume"}) == {}
+    assert "candidate" not in context._state(tmp_path)
     _, wire = project(tmp_path, "second", payload=payload)
-    assert wire["mode"] == "full" and wire["context"] == payload
+    assert_file_delta(wire, before["recovery"], payload)
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="Named pipes require POSIX")
@@ -256,16 +269,24 @@ def test_real_hook_rejects_fifo_history_without_waiting_for_a_writer(tmp_path, m
             result = hook({"hook_event_name": "SessionStart", "source": "resume"})
         after = context._state(tmp_path)
         assert "candidate" not in after and "pending" not in after
-        assert after["context_epoch"] != before["context_epoch"]
-        assert after["recovery"] == reference
-        guidance = result["hookSpecificOutput"]["additionalContext"]
-        assert reference["command"] in guidance
-        # Actual CLI hook recovery must stand alone after persistent context loss.
-        assert "max_output_tokens=22000" in guidance
-        assert "max_output_tokens=24000" in guidance
-        assert "grants no new authority/freshness" in guidance and "retention proof" in guidance
-        _, fallback = project(tmp_path, "after-fifo", payload=payload)
-        assert fallback["mode"] == "full" and fallback["context"] == payload
+        if phase == "post_tool":
+            # No replay checkpoint was created from the pipe. It cannot prove
+            # retention, but the regular saved JSON is still a valid file base.
+            assert after["context_epoch"] == before["context_epoch"] and result == {}
+            _, wire = project(tmp_path, "after-fifo", payload=payload)
+            assert_file_delta(wire, reference, payload)
+        else:
+            # A previously verified replay became unreadable: this may hide
+            # compaction, so rotate conservatively without opening the pipe.
+            assert after["context_epoch"] != before["context_epoch"]
+            assert after["recovery"] == reference
+            guidance = result["hookSpecificOutput"]["additionalContext"]
+            assert reference["command"] in guidance
+            assert "max_output_tokens=22000" in guidance
+            assert "max_output_tokens=24000" in guidance
+            assert "grants no new authority/freshness" in guidance and "retention proof" in guidance
+            _, fallback = project(tmp_path, "after-fifo", payload=payload)
+            assert fallback["mode"] == "full" and fallback["context"] == payload
     assert Path(reference["path"]).read_bytes() == captured
     assert not registry.exists() and not runtime.exists()
 

@@ -99,7 +99,8 @@ try {
   assert.doesNotMatch(await checkObservation.innerText(), /任务验收规则|Task validation rules/,
     "An independently validated original request must not claim a Todo validation basis");
   // Another version's witness must never appear as a check of this report.
-  validation = {...validation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
+  // Restore the original Todo subject before the linked recovery journey.
+  validation = {...currentValidation, output_versions: [{ref: "report.json", sha256: "f".repeat(64)}, outputVersions[1]]};
   await recheck.click();
   await original().waitFor();
   await evidence.getByText("本次验收依据", {exact: true}).click();

@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
@@ -17,11 +18,12 @@ from loopx.chat_store import ChatSessionStore
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="loopx-team-feedback-") as directory:
         root = Path(directory)
+        runtime_root = root / "runtime"
         registry = root / "registry.json"
-        registry.write_text(json.dumps({"schema_version": "0.1", "goals": [
+        registry.write_text(json.dumps({"schema_version": "0.1", "common_runtime_root": str(runtime_root), "goals": [
             {"id": "research", "repo": str(root), "status": "active"},
         ]}), encoding="utf-8")
-        store = ChatSessionStore(root / "runtime")
+        store = ChatSessionStore(runtime_root)
         runtime = ChatRuntimeController(store=store, codex_bin="missing-codex", registry_path=registry)
         store.create_session(goal_id="research", agent_id="codex", channel_id="goal.research",
                              upstream_thread_id="fixture", session_id="feedback",
@@ -34,7 +36,8 @@ def main() -> None:
         server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
         server.verbose = False
         server.registry_path = registry
-        server.runtime_root = root / "runtime"
+        server.runtime_root = runtime_root
+        server.runtime_root_override = str(runtime_root)
         server.chat_store = store
         server.runtime_controller = runtime
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -59,4 +62,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # A missing route must fail even on a clean CI host, before reading or
+    # writing any ambient runtime. Inbox and Chat operations remain real.
+    with patch("loopx.paths.select_default_runtime_root", side_effect=AssertionError(
+        "The feedback fixture must use only its temporary runtime"
+    )):
+        main()

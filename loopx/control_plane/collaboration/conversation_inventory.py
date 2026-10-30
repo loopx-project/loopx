@@ -11,7 +11,7 @@ import hashlib
 import json
 
 from ..content_digest import BARE_SHA256_PATTERN
-from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
+from .goal_instance_scope import CollaborationLifecycleRejected, collaboration_goal_scope, decide_collaboration_lifecycle
 from .inbox import _entry, _now, _read, _receipt, _request_lock, _root, read_inbox_transaction, reply_status
 from .links import read_linked_work
 from .source_chat_observation import is_source_chat_host, original_delivery_facts, original_turn_reader
@@ -45,7 +45,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
         raise ValueError("request search must be at most 200 characters")
     query = search.strip().casefold()
     paths = sorted((_root(root) / "entries").glob("*/*.json"))
-    rows, unreadable, cache, turn_readers = [], 0, {}, {}
+    rows, unreadable, cache, turn_readers, diagnostics = [], 0, {}, {}, []
     for path in paths[:2000]:
         try:
             candidate = _read(path)
@@ -79,8 +79,17 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
                     if row.get("source_kind") == "peer":
                         continue
                     grant = source_context_target_authority(root, source_session, turn, {"goal_id": gid, "agent_id": aid})
-                    decide_collaboration_lifecycle(scope, operation="original_request_inspect", record=row, route=route,
-                        initial_delivery=original_delivery_facts(row, route, turn, source_id=grant["source_id"]))
+                    try:
+                        decide_collaboration_lifecycle(scope, operation="original_request_inspect", record=row, route=route,
+                            initial_delivery=original_delivery_facts(row, route, turn, source_id=grant["source_id"]))
+                    except CollaborationLifecycleRejected as exc:
+                        # Only this typed refusal proves the route and source
+                        # matched before the conflicting receipt was observed.
+                        # Withhold the brief, work and completion state as before.
+                        if exc.decision.get("delivery_proof_reason") == "handoff_receipt_conflict" and len(diagnostics) < 12:
+                            diagnostics.append({"request_id": row["request_id"], "goal_id": gid, "agent_id": aid,
+                                "code": exc.decision["code"], "reason": exc.decision["delivery_proof_reason"]})
+                        raise
                     observed = read_inbox_transaction(root, {"operation": "receipt_states", "rows": [row], "include_agenda": True})
                     state, agenda = observed["items"][0], observed["agenda_items"][0]
                     controlled = state.get("readback")
@@ -129,7 +138,7 @@ def read_conversation_requests(root, registry, store, session, *, goal_ids, core
             (row.get("brief") or {}).get("purpose"), (row.get("brief") or {}).get("context")))]
     visible.sort(key=lambda row: (row.get("last_event_at") or "", row["request_id"]), reverse=True)
     page = visible[offset:offset + limit]
-    coverage = {"scan_complete": len(paths) <= 2000, "unreadable": unreadable}
+    coverage = {"scan_complete": len(paths) <= 2000, "unreadable": unreadable, "diagnostics": diagnostics}
     # A page fence over observations, not an atomic snapshot or a new ledger.
     snapshot_digest = hashlib.sha256(json.dumps([visible, coverage, query], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     return {"ok": True, "session_id": session["session_id"], "rows": page,

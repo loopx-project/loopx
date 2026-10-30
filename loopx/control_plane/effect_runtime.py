@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,8 @@ MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.read",
+    "todo.quota_planning.project",
+    "goal.vision_wait.project",
     "collaboration.inbox.read",
     "collaboration.delegation.inventory_page",
     "benchmark.trajectory.codex-usage",
@@ -57,6 +60,7 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
     "quota.settlement.read",
     "quota.spend.commit",
     "quota.turn_envelope.evaluate",
+    "turn.controller",
     "goal.checkpoint_read_context.resolve",
     "goal.checkpoint_read_context.commit",
     "goal.checkpoint_read_context.inspect_replay",
@@ -277,42 +281,38 @@ def _control_plane_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _scan_runtime_source_files(root: Path) -> tuple[str, ...]:
-    files: list[str] = []
+def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
+    snapshot: list[tuple[str, int, int, int]] = []
     for directory, child_directories, filenames in os.walk(root):
         child_directories.sort()
         relative_directory = os.path.relpath(directory, root)
         if relative_directory == ".":
             relative_directory = ""
-        files.extend(
-            Path(relative_directory, filename).as_posix()
-            for filename in sorted(filenames)
-            if Path(filename).suffix in _RUNTIME_SOURCE_SUFFIXES
-            and Path(directory, filename).is_file()
-        )
-    return tuple(sorted(files))
-
-
-def _runtime_file_snapshot(
-    root: Path,
-    files: tuple[str, ...],
-) -> _RuntimeSourceSnapshot:
-    return tuple(
-        (
-            relative,
-            (metadata := (root / relative).stat()).st_mtime_ns,
-            metadata.st_ctime_ns,
-            metadata.st_size,
-        )
-        for relative in files
-    )
+        for filename in sorted(filenames):
+            dot = filename.rfind(".")
+            if dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES:
+                continue
+            source = Path(directory, filename)
+            try:
+                metadata = source.stat()
+            except OSError:
+                # Preserve pathlib's missing-file and platform-specific error policy.
+                if not source.is_file():
+                    continue
+                raise
+            except ValueError:
+                continue
+            if stat.S_ISREG(metadata.st_mode):
+                snapshot.append((Path(relative_directory, filename).as_posix(),
+                    metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
+    return tuple(sorted(snapshot))
 
 
 def _runtime_source_snapshot(root: Path | None = None) -> _RuntimeSourceSnapshot:
     """Return cheap metadata that invalidates the packaged-source hash."""
 
     source_root = (root or _control_plane_root()).resolve()
-    return _runtime_file_snapshot(source_root, _scan_runtime_source_files(source_root))
+    return _scan_runtime_source_snapshot(source_root)
 
 
 def _runtime_source_files(root: Path | None = None) -> tuple[str, ...]:
@@ -771,22 +771,7 @@ def _stop_effect_runtime(
             if not _pid_is_alive(pid):
                 stopped = True
                 break
-            if os.name == "posix":
-                # A non-child zombie cannot write, but kill(pid, 0) still sees
-                # it. Managed runtimes start in their own session/process group.
-                from ..extensions.process_runtime import _posix_owned_group_has_exited
-                try:
-                    stopped = _posix_owned_group_has_exited(
-                        pid, max(.001, deadline - time.monotonic()),
-                    )
-                except (OSError, subprocess.TimeoutExpired, UnicodeError, RuntimeError):
-                    stopped = False
-                if stopped:
-                    # The child may have exited during the group snapshot,
-                    # after the first nonblocking reap. Retire its wait status
-                    # before returning successful namespace cleanup.
-                    _reap_exited_runtime_child(info)
-                    break
+            # A zombie leader can still have threads writing into the namespace.
             time.sleep(.05)
             continue
         published, published_token = _serving_token(info_path)
@@ -827,7 +812,6 @@ def _request_with_info(
     }
     with ExitStack() as stack:
         response_sink: Path | None = None
-        encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if large_local_snapshot:
             if method not in LOCAL_SNAPSHOT_METHODS:
                 raise EffectRuntimeRejected(
@@ -858,6 +842,8 @@ def _request_with_info(
                     "sha256": hashlib.sha256(params_bytes).hexdigest(),
                 }
                 encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+        else:
+            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
         if len(encoded) > MAX_REQUEST_BYTES:
             raise EffectRuntimeRejected(
                 "TypeScript Effect runtime request is oversized",

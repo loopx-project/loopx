@@ -136,9 +136,9 @@ def test_quota_planning_keeps_gate_deadline_before_visibility_limits(monkeypatch
     original = json.loads(json.dumps(gates))
     crossings = []
     invoke = quota_selection.effect_runtime_result
-    def observed(method, params):
+    def observed(method, params, **kwargs):
         crossings.append(method)
-        return invoke(method, params)
+        return invoke(method, params, **kwargs)
     monkeypatch.setattr(quota_selection, "effect_runtime_result", observed)
     summary = quota_summary.summarize_user_todos_for_quota(
         {"schema_version": "todo_summary_v0", "items": gates, "total_count": 26,

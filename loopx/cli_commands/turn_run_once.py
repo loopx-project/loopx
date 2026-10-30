@@ -803,7 +803,6 @@ def execute_turn_run_once(
             def native_launch_decision(current_registry: Path) -> Mapping[str, Any]:
                 return current_turn_host_launch_decision(args, registry_path=current_registry,
                     runtime_root=runtime_root, identity=settlement_identity,
-                    replan_obligation_id=replan_obligation_id,
                     planned_effective_action=payload["turn_envelope"].get("effective_action"),
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,
@@ -827,7 +826,7 @@ def execute_turn_run_once(
                 # when its mirror still advertises old quota or health.
                 return current_turn_host_launch_decision(
                     args, registry_path=current_registry, runtime_root=runtime_root,
-                    identity=settlement_identity, replan_obligation_id=replan_obligation_id,
+                    identity=settlement_identity,
                     planned_effective_action=payload["turn_envelope"].get("effective_action"),
                     scheduler_execution_context=payload.get("scheduler_execution_context") or {},
                     operator_inbox_urgency_projector=operator_inbox_urgency_projector,

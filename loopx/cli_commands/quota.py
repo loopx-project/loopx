@@ -6,6 +6,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .quota_presentation import (
+    _project_quota_cli_payload as _project_quota_cli_payload,
+    _quota_renderer as _quota_renderer,
+)
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
@@ -26,17 +30,11 @@ from ..capabilities.periodic_report.pending_intent import (
 from ..capabilities.repository_change_window import (
     repository_delivery_interaction_hook,
 )
-from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
-from ..control_plane.quota.cli_projection import (
-    compact_quota_monitor_poll_cli_payload,
-    compact_quota_plan_cli_payload,
-    compact_quota_should_run_cli_payload,
-)
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
@@ -59,20 +57,6 @@ from ..control_plane.quota.settlement_cli import (
     quota_rollout_todo_id,
     reconcile_existing_heartbeat_receipt_for_turn,
     render_existing_heartbeat_receipt_payload,
-)
-from ..control_plane.quota.turn_envelope import build_turn_envelope
-from ..presentation.renderers.quota_event_markdown import (
-    render_quota_monitor_poll_markdown,
-    render_quota_slot_preview_markdown,
-)
-from ..presentation.renderers.quota_markdown import (
-    render_quota_markdown,
-    render_quota_scheduler_ack_markdown,
-    render_quota_scheduler_failure_markdown,
-    render_quota_should_run_markdown,
-)
-from ..presentation.renderers.turn_envelope_markdown import (
-    render_turn_envelope_markdown,
 )
 from ..quota import (
     build_quota_plan,
@@ -184,22 +168,6 @@ def _effective_spend_turn_instance_id(
     return payload_turn_id
 
 
-def _quota_renderer(
-    args: argparse.Namespace,
-) -> Callable[[dict[str, object]], str]:
-    command = args.quota_command
-    if bool(getattr(args, "turn_envelope", False)):
-        return render_turn_envelope_markdown
-    return {
-        "should-run": render_quota_should_run_markdown,
-        "monitor-poll": render_quota_monitor_poll_markdown,
-        "scheduler-ack": render_quota_scheduler_ack_markdown,
-        "scheduler-ack-current": render_quota_scheduler_ack_markdown,
-        "scheduler-fail-current": render_quota_scheduler_failure_markdown,
-        "spend-slot": render_quota_slot_preview_markdown,
-        "void-slot": render_quota_slot_preview_markdown,
-    }.get(command, render_quota_markdown)
-
 
 def _dispatch_quota_turn_start_hooks(
     args: argparse.Namespace,
@@ -298,54 +266,6 @@ def _attach_turn_start_hook_dispatch(
         payload["turn_start_capability_hook_dispatch"] = {
             key: value for key, value in dispatch.items() if key != "contexts"
         }
-def _project_quota_cli_payload(
-    payload: dict[str, object],
-    args: argparse.Namespace,
-    detail_sections: frozenset[str],
-    scheduler_context: object,
-    *,
-    captured_decision_path: str | None = None,
-) -> dict[str, object]:
-    """Project already-decided facts; preserve typed failures on envelope rejection.
-
-    The envelope is an additive hot-path view over a decided payload. A typed
-    validation/failure payload has no interaction contract to project, so a
-    renderer rejection keeps the typed diagnostic itself (with the skip reason)
-    instead of masking it with a crash (issue #3687).
-    """
-    from ..control_plane.effect_program import reject_retired_quota_format
-
-    reject_retired_quota_format(payload)
-    if not bool(getattr(args, "turn_envelope", False)):
-        if args.quota_command in {"status", "plan"}:
-            return compact_quota_plan_cli_payload(payload, detail_sections=detail_sections)
-        if args.quota_command == "should-run":
-            if captured_decision_path and "vision" not in detail_sections:
-                from ..control_plane.quota.turn_envelope import _turn_envelope_result
-                payload = _turn_envelope_result("replan_cli_view", payload=payload)
-            return compact_quota_should_run_cli_payload(
-                payload,
-                include_todo_summary_detail="agent-todos" in detail_sections,
-                include_user_todo_summary_detail="user-todos" in detail_sections,
-                include_goal_boundary_detail="goal-boundary" in detail_sections,
-                include_vision_detail="vision" in detail_sections,
-            )
-        if args.quota_command == "monitor-poll":
-            return compact_quota_monitor_poll_cli_payload(
-                payload, include_decision_detail="decisions" in detail_sections,
-            )
-        return payload
-    try:
-        return build_turn_envelope(
-            payload,
-            scheduler_execution_context=scheduler_context,
-            captured_decision_path=captured_decision_path,
-        )
-    except EffectRuntimeRejected as envelope_error:
-        degraded = dict(payload)
-        degraded["turn_envelope_skipped"] = str(envelope_error)[:200]
-        return degraded
-
 
 def _emit_quota_result(
     payload: dict[str, object],
@@ -397,7 +317,7 @@ def _emit_quota_result(
                 and args.format == "json" and not getattr(args, "defer_context_presentation", False)):
             print_payload(captured_quota_failure_view(payload, capture_directory=capture_directory,
                 max_page_output_bytes=getattr(args, "max_page_output_bytes", None)),
-                args.format, _quota_renderer(args))
+                args.format, _quota_renderer(args, failure=True))
             return 1
         if payload.get("ok") is True:
             delivery_request = handoff_decision(capture_directory, getattr(args, "decision_handoff_socket", None), context_delivery_enabled)
@@ -408,7 +328,7 @@ def _emit_quota_result(
         failure = quota_decision_transport_failure_payload(
             args, payload, exc, capture_directory=capture_directory,
         )
-        print_payload(failure, args.format, _quota_renderer(args))
+        print_payload(failure, args.format, _quota_renderer(args, failure=True))
         return 1
     if (delivery_request is not None or getattr(args, "codex_context_dir", None)
             or getattr(args, "codex_context_root", None)):
@@ -477,9 +397,9 @@ def _emit_quota_result(
             failure = quota_decision_transport_failure_payload(
                 args, captured_payload, exc, capture_directory=capture_directory,
             )
-            print_payload(failure, args.format, _quota_renderer(args))
+            print_payload(failure, args.format, _quota_renderer(args, failure=True))
             return 1
-    print_payload(payload, args.format, _quota_renderer(args))
+    print_payload(payload, args.format, _quota_renderer(args, failure=not succeeded))
     return 0 if succeeded else 1
 
 
@@ -654,6 +574,10 @@ def handle_quota_command(
                 turn_instance_id=heartbeat_turn_id,
                 interaction_projection_hooks=interaction_projection_hooks,
                 turn_start_hook_dispatch=turn_start_hook_dispatch,
+                context_navigation=(
+                    native_context_activation(args)["enabled"]
+                    and not bool(getattr(args, "turn_envelope", False))
+                ),
                 goal_ref=goal_ref,
             )
             _attach_turn_start_hook_dispatch(payload, turn_start_hook_dispatch)

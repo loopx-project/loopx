@@ -103,6 +103,30 @@ def test_unavailable_context_is_not_used_even_if_it_retains_old_content():
     assert build_turn_envelope(shared)["action"]["planning_horizon"]["core_goal"]["acceptance_contract"] == acceptance()
 
 
+@pytest.mark.parametrize("project", [_reference_inline_goal_acceptance, compact_quota_should_run_cli_payload])
+@pytest.mark.parametrize("left,right", [(1, 1.0), (False, 0), (-0.0, 0),
+    (2**60, 2**60 + 1), (2**60, float(2**60))])
+def test_reference_transport_keeps_distinct_original_numbers_and_later_exact_owner(left, right, project):
+    source = packet(False)
+    first = source["planning_horizon"]["core_goal"]["acceptance_contract"]
+    second = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"]
+    third = source["agent_todo_summary"]["goal_acceptance_contract"]
+    first["future"] = {"observation": left}
+    second["future"] = {"observation": right}
+    third["future"] = {"observation": right}
+    original = json.dumps(source, ensure_ascii=False)
+    result = project(source)
+    # JS equality is insufficient to replace the second source. The third may
+    # still share its exact later owner, including original numeric spelling.
+    actual = result["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+    assert json.dumps(actual["acceptance_contract"]) == json.dumps(second)
+    assert "acceptance_contract_ref" not in actual
+    assert result["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
+        "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract")
+    assert json.dumps(source, ensure_ascii=False) == original
+    assert json.dumps(project(result)) == json.dumps(result)
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_reuses_complete_acceptance_for_selection_and_replan(tmp_path, monkeypatch, provider):
     from test_replan_successor_guard_reentry import _fixture, AGENT, GOAL
