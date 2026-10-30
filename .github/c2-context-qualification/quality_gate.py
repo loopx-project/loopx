@@ -86,6 +86,7 @@ def plan(root: Path, config: dict | None = None, script: Path | None = None) -> 
     # quality config, never the immutable protocol or the measurement job config.
     add("functional-preflight", "head", [py, str(script), "--functional-preflight"], 1200)
 
+    add("baseline-wheel-build", "base", ["uv", "build", "--wheel", "--out-dir", str(root / "quality-baseline-wheelhouse")], 900)
     add("wheel-build", "head", ["uv", "build", "--wheel", "--out-dir", str(root / "quality-wheelhouse")], 900)
     add("wheel-byte-check", "head", [py, str(script), "--wheel-byte-check"], 300)
     add("installed-origin-recorder", "head", [py, str(script), "--installed-origin-recorder"], 120)
@@ -94,7 +95,8 @@ def plan(root: Path, config: dict | None = None, script: Path | None = None) -> 
     add("native-sdk-install", "head", ["npm", "install", "--prefix", str(native_dir), "--no-save", NATIVE_PACKAGE], 900)
     for arm in ("base", "head", "installed"):
         env = {"LOOPX_NATIVE_CHECKPOINT_BIN": str(native_dir / "node_modules/.bin/codex"),
-               "CODEX_HOME": str(root / f"quality-codex-home-{arm}")}
+               "CODEX_HOME": str(root / f"quality-codex-home-{arm}"),
+               "PYTHONPATH": str(sources["head" if arm == "installed" else arm] / "tests/control_plane")}
         interpreter = str(root / ".quality-wheel-venv/bin/python") if arm == "installed" else py
         if arm == "installed":
             env["LOOPX_NATIVE_CONTEXT_CLI"] = str(root / ".quality-wheel-venv/bin/loopx")
@@ -117,7 +119,7 @@ def self_check() -> None:
     private_steps = plan(private_root, config, private_script)
     flat_steps = plan(flat_root, config, flat_script)
     expected = {"ruff", "mypy", "control-plane-tsc", "affected-node-tests", "affected-python-tests",
-                "canary-premerge", "functional-preflight", "wheel-build", "wheel-byte-check",
+                "canary-premerge", "functional-preflight", "baseline-wheel-build", "wheel-build", "wheel-byte-check",
                 "native-sdk-install", "native-ssh-goal-base", "native-ssh-goal-head", "native-ssh-goal-installed",
                 "installed-origin-recorder"}
     assert len(NODE_TESTS) == 5 and len(set(NODE_TESTS)) == 5
@@ -136,6 +138,7 @@ def self_check() -> None:
     installed = next(step for step in flat_steps if step["name"] == "native-ssh-goal-installed")
     assert installed["env"]["LOOPX_NATIVE_CONTEXT_CLI"] == "/private/flattened-harness/.quality-wheel-venv/bin/loopx"
     provenance_self_check()
+    wheel_inventory_self_check()
     print(json.dumps({"self_check": "passed", "node_tests": list(NODE_TESTS),
                       "python_tests": list(PYTHON_TESTS),
                       "layouts_checked": [str(private_root), str(flat_root)],
@@ -151,13 +154,17 @@ def run_one(step: dict, root: Path, logs: Path, job_started_epoch: float) -> dic
         record["installed_cli_path"] = step["env"]["LOOPX_NATIVE_CONTEXT_CLI"]
         record["native_launch_contract"] = {
             "test_cwd_is_head_checkout": True,
-            "parent_pythonpath_inherited": False,
+            "operator_pythonpath_inherited": False,
+            "pytest_fixture_pythonpath": step["env"].get("PYTHONPATH"),
             "test_selects_installed_cli_override": True,
             "cli_argv_injects_source_pythonpath": False,
         }
     env = safe_environment()
     env.update(step["env"])
     env["PYTHONUNBUFFERED"] = "1"
+    binary_dir = (root / ".quality-wheel-venv/bin" if step["name"] == "native-ssh-goal-installed"
+                  else Path(step["cwd"]) / ".venv/bin")
+    env["PATH"] = str(binary_dir) + os.pathsep + env.get("PATH", os.defpath)
     log = logs / step["name"]
     log.mkdir(parents=True, exist_ok=True)
     try:
@@ -174,6 +181,11 @@ def run_one(step: dict, root: Path, logs: Path, job_started_epoch: float) -> dic
         (log / "stderr.bin").write_bytes(stderr if isinstance(stderr, bytes) else stderr.encode())
         record.update({"returncode": None, "timed_out": True,
                        "stdout_bytes": len(stdout), "stderr_bytes": len(stderr)})
+    except OSError as exc:
+        (log / "stdout.bin").write_bytes(b"")
+        (log / "stderr.bin").write_bytes(b"")
+        record.update({"returncode": 127, "timed_out": False, "failed_to_start": True,
+                       "error_kind": type(exc).__name__, "stdout_bytes": 0, "stderr_bytes": 0})
     record["finished_epoch"] = time.time()
     (log / "metadata.json").write_text(json.dumps(record, indent=2) + "\n")
     if step["name"] == "native-ssh-goal-installed":
@@ -215,22 +227,69 @@ def functional_preflight(root: Path) -> None:
         config_path.write_bytes(original)
 
 
-def wheel_byte_check(root: Path) -> None:
-    source = Path(json.loads((root / "evaluation_config.json").read_text())["candidate_source"])
-    wheelhouse = root / "quality-wheelhouse"
-    wheels = list(wheelhouse.glob("*.whl"))
-    if len(wheels) != 1:
-        raise SystemExit(f"expected one candidate wheel, found {len(wheels)}")
-    with zipfile.ZipFile(wheels[0]) as archive:
+def wheel_runtime_bytes(source: Path, wheel: Path) -> tuple[dict[str, str], list[str]]:
+    manifests = list(source.glob("*.egg-info/SOURCES.txt"))
+    if len(manifests) != 1:
+        raise SystemExit("expected one setuptools source manifest from the completed wheel build")
+    selected = {name for name in manifests[0].read_text().splitlines() if name.startswith("loopx/")}
+    with zipfile.ZipFile(wheel) as archive:
         members = {name: archive.read(name) for name in archive.namelist() if name.startswith("loopx/") and not name.endswith("/")}
+    if selected != set(members):
+        raise SystemExit(json.dumps({"manifest_missing_from_wheel": sorted(selected - set(members)),
+                                     "wheel_not_in_manifest": sorted(set(members) - selected)}))
+    for name, content in members.items():
+        if not (source / name).is_file() or (source / name).read_bytes() != content:
+            raise SystemExit(f"wheel runtime byte mismatch: {name}")
     tracked = subprocess.check_output(["git", "-C", str(source), "ls-files", "-z", "loopx"], text=False).split(b"\0")
-    expected = {p.decode(): hashlib.sha256((source / p.decode()).read_bytes()).hexdigest()
-                for p in tracked if p and (source / p.decode()).is_file()}
-    actual = {name: hashlib.sha256(data).hexdigest() for name, data in members.items()}
-    missing = sorted(set(expected) - set(actual))
-    mismatched = sorted(name for name in expected.keys() & actual.keys() if expected[name] != actual[name])
-    if missing or mismatched:
-        raise SystemExit(json.dumps({"missing_from_wheel": missing, "byte_mismatch": mismatched}))
+    return ({name: hashlib.sha256(data).hexdigest() for name, data in members.items()},
+            sorted(p.decode() for p in tracked if p and p.decode() not in selected))
+
+
+def wheel_inventory_self_check() -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="c2-wheel-inventory-") as temporary:
+        source = Path(temporary)
+        (source / "loopx").mkdir()
+        (source / "loopx/owner.py").write_bytes(b"VALUE = 1\n")
+        (source / "loopx/example.txt").write_text("documented source example")
+        (source / "fixture.egg-info").mkdir()
+        (source / "fixture.egg-info/SOURCES.txt").write_text("loopx/owner.py\n")
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "add", "loopx"], check=True)
+        wheel = source / "fixture.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr("loopx/owner.py", b"VALUE = 1\n")
+        members, omitted = wheel_runtime_bytes(source, wheel)
+        assert set(members) == {"loopx/owner.py"} and omitted == ["loopx/example.txt"]
+        for contents in ({}, {"loopx/owner.py": b"VALUE = 2\n"}):
+            with zipfile.ZipFile(wheel, "w") as archive:
+                for name, value in contents.items():
+                    archive.writestr(name, value)
+            try:
+                wheel_runtime_bytes(source, wheel)
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("missing or modified packaged runtime was accepted")
+
+
+def wheel_byte_check(root: Path) -> None:
+    config = json.loads((root / "evaluation_config.json").read_text())
+    source = Path(config["candidate_source"])
+    wheels = list((root / "quality-wheelhouse").glob("*.whl"))
+    base_wheels = list((root / "quality-baseline-wheelhouse").glob("*.whl"))
+    if len(wheels) != 1 or len(base_wheels) != 1:
+        raise SystemExit("expected one separately built wheel per source version")
+    subprocess.run(["git", "-C", str(source), "diff", "--exit-code", BASE, HEAD, "--",
+                    "pyproject.toml", "setup.py", "MANIFEST.in"], check=True)
+    expected, omitted = wheel_runtime_bytes(source, wheels[0])
+    base_expected, base_omitted = wheel_runtime_bytes(Path(config["baseline_source"]), base_wheels[0])
+    if set(expected) != set(base_expected) or omitted != base_omitted:
+        raise SystemExit("packaging-neutral C2 changed the selected runtime inventory or inherited omissions")
+    changed = subprocess.check_output(["git", "-C", str(source), "diff", "--name-only", BASE, HEAD, "--", "loopx"], text=True).splitlines()
+    if not {"loopx/entrypoint.py", *changed}.issubset(expected):
+        raise SystemExit("wheel lacks the entrypoint or a changed C2 runtime owner")
     venv = root / ".quality-wheel-venv"
     env = safe_environment()
     if subprocess.check_output([sys.executable, "-c", "import platform; print(platform.python_version())"],
@@ -254,7 +313,10 @@ def wheel_byte_check(root: Path) -> None:
         if not installed_file.is_file() or hashlib.sha256(installed_file.read_bytes()).hexdigest() != digest:
             raise SystemExit(f"installed product byte mismatch: {name}")
     print(json.dumps({"wheel": str(wheels[0]), "product_files": len(expected),
-                      "installed_import": str(installed), "installed_bytes_match": True}))
+                      "installed_import": str(installed), "installed_bytes_match": True,
+                      "inventory_source": "setuptools build manifest; matched independently built baseline wheel",
+                      "inherited_tracked_files_not_selected": omitted,
+                      "scope": "C2 installed runtime and packaging parity; inherited omissions are not fixed"}))
 
 
 def installed_origin_recorder(root: Path) -> None:
@@ -328,6 +390,20 @@ if pathlib.Path(sys.argv[0]).resolve() == cli:
         reported = Path(result.stdout.strip()).resolve()
         assert reported.is_relative_to(site), {
             "reported": str(reported), "site": str(site), "source": str(source)}
+        source_bin = source / ".venv/bin"
+        source_bin.mkdir(parents=True)
+        local_cli = source_bin / "loopx"
+        local_cli.write_bytes(cli.read_bytes())
+        local_cli.chmod(0o755)
+        logs = root / "step-logs"
+        missing = run_one({"name": "missing-console", "cwd": str(source),
+                           "argv": [str(root / "missing-console")], "timeout_seconds": 5, "env": {}},
+                          root, logs, time.time())
+        assert missing["returncode"] == 127 and missing["error_kind"] == "FileNotFoundError"
+        resolved = run_one({"name": "bare-console", "cwd": str(source),
+                            "argv": ["loopx"], "timeout_seconds": 5, "env": {}}, root, logs, time.time())
+        assert resolved["returncode"] == 0
+        assert Path((logs / "bare-console/stdout.bin").read_text().strip()).resolve().is_relative_to(site)
 
 
 def main() -> int:
