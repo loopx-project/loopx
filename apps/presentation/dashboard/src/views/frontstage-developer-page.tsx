@@ -147,27 +147,26 @@ function ContractExplorer() {
 function ProjectionDiffing() {
   return (
     <CockpitPanel icon={GitCompareArrows} title="Projection Diffing">
-      <div className="overflow-x-auto" data-testid="developer-projection-diffing">
-        <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
-          <thead>
-            <tr className="bg-slate-50 text-xs uppercase tracking-normal text-slate-500">
-              <th className="w-[92px] border-b border-slate-200 px-4 py-3 font-semibold">Axis</th>
-              <th className="w-[28%] border-b border-slate-200 px-4 py-3 font-semibold">Current</th>
-              <th className="w-[26%] border-b border-slate-200 px-4 py-3 font-semibold">Proposed</th>
-              <th className="border-b border-slate-200 px-4 py-3 font-semibold">Gate</th>
-            </tr>
-          </thead>
-          <tbody>
-            {projectionDiffRows.map((row) => (
-              <tr className="align-top" key={row.axis}>
-                <td className="border-b border-slate-100 px-4 py-3 font-semibold text-slate-950">{row.axis}</td>
-                <td className="border-b border-slate-100 px-4 py-3 text-slate-600">{row.current}</td>
-                <td className="border-b border-slate-100 px-4 py-3 text-slate-600">{row.proposed}</td>
-                <td className="border-b border-slate-100 px-4 py-3 text-slate-600">{row.gate}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="grid gap-2" data-testid="developer-projection-diffing">
+        {projectionDiffRows.map((row) => (
+          <article className="rounded-lg border border-slate-200 p-3" key={row.axis}>
+            <h3 className="text-sm font-semibold text-slate-950">{row.axis}</h3>
+            <dl className="mt-2 grid gap-1.5">
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-3">
+                <dt className="text-xs text-slate-500">Current</dt>
+                <dd className="text-sm text-slate-600">{row.current}</dd>
+              </div>
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-3">
+                <dt className="text-xs text-slate-500">Proposed</dt>
+                <dd className="text-sm text-slate-600">{row.proposed}</dd>
+              </div>
+              <div className="grid grid-cols-[72px_minmax(0,1fr)] gap-3">
+                <dt className="text-xs text-slate-500">Gate</dt>
+                <dd className="text-sm text-slate-600">{row.gate}</dd>
+              </div>
+            </dl>
+          </article>
+        ))}
       </div>
     </CockpitPanel>
   );
