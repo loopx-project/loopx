@@ -31,7 +31,7 @@ from .capabilities.native_chat.project_context import ChatProjectContexts
 from .chat_attachments import (
     CHAT_JSON_MAX_BYTES,
     CHAT_TURN_MAX_BODY_BYTES,
-    normalize_chat_image_attachments,
+    normalize_local_chat_attachments,
     validate_chat_turn_envelope,
 )
 from .chat_actions import ChatActionService, ProtectedActionGate, goal_workspace_labels, goal_workspace_ref
@@ -801,7 +801,7 @@ class ChatRequestHandler(
             message = str(body.get("message") or "").strip()
             if not message:
                 raise ValueError("message is required")
-            attachments = normalize_chat_image_attachments(body.get("attachments"))
+            attachments = normalize_local_chat_attachments(session, body.get("attachments"))
             client_turn_id = _compact_text(body.get("client_turn_id"), limit=160) or uuid.uuid4().hex
         except (ValueError, TypeError, OverflowError) as exc:
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")

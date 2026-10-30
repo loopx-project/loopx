@@ -1,3 +1,4 @@
+import {DocumentAttachment, isTextDocument} from "./document-attachment";
 import {useEffect, useRef, useState} from "react";
 import {ChevronRight, CircleAlert, ListChecks, RefreshCw, X} from "lucide-react";
 import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
@@ -132,6 +133,7 @@ function requestStage(row: ConversationRequest, zh: boolean) {
 
 function OriginalImage({attachment, zh}: {attachment: ChatImageAttachment; zh: boolean}) {
   const [failed, setFailed] = useState(false);
+  if (isTextDocument(attachment.mime_type)) return <DocumentAttachment dataUrl={attachment.data_url} name={attachment.name} size={attachment.size} zh={zh}/>;
   return failed ? <p role="status">{zh ? "图片无法显示：" : "Image unavailable: "}{attachment.name}</p>
     : <img src={attachment.data_url} alt={attachment.name} onError={() => setFailed(true)}/>;
 }
