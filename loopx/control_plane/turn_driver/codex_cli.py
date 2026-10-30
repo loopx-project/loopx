@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -41,7 +40,8 @@ from .executor import (
 from ..capability_hooks import capability_result_fields
 from .execution_profile import require_supported_reasoning_effort
 from .host_failure import BuiltInHostError
-from .host_process_transport import HostOutputLines, run_host_process
+from .host_process_transport import HostOutputLines
+from ...hosts.oar.bridge import run_oar_turn
 from .transaction import LOOPX_TURN_RESULT_SCHEMA_VERSION, TRANSACTION_PHASES
 
 
@@ -103,6 +103,13 @@ _STRUCTURED_HTTP_STATUS_CATEGORIES = {
     401: "auth_failed",
     429: "rate_limited",
     503: "provider_overloaded",
+}
+_OAR_STARTUP_FAILURE_CATEGORIES = {
+    "auth": "auth_failed",
+    "quota": "quota_exhausted",
+    "billing": "quota_exhausted",
+    "rate_limited": "rate_limited",
+    "overloaded": "provider_overloaded",
 }
 _FAILURE_CATEGORY_PRIORITY = {
     # Conflicting observations fail closed before any retryable category. Among
@@ -375,20 +382,6 @@ def codex_cli_event_session_id(event: Mapping[str, Any]) -> str | None:
     return None
 
 
-def codex_cli_session_id_from_jsonl(value: str) -> str | None:
-    """Return the first opaque Codex thread id from an exec JSONL stream."""
-
-    for line in value.splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, Mapping):
-            if session_id := codex_cli_event_session_id(event):
-                return session_id
-    return None
-
-
 def _diagnostic_failure_category(line: str) -> str | None:
     text = line.lower().replace("’", "'")
     if any(
@@ -546,7 +539,7 @@ def _event_failure_categories(
 
     # 1. A provider error code is the most specific signal. If it exists but is
     # unknown, fail closed instead of reinterpreting its English message.
-    code_containers = (event, *error_containers)
+    code_containers = (event, _mapping(event.get("params")), *error_containers)
     code_categories: list[str] = []
     for container in code_containers:
         for field in ("code", "error_code", "errorCode"):
@@ -612,13 +605,6 @@ def _event_failure_categories(
                 if category is not None:
                     return None, category
     return None, None
-
-
-def _event_failure_category(event: Mapping[str, Any]) -> str | None:
-    """Classify one error event without retaining its provider prose."""
-
-    structured, diagnostic = _event_failure_categories(event)
-    return structured or diagnostic
 
 
 def _select_failure_category(categories: list[str]) -> str | None:
@@ -724,6 +710,26 @@ def _codex_command(
         command.append(session_id)
     command.append("-")
     return command
+
+
+def _codex_oar_request(
+    request: Mapping[str, Any], *, codex_bin: str, project: Path,
+    prompt: str, sandbox: str, model: str | None, reasoning_effort: str | None,
+    session_id: str | None, mcp_server: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project the admitted Codex controls into the shared OAR runtime request."""
+    config: dict[str, Any] = {
+        "runtime": "codex", "command": codex_bin, "cwd": str(project),
+        "prompt": prompt, "sandbox": sandbox,
+        "outputSchema": codex_cli_result_schema(request),
+        # Preserve the invocation-scoped MCP's required/startup/approval
+        # configuration; OAR owns the app-server process and Session controls.
+        "launchArgs": _codex_mcp_config_arguments(mcp_server),
+    }
+    for field, value in (("model", model), ("effort", reasoning_effort), ("resume", session_id)):
+        if value is not None:
+            config[field] = value
+    return config
 
 
 def run_codex_cli_host(
@@ -840,107 +846,134 @@ def run_codex_cli_host(
             raise ValueError("native child CLI observation requires the durable host attempt")
         invocation_id = f"exec:{request['turn_key']}:{attempt}"
 
-    with tempfile.TemporaryDirectory(prefix="loopx-turn-codex-") as directory:
-        temporary = Path(directory)
-        schema_path = temporary / "result-schema.json"
-        output_path = temporary / "last-message.json"
-        schema_path.write_text(
-            json.dumps(
-                codex_cli_result_schema(request),
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-            encoding="utf-8",
+    observed_session: list[str] = []
+    failures = CodexFailureObservation()
+    missing_resume_target = False
+
+    def observe_record(record: Mapping[str, Any]) -> None:
+        nonlocal missing_resume_target
+        if record.get("type") == "result":
+            terminal = _mapping(record.get("result"))
+            error = _mapping(terminal.get("error"))
+            if error.get("name") == "SessionNotFoundError":
+                missing_resume_target = bool(session_id and error.get("sessionId") == session_id
+                                             and error.get("method") == "thread/resume")
+                failures.structured.add("session_missing" if missing_resume_target else "unknown")
+            elif error.get("name") == "RuntimeFailureError":
+                # Session creation can fail before native observation begins.
+                # Use OAR's typed failure while preserving any more-specific
+                # native evidence, including an unknown provider code.
+                if not failures.structured:
+                    failure = _mapping(terminal.get("outcome")).get("failure")
+                    failures.structured.add(_OAR_STARTUP_FAILURE_CATEGORIES.get(str(failure), "unknown"))
+            elif isinstance(error.get("message"), str):
+                failures.observe_stderr(error["message"])
+            return
+        if record.get("type") == "ready":
+            candidate = _valid_session_id(record.get("sessionId"))
+            if candidate and candidate not in observed_session:
+                observed_session.append(candidate)
+            return
+        if record.get("type") != "native":
+            return
+        frame = _mapping(record.get("frame"))
+        # Child errors and completion items cannot become the parent's result.
+        # OAR attributes a native child thread with its own session id.
+        if (not observed_session or frame.get("sessionId") != observed_session[0]
+                or frame.get("agentPath") != []):
+            return
+        body = _mapping(frame.get("body"))
+        if frame.get("kind") == "response" and body.get("kind") == "rejected":
+            # OAR control refusals do not retain the native provider error code.
+            # Familiar prose cannot prove a safe retry after that detail is lost.
+            failures.structured.add("unknown")
+            return
+        if frame.get("kind") != "frame":
+            return
+        params = _mapping(body.get("native"))
+        method = body.get("type")
+        if not isinstance(method, str):
+            return
+        failures.observe_event({"method": method, "params": params})
+        item = params.get("item")
+        if child_observer is not None and method == "item/completed" and isinstance(item, Mapping):
+            def record_child() -> None:
+                child_observer.observe(item, session_id=observed_session[0], invocation_id=invocation_id)
+
+            if goal_admission is None:
+                record_child()
+            else:
+                goal_admission.accept_result(record_child)
+
+    diagnostics = HostOutputLines(failures.observe_stderr)
+    input_text = _prompt(request)
+    config = _codex_oar_request(
+        request, codex_bin=str(resolved), project=project, prompt=input_text,
+        sandbox=sandbox, model=model, reasoning_effort=reasoning_effort,
+        session_id=session_id, mcp_server=mcp_server,
+    )
+    with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
+        observed = run_oar_turn(
+            config, project=project, timeout_seconds=timeout_seconds,
+            drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
+            on_record=observe_record, on_stderr=diagnostics.feed,
+            launch_guard=lambda: launch_scope("codex_cli_host_launch"),
         )
-        command = _codex_command(
-            codex_bin=str(resolved),
-            project=project,
-            schema_path=schema_path,
-            output_path=output_path,
-            sandbox=sandbox,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            session_id=session_id,
-            mcp_server=mcp_server,
-        )
-        observed_session: list[str] = []
-        failures = CodexFailureObservation()
-
-        def observe_event(line: str) -> None:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                return
-            if isinstance(event, dict):
-                candidate = codex_cli_event_session_id(event)
-                if candidate and candidate not in observed_session:
-                    observed_session.append(candidate)
-                item = event.get("item")
-                if (child_observer is not None and observed_session
-                        and event.get("type") == "item.completed" and isinstance(item, Mapping)):
-                    def record_child() -> None:
-                        child_observer.observe(item, session_id=observed_session[0], invocation_id=invocation_id)
-
-                    if goal_admission is None:
-                        record_child()
-                    else:
-                        goal_admission.accept_result(record_child)
-                failures.observe_event(event)
-
-        def observe_stderr(line: str) -> None:
-            failures.observe_stderr(line)
-
-        events = HostOutputLines(observe_event)
-        diagnostics = HostOutputLines(observe_stderr)
-        input_text = _prompt(request)
-        with capture_codex_input_source(project, input_text, lineage["goal_id"], observed_session):
-            observed = run_host_process(command, project=project, input_text=input_text,
-                timeout_seconds=timeout_seconds, drain_timeout_seconds=OUTPUT_DRAIN_TIMEOUT_SECONDS,
-                on_stdout=events.feed, on_stderr=diagnostics.feed,
-                launch_guard=lambda: launch_scope("codex_cli_host_launch"))
-            events.finish()
-            diagnostics.finish()
-        returncode = observed["returncode"]
-        timed_out = observed["outcome"] == "timeout"
-        output_observation_incomplete = not (observed["output_complete"] and events.complete and diagnostics.complete)
-        if observed["outcome"] not in {"exited", "timeout"}:
-            raise BuiltInHostError("codex_cli_process_" + observed["outcome"])
-        if session_scope == "agent" and (
-            len(observed_session) > 1 or (returncode == 0 and not observed_session)
-        ):
-            raise BuiltInHostError("codex_cli_session_identity_unconfirmed")
-        if session_id and any(candidate != session_id for candidate in observed_session):
-            raise BuiltInHostError("codex_cli_resume_session_identity_changed")
-        if timed_out:
-            if observed_session:
-                store_session(observed_session[0])
-            raise BuiltInHostError(
-                "codex_cli_timeout",
-                failure_kind="executor_timeout",
-                recovery_kind=("resume_session" if observed_session else None),
-            )
-        category = failures.category(complete=not output_observation_incomplete)
-        if session_scope == "todo" and returncode != 0 and category in SESSION_INVALIDATING_FAILURE_CATEGORIES:
-            discard_session()
-        if observed_session and (
-            returncode == 0 or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
-        ):
+        diagnostics.finish()
+    returncode = observed["returncode"]
+    timed_out = observed["outcome"] == "timeout"
+    output_observation_incomplete = not (observed["output_complete"] and diagnostics.complete)
+    if observed["outcome"] not in {"exited", "timeout"}:
+        raise BuiltInHostError("codex_cli_process_" + observed["outcome"])
+    if session_scope == "agent" and (
+        len(observed_session) > 1 or (returncode == 0 and not observed_session)
+    ):
+        raise BuiltInHostError("codex_cli_session_identity_unconfirmed")
+    if session_id and any(candidate != session_id for candidate in observed_session):
+        raise BuiltInHostError("codex_cli_resume_session_identity_changed")
+    if timed_out:
+        if observed_session:
             store_session(observed_session[0])
-        if returncode != 0:
-            raise BuiltInHostError(
-                f"codex_cli_{category}",
-                failure_kind=_FAILURE_KINDS.get(category, "unknown"),
-                recovery_kind=(
-                    "resume_session"
-                    if observed_session
-                    and category in _SESSION_RESUMABLE_FAILURE_CATEGORIES
-                    else None
-                ),
-            )
-        try:
-            result = json.loads(output_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise BuiltInHostError("codex_cli_final_result_missing") from exc
-        if not isinstance(result, dict):
-            raise BuiltInHostError("codex_cli_final_result_not_object")
-        return result
+        raise BuiltInHostError(
+            "codex_cli_timeout",
+            failure_kind="executor_timeout",
+            recovery_kind=("resume_session" if observed_session else None),
+        )
+    outcome = _mapping(observed.get("turn_outcome"))
+    if outcome.get("kind") == "failed" and isinstance(outcome.get("reason"), str):
+        failures.observe_stderr(outcome["reason"])
+    category = failures.category(complete=not output_observation_incomplete)
+    if session_scope == "todo" and returncode != 0 and (
+        category in SESSION_INVALIDATING_FAILURE_CATEGORIES or missing_resume_target
+    ):
+        # A typed refusal proves this exact resume target is gone even if the
+        # failed open supplied no cleanup receipt. Failure still remains closed;
+        # independently remove the binding that cannot be resumed.
+        discard_session()
+    if observed_session and (
+        returncode == 0 or category not in SESSION_INVALIDATING_FAILURE_CATEGORIES
+    ):
+        store_session(observed_session[0])
+    if returncode != 0:
+        raise BuiltInHostError(
+            f"codex_cli_{category}",
+            failure_kind=_FAILURE_KINDS.get(category, "unknown"),
+            recovery_kind=(
+                "resume_session"
+                if observed_session
+                and category in _SESSION_RESUMABLE_FAILURE_CATEGORIES
+                else None
+            ),
+        )
+    # The bridge exposes final_response only for a completed root turn. A
+    # streamed fragment, child response or interrupted result is never parsed.
+    response = observed.get("final_response")
+    if not isinstance(response, str):
+        raise BuiltInHostError("codex_cli_final_result_missing")
+    try:
+        result = json.loads(response)
+    except json.JSONDecodeError as exc:
+        raise BuiltInHostError("codex_cli_final_result_missing") from exc
+    if not isinstance(result, dict):
+        raise BuiltInHostError("codex_cli_final_result_not_object")
+    return result

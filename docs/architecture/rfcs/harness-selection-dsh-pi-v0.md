@@ -7,6 +7,32 @@ Scope: the shared goals of [Reliability Diagnostics](./long-running-agent-reliab
 and [Desktop Execution Frontends](./desktop-execution-frontends-v0.md).
 [中文](./harness-selection-dsh-pi-v0.zh-CN.md)
 
+## OAR integration checkpoint (2026-10-28)
+
+LoopX-owned bounded Codex and DSH Turns, DSH Chat segments, and an explicitly
+selected Pi generic-cli Turn now share `@botiverse/oar@0.75.0` session, event,
+control and cleanup management. [Runtime setup](../../../loopx/hosts/oar/README.md)
+documents the exact dependency, explicit installation and Node.js 24 requirement
+for this optional runtime. Core's Node.js 22.22.3 requirement is unchanged.
+
+Codex uses OAR's native app-server adapter with the requested sandbox and opaque
+resume identity preserved. Pi uses OAR's matching bundled subprocess runtime.
+Because upstream OAR has no DSH runtime, LoopX supplies a thin TypeScript runtime
+over its existing pinned Python SDK worker. The shared Turn, validation, quota
+and work-settlement owners remain authoritative. Missing output, rejected
+controls, failed native outcomes or unconfirmed cleanup cannot become success.
+
+This is a bounded-execution integration checkpoint. The existing Pi/DSH plugins
+inside an already running host retain same-session behavior. Rich native Codex
+Chat and Codex/DSH operation transports retain their adapters until OAR supports
+their dynamic-tool, history-injection and background-control contracts. The
+runtime adapter owner must qualify those contracts before extending this
+boundary. This checkpoint does not promote the L1, Mode B, restart-recovery or
+long-horizon effectiveness claims below; the dated historical tables retain
+their original evidence scope. DSH Chat now reports real interrupt support for
+the default supervised runtime, while an explicit custom runner may only
+support abandonment.
+
 ## Decision
 
 Keep **DSH as the first L1 event source**. Do not infer that DSH is already the

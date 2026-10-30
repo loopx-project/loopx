@@ -52,6 +52,14 @@ from loopx.control_plane.turn_driver.host_binding import (
 from loopx.extensions.lark.cli_resolution import LarkCliResolution
 
 
+@pytest.fixture(autouse=True)
+def ready_optional_oar(monkeypatch):
+    monkeypatch.setattr(
+        "loopx.hosts.oar.installation.inspect_installation",
+        lambda: {"ready": True, "oar_version": "fixture-version"},
+    )
+
+
 def _apply_steward_executor_default(runtime_root: Path) -> None:
     """Store one machine-level steward selection, as a machine surface would."""
 

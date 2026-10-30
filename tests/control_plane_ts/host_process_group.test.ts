@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import {execFileSync, spawn} from "node:child_process";
 import {once} from "node:events";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import {performance} from "node:perf_hooks";
+import {setTimeout as delay} from "node:timers/promises";
 import test from "node:test";
 import {hasLiveGroupMembers, waitForProcessGroupStop} from "../../loopx/control_plane/turn_driver/host_process_group.ts";
+import {runHostProcess} from "../../loopx/control_plane/turn_driver/host_process.ts";
 
 test("cleanup observation excludes only zombies, not sleeping or stopped members", () => {
   assert.equal(hasLiveGroupMembers(" 42 Z\n42 Z+\n100 R\n", 42), false);
@@ -57,4 +62,126 @@ test("EPERM is not mistaken for a stopped group", {skip: process.platform === "w
   const pgid = Number(execFileSync("ps", ["-p", String(process.pid), "-o", "pgid="], {encoding: "utf8"}).trim());
   t.mock.method(process, "kill", () => { throw Object.assign(new Error("permission denied"), {code: "EPERM"}); });
   await assert.rejects(waitForProcessGroupStop(pgid), /did not stop before cleanup deadline/);
+});
+
+test("managed OAR cancellation drains nested detached groups before returning", {skip: process.platform === "win32"}, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-oar-descendants-"));
+  const childMarker = join(directory, "child-counter"), grandchildMarker = join(directory, "grandchild-counter");
+  const ancestry = join(directory, "ancestry.json");
+  const nativeSession = join(directory, "native-session.json");
+  const nativeIdentity = {id: "retained-native-session", turns: ["prior completed work"]};
+  await writeFile(nativeSession, JSON.stringify(nativeIdentity));
+  const ownedGroups = new Set<number>();
+  t.after(async () => {
+    for (const group of ownedGroups) {
+      try { process.kill(-group, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    await rm(directory, {recursive: true, force: true});
+  });
+  const heartbeat = (path: string) => `
+    const fs=require('node:fs');let count=0;
+    const path=${JSON.stringify(path)};
+    process.on('SIGTERM',()=>{});
+    function tick(){fs.writeFileSync(path+'.next',String(count++));fs.renameSync(path+'.next',path)}
+    tick();setInterval(tick,10);
+  `;
+  const grandchild = heartbeat(grandchildMarker);
+  const child = `
+    const {spawn}=require('node:child_process');
+    const grandchild=spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{detached:true,stdio:'ignore'});
+    grandchild.unref();
+    ${heartbeat(childMarker)}
+    fs.writeFileSync(${JSON.stringify(ancestry)},JSON.stringify({child:process.pid,grandchild:grandchild.pid}));
+  `;
+  const leader = `
+    const {spawn}=require('node:child_process'),fs=require('node:fs');
+    const child=spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'});
+    child.unref();
+    const ready=setInterval(()=>{
+      if(fs.existsSync(${JSON.stringify(childMarker)})&&fs.existsSync(${JSON.stringify(grandchildMarker)})){
+        clearInterval(ready);process.stdout.write('native-ready\\n');
+      }
+    },5);
+    process.on('SIGTERM',()=>process.exit(0));
+    setInterval(()=>{},1000);
+  `;
+  const cancellation = new AbortController();
+  let ready = false;
+  const result = await runHostProcess({
+    argv: [process.execPath, "-e", leader], cwd: directory, input: "",
+    timeout_ms: 5000, drain_timeout_ms: 100, stdout_limit_bytes: 4096,
+  }, async output => {
+    if (output.kind === "stdout" && output.text.includes("native-ready")) {
+      ready = true;
+      const groups = JSON.parse(await readFile(ancestry, "utf8"));
+      ownedGroups.add(groups.child); ownedGroups.add(groups.grandchild);
+      cancellation.abort();
+    }
+  }, cancellation.signal, undefined, {trackDescendants: true, descendants: async observation => {
+    for (const group of observation.process_groups) ownedGroups.add(group);
+  }});
+  assert.ok(ready, "the nested native workers must actually be running before cancellation");
+  assert.equal(result.outcome, "cancelled");
+  assert.equal(result.descendant_cleanup_complete, true);
+  assert.equal(ownedGroups.size, 2, "both independently detached groups are owned");
+  for (const group of ownedGroups) await waitForProcessGroupStop(group);
+  const before = await Promise.all([readFile(childMarker, "utf8"), readFile(grandchildMarker, "utf8")]);
+  await delay(120);
+  assert.deepEqual(await Promise.all([readFile(childMarker, "utf8"), readFile(grandchildMarker, "utf8")]), before,
+    "a stopped OAR owner must not leave either detached generation writing after return");
+  assert.deepEqual(JSON.parse(await readFile(nativeSession, "utf8")), nativeIdentity,
+    "process cleanup preserves the native conversation used by resume");
+});
+
+test("lost owner observation cannot strand a stopped detached native process", {skip: process.platform === "win32"}, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-oar-owner-loss-"));
+  const pidPath = join(directory, "native.pid"), effectPath = join(directory, "native-effect");
+  let nativePid: number | undefined;
+  t.after(async () => {
+    if (nativePid) {
+      try { process.kill(-nativePid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    await rm(directory, {recursive: true, force: true});
+  });
+  const native = `
+    const fs=require('node:fs');
+    fs.writeFileSync(${JSON.stringify(effectPath)},'completed native effect');
+    process.stdout.write('ready');setInterval(()=>{},1000);
+  `;
+  const leader = `
+    const {spawn}=require('node:child_process'),fs=require('node:fs');
+    const native=spawn(process.execPath,['-e',${JSON.stringify(native)}],{detached:true,stdio:['ignore','pipe','ignore']});
+    native.stdout.once('data',()=>{
+      process.kill(native.pid,'SIGSTOP');
+      fs.writeFileSync(${JSON.stringify(pidPath)},String(native.pid));
+      process.stdout.write('native-stopped\\n');
+    });
+    process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);
+  `;
+  const cancellation = new AbortController();
+  let deliveryFailures = 0;
+  const result = await runHostProcess({
+    argv: [process.execPath, "-e", leader], cwd: directory, input: "",
+    timeout_ms: 5000, drain_timeout_ms: 100, stdout_limit_bytes: 4096,
+  }, async output => {
+    if (output.kind === "stdout" && output.text.includes("native-stopped")) {
+      nativePid = Number(await readFile(pidPath, "utf8"));
+      cancellation.abort();
+    }
+  }, cancellation.signal, undefined, {trackDescendants: true, descendants: async observation => {
+    assert.ok(nativePid && observation.process_groups.includes(nativePid));
+    deliveryFailures++;
+    throw new Error("owner pipe disconnected");
+  }});
+  assert.ok(nativePid, "the native child must have started and been suspended before owner loss");
+  assert.ok(deliveryFailures > 0, "the disconnected observation path must actually execute");
+  assert.equal(result.outcome, "cancelled");
+  assert.equal(result.output_complete, false, "lost observations cannot be reported as complete");
+  assert.equal(result.descendant_cleanup_complete, true);
+  await waitForProcessGroupStop(nativePid);
+  assert.equal(await readFile(effectPath, "utf8"), "completed native effect");
 });

@@ -5,6 +5,10 @@ does not promise an interactive or cross-turn host session, so this adapter does
 not pretend to hold one. Every Chat turn starts one segment on the resolved
 managed execution profile, hands it the channel's bounded history plus the
 current message, and returns the final assistant message as the answer.
+Each default segment has its own native id: the pinned SDK cannot reopen a
+persisted session in a new process. The Chat binding keeps its stable id and
+bounded history; a fresh segment is planned before launch, never as a retry
+after a failed resume. Explicit runner hooks retain their existing id contract.
 
 What this transport deliberately does **not** claim, because a caller must not
 infer it:
@@ -16,10 +20,10 @@ infer it:
   ``STEWARD_SEGMENT_ENV``), so a model that reaches for a tool is refused by the
   dsh sandbox itself, and the answer must come from the evidence LoopX supplies.
 
-The managed host cannot cancel a segment once it has started, so this adapter
-holds **one** executor slot per binding: a segment start while the previous
-segment is still running is refused with a typed error instead of quietly
-starting a second executor, and an interrupted segment's answer is discarded
+The default OAR host cancels a segment through its supervised process. An
+explicit runner may support only abandonment. This adapter holds **one**
+executor slot per binding until the worker actually exits: a concurrent start
+is refused with a typed error, and an interrupted segment's answer is discarded
 rather than folded back into the channel's visible history.
 """
 
@@ -39,6 +43,7 @@ from .dsh_goal_mode.turn_host_adapter import (
     normalize_runner_outcome,
     resolve_dsh_home,
     run_dsh_turn,
+    terminal_error_reason,
     terminal_output_budget_state,
 )
 
@@ -59,8 +64,8 @@ STEWARD_SEGMENT_ENV = {"DSH_PERMISSION_MODE": "read-only"}
 MANAGED_HOST_CHAT_TIMEOUT = "managed_host_chat_timeout"
 MANAGED_HOST_CHAT_FAILED = "managed_host_chat_failed"
 # A second executor for one binding is refused, not queued or run in parallel:
-# the managed host has no cancel, so the previous segment can only be waited
-# out. The code names the state the channel is in, not a user mistake.
+# cancellation is not proof the previous worker has exited. The code names the
+# state the channel is in, not a user mistake.
 MANAGED_HOST_CHAT_SEGMENT_IN_FLIGHT = "managed_host_chat_segment_in_flight"
 
 # How long a new segment waits for the previous one to exit before it refuses.
@@ -75,12 +80,13 @@ class _SegmentSlot:
     """The binding's single managed-executor slot.
 
     The slot is occupied until the segment's thread actually exits, including
-    after a channel timeout: the segment keeps running in the host, so the next
-    start must still see one executor as long as that is true.
+    after a channel timeout: cancellation cleanup or an explicit runner may
+    still be running, so the next start must see one executor until it exits.
     """
 
     thread: threading.Thread | None = None
     interrupted: bool = False
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass
@@ -119,7 +125,7 @@ class DshChatAdapter:
             "adapter_kind": "deepseek_harness_segment",
             "streaming": False,
             "resume": True,
-            "interrupt": False,
+            "interrupt": self.runner is None,
             # No tool authority is granted by the channel. The segment answers
             # from the evidence LoopX supplies and delegates work back.
             "tool_calls": False,
@@ -145,7 +151,7 @@ class DshChatAdapter:
         )
         return f"{self.objective.strip()}{history_block}\n\n{_turn_prompt(message)}"
 
-    def _run_segment(self, prompt: str) -> dict[str, Any]:
+    def _run_segment(self, prompt: str, cancel_event: threading.Event) -> dict[str, Any]:
         budget = dsh_output_token_budget(self.max_tokens)
         if not budget["valid"]:
             raise CodexChatAgentError(
@@ -161,7 +167,10 @@ class DshChatAdapter:
         segment_env.update(STEWARD_SEGMENT_ENV)
         outcome = runner(
             prompt=prompt,
-            session_id=self.session_id,
+            session_id=(
+                f"{self.session_id}-segment-{uuid.uuid4().hex}"
+                if self.runner is None else self.session_id
+            ),
             workspace=self.work_dir,
             session_root=resolve_dsh_home(self.work_dir),
             provider=self.provider,
@@ -172,6 +181,7 @@ class DshChatAdapter:
             runtime_bin=self.runtime_bin,
             request_timeout_seconds=self.timeout_sec,
             env=segment_env,
+            **({"cancel_event": cancel_event} if self.runner is None else {}),
         )
         if isinstance(outcome, str):
             return {"final_response": outcome, "finish_reason": None, "events": []}
@@ -222,7 +232,7 @@ class DshChatAdapter:
 
         def run() -> None:
             try:
-                outcome.update(self._run_segment(prompt))
+                outcome.update(self._run_segment(prompt, slot.cancel_event))
             except BaseException as exc:  # noqa: BLE001 - re-raised on the caller thread
                 failure.append(exc)
 
@@ -233,6 +243,7 @@ class DshChatAdapter:
         worker.start()
         worker.join(self.timeout_sec)
         if worker.is_alive():
+            slot.cancel_event.set()
             # The segment is bounded by the caller's deadline, not by the host's
             # willingness to stop: the channel reports a typed timeout instead of
             # waiting on the steward forever.
@@ -250,6 +261,11 @@ class DshChatAdapter:
                 gate=None,
                 error_code=MANAGED_HOST_CHAT_FAILED,
             ) from error
+        if terminal_error_reason(outcome) is not None:
+            raise CodexChatAgentError(
+                "The managed host reported a terminal provider failure; no answer was accepted.",
+                gate=None, error_code=MANAGED_HOST_CHAT_FAILED,
+            )
         budget_state = terminal_output_budget_state(outcome)
         if budget_state is not None:
             raise CodexChatAgentError(
@@ -290,20 +306,18 @@ class DshChatAdapter:
         return response
 
     def interrupt_turn(self, turn_id: str | None = None) -> None:
-        # The segment owns its own runtime and exits on its request timeout, so
-        # there is no retained session to interrupt and no host-side cancel to
-        # call. What the channel can do is mark the running segment as
-        # abandoned, so its later answer is discarded instead of becoming the
-        # channel's newest visible statement. The slot stays occupied until the
-        # segment exits, because it is still the binding's one executor.
+        # OAR propagates the stop to the owned runtime tree. Explicit compatible
+        # runners may only support abandonment; either way retain the slot until
+        # its thread exits and never publish a late answer.
         del turn_id
         with self._slot_lock:
             slot = self._slot
             if slot is not None and slot.thread is not None and slot.thread.is_alive():
                 slot.interrupted = True
+                slot.cancel_event.set()
 
     def close_session(self) -> None:
-        return None
+        self.interrupt_turn()
 
     def healthcheck(self) -> bool:
         return True

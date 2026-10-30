@@ -1,0 +1,13 @@
+{
+  "name": "@loopx/oar-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "test": "node --no-warnings --experimental-strip-types --test *.test.ts",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": { "@botiverse/oar": "0.75.0" },
+  "devDependencies": { "@types/node": "24.3.0", "typescript": "6.0.3" }
+}

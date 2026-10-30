@@ -23,6 +23,10 @@ from .chat import (
     VisibleResponseStreamFilter,
     parse_agent_response,
 )
+from .chat_endpoint_remediation import (
+    AGENT_ENDPOINT_NEXT_ACTIONS as AGENT_ENDPOINT_NEXT_ACTIONS,
+    AGENT_ENDPOINT_UNAVAILABLE as AGENT_ENDPOINT_UNAVAILABLE,
+)
 
 
 class CodexChatAgentError(RuntimeError):
@@ -50,29 +54,6 @@ def _host_tool_gate(summary: str, next_action: str) -> dict[str, str]:
         "summary": summary,
         "next_action": next_action,
     }
-
-
-# One typed endpoint-unavailability error plus the next step for each reason the
-# executor readback can publish. A surface that cannot serve a request names the
-# blocking fact and what clears it, so an operator never has to infer why an
-# endpoint that is listed as a capability refused the session.
-AGENT_ENDPOINT_UNAVAILABLE = "agent_endpoint_unavailable"
-AGENT_ENDPOINT_NEXT_ACTIONS = {
-    "dsh_runtime_unavailable": (
-        "The LoopX Chat service interpreter cannot import deepseek_harness. "
-        "Run `loopx doctor` in that service environment and check python.executable; "
-        "install `loopx[deepseek-harness]` in the same environment, then restart LoopX Chat."
-    ),
-    "operator_credential_unconfigured": (
-        "Set the managed executor credential (DEEPSEEK_API_KEY, with "
-        "DEEPSEEK_BASE_URL when the endpoint is not the provider default) in the "
-        "LoopX Chat service environment, then restart it."
-    ),
-    "invalid_reasoning_effort": (
-        "Fix the configured reasoning effort (LOOPX_MANAGER_REASONING_EFFORT or "
-        "LOOPX_TURN_REASONING_EFFORT) and restart LoopX Chat."
-    ),
-}
 
 
 def agent_endpoint_error(agent_id: str, *, reason: str = "") -> ValueError:

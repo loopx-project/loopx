@@ -41,6 +41,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+      - run: npm ci --ignore-scripts --prefix loopx/hosts/oar
       - run: python -m pip install -e ".[test]" -e packages/loopx-ark-turn
       - name: Public SDK, real stdio MCP, negative cases and DSH parity
         run: >-

@@ -123,14 +123,17 @@ def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path:
         "contributions": [{"capability_id": "multi_subagent", "facts": {"max_children": 3}}]})
     request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo_native_1"
 
-    def host(command, **kwargs):
-        kwargs["on_stdout"](json.dumps({"type": "thread.started", "thread_id": "parent-1"}) + "\n")
+    def host(config, **kwargs):
+        kwargs["on_record"]({"type": "ready", "sessionId": "parent-1"})
         for item in _turn()["items"]:
-            kwargs["on_stdout"](json.dumps({"type": "item.completed", "item": item}) + "\n")
-        Path(command[command.index("--output-last-message") + 1]).write_text(json.dumps({"parent_work": "preserved"}))
-        return {"returncode": 0, "outcome": "exited", "output_complete": True}
+            kwargs["on_record"]({"type": "native", "frame": {
+                "kind": "frame", "sessionId": "parent-1", "agentPath": [],
+                "body": {"type": "item/completed", "native": {"item": item}},
+            }})
+        return {"returncode": 0, "outcome": "exited", "output_complete": True,
+                "final_response": json.dumps({"parent_work": "preserved"})}
 
-    monkeypatch.setattr(codex_cli, "run_host_process", host)
+    monkeypatch.setattr(codex_cli, "run_oar_turn", host)
     assert codex_cli.run_codex_cli_host(request, runtime_root=tmp_path, project=tmp_path,
         codex_bin=sys.executable) == {"parent_work": "preserved"}
     activity = load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
@@ -141,30 +144,24 @@ def test_cli_host_collects_native_items_before_returning_parent_result(tmp_path:
 
 
 def _real_cli_calls(tmp_path, monkeypatch, batches, *, host_attempts=None):
-    import sys
     from loopx.control_plane.turn_driver import codex_cli
     from tests.test_loopx_turn_codex_cli import _request
 
-    script = tmp_path / "host.py"
-    script.write_text("""
-import json, sys
+    from tests.control_plane.codex_app_server_fixture import write_codex_app_server_fixture
+
+    event_file = tmp_path / "events.json"
+    native_log = tmp_path / "native-rpc.jsonl"
+    monkeypatch.setenv("FIXTURE_NATIVE_CHILD_EVENTS", str(event_file))
+    monkeypatch.setenv("FAKE_CODEX_RPC_LOG", str(native_log))
+    script = write_codex_app_server_fixture(tmp_path / "native-codex", """
+import json, os, sys
 from pathlib import Path
 sys.stdin.read()
 print(json.dumps({"type": "thread.started", "thread_id": "parent-1"}), flush=True)
-for item in json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")):
+for item in json.loads(Path(os.environ["FIXTURE_NATIVE_CHILD_EVENTS"]).read_text(encoding="utf-8")):
     print(json.dumps({"type": "item.completed", "item": item}), flush=True)
-Path(sys.argv[2]).write_text(json.dumps({"parent_work": "preserved"}), encoding="utf-8")
-""", encoding="utf-8")
-    event_file = tmp_path / "events.json"
-    sessions = []
-
-    def command(**kwargs):
-        sessions.append(kwargs["session_id"])
-        return [sys.executable, str(script), str(event_file), str(kwargs["output_path"])]
-
-    # Replace only executable selection; run the real process, stream parser,
-    # session store, receipt admission and durable readback.
-    monkeypatch.setattr(codex_cli, "_codex_command", command)
+Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text(json.dumps({"parent_work": "preserved"}), encoding="utf-8")
+""")
     for attempt, items in enumerate(batches, 1):
         request = _request(session_action="start_new" if attempt == 1 else "resume")
         request["turn_instance_id"] = TURN
@@ -174,7 +171,9 @@ Path(sys.argv[2]).write_text(json.dumps({"parent_work": "preserved"}), encoding=
         request["turn_envelope"]["action"]["selected_todo"]["todo_id"] = "todo_native_1"
         event_file.write_text(json.dumps(items), encoding="utf-8")
         assert codex_cli.run_codex_cli_host(request, runtime_root=tmp_path, project=tmp_path,
-            codex_bin=sys.executable) == {"parent_work": "preserved"}
+            codex_bin=str(script)) == {"parent_work": "preserved"}
+    sessions = [row["params"].get("threadId") for row in map(json.loads, native_log.read_text().splitlines())
+                if row.get("method") in {"thread/start", "thread/resume"}]
     assert sessions == [None] + ["parent-1"] * (len(batches) - 1)
     return load_native_child_activity(tmp_path, goal_id=GOAL, agent_id=AGENT,
         turn_instance_id=TURN, configured_limit=3)

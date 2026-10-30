@@ -55,7 +55,7 @@ def managed_host_capability(runtime_root: Path | None = None) -> dict[str, Any]:
         "unavailable_reason": binding.get("unavailable_reason"),
         "streaming": False,
         "resume": True,
-        "interrupt": False,
+        "interrupt": True,
         "tool_calls": False,
         "trust_scope": "read_only",
         # The channel pins this for its own segments; naming it here keeps the
@@ -63,6 +63,7 @@ def managed_host_capability(runtime_root: Path | None = None) -> dict[str, Any]:
         "sandbox_mode": STEWARD_SEGMENT_ENV["DSH_PERMISSION_MODE"],
         "execution_profile": profile,
         "output_token_budget": binding.get("output_token_budget"),
+        "oar_runtime": binding.get("oar_runtime"),
         "source": "builtin",
     }
 

@@ -163,7 +163,8 @@ def test_current_phase_probe_executes_once_after_unique_extension(controllers, t
     workspace.mkdir()
     (workspace / "retained-inputs.json").write_text(json.dumps([2, 3]))
     native = tmp_path / "controlled-codex"
-    native.write_text(f"#!{sys.executable}\n" + (_PHASE_HOST if mode == "governed" else _HEARTBEAT_PHASE_HOST))
+    from tests.control_plane.codex_app_server_fixture import write_codex_app_server_fixture
+    write_codex_app_server_fixture(native, f"#!{sys.executable}\n" + (_PHASE_HOST if mode == "governed" else _HEARTBEAT_PHASE_HOST))
     native.chmod(0o700)
     environment = worker_env(workspace)
     skills = project / "shared-skills"

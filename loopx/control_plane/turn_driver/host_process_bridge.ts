@@ -43,9 +43,18 @@ process.stdin.on("data", (chunk: Buffer) => {
       }
       const lease = raw.delegated_lease;
       delete raw.delegated_lease;
+      const trackDescendants = raw.track_descendants === true;
+      delete raw.track_descendants;
+      const terminationGraceMs = raw.termination_grace_ms;
+      delete raw.termination_grace_ms;
+      if (terminationGraceMs !== undefined && (typeof terminationGraceMs !== "number"
+          || !Number.isFinite(terminationGraceMs) || terminationGraceMs < 0 || terminationGraceMs > 10000)) {
+        throw new TypeError("invalid Host termination grace");
+      }
       const request = decodeHostProcessRequest(raw);
       // The owned process group is reported before either path can run unaccounted.
-      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, undefined, {spawned: emit}));
+      if (lease === undefined) await emit(await runHostProcess(request, emit, owner.signal, terminationGraceMs,
+        {spawned: emit, trackDescendants, descendants: emit}));
       else {
         // Ordinary Hosts do not load canonical lease/provider modules.
         const {decodeDelegatedHostLease, runLeasedHostProcess} = await import("./leased_host_process.ts");

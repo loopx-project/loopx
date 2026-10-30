@@ -1,2 +1,3 @@
 graft loopx/web/chat
+prune loopx/hosts/oar/node_modules
 exclude loopx/semantics/project_registry_io_manifest_v1.json

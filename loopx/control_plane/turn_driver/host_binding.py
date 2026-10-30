@@ -77,6 +77,7 @@ MANAGED_HOST = MANAGED_TURN_HOST
 # launchability fact this projection checks without side effects.
 DSH_RUNTIME_MODULE = "deepseek_harness"
 DSH_RUNTIME_UNAVAILABLE = "dsh_runtime_unavailable"
+OAR_RUNTIME_UNAVAILABLE = "oar_runtime_unavailable"
 # Module availability is scoped to this interpreter, not the whole machine.
 MANAGED_RUNTIME_PROBE_SCHEMA_VERSION = "managed_runtime_probe_v0"
 RUNTIME_PROBE_SCOPE_INTERPRETER = "probing_interpreter"
@@ -91,6 +92,7 @@ OPERATOR_CREDENTIAL_UNCONFIGURED = "operator_credential_unconfigured"
 # can change here; they never select a host, endpoint, or model themselves.
 REMEDY_CONFIGURE_OPERATOR_CREDENTIAL = "configure_operator_credential"
 REMEDY_CONFIGURE_DSH_RUNTIME = "configure_dsh_runtime"
+REMEDY_CONFIGURE_OAR_RUNTIME = "configure_oar_runtime"
 REMEDY_CORRECT_EXECUTION_PROFILE = "correct_execution_profile"
 REMEDY_SELECT_INDIVIDUAL_HOST = "select_individual_host"
 
@@ -145,12 +147,16 @@ def _managed_unavailable_remediation(reason: str | None) -> list[str]:
 
     The list is empty whenever the managed executor can launch, so a caller
     reads the same field in both states instead of branching on its presence.
-    Selecting an individual host is always one exit, because it is the
-    documented alternative to a managed host nothing here can authenticate.
+    Selecting an individual host clears managed credential/profile refusals.
+    A shared OAR dependency must be repaired for either built-in bounded host.
     """
 
     if reason is None:
         return []
+    if reason == OAR_RUNTIME_UNAVAILABLE:
+        # Both shipped bounded hosts use OAR. Switching between them does not
+        # repair a missing shared dependency.
+        return [REMEDY_CONFIGURE_OAR_RUNTIME]
     remedy_by_reason = {
         DSH_RUNTIME_UNAVAILABLE: REMEDY_CONFIGURE_DSH_RUNTIME,
         OPERATOR_CREDENTIAL_UNCONFIGURED: REMEDY_CONFIGURE_OPERATOR_CREDENTIAL,
@@ -159,6 +165,28 @@ def _managed_unavailable_remediation(reason: str | None) -> list[str]:
         remedy_by_reason.get(reason, REMEDY_CORRECT_EXECUTION_PROFILE),
         REMEDY_SELECT_INDIVIDUAL_HOST,
     ]
+
+
+def _oar_runtime_readiness(
+    probe: Callable[[], Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Read optional host installation facts without importing them into Core.
+
+    The installation owner checks the selected Node executable and the locked
+    dependency; it never installs anything here. Public Turn readback includes
+    no local paths or process diagnostics from that inspection.
+    """
+    if probe is None:
+        from ...hosts.oar.installation import inspect_installation
+
+        probe = inspect_installation
+    observed = probe()
+    ready = observed.get("ready") is True
+    return {
+        "ready": ready,
+        "oar_version": observed.get("oar_version"),
+        **({} if ready else {"unavailable_reason": OAR_RUNTIME_UNAVAILABLE}),
+    }
 
 
 def dsh_output_token_budget(max_tokens: int | None = None) -> dict[str, Any]:
@@ -210,6 +238,7 @@ def managed_executor_binding(
     environ: Mapping[str, str] | None = None,
     dsh_runner_configured: bool = False,
     module_probe: Callable[[str], bool] | None = None,
+    oar_probe: Callable[[], Mapping[str, Any]] | None = None,
     provider: str | None = None,
     model: str | None = None,
     reasoning_effort: str | None = None,
@@ -234,8 +263,23 @@ def managed_executor_binding(
     ``runtime_probe`` states what the ``dsh_runtime_unavailable`` verdict is a
     claim about, so a reader does not take a process-level answer for a
     machine-level fact.
+
+    ``oar_runtime`` is present only for the built-in bounded OAR hosts. Native
+    operation transports and explicit DSH runners own their dependencies and
+    are not blocked by an optional OAR installation.
     """
 
+    operation_transport_enabled = (
+        codex_operation_tools or dsh_operation_module_configured
+    )
+    uses_oar = (
+        not operation_transport_enabled
+        and (
+            host == INDIVIDUAL_TURN_HOST
+            or (host == MANAGED_HOST and not dsh_runner_configured)
+        )
+    )
+    oar_runtime = _oar_runtime_readiness(oar_probe) if uses_oar else None
     if host == MANAGED_HOST:
         credential_env = configured_operator_credential(environ)
         runtime_available = bool(
@@ -256,8 +300,12 @@ def managed_executor_binding(
             unavailable_reason = OPERATOR_CREDENTIAL_UNCONFIGURED
         elif not output_token_budget["valid"]:
             unavailable_reason = INVALID_OUTPUT_TOKEN_LIMIT
-        else:
+        elif profile_reason is not None:
             unavailable_reason = profile_reason
+        elif oar_runtime is not None and not oar_runtime["ready"]:
+            unavailable_reason = OAR_RUNTIME_UNAVAILABLE
+        else:
+            unavailable_reason = None
         binding = {
             "schema_version": MANAGED_EXECUTOR_BINDING_SCHEMA_VERSION,
             "executor": host,
@@ -282,8 +330,10 @@ def managed_executor_binding(
                 "available": runtime_available,
             },
         }
+        if oar_runtime is not None:
+            binding["oar_runtime"] = oar_runtime
         return _with_operation_transport(
-            binding, enabled=codex_operation_tools or dsh_operation_module_configured, host=host,
+            binding, enabled=operation_transport_enabled, host=host,
             sandbox=codex_sandbox, model=profile["model"], reasoning_effort=profile["reasoning_effort"],
             dsh_operation_module_configured=dsh_operation_module_configured,
         )
@@ -311,8 +361,16 @@ def managed_executor_binding(
         # branches on its presence; only a managed executor probes a runtime.
         "runtime_probe": None,
     }
+    if oar_runtime is not None:
+        binding["oar_runtime"] = oar_runtime
+        if not oar_runtime["ready"]:
+            binding["available"] = False
+            binding["unavailable_reason"] = OAR_RUNTIME_UNAVAILABLE
+            binding["unavailable_remediation"] = _managed_unavailable_remediation(
+                OAR_RUNTIME_UNAVAILABLE
+            )
     return _with_operation_transport(
-        binding, enabled=codex_operation_tools or dsh_operation_module_configured, host=host,
+        binding, enabled=operation_transport_enabled, host=host,
         sandbox=codex_sandbox, model=model, reasoning_effort=reasoning_effort,
         dsh_operation_module_configured=dsh_operation_module_configured,
     )
@@ -345,11 +403,12 @@ def managed_executor_binding_from_host_args(
     *,
     environ: Mapping[str, str] | None = None,
     module_probe: Callable[[str], bool] | None = None,
+    oar_probe: Callable[[], Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Project one trusted Turn argv binding through the existing host owner.
 
-    This is deliberately a read model: it selects no host, executes no probe
-    command and returns none of the raw argv. Optional host-specific profile
+    This is deliberately a read model: it selects no host, launches no model
+    work and returns none of the raw argv. Optional host-specific profile
     flags are interpreted here, beside their owning Turn host, so coordinator
     capabilities can consume one provider-neutral executor projection.
     """
@@ -359,6 +418,8 @@ def managed_executor_binding_from_host_args(
         host,
         environ=environ,
         module_probe=module_probe,
+        oar_probe=oar_probe,
+        dsh_runner_configured=bool(turn_host_arg_option(host_args, "--dsh-runner")),
         provider=(
             turn_host_arg_option(host_args, "--dsh-provider")
             if host == MANAGED_HOST
@@ -427,12 +488,16 @@ def managed_executor_unavailable_payload(
             for code in (remediation if isinstance(remediation, list) else [])
             if str(code)
         ],
-        "remediation_host": INDIVIDUAL_TURN_HOST,
+        "remediation_host": (
+            None if binding.get("unavailable_reason") == OAR_RUNTIME_UNAVAILABLE
+            else INDIVIDUAL_TURN_HOST
+        ),
         # An operation transport refusal is not an instruction to configure
         # model credentials. The existing typed transport owner supplies its
         # remedies and supported hosts/sandboxes independently of launchability.
         "remediation_env_vars": (
             [] if "operation_transport" in binding
+            or binding.get("unavailable_reason") == OAR_RUNTIME_UNAVAILABLE
             else list(OPERATOR_CREDENTIAL_ENV_VARS)
         ),
     }

@@ -25,6 +25,18 @@ or state is correct.
 Check the local host once with `codex doctor`. If the default model is newer
 than the installed Codex CLI, update Codex or pass `--codex-model`.
 
+Bounded Codex Turns use the shared OAR runtime. Install its locked dependency
+once in the LoopX service environment with Node.js 24+:
+
+```bash
+python -m loopx.hosts.oar install
+python -m loopx.hosts.oar status
+```
+
+The existing Codex options and native session bindings remain available. See
+[runtime setup and compatibility](../../../../loopx/hosts/oar/README.md) for
+the installed-package path, Pi/DSH selection and native Chat boundaries.
+
 ## Run One Turn
 
 For a write-capable coding todo:

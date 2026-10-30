@@ -46,6 +46,14 @@ _NO_RUNTIME = lambda _module: False  # noqa: E731 - tiny probe fixture
 _RUNTIME = lambda _module: True  # noqa: E731 - tiny probe fixture
 
 
+@pytest.fixture(autouse=True)
+def ready_optional_oar(monkeypatch):
+    monkeypatch.setattr(
+        "loopx.hosts.oar.installation.inspect_installation",
+        lambda: {"ready": True, "oar_version": "fixture-version"},
+    )
+
+
 def test_trusted_host_args_project_the_same_last_explicit_profile_without_raw_argv():
     binding = managed_executor_binding_from_host_args(
         [
@@ -241,6 +249,10 @@ def test_managed_executor_reports_the_operator_credential_and_endpoint():
             "module": DSH_RUNTIME_MODULE,
             "scope": RUNTIME_PROBE_SCOPE_INTERPRETER,
             "available": True,
+        },
+        "oar_runtime": {
+            "ready": True,
+            "oar_version": "fixture-version",
         },
     }
 

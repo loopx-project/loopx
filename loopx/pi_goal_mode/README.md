@@ -4,6 +4,12 @@ The Pi host adapter for LoopX. Pi is a terminal coding agent whose extensions
 register commands, tools, and event handlers; this adapter turns a Pi session
 into a LoopX-governed visible goal loop.
 
+For a bounded Pi Turn launched by LoopX, use the separate
+[OAR-managed Pi adapter](../hosts/oar/README.md#select-a-runtime). It shares
+session/event/lifecycle management with Codex and DSH. The extension described
+below remains inside the current Pi session and preserves its native commands,
+tools and governed continuation.
+
 ## Surface
 
 - **`/loopx`** — with no arguments, runs `loopx bootstrap-command-pack --project .`

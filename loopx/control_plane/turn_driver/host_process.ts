@@ -3,7 +3,7 @@
 import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
 import {setTimeout as delay} from "node:timers/promises";
 import {StringDecoder} from "node:string_decoder";
-import {waitForProcessGroupStop} from "./host_process_group.ts";
+import {descendantProcessGroups, waitForProcessGroupStop} from "./host_process_group.ts";
 
 export interface HostProcessRequest {
   argv: string[];
@@ -21,6 +21,7 @@ export interface HostProcessResult {
   output_complete: boolean;
   cleanup_scope: "process_group" | "process_tree_best_effort";
   group_signal_sent: boolean;
+  descendant_cleanup_complete?: boolean;
 }
 export type HostProcessOutput = {kind: "stdout" | "stderr"; text: string};
 /** The group this owner will clean up, reported once the Host is spawned.
@@ -54,12 +55,15 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
 export type HostProcessHooks = {
   spawned?: (item: HostProcessSpawned) => Promise<void>;
   openInput?: (write: (text: string) => Promise<void>) => void;
+  /** SDKs such as OAR own additional detached groups below this Host. */
+  trackDescendants?: boolean;
+  descendants?: (item: {kind: "descendants"; process_groups: number[]}) => Promise<void>;
 };
 
 export async function runHostProcess(request: HostProcessRequest,
   output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
   terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
-  {spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
+  {spawned, openInput, trackDescendants, descendants}: HostProcessHooks = {}): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -69,6 +73,25 @@ export async function runHostProcess(request: HostProcessRequest,
   let outcome: HostProcessResult["outcome"] = "exited";
   let complete = true, forcedDrain = false, stdoutBytes = 0;
   let cleanup: Promise<void> | undefined;
+  const ownedGroups = new Set<number>();
+  const observeDescendants = async () => {
+    if (!trackDescendants || !child.pid || child.exitCode !== null || child.signalCode !== null) return;
+    for (const group of await descendantProcessGroups(child.pid, child.pid)) ownedGroups.add(group);
+    if (descendants) {
+      try { await descendants({kind: "descendants", process_groups: [...ownedGroups]}); }
+      catch {
+        // The Python owner may have died. Lost evidence makes output incomplete,
+        // but must not prevent signals for the groups we already observed.
+        complete = false;
+      }
+    }
+  };
+  const signalDescendants = (signal: NodeJS.Signals) => {
+    for (const group of ownedGroups) {
+      try { process.kill(-group, signal); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    }
+  };
   const clean = () => cleanup ??= (async () => {
     if (process.platform === "win32") {
       if (!child.pid) return;
@@ -83,15 +106,27 @@ export async function runHostProcess(request: HostProcessRequest,
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       return;
     }
+    // Observe before signalling: detached SDK descendants would otherwise be
+    // reparented and invisible after their OAR owner exits. A second observation
+    // covers a runtime still opening during the graceful shutdown window.
+    await observeDescendants();
+    signalDescendants("SIGTERM");
     // Always signal the owned group, including after the leader's exit.
     const sent = signalGroup(child, "SIGTERM");
     base.group_signal_sent ||= sent;
     if (sent) {
       await delay(terminationGraceMs);
+      await observeDescendants();
+      signalDescendants("SIGKILL");
       signalGroup(child, "SIGKILL");
       // KILL delivery is asynchronous. Closed pipes and a reaped leader do not
       // establish that descendants have stopped executing or writing.
       await waitForProcessGroupStop(child.pid!);
+    }
+    if (trackDescendants) {
+      signalDescendants("SIGKILL");
+      await Promise.all([...ownedGroups].map(waitForProcessGroupStop));
+      base.descendant_cleanup_complete = true;
     }
   })();
   const stop = (reason: HostProcessResult["outcome"]) => {

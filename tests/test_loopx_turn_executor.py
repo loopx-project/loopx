@@ -177,6 +177,7 @@ def _managed_plan(*, runtime_available: bool) -> dict[str, object]:
         "dsh",
         environ={"DEEPSEEK_API_KEY": "fixture-operator-credential"},
         module_probe=lambda _module: runtime_available,
+        oar_probe=lambda: {"ready": True, "oar_version": "fixture-version"},
     )
     return managed
 
