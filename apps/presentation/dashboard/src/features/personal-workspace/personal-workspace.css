@@ -2330,3 +2330,9 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-runband-key.is-failed::before { background: var(--pw-red); }
 .personal-runband-key.is-running::before { background: var(--pw-blue); }
 .personal-runband-key.is-waiting::before { background: var(--pw-amber); }
+
+/* Board cards read like the design: title first, meta underneath. */
+.personal-task-kanban .personal-task-lane-scroll > button,
+.personal-task-kanban .personal-task-card > button { grid-template-columns: minmax(0, 1fr); }
+.personal-task-kanban .personal-task-lane-scroll > button > span[aria-hidden="true"]:first-child,
+.personal-task-kanban .personal-task-card > button > span[aria-hidden="true"]:first-child { display: none; }
