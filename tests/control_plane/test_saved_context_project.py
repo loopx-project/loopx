@@ -274,7 +274,7 @@ def test_saved_projection_planner_process_exit_keeps_current_recovery(tmp_path, 
         "import os\n"
         "from loopx.control_plane.quota import turn_envelope\n"
         "def interrupt(*args, **kwargs): os._exit(37)\n"
-        "turn_envelope.plan_progressive_context = interrupt\n"
+        "turn_envelope.effect_runtime_result = interrupt\n"
         "from loopx.cli import main\n"
         "raise SystemExit(main())\n"
     )

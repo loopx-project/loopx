@@ -1040,6 +1040,16 @@ unchanged. This does not qualify C1's unified producer/consumer cutover or the
 matched effectiveness/full-cost result in §9. Rollback uses the existing
 context-delivery off path; staged material composition remains separately owned.
 
+Native delivery now composes the existing progressive plan and full/delta codec
+in one TypeScript invocation. The intermediate Python plan application and its
+dispatch are retired. Python retains the session lock, Host observations and
+private immutable-file publication: it saves the current complete recovery
+before the optional transaction, then publishes any required view before
+returning its encoded delivery. Original numeric spellings and source-reference
+identity use the existing projection-edit transport. This changes neither
+required-read obligations nor admission, settlement or the off path; it does
+not close C1/C2 adoption or establish model-outcome/full-cost benefit.
+
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
 C7 can prepare measurements before C6 but cannot claim two-session outcomes.

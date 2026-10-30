@@ -581,13 +581,20 @@ function publish(request: JsonObject, result: JsonObject, values: ProjectionSour
 /** Hosts may confirm final-input retention, or explicitly select the native
  * hook delivery assumption. These bases are distinct; neither grants authority. */
 export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[] = []): JsonObject {
+  const values: ProjectionSourceValues = new WeakMap();
+  return publish(request, encodeContextDelivery(request, legacyQuotaFields, values), values);
+}
+
+/** Shared encoding within one presentation transaction; callers publish once
+ * against their original source so numeric facts never round-trip through JS. */
+export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[],
+    values: ProjectionSourceValues): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
-  const values: ProjectionSourceValues = new WeakMap();
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
   const full = (reason: string): JsonObject => ({schema_version: VERSION, mode: "full", target,
     ancestry: 0, reason, context: request.source_edits === true ? context : clone(context)});
-  const fullResult = (reason: string): JsonObject => publish(request, full(reason), values);
+  const fullResult = full;
   const baseline = jsonObject(request.baseline), retained = jsonObject(request.retained);
   const continuity = jsonObject(request.continuity);
   const binding = jsonObject(baseline?.target), prior = jsonObject(baseline?.context);
@@ -636,8 +643,8 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
   // Native consumers page the wire before they can use its baseline. Deliver
   // the existing basis and interpretation before the potentially large tree;
   // do not duplicate them in a second host instruction or change strict IO.
-  return publish(request, assumed || fileBacked ? {schema_version: VERSION, mode: "delta",
-    continuity_basis: delta.continuity_basis, instruction: delta.instruction, ...delta} : delta, values);
+  return assumed || fileBacked ? {schema_version: VERSION, mode: "delta",
+    continuity_basis: delta.continuity_basis, instruction: delta.instruction, ...delta} : delta;
 }
 
 /** Validate the exact change tree against the immutable CURRENT capture before
