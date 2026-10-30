@@ -46,7 +46,6 @@ def _start_stalled_holder(
     script = """
 import os
 import sys
-import time
 from pathlib import Path
 from loopx.file_lock import exclusive_file_lock
 
@@ -57,10 +56,11 @@ with exclusive_file_lock(
     operation="stalled-holder",
 ):
     print(f"ready {os.getpid()} {os.getppid()}", flush=True)
-    time.sleep(30)
+    sys.stdin.readline()
 """
     process = subprocess.Popen(
         [sys.executable, "-c", script, str(target)],
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -73,9 +73,10 @@ with exclusive_file_lock(
 
 
 def _stop(process: subprocess.Popen[str]) -> None:
-    process.terminate()
     try:
-        process.wait(timeout=3)
+        # Ask the holder itself to release the kernel lock. Terminating only
+        # Windows' venv redirector leaves its interpreter child holding it.
+        process.communicate(input="\n", timeout=3)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=3)
