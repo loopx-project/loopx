@@ -1,4 +1,5 @@
 import {claimExecutionReference, claimExecutionProof} from "./claim_execution.ts";
+import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -1391,11 +1392,42 @@ export async function executeCoordinationTodoTerminalLifecycle(
     );
   }
   if (authority.outcome === "rejected" || authority.outcome === "conflict") {
+    // Missing execution is ordinary task preparation. Reuse the real claim
+    // preview instead of guessing from lease expiry or teaching callers to
+    // copy internal key/version fields. Explicit stale proof remains rejected.
+    let recovery: JsonObject | undefined;
+    if (handoffMode === "hard_lease" && authorityTodo.role === "agent" &&
+        input.actor_agent_id !== null && normalized.claim_operation_id === undefined &&
+        input.lease_idempotency_key === null && input.lease_expected_version === null &&
+        ["handoff_mode_requires_lease", "lease_fence_required"].includes(authority.code)) {
+      const preview = await executeCoordinationTodoClaim(store, {
+        goal_id: input.goal_id, todo_id: input.todo_id, actor_agent_id: input.actor_agent_id,
+        claimed_by: input.actor_agent_id, expected_role: input.expected_role,
+        registered_agents: input.registered_agents, manage_execution: true, dry_run: true,
+        operation_id: `terminal-claim-preview-${canonicalAuthoritySha256({operation_id: input.operation_id,
+          goal_id: input.goal_id, todo_id: input.todo_id, actor_agent_id: input.actor_agent_id}).slice(0, 32)}`,
+        now: input.now,
+      }, authoritySourcesCurrent).catch(() => null);
+      // Optional guidance cannot replace the already established rejection
+      // with an unrelated provider/read failure.
+      if (preview?.dry_run === true && ["planned", "no_change"].includes(String(preview.status))) {
+        recovery = {action: "claim_task", execution_authority_granted: false,
+          reason: "Prepare this task with ordinary todo claim, then retry this original operation using the returned claim_operation_id. The claim rechecks current ownership and eligibility; this preview grants no execution authority.",
+          claim: {command: "loopx todo claim", cli_args: ["todo", "claim", "--goal-id", input.goal_id,
+            "--todo-id", input.todo_id, "--agent-id", input.actor_agent_id, "--claimed-by", input.actor_agent_id]},
+          retry: {command: `loopx todo ${input.command}`, requires_flags: ["--claim-operation-id"],
+            reference_source: "claim_operation_id_from_claim"}};
+      } else if (preview !== null && typeof preview.reason_code === "string") {
+        recovery = {action: "resolve_acquire_rejection", execution_authority_granted: false,
+          reason_code: preview.reason_code, reason: typeof preview.reason === "string"
+            ? preview.reason : "Task preparation is not currently available."};
+      }
+    }
     return terminalFailure(
       authority.code,
       authority.code === "handoff_mode_retired" ? HANDOFF_MODE_RETIRED_REASON
         : `canonical Todo terminal lifecycle rejected the request: ${authority.code}`,
-      {terminal_decision: authority},
+      {terminal_decision: authority, ...(recovery === undefined ? {} : {recovery, handoff_mode: handoffMode})},
       "decision_rejection",
     );
   }
