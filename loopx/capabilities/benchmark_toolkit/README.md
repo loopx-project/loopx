@@ -1105,6 +1105,19 @@ loopx benchmark experiment-board-upsert \
   --format json
 ```
 
+Upsert now returns the complete normalized affected `row` and `write` receipt
+by default, for both preview and execution. Check `write.dry_run` and
+`write.write_performed` before treating a preview as a saved update. The receipt
+retains metrics, countability, protocol identity and total ledger `row_count`;
+it does not imply a matched comparison or replace whole-study inspection.
+Consumers of the previous board-shaped response can add `--include-board`.
+`--benchmark-id` and `--study-id` filter that optional board projection; they do
+not constrain the write or hide the affected row in the default receipt.
+For a later comparison, call `experiment-board-show` with the same Goal/project
+route and relevant benchmark/study filters. Reuse a current board already read
+when it answers the decision; avoid rebuilding and returning it after every
+single-row update. Validation and invalid-transition rejection still apply.
+
 The default ledger is locked, atomically updated, and keyed by benchmark, study,
 case, and run identity. A compact row carries arm role, exact and comparison
 protocol ids, model, score metrics, countability, treatment fidelity, bounded
