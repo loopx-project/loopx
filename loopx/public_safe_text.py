@@ -285,6 +285,26 @@ PRESENTATION_LOCAL_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
     PRESENTATION_EXTENDED_WINDOWS_PATH_PATTERN,
     PRESENTATION_COLON_PREFIXED_WINDOWS_PATH_PATTERN,
 )
+# The provider-issued credential shapes, as one alternation body shared by every
+# owner that has to recognize a token with no label at all. A prefix carries the
+# provider's own issuer identity, so the shape is self-describing and a caller
+# never has to guess a label; the length floor keeps ordinary prose out. Case
+# folding is left to the consumer's compile flags or inline `(?i)`, so this
+# string stays a plain alternation instead of owning one flag decision.
+#
+# Kept here rather than restated per caller: a scan that recognizes only some
+# issuers certifies the rest as public-safe, and copies drift (Refs #5136).
+PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
+    r"\bgh[pousr]_[a-z0-9]{16,}\b|"
+    r"\bgithub_pat_[a-z0-9_]{20,}|"
+    r"\b(?:akia|asia)[a-z0-9]{16}\b|"
+    r"\bxox[baprs]-[a-z0-9-]{10,}|"
+    r"\baiza[a-z0-9_-]{20,}|"
+    r"\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|"
+    r"\bnpm_[a-z0-9]{20,}|"
+    r"\bpypi-[a-z0-9_-]{20,}|"
+    r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b"
+)
 PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
     tuple[str, re.Pattern[str]], ...
 ] = (
@@ -311,31 +331,19 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
             re.IGNORECASE,
         ),
     ),
+    # An issuer prefix is its own label: a token carried in tool output or a
+    # pasted log rarely arrives as an assignment, so the assignment arm never
+    # sees it. Composed from the shared source the sibling scanners consume
+    # (#7636), case-folded like the presentation local-path arms.
+    (
+        "provider token",
+        re.compile(r"(?i)(?:" + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE + r")"),
+    ),
 )
 # Refs #5136: one definition for "this string carries a raw remote location".
 # Three validators each restated the same scheme list, and the canonical
 # public-safety owner had no counterpart, so a fourth caller had to invent one.
 REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
-# The provider-issued credential shapes, as one alternation body shared by every
-# owner that has to recognize a token with no label at all. A prefix carries the
-# provider's own issuer identity, so the shape is self-describing and a caller
-# never has to guess a label; the length floor keeps ordinary prose out. Case
-# folding is left to the consumer's compile flags or inline `(?i)`, so this
-# string stays a plain alternation instead of owning one flag decision.
-#
-# Kept here rather than restated per caller: a scan that recognizes only some
-# issuers certifies the rest as public-safe, and copies drift (Refs #5136).
-PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
-    r"\bgh[pousr]_[a-z0-9]{16,}\b|"
-    r"\bgithub_pat_[a-z0-9_]{20,}|"
-    r"\b(?:akia|asia)[a-z0-9]{16}\b|"
-    r"\bxox[baprs]-[a-z0-9-]{10,}|"
-    r"\baiza[a-z0-9_-]{20,}|"
-    r"\b(?:sk|rk)_(?:live|test)_[a-z0-9]{12,}|"
-    r"\bnpm_[a-z0-9]{20,}|"
-    r"\bpypi-[a-z0-9_-]{20,}|"
-    r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b"
-)
 SECRET_LIKE_SURFACE_PATTERN = re.compile(
     r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
     r"\b(?:access|api|secret)[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
