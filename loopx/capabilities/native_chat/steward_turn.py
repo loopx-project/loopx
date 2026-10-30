@@ -445,7 +445,8 @@ class StewardTurnHost:
 
     def _prepare_submission(self, binding_id: str, *, turn_instance_id: str, todo_id: str | None,
                             validation_command: Sequence[str] | None, work_kind: str,
-                            monitor_deadline: str | None, report_window: dict[str, Any] | None) -> dict[str, Any]:
+                            monitor_deadline: str | None, report_window: dict[str, Any] | None,
+                            quota_observation: dict[str, Any] | None = None) -> dict[str, Any]:
         """Read original request/recovery identity without accepting any work."""
         binding = next((row for row in self.bindings.read()["bindings"] if row["binding_id"] == binding_id), None)
         if binding is None:
@@ -464,6 +465,16 @@ class StewardTurnHost:
                 report_subscription_revision=report_window["subscription_revision"])
         client_id = native_steward_client_id(actor, turn_instance_id)
         existing = self.store.turn_for_client(actor["session_id"], client_id)
+        if quota_observation is not None:
+            if binding != quota_observation["binding"]:
+                raise ValueError("the original steward authorization changed during quota observation")
+            # Refence execution evidence after slow metadata IO; ordinary SSE
+            # read counters do not change the original request or its effects.
+            original = quota_observation["original"]
+            if existing is None or any(existing.get(key) != original.get(key) for key in (
+                    "turn_id", "client_turn_id", "status", "loopx_request", "response",
+                    "upstream_turn_id", "delta_count", "error_code", "error", "loopx_execution")):
+                raise ValueError("the original report changed during quota observation")
         launch_recovery = None
         selection_recovery = None
         if existing is not None:
@@ -478,7 +489,9 @@ class StewardTurnHost:
                 retained = report_turn(self.store, actor, report_window)
                 if retained is not None and retained["turn_id"] != existing["turn_id"]:
                     return {"turn": retained}
-                quota_request = self.report_quota_request(existing)
+                if quota_observation is None:
+                    return {"turn": existing, "quota_probe": {"original": existing, "binding": binding}}
+                quota_request = quota_observation["request"]
                 if quota_request is not None:
                     request = quota_request
                     client_id = native_steward_client_id(actor, request["turn_instance_id"])
@@ -538,8 +551,14 @@ class StewardTurnHost:
             monitor_deadline=monitor_deadline, report_window=report_window)
         with controller.lock, exclusive_file_lock(self.bindings.path, operation="inspect_native_steward_turn"):
             prepared = self._prepare_submission(binding_id, **parameters)
-            if "turn" in prepared:
-                return prepared["turn"], False
+        quota_observation = None
+        if "quota_probe" in prepared:
+            quota_observation = prepared["quota_probe"]
+            quota_observation["request"] = self.report_quota_request(quota_observation["original"])
+            with controller.lock, exclusive_file_lock(self.bindings.path, operation="inspect_native_steward_turn"):
+                prepared = self._prepare_submission(binding_id, **parameters, quota_observation=quota_observation)
+        if "turn" in prepared:
+            return prepared["turn"], False
         observed = self._observe(prepared["request"]["actor"])
         retained = None
         if work_kind == "monitor":
@@ -549,7 +568,7 @@ class StewardTurnHost:
             retained = native_command(controller, ["task-lease", "inspect", "--goal-id", prepared["request"]["actor"]["goal_id"],
                 "--todo-id", todo_id]).get("lease")
         with controller.lock, exclusive_file_lock(self.bindings.path, operation="admit_native_steward_turn"):
-            current = self._prepare_submission(binding_id, **parameters)
+            current = self._prepare_submission(binding_id, **parameters, quota_observation=quota_observation)
             if "turn" in current:
                 return current["turn"], False
             if current["request"] != prepared["request"] or current["client_id"] != prepared["client_id"]:
