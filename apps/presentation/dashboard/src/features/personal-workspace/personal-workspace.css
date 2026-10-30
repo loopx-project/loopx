@@ -2336,3 +2336,11 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-task-kanban .personal-task-card > button { grid-template-columns: minmax(0, 1fr); }
 .personal-task-kanban .personal-task-lane-scroll > button > span[aria-hidden="true"]:first-child,
 .personal-task-kanban .personal-task-card > button > span[aria-hidden="true"]:first-child { display: none; }
+
+/* Match the board design: 13px titles, 10/12 padding, dark lane labels, 14px gutters. */
+.personal-task-kanban { gap: 14px; }
+.personal-task-kanban .personal-object-list > header > strong { color: var(--pw-text); font-size: var(--text-body); font-weight: 600; }
+.personal-task-kanban .personal-task-lane-scroll > button,
+.personal-task-kanban .personal-task-card > button { padding: 10px 12px; }
+.personal-task-kanban .personal-task-lane-scroll > button > strong,
+.personal-task-kanban .personal-task-card > button > strong { font-size: var(--text-caption); line-height: 1.45; }
