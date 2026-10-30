@@ -1,0 +1,229 @@
+name: C2 Fixed Session Candidate Qualification
+
+on:
+  push:
+    branches: [codex/c2-candidate-context-qualification-20261031]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  BASE_SHA: 04c5799b88f6c4cf12a224b7fa679f272e1e794e
+  HEAD_SHA: e42c536e609ba383217a3e83b8cf07c72542944c
+  LOOPX_USAGE_PING: "0"
+  PYTHONUNBUFFERED: "1"
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+jobs:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CASE_PROVIDER: file
+      CASE_HISTORY: "0"
+      CASE_MODE: cold-daemon
+      CALIBRATION_REPLICA: "0"
+    steps:
+      - name: Record quality deadline and check capacity
+        run: |
+          echo "C2_QUAL_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os, shutil
+          for path in (os.environ['RUNNER_TEMP'], os.environ['GITHUB_WORKSPACE']):
+              assert shutil.disk_usage(path).free >= 7 * 1024**3, 'Need6GiB peak plus1GiB reserve'
+          PY
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.21.0"
+      - name: Prepare exact source versions for quality checks
+        run: |
+          git diff --exit-code "$HEAD_SHA" HEAD -- loopx
+          python -m pip install uv==0.10.2
+          mkdir -p "$RUNNER_TEMP/c2-candidate-quality"
+          cp -R .github/c2-context-qualification/. "$RUNNER_TEMP/c2-candidate-quality/"
+          chmod +x "$RUNNER_TEMP/c2-candidate-quality/bin/loopx-eval"
+          python "$RUNNER_TEMP/c2-candidate-quality/ci_prepare.py"
+      - name: Correctness, static, package, native integration and input parity
+        run: |
+          cd "$RUNNER_TEMP/c2-candidate-quality"
+          python quality_gate.py --run
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.22.3"
+      - name: Minimum Node control-plane owner checks
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'c2-candidate-quality'
+          source = pathlib.Path(json.loads((root / 'evaluation_config.json').read_text())['candidate_source'])
+          assert subprocess.check_output(['node', '--version'], text=True).strip() == 'v22.22.3'
+          subprocess.run(['npm', 'run', 'typecheck:control-plane'], cwd=source, check=True)
+          subprocess.run(['node', '--no-warnings', '--experimental-sqlite', '--experimental-strip-types', '--test',
+              'tests/control_plane_ts/context_delivery.test.ts', 'tests/control_plane_ts/progressive_context.test.ts',
+              'tests/control_plane_ts/turn_envelope.test.ts', 'tests/control_plane_ts/interaction_contract.test.ts',
+              'tests/control_plane_ts/turn_loop_controller.test.ts'], cwd=source, check=True)
+          (root / 'minimum-node-result.json').write_text(json.dumps({'node': '22.22.3', 'passed': True}))
+          PY
+      - name: Retire private quality namespaces
+        if: always()
+        run: |
+          if ! test -f "$RUNNER_TEMP/c2-candidate-quality/evaluation_config.json"; then exit 0; fi
+          cd "$RUNNER_TEMP/c2-candidate-quality"
+          python stop_all.py
+      - name: Preserve quality evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c2-candidate-quality
+          retention-days: 30
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/c2-candidate-quality/*.json
+            ${{ runner.temp }}/c2-candidate-quality/*.jsonl
+            ${{ runner.temp }}/c2-candidate-quality/*.log
+            ${{ runner.temp }}/c2-candidate-quality/quality-logs/**
+            ${{ runner.temp }}/c2-candidate-quality/quality-results/**
+            ${{ runner.temp }}/c2-candidate-quality/qa_native/*.py
+            ${{ runner.temp }}/c2-candidate-quality/evaluation-fixtures/**
+
+  performance:
+    needs: quality
+    name: ${{ matrix.provider }}-${{ matrix.history }}-${{ matrix.mode }}-r${{ matrix.replica }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      max-parallel: 8
+      matrix:
+        provider: [file, sqlite]
+        history: [0, 500]
+        mode: [cold-daemon, warm]
+        replica: [0, 1, 2, 3]
+    env:
+      CASE_PROVIDER: ${{ matrix.provider }}
+      CASE_HISTORY: ${{ matrix.history }}
+      CASE_MODE: ${{ matrix.mode }}
+      CALIBRATION_REPLICA: ${{ matrix.replica }}
+    steps:
+      - name: Record deadline and check actual filesystems
+        run: |
+          echo "C2_QUAL_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import os, shutil
+          for path in (os.environ['RUNNER_TEMP'], os.environ['GITHUB_WORKSPACE']):
+              assert shutil.disk_usage(path).free >= 5 * 1024**3, 'Need4GiB peak plus1GiB reserve'
+          PY
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.21.0"
+      - name: Prepare exact semantic versions in frozen physical positions
+        run: |
+          git diff --exit-code "$HEAD_SHA" HEAD -- loopx
+          python -m pip install uv==0.10.2
+          mkdir -p "$RUNNER_TEMP/c2-candidate"
+          cp -R .github/c2-context-qualification/. "$RUNNER_TEMP/c2-candidate/"
+          chmod +x "$RUNNER_TEMP/c2-candidate/bin/loopx-eval"
+          python "$RUNNER_TEMP/c2-candidate/ci_prepare.py"
+          python - <<'PY'
+          import json, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'c2-candidate'
+          config = json.loads((root / 'evaluation_config.json').read_text())
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('C2_DRIVER_PYTHON=' + config['candidate_source'] + '/.venv/bin/python\n')
+          PY
+      - name: Freeze the schedule before domain setup
+        run: |
+          cd "$RUNNER_TEMP/c2-candidate"
+          "$C2_DRIVER_PYTHON" session_driver.py --self-check
+          "$C2_DRIVER_PYTHON" session_driver.py --schedule-only
+      - name: Prepare declared fixture and cache controls
+        run: |
+          cd "$RUNNER_TEMP/c2-candidate"
+          "$C2_DRIVER_PYTHON" evaluate.py prepare
+          "$C2_DRIVER_PYTHON" cache_pin.py --self-check
+          sudo -n env "LD_LIBRARY_PATH=${LD_LIBRARY_PATH-}" "$C2_DRIVER_PYTHON" cache_pin.py --identity-self-check
+      - name: Measure primary CLI first, then auxiliary runtime probes
+        run: |
+          cd "$RUNNER_TEMP/c2-candidate"
+          sudo -n env "LD_LIBRARY_PATH=${LD_LIBRARY_PATH-}" "$C2_DRIVER_PYTHON" cache_pin.py -- "$C2_DRIVER_PYTHON" qualification_run.py
+      - name: Retire every private namespace
+        if: always()
+        run: |
+          if ! test -f "$RUNNER_TEMP/c2-candidate/evaluation_config.json"; then exit 0; fi
+          cd "$RUNNER_TEMP/c2-candidate"
+          python stop_all.py
+      - name: Preserve complete or partial measurement evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c2-candidate-${{ matrix.provider }}-${{ matrix.history }}-${{ matrix.mode }}-r${{ matrix.replica }}
+          retention-days: 30
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/c2-candidate/*.json
+            ${{ runner.temp }}/c2-candidate/*.jsonl
+            ${{ runner.temp }}/c2-candidate/*.py
+            ${{ runner.temp }}/c2-candidate/aux-probes/**
+            ${{ runner.temp }}/c2-candidate/aux-probe-rows/**
+            ${{ runner.temp }}/c2-candidate/observed-blobs/*.json
+            ${{ runner.temp }}/c2-candidate/clock-hooks/*
+            ${{ runner.temp }}/c2-candidate/bin/loopx-eval
+            ${{ runner.temp }}/c2-candidate/requirements.txt
+            ${{ runner.temp }}/c2-candidate/evaluation-fixtures/**
+
+  analyze:
+    needs: performance
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13.12"
+      - name: Collect every available declared slot and analyze
+        run: |
+          mkdir -p "$RUNNER_TEMP/c2-candidate-results"
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          result = subprocess.run(['gh', 'run', 'download', os.environ['GITHUB_RUN_ID'],
+              '--repo', os.environ['GITHUB_REPOSITORY'], '--pattern', 'c2-candidate-*',
+              '--dir', os.environ['RUNNER_TEMP'] + '/c2-candidate-results'], capture_output=True)
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'c2-candidate-collection.json').write_text(json.dumps({
+              'returncode': result.returncode, 'stdout_bytes': len(result.stdout),
+              'stderr_bytes': len(result.stderr), 'partial_download_possible': result.returncode != 0}))
+          PY
+          python .github/c2-context-qualification/analyze_qualification.py "$RUNNER_TEMP/c2-candidate-results" .github/c2-context-qualification/qualification-manifest.json --output "$RUNNER_TEMP/c2-candidate-analysis.json"
+          python - <<'PY'
+          import json, os, pathlib
+          report = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'c2-candidate-analysis.json').read_text())
+          assert report['engineering_score_pass'] and report['qualification_eligible'], 'Qualification remains held; inspect all slot failures and scores'
+          PY
+      - name: Preserve engineering decision and all missing or failed slots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c2-candidate-analysis
+          retention-days: 30
+          path: |
+            ${{ runner.temp }}/c2-candidate-analysis.json
+            ${{ runner.temp }}/c2-candidate-collection.json

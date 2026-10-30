@@ -1,0 +1,157 @@
+{
+  "status": "frozen_for_candidate_qualification",
+  "scope": "Fixed preregistered benchmark sessions and cases; engineering decision scores, no calibrated cross-VM95coverage or universal-host claim",
+  "baseline": "04c5799b88f6c4cf12a224b7fa679f272e1e794e",
+  "candidate": "e42c536e609ba383217a3e83b8cf07c72542944c",
+  "seed": 20261030,
+  "cases": [
+    {
+      "provider": "file",
+      "history": 0,
+      "mode": "cold-daemon"
+    },
+    {
+      "provider": "file",
+      "history": 0,
+      "mode": "warm"
+    },
+    {
+      "provider": "file",
+      "history": 500,
+      "mode": "cold-daemon"
+    },
+    {
+      "provider": "file",
+      "history": 500,
+      "mode": "warm"
+    },
+    {
+      "provider": "sqlite",
+      "history": 0,
+      "mode": "cold-daemon"
+    },
+    {
+      "provider": "sqlite",
+      "history": 0,
+      "mode": "warm"
+    },
+    {
+      "provider": "sqlite",
+      "history": 500,
+      "mode": "cold-daemon"
+    },
+    {
+      "provider": "sqlite",
+      "history": 500,
+      "mode": "warm"
+    }
+  ],
+  "replicas_per_case": 4,
+  "slots": 32,
+  "physical_candidate_slot_balance": "2base/2head percase, seeded before any outcomes",
+  "semantic_arms": "base always baselineversion, head always candidateversion; baseline_source/candidate_source map to physical directories",
+  "main_workload": {
+    "blocks": 160,
+    "rounds_per_block": 2,
+    "primary_aa_pairs": 160,
+    "primary_ab_pairs": 320,
+    "conditioning_aa_cli": 320,
+    "warmups": 40,
+    "timed_cli": 1280,
+    "primary_cli": 960,
+    "factory_cli": 17,
+    "role_ages": "10..329 all4roles",
+    "source_roles": {
+      "aa_base": "base",
+      "aa_compare": "base",
+      "ab_base": "base",
+      "ab_compare": "head"
+    }
+  },
+  "auxiliary_probes": {
+    "after_all_main_timing_and_main_role_cleanup": true,
+    "separate_namespaces": true,
+    "per_arm": {
+      "cold_cli": 16,
+      "warmups": 10,
+      "warm_burst_cli": 16,
+      "idle_seconds": 5
+    },
+    "cli_per_session": 84,
+    "metrics": [
+      "managedruntime cold-start spans",
+      "logical typedRPC and actual IPC attempt spans",
+      "context transaction span from first plan/contextRPC to last delivery RPC",
+      "cross-runtime contextRPC counts",
+      "daemon RSS after warmup, bounded16CLI burst and5second idle"
+    ],
+    "main_cli_instrumentation": false,
+    "qualification_latency_source": "Main uninstrumented CLI rows only; auxiliary CLI wall times never substitute"
+  },
+  "budget": {
+    "domain_cli_per_session": 1421,
+    "total_domain_cli": 45472,
+    "max_parallel_jobs": 8,
+    "job_cap_minutes": 90,
+    "command_cap_minutes": 80,
+    "cleanup_upload_reserve_minutes": 5,
+    "runner_minutes_hard_ceiling": 2880,
+    "expected_wall_reference_minutes": 151,
+    "no_replacement_or_automatic_expansion": true,
+    "total_domain_cli_scope": "Measurement32sessions only; quality/preflight and analysis are separately bounded phases"
+  },
+  "decision_scores": {
+    "bootstrap_trials": 5000,
+    "aa_absolute_boot_quantile": 0.95,
+    "ab_lower_quantile": 0.025,
+    "ab_upper_quantile": 0.95,
+    "aa_cap_ms": 25,
+    "aa_cap_fraction": 0.05,
+    "all_cases_and_both_quantiles_required": true,
+    "formal_coverage_qualified": false,
+    "interpretation": "Resample matched call pairs within each fixed declared session and pool raw values at each draw. Preserve same VM weights; report individual session and LOO stability. Scores are conditional engineering diagnostics, not validated population confidence intervals."
+  },
+  "failure_policy": "Keep all slots and all failures. Technical/source/lifecycle faults stop remaining jobs; no selective replacement. A failed engineering score holds publication. Old4/8status never reclassified.",
+  "readiness": [
+    "main and PR dedup refreshed",
+    "new-head correctness/static/packaging/native gates before measurement",
+    "source-slot truthful driver plus real-process boundary selfcheck",
+    "probe spans only outside primary timing",
+    "independent review of config/workflow/analyzer before push"
+  ],
+  "native_token_lane": "Still separately needs isolated profile; no real model call authorized by this protocol file alone",
+  "files_owned": {
+    "driver": "driver/session_driver.py and control selfcheck",
+    "probe": "probe/rpc_probe.py and auxiliary_probe.py and one selfcheck",
+    "analysis": "analysis/analyze_qualification.py and one selfcheck",
+    "lead": "harness configuration, workflow, manifest, integration, source gates and resource cleanup"
+  },
+  "shared_driver_helpers": [
+    "pid_identity(pid)",
+    "runtime_identities(e, namespace)",
+    "stop_and_verify(e, namespace)",
+    "write_frozen(path, payload)"
+  ],
+  "flattened_harness": "All implementation modules copied to one .github/c2-context-qualification root at integration",
+  "probe_entrypoint": "auxiliary_probe.py --run after session_driver.py --run, under the same cache-pin child coordinator",
+  "workflow_graph": {
+    "quality": {
+      "jobs": 1,
+      "cap_minutes": 45,
+      "must_pass_before_measurement": true
+    },
+    "measurement": {
+      "jobs": 32,
+      "max_parallel": 8,
+      "cap_minutes_each": 90,
+      "domain_cli_total": 45472
+    },
+    "analysis": {
+      "jobs": 1,
+      "cap_minutes": 30,
+      "runs_after_terminal_measurements": true
+    },
+    "total_jobs": 34,
+    "runner_minutes_hard_ceiling": 2955
+  }
+}

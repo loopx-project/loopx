@@ -1,0 +1,8 @@
+{
+  "pr": 7430,
+  "head": "35e4ef22674a2000b22a96241a7cdd7c3ae3ba33",
+  "path": "tests/control_plane/codex_checkpoint_fixture.py",
+  "blob_sha": "26d791205ecb0028b3157f5ede1c13245a77ddd9",
+  "function": "native_capture_wire",
+  "scope": "Borrowed test oracle only; no product or source checkout changes"
+}
