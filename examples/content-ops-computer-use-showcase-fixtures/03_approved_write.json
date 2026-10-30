@@ -1,0 +1,8 @@
+{
+  "case_id": "03_approved_write",
+  "description": "Agent clicks the approved submit control under the current gate revision; content-ops confirms the attempt but does not fabricate a record_delivery -- that stays with content-ops's existing readback-verified delivery flow.",
+  "ui_state": {
+    "screen_reachable": true,
+    "submit_click_permitted": true
+  }
+}

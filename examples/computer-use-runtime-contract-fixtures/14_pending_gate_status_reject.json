@@ -1,0 +1,25 @@
+{
+  "case_id": "14_pending_gate_status_reject",
+  "description": "Action request for credential_use carries a well-formed but pending gate_binding.status; a gate that is not yet open must not authorize a credential-using action.",
+  "expect": "reject",
+  "expected_reason_contains": "'open' was expected",
+  "request": {
+    "schema_version": "computer_use_action_request_v0",
+    "goal_id": "loopx-meta",
+    "todo_id": "todo_login_gate",
+    "provider_id": "computer_use_runtime",
+    "action_unit": "authenticate_after_owner_gate",
+    "effect_class": "credential_use",
+    "write_scope": {
+      "allowed_actions": ["submit the owner-approved credential form"],
+      "forbidden_effect_classes": ["external_write"]
+    },
+    "gate_binding": {
+      "gate_id": "gate_login_owner_approval",
+      "revision": 1,
+      "status": "pending"
+    },
+    "stop_condition": "stop until the owner gate is open",
+    "validation_target": "credentials are only used once the owner gate is open"
+  }
+}
