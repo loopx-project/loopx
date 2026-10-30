@@ -589,7 +589,10 @@ def test_same_turn_terminal_recovery_accepts_a_real_blocker_without_another_debi
     complete = ("todo", "complete", "--goal-id", cli.GOAL_ID, *binding, *lease,
                 "--evidence", "Original declared source check passed.")
     original = call(*complete)
+    direction = call("checkpoint-context", "--goal-id", cli.GOAL_ID, *binding,
+                     "--purpose", "first_delivery")
     call("refresh-state", "--goal-id", cli.GOAL_ID, *binding,
+         "--checkpoint-read-context", direction["read_context_id"],
          "--classification", "original_delivery_validated", "--delivery-batch-scale", "implementation",
          "--delivery-outcome", "outcome_progress", "--vision-state", "vision_closed",
          "--vision-summary", "Original source deliverable validated.",

@@ -88,7 +88,8 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
     assert.deepEqual(await loaded(store), saved);
   });
   for (const closeoutSource of ["turn", "lifecycle"] as const) {
-  test(`${provider}: deferred original no-followup upgrades once without new validation (${closeoutSource})`, async t => {
+  for (const [requestedNoFollowup, deferred] of [[false, false], [false, true], [true, true]]) {
+  test(`${provider}: original no-followup upgrades once without new validation (${closeoutSource}, requested=${requestedNoFollowup}, deferred=${deferred})`, async t => {
     const {store, contender} = await factory(t);
     const goal = "deferred-terminal";
     const fixture = productionScaleCoordinationFixture(goal, "native");
@@ -114,7 +115,7 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
       lifecycle_grants: [], authority_reason: null, decision_outcome: null, operation_identity: {kind: "completion_turn"},
       lease_idempotency_key: fixture.completion_lease_idempotency_key,
       lease_expected_version: fixture.completion_lease_expected_version, allow_user_gate_auto_acquire: false,
-      requested_no_followup: true, defer_no_followup: true,
+      requested_no_followup: requestedNoFollowup, defer_no_followup: deferred,
       requested_completion_turn_key: "original-turn", requested_completion_identity_source: "turn_settlement",
       linked_successor_todo_ids: [], successor_intents: [], note: "Verified candidate", evidence: "Validation passed",
       reason: null, clear_claim: false, validation_declaration: declaration, validation_receipt: validation,
@@ -128,10 +129,11 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
     assert.equal(todo.status, "done");
     assert.equal(todo.completion_continuation, "active_goal");
     assert.equal(todo.completion_recovery ?? null, null);
-    assert.equal(todo.completion_requested_continuation, "no_followup");
-    assert.equal(todo.no_followup, false);
+    assert.equal(todo.completion_requested_continuation ?? null, requestedNoFollowup ? "no_followup" : null);
+    assert.equal(todo.no_followup, deferred ? false : undefined);
     assert.equal((await execute(contender, request, async () => true, null, undefined, check)).status, "replayed");
-    const closeout = {...request, defer_no_followup: false, validation_receipt: null,
+    const closeout = {...request, requested_no_followup: true, defer_no_followup: false,
+      delivery_read_context_id: requestedNoFollowup ? request.delivery_read_context_id : undefined, validation_receipt: null,
       validation_source_provider_revision: committed.provider_revision};
     const changed = await execute(store, {...closeout, evidence: "Changed result"}, async () => true, null, undefined, check);
     assert.equal(changed.reason_code, "coordination_operation_identity_mismatch", JSON.stringify(changed));
@@ -166,15 +168,17 @@ export function registerTerminalSourceConformance(provider: string, factory: Aut
       null, async () => {throw new Error("No repeated settlement verification");}, check)).status, "replayed");
     // After lifecycle closeout the exact accepted Turn RESULT remains historical;
     // changing its actor, evidence or lease cannot borrow that receipt.
-    assert.equal((await execute(store, closeout, async () => {throw new Error("Historical RESULT");},
+    const resultReplay = requestedNoFollowup ? closeout : {...request, delivery_read_context_id: undefined};
+    assert.equal((await execute(store, resultReplay, async () => {throw new Error("Historical RESULT");},
       null, undefined, check)).status, "replayed");
     for (const patch of [{evidence: "Changed result"}, {actor_agent_id: "agent-b"},
       {lease_expected_version: 999}]) {
-      assert.equal((await execute(store, {...closeout, ...patch}, async () => true, null, undefined, check)).status, "failed");
+      assert.equal((await execute(store, {...resultReplay, ...patch}, async () => true, null, undefined, check)).status, "failed");
       assert.deepEqual(await loaded(store), after);
     }
     assert.deepEqual(await loaded(store), after);
   });
+  }
   }
   test(`${provider}: protected completion final CAS preserves a racing peer and historical recovery`, async t => {
     const {store, contender} = await factory(t);

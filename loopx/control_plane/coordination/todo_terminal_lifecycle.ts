@@ -1211,9 +1211,9 @@ function semanticDuplicate(
   return undefined;
 }
 
-async function exactStoredDeferredParent(
+async function exactStoredCompletionParent(
   store: AuthorityStore, input: ResolvedCoordinationTodoTerminalLifecycleInput,
-  todo: JsonObject,
+  todo: JsonObject, deferred = true,
 ): Promise<CoordinationTodoTerminalLifecycleResult | null> {
   const operationId = completionTurnOperationId(input, false);
   const saved = await store.readReceipt(operationId);
@@ -1223,11 +1223,17 @@ async function exactStoredDeferredParent(
       receipt.operation_id !== operationId || receipt.goal_id !== input.goal_id ||
       receipt.todo_id !== input.todo_id || receipt.command !== "complete" ||
       typeof receipt.delivery_read_context_id !== "string") return null;
+  for (const requestedNoFollowup of deferred ? [false, true] : [false]) {
+    const parent = {...input, requested_no_followup: requestedNoFollowup, defer_no_followup: deferred,
+      delivery_read_context_id: input.delivery_read_context_id ?? receipt.delivery_read_context_id};
+    const exact = await terminalReceipt(parent, terminalRequestSha(parent)).read(store);
+    if (exact?.status === "replayed") return exact;
+  }
   const result = canonicalAuthorityObject(receipt.result, "original completion result");
-  if (result.completion_policy == null) return null;
-  const recordedPolicy = canonicalAuthorityObject(result.completion_policy, "original completion policy");
-  if (!Object.hasOwn(recordedPolicy, "effective_claimed_by")) return null;
+  const recordedPolicy = result.completion_policy == null ? null
+    : canonicalAuthorityObject(result.completion_policy, "original completion policy");
   const policy = input.completion_policy_request;
+  if (policy !== null && (recordedPolicy === null || !Object.hasOwn(recordedPolicy, "effective_claimed_by"))) return null;
   if (policy?.claimed_by != null && policy.claimed_by !== todo.claimed_by) return null;
   // Optional transport defaults preserve the committed result. Even this
   // reconstruction must match its entire original fingerprint; no supplied
@@ -1239,9 +1245,9 @@ async function exactStoredDeferredParent(
     reason: input.reason ?? optionalString(todo.reason, "original reason"),
     delivery_read_context_id: input.delivery_read_context_id ?? receipt.delivery_read_context_id,
     completion_policy_request: policy === null ? null : {...policy,
-      claimed_by: recordedPolicy.effective_claimed_by},
-    operation_id: operationId, defer_no_followup: true};
-  for (const requestedNoFollowup of [false, true]) {
+      claimed_by: recordedPolicy?.effective_claimed_by},
+    operation_id: operationId, defer_no_followup: deferred};
+  for (const requestedNoFollowup of deferred ? [false, true] : [false]) {
     const parent = {...recovered, requested_no_followup: requestedNoFollowup};
     const exact = await terminalReceipt(parent, terminalRequestSha(parent)).read(store);
     if (exact?.status === "replayed") return exact;
@@ -1337,7 +1343,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
         if (todo?.status === "done" &&
             todo.completion_turn_key === input.requested_completion_turn_key &&
             todo.completion_requested_continuation === "no_followup") {
-          const original = await exactStoredDeferredParent(store, input, todo);
+          const original = await exactStoredCompletionParent(store, input, todo);
           if (original?.status === "replayed") return original;
         }
       }
@@ -1717,11 +1723,17 @@ export async function executeCoordinationTodoTerminalLifecycle(
           requested_no_followup: false,
           operation_id: completionTurnOperationId(input, false)};
         let original = await terminalReceipt(originalInput, terminalRequestSha(originalInput)).read(store);
-        // The result phase may have durably deferred the original closeout.
+        if (original?.reason_code === "coordination_operation_identity_mismatch") {
+          // An ordinary freshness-protected result also owns its read key.
+          // Recover absent transport defaults, then require the full original
+          // fingerprint; supplied actor, lease, evidence and keys still bind.
+          original = await exactStoredCompletionParent(store, originalInput, todo, false) ?? original;
+        }
+        // An ordinary RESULT may defer its checkpoint without requesting
+        // no-followup. Its receipt, not a Todo pending marker, binds that fact.
         // Recover only an exact parent fingerprint, including actor, evidence,
         // validation and lease; the pending marker alone grants no authority.
-        if (todo.completion_requested_continuation === "no_followup" &&
-            (original === null || original.reason_code === "coordination_operation_identity_mismatch")) {
+        if (original === null || original.reason_code === "coordination_operation_identity_mismatch") {
           for (const requestedNoFollowup of [false, true]) {
             const deferred = {...originalInput, requested_no_followup: requestedNoFollowup,
               defer_no_followup: true};
@@ -1732,9 +1744,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
             }
           }
         }
-        if (todo.completion_requested_continuation === "no_followup" &&
-            (original === null || original.reason_code === "coordination_operation_identity_mismatch")) {
-          original = await exactStoredDeferredParent(store, originalInput, todo) ?? original;
+        if (original === null || original.reason_code === "coordination_operation_identity_mismatch") {
+          original = await exactStoredCompletionParent(store, originalInput, todo) ?? original;
         }
         if (original === null) return terminalFailure("terminal_completion_receipt_required",
           "Same-Turn closeout requires the original accepted ordinary completion receipt.", {}, "decision_rejection");

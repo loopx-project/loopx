@@ -195,7 +195,7 @@ function admittedLifecycleSource(request: JsonObject, obligation: JsonObject): J
             item.completion_continuation === prior.completion_continuation &&
             item.completion_recovery === prior.completion_recovery) ||
            (item.no_followup === true && item.completion_continuation === "no_followup" &&
-            item.completion_recovery === "lifecycle_reentry_terminal_closeout" &&
+            TODO_COMPLETION_RECOVERIES.some(recovery => recovery === item.completion_recovery) &&
             (item.updated_at === prior.updated_at ||
              (typeof item.updated_at === "string" && parseTodoTimestampMicros(item.updated_at) !== null &&
               parseTodoTimestampMicros(item.updated_at)! >= admissionSecond!))));

@@ -1379,11 +1379,12 @@ def test_typed_blocked_retry_without_successor_defers_the_only_todo(
     assert next_turn["should_run"] is False, next_turn
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_scheduler_cache_misses_after_todo_state_changes_without_run(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     guard = (
         "quota",
         "should-run",
@@ -1448,8 +1449,78 @@ def test_scheduler_cache_misses_after_todo_state_changes_without_run(
         refreshed["status_projection_cache"]["miss_reason"]
         == "goal_todo_projection_changed"
     )
-    assert refreshed["should_run"] is False
+    # Deferral removes new work authority, but cannot discard the admitted
+    # Turn's original settlement. Recovery is not a new Todo dispatch.
+    assert refreshed["effective_action"] == "unsettled_host_turn_recovery"
+    assert refreshed["normal_delivery_allowed"] is False
     assert "selected_todo" not in refreshed
+    identity = initial["heartbeat_receipt"]["settlement_identity"]
+    assert refreshed["heartbeat_receipt"]["settlement_identity"] == identity
+    assert (index_path.read_bytes() if index_path.exists() else None) == index_before
+    assert _spend_run_count(runtime) == 0
+
+    binding = (
+        "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+        "--turn-instance-id", identity["turn_instance_id"],
+    )
+    rc, context = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "delivery_result", cwd=project,
+    )
+    assert rc == 0, context
+    writeback = (
+        "refresh-state", "--goal-id", GOAL_ID, *binding,
+        "--classification", "deferred_turn_checkpoint",
+        "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress",
+        "--no-global-sync", "--suppress-external-sinks",
+    )
+    rc, retained = _run_cli(registry_path, runtime, *writeback, cwd=project)
+    assert rc == 0, retained
+    assert _spend_run_count(runtime) == 0
+    rc, direction = _run_cli(
+        registry_path, runtime, "checkpoint-context", "--goal-id", GOAL_ID,
+        *binding, "--purpose", "supplement_checkpoint", cwd=project,
+    )
+    assert rc == 0 and direction["basis"]["todo"]["status"] == "deferred", direction
+    vision = project / "deferred-direction.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "todo_delta": [f"retain:{TODO_ID}"],
+        "vision_patch": {"acceptance_summary": "Resume the retained task only after its dated wait."},
+        "path_delta": {"outcome": "no_change", "prior_assumption": "The selected task remains required.",
+            "observed_reality": "Its current source is deferred until 2099-01-01T00:00:00Z.",
+            "retained": ["The original task and its dated wait."], "evidence_refs": [f"todo:{TODO_ID}"]},
+    }), encoding="utf-8")
+    rc, accepted = _run_cli(
+        registry_path, runtime, *writeback, "--checkpoint-read-context", direction["read_context_id"],
+        "--agent-vision-json", str(vision), cwd=project,
+    )
+    assert rc == 0 and accepted["vision_checkpoint"]["satisfied"] is True, accepted
+    rc, settled = _run_cli(
+        registry_path, runtime, "quota", "spend-slot", "--goal-id", GOAL_ID,
+        *binding, "--source", "heartbeat", "--execute", cwd=project,
+    )
+    assert rc == 0 and settled["appended"] is True, settled
+    assert _spend_run_count(runtime) == 1
+
+    # A genuinely fresh Turn must still wait until 2099 after that original
+    # obligation is settled, including when the projection cache is requested.
+    rc, waiting = _run_cli(
+        registry_path, runtime, *guard, "--use-projection-cache",
+        "--turn-instance-id", "turn-after-deferred-settlement", cwd=project,
+    )
+    assert rc == 0 and waiting["should_run"] is False, waiting
+    assert waiting["effective_action"] == "agent_scope_wait"
+    assert "selected_todo" not in waiting
+    listed_rc, listed = _run_cli(
+        registry_path, runtime, "todo", "list", "--goal-id", GOAL_ID,
+    )
+    assert listed_rc == 0, listed
+    [deferred] = [item for item in listed["todos"] if item["todo_id"] == TODO_ID]
+    assert deferred["status"] == "deferred" and deferred["resume_ready"] is False
+    assert deferred["resume_when"] == "resume_at:2099-01-01T00:00:00Z"
+    assert _spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("include_detail", [False, True])

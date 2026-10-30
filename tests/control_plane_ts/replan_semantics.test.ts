@@ -581,6 +581,16 @@ test(`${recovery} restores only its exact admitted review and still owes Vision`
   assert.equal(packet.semantic_delta, null);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: result, agent_vision: vision}).accepted, true);
+  const admitted = {...row, no_followup: false, completion_continuation: "active_goal",
+    completion_recovery: undefined, updated_at: row.completed_at};
+  const sealed = {...original, lifecycle_admission_items: [admitted]};
+  const sealedCandidate = {...candidate, obligation: sealed, source_obligation: sealed};
+  const sealedRequest = {...request, transition_candidates: [sealedCandidate]};
+  const restored = projectReplanSemantics(sealedRequest).obligation as JsonObject;
+  assert.equal((restored.settlement_action_packet as JsonObject).settlement_only, true);
+  assert.throws(() => projectReplanSemantics({...sealedRequest,
+    transition_candidates: [{...sealedCandidate, items: [{...row, completion_recovery: "unverified"}]}]}),
+  /identity conflicts/);
   const historical = {...row, todo_id: "todo_historical", completion_turn_key: "historical-completion",
     completed_at: "2026-07-31T23:59:00Z", updated_at: "2026-07-31T23:59:01Z"};
   for (const items of [[historical, row], [row, historical]]) {
