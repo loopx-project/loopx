@@ -104,6 +104,12 @@ Quota capture 与 Turn journal capture 都调用
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
 
+可选 host poll 也是该次原始观测的一部分。来源保真切片在 capture 前仅记录一次
+`--record-host-poll`，普通 CLI、envelope 与原生上下文交付复用同一回执；恢复读取不再
+轮询。后续 capture/handoff 失败的错误响应仍携带已记录观测，不表示缺少准入，也不
+授权重放。默认关闭行为和不可读回执诊断不变。这只修复 capture 完整性，不代表统一
+writer/consumer 切换或长程成本收益已取得资格。
+
 独立的原生展示切片复用已提交的完整恢复原件作为 reader 目标，避免再次发布未使用的
 wire 副本。Delta 与未包装输入仍保留各自的不可变文件，reader/lifecycle owner 不变。
 同一 107,289 字节合成来源的 capture 写入从 216,754 降为 107,289 字节；完整 reader
