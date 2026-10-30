@@ -490,6 +490,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
     from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
+    from tests.control_plane.codex_checkpoint_fixture import last_context_page as _last_page
     from tests.control_plane.test_codex_context_capture import _delivered
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _configure_selectable_alternative,
@@ -581,14 +582,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if descriptor["mode"] == "delta":
                     assert descriptor["target"] == published["target"]
                 observed[name] = (published, descriptor)
-                # The existing page protocol also admits the projector's first
-                # page. Old installed projectors still start with command.
-                offset = descriptor["next_offset"] if "content" in descriptor else 0
-                for offset in range(len(data) if offset is None else offset, len(data), 4096):
-                    # Synthetic captures are ASCII JSON; public reader owns every byte.
-                    queue.append(shlex.join([*cli, "--format", "json", "quota", "context-read",
-                        "--capture-file", descriptor["path"], "--capture-sha256", descriptor["sha256"],
-                        "--offset", str(offset)]))
+                # Follow the public reader's actual page cursor rather than
+                # guessing offsets from the capture size. This keeps each
+                # request's real page budget and avoids overlapping reads.
+                queue.append(descriptor["command"])
                 if progressive:
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
@@ -616,6 +613,12 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     native_context = home / "loopx-context" if benchmark else context
                     assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
+                    page = _last_page(request)
+                    assert page is not None and page["sha256"] == descriptor["sha256"]
+                    if not page["eof"]:
+                        assert page["next_offset"] > page["offset"] and page["next_command"]
+                        queue.append(page["next_command"])
+                        return response(request, number, message)
                     assert _delivered(request, descriptor["sha256"]) == Path(descriptor["path"]).read_text().rstrip("\n")
                 if benchmark and name in ("cold", "warm"):
                     # Consume the command actually delivered to the native
