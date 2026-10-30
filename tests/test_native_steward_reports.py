@@ -635,6 +635,117 @@ def test_report_quota_failure_continues_once_after_native_no_effects_and_availab
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["unrelated_input", "read_counter", "queued_input", "binding_scope",
+    "original_changed", "original_changed_after_identity"])
+def test_report_quota_observation_keeps_publication_available_and_rechecks_original(
+        steward, tmp_path, monkeypatch, provider, change):
+    import copy
+    import threading
+    import time
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.file_lock import exclusive_file_lock
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost, native_steward_client_id
+    from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
+    store, runtime, _, transport, binding, capture, _ = steward
+    install_model(steward, tmp_path, sid)
+
+    def exhausted(_adapter, _prompt, event_sink):
+        event_sink("turn.started", {"upstream_turn_id": "quota-refused-native-turn"})
+        raise CodexChatAgentError("The provider allowance was exhausted.")
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", exhausted)
+    original = finish(runtime, pump_steward_monitors(runtime)[0])
+    native = original["response"]["native_loopx"]
+    assert native["status"] == "failed" and native["host_failure"]["kind"] == "unknown"
+    _, window = reports.current_window(binding["binding_id"])
+    journal = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=native["resume_turn_key"])
+    original_journal, calls = journal.read_bytes(), capture.read_bytes()
+    other = store.create_session(goal_id=actor["goal_id"], agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="unrelated-user-thread")
+    entered, released = threading.Event(), threading.Event()
+    results, errors, observations = [], [], []
+    proof = {"thread_id": store.load_session(sid)["upstream_thread_id"],
+        "turn_id": original["upstream_turn_id"], "only_original_user_item": True,
+        "codex_error_info": "usageLimitExceeded", "quota_available": change not in {"unrelated_input", "read_counter"},
+        "quota_observed_at": time.time()}
+
+    def observe(**_kwargs):
+        observations.append(_kwargs)
+        entered.set()
+        assert released.wait(10), "quota observation fixture was not released"
+        return dict(proof)
+
+    def change_original():
+        changed = copy.deepcopy(original["response"])
+        changed["native_loopx"]["reason"] = "Retained source changed during observation"
+        store.update_turn(sid, original["turn_id"], response=changed)
+
+    observe_identity = StewardTurnHost._observe
+
+    def identity(host, actor):
+        observed = observe_identity(host, actor)
+        if change == "original_changed_after_identity":
+            with runtime.lock:
+                change_original()
+        return observed
+
+    def submit():
+        try:
+            request = original["loopx_request"]
+            results.append(StewardTurnHost(runtime).submit(binding["binding_id"], report_window=window,
+                **{key: request[key] for key in ("turn_instance_id", "todo_id", "work_kind", "validation_command")}))
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(observe))
+    monkeypatch.setattr(StewardTurnHost, "_observe", identity)
+    worker = threading.Thread(target=submit)
+    worker.start()
+    available = False
+    queued = None
+    try:
+        assert entered.wait(5)
+        available = runtime.lock.acquire(timeout=.5)
+        if available:
+            with exclusive_file_lock(transport.bindings.path, timeout_seconds=.5):
+                if change in {"unrelated_input", "queued_input"}:
+                    queued, created = store.create_queued_turn(other["session_id"] if change == "unrelated_input" else sid,
+                        client_turn_id="human-during-quota", message="Keep this ordinary input available", origin="web")
+                    assert created
+                elif change == "original_changed":
+                    change_original()
+                elif change == "read_counter":
+                    store.update_turn(sid, original["turn_id"],
+                        sse_reconnect_count=original["sse_reconnect_count"] + 1)
+            if change == "binding_scope":
+                transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                    executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+    finally:
+        if available:
+            runtime.lock.release()
+        else:
+            proof["quota_available"] = False  # A failing baseline must not start model work.
+        released.set()
+        worker.join(10)
+    assert not worker.is_alive()
+    assert available, "quota metadata IO prevented ordinary input and binding publication"
+    assert len(observations) == 1
+    assert journal.read_bytes() == original_journal and capture.read_bytes() == calls
+    continued = native_steward_client_id(actor, original["loopx_request"]["turn_instance_id"] + ".quota-recovery")
+    assert store.turn_for_client(sid, continued) is None
+    if change in {"unrelated_input", "read_counter"}:
+        assert not errors and results == [(store.load_turn(sid, original["turn_id"]), False)]
+        if queued:
+            assert store.load_turn(other["session_id"], queued["turn_id"])["status"] == "queued"
+    else:
+        assert len(errors) == 1 and isinstance(errors[0], ValueError), errors
+        assert results == []
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("local_session", [False, True])
 @pytest.mark.parametrize("replan_outcome", ["settled", "wait", "invalid_semantic", "already_admitted", "retained_probe"])
 def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(steward, tmp_path, monkeypatch, provider, local_session, replan_outcome):
