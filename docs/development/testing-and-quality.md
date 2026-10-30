@@ -477,7 +477,11 @@ Effect 后台进程；相同源码指纹可能让源码环境与已安装版本�
 The Effect server drains admitted handlers before retiring. With compilation
 caching enabled, its final synchronous cache flush has a one-second allowance,
 supervised by a worker in the same process. Healthy completion still persists
-the real Node cache before removing the locator. A blocked or failed flush
+the real Node cache before removing the locator. The cache-disabled worker
+acknowledges readiness before loading cleanup helpers; those helpers load only
+after it wins retirement. The main thread still preloads them before flushing.
+This keeps cleanup-module loading out of the supervisor's startup allowance.
+A blocked or failed flush
 keeps that cache-disabled worker responsible for the same fenced, identity-checked
 locator cleanup and termination of the already settled process. Node invokes
 the calling environment's [native exit hooks even on self-`SIGKILL`](https://github.com/nodejs/node/blob/v24.21.0/src/node_process_methods.cc#L199-L205), so terminating
@@ -492,7 +496,9 @@ separate from injected-failure coverage; V8 CPU samples do not measure kernel IO
 
 Effect 服务先排空已接纳的 handler，再退出。启用编译缓存时，同进程 worker
 监督最终同步写盘，给缓存一秒处理时间；正常完成仍先持久化真实 Node 缓存，
-再清理定位文件。写盘阻塞或失败时，保留已就绪且关闭缓存的 worker，由它复用
+再清理定位文件。关闭缓存的 worker 先确认就绪，赢得退休权后才加载清理模块；
+主线程仍在写盘前预加载这些模块，避免清理模块加载消耗监督 worker 的启动额度。
+写盘阻塞或失败时，保留已就绪且关闭缓存的 worker，由它复用
 同一锁和精确身份校验清理定位文件，并终止已结算的进程。Node 自发 `SIGKILL`
 也先执行调用环境的原生退出钩子，因此先停 worker 再由主线程终止会重入缓存写盘；
 回归检查实际缓存文件，不能只检查退出信号。监督 worker 无法启动时，定位文件
@@ -612,7 +618,7 @@ the change only needs a few Python tests.
 | Validation scope / 验证范围 | Setup / 安装范围 |
 | --- | --- |
 | Selected Python unit tests using pytest, JSON Schema or YAML / 指定的基础 Python 单元测试 | `uv sync --extra test-core` |
-| Full Python suite, lint, integration tests or premerge / 完整 Python 测试、静态检查、集成测试或提交前验证 | `uv sync --extra test` |
+| Full Python suite, lint, integration tests or premerge / 完整 Python 测试、静态检查、集成测试或提交前验证 | `uv sync --extra test`; selected `semantic-vocabulary-drift-smoke.py` also needs root `npm ci --ignore-scripts` / 若选择全库语义检查，还需在根目录安装其 Node 依赖 |
 | Full control-plane TypeScript tests or coverage / 完整控制面 TypeScript 测试或覆盖率 | Root `npm ci` plus `uv sync --extra test` for Python subprocesses / 根目录 Node 依赖及测试子进程所需的 Python 环境 |
 | Control-plane typecheck / 控制面类型检查 | `npm ci` at the repository root / 仓库根目录 |
 | Dashboard build or browser tests / Dashboard 构建或浏览器测试 | `npm ci --prefix apps/presentation/dashboard`; browser tests also require their documented browser and backend setup / 浏览器测试另需其文档指定的浏览器与后端环境 |
@@ -772,11 +778,31 @@ installed-App health check. No model calls are involved.
 `--check` 会报错，旧清单路径已忽略。这属于需要 Git 和 Node 开发依赖的源码检查，
 不是安装版 App 健康检查，也不调用模型。
 
-Confirm the interpreter and imported checkout when diagnosing a mismatch:
+Inspect the interpreter and imported module when diagnosing a mismatch:
 
 ```bash
-uv run python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
+uv run --extra test python -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"
 ```
+
+This checks that invocation, not a console script launched elsewhere. An inherited
+`PYTHONPATH` can select an installed release before the worktree's editable package;
+running `python -c` at the repository root can mask that difference. For a source
+CLI on POSIX, pin this checkout for the command and its child imports:
+
+```bash
+PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}" uv run --extra test python -m loopx.cli --format json version
+```
+
+Keep this override local to the validation subprocess, preserve unrelated settings,
+and record the actual source and argv. A matching version string alone is not
+source provenance. Isolated CLI test launchers should likewise pin the checkout;
+they must not accidentally qualify an installed release.
+
+上面的检查只说明该 Python 调用的来源，不能证明另一个 console script 的来源。
+继承的 `PYTHONPATH` 可能让已安装版本优先于 worktree；在仓库根目录执行 `python -c`
+又可能掩盖差异。源码验证使用上述模块入口，并仅在该子进程内把当前目录放到导入路径
+首位；保留其他设置，记录实际源码和 argv，不凭相同版本号判断来源。隔离 CLI 测试的
+启动器也应固定目标检出目录，避免误测安装版。
 
 Node-based TypeScript tests and browser smokes that launch Python use
 `scripts/test-python.mjs`. It honors an explicit `LOOPX_TEST_PYTHON` (then the
@@ -1312,6 +1338,25 @@ fields; this does not introduce a new telemetry system or receipt gate.
 循环得到解决，恢复后实际继续完成有用操作才支持接续收益判断。
 
 ### Budget Failure Decisions
+
+The thin heartbeat's 4,500-character presentation allowance did not cover the
+complete combination of a 320-character scope, all five runtime capability
+flags, Codex App transport and an explicit CLI route. The existing public CLI
+fixture with `/opt/loopx/qualified-tools/bin/loopx` emits 4,851 normalized body
+characters at `a36e01c32`; its instructions and command arguments are complete.
+Calibrate only this presentation allowance to 4,900, leaving 49 characters above
+that input. Retain the original over-budget observation and add the complete
+CLI combination plus an oversized-route negative case. Prompt text, capability
+flags, the visible Goal's 4,000-character host limit, existing JSON/body fixture
+ceilings, execution authority and frozen qualification results remain unchanged.
+This corrects diagnostic coverage; it is not an output reduction or a claim of
+model compliance, runtime recovery or lower cost.
+
+薄提示原 4,500 字符展示预算未覆盖完整能力与显式 CLI 路由的组合；同一公开夹具
+保留 320 字符 scope、五项能力和完整指令时为 4,851。仅将该展示预算校准为
+4,900，保留原超限记录，并加入完整组合及更长路由仍超限的反例。正文、参数、
+4,000 字符宿主硬边界、既有 JSON/正文夹具上限及执行权限不变；不据此声称节省
+输出、恢复运行或改善模型行为。
 
 The fixed visible-Goal host fixture's 3,200-character regression guard predates
 `1d5d2d0f6`, which adds the known Todo choice to the first current guard. On the

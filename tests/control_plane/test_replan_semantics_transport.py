@@ -20,7 +20,8 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.parametrize("large", [False, True])
-def test_lifecycle_source_preserves_complete_input_and_output(isolated_runtime: Path, large: bool):
+@pytest.mark.parametrize("recovery", ["same_turn_terminal_closeout", "lifecycle_reentry_terminal_closeout"])
+def test_lifecycle_source_preserves_complete_input_and_output(isolated_runtime: Path, large: bool, recovery: str):
     item = {
         "todo_id": "todo_accepted_source", "index": 1,
         "status": "done", "done": True, "task_class": "advancement_task",
@@ -28,7 +29,7 @@ def test_lifecycle_source_preserves_complete_input_and_output(isolated_runtime: 
         "completed_at": "2026-08-01T00:00:00Z", "updated_at": "2026-08-01T00:00:00Z",
         "completion_turn_key": "original-completion",
         "no_followup": True, "completion_continuation": "no_followup",
-        "completion_recovery": "lifecycle_reentry_terminal_closeout",
+        "completion_recovery": recovery,
         "note": "x" * (effect_runtime.MAX_REQUEST_BYTES + 128) if large else "Accepted source.",
     }
     params = {"operation": "lifecycle_source", "agent_id": "fixture-agent",

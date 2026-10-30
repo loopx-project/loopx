@@ -22,7 +22,7 @@ from .chat_manager import (
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
-from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter, start_attachment_turn
 from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
 from .capabilities.native_chat.steward_managed_mode import prepare_managed_session_route, require_managed_agent_session
 from .capabilities.native_chat.turn_release import TurnReleaseWakeup
@@ -1067,6 +1067,8 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None:
             raise KeyError("chat session was not found")
+        from .chat_attachments import require_text_document_route
+        require_text_document_route(session, attachments)
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
         if session.get("project_context") is not None:
@@ -1853,9 +1855,7 @@ class ChatRuntimeController:
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
                 with observe_goal_execution(self.store.root.parent, observed_goal, host=str(session.get("agent_id") or "unknown")):
                     if attachments:
-                        if not isinstance(adapter, CodexAppServerAdapter):
-                            raise ValueError("image attachments currently require the Codex Agent endpoint")
-                        response = adapter.start_turn_with_attachments(message, event_sink, attachments)
+                        response = start_attachment_turn(adapter, session, current_turn, message, event_sink, attachments)
                     else:
                         response = adapter.start_turn(message, event_sink)
             if execution_ended():

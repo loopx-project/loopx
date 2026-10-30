@@ -77,6 +77,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
 	"performance-diagnosis",
+	"heartbeat-prompt",
 }
 
 
@@ -173,12 +174,16 @@ def resolve_cli_registry(
 	registry_was_configured = user_supplied_registry(raw_argv) or bool(
 		os.environ.get("LOOPX_REGISTRY")
 	)
-	if args.command == "quota" and getattr(args, "quota_command", None) == "context-read":
+	if args.command == "update" and getattr(args, "update_action", None) == "activate":
+		# Service activation reads its route from the loaded original manager.
+		# It neither opens Goal authority nor guesses a default Chat store.
+		return registry_path, registry_was_configured
+	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
 
-		# The reader owns capture integrity and native-session scope. It cannot
-		# reach Goal authority, so default registry conflicts are unrelated.
-		if has_explicit_context_read_source(args):
+		# Captured readers own source validation (including missing references)
+		# and native-session scope; neither reaches live Goal authority.
+		if args.quota_command == "replan-view" or has_explicit_context_read_source(args):
 			return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
@@ -390,6 +395,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .capabilities.performance_diagnosis.cli import register_performance_diagnosis_commands
 
 		register_performance_diagnosis_commands(subparsers, add_subcommand_format)
+	elif command == "heartbeat-prompt":
+		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
+
+		register_heartbeat_control_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -401,6 +410,14 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "heartbeat-prompt":
+		from .cli_commands.support_control_heartbeat import handle_heartbeat_prompt_command
+
+		return handle_heartbeat_prompt_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=not allow_missing_registry,
+			print_payload=print_payload, output_format=output_format,
+		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
 
