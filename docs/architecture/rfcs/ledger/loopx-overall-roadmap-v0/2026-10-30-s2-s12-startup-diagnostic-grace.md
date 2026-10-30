@@ -17,11 +17,18 @@ retrievable run of that lane (`1e3401591`) failed with
 assert 'runtime_startup_timeout' == 'mutation_lock_timeout'
 ```
 
-`runtime_startup_timeout` is produced only when the ready budget expires while
-the child is still running, so on that run the child had not exited inside
-15 s. The same job's pytest step ran 439 cases in 5 min 31 s, and the chunk
-holding the failure took two minutes against six seconds for the chunk before
-it, so the runner was heavily loaded.
+`runtime_startup_timeout` is produced whenever the parent does not observe the
+child's exit inside the ready loop. The baseline reads the published envelope
+only when a poll *within* that loop reports an exit; after the loop it polls
+once more, but only to decide whether to terminate the child, and it then
+always reports the generic timeout. The historical run therefore does not
+distinguish two situations: the child had not published yet when the budget
+expired, or the child had already published and exited and the parent had not
+observed that exit before it left the loop. The same job's pytest step ran 439
+cases in 5 min 31 s, and the chunk holding the failure took two minutes
+against six seconds for the chunk before it, so the runner was heavily loaded.
+That load is a plausible contributor to a late publication, not a demonstrated
+cause.
 
 The startup cost itself has ample headroom. Measured on the Windows runner at
 `2f544f9692` and on macOS at `d3d9ad209d`:
@@ -37,13 +44,15 @@ neither is widened here.
 
 The exact code is lost rather than absent. The TypeScript runtime computes the
 typed code and publishes it to stderr when it gives up; Python reads that
-envelope only when `process.poll()` shows the child has already exited, and
-otherwise terminates the child at the budget and reports the generic
-`runtime_startup_timeout`. The envelope is published at the moment the child
-exits, so there is nothing typed to read while the child is still running: at
-one second, three seconds and five seconds the child is still running and
-stderr holds zero bytes, and the envelope appears only once it exits, at about
-5.8 s, together with exit code 2.
+envelope only when a poll inside the ready loop shows the child has already
+exited, and otherwise terminates the child at the budget and reports the
+generic `runtime_startup_timeout` without reading the capture again. The
+envelope is published at the moment the child exits, so a child that has not
+exited has published nothing to read: at one second, three seconds and five
+seconds the child is still running and stderr holds zero bytes, and the
+envelope appears only once it exits, at about 5.8 s, together with exit code 2.
+A child that has published and exited leaves the envelope in the capture, and
+the baseline leaves it unread.
 
 The host therefore discarded a diagnostic the runtime had already computed and
 reported a generic timeout instead. The diagnostic difference is the whole
@@ -68,6 +77,11 @@ the generic `runtime_startup_timeout` is reported, so the wait stays bounded.
 A runtime that publishes its locator inside the window is now accepted instead
 of terminated. Before the repair, a runtime that was merely slow was killed at
 the ready budget; that outcome is unchanged in kind, only later in time.
+
+The repair covers both situations the historical record cannot separate: a
+late publication is read inside the window, and an envelope that was already
+published is read without waiting for the child to exit. It therefore does not
+depend on knowing which of the two the recorded failure was.
 
 ## The two acceptance points
 
@@ -101,14 +115,17 @@ set is preserved rather than reclassified.
 A failed startup now blocks its caller for up to twice the ready budget
 instead of once. `effect_runtime_request` retries a startup failure once for a
 retry-safe call, so a caller that is failing to start can wait for two
-attempts. The retry policy is unchanged here.
+attempts. The retry policy is unchanged here. That is the wait this startup
+path adds, not an absolute ceiling for the whole call: the startup lock, the
+Node probe and the outer retry each carry their own cost.
 
 ## Evidence
 
-The repair is pinned by a test that reproduces the observed failure without a
-Windows runner. With the ready budget shortened and a live mutation lock held
-by the current process, the pre-repair host reports the generic timeout, and
-the assertion is the one the Windows lane produced:
+The repair is pinned by tests that reproduce the failure mode without a
+Windows runner: the parent does not observe the runtime's published
+diagnostic inside the ready loop. With the ready budget shortened and a live
+mutation lock held by the current process, the pre-repair host reports the
+generic timeout, and the assertion is the one the Windows lane produced:
 
 ```
 assert 'runtime_startup_timeout' == 'mutation_lock_timeout'
@@ -116,9 +133,13 @@ assert 'runtime_startup_timeout' == 'mutation_lock_timeout'
 
 After the repair the same fixture delivers the exact
 `mutation_lock_timeout`, the published envelope, and the preserved live lock.
-A second test pins the bound: a runtime that publishes nothing is terminated
-and still reports `runtime_startup_timeout` after exactly one ready budget
-plus one grace window.
+A second test pins the other situation the historical record cannot separate:
+an envelope that the runtime published before the deadline but whose exit the
+parent's poll missed is still read, because the parent polls once more after
+the loop but the baseline never reads the capture again. Both tests report the
+generic timeout on the baseline. A third test pins the bound: a runtime that
+publishes nothing is terminated and still reports `runtime_startup_timeout`
+after exactly one ready budget plus one grace window.
 
 ## Validation
 
