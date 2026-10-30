@@ -148,21 +148,43 @@ function checkpointReceiptName(effect: string, work: boolean): string {
   return createHash("sha256").update(effect + (work ? ":delivery_result" : "")).digest("hex") + ".json";
 }
 
-function indexedReadProof(rows: JsonObject[], goal: string, name: string): {row: JsonObject; purpose: string} | null {
+interface CheckpointHistoryIndex {
+  proofs: Map<string, {row: JsonObject; purpose: string}>;
+  attempts: Map<string, {work: JsonObject[]; direction: JsonObject[]}>;
+}
+
+/** One captured history owns these lookup tables; no cached or repaired state.
+ * Keep every matching row so duplicate/conflicting attempts still fail closed. */
+function indexCheckpointHistory(rows: JsonObject[], goal: string): CheckpointHistoryIndex {
+  const proofs: CheckpointHistoryIndex["proofs"] = new Map();
+  const attempts: CheckpointHistoryIndex["attempts"] = new Map();
   for (const row of rows) {
     const binding = jsonObject(row.settlement_identity);
-    if (binding?.goal_id !== goal) continue;
-    const effect = binding.effect_id;
+    const effect = binding?.effect_id;
     if (typeof effect !== "string") continue;
-    const direction = jsonObject(row.vision_checkpoint)?.satisfied === true &&
-      jsonObject(jsonObject(row.vision_checkpoint)?.read_context) !== null;
-    if (direction && name === checkpointReceiptName(effect, false)) return {row, purpose: "first_delivery"};
+    const checkpoint = jsonObject(row.vision_checkpoint);
+    const directionAttempt = checkpoint?.satisfied === true && checkpoint.read_context != null;
+    const direction = directionAttempt && jsonObject(checkpoint?.read_context) !== null;
+    if (row.result_work_context != null || directionAttempt) {
+      let matching = attempts.get(effect);
+      if (!matching) { matching = {work: [], direction: []}; attempts.set(effect, matching); }
+      if (row.result_work_context != null) matching.work.push(row);
+      if (directionAttempt) matching.direction.push(row);
+    }
+    if (binding?.goal_id !== goal) continue;
     const work = jsonObject(row.result_work_context) !== null;
-    if ((direction || work) && name === checkpointReceiptName(effect, true)) {
-      return {row, purpose: work ? "delivery_result" : "first_delivery"};
+    if (direction) {
+      const name = checkpointReceiptName(effect, false);
+      if (!proofs.has(name)) proofs.set(name, {row, purpose: "first_delivery"});
+    }
+    if (direction || work) {
+      const name = checkpointReceiptName(effect, true);
+      // Preserve the historical first matching row, including direction-only
+      // proof for a lost work read. The attempt owner still verifies artifacts.
+      if (!proofs.has(name)) proofs.set(name, {row, purpose: work ? "delivery_result" : "first_delivery"});
     }
   }
-  return null;
+  return {proofs, attempts};
 }
 
 /** Observation only: recover bindings from verified indexed effects, never from
@@ -180,6 +202,7 @@ export function inspectCheckpointReadHistoryFromRows(value: unknown, rows: JsonO
   if (!Array.isArray(request.receipt_names)) throw new EffectRuntimeRequestError("receipt_names must be an array");
   const names = new Set<unknown>(request.receipt_names);
   const contexts = join(root, "goals", goal, "checkpoint-contexts");
+  const history = indexCheckpointHistory(rows, goal);
   // Deleted reads cannot appear in a directory scan. Recover their indexed
   // binding too; accounting/terminal owners still decide whether it is pending.
   for (const row of rows) {
@@ -199,11 +222,11 @@ export function inspectCheckpointReadHistoryFromRows(value: unknown, rows: JsonO
     if (typeof name !== "string" || !name.endsWith(".json") || !BARE_SHA256_PATTERN.test(name.slice(0, -5))) {
       throw new EffectRuntimeRequestError("invalid checkpoint receipt name");
     }
-    const proof = indexedReadProof(rows, goal, name);
+    const proof = history.proofs.get(name);
     if (!proof) continue;
     try {
-      const result = inspectCheckpointAttemptFromRows({runtime_root: root, identity: proof.row.settlement_identity,
-        purpose: proof.purpose}, rows);
+      const result = inspectCheckpointAttemptFromHistory({runtime_root: root, identity: proof.row.settlement_identity,
+        purpose: proof.purpose}, rows, history);
       if (result.status === "committed") verified.push({receipt_name: name, identity: proof.row.settlement_identity,
         purpose: proof.purpose});
     } catch (error) {
@@ -223,14 +246,18 @@ export function inspectCheckpointAttempt(value: unknown): JsonObject {
 }
 
 export function inspectCheckpointAttemptFromRows(value: unknown, rows: JsonObject[]): JsonObject {
+  return inspectCheckpointAttemptFromHistory(value, rows);
+}
+
+function inspectCheckpointAttemptFromHistory(value: unknown, rows: JsonObject[], captured?: CheckpointHistoryIndex): JsonObject {
   const request = requireJsonObject(value, "checkpoint attempt inspection");
   const root = requireLocalAuthorityRuntimeRoot(request.runtime_root);
   const identity = requireJsonObject(request.identity, "settlement identity");
-  const runsDir = join(root, "goals", goalPathSegment(identity.goal_id), "runs");
+  const goal = goalPathSegment(identity.goal_id);
+  const runsDir = join(root, "goals", goal, "runs");
   const work = request.purpose === "delivery_result";
-  const matching = rows.filter(row => jsonObject(row.settlement_identity)?.effect_id === identity.effect_id &&
-    (work ? row.result_work_context != null : jsonObject(row.vision_checkpoint)?.satisfied === true &&
-      jsonObject(row.vision_checkpoint)?.read_context != null));
+  const history = captured ?? indexCheckpointHistory(rows, goal);
+  const matching = history.attempts.get(String(identity.effect_id))?.[work ? "work" : "direction"] ?? [];
   const path = join(root, "goals", goalPathSegment(identity.goal_id), "checkpoint-contexts",
     checkpointReceiptName(requireNonEmptyString(identity.effect_id, "effect_id"), work));
   let receipt: JsonObject | null = null;
@@ -265,12 +292,12 @@ export function inspectCheckpointAttemptFromRows(value: unknown, rows: JsonObjec
       let other: JsonObject;
       try { other = requireJsonObject(JSON.parse(readFileSync(join(contexts, name), "utf8")), "read receipt"); }
       catch {
-        const proof = indexedReadProof(rows, goalPathSegment(identity.goal_id), name);
+        const proof = history.proofs.get(name);
         if (proof) {
           // Reuse receipt-first artifact verification without scanning other reads.
           // A work proof alone cannot establish that a direction append committed.
-          const verified = inspectCheckpointAttemptFromRows({runtime_root: root, identity: proof.row.settlement_identity,
-            purpose: proof.purpose}, rows);
+          const verified = inspectCheckpointAttemptFromHistory({runtime_root: root, identity: proof.row.settlement_identity,
+            purpose: proof.purpose}, rows, history);
           if (verified.status === "committed") continue;
         }
         unknown("checkpoint read receipt is unavailable; preserve original Turn artifacts before retrying");
@@ -278,9 +305,9 @@ export function inspectCheckpointAttemptFromRows(value: unknown, rows: JsonObjec
       const owner = jsonObject(other.identity);
       if (other.purpose === "first_delivery" && other.commit_attempt != null && owner?.effect_id !== identity.effect_id &&
           owner?.agent_id === identity.agent_id && owner?.todo_id === identity.todo_id) {
-        const proof = indexedReadProof(rows, goalPathSegment(identity.goal_id), name);
+        const proof = history.proofs.get(name);
         if (!proof || proof.purpose !== "first_delivery" ||
-            inspectCheckpointAttemptFromRows({runtime_root: root, identity: owner, purpose: "first_delivery"}, rows).status !== "committed") {
+            inspectCheckpointAttemptFromHistory({runtime_root: root, identity: owner, purpose: "first_delivery"}, rows, history).status !== "committed") {
           unknown("another original Turn has an unresolved direction append for this Todo");
         }
       }

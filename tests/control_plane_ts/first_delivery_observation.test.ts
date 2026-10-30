@@ -8,6 +8,8 @@ import {join, resolve} from "node:path";
 import test from "node:test";
 import {settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} from "../../loopx/control_plane/effect_runtime_handlers.ts";
+import {inspectCheckpointAttemptFromRows, inspectCheckpointReadHistoryFromRows,
+  readCheckpointHistoryRows} from "../../loopx/control_plane/goals/checkpoint_commit.ts";
 
 const goal = "observation-goal", agent = "observation-agent";
 async function fixture(count: number, loss = "intact", pending = false) {
@@ -44,6 +46,84 @@ async function fixture(count: number, loss = "intact", pending = false) {
 }
 
 const observe = (request: JsonObject) => dispatchEffectRuntimeMethod(createEffectRuntimeHandlers(), "turn.first_delivery.observe", request);
+
+async function retainWorkHistory(f: Awaited<ReturnType<typeof fixture>>, loss: string): Promise<void> {
+  const rows: JsonObject[] = [];
+  for (const row of f.rows) {
+    if (row.classification === "state_refreshed") {
+      const identity = row.settlement_identity as JsonObject;
+      const work = {...row, result_work_context: {ok: true, purpose: "delivery_result", read_context_id: `work-${row.turn_instance_id}`},
+        vision_checkpoint: {required: true, satisfied: false, decision: "missing_required"},
+        json_path: join(f.root, "goals", goal, "runs", `work-${row.turn_instance_id}.json`),
+        markdown_path: join(f.root, "goals", goal, "runs", `work-${row.turn_instance_id}.md`)};
+      await fsp.writeFile(work.json_path, JSON.stringify(work));
+      await fsp.writeFile(work.markdown_path, "Retained result before direction\n");
+      const name = createHash("sha256").update(String(identity.effect_id) + ":delivery_result").digest("hex") + ".json";
+      if (loss !== "deleted") await fsp.writeFile(join(f.root, "goals", goal, "checkpoint-contexts", name),
+        loss === "damaged" ? "{" : JSON.stringify({schema_version: "checkpoint_read_context_v2", purpose: "delivery_result", identity}));
+      rows.push(work);
+    }
+    rows.push(row);
+  }
+  f.rows = rows;
+  await fsp.writeFile(f.index, rows.map(row => JSON.stringify(row) + "\n").join(""));
+}
+
+for (const loss of ["deleted", "damaged"]) test(`lost work and direction reads recover with bounded history traversal: ${loss}`, async () => {
+  for (const count of [1, 100, 1000]) {
+    const f = await fixture(count, loss);
+    try {
+      await retainWorkHistory(f, loss);
+      const before = await fsp.readFile(f.index, "utf8");
+      const contexts = join(f.root, "goals", goal, "checkpoint-contexts");
+      const names = await fsp.readdir(contexts);
+      let identityReads = 0;
+      const rows = readCheckpointHistoryRows(f.root, goal).map(row => new Proxy(row, {
+        get(target, key, receiver) {
+          if (key === "settlement_identity") identityReads++;
+          return Reflect.get(target, key, receiver);
+        },
+      }));
+      const recovered = inspectCheckpointReadHistoryFromRows({runtime_root: f.root, goal_id: goal,
+        agent_id: agent, receipt_names: names}, rows).verified as JsonObject[];
+      assert.equal(recovered.length, count * 2, "both original result and later direction remain independently provable");
+      for (const purpose of ["delivery_result", "first_delivery"]) {
+        const byEffect = (a: JsonObject, b: JsonObject) => String(a.effect_id).localeCompare(String(b.effect_id));
+        assert.deepEqual(recovered.filter(row => row.purpose === purpose).map(row => row.identity as JsonObject).sort(byEffect),
+          [...f.identities].sort(byEffect));
+      }
+      // Count actual source visits, not elapsed time or the number of file opens:
+      // one captured history must not be scanned again for each lost receipt.
+      assert.ok(identityReads <= rows.length * 8, `${identityReads} identity reads for ${rows.length} rows`);
+      assert.equal(await observe(f.request), null);
+      assert.equal(await fsp.readFile(f.index, "utf8"), before);
+      assert.deepEqual(await fsp.readdir(contexts), names, "observation cannot recreate disposable receipts");
+    } finally { await fsp.rm(f.root, {recursive: true, force: true}); }
+  }
+});
+
+for (const purpose of ["delivery_result", "first_delivery"]) test(`indexed recovery does not deduplicate competing ${purpose} attempts`, async () => {
+  const f = await fixture(1, "deleted");
+  try {
+    await retainWorkHistory(f, "deleted");
+    const rows = readCheckpointHistoryRows(f.root, goal);
+    const original = rows.find(row => purpose === "delivery_result" ? row.result_work_context != null :
+      (row.vision_checkpoint as JsonObject | undefined)?.satisfied === true)!;
+    // Duplicate and malformed candidates remain uncertain for this effect;
+    // neither a map overwrite nor stricter proof parsing may hide a competitor.
+    const malformed = purpose === "delivery_result" ? {...original, result_work_context: ""} :
+      {...original, vision_checkpoint: {...original.vision_checkpoint as JsonObject, read_context: ""}};
+    for (const competitor of [{...original}, malformed]) {
+      await fsp.writeFile(f.index, [...rows, competitor].map(row => JSON.stringify(row) + "\n").join(""));
+      const competing = readCheckpointHistoryRows(f.root, goal);
+      assert.throws(() => inspectCheckpointAttemptFromRows({runtime_root: f.root,
+        identity: f.identities[0], purpose}, competing), {code: "checkpoint_commit_unknown"});
+      const recovered = inspectCheckpointReadHistoryFromRows({runtime_root: f.root, goal_id: goal,
+        agent_id: agent, receipt_names: []}, competing).verified as JsonObject[];
+      assert.equal(recovered.some(row => row.purpose === purpose), false);
+    }
+  } finally { await fsp.rm(f.root, {recursive: true, force: true}); }
+});
 
 for (const loss of ["intact", "damaged", "deleted"]) for (const count of [0, 1, 100, 1000]) {
   test(`one batch bounds source reads across ${count} ${loss} historical Turns`, async t => {
