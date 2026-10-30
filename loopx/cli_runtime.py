@@ -78,6 +78,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"handoff", "handoff-mode",
 	"performance-diagnosis",
 	"heartbeat-prompt",
+	"goal-acceptance",
 }
 
 
@@ -399,6 +400,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.support_control_heartbeat_registration import register_heartbeat_control_commands
 
 		register_heartbeat_control_commands(subparsers, add_subcommand_format)
+	elif command == "goal-acceptance":
+		from .cli_commands.goal_acceptance import register_goal_acceptance_command
+
+		register_goal_acceptance_command(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -417,6 +422,13 @@ def _dispatch_common_command(
 			args, registry_path=registry_path,
 			registry_was_supplied=not allow_missing_registry,
 			print_payload=print_payload, output_format=output_format,
+		)
+	if args.command == "goal-acceptance":
+		from .cli_commands.goal_acceptance import handle_goal_acceptance_command
+
+		return handle_goal_acceptance_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			output_format=output_format, print_payload=print_payload,
 		)
 	if args.command == "performance-diagnosis":
 		from .capabilities.performance_diagnosis.cli import handle_performance_diagnosis_command
