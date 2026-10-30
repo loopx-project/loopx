@@ -505,10 +505,11 @@ def build_loopx_turn_plan(
             route = LoopXTurnRoute.CONTRACT_ERROR
         if not selected_todo and identity_error is None:
             if settlement_identity is None:
-                # An unbound replan remains controller work. Ordinary work
-                # without a Task or request binding must still fail session
-                # validation rather than disguising a malformed contract as wait.
-                if route is LoopXTurnRoute.REPLAN_REQUIRED:
+                # Historical inputs without a work binding safely waited.
+                # Preserve that decoder without weakening complete ordinary
+                # work: its missing binding still fails session validation.
+                if (route is LoopXTurnRoute.REPLAN_REQUIRED
+                        or work_contract is _ABSENT_WORK_CONTRACT):
                     route = LoopXTurnRoute.BLOCKED
             elif (session_scope != "agent" and not (
                 settlement_identity.request_subject is not None and iteration_context_policy == "fresh"
