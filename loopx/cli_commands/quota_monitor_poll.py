@@ -3,15 +3,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.capability_hooks import InteractionProjectionHookRegistration
 from ..control_plane.quota.effective_action import EffectiveAction
-from .quota_context import QuotaCommandContext
-from .quota_action_selection import RequestedQuotaActionSelection
-from ..capabilities.explore.composition_frontier import (
-    project_live_explore_composition_frontier,
-)
 from ..control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
@@ -20,6 +16,10 @@ from ..control_plane.quota.heartbeat_receipt import (
 from ..control_plane.scheduler.execution_context import (
     SchedulerExecutionContextResolution,
 )
+
+if TYPE_CHECKING:
+    from .quota_action_selection import RequestedQuotaActionSelection
+    from .quota_context import QuotaCommandContext
 
 
 def _receipt_bound_monitor_todo_id(
@@ -118,6 +118,10 @@ def record_quota_monitor_poll_for_cli(
             settlement_todo_id=settlement_todo_id,
             after_decision=lambda _status: before, render_markdown=lambda _payload: "",
         )
+    from ..capabilities.explore.composition_frontier import (
+        project_live_explore_composition_frontier,
+    )
+
     return monitor_poll_recorder(
         status_payload, **arguments,
         available_capabilities=args.available_capabilities,
@@ -201,6 +205,10 @@ def record_automatic_heartbeat_stall(
         and existing_stall is None
     ):
         return payload, status_payload, cache_metadata, "not_applicable"
+    from ..capabilities.explore.composition_frontier import (
+        project_live_explore_composition_frontier,
+    )
+
     poll = monitor_poll_recorder(
         status_payload,
         goal_id=args.goal_id,
