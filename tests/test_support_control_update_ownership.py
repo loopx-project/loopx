@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import argparse
 import re
+import json
 from pathlib import Path
+from unittest import mock
+
+import pytest
 
 from loopx.cli_commands import support_control
 from loopx.cli_commands import support_control_update as update_module
@@ -76,3 +80,31 @@ def test_dispatch_ignores_other_commands() -> None:
         )
         is None
     )
+
+
+def test_activation_has_no_registry_or_installation_dependency(monkeypatch, capsys):
+    from loopx.cli import main
+    payload = {"schema_version": "loopx_runtime_service_activation_v1", "ok": True,
+        "service": "chat", "status": "restart_requested", "readiness_verified": False}
+    monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
+    with (mock.patch("loopx.cli_runtime.select_default_runtime_root", side_effect=AssertionError("no default store")),
+          mock.patch("loopx.runtime_activation.activate_runtime_services", return_value=payload) as activate,
+          mock.patch.object(update_module, "build_update_plan", side_effect=AssertionError("no install"))):
+        assert main(["--format", "json", "update", "activate", "--service", "chat", "--port", "18767"]) == 0
+    activate.assert_called_once_with(service="chat", port=18767)
+    assert json.loads(capsys.readouterr().out) == payload
+
+
+@pytest.mark.parametrize("args", [
+    ["activate", "--dry-run"], ["activate", "--ref", "main"],
+    ["activate", "--background"], ["activate", "--port", "18767"],
+    ["plan", "--service", "chat"],
+])
+def test_activation_flags_cannot_change_update_intent(args, capsys):
+    from loopx.cli import main
+    with (mock.patch("loopx.runtime_activation.activate_runtime_services") as activate,
+          mock.patch.object(update_module, "build_update_plan") as plan):
+        assert main(["--registry", "/nonexistent-registry", "--format", "json", "update", *args]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    activate.assert_not_called()
+    plan.assert_not_called()

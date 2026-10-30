@@ -261,6 +261,31 @@ def test_probe_existing_chat_accepts_exact_loopx_fingerprint() -> None:
         thread.join(timeout=2)
 
 
+def test_probe_legacy_chat_falls_back_once_and_keeps_capability_checks():
+    from loopx.dashboard_launcher import _probe_existing_chat
+    paths = []
+    class Legacy(_CapabilitiesHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            if self.path == "/api/chat/readiness":
+                self.send_response(404)
+                self.end_headers()
+            else:
+                super().do_GET()
+    server, thread = _serve_capabilities(Legacy)
+    try:
+        assert _probe_existing_chat("127.0.0.1", server.server_port) == "matching"
+        assert paths == ["/api/chat/readiness", "/api/chat/capabilities"]
+        paths.clear()
+        assert _probe_existing_chat("127.0.0.1", server.server_port,
+            goal_subagent_configuration_enabled=False) == "matching"
+        assert paths == ["/api/chat/capabilities"]
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+
+
 @pytest.mark.parametrize(
     ("capability", "requested"),
     [(None, True), ("preview_locked", False)],

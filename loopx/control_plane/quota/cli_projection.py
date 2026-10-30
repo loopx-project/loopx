@@ -94,6 +94,16 @@ _RETAINED_MONITOR_POLL_FOLLOW_UP_SUMMARY_FIELDS = (
 )
 
 
+def _json_content_key(value: Any) -> str:
+    """Compare original JSON values for sharing, including types and signed zero.
+
+    This is local serialization IO, not another quota or context-selection rule.
+    Python equality merges booleans with integers and integral floats; those
+    distinct source facts must not borrow each other's in-response owner.
+    """
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+
+
 def _compact_monitor_poll_interaction_contract(
     contract: Any,
 ) -> dict[str, Any] | None:
@@ -254,10 +264,11 @@ def _reference_inline_replan_authoring(
     steps = plan.get("ordered_steps") if isinstance(plan, dict) else None
     if not isinstance(steps, list):
         return packet
+    authoring_key = _json_content_key(writeback["vision_authoring"])
     index = next(
         (index for index, step in enumerate(steps)
          if isinstance(step, dict) and step.get("kind") == "durable_writeback"
-         and step.get("vision_authoring") == writeback["vision_authoring"]),
+         and _json_content_key(step.get("vision_authoring")) == authoring_key),
         None,
     )
     if index is None:
@@ -304,10 +315,11 @@ def _replace_nested_vision_continuation_audits(
     source_audit: dict[str, Any],
     audit_ref: dict[str, Any],
 ) -> None:
+    source_key = _json_content_key(source_audit)
     frontier = payload.get("goal_frontier_projection")
     if (
         isinstance(frontier, dict)
-        and frontier.get("vision_continuation_audit") == source_audit
+        and _json_content_key(frontier.get("vision_continuation_audit")) == source_key
     ):
         compact_frontier = dict(frontier)
         compact_frontier["vision_continuation_audit"] = dict(audit_ref)
@@ -321,7 +333,7 @@ def _replace_nested_vision_continuation_audits(
         channel = compact_interaction.get(channel_name)
         if (
             not isinstance(channel, dict)
-            or channel.get("vision_continuation_audit") != source_audit
+            or _json_content_key(channel.get("vision_continuation_audit")) != source_key
         ):
             continue
         compact_channel = dict(channel)
@@ -536,9 +548,8 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
         value = parent.get(field) if isinstance(parent, dict) else None
         if not isinstance(value, dict) or not value or field + "_ref" in parent:
             continue
-        # Python equality conflates True/1 and False/0. Compare JSON types and
-        # the complete content, including revision, scope, failures and sources.
-        encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        # Keep complete revision, scope, failures and sources in the identity.
+        encoded = _json_content_key(value)
         reference = carriers.get(encoded)
         own_ref = "$" + "".join(
             f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)

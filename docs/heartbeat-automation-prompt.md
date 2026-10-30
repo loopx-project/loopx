@@ -466,6 +466,16 @@ use the explicit original capture reference. If preparation fails before that
 can be established, or invalidation also fails, the CLI reports
 `quota_decision_transport_failed` with the saved decision and receipt. Do not
 rerun admission to recover a presentation failure.
+
+When the caller also selects `--record-host-poll`, the existing liveness owner
+records that observation once before the original capture. The saved decision,
+ordinary/envelope output and native recovery view retain the same
+`host_poll_receipt`, including an unreadable-receipt diagnostic. A capture or
+handoff failure still reports an already-recorded poll; its count can advance
+even when presentation fails. Reading the original evidence never records
+another poll, launches work or spends quota. Without this flag, capture and
+context delivery do not create a liveness receipt.
+
 `off` creates no native journal, hook configuration or input
 observation; directories alone never turn it on. This declaration check is not
 host authentication, execution authority or proof of retained input. Native

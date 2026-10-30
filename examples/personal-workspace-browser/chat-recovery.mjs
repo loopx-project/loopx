@@ -213,7 +213,7 @@ export const chatRecoveryScenario = {
       await page.locator(".personal-composer-tools > summary").click();
       const [fileChooser] = await Promise.all([
         page.waitForEvent("filechooser"),
-        page.getByRole("button", { name: "添加图片" }).click(),
+        page.getByRole("button", { name: "添加附件" }).click(),
       ]);
       await fileChooser.setFiles({
         buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8WQAAAAASUVORK5CYII=", "base64"),
@@ -222,7 +222,7 @@ export const chatRecoveryScenario = {
       });
       await page.getByRole("img", { name: "loopx-smoke.png" }).waitFor({ state: "visible" });
       if (await page.getByRole("button", { name: "发送", exact: true }).isDisabled()) throw new Error("A valid image attachment did not enable the composer send action");
-      await page.getByRole("button", { name: "移除图片 loopx-smoke.png" }).click();
+      await page.getByRole("button", { name: "移除附件 loopx-smoke.png" }).click();
       pass(18, "The visible attachment button opens a file chooser; a valid PNG renders a preview and enables send.");
 
       await page.getByLabel("向 LoopX 发送消息").evaluate((target) => {
@@ -233,7 +233,7 @@ export const chatRecoveryScenario = {
         target.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }));
       });
       await page.getByRole("img", { name: "loopx-pasted.png" }).waitFor({ state: "visible" });
-      await page.getByRole("button", { name: "移除图片 loopx-pasted.png" }).click();
+      await page.getByRole("button", { name: "移除附件 loopx-pasted.png" }).click();
       pass(19, "Pasting a clipboard PNG attaches through the same validated composer path.");
       await page.locator(".personal-goal-link").first().click();
       const goalNavigation = page.getByRole("navigation", { name: "Goal 视图" });

@@ -105,7 +105,7 @@ export const conversationImageRequestScenario = {
         await page.locator('input[type="file"]').setInputFiles({name: "retry.png", mimeType: "image/png", buffer: bytes});
         await composer.fill("保留这张图，修改后再发。");
         await page.getByRole("button", {name: "发送", exact: true}).click();
-        await page.locator(".personal-message.is-assistant").last().getByText(/请求未提交；草稿和图片已保留/).waitFor();
+        await page.locator(".personal-message.is-assistant").last().getByText(/请求未提交；草稿和附件已保留/).waitFor();
         assert.equal(await composer.inputValue(), "保留这张图，修改后再发。");
         assert.equal(await page.locator(".personal-composer-images img").count(), 1);
         assert.equal(sent.length, 1, "Rejected request must not replay itself");

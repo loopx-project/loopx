@@ -488,9 +488,8 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
-    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+    from tests.control_plane.codex_checkpoint_fixture import last_context_page, local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
-    from tests.control_plane.codex_checkpoint_fixture import last_context_page as _last_page
     from tests.control_plane.test_codex_context_capture import _delivered
     from tests.control_plane.test_quota_settlement_cli import (
         AGENT_ID, GOAL_ID, TODO_ID, _configure_selectable_alternative,
@@ -539,6 +538,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     if not benchmark:
         (home / "hooks.json").write_text(json.dumps({"hooks": configuration["hooks"]}))
     phase, queue, observed, errors = "cold", [], {}, []
+    read_offsets = {}
     actual_turn = None
 
     def response(request, number, message):
@@ -582,6 +582,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 if descriptor["mode"] == "delta":
                     assert descriptor["target"] == published["target"]
                 observed[name] = (published, descriptor)
+                read_offsets[name] = 0
                 # Follow the public reader's actual page cursor rather than
                 # guessing offsets from the capture size. This keeps each
                 # request's real page budget and avoids overlapping reads.
@@ -599,13 +600,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             else:
                 name = phase.removesuffix("_read")
                 descriptor = observed[name][1]
+                page = last_context_page(request)
+                assert page and page["ok"]
                 if progressive:
-                    outputs = [item["output"] for item in request["input"]
-                        if item.get("type") in ("function_call_output", "custom_tool_call_output")]
-                    output = outputs[-1]
-                    if isinstance(output, list):
-                        output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
-                    page = json.loads(output.split("\nOutput:\n", 1)[-1])
                     values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
                     assert values["/goal_id"] == GOAL_ID
                     assert values["/heartbeat_receipt"]["turn_instance_id"] == (
@@ -613,7 +610,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     native_context = home / "loopx-context" if benchmark else context
                     assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
-                    page = _last_page(request)
+                    assert page["offset"] == read_offsets[name]
+                    read_offsets[name] += len(page["content"].encode())
+                    assert read_offsets[name] == (page["total_bytes"] if page["eof"] else page["next_offset"])
                     assert page is not None and page["sha256"] == descriptor["sha256"]
                     if not page["eof"]:
                         assert page["next_offset"] > page["offset"] and page["next_command"]
