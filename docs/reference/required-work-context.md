@@ -39,6 +39,11 @@ references follow their complete inline owner when that projection relocates it,
 including an owner visited later. Different revisions, types, failures and
 sources stay distinct. This adds no source read or authority, admission or
 settlement change; saved captures retain their original contents.
+Vision-audit and replan-authoring mirrors reuse that local serialization
+identity. Boolean/number values, integer/integral-float representations and
+signed zero remain distinct when their original JSON encodings differ. Key
+order alone does not prevent sharing. This adds no model read or runtime round
+trip; distinct source facts retain their complete instructions.
 Registered Goal state uses the existing writer's strict generated-region
 ownership. When every recognized Todo region is explicitly marked, the source
 adapter delivers **all other text verbatim** in `work_context.sources`: Goal
@@ -590,6 +595,9 @@ all-Goal adoption, actual solver costs or outcome benefit.
 普通 CLI 在同一响应内共享完全相同的验收副本。已有引用跟随本次投影迁移的完整
 内联 owner，包括后访问的 owner；不同修订、类型、失败和来源分别保留。不增加来源
 读取，不改变权限、准入或结算；已存 capture 保留原始内容。
+Vision audit 和 replan authoring 副本复用该本地序列化身份。原始 JSON 编码不同的
+布尔／数值、整数／整值浮点表示及带符号零分别保留；仅键顺序不同仍可共享。不增加
+模型补读或 runtime 往返；不同来源事实保留完整指引。
 Goal Markdown 复用原 writer 对生成区域的严格归属规则：所有已识别 Todo 区域均有
 显式标记时，`work_context.sources` 原样携带区域外的全部文字，保留目标、frontmatter、
 任意章节、注释、历史和末尾停止条件。`excluded_todo_regions` 保留每段的角色、行区间
