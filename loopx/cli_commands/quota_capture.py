@@ -393,13 +393,24 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
                     "Current context recovery could not be prepared. Read the saved "
                     "original decision and receipt; do not rerun admission."
                 )
+            page_bytes, output_bytes = native_context_page_budget()
+            output_limit = getattr(args, "max_page_output_bytes", None)
+            if isinstance(output_limit, int) and output_limit > 0:
+                output_bytes = min(output_bytes, output_limit)
+                page_bytes = min(page_bytes, output_bytes)
+            recovery_index = {**full_reference, "command": context_capture_read_command(
+                Path(full_reference["path"]), full_reference["sha256"],
+                page_bytes=page_bytes, max_page_output_bytes=output_bytes, list_fields=True)}
             return {"ok": False, "error_code": exc.error_code,
                 "reason": " ".join(str(exc).split())[:500],
                 "heartbeat_receipt": receipt, "capture_sha256": args.capture_sha256,
-                "recovery": full_reference,
-                "instruction": "Context presentation was not published. Read recovery.command for the "
-                    "original captured decision and preserve its Turn receipt; do not rerun admission. "
-                    "Authority and freshness are unchanged. " + CONTEXT_CAPTURE_READ_GUIDANCE}
+                "recovery": recovery_index,
+                "instruction": "Context presentation was not published. Discover current fields with "
+                    "recovery.command, then select only the facts the current decision needs from the original "
+                    "capture; do not drain unrelated optional material or rerun admission. Preserve its Turn "
+                    "receipt. If a selected value spans pages, follow next_command only for that selection and "
+                    "verify contiguous offsets, total_bytes and sha256. Authority and freshness are unchanged. "
+                    + CONTEXT_CAPTURE_NAVIGATION_GUIDANCE}
         # Off is inert; after native preparation an optional wire write can fall
         # back to the committed required view without leaving an older selector live.
     result: dict[str, Any] = {"ok": True, "mode": mode, **reference, **({"target": target} if target else {}),

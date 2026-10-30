@@ -71,6 +71,58 @@ def content_hashes(root):
     }
 
 
+@pytest.mark.parametrize("state", ["queued", "running", "completed", "unknown"])
+def test_desktop_activation_uses_original_manager_and_accepted_work(services, monkeypatch, state):
+    from loopx import dashboard_launcher, runtime_activation
+    runtime, agents, calls = services
+    # A legitimate private bootstrap need not carry the release launcher's
+    # Python source text. The loaded manager and its explicit route own it.
+    (agents / "com.loopx.chat.plist").write_bytes(plistlib.dumps({"ProgramArguments": [
+        "/bin/zsh", "-c", shlex.join(["exec", "private-host", "--runtime-root", str(runtime), "chat"])]}))
+    store = ChatSessionStore(runtime)
+    sid = session(store)
+    turn, _ = store.create_queued_turn(sid, client_turn_id="original", message="retain this input")
+    store.update_turn(sid, turn["turn_id"], status=state)
+    before = content_hashes(store.root)
+    listening, signals = [True], []
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda *_a: "stale")
+    monkeypatch.setattr(dashboard_launcher, "_listener_pids", lambda _port: [12345] if listening[0] else [])
+    monkeypatch.setattr(dashboard_launcher, "_is_same_user_loopx_chat_process", lambda _pid: True)
+    monkeypatch.setattr(runtime_activation, "_managed_service_pid", lambda *_a, **_k: 12345)
+
+    def stop(pid, signal):
+        signals.append((pid, signal))
+        listening[0] = False
+    monkeypatch.setattr(runtime_activation.os, "kill", stop)
+    result = runtime_activation.activate_runtime_services(service="chat")
+    assert content_hashes(store.root) == before
+    assert result["readiness_verified"] is False
+    if state == "completed":
+        assert result["ok"] and result["status"] == "restart_requested"
+        assert len(signals) == 1 and signals[0][0] == 12345
+        assert calls == [["launchctl", "kickstart", f"gui/{runtime_activation.os.getuid()}/com.loopx.chat"]]
+    else:
+        assert not result["ok"] and result["status"] == "deferred"
+        assert result["reason"] == ("chat_state_unverified" if state == "unknown" else "chat_work_pending")
+        assert not signals and not calls
+
+
+def test_desktop_activation_rechecks_loaded_manager_before_signalling(services, monkeypatch):
+    from loopx import dashboard_launcher, runtime_activation
+    runtime, _agents, calls = services
+    ChatSessionStore(runtime)
+    monkeypatch.setattr(dashboard_launcher, "_probe_existing_chat", lambda *_a: "stale")
+    monkeypatch.setattr(dashboard_launcher, "_listener_pids", lambda _port: [12345])
+    monkeypatch.setattr(dashboard_launcher, "_is_same_user_loopx_chat_process", lambda _pid: True)
+    identities = iter([12345, 54321])
+    monkeypatch.setattr(runtime_activation, "_managed_service_pid", lambda *_a, **_k: next(identities))
+    with mock.patch.object(runtime_activation.os, "kill") as stop:
+        result = runtime_activation.activate_runtime_services(service="chat")
+    assert result["reason"] == "chat_state_unverified"
+    stop.assert_not_called()
+    assert not calls
+
+
 @pytest.mark.parametrize(
     "state", ["queued", "starting", "running", "completing", "interrupting"]
 )

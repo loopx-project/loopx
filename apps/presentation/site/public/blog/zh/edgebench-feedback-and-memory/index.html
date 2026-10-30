@@ -3,41 +3,58 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LoopX 控制面内核：长程工作的效果与效率 · LoopX</title>
-<meta name="description" content="从原 Turn 结算、完整上下文交付和请求内读取，解释 LoopX 内核的具体修复、反例、实测成本及长程价值的证据边界。">
+<title>让 Agent 多做十小时，究竟多做出了什么？ · LoopX</title>
+<meta name="description" content="这条研究从 10 月初的轨迹诊断开始，先修评测与续跑，再追踪证据怎样进入下一次实验，最后把控制面自己的成本算进来。下面按这个过程展开：哪些机制改了，哪些结果支持它，哪些结果迫使我们改方向。">
 <link rel="canonical" href="https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/">
 <link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/">
 <link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/">
 <link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/edgebench-feedback-and-memory/">
 <meta property="og:type" content="article">
-<meta property="og:title" content="LoopX 控制面内核：长程工作的效果与效率">
-<meta property="og:description" content="从原 Turn 结算、完整上下文交付和请求内读取，解释 LoopX 内核的具体修复、反例、实测成本及长程价值的证据边界。">
+<meta property="og:title" content="让 Agent 多做十小时，究竟多做出了什么？">
+<meta property="og:description" content="这条研究从 10 月初的轨迹诊断开始，先修评测与续跑，再追踪证据怎样进入下一次实验，最后把控制面自己的成本算进来。下面按这个过程展开：哪些机制改了，哪些结果支持它，哪些结果迫使我们改方向。">
 <meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/">
 <link rel="stylesheet" href="../../images/edgebench-feedback-and-memory/article.css">
 </head>
 <body><main id="main"><div class="language"><a href="../">← LoopX 博客</a><a href="../../edgebench-feedback-and-memory/" lang="en">English</a></div>
-<header>
-<p class="muted">黄睿腾 · 更新于 2026 年 10 月 28 日 · 内核工程与研究</p>
-<h1>LoopX 控制面内核：长程工作的效果与效率</h1>
-<p class="subtitle">原 Turn 收尾、上下文交付与重复读取的三处修复</p>
-<p class="lead">Agent 能运行更久，还要让后续工作有价值、成果保得住，并让控制面本身的成本值得付出。</p>
-<p>EdgeBench 的长轨迹为我们暴露控制面问题提供了场景：任务已换方向，原 Turn 却未收尾；入口上下文缩短了，恢复总量却增加；一次读取反复核验同一份运行时。这篇沿共享语义 owner 解释三处修复，以及它们解决了什么、还没有证明什么。</p>
-</header>
-<nav aria-label="文章目录"><a href="#thesis">内核目标</a><a href="#repair-cases">正确接续</a><a href="#context">上下文成本</a><a href="#runtime-read">重复读取</a><a href="#validation">长程验证</a><a href="#new-study">下一步</a></nav>
-<section id="thesis"><h2>1. 内核怎样帮助长程工作？</h2>
+<header><p class="muted">黄睿腾 · 2026 年 10 月 29 日</p><h1>让 Agent 多做十小时，究竟多做出了什么？</h1><p class="subtitle">EdgeBench 如何反过来改造 LoopX 的长程控制面</p><p class="lead">一项研究可以起步更好，却在接下来的十小时里几乎没有增长。也可以不断改代码，最后丢掉最好结果。我们用这两种失败，重新审视目标、反馈、实验步长与恢复。</p><p>这条研究从 10 月初的轨迹诊断开始，先修评测与续跑，再追踪证据怎样进入下一次实验，最后把控制面自己的成本算进来。下面按这个过程展开：哪些机制改了，哪些结果支持它，哪些结果迫使我们改方向。</p></header><nav aria-label="文章目录"><a href="#research-history">研究时间线</a><a href="#ledger">可信反馈</a><a href="#goal-continuity">目标不丢</a><a href="#experiment-stride">实验步长</a><a href="#recovery-state">完整恢复</a><a href="#later-common-windows">后程结果</a><a href="#context">总成本</a></nav><section id="thesis">
 <p>这里的 kernel 指 LoopX 共享的目标、准入、事务和恢复规则。LoopX 让原始目标、验收条件、工作归属和证据跨会话、跨宿主持久化。控制面约束状态转换，为模型的下一步提供反馈，但不能认证这个选择是否高明。一条发现、一次读取回执、一条 replan 记录都只是中间证据；真正需要追踪的链条，要落到实际工作和经过验证的成果。</p>
-<p>这些规则的归属和<a href="../typescript-control-plane-refactor/#model-assisted-semantics">强模型参与的语义修复</a>，见 TypeScript 重构一文。下面分别检查接续正确性、完整交付成本和 Host 读取成本。</p>
+<p>这些规则的归属和<a href="../typescript-control-plane-refactor/#model-assisted-semantics">强模型参与的语义修复</a>，见 TypeScript 重构一文。下面从研究过程检查这些规则怎样影响实际工作。</p>
 <ol class="flow" aria-label="基于证据的工作循环"><li><strong>目标</strong><span>验收与范围</span></li><li><strong>证据</strong><span>结果与限制</span></li><li><strong>决策</strong><span>继续或换方向</span></li><li><strong>工作</strong><span>执行与验证</span></li><li><strong>保留</strong><span>保住最佳有效成果</span></li></ol>
 <p>我们区分起点优势、后续增量和最佳成果保留。更高的最终分数，可能主要来自更强的起点；更好的中间候选，也可能没有留在终态工作区里。运行更久、Todo 更多、图更大，都不能替代这三项判断。</p>
-</section>
-<section id="repair-cases"><h2>2. 新路线已确定，原来的工作怎样收尾？</h2>
-<p>一次长程工作可能在复盘时发现：原路线的证据不足，应该登记一个新的验证任务。后继 Todo 已经创建，但这轮复盘的结果还没有写回和结算。如果再次读取准入就改选新 Todo，模型会面对两份身份：刚做完的复盘属于旧 Turn，新的工作却被投影成当前任务。多叫醒一次模型，并不能解决这项归属冲突。</p>
-<p><a href="https://github.com/loopx-project/loopx/pull/7269">#7269</a> 收敛的是控制面的接续语义。<strong>创建后继任务证明路线已经落地，不证明原 Turn 已经结算，也不授予新任务执行权。</strong> 原有 TypeScript replan transition 和 quota settlement owner 保留创建回执、原义务与原 Turn 的绑定；同轮重读返回原结算步骤。写回后只剩待结算步骤，结算后这轮停止，新任务保持 open，留给下一次正常准入。</p>
-<p>这里还必须区分 <code>must_attempt</code> 和 <code>delivery_allowed</code>：前者要求处理本轮的工作义务，后者描述普通交付是否获准。需要重规划时，即使普通交付关闭，合法的规划工作仍可继续；不能为了让 Agent“动起来”就打开普通执行许可。租约、预算、停止条件和后继任务的准入继续由原 owner 判断。</p>
-<p><a href="https://github.com/loopx-project/loopx/blob/10e5fa57a4e7dad399d59bfa04d5b28dc04919f3/tests/control_plane/test_replan_successor_guard_reentry.py#L237">真实 File / SQLite CLI 回归</a>先创建后继，再原样执行返回的写回和结算命令：提前扣额被拒绝，重复结算只有一次 debit，原 Turn 不被后继替换，下一 Turn 才选择新任务。另有<a href="https://github.com/loopx-project/loopx/blob/10e5fa57a4e7dad399d59bfa04d5b28dc04919f3/tests/control_plane/test_replan_successor_guard_reentry.py#L334">归属改变、延后和撤回 claim 的负例</a>，证明失效的创建回执不能结算原结果。这里验证的是完整状态转换和真实入口，不能由一个字段或一次 ACK 代替。</p>
-<p>这项修复让模型把注意力留给“接下来验证什么”，减少为结算身份反复解释和重新准入的机会。它没有保证下一项研究一定有效；我们仍要追踪证据、选择、后续实际工作和原生成果。<a href="#memory">同点接续观察</a>给出了有限正向结果及其反证。</p>
-</section>
-<section id="context"><h2>3. 上下文变短，完整交付也变便宜了吗？</h2>
+</section><section id="research-history"><h2>1. 先看整个研究过程</h2><table tabindex="0"><thead><tr><th>时间</th><th>焦点</th><th>改变</th><th>实现</th></tr></thead><tbody><tr><td>10 月初</td><td>反馈与实验起点</td><td>排查盲跑提示、账本与恢复错误；建立原始任务、评分和续跑的边界。</td><td><a href="https://github.com/loopx-project/loopx/pull/5586">#5586</a>, <a href="https://github.com/loopx-project/loopx/pull/5844">#5844</a>, <a href="https://github.com/loopx-project/loopx/pull/5879">#5879</a></td></tr><tr><td>10 月 9–11 日</td><td>原目标与有效反馈</td><td>保留完整评测响应、候选身份、原始要求；一次实现或提交不能冒充 Goal 完成。</td><td><a href="https://github.com/loopx-project/loopx/pull/6031">#6031</a>, <a href="https://github.com/loopx-project/loopx/pull/6039">#6039</a>, <a href="https://github.com/loopx-project/loopx/pull/6133">#6133</a>, <a href="https://github.com/loopx-project/loopx/pull/6199">#6199</a></td></tr><tr><td>10 月 12–16 日</td><td>实验步长与恢复点</td><td>从机械缩小动作，转向 grow / switch / verify；联合保存会话、候选、评测机会和预算，复盘前切换 fresh context。</td><td><a href="https://github.com/loopx-project/loopx/pull/6298">#6298</a>, <a href="https://github.com/loopx-project/loopx/pull/6321">#6321</a>, <a href="https://github.com/loopx-project/loopx/pull/6305">#6305</a>, <a href="https://github.com/loopx-project/loopx/pull/6622">#6622</a>, <a href="https://github.com/loopx-project/loopx/pull/6649">#6649</a></td></tr><tr><td>10 月中下旬</td><td>后程改善与成果保留</td><td>共同窗口拆开起点、后续增量和 best 保留；Schema 的高成本与平台期成为反证。</td><td><a href="https://github.com/loopx-project/loopx/pull/6440">#6440</a>, <a href="https://github.com/loopx-project/loopx/pull/6532">#6532</a>, <a href="https://github.com/loopx-project/loopx/pull/6671">#6671</a></td></tr><tr><td>10 月 22–28 日</td><td>控制面完整成本</td><td>减少被动轮询和重复读取；核对原 Turn 收尾、完整上下文、差分失效回退及恢复费用。</td><td><a href="https://github.com/loopx-project/loopx/pull/6983">#6983</a>, <a href="https://github.com/loopx-project/loopx/pull/7013">#7013</a>, <a href="https://github.com/loopx-project/loopx/pull/7036">#7036</a>, <a href="https://github.com/loopx-project/loopx/pull/7197">#7197</a>, <a href="https://github.com/loopx-project/loopx/pull/7269">#7269</a></td></tr></tbody></table><p class="muted">按机制改变和可解释的失败选择案例；表中 PR 是阶段锚点，不是逐日全量发布清单。日期表示研究阶段，具体创建、合入及历史资格以链接为准。</p></section><span id="validation"></span><span id="matrix"></span><span id="observation-basis"></span><span id="zero"></span><section id="ledger"><h2>2. 先确认反馈值得相信</h2>
+<p>最初的 Portfolio 实验先暴露了测量和执行缺陷。一个盲跑 wrapper 在移除评测入口时，也删掉了迭代优化提示；一个账本检查把更早的市场收益归给了收盘时才买入的持仓。它们都混淆了原本的比较。修复后必须另起尝试，旧结果继续保留。</p>
+<p>一个小反例就能说明记账问题：初始现金 100,000，在收盘价 200 时买入 100 单位并支付 10 手续费，即时权益应为 99,990，NAV 为 <strong>0.9999</strong>；新持仓没有赚到此前从 100 涨到 200 的收益。之后，对两个冻结样本独立重建，各自 243 天全部吻合，权益残差小于 4×10⁻⁹，股数没有差异。这证明账本一致，不证明投资策略优秀。版本化修复见 <a href="https://github.com/ByteDance-Seed/EdgeBench/pull/14">EdgeBench #14</a>。</p>
+<span id="strategy"></span><span id="real"></span><span id="goal-anchor"></span><span id="wake-recovery"></span><p>续跑也有类似问题：某个工作项结束后，外层进程可以不断唤醒，却没有恢复出有用的下一步。判断必须回到原始目标。Todo 完成之后，可以继续实验、等待或结束，但它本身不能代表 Goal 验收。可靠反馈与恢复让之后的研究变得可解释。</p>
+<h3 id="review-cadence">长任务没做完，何时检查方向？</h3>
+<p>一个证明任务可以连续做几个小时，Todo 始终处于进行中。如果复盘只在完成若干 Todo 后触发，最需要检查的长任务反而可能一直等不到检查。把任务人为拆碎来凑次数，也不会改善研究。</p>
+<p>10 月 7 日的 <a href="https://github.com/loopx-project/loopx/pull/5879">#5879</a> 改了计数依据：按照<strong>已经结算的有效工作 Turn</strong>触发复盘，同一个 Todo 尚未完成时也能检查方向。这不是每调用一次工具就复盘。只写入进度而未完成结算，不增加次数；重复历史也不能重复计数。原有明确的 Todo 单位设置继续保留，各批实验仍按自己的冻结配置分析。</p>
+<p>另一半修复在复盘之后。判断现有方法仍然可行，可以带着证据继续原任务，无须为了证明“重规划过”而换路线。<a href="https://github.com/loopx-project/loopx/blob/b92bff438422a75f91701a1ca32a7e902e117289/tests/control_plane/test_effective_turn_replan.py#L34">该合入版本的真实 CLI 回归</a>覆盖了同一未完成 Todo 上的结算计数、缺失结算回执时不计数、拒绝没有证据引用的复盘，以及有证据地继续后再次获得工作准入。它验证了检查方向的时机与恢复执行的路径；模型是否作出更好的选择，仍要看后续实验。</p>
+<span id="lean"></span><h3>早期系统进展可以量化</h3>
+<table><thead><tr><th>盲跑 Lean 原始分</th><th>早期 Resume v14</th><th>后期 Resume（#5844）</th><th>早期 Explore v14</th><th>后期 Explore（#5844）</th></tr></thead><tbody><tr><td>180 分钟</td><td>0.1103</td><td>0.3478</td><td>0.1134</td><td>0.4019</td></tr><tr><td>450 分钟</td><td>0.1882</td><td>0.5243</td><td>0.1996</td><td>0.5605</td></tr></tbody></table>
+<p>这些单次运行的共同窗口里，后期原始分约为早期的 2.8–3.5 倍。提示、任务入口、runner 可靠性和 LoopX 机制一起变化。它支持整体系统有进展，不足以归因给某个机制，也不能保证其他题的终态表现。</p>
+<details><summary>比较边界</summary><p>历史研究包含 Official、单次调用、原生 Goal、LoopX Resume 和 LoopX Explore。Explore 在续跑基础上增加可选的证据采集和规划。盲跑仍可使用公开任务、训练数据和本地验证器，但收不到隐藏评测分数和诊断；后台操作者评测不是 solver 反馈。后来的 native-feedback 研究由 Agent 主动申请评测，按已接受提交执行一小时冷却，不做周期评测。这些是不同研究，不能合并成一个处理效应。</p><p>模型、effort、提示、runner 和预算共同演化。早期主要用 Sol/xhigh，后来的 Sol/max、Astra/xhigh 批次各自保留条件。每臂一次运行只能提供描述性证据。缺失、主动停止、无效和有效零分分别记录。Checkpoint 接续保留源时间、评测机会和冷却；donor 历史不算新的独立重复。</p></details></section><section id="goal-continuity"><h2>3. Agent 完成了自己列的任务，却没完成你的目标</h2>
+<p>长程研究的一个危险漂移是：原目标要求改善算法，Agent 把它拆成“实现方案、跑测试、提交结果”。三项 Todo 都完成了，外层循环也结束了，但算法是否更好仍未得到回答。另一个漂移来自 Agent 自己加的筛选门槛：某个局部 proxy 不过线，就被升级成不能继续研究的硬限制。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/6133">#6133</a> 把原始目标和硬约束，与 Agent 的暂定候选条件区分开；要求有区分力的实际产物证据，并保留适用范围明确的负结果。<a href="https://github.com/loopx-project/loopx/pull/6199">#6199</a> 将原始研究任务贯穿启动、Goal 与恢复：实现、测试、提交都是里程碑，不能替代目标验收。到 <a href="https://github.com/loopx-project/loopx/pull/6649">#6649</a>，检查又深入到真正送进 replan 的内容——不能用泛化提醒替代原问题，也不能把有用的 scoped evidence 截成短尾巴。</p>
+<p><strong>把目标存进文件，只解决了“找得到”；把它完整送进下一次决策，才有机会约束“接下来做什么”。</strong> 期限与停止仍由宿主执行。保留目标不等于允许无限续跑，也不保证模型一定找到好方案。</p></section><span id="planned-stride"></span><section id="experiment-stride"><h2>4. 失败之后，应该做小一点，还是换一个问题？</h2>
+<p>如果失败后总是缩小步长，Agent 很容易陷在局部修补里。一次失败可能来自实现错误，也可能说明整个机制假设不成立；这两种情况不该得到同一个“做少一点”。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/6298">#6298</a> 先把工作规模、路线距离、验证范围分开。随后 <a href="https://github.com/loopx-project/loopx/pull/6321">#6321</a> 将 grow / hold / shrink 的机械映射改为 <strong>grow / switch / verify</strong>：扩大已有根据的路线，切换被反证的机制，或者补一个能分辨假设的实验。每条路线需要自己的具体计划，工作单元要足以完成一次有效检验，不能只缩短每轮文本。</p>
+<p>例如一种求解策略只在高重复输入上有效，合理下一步可能是验证收益是否跟重复程度相关，再决定是否采用选择器；也可能是保留旧策略。这个例子说明三种决策的区别，不是声称某一 PR 已证明通用收益。Explore 记录的发现还要回到后续复盘，看它是否被采用、带来新信息或改变了实验。没有必要为了增加“转向次数”而强行换路线。</p>
+<p>这些是可选的规划机制。启用它们之后，仍需验证真实决策和后续成果；一个已登记的实验计划不是效果提升。</p></section><section id="recovery-state"><h2>5. 恢复一次研究，要恢复哪些东西？</h2>
+<p>复制候选代码，只保住了研究状态的一部分。如果接收者忘记已经用过的评测机会、从零计算冷却时间，或把恢复耗时从预算里抹掉，“同点接续”就悄悄获得了额外资源。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/6305">#6305</a> 将会话、候选、Explore、Goal、评测 best、机会、冷却和预算一起纳入 checkpoint。先暂停写入并封存，再允许围绕该状态做决策。<a href="https://github.com/loopx-project/loopx/pull/6622">#6622</a> 把 fresh-session 切换提前到复盘之前：否则关键路线已被旧上下文选定，随后换会话无法回答“新上下文怎样影响这次选择”。</p>
+<p>这个恢复合同支持更有针对性的比较：同一研究点之后，两臂读到了什么、选择了什么、实际跑了什么、留下哪个有效结果。它不能自动消除模型、effort 和 runner 差异，也不能把同一个 donor 的接续当作新的独立重复。未知的恢复资格继续保留为未知。</p></section><section id="later-common-windows"><h2>6. 十几个小时之后，是起点优势，还是新的进展？</h2>
+<p>后来的实验把重点转向十几个小时之后的工作。先比较共同观察窗口，再拆开起点、后续增量和保留的候选。只看终点排名，很容易混淆它们。</p>
+<table><thead><tr><th>历史批次</th><th>观察结果</th><th>含义</th></tr></thead><tbody>
+<tr><td>Sol/xhigh，新旧 LoopX，Ad Placement · 14h</td><td>49,589,589,573 → 49,615,495,839</td><td>新版 2h 时落后、14h 时领先，终态工作区与保留的 best 一致</td></tr>
+<tr><td>Astra/xhigh，Official Grid · 6h → 12h</td><td>1862 → 1810，越低越好</td><td>更强的基础模型基线仍在后程产生有效改善</td></tr>
+</tbody></table>
+<p>Ad Placement 说明后程并非必然平台期：后来的差候选被拒绝，最佳版本保住了。原始分领先约 0.052%，幅度不大；这里的终态工作区核验也只覆盖这一臂。新旧包同时改变 core 和 runner，不能当作某个 LoopX feature 的独立效应。</p>
+<p>Astra 的结果推进了我们观察到的基础模型能力边界。Official 将速度修改和搜索修改分开，得到连续的原生改善。这项进展属于基础模型／Official 路径，不能算到 LoopX 头上。更强模型也提高了 harness 的要求：面对不断进步的基线，上下文与复盘成本必须换来相应价值。</p>
+<span id="negative-decision"></span><h3>Schema：起点领先不等于持续改善</h3>
+<p>Schema 是这里展开的反例。Sol 新旧版 14 小时窗口，新版 0.804620、旧版 0.723684。但第一次原生结果已经是 0.794620 对 0.713158，且收到反馈的耗时不同。后续增量仅为 <strong>0.010000 和 0.010526</strong>。较大的终点优势主要来自起点；后续不断改代码，仍未完成原始六项目标。</p>
+<p>另一组 Astra/xhigh 的 12 小时比较更不利：Official 达到 0.881813，LoopX 为 0.786257，两边 6h 到 12h 的 best 都没有提升。LoopX 记录了 36 次完成的压缩，Official 为四次；未缓存输入约为其 5.32 倍。压缩可能与有效工作重叠，版本、恢复、共享负载和评分条件也有差异。但轨迹仍指出了实际挑战：更多改动和控制活动，没有转化为更多验收价值。</p>
+<details><summary>这些窗口的条件与限制</summary><p>Sol 新旧研究采用 planned + Explore、Sol/xhigh、关闭 TurnEnvelope、Agent 主动申请 native feedback、一小时冷却。14h 是读过早期结果后，按最早实际结束时间以下的最大整小时选定，并非完成 18h。另一组 Astra 比较各臂自己的前 12h，包含准备。Sol 窗口对齐了 7,522 个独立 response 和 52 个收到的原生结果，Astra 为 5,277 个 response、45 个结果；累计计数没有反复累加，reasoning 已在 output 中。历史基础设施失败及整次运行完整性未知继续保留。处理包不同、自适应重启，以及此前操作者读到过一个 Official 终态汇总，都限制了因果判断。</p></details>
+</section><section id="context"><h2>7. 控制面自己花掉了多少成本？</h2>
 <p>另一个错误假设是：入口 packet 变短，Agent 的总成本就会下降。把目标、事实、写回说明从入口挪到第二条命令，确实缩短了首屏；模型随后还要读取它们。若中途丢失上下文，又要重建同一份来源。只量入口，就把成本移出了表格。</p>
 <p><a href="https://github.com/loopx-project/loopx/pull/7269">#7269</a> 将原有捕获交给共享的上下文 reader：先读完整目标、事实和反馈，再读写回格式及结算步骤。review 与 writeback 是<strong>同一个不可变决策的两个视图</strong>，不是重新做一次准入，也不各自拥有一套权限判断。<a href="https://github.com/loopx-project/loopx/blob/10e5fa57a4e7dad399d59bfa04d5b28dc04919f3/tests/control_plane/test_replan_staged_read.py#L37">源码回归</a>逐项核对目标、规划范围、证据引用、完整写回合同和 action signature；小入口必须仍能到达完整义务。</p>
 <p>差分还增加了一个前提：接收者确实保留了那份精确基础。当前 native Hook 路径在同一会话和 context epoch 内，把完整分页后的正常工具交付作为连续性工程假设。会话变化、已观察到的压缩、缺页或已知交付失败会使它失效，随后读取<strong>原来的完整 capture</strong>；另开一次 guard 取得的新决策不能代替恢复旧决策。漏掉的 Hook 和不可见的下游截断仍是限制，读取回执不是模型保留内容的独立证明。</p>
@@ -59,50 +76,7 @@
 <p>历史离线回放说明了为什么必须算总量：结构化 Host 和原生呈现字节下降 57.72%、60.23%，原生入口加完整恢复上升 6.37%。这些是历史字节观察，不是当前提交的模型 token 结果。早期离线探针还曾报告 CLI 字节增加 2.25%，但因漏掉最终 CLI 压缩并重新格式化入口，已撤回其实际 CLI 交付测量资格。该数字仅作为无效历史记录保留，不用于完整交付或成本结论。不能把视图缩小 60% 写成总成本下降 60%。</p>
 </details>
 <p>当前效率工作把普通入口、分段交付接到共享传输，减少重复读取和重新绑定，消掉可避免的结算往返。差分关闭的默认路径同样重要；开启后也必须正确恢复，并让产品和 benchmark 都易于启用。<strong>所有机制合计 15%</strong> 的参考目标尚未完成资格验证；它不是每个机制各有一份额度，也不能用来漏记失败和重建成本。</p>
-</section>
-<section id="runtime-read"><h2>4. 一次读取，为什么重复检查同一份运行时？</h2>
-<p>有些开销来自控制面自己。读取一页 Explore 研究上下文，需要多次调用同一个受管理的 TS runtime。Python transport 每次调用都核验运行时源码指纹；在包含大量量化发现的请求里，同一份源码树被反复检查。慢的是这一条真实控制路径，不是模型推理，也不是研究算法。</p>
-<p><a href="https://github.com/loopx-project/loopx/pull/7013">#7013</a> 复用已有 <code>effect_runtime_request_scope</code>，把 <code>explore_turn_context</code> 包在一个逻辑请求内。同请求只解析一次 runtime revision，内部调用使用相同代码版本；离开请求时在 <code>finally</code> 中释放并重置，下一次读取重新解析。<strong>复用的是运行时代码身份，不是跨请求缓存 Goal 状态或研究结果。</strong> 共享规则仍由 TS owner 执行，Python 只收敛 transport 的重复工作。</p>
-<p>原 PR 对 600 条合成发现执行真实隔离 CLI：单独预热后取三次未插桩样本，中位数 File 从 <strong>4.005 秒降至 0.495 秒</strong>，SQLite 从 <strong>4.268 秒降至 0.603 秒</strong>；环境为 Node 24.21、SQLite 3.53、Python 3.14.8。完整 JSON 与来源日志字节一致。这是具名历史负载上的 Host 延迟，不是当前版本复测或整轮 Agent 的八倍提速。</p>
-<p><a href="https://github.com/loopx-project/loopx/blob/20837965ddab053f0271775a327ec66310345c9e/tests/control_plane/test_explore_turn_request_scope.py">回归</a>还独立检查：下一次请求能读到新 finding；损坏历史继续报错；失败后 scope 已清除，修复来源后的下一次读取可恢复。旧实现会在“一次请求只核验一次”的反例上失败。单纯加一个永久缓存虽然也可能更快，却会失去这些边界。</p>
-<p>这类优化的直接价值，是更快拿到同一份决策输入，同时保留下一次请求的新鲜性。更少墙钟等待是否换来更多可验证成果，仍需要完整工作轨迹；本例没有测出更少模型输入或费用。</p>
-</section>
-<section id="validation"><h2>5. 工程修复有没有换来长程价值？</h2>
-<p>上述反例能证明身份、读取和恢复的具体改进。效果还要回到真实后续工作：早期 Lean 有系统级进展，Ad 有晚期反超和保住最佳的实例，Schema 则暴露了起点领先但后续几乎不增长、控制成本偏高的问题。同点 #7269 接续减少了初次复盘往返，但 Grid 的完整用量后来增加。以下保留各组原始数字、窗口和负结果，不将它们合成单一机制的收益。</p>
-<details><summary>反馈与续跑：早期系统比较</summary>
-<span id="matrix"></span><span id="observation-basis"></span><h3>研究重点如何变化</h3>
-<table><thead><tr><th>阶段</th><th>问题</th><th>证据能回答什么</th></tr></thead><tbody>
-<tr><td>反馈与续跑</td><td>结果可信、授权工作能持续推进吗？</td><td>评测缺陷、恢复故障、共同窗口内的系统进展</td></tr>
-<tr><td>后续决策</td><td>积累的证据改善了下一次实验吗？</td><td>决策到工作的轨迹、成熟研究点之后的变化</td></tr>
-<tr><td>上下文效率</td><td>能否用更低完整成本交付相同义务？</td><td>实际模型输入、恢复、工具往返和成果／成本比较</td></tr>
-</tbody></table>
-<details><summary>比较边界</summary><p>历史研究包含 Official、单次调用、原生 Goal、LoopX Resume 和 LoopX Explore。Explore 在续跑基础上增加可选的证据采集和规划。盲跑仍可使用公开任务、训练数据和本地验证器，但收不到隐藏评测分数和诊断；后台操作者评测不是 solver 反馈。后来的 native-feedback 研究由 Agent 主动申请评测，按已接受提交执行一小时冷却，不做周期评测。这些是不同研究，不能合并成一个处理效应。</p><p>模型、effort、提示、runner 和预算共同演化。早期主要用 Sol/xhigh，后来的 Sol/max、Astra/xhigh 批次各自保留条件。每臂一次运行只能提供描述性证据。缺失、主动停止、无效和有效零分分别记录。Checkpoint 接续保留源时间、评测机会和冷却；donor 历史不算新的独立重复。</p></details>
-<span id="zero"></span><section id="ledger"><h3>先让反馈与续跑可信</h3>
-<p>最初的 Portfolio 实验先暴露了测量和执行缺陷。一个盲跑 wrapper 在移除评测入口时，也删掉了迭代优化提示；一个账本检查把更早的市场收益归给了收盘时才买入的持仓。它们都混淆了原本的比较。修复后必须另起尝试，旧结果继续保留。</p>
-<p>一个小反例就能说明记账问题：初始现金 100,000，在收盘价 200 时买入 100 单位并支付 10 手续费，即时权益应为 99,990，NAV 为 <strong>0.9999</strong>；新持仓没有赚到此前从 100 涨到 200 的收益。之后，对两个冻结样本独立重建，各自 243 天全部吻合，权益残差小于 4×10⁻⁹，股数没有差异。这证明账本一致，不证明投资策略优秀。版本化修复见 <a href="https://github.com/ByteDance-Seed/EdgeBench/pull/14">EdgeBench #14</a>。</p>
-<span id="strategy"></span><span id="real"></span><span id="goal-anchor"></span><span id="wake-recovery"></span><p>续跑也有类似问题：某个工作项结束后，外层进程可以不断唤醒，却没有恢复出有用的下一步。判断必须回到原始目标。Todo 完成之后，可以继续实验、等待或结束，但它本身不能代表 Goal 验收。可靠反馈与恢复让之后的研究变得可解释。</p>
-<span id="lean"></span><h3>早期系统进展可以量化</h3>
-<table><thead><tr><th>盲跑 Lean 原始分</th><th>早期 Resume v14</th><th>后期 Resume（#5844）</th><th>早期 Explore v14</th><th>后期 Explore（#5844）</th></tr></thead><tbody><tr><td>180 分钟</td><td>0.1103</td><td>0.3478</td><td>0.1134</td><td>0.4019</td></tr><tr><td>450 分钟</td><td>0.1882</td><td>0.5243</td><td>0.1996</td><td>0.5605</td></tr></tbody></table>
-<p>这些单次运行的共同窗口里，后期原始分约为早期的 2.8–3.5 倍。提示、任务入口、runner 可靠性和 LoopX 机制一起变化。它支持整体系统有进展，不足以归因给某个机制，也不能保证其他题的终态表现。</p>
-</section>
-</details>
-<details><summary>初始优势、后程改善与成果保留</summary>
-<section id="later-common-windows"><h3>第一次好结果之后，还发生了什么？</h3>
-<p>后来的实验把重点转向十几个小时之后的工作。先比较共同观察窗口，再拆开起点、后续增量和保留的候选。只看终点排名，很容易混淆它们。</p>
-<table><thead><tr><th>历史批次</th><th>观察结果</th><th>含义</th></tr></thead><tbody>
-<tr><td>Sol/xhigh，新旧 LoopX，Ad Placement · 14h</td><td>49,589,589,573 → 49,615,495,839</td><td>新版 2h 时落后、14h 时领先，终态工作区与保留的 best 一致</td></tr>
-<tr><td>Astra/xhigh，Official Grid · 6h → 12h</td><td>1862 → 1810，越低越好</td><td>更强的基础模型基线仍在后程产生有效改善</td></tr>
-</tbody></table>
-<p>Ad Placement 说明后程并非必然平台期：后来的差候选被拒绝，最佳版本保住了。原始分领先约 0.052%，幅度不大；这里的终态工作区核验也只覆盖这一臂。新旧包同时改变 core 和 runner，不能当作某个 LoopX feature 的独立效应。</p>
-<p>Astra 的结果推进了我们观察到的基础模型能力边界。Official 将速度修改和搜索修改分开，得到连续的原生改善。这项进展属于基础模型／Official 路径，不能算到 LoopX 头上。更强模型也提高了 harness 的要求：面对不断进步的基线，上下文与复盘成本必须换来相应价值。</p>
-<span id="negative-decision"></span><h3>Schema：起点领先不等于持续改善</h3>
-<p>Schema 是这里展开的反例。Sol 新旧版 14 小时窗口，新版 0.804620、旧版 0.723684。但第一次原生结果已经是 0.794620 对 0.713158，且收到反馈的耗时不同。后续增量仅为 <strong>0.010000 和 0.010526</strong>。较大的终点优势主要来自起点；后续不断改代码，仍未完成原始六项目标。</p>
-<p>另一组 Astra/xhigh 的 12 小时比较更不利：Official 达到 0.881813，LoopX 为 0.786257，两边 6h 到 12h 的 best 都没有提升。LoopX 记录了 36 次完成的压缩，Official 为四次；未缓存输入约为其 5.32 倍。压缩可能与有效工作重叠，版本、恢复、共享负载和评分条件也有差异。但轨迹仍指出了实际挑战：更多改动和控制活动，没有转化为更多验收价值。</p>
-<details><summary>这些窗口的条件与限制</summary><p>Sol 新旧研究采用 planned + Explore、Sol/xhigh、关闭 TurnEnvelope、Agent 主动申请 native feedback、一小时冷却。14h 是读过早期结果后，按最早实际结束时间以下的最大整小时选定，并非完成 18h。另一组 Astra 比较各臂自己的前 12h，包含准备。Sol 窗口对齐了 7,522 个独立 response 和 52 个收到的原生结果，Astra 为 5,277 个 response、45 个结果；累计计数没有反复累加，reasoning 已在 output 中。历史基础设施失败及整次运行完整性未知继续保留。处理包不同、自适应重启，以及此前操作者读到过一个 Official 终态汇总，都限制了因果判断。</p></details>
-</section>
-</details>
-<details><summary>同点复盘：实际工作与完整输入</summary>
-<section id="memory"><h3>证据有没有改变下一步工作？</h3>
+</section><details><summary>同点接续：完整结果与用量</summary><section id="memory"><h3>证据有没有改变下一步工作？</h3>
 <span id="decision-followthrough"></span><p>成熟 checkpoint 可以帮助观察一个具体决策边界。接收者继承相同科学状态和 incumbent，再追踪它读了什么证据、选了什么实验、实际做了什么、原生反馈如何。负向本地结果若能在明确条件下排除一条分支，也有价值。继续原方向有依据时，replan 不必强行改道。</p>
 <p>近期 <a href="https://github.com/loopx-project/loopx/pull/7269">#7269</a> 让 Agent 先读目标、事实和反馈，再读写回格式；释放过时的任务选择偏好，并在创建 successor 后保留原 Turn 的结算身份。它对应两个真实往返来源：决策前先读大段写入指令，以及后续任务创建后还要补一轮确认结算归属。</p>
 <span id="staged-replan-outcomes"></span><table><thead><tr><th>同点 Sol/max 接续</th><th>基线 → 修订</th><th>口径</th></tr></thead><tbody>
@@ -120,14 +94,22 @@
 <tr><td>Schema 修订</td><td>622,478（−26.52%）</td><td>37,570,432（−7.75%）</td><td>113,162（−0.45%）</td></tr>
 </tbody></table>
 <p>这里覆盖截止 10 月 25 日 15:42:31 UTC 的共同 82 分 27 秒外层窗口，包含初始恢复、复盘、普通工作和未结束 Turn 已落盘请求。以四臂停止后保留的原生计数复核，扣除同一源点的历史用量，未发现计数缺口。各臂最后落盘请求最多相差 2 分 22 秒，尚未落盘的用量仍未知。Grid 修订臂的三类用量都更高；Schema 三类都未增加。早先 68 分 26 秒窗口里 Grid 未缓存输入下降 7.25%，延长共同窗口后却转为上升 3.60%，说明不能择取早期窗口来宣布节省。局部复盘减负未证明整段过程净省钱。</p>
-</section>
-</details>
-</section>
-<span id="patches"></span><span id="planned-stride"></span><span id="distribution"></span><span id="rerun"></span><section id="new-study"><h2>6. 从零开始的上下文验证</h2>
-<p>当前上下文研究让 Grid、Schema、Ad Placement 从原始任务开始，使用 Sol/max，每题最多 18h。可用的历史 Official 或旧 LoopX 作为描述性参考，保留模型／effort、源码、评分器、机会和时钟差异，不冒称严格配对；旧材料无法回答相应问题时再补 base。各次尝试按实际源码、连续性依据和传输路径分别分析，不合并成同一处理。</p>
+</section></details><details><summary>近期实现细节：放回它们所属的阶段</summary><section id="repair-cases"><h3>新路线已确定，原来的工作怎样收尾？</h3>
+<p>一次长程工作可能在复盘时发现：原路线的证据不足，应该登记一个新的验证任务。后继 Todo 已经创建，但这轮复盘的结果还没有写回和结算。如果再次读取准入就改选新 Todo，模型会面对两份身份：刚做完的复盘属于旧 Turn，新的工作却被投影成当前任务。多叫醒一次模型，并不能解决这项归属冲突。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/7269">#7269</a> 收敛的是控制面的接续语义。<strong>创建后继任务证明路线已经落地，不证明原 Turn 已经结算，也不授予新任务执行权。</strong> 原有 TypeScript replan transition 和 quota settlement owner 保留创建回执、原义务与原 Turn 的绑定；同轮重读返回原结算步骤。写回后只剩待结算步骤，结算后这轮停止，新任务保持 open，留给下一次正常准入。</p>
+<p>这里还必须区分 <code>must_attempt</code> 和 <code>delivery_allowed</code>：前者要求处理本轮的工作义务，后者描述普通交付是否获准。需要重规划时，即使普通交付关闭，合法的规划工作仍可继续；不能为了让 Agent“动起来”就打开普通执行许可。租约、预算、停止条件和后继任务的准入继续由原 owner 判断。</p>
+<p><a href="https://github.com/loopx-project/loopx/blob/10e5fa57a4e7dad399d59bfa04d5b28dc04919f3/tests/control_plane/test_replan_successor_guard_reentry.py#L237">真实 File / SQLite CLI 回归</a>先创建后继，再原样执行返回的写回和结算命令：提前扣额被拒绝，重复结算只有一次 debit，原 Turn 不被后继替换，下一 Turn 才选择新任务。另有<a href="https://github.com/loopx-project/loopx/blob/10e5fa57a4e7dad399d59bfa04d5b28dc04919f3/tests/control_plane/test_replan_successor_guard_reentry.py#L334">归属改变、延后和撤回 claim 的负例</a>，证明失效的创建回执不能结算原结果。这里验证的是完整状态转换和真实入口，不能由一个字段或一次 ACK 代替。</p>
+<p>这项修复让模型把注意力留给“接下来验证什么”，减少为结算身份反复解释和重新准入的机会。它没有保证下一项研究一定有效；我们仍要追踪证据、选择、后续实际工作和原生成果。<a href="#memory">同点接续观察</a>给出了有限正向结果及其反证。</p>
+</section><section id="runtime-read"><h3>一次读取，为什么重复检查同一份运行时？</h3>
+<p>有些开销来自控制面自己。读取一页 Explore 研究上下文，需要多次调用同一个受管理的 TS runtime。Python transport 每次调用都核验运行时源码指纹；在包含大量量化发现的请求里，同一份源码树被反复检查。慢的是这一条真实控制路径，不是模型推理，也不是研究算法。</p>
+<p><a href="https://github.com/loopx-project/loopx/pull/7013">#7013</a> 复用已有 <code>effect_runtime_request_scope</code>，把 <code>explore_turn_context</code> 包在一个逻辑请求内。同请求只解析一次 runtime revision，内部调用使用相同代码版本；离开请求时在 <code>finally</code> 中释放并重置，下一次读取重新解析。<strong>复用的是运行时代码身份，不是跨请求缓存 Goal 状态或研究结果。</strong> 共享规则仍由 TS owner 执行，Python 只收敛 transport 的重复工作。</p>
+<p>原 PR 对 600 条合成发现执行真实隔离 CLI：单独预热后取三次未插桩样本，中位数 File 从 <strong>4.005 秒降至 0.495 秒</strong>，SQLite 从 <strong>4.268 秒降至 0.603 秒</strong>；环境为 Node 24.21、SQLite 3.53、Python 3.14.8。完整 JSON 与来源日志字节一致。这是具名历史负载上的 Host 延迟，不是当前版本复测或整轮 Agent 的八倍提速。</p>
+<p><a href="https://github.com/loopx-project/loopx/blob/20837965ddab053f0271775a327ec66310345c9e/tests/control_plane/test_explore_turn_request_scope.py">回归</a>还独立检查：下一次请求能读到新 finding；损坏历史继续报错；失败后 scope 已清除，修复来源后的下一次读取可恢复。旧实现会在“一次请求只核验一次”的反例上失败。单纯加一个永久缓存虽然也可能更快，却会失去这些边界。</p>
+<p>这类优化的直接价值，是更快拿到同一份决策输入，同时保留下一次请求的新鲜性。更少墙钟等待是否换来更多可验证成果，仍需要完整工作轨迹；本例没有测出更少模型输入或费用。</p>
+</section></details><span id="patches"></span><span id="distribution"></span><span id="rerun"></span><section id="new-study"><h2>8. 上下文差分：10 月 28 日记录的资格仍有缺口</h2>
+<p>截至 10 月 28 日的上下文研究让 Grid、Schema、Ad Placement 从原始任务开始，使用 Sol/max，每题最多 18h。可用的历史 Official 或旧 LoopX 作为描述性参考，保留模型／effort、源码、评分器、机会和时钟差异，不冒称严格配对；旧材料无法回答相应问题时再补 base。各次尝试按实际源码、连续性依据和传输路径分别分析，不合并成同一处理。</p>
 <p>先核实实际交付确实改变：首次完整读取、声明连续性依据的后续差分、已知基线失效时的完整回退，以及一次从复盘到工作的完整交互。再比较有效进展、成果保留和完整用量。开关、回执、局部小包都不能替代这些证据。Feature 偏离预期时，停止相关尝试，保留其成本和历史，修复后用新的尝试身份重启。</p>
-<p>新原生 Hook 路径的首批 Grid、Ad 交互已完成完整分页、一次差分及后续任务工作。同一次捕获内，差分载荷分别比对应完整包小 19.53%、19.48%；这只是一轮读取的载荷比较，不含分页封装、后续模型输入、Hook、恢复或复盘费用，不能外推为总成本下降。完整复盘到后续原生成果、持续收益和故障恢复仍待验证。</p><p>效果目标是很多小时之后仍能取得有效进展并保住成果；效率目标是用更低完整成本和人工介入取得同等验收价值。下一份结果需要同时回答它们；当前运行不重置原定截止时间，替换尝试的失败和消耗也保留。</p>
-</section>
-<footer><p>数值分别保留各历史模型、版本、窗口与有效性边界。公开实现：<a href="https://github.com/loopx-project/loopx">LoopX</a>。早期详细记录保留在<a href="https://github.com/loopx-project/loopx/blob/a9a720db/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html">上一版文章</a>。这里不发布原始轨迹、隐藏评测材料、运行时凭证或私有操作上下文。</p></footer>
+<p>新原生 Hook 路径的首批 Grid、Ad 交互已完成完整分页、一次差分及后续任务工作。同一次捕获内，差分载荷分别比对应完整包小 19.53%、19.48%；这只是一轮读取的载荷比较，不含分页封装、后续模型输入、Hook、恢复或复盘费用，不能外推为总成本下降。完整复盘到后续原生成果、持续收益和故障恢复仍待验证。</p><p>效果目标是很多小时之后仍能取得有效进展并保住成果；效率目标是用更低完整成本和人工介入取得同等验收价值。下一份结果需要同时回答它们；这些尝试沿用各自原定截止时间，替换尝试的失败和消耗也保留。</p>
+</section><footer><p>数值分别保留各历史模型、版本、窗口与有效性边界。公开实现：<a href="https://github.com/loopx-project/loopx">LoopX</a>。早期详细记录保留在<a href="https://github.com/loopx-project/loopx/blob/a9a720db/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html">上一版文章</a>。这里不发布原始轨迹、隐藏评测材料、运行时凭证或私有操作上下文。</p></footer>
 </main></body>
 </html>
