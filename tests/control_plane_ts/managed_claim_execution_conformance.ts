@@ -115,6 +115,16 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     assert.equal(result.recovery, undefined);
     assert.deepEqual(await loaded(store), before);
   });
+  test(`${provider} managed execution: supersede never recommends an unsupported claim-reference retry`, async t => {
+    const {store, request} = await setup(t);
+    const before = await loaded(store);
+    const rejected = await complete(store, {...completion(request), command: "supersede" as const,
+      claim_operation_id: undefined, operation_identity: {kind: "explicit" as const, operation_id: "terminal-supersede"},
+      requested_completion_turn_key: null, reason: "Continue through declared successor work"});
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.recovery, undefined);
+    assert.deepEqual(await loaded(store), before);
+  });
   test(`${provider} managed execution: ordinary claim/progress carry one execution, renew only near expiry, recover without writes`, async t => {
     const {store, request, progress} = await setup(t);
     const before = await loaded(store);

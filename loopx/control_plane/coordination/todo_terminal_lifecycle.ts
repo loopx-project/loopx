@@ -1396,7 +1396,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     // preview instead of guessing from lease expiry or teaching callers to
     // copy internal key/version fields. Explicit stale proof remains rejected.
     let recovery: JsonObject | undefined;
-    if (handoffMode === "hard_lease" && authorityTodo.role === "agent" &&
+    if (input.command === "complete" && handoffMode === "hard_lease" && authorityTodo.role === "agent" &&
         input.actor_agent_id !== null && normalized.claim_operation_id === undefined &&
         input.lease_idempotency_key === null && input.lease_expected_version === null &&
         ["handoff_mode_requires_lease", "lease_fence_required"].includes(authority.code)) {

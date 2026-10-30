@@ -13,7 +13,10 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
     recovery = payload.get("recovery")
     if not isinstance(recovery, dict) or not recovery.get("reason") or not payload.get("handoff_mode"):
         return []
-    lines = ([] if recovery.get("action") == "claim_task"
+    retry = recovery.get("retry")
+    complete_claim_recovery = (recovery.get("action") == "claim_task"
+        and isinstance(retry, dict) and retry.get("command") == "loopx todo complete")
+    lines = ([] if complete_claim_recovery
         else [f"- handoff_mode: `{payload['handoff_mode']}`"])
     lines.append(f"- recovery: {recovery['reason']}")
     for step in ("claim", "inspect", "acquire", "retry", "release"):
