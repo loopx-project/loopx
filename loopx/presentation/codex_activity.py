@@ -23,6 +23,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
+from ..public_safe_text import PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
+
 STEP_KINDS = ("reasoning", "command", "tool", "search", "file_change")
 STEP_STATES = ("running", "completed", "failed")
 COMMAND_VERBS = ("read", "search", "list", "run")
@@ -56,6 +58,12 @@ _SECRET_PATTERNS = (
     re.compile(r"(?i)(--?[a-z0-9-]*(?:token|secret|password|passwd|api-?key)[a-z0-9-]*(?:\s*=\s*|\s+))" + _SHELL_VALUE),
     re.compile(r"(?i)(\b[a-z0-9_]*(?:token|secret|password|passwd|api_?key)[a-z0-9_]*\s*=\s*)" + _SHELL_VALUE),
     re.compile(r"()\b(?:sk|ghp|gho|ghs|github_pat|xox[abp])[-_][A-Za-z0-9_-]{12,}"),
+    # An issuer-prefixed token needs no label, so the label arms above cannot
+    # see it. Take the shapes from the canonical public-safety owner instead of
+    # keeping a second issuer list here: this list once recognized only some
+    # issuers and stored the rest for replay (Refs #5136, #7635, #7636). The
+    # narrower arm above still covers the generic `sk-` form the owner omits.
+    re.compile(r"()(?:" + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE + r")", re.I),
 )
 # Network URLs and relative paths must survive. A complete path token, rather
 # than a directory-name denylist, determines whether it belongs to this project.
