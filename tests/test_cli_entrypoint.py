@@ -285,6 +285,7 @@ assert payload["groups"]
 		(["agent-context", "--help"], "loopx.cli_commands.agent_context", "loopx.cli_commands.agent_context"),
 		(["agent-directory", "--help"], "loopx.cli_commands.agent_directory", "loopx.cli_commands.agent_directory"),
 		(["agent-capabilities", "--help"], "loopx.cli_commands.agent_capabilities", "loopx.cli_commands.agent_capabilities"),
+		(["goal-acceptance", "--help"], "loopx.cli_commands.goal_acceptance", "loopx.cli_commands.goal_acceptance"),
 		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
@@ -582,6 +583,9 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		argv_cases.extend([[command, "--help"], [command], [command, "--unknown-option"],
 			[command, "--goal-id", "goal", "--agent-i", "agent"]])
 	argv_cases.append(["agent-context", "--goal-id", "goal", "--agent-id", "agent", "--phase", "unknown"])
+	argv_cases.extend([["goal-acceptance", "--help"], ["goal-acceptance", "inspect"],
+		["goal-acceptance", "unknown-action", "--goal-id", "goal"],
+		["goal-acceptance", "inspect", "--goal-id", "goal", "--unknown-option"]])
 	selected = run_cli_batch("loopx.entrypoint", argv_cases)
 	full = run_cli_batch("loopx.cli", argv_cases)
 
@@ -712,6 +716,25 @@ def test_selected_lifecycle_refusals_match_without_full_cli(tmp_path, arguments)
 	before = registry.read_bytes()
 	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
 		*arguments, "--goal-id", "missing-goal"]
+	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
+	full = run_cli_main("loopx.cli", argv)
+	assert selected.returncode == full.returncode == 1
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr
+	assert json.loads(selected.stdout)["ok"] is False
+	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("arguments", [
+	["inspect"],
+	["inspect-proposal", "--proposal-id", "missing-proposal"],
+	["verify", "--proposal-id", "missing-proposal"],
+])
+def test_selected_goal_acceptance_refusals_match_without_full_cli(tmp_path, arguments):
+	registry, runtime = write_command_fixture(tmp_path)
+	before = registry.read_bytes()
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+		"goal-acceptance", *arguments, "--goal-id", "missing-goal"]
 	selected = run_cli_main("loopx.entrypoint", argv, forbidden_modules=("loopx.cli",))
 	full = run_cli_main("loopx.cli", argv)
 	assert selected.returncode == full.returncode == 1
