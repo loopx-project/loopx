@@ -1,11 +1,17 @@
 """Independent OS readback for the Windows private IO tests."""
 from pathlib import Path
-import subprocess
 import os
+import shutil
+import subprocess
+
+import pytest
 
 
 def assert_private_acl(path: Path) -> None:
     # PowerShell uses .NET's independent ACL reader; product IO uses Win32.
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 is required for independent Windows ACL readback")
     script = '''$ErrorActionPreference='Stop'
     $p=$env:LOOPX_PRIVATE_IO_TEST_PATH
     $acl=Get-Acl -LiteralPath $p
@@ -19,7 +25,7 @@ def assert_private_acl(path: Path) -> None:
     if($acl.Access.Count -ne 3){throw 'Private ACE set incomplete'}
     '''
     result = subprocess.run(
-        ["pwsh", "-NoLogo", "-NoProfile", "-Command", script],
+        [pwsh, "-NoLogo", "-NoProfile", "-Command", script],
         env=dict(os.environ, LOOPX_PRIVATE_IO_TEST_PATH=str(path)),
         capture_output=True, text=True, timeout=30,
     )

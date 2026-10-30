@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -140,7 +141,10 @@ def test_session_publication_failure_keeps_prior_session(tmp_path,monkeypatch,fa
 def test_python_rejects_junction_parent(snapshot,tmp_path):
     path, _ = snapshot
     link = tmp_path / "loopx-effect-junction"
-    cmd=['pwsh','-NoLogo','-NoProfile','-Command',"New-Item -ItemType Junction -Path $env:LX_LINK -Target $env:LX_TARGET | Out-Null"]
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 is required to create the junction fixture")
+    cmd=[pwsh,'-NoLogo','-NoProfile','-Command',"New-Item -ItemType Junction -Path $env:LX_LINK -Target $env:LX_TARGET | Out-Null"]
     r=subprocess.run(cmd,env=dict(os.environ,LX_LINK=str(link),LX_TARGET=str(path.parent)),capture_output=True,text=True,timeout=30)
     assert r.returncode==0,r.stderr
     try:
