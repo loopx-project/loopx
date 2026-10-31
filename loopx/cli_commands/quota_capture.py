@@ -197,10 +197,20 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
-        return {"ok": False, "schema_version": "context_capture_page_v1",
+        result = {"ok": False, "schema_version": "context_capture_page_v1",
             "reason": str(exc) if isinstance(exc, (ValueError, EffectRuntimeRemoteError, EffectRuntimeStartupError))
                 else "original capture could not be read",
             "recovery": "Restore the original digest-bound capture; no guard, admission or spend was performed."}
+        if isinstance(exc, (EffectRuntimeRemoteError, EffectRuntimeStartupError)):
+            result["diagnostic_code"] = exc.diagnostic_code
+            result["recovery"] = ("Resolve the reported runtime failure, then retry reading the same digest-bound capture; "
+                "no guard, admission or spend was performed.")
+        if isinstance(exc, EffectRuntimeRemoteError):
+            result["error_kind"] = exc.error_kind
+            if exc.error_kind == "request_rejected":
+                result["recovery"] = ("Correct the rejected read request; for unknown fields use --list on a known parent. "
+                    "Keep the original capture and digest; no guard, admission or spend was performed.")
+        return result
 
 
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
