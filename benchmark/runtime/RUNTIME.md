@@ -415,6 +415,34 @@ Backend-specific networking stays in the benchmark's native launcher.
 
 ## Results, timeout and recovery
 
+### Live session observation
+
+Frequent capacity and liveness polls may use
+`benchmark.runtime.session_observation.observe_codex_session_tail`. It reads at
+most the final 16 MiB of a live rollout by default, keeps only complete JSONL
+records, and returns content-free event counts, the latest cumulative token
+snapshot, timestamps, and framing diagnostics. Structured terminal provider
+failures reuse the same record framing through `provider_failure.py`; free-text
+errors are not classified as rate limits. The observation does not return prompts,
+assistant messages, tool output, error text, session ids, model ids, or local
+paths.
+
+An external controller can call the same path without importing benchmark code:
+
+```sh
+python -m benchmark.runtime.session_observation /explicit/session/rollout.jsonl
+```
+
+The rollout path is selected by the isolated runner/controller and is never
+echoed into the observation. The module is not loaded or invoked by ordinary
+workers unless a controller explicitly runs this command.
+
+This bounded tail is an operational signal, not an accounting or integrity
+source. Exact usage booking continues to stream the complete explicitly bound
+rollout through `read_codex_session_usage`; trajectory conversion and benchmark
+integrity continue to use their existing complete artifacts. A missing usage
+event in the bounded tail remains unknown rather than becoming zero.
+
 Private per-wake receipts distinguish process success, Turn settlement and
 native benchmark results. Sessions are collected once per native filename;
 resume updates that copy instead of counting the old prefix in every wake.
