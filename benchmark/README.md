@@ -726,6 +726,13 @@ later files with an older native point. Missing paths, archive links, traversal 
 Declare only the intended private code/state stores: a whole home can contain
 credentials, and neither archive filtering nor a freeze is privacy certification.
 
+Supervisor failure receipts retain the exception-class `error_kind`. Failures
+from the managed Effect runtime additionally expose `runtime_failure.error_kind`
+and `runtime_failure.diagnostic_code`, without copying the error message or raw
+provider response into the worker reply. An expired artifact capture window is
+`request_rejected` / `checkpoint_capture_window_closed`. These diagnostics do not
+retry the capture, extend its deadline or grant execution authority.
+
 This explicit command produces an **inert joint file snapshot**, still
 `research_point_qualified=false`. It does not snapshot process memory, freeze
 external writers or activate canonical research state. Ordinary native restore
