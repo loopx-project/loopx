@@ -856,6 +856,12 @@ known pointer does not require another index round trip. Batch within the combin
 output budget, avoid overlapping parent/child selections, and inspect a missing
 pointer's parent before retrying the rejected batch. These are caller guidelines;
 selection validation, required reads and authority checks remain unchanged.
+When it fits the existing native-reference output ceiling, `field_index` supplies
+the complete top-level index of the current recovery capture. Its pointers,
+types, byte sizes and member counts match `context-read --list`; it contains no
+field bodies and never proves they were read. Select those pointers through
+`recovery.command`; a delta's `command` still addresses its patch. Oversized
+indexes are omitted whole, leaving `index_command` and full recovery available.
 Selection errors identify the original `--select` argument and, for a failed
 lookup, its token position (both 1-based). Sorting and duplicate elimination do
 not renumber arguments. Inspect the resolved prefix before that token in the
@@ -896,6 +902,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 发现多层字段。深度默认为 1，可选 1–8；需要更深时选择新的父节点继续。这只限制
 单次遍历深度，不限制 capture 容量或可读正文。优先展开相关子树，省略路径才从根开始。
 生成的读取指引会提示上述选择，不把查目录变成前置步骤，也不改变工作前的必读要求。
+在原生引用的现有输出上限允许时，`field_index` 直接提供当前 recovery capture 的完整
+顶层目录，其 pointer、类型、字节数和成员数与 `context-read --list` 一致。目录不含
+正文，也不证明已阅读；通过 `recovery.command` 选读这些路径，delta 的 `command`
+仍指向补丁。过大目录整体省略，保留 `index_command` 与完整恢复路径。
 普通 capture 回复、原生持久配置与压缩后恢复携带同一份选择指引。恢复命令直接指向
 `--select`，已知路径无须多查一轮目录。按合计输出预算分批，避免同时选择父节点和
 子节点；路径缺失时先查其父节点，再重试被拒绝的批次。这些是调用建议，不改变
