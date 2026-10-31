@@ -256,19 +256,23 @@ function ManagerHomeBoard({
             <AlertCircle size={15} />
             <strong>{t("home.systemHealth", { summary: systemHealth.summary })}</strong>
             {systemHealth.freshnessWarning ? <small>（{systemHealth.freshnessWarning}）</small> : null}
-            {systemHealth.issues.length > 0 || systemHealth.diagnostics?.length ? (
+            {systemHealth.diagnostics?.length ? (
               <details className="personal-system-health-diagnostics">
                 <summary>{t("home.health.diagnostics")}</summary>
-                <ul>
-                  {systemHealth.issues.map((issue, idx) => <li key={`issue-${idx}`}>{issue}</li>)}
-                  {(systemHealth.diagnostics ?? []).map((line, idx) => <li key={`diag-${idx}`}>{line}</li>)}
-                </ul>
+                <ul>{systemHealth.diagnostics.map((line, idx) => <li key={`diag-${idx}`}>{line}</li>)}</ul>
               </details>
             ) : null}
             {systemHealth.retryable && onRetrySource ? (
               <button className="personal-system-health-retry" data-testid="personal-source-retry" onClick={onRetrySource} type="button">{t("home.health.retry")}</button>
             ) : null}
           </div>
+          {/* A readable failure reason stays in the open; only the deeper
+              diagnostics fold, so the owner can act without opening anything. */}
+          {systemHealth.issues.length > 0 ? (
+            <ul className="personal-system-health-issues">
+              {systemHealth.issues.map((issue, idx) => <li key={`issue-${idx}`}>{issue}</li>)}
+            </ul>
+          ) : null}
         </div>
       ) : null}
       {onboarding?.kind === "no_goals" && goals.length === 0 ? (
@@ -2694,8 +2698,6 @@ export function PersonalWorkspacePage({
         onClose={closeSettings}
         onThemeChange={updateTheme}
         theme={theme}
-        attentionNotifications={hostReadOnly ? undefined : { enabled: attentionNotificationsEnabled, support: attentionNotificationSupportState }}
-        onAttentionNotificationsChange={hostReadOnly ? undefined : updateAttentionNotifications}
       />
     </Suspense>
   ) : null;

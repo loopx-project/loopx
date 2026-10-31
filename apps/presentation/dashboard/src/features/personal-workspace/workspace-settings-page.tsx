@@ -21,14 +21,7 @@ import { OperatorCredentialSettings } from "./operator-credential-settings";
 import { CodexAccountSettings } from "./codex-account-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
-import type { AttentionNotificationSupport } from "./attention-notifications";
 
-const attentionNotificationSupportCopy = {
-  default: "settings.attentionNotificationsDefault",
-  denied: "settings.attentionNotificationsDenied",
-  granted: "settings.attentionNotificationsGranted",
-  unsupported: "settings.attentionNotificationsUnsupported",
-} as const;
 
 type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
@@ -59,8 +52,6 @@ export function WorkspaceSettingsPage({
   onClose,
   onThemeChange,
   theme,
-  attentionNotifications,
-  onAttentionNotificationsChange,
   onOpenOriginalConversation,
 }: {
   callbacks: PersonalWorkspaceCallbacks;
@@ -75,8 +66,6 @@ export function WorkspaceSettingsPage({
   onClose: () => void;
   onThemeChange: (theme: WorkspaceTheme) => void;
   theme: WorkspaceTheme;
-  attentionNotifications?: { enabled: boolean; support: AttentionNotificationSupport };
-  onAttentionNotificationsChange?: (enabled: boolean) => void | Promise<void>;
   onOpenOriginalConversation?: (target: import("../../data/chat").BoundConversationTarget) => void;
 }) {
   const { locale, setLocale, t } = useWorkspaceI18n();
