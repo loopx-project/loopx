@@ -3,13 +3,20 @@ import { resolve } from "node:path";
 import { outputDir } from "./fixture.mjs";
 import { openWorkspacePage } from "./scenario-context.mjs";
 
-// Needs-you desktop notifications are a per-browser opt-in. Enabling asks the
-// browser once and seeds what already waits; from then on the page re-reads
-// the workspace in the background and notifies only for a new item that waits
-// on the owner while they are not looking. Turning it off stops both. The
-// browser API is stubbed so the scenario observes exactly what the page sends.
+// Needs-you desktop notifications are a per-browser opt-in, surfaced as a bell
+// in the sidebar footer: a labelled button whose pressed state, class, title
+// and dot are the whole surface. Enabling asks the browser once and seeds what
+// already waits; from then on the page re-reads the workspace in the background
+// and notifies only for a new item that waits on the owner while they are not
+// looking. Turning it off stops both. The browser API is stubbed so the
+// scenario observes exactly what the page sends.
 
 const gateText = "Approve the restated FY2023 operating cash flow";
+// The bell is found by its accessible name, the same way a person reads it.
+const bellName = "桌面通知"; // t("settings.attentionNotifications")
+const bellToggleTitle = "有事项需要我决定时提醒我"; // t("settings.attentionNotificationsToggle")
+const bellHintTitle = "仅在本页面在此浏览器中保持打开时生效。进展和运行不会提醒，只提醒新出现的、等你决定的事项。开启后页面每 30 秒重新读取一次工作区。"; // t("settings.attentionNotificationsHint")
+const bellSelector = `button[aria-label="${bellName}"]`;
 
 function installNotificationStub(page, { permission = "default" } = {}) {
   return page.addInitScript((initial) => {
@@ -36,6 +43,46 @@ function addGate(fixture, todoId, text) {
   first.user_todos.total_count = first.user_todos.items.length;
 }
 
+// The bell is the owner's whole notifications surface: aria-pressed says on or
+// off, the is-* class says which square it is in (off/on/blocked), title carries
+// the sentence the settings block used to print, disabled means this browser
+// blocks it, and the dot marks on. Read it the way a person would see it.
+function notificationBell(page) {
+  return page.getByRole("button", { name: bellName, exact: true });
+}
+
+async function expectBell(page, { pressed, state, disabled, title, dot }) {
+  const expected = { pressed, state, disabled, title, dot };
+  try {
+    await page.waitForFunction(
+      ({ selector, pressed, state, disabled, title }) => {
+        const node = document.querySelector(selector);
+        return Boolean(node)
+          && node.getAttribute("aria-pressed") === String(pressed)
+          && node.classList.contains(`is-${state}`)
+          && node.disabled === disabled
+          && node.getAttribute("title") === title;
+      },
+      { selector: bellSelector, pressed, state, disabled, title },
+    );
+  } catch (error) {
+    const actual = await page.evaluate(({ selector }) => {
+      const node = document.querySelector(selector);
+      return node ? { label: node.getAttribute("aria-label"), pressed: node.getAttribute("aria-pressed"), className: node.getAttribute("class"), title: node.getAttribute("title"), disabled: node.disabled, dots: node.querySelectorAll(".personal-notification-dot").length } : null;
+    }, { selector: bellSelector }).catch(() => "unreadable");
+    throw new Error(`The bell never reached ${JSON.stringify(expected)}; it read ${JSON.stringify(actual)}; ${error.message}`);
+  }
+  const bell = notificationBell(page);
+  const className = await bell.getAttribute("class");
+  assert.equal(await bell.getAttribute("aria-label"), bellName, "The bell names itself with the notifications label");
+  assert.equal(await bell.getAttribute("aria-pressed"), String(pressed), `The bell reports ${pressed ? "on" : "off"}`);
+  assert.match(className ?? "", new RegExp(`\\bis-${state}\\b`), `The bell's class reports ${state}`);
+  assert.equal(await bell.getAttribute("title"), title, "The bell's title carries this state's sentence");
+  assert.equal(await bell.isDisabled(), disabled, disabled ? "A browser that blocks notifications disables the bell" : "The bell is offered");
+  assert.equal(await bell.locator(".personal-notification-dot").count(), dot ? 1 : 0, dot ? "An on bell shows its dot" : "An off bell shows no dot");
+  return bell;
+}
+
 export const attentionNotificationsScenario = {
   id: "attention-notifications",
   async run({ browser, collectCoverage, url }) {
@@ -47,25 +94,19 @@ export const attentionNotificationsScenario = {
       assert.equal(await page.evaluate(() => window.__loopxPermissionRequests), 0);
       assert.equal(await page.evaluate(() => localStorage.getItem("loopx-pw-attention-notifications")), null);
 
-      await page.getByRole("button", { name: "设置", exact: true }).click();
-      await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
-      const settings = page.getByTestId("attention-notification-settings");
-      const toggle = settings.getByRole("checkbox");
-      const permission = page.getByTestId("attention-notification-permission");
-      await settings.waitFor({ state: "visible" });
-      assert.equal(await toggle.isChecked(), false);
-      assert.match(await permission.innerText(), /开启时浏览器会请求通知权限/);
+      const bell = notificationBell(page);
+      await bell.waitFor({ state: "visible", timeout: 15_000 });
+      const offBell = { pressed: false, state: "off", disabled: false, title: bellToggleTitle, dot: false };
+      await expectBell(page, offBell);
 
       // Timers scheduled from now on are fake, so the 30 s re-read can be fired on demand.
       await page.clock.install();
-      await toggle.click();
-      await page.waitForFunction(() => document.querySelector('[data-testid="attention-notification-permission"]')?.textContent?.includes("已允许"));
-      assert.equal(await toggle.isChecked(), true);
-      assert.equal(await page.evaluate(() => window.__loopxPermissionRequests), 1, "The toggle asks the browser exactly once");
+      await bell.click();
+      await expectBell(page, { pressed: true, state: "on", disabled: false, title: bellHintTitle, dot: true });
+      assert.equal(await page.evaluate(() => window.__loopxPermissionRequests), 1, "The bell asks the browser exactly once");
       assert.equal(await page.evaluate(() => localStorage.getItem("loopx-pw-attention-notifications")), "on");
       assert.equal((await notifications()).length, 0, "Enabling never replays items already waiting");
-      await page.screenshot({ path: resolve(outputDir, "attention-notifications-settings.png"), animations: "disabled" });
-      await page.getByRole("button", { name: "返回工作区", exact: true }).click();
+      await page.screenshot({ path: resolve(outputDir, "attention-notifications-bell.png"), animations: "disabled" });
 
       // A partial read that omits a gate already seen at enable time, then a
       // full read that lists it again, is not a new decision: identities seen
@@ -111,14 +152,14 @@ export const attentionNotificationsScenario = {
       assert.match(await drawer.innerText(), new RegExp(gateText.slice(0, 24)));
       assert.equal(await page.evaluate(() => window.__loopxNotifications[0].closed), true);
       await page.screenshot({ path: resolve(outputDir, "attention-notifications-opened.png"), animations: "disabled" });
+      // Close the item the way a person would, then reach the sidebar bell.
+      await page.keyboard.press("Escape");
+      await drawer.waitFor({ state: "hidden", timeout: 10_000 });
 
       // Turning it off stops the background re-read and any further notification.
-      await page.getByRole("button", { name: "设置", exact: true }).click();
-      await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
-      await toggle.click();
-      assert.equal(await toggle.isChecked(), false);
+      await bell.click();
+      await expectBell(page, offBell);
       assert.equal(await page.evaluate(() => localStorage.getItem("loopx-pw-attention-notifications")), null);
-      await page.getByRole("button", { name: "返回工作区", exact: true }).click();
       const readsAfterOff = api.statusRequestCount;
       api.transformStatus = (fixture) => { addGate(fixture, "gate-restatement", gateText); addGate(fixture, "gate-second", "Choose the segment disclosure source"); };
       await page.clock.runFor(70_000);
@@ -131,50 +172,47 @@ export const attentionNotificationsScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("personal-goal-home").waitFor({ state: "visible", timeout: 15_000 });
       await page.waitForTimeout(1_000);
+      await expectBell(page, { pressed: true, state: "on", disabled: false, title: bellHintTitle, dot: true });
       assert.equal((await notifications()).length, 0, "A reload with items already waiting notifies nothing");
       const coverageEntries = await session.close();
 
       // A browser that blocked notifications can be allowed again in its site
       // settings without reloading: returning to the page reads the answer
-      // back, the switch is usable, and turning it on asks nothing more. A
+      // back, the bell becomes usable, and turning it on asks nothing more. A
       // revocation while on reads back the same way and stops the re-read.
       const denied = await openWorkspacePage(browser, url, { collectCoverage, viewport: { width: 1440, height: 900 }, beforeGoto: (_api, page) => installNotificationStub(page, { permission: "denied" }) });
       try {
         const { api: deniedApi, page } = denied;
-        await page.getByRole("button", { name: "设置", exact: true }).click();
-        await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
-        const settings = page.getByTestId("attention-notification-settings");
-        const toggle = settings.getByRole("checkbox");
-        const permission = page.getByTestId("attention-notification-permission");
-        await settings.waitFor({ state: "visible" });
-        assert.equal(await toggle.isDisabled(), true, "Blocked: the switch is not offered");
-        assert.match(await permission.innerText(), /已拒绝/);
+        const bell = notificationBell(page);
+        await bell.waitFor({ state: "visible", timeout: 15_000 });
+        // Blocked: the same bell is offered but disabled and in its blocked square.
+        await expectBell(page, { pressed: false, state: "blocked", disabled: true, title: bellToggleTitle, dot: false });
         await page.evaluate(() => { window.Notification.permission = "granted"; window.dispatchEvent(new Event("focus")); });
-        await page.waitForFunction(() => document.querySelector('[data-testid="attention-notification-permission"]')?.textContent?.includes("已允许"), null, { timeout: 10_000 });
-        assert.equal(await toggle.isDisabled(), false, "A grant made elsewhere makes the switch usable again");
-        assert.equal(await toggle.isChecked(), false, "Nothing turns on by itself");
+        await expectBell(page, { pressed: false, state: "off", disabled: false, title: bellToggleTitle, dot: false });
         await page.clock.install();
-        await toggle.click();
-        await page.waitForFunction(() => document.querySelector('[data-testid="attention-notification-permission"] ~ *') !== undefined);
-        assert.equal(await toggle.isChecked(), true);
+        await bell.click();
+        await expectBell(page, { pressed: true, state: "on", disabled: false, title: bellHintTitle, dot: true });
         assert.equal(await page.evaluate(() => window.__loopxPermissionRequests), 0, "An already granted browser is not asked again");
-        await page.getByRole("button", { name: "返回工作区", exact: true }).click();
         const readsBefore = deniedApi.statusRequestCount;
         await page.clock.runFor(31_000);
         await page.waitForTimeout(1_000);
         assert.ok(deniedApi.statusRequestCount > readsBefore, "Enabled after recovery, the page re-reads in the background");
         // Revoked in the site settings while on: read back on return, stop quietly.
         await page.evaluate(() => { window.Notification.permission = "denied"; window.dispatchEvent(new Event("focus")); });
-        await page.waitForTimeout(500);
+        // The preference is not rewritten behind the owner: the bell stays on
+        // (pressed, dot) but is blocked, which is how a revocation shows here.
+        await expectBell(page, { pressed: true, state: "on", disabled: true, title: bellHintTitle, dot: true });
         const readsAfterRevoke = deniedApi.statusRequestCount;
         await page.clock.runFor(70_000);
         await page.waitForTimeout(1_000);
         assert.equal(deniedApi.statusRequestCount, readsAfterRevoke, "A revoked permission stops the background re-read");
-        await page.getByRole("button", { name: "设置", exact: true }).click();
-        await page.locator(".personal-settings-tabs").getByRole("button", { name: "外观", exact: true }).click();
-        await settings.waitFor({ state: "visible" });
-        assert.match(await permission.innerText(), /已拒绝/, "The revocation shows as what it is");
-        assert.equal(await toggle.isDisabled(), true);
+        assert.equal(await page.evaluate(() => localStorage.getItem("loopx-pw-attention-notifications")), "on", "A revocation does not clear the stored preference");
+        // Allowed again, the bell is usable and the owner can turn it off.
+        await page.evaluate(() => { window.Notification.permission = "granted"; window.dispatchEvent(new Event("focus")); });
+        await expectBell(page, { pressed: true, state: "on", disabled: false, title: bellHintTitle, dot: true });
+        await bell.click();
+        await expectBell(page, { pressed: false, state: "off", disabled: false, title: bellToggleTitle, dot: false });
+        assert.equal(await page.evaluate(() => localStorage.getItem("loopx-pw-attention-notifications")), null, "Turning it off clears the stored preference");
         return { coverageEntries: [...coverageEntries, ...await denied.close()] };
       } catch (error) {
         await denied.close().catch(() => {});

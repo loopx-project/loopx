@@ -477,7 +477,10 @@ export const goalActivityScenario = {
     const offline = await openWorkspacePage(browser, url, {
       collectCoverage,
       beforeGoto: async (_api, page) => {
-        await page.route("**/api/chat/sessions?*", (route) => route.request().method() === "GET"
+        // Match the sessions read with or without a query string: the glob form
+        // with `?*` only matched when a query was present, so the branch was not
+        // deterministic across fixtures.
+        await page.route(/\/api\/chat\/sessions(\?|$)/, (route) => route.request().method() === "GET"
           ? route.fulfill({ status: 503, contentType: "application/json", json: { ok: false, error: "unavailable" } })
           : route.fallback());
       },
