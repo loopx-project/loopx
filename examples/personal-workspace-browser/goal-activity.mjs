@@ -488,9 +488,19 @@ export const goalActivityScenario = {
     try {
       const { page } = offline;
       const queued = await goalRow(page, "Multi Agent Projection");
-      // "暂时读不到执行状态" is the alsoKey sentence, not the row's leading word.
+      // The row shows one word; the sentence that explains the unreadable session
+      // state lives on its name. Which sentence the owner composes depends on what
+      // the status snapshot already declared, so assert the invariant instead of one
+      // wording: the state is named, and it never claims LoopX execution.
       await queued.locator("small", { hasText: "已安排" }).waitFor({ timeout: 15_000 });
-      assert.match(await activityTitle(queued), /暂时读不到执行状态/, "The unreadable run state is named in the row's full sentence");
+      await page.waitForFunction(() => {
+        const row = [...document.querySelectorAll(".personal-goal-row")].find(candidate =>
+          candidate.querySelector("strong")?.textContent?.includes("Multi Agent Projection"));
+        const sentence = row?.querySelector("small");
+        return /暂时读不到执行状态|执行情况以宿主为准/.test(sentence?.getAttribute("aria-label") ?? "");
+      }, null, { timeout: 15_000 });
+      const unreadableSentence = await activityTitle(queued);
+      assert.doesNotMatch(unreadableSentence, /执行中|推进中/, "An unreadable session state is never rendered as running");
       assert.equal(await page.locator(".personal-goal-mark.is-live").count(), 0, "An unreadable session owner never produces a live Goal");
       assert.equal(await page.locator(".personal-brief [data-testid=\"personal-brief-running\"]").count(), 0,
         "An unreadable session owner is named on its row, never counted in a removed execution tile");

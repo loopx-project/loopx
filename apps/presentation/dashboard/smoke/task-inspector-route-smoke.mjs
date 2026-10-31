@@ -237,7 +237,8 @@ try {
         if (width === 1512) {
           await tasks.locator('.personal-task-card', {hasText: "Current Todo"}).locator(":scope > button").click();
           await drawer.waitFor();
-          await tasks.getByRole("group", {name: "任务状态筛选"}).getByRole("button", {name: "受阻与延后", exact: true}).click();
+          // The toolbar is one filter control now; the same filter is a select.
+          await tasks.getByRole("combobox", {name: "任务状态筛选"}).selectOption({label: "受阻与延后"});
           await tasks.locator(".personal-task-selection-note").waitFor();
           assert.equal(new URL(page.url()).searchParams.get("todo"), "todo-progress-current", "Filtering cannot change the selected Task identity");
           await tasks.getByRole("button", {name: "显示所选任务", exact: true}).click();

@@ -56,7 +56,9 @@ try {
   const { page } = session;
   try {
     await openShowcaseGoal(page);
-    const inlineRail = page.getByTestId('goal-workspace-inline-rail');
+    // The rail lost its testid when it moved into the document as the last row;
+    // the shipped wrapper class is the owner of "the inline All work inventory".
+    const inlineRail = page.locator('.goal-workspace-rail-inline');
     const inventory = inlineRail.locator('.goal-workspace-inventory');
     const decision = page.locator('.goal-overview [data-attention-id="showcase-gate-window"]:visible');
     assert.equal(await decision.count(), 1, 'The owner decision is shown once in the composed Overview');
