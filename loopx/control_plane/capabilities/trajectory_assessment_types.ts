@@ -98,7 +98,16 @@ export interface TrajectorySolverUsage {
   request_coverage?: TrajectoryRequestCoverage;
   /** Optional measured attribution or a labeled recorded-packet estimate; not a counter authority. */
   loopx_input?: TrajectoryLoopXInput;
+  /** Appended captured text only, never provider-token or replay accounting. */
+  tool_context?: TrajectoryToolContext;
 }
+
+export type TrajectoryToolContext = {method: 'codex_loopx_tool_context_inventory_v1'} & (
+  {status: 'observed'; observed_input_text_bytes: number; loopx_tool_output_bytes: number;
+    loopx_tool_output_fraction: number | null; unassigned_input_text_bytes: number;
+    unmeasured_parts: number; tool_outputs: number; duplicate_output_records: number;
+    repeated_loopx_output_bytes: number; operations: Array<{operation: string; calls: number; bytes: number}>}
+  | {status: 'unavailable'; reason: string});
 
 export type TrajectoryLoopXInput = {
   method: 'provider_input_token_attribution_v1' | 'tiktoken_o200k_base_input_estimate_v1';

@@ -24,6 +24,13 @@ test('duplicate counter observation does not charge twice',()=>{
   const es=fixture();es.splice(3,0,structuredClone(es[2]));es.forEach((e,i)=>e.line=i+1);
   assert.equal(run(es).input_tokens,140);
 });
+test('invalid supplementary tool inventory cannot erase native counters', () => {
+  const before = run();
+  const result = summarize({events: fixture(), session_id: 'session', tool_context: [{line: 0}]});
+  assert.equal(result.tool_context?.status, 'unavailable');
+  const {tool_context, ...native} = result;
+  assert.deepEqual(native, before);
+});
 test('unknown counters, resets, missing prefix, session mismatch and unfinished work reject',()=>{
   for(const edit of [
     (e:any[])=>{e[0].payload.id='other';},
