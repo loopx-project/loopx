@@ -456,6 +456,12 @@ ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
 the Host retained the same bytes in model history.
 
+File references carry the original path, digest and budgeted reader command;
+the outer view supplies navigation. The first bounded full-file page supplies
+the complete paging and truncation-recovery instructions, including when read
+directly by capture/hash in a fresh shell. Selected pages keep their scoped
+read instructions. Historical unbounded page responses retain their wire shape.
+
 The native codec's `captured_file` basis verifies the previous full file and
 compares exact versions, including unchanged control fields. It does not depend
 on a full read, page EOF, a model ACK or a retained-input claim. Goal, Agent,
@@ -747,6 +753,10 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 `--list` 或 `--select <pointer>`，差分投递时也直接读取当前完整捕获。
 元数据仍放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
 原始工具日志完整，不证明宿主保留给模型的字节也完整。
+
+文件引用保留原始路径、摘要和遵循预算的读取命令；外层视图提供导航。首个有界全文
+分页返回完整的分页与截断恢复说明，直接在新 shell 中按 capture/hash 读取也一样。
+选读页仍提供其作用域内的读取说明；历史无界分页响应保留原有 wire 结构。
 
 原生 `captured_file` 基线来自校验后的前一完整文件，可差分复用所有未变字段，包括
 控制字段；不依赖通读、EOF、模型 ACK 或保留输入声明。Goal、Agent、会话、surface、
