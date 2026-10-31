@@ -1393,3 +1393,16 @@ inventory，不依赖摘要条数或 Markdown。补 evidence 不会重新设置�
 显式执行 proof 仍严格校验。Monitor 规划/观察、ownership、routing、capability 与终态
 操作不在此 intent 内。缺失 display 不阻止 canonical 更新；提交后的正常投影恢复
 托管 Todo 展示。不支持的操作不会回退 Markdown，也不自动切换 provider 或 promotion。
+
+### Scoped User context source reads
+
+Inline work context obtains its scoped open User Todos in one canonical query.
+The existing typed reader filters scope and status before restoring complete
+selected bodies from that same snapshot. Its internal `full_text` read option
+changes presentation only; ordinary CLI inventories remain bounded, and exact
+reads, authority failures and execution admission retain their existing rules.
+It does not cache an earlier revision or grant permission from a read.
+
+内联工作上下文从同一份 canonical 快照筛选当前 Agent 的开放 User Todo，并恢复完整
+正文，避免清单之后再逐条重读。内部 `full_text` 仅影响正文展示；普通 CLI 清单仍有界，
+不缓存旧版本，也不改变精确读取、权限拒绝或执行准入规则。
