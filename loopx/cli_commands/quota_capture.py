@@ -91,6 +91,24 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     return best
 
 
+def _context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize metadata for TS-verified addresses, preserving Python JSON values."""
+    fields = []
+    for child in children:
+        value: Any = payload
+        for key in child["path"]:
+            value = value[key]
+        field = {"pointer": child["pointer"], "type":
+            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
+            else "null" if value is None else "boolean" if isinstance(value, bool)
+            else "string" if isinstance(value, str) else "number",
+            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
+        if isinstance(value, (dict, list)):
+            field["count"] = len(value)
+        fields.append(field)
+    return fields
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None) -> dict[str, Any]:
@@ -163,20 +181,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 for key in item["path"]:
                     selected = selected[key]
                 if list_fields:
-                    fields = []
-                    for child in item["children"]:
-                        value = payload
-                        for key in child["path"]:
-                            value = value[key]
-                        field = {"pointer": child["pointer"], "type":
-                            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
-                            else "null" if value is None else "boolean" if isinstance(value, bool)
-                            else "string" if isinstance(value, str) else "number",
-                            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
-                        if isinstance(value, (dict, list)):
-                            field["count"] = len(value)
-                        fields.append(field)
-                    views.append({"pointer": item["pointer"], "fields": fields})
+                    views.append({"pointer": item["pointer"], "fields": _context_index_fields(payload, item["children"])})
                 else:
                     views.append({"pointer": item["pointer"], "value": selected})
             view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
@@ -273,6 +278,24 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # The reference must fit even under an explicit small caller ceiling.
     def fits():
         return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
+    # The same complete top-level index as `context-read --list`, bound to
+    # recovery (current facts), not a delta's patch keys. This saves an index
+    # tool roundtrip when it fits; it neither supplies source contents nor
+    # acknowledges their delivery. Deeper navigation keeps its existing route.
+    from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+    # Depth-one addressing needs keys only, not another transport of every
+    # source body. Metadata bytes/types are read from the original JSON below.
+    try:
+        plan = _turn_envelope_result("context_select", context=dict.fromkeys(current_document), select=[""], list_fields=True)
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        # An optional index cannot turn a valid immutable file reference into
+        # a failed delivery. Ordinary full recovery remains a file-only read.
+        pass
+    else:
+        result["field_index"] = _context_index_fields(current_document, plan["selections"][0]["children"])
+        if not fits():
+            result.pop("field_index")  # Optional metadata must never displace recovery or instructions.
     if not fits():
         result.pop("overview")
     if not fits():
