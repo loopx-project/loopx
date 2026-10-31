@@ -6,13 +6,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..capabilities.turn_context import attach_turn_context
-from ..capabilities.reward_memory.codex_app_outcome import (
-    stage_codex_app_turn_outcome_candidate_fail_open,
-)
-from ..capabilities.reward_memory.turn_hooks import run_staged_memory_settlement
-from ..control_plane.quota.settlement import read_heartbeat_settlement
-
 
 def stage_reward_memory_outcome_candidate(
     payload: dict[str, Any],
@@ -27,6 +20,9 @@ def stage_reward_memory_outcome_candidate(
     validation_workspace: Path,
 ) -> None:
     """Attach a privately staged outcome candidate after a valid refresh."""
+    from ..capabilities.reward_memory.codex_app_outcome import (
+        stage_codex_app_turn_outcome_candidate_fail_open,
+    )
 
     settlement_identity = payload.get("settlement_identity")
     settlement_identity = (
@@ -78,6 +74,9 @@ def attach_reward_memory_ingest_after_spend(
 ) -> None:
     if not execute or payload.get("ok") is not True:
         return
+    from ..capabilities.reward_memory.turn_hooks import run_staged_memory_settlement
+    from ..control_plane.quota.settlement import read_heartbeat_settlement
+
     readback = read_heartbeat_settlement(
         runtime_root,
         goal_id=goal_id,
@@ -137,6 +136,8 @@ def attach_reward_memory_recall_after_should_run(
         or heartbeat_receipt.get("status") not in {"committed", "replayed"}
     ):
         return
+    from ..capabilities.turn_context import attach_turn_context
+
     attach_turn_context(
         payload,
         registry_path=registry_path,
