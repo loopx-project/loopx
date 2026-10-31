@@ -44,6 +44,7 @@ from benchmark.edgebench.prompts import (
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
+from benchmark.edgebench.result_publication import write_native_result as _write_native_final_result
 
 
 def _observe_run(call):
@@ -83,25 +84,6 @@ def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_ou
     if not execution_started or runtime_seconds <= 0 or (not timed_out and exit_code != 0):
         return "runner_failed"
     return "terminal"
-
-
-def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort,
-                               feedback="native", native_goal_outcome=None):
-    """Retain partial native scores without publishing a completion marker."""
-    if status != "terminal" and not (native_goal_outcome and result.runtime_seconds > 0):
-        return
-    final = dict(agent=agent, task=task, run_id=run_id, model=model, effort=effort,
-                 **result.to_dict())
-    if native_goal_outcome is not None:
-        final.update(runtime_status=status, native_goal_outcome=native_goal_outcome)
-    if feedback == "best-only":
-        final["evaluation_coverage"] = "online_only"
-        final["offline_scoring_complete"] = False
-    # SForge consumers treat final_result.json itself as a completed run.
-    destination = trial / ("final_result.json" if status == "terminal" else "partial_result.json")
-    pending = destination.with_suffix(".json.tmp")
-    pending.write_text(json.dumps(final, indent=2, ensure_ascii=False))
-    pending.replace(destination)
 
 
 def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -> int:

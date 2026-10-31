@@ -206,9 +206,13 @@ The EdgeBench adapter carries this outcome through artifact collection into
 `runtime_status` and `native_goal_outcome`. Failed, cancelled, usage-limited and
 unknown native outcomes do not publish `final_result.json`: existing SForge
 consumers use that file as a completion marker without interpreting the outcome
-labels. Handled terminal stops retain the existing final-result behavior;
-neither artifact grants result qualification. Ordinary non-native profile
-handling is unchanged. Adopt this behavior only for newly pinned attempts;
+labels. A handled terminal stop completes execution; explicit native grading
+must also be `complete` to publish a final result. Pending or unknown grading
+retains its scores and reason in a partial result, including for ordinary
+non-native profiles. Sources that omit `grading_status` retain the legacy
+publication behavior. Neither artifact grants result qualification; see the
+[EdgeBench result publication rules](../edgebench/README.md) for export behavior.
+Adopt this behavior only for newly pinned attempts;
 frozen histories retain their original receipts and require explicit post-run
 classification. Roll back by pinning the previous source for another new attempt,
 not by renaming artifacts in a frozen run.
