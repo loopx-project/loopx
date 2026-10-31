@@ -617,6 +617,8 @@ def test_native_terminal_handoff_is_readable_by_visualizer(tmp_path, timed_out):
     result = RunResult(best_score=0.0, best_pass_rate=1.0, best_round="auto-1",
                        total_rounds=1, auto_submissions=1, runtime_seconds=12.0,
                        timed_out=timed_out)
+    if hasattr(result, "grading_status"):
+        result.grading_status = "complete"
     _write_native_final_result(trial, result, status="terminal", agent="codex",
                               task="case", run_id="run", model="model", effort="xhigh")
     final = json.loads((trial / "final_result.json").read_text())
