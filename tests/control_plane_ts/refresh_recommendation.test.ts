@@ -309,3 +309,26 @@ test("lane write revalidates the original Goal, actor and effect identity", () =
     ...baseRequest.settlement_identity, effect_id: "forged-effect",
   }}), /effect id does not match its identity/);
 });
+
+test("explicit retirement keeps a distinct read fence instead of recreating the initial basis", () => {
+  const initial = resolveLaneRecommendation(laneContext);
+  const first = resolveLaneRecommendation({...laneContext, write: {text: "Old experiment.", expected_basis: initial.basis}});
+  const explicit = {...resolveRefreshRecommendation({...baseRequest, explicit_action: "Reconsider the method."}),
+    goal_id: laneContext.goal_id, agent_id: laneContext.agent_id,
+    journal_source: {generated_at: "2026-01-01T00:00:00Z", json_path: "run:explicit-1"}};
+  const retired = resolveLaneRecommendation({...laneContext, prior_resolution: explicit});
+  assert.notEqual(retired.basis, initial.basis);
+  assert.notEqual(retired.basis, resolveLaneRecommendation({...laneContext, prior_resolution: first.resolution}).basis);
+  assert.equal((retired.selected_todo as Record<string, unknown>).next_step, undefined);
+  const stale = resolveLaneRecommendation({...laneContext, prior_resolution: explicit,
+    write: {text: "Old experiment.", expected_basis: initial.basis}});
+  assert.equal(stale.admitted, false);
+  assert.equal(stale.error_code, "next_action_basis_conflict");
+  assert.equal(resolveLaneRecommendation({...laneContext, prior_resolution: explicit,
+    write: {text: "New supported route.", expected_basis: retired.basis}}).admitted, true);
+  const repeated = resolveLaneRecommendation({...laneContext, prior_resolution: {...explicit,
+    journal_source: {...explicit.journal_source, json_path: "run:explicit-2"}}});
+  assert.notEqual(repeated.basis, retired.basis, "same wording and clock do not collapse distinct committed receipts");
+  assert.equal(resolveLaneRecommendation({...laneContext, prior_resolution: {...explicit, agent_id: "agent-b"}}).basis, initial.basis);
+  assert.equal(JSON.stringify(retired).includes("run:explicit"), false, "source identity stays behind the digest");
+});

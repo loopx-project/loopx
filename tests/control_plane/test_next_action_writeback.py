@@ -8,7 +8,7 @@ import pytest
 
 import loopx.state_refresh as refresh
 from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
-from loopx.control_plane.testing.canary_harness import run_json_cli
+from loopx.control_plane.testing.canary_harness import run_json_cli, run_json_cli_result
 from loopx.control_plane.todos.provider_projection import project_current_canonical_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.work_items.recommendation_source_io import RecommendationWritebackRejected
@@ -107,6 +107,30 @@ def test_multi_agent_steps_are_independent_and_report_scope_does_not_grant_autho
     assert after_b["agent-a"]["next_step"] == after_a["agent-a"]["next_step"]
     assert after_b["agent-b"]["next_step"] == "Evaluate the incumbent."
     assert state.read_text() == original_state
+
+
+def test_explicit_guidance_retires_the_old_step_without_changing_the_selected_todo(tmp_path):
+    registry, state, runtime, _ = fixture(tmp_path, ("agent-a", "agent-b"))
+    original = state.read_text()
+    write(registry, runtime, next_action="Continue the old experiment.")
+    # A derived progress observation is not a new decision and keeps that step.
+    write(registry, runtime, next_action=None)
+    _, retained = routes(registry, runtime, tmp_path)
+    assert retained["agent-a"]["next_step"] == "Continue the old experiment."
+    # Another actor's explicit instruction cannot retire this actor's step.
+    write(registry, runtime, agent_id="agent-b", next_action=None,
+          recommended_action="Review the independent result.")
+    _, peer = routes(registry, runtime, tmp_path)
+    assert peer["agent-a"]["next_step"] == "Continue the old experiment."
+    decision = write(registry, runtime, next_action=None,
+                     recommended_action="The result invalidated the old experiment; reconsider the method.")
+    assert decision["recommended_action_resolution"]["recommended_action_source"] == "explicit_arg"
+    _, current = routes(registry, runtime, tmp_path)
+    assert current["agent-a"]["todo_id"] == "todo_parser"
+    assert "next_step" not in current["agent-a"], "a prior step cannot outrank later explicit guidance"
+    derived = write(registry, runtime, next_action=None)
+    assert derived["recommended_action"] != "Continue the old experiment."
+    assert state.read_text() == original
 
 
 @pytest.mark.parametrize("agents,actor", [([], "agent-a"), (["agent-b"], "agent-a"), (["agent-a"], None)])
@@ -329,3 +353,53 @@ def test_unavailable_canonical_reader_never_uses_stale_markdown(tmp_path, monkey
         write(registry, runtime)
     assert state.read_text() == original_state
     assert not (runtime / "goals/next-action-goal/runs/index.jsonl").exists()
+
+
+def test_explicit_retirement_cannot_revalidate_a_delayed_initial_basis(tmp_path):
+    registry, state, runtime, _ = fixture(tmp_path)
+    original_state = state.read_bytes()
+    authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="next-action-goal")
+    _, initial = routes(registry, runtime, tmp_path)
+    old_basis = initial["agent-a"]["next_action_basis"]
+    write(registry, runtime, next_action="Continue the old experiment.", next_action_basis=old_basis)
+    guidance = "The result invalidated the experiment; reconsider the method."
+    write(registry, runtime, next_action=None, recommended_action=guidance)
+    _, retired = routes(registry, runtime, tmp_path)
+    new_basis = retired["agent-a"]["next_action_basis"]
+    assert new_basis != old_basis, "an explicit decision must not recreate the initial read basis"
+    index = runtime / "goals/next-action-goal/runs/index.jsonl"
+    before = index.read_bytes()
+    with pytest.raises(RecommendationWritebackRejected) as conflict:
+        write(registry, runtime, next_action="Continue the old experiment.", next_action_basis=old_basis)
+    assert conflict.value.code == "next_action_basis_conflict"
+    assert index.read_bytes() == before
+    delayed = subprocess.run([sys.executable, "-m", "loopx.cli", "--format", "json",
+        "--registry", str(registry), "--runtime-root", str(runtime), "refresh-state",
+        "--goal-id", "next-action-goal", "--agent-id", "agent-a",
+        "--next-action", "Continue the old experiment.", "--next-action-basis", old_basis,
+        "--no-global-sync"], capture_output=True, text=True, timeout=30)
+    assert delayed.returncode == 1
+    assert json.loads(delayed.stdout)["error_code"] == "next_action_basis_conflict"
+    assert index.read_bytes() == before
+    status_code, status = run_json_cli_result("status", "--include-task-graph", registry_path=registry, runtime_root=runtime)
+    # This existing minimal fixture lacks a complete Goal health brief; status
+    # still returns a complete read projection, not an execution/health grant.
+    assert status_code == 1 and status["projection_envelope"]["complete"] is True
+    assert "error" not in status
+    item = next(item for item in status["attention_queue"]["items"] if item["goal_id"] == "next-action-goal")
+    selected = next(row for row in item["agent_next_actions"] if row["agent_id"] == "agent-a")
+    assert "next_step" not in selected
+    # Even a repeated explicit statement is a later decision, not the same read.
+    write(registry, runtime, next_action=None, recommended_action=guidance)
+    _, repeated = routes(registry, runtime, tmp_path)
+    assert repeated["agent-a"]["next_action_basis"] != new_basis
+    write(registry, runtime, next_action="Test the newly supported route.",
+        next_action_basis=repeated["agent-a"]["next_action_basis"])
+    for _ in range(2):
+        write(registry, runtime, next_action=None)
+    _, current = routes(registry, runtime, tmp_path)
+    assert current["agent-a"]["next_step"] == "Test the newly supported route."
+    assert state.read_bytes() == original_state
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="next-action-goal")
+    for key in ("provider_revision", "cursor", "todos"):
+        assert after[key] == authority[key]

@@ -591,6 +591,22 @@ Todo, in either personal or Goal report scope; it does not replace shared prose.
 `--next-action-basis` optionally rejects an edit planned from an older source
 read. If the basis is stale, read the current task/step and retry; if no eligible
 task is available, resolve its existing lifecycle or routing boundary first.
+A later explicit `--recommended-action` from that same Agent retires reuse of
+its older bound step. The selected Todo and its authority remain unchanged;
+another Agent's guidance does not retire the step, and ordinary derived progress
+observations preserve it. Write a fresh `--next-action` if a new task-bound step
+is needed after the explicit guidance.
+
+The same Agent's explicit retirement also remains part of the Next Action read
+fence. The typed owner hashes its existing journal source identity, so a delayed
+initial basis cannot become valid again, and repeated wording still names distinct
+committed decisions. This is an ephemeral source-facts fence, not a new persisted
+step or an execution grant; a fresh read can establish the next valid step.
+
+同一 Agent 的显式步骤退休也参与 Next Action 读取依据。typed owner 对已有 journal
+来源身份计算摘要，旧的初始依据不能再次有效；即使指导文字重复，独立提交的决策也不
+混为同一依据。这不是新增持久化步骤或执行权限，新读取仍可合法写入下一步。
+
 Native Turn host `next_action` remains follow-up guidance in its durable result,
 not this explicit task-step edit: completion or repair may leave no runnable
 current task. See [Next Action writeback](quota-allocation.md) for attribution,
