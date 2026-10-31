@@ -384,6 +384,7 @@ def goal_quota_with_spend_ledger(
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0
+    unreadable_event_count = 0
 
     for run in runs:
         if not isinstance(run, dict):
@@ -416,14 +417,33 @@ def goal_quota_with_spend_ledger(
             or generated_at > current_time
         ):
             continue
-        contribution = quota_slot_contribution(run)
-        if contribution is None:
+        
+        # Check for unreadable events
+        event, is_unreadable = load_quota_event_from_run(run)
+        if is_unreadable:
+            unreadable_event_count += 1
+            # Skip unreadable events but count them
             continue
-        kind, run_key, slots = contribution
-        contributions.append((run_key, kind, slots))
-        if kind == "spent":
+        
+        if event is None:
+            continue
+        
+        slots = max(0, _int_number(event.get("slots"), default=0))
+        if slots <= 0:
+            continue
+        
+        event_type = str(event.get("event_type") or "")
+        if event_type == QUOTA_SLOT_SPENT_CLASSIFICATION:
+            run_key = str(event.get("run_generated_at") or run.get("generated_at") or "")
+            if not run_key:
+                continue
+            contributions.append(("spent", run_key, slots))
             spend_event_count += 1
-        else:
+        elif event_type == QUOTA_SLOT_VOIDED_CLASSIFICATION:
+            voided_run_generated_at = str(event.get("voided_run_generated_at") or "")
+            if not voided_run_generated_at:
+                continue
+            contributions.append(("voided", voided_run_generated_at, slots))
             void_event_count += 1
 
     payload["spent_slots"] = sum(net_quota_slot_spend(contributions).values())
@@ -431,6 +451,8 @@ def goal_quota_with_spend_ledger(
     payload["spend_event_count"] = spend_event_count
     if void_event_count:
         payload["void_event_count"] = void_event_count
+    if unreadable_event_count:
+        payload["unreadable_event_count"] = unreadable_event_count
     return payload
 
 
@@ -447,6 +469,7 @@ def quota_status(
     compute = float(payload["compute"])
     spent_slots = int(payload["spent_slots"])
     allowed_slots = int(payload["allowed_slots"])
+    unreadable_event_count = int(payload.get("unreadable_event_count", 0))
 
     if goal_is_stopped(goal):
         state = "paused"
@@ -494,6 +517,11 @@ def quota_status(
         if spent_slots >= allowed_slots:
             state = "throttled"
             reason = f"{compute:g} compute quota spent {spent_slots}/{allowed_slots} slots in this window"
+        elif unreadable_event_count > 0:
+            state = "blocked_health"
+            reason = f"{compute:g} compute quota has {unreadable_event_count} unreadable spend event(s); quota ledger is corrupted"
+            payload["blocked_action_scope"] = "quota_ledger"
+            payload["safe_bypass_allowed"] = False
         else:
             state = "eligible"
             reason = (
