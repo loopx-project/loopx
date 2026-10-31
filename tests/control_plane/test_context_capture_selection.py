@@ -8,6 +8,7 @@ import pytest
 
 from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, last_context_page
 from loopx.cli_commands.quota_capture import read_context_capture
+from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from loopx.control_plane.turn_driver.decision_capture import capture_page_range
 from test_quota_settlement_cli import _run_cli
 
@@ -276,3 +277,92 @@ def test_cli_missing_batch_pointer_identifies_original_argument_without_source_l
     assert f"--select argument 3, token {token}" in result["reason"]
     assert pointer not in result["reason"] and "stop if unavailable" not in json.dumps(result)
     assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+def test_cli_repairs_missing_selection_using_typed_error_and_same_capture(tmp_path):
+    path, raw, original = fixture_capture(tmp_path)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest()]
+    code, failure = _run_cli(registry, runtime, *command,
+        "--select", "/large", "--select", "/rows/0/missing", cwd=tmp_path)
+    assert code != 0 and failure["ok"] is False and "content" not in failure
+    assert failure["error_kind"] == "request_rejected"
+    assert failure["diagnostic_code"] == "context_selection_missing_pointer"
+    assert "--list" in failure["recovery"] and "Restore" not in failure["recovery"]
+    # Branch on the typed cause, not wording in reason; discover and retry
+    # against the original capture without another guard or admission.
+    code, index = _run_cli(registry, runtime, *command, "--select", "/rows/0", "--list", cwd=tmp_path)
+    assert code == 0 and index["ok"] and index["eof"], index
+    fields = json.loads(index["content"])["selections"][0]["fields"]
+    pointer = next(field["pointer"] for field in fields if field["pointer"] == "/rows/0/tail")
+    code, selected = _run_cli(registry, runtime, *command, "--select", pointer, cwd=tmp_path)
+    assert code == 0 and selected["ok"] and selected["eof"], selected
+    assert json.loads(selected["content"])["selections"] == [
+        {"pointer": pointer, "value": original["rows"][0]["tail"]}]
+    assert capture_page_range(selected, raw=raw, digest=selected["sha256"]) is None
+    assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
+
+
+@pytest.mark.parametrize("kind,code", [
+    ("request_rejected", "request_too_large"),
+    ("io_transient", "io_busy"),
+    ("io_permanent", "io_permission_denied"),
+    ("internal_failure", "unexpected_handler_error"),
+])
+def test_reader_preserves_runtime_diagnostics_without_parsing_reason(tmp_path, monkeypatch, kind, code):
+    from loopx.control_plane.quota import turn_envelope
+
+    path, raw, _ = fixture_capture(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise EffectRuntimeRemoteError("same opaque reason", error_kind=kind, diagnostic_code=code)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", fail)
+    result = read_context_capture(args(path, raw))
+    assert result["ok"] is False and "content" not in result and "next_command" not in result
+    assert result["error_kind"] == kind and result["diagnostic_code"] == code
+    assert result["reason"] == "same opaque reason"
+    assert "Restore" not in result["recovery"]
+    assert ("--list" in result["recovery"]) is (kind == "request_rejected")
+    assert path.read_bytes() == raw
+
+
+def test_runtime_startup_failure_does_not_request_capture_restoration(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    path, raw, _ = fixture_capture(tmp_path)
+
+    def fail(*_args, **_kwargs):
+        raise EffectRuntimeStartupError("runtime unavailable", diagnostic_code="runtime_startup_timeout")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", fail)
+    result = read_context_capture(args(path, raw))
+    assert result["ok"] is False and "content" not in result
+    assert result["diagnostic_code"] == "runtime_startup_timeout"
+    assert "runtime" in result["recovery"] and "Restore" not in result["recovery"]
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("damage", ["missing", "digest", "json"])
+def test_capture_failure_cannot_be_repaired_as_a_selector_error(tmp_path, monkeypatch, damage):
+    from loopx.control_plane.quota import turn_envelope
+
+    path, raw, _ = fixture_capture(tmp_path)
+    request = args(path, raw)
+    if damage == "missing":
+        path.unlink()
+    elif damage == "digest":
+        path.write_bytes(b"{}")
+    else:
+        path.write_bytes(b"{broken")
+        request.capture_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("invalid captures must not reach selection")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unexpected)
+    result = read_context_capture(request)
+    assert result["ok"] is False and "content" not in result and "next_command" not in result
+    assert "diagnostic_code" not in result and "error_kind" not in result
+    assert "Restore the original digest-bound capture" in result["recovery"]

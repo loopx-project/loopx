@@ -862,6 +862,16 @@ not renumber arguments. Inspect the resolved prefix before that token in the
 same capture; malformed pointers need syntax repair first. Diagnostics never
 echo the pointer or task values, and no part of a rejected batch is delivered.
 
+Reader failures preserve the runtime's `error_kind` and `diagnostic_code` so
+programs need not parse `reason`. Selector rejections use `request_rejected`
+with `context_selection_invalid_pointer`, `context_selection_invalid_index`
+or `context_selection_missing_pointer`. Repair the pointer syntax or inspect
+the known parent in the same capture, then retry the corrected batch. Other
+runtime failures retain their own classification; startup failures retain
+their diagnostic code. These failures do not require restoring a healthy
+capture. Missing or damaged capture files still fail closed through the
+original file/digest checks. Reading again never reruns admission.
+
 The `context_capture_index_v1` view shares the digest-bound pagination contract.
 An expanded index includes its `list_depth`; `next_command` preserves the depth,
 selectors and both hashes. Changing depth rejects the prior view's continuation.
@@ -904,6 +914,13 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 开始。排序和去重不改变参数编号。在同一 capture 中检查失败 token 前已解析的
 路径前缀；语法错误需先修正 pointer。错误信息不回显路径或任务正文，被拒绝的
 批次不会返回部分内容。
+
+读取失败保留 runtime 的 `error_kind` 与 `diagnostic_code`，程序无需解析 `reason`。
+选择错误使用 `request_rejected`，原因码分别为 `context_selection_invalid_pointer`、
+`context_selection_invalid_index` 或 `context_selection_missing_pointer`。
+修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。其他 runtime
+故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
+文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
 
 `context_capture_index_v1` 沿用双摘要分页；展开的目录包含 `list_depth`，
 `next_command` 保留深度、路径和两个摘要。更改深度会拒绝旧视图的续读，目录 cursor
