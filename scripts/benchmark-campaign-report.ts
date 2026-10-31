@@ -21,11 +21,21 @@ type Effort = {
 type ScoreSample = {
   elapsed_ms: number; value: number; normalization_id: string; evidence_ref: string;
 };
+type RunConfiguration = {
+  source_revision_id: string | null;
+  scorer_revision_id: string | null;
+  model_id: string | null;
+  budget_ms: number | null;
+  active_submission_cooldown_ms: number | null;
+  background_evaluation_interval_ms: number | null;
+  resource_profile: string | null;
+  evidence_ref: string;
+};
 type Selection = {
   arm_id: string; case_id: string; run_id: string; status: Status;
   score: Score | null; protocol_id: string; exclude_reason: string | null;
   rerun_reason: Rerun | null;
-  effort?: Effort; score_samples?: ScoreSample[];
+  effort?: Effort; score_samples?: ScoreSample[]; configuration?: RunConfiguration;
 };
 type Incident = {
   arm_id: string; case_id: string; run_id: string; fault: Fault;
@@ -107,6 +117,15 @@ export function validateInput(raw: unknown): CampaignInput {
         requireThat(token(sample.normalization_id) && text(sample.evidence_ref), 'score sample provenance required');
         previous = sample.elapsed_ms;
       }
+    }
+    if (r.configuration !== undefined) {
+      const c = r.configuration;
+      requireThat(c && text(c.evidence_ref), 'configuration evidence required');
+      requireThat([c.source_revision_id, c.scorer_revision_id, c.model_id].every(v => v === null || token(v)),
+        'configuration revision/model ids invalid');
+      requireThat(c.resource_profile === null || text(c.resource_profile), 'configuration resource profile invalid');
+      requireThat([c.budget_ms, c.active_submission_cooldown_ms, c.background_evaluation_interval_ms]
+        .every(nonnegativeIntegerOrNull), 'configuration numeric fields must be nonnegative integers or null');
     }
   }
   requireThat(Array.isArray(d.incidents) && distinct(d.incidents.map(i => i.run_id)), 'incident run ids must be unique');
@@ -205,14 +224,43 @@ export function buildReport(raw: unknown) {
   const score_time_series = d.selection.flatMap(row => (row.score_samples ?? []).map(sample => ({
     arm_id: row.arm_id, case_id: row.case_id, run_id: row.run_id, ...sample,
   })));
+  const configurationFields = ['source_revision_id', 'scorer_revision_id', 'model_id', 'budget_ms',
+    'active_submission_cooldown_ms', 'background_evaluation_interval_ms', 'resource_profile'] as const;
+  const profileGroups = new Map<string, {
+    arm_id: string; configuration_supplied: boolean; configuration: Omit<RunConfiguration, 'evidence_ref'>;
+    run_ids: string[]; case_ids: string[]; evidence_refs: string[];
+  }>();
+  for (const row of d.selection) {
+    const supplied = row.configuration !== undefined;
+    const configuration = Object.fromEntries(configurationFields.map(field =>
+      [field, row.configuration?.[field] ?? null])) as Omit<RunConfiguration, 'evidence_ref'>;
+    const profileKey = digest({arm_id: row.arm_id, configuration_supplied: supplied, configuration});
+    const group = profileGroups.get(profileKey) ?? {arm_id: row.arm_id, configuration_supplied: supplied,
+      configuration, run_ids: [], case_ids: [], evidence_refs: []};
+    group.run_ids.push(row.run_id); group.case_ids.push(row.case_id);
+    if (row.configuration) group.evidence_refs.push(row.configuration.evidence_ref);
+    profileGroups.set(profileKey, group);
+  }
+  const armOrder = new Map(d.arms.map((arm, index) => [arm.arm_id, index]));
+  const configuration_profiles = [...profileGroups.entries()].map(([profile_id, group]) => ({
+    arm_id: group.arm_id, profile_id, configuration_supplied: group.configuration_supplied,
+    ...group.configuration, run_count: group.run_ids.length, run_ids: [...group.run_ids].sort(),
+    case_ids: [...group.case_ids].sort(), evidence_refs: [...new Set(group.evidence_refs)].sort(),
+  })).sort((a, b) => (armOrder.get(a.arm_id)! - armOrder.get(b.arm_id)!) ||
+    Number(b.configuration_supplied) - Number(a.configuration_supplied) ||
+    b.run_count - a.run_count || a.profile_id.localeCompare(b.profile_id));
   return { schema_version: 'benchmark_campaign_report_v1', input_sha256: digest(d),
     observed_at: d.observed_at, title: d.title, summary, comparisons, selection: d.selection,
-    score_time_series, incidents: d.incidents, execution_audit: d.execution_audit ?? [], notes: d.notes };
+    configuration_profiles, score_time_series, incidents: d.incidents,
+    execution_audit: d.execution_audit ?? [], notes: d.notes };
 }
 
 type Report = ReturnType<typeof buildReport>;
 const cell = (v: unknown) => String(v ?? '—').replaceAll('|', '\\|').replace(/[\r\n]+/g, ' ').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const number = (v: number | null) => v === null ? '—' : v.toFixed(2);
+const known = (v: unknown) => v === null || v === undefined ? '未知' : v;
+const hours = (v: number | null) => v === null ? '未知' : (v / 3_600_000).toFixed(2);
+const seconds = (v: number | null) => v === null ? '未知' : (v / 1000).toFixed(0);
 const coveredTotal = (coverage: number, value: number, scale = 1) =>
   coverage === 0 ? null : scale === 1 ? value : (value / scale).toFixed(2);
 function table(headers: string[], rows: unknown[][]) {
@@ -234,6 +282,8 @@ export function renderMarkdown(r: Report): string {
     table(['实验组','首次已归因产品故障','历史已归因产品故障','历史已归因基础设施故障','历史归因待查','历史调度取消','基础设施待补跑','评分待补跑','取消待补跑','其他待重做'], r.summary.map(a => [a.label,a.product_failures_initial,a.product_failures_ever,a.infrastructure_failures_ever,a.unknown_failures_ever,a.cancelled_cases_ever,a.pending_reruns.infrastructure,a.pending_reruns.scoring,a.pending_reruns.operator_cancelled,(a.pending_reruns.comparison_change ?? 0)+(a.pending_reruns.integrity_review ?? 0)+(a.pending_reruns.product ?? 0)+(a.pending_reruns.unknown ?? 0)])) +
     '\n\n成本只汇总调用方提供并带证据的运行时长、token 和模型请求数；未知不按零计。各组覆盖数不同，不能直接用总量判断效率。\n\n' +
     table(['实验组','时长覆盖','总运行时长(h)','Token覆盖','总Token','请求数覆盖','模型请求数','三项完整'], r.summary.map(a => [a.label,`${a.effort.duration_known_runs}/${a.total}`,coveredTotal(a.effort.duration_known_runs,a.effort.duration_ms,3_600_000),`${a.effort.token_known_runs}/${a.total}`,coveredTotal(a.effort.token_known_runs,a.effort.token_count),`${a.effort.model_request_known_runs}/${a.total}`,coveredTotal(a.effort.model_request_known_runs,a.effort.model_request_count),a.effort.complete_runs])) +
+    '\n\n## 运行配置矩阵\n\n每行是一组实际出现的配置；同一组出现多行表示该组内部配置并不一致。未知值保持未知。配置相同也不自动证明严格配对、处理忠实度或因果可比性。\n\n' +
+    table(['实验组','运行数','Source','Scorer','Model','预算(h)','主动提交冷却(s)','后台评测(s)','资源档位','证据覆盖'],r.configuration_profiles.map(p => [labels.get(p.arm_id),p.run_count,known(p.source_revision_id),known(p.scorer_revision_id),known(p.model_id),hours(p.budget_ms),seconds(p.active_submission_cooldown_ms),seconds(p.background_evaluation_interval_ms),known(p.resource_profile),`${p.configuration_supplied ? p.run_count : 0}/${p.run_count}`])) +
     '\n\n均分使用相同题目交集、相同归一化规则，尺度 0–100。未出分不填 0；授权的故障判零单独保留来源。以下为描述性比较；源版本、协议、资源差异和完整性复核仍需独立审查。\n\n' +
     table(['对比范围','共同题数',...r.summary.map(a => a.label),'第二组−第一组','共同题中双方/各方可计数'],r.comparisons.map(c => [c.arms.map(a => labels.get(a)).join(' / '),c.n,...r.summary.map(a => number(c.means[a.arm_id] ?? null)),number(c.delta_second_minus_first),c.qualified_common_n])) +
     '\n\n' + r.notes.map(n => '- ' + cell(n)).join('\n') + '\n\n## 共同题目与排除记录\n\n' +
@@ -244,8 +294,8 @@ export function renderMarkdown(r: Report): string {
 export function renderCsv(r: Report): string {
   // Neutralize spreadsheet formulas in caller-controlled labels and ids.
   const q = (v: unknown) => { let s = String(v ?? ''); if (/^\s*[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replaceAll('"','""') + '"'; };
-  return [['arm_id','case_id','run_id','status','score_0_100','score_origin','normalization_id','countable','rerun_reason','exclude_reason','score_evidence_ref','duration_ms','token_count','model_request_count','effort_evidence_ref','score_sample_count'],
-    ...r.selection.map(s => [s.arm_id,s.case_id,s.run_id,s.status,s.score?.value,s.score?.origin,s.score?.normalization_id,s.score?.countable,s.rerun_reason,s.exclude_reason,s.score?.evidence_ref,s.effort?.duration_ms,s.effort?.token_count,s.effort?.model_request_count,s.effort?.evidence_ref,s.score_samples?.length ?? 0])].map(row => row.map(q).join(',')).join('\n')+'\n';
+  return [['arm_id','case_id','run_id','status','score_0_100','score_origin','normalization_id','countable','rerun_reason','exclude_reason','score_evidence_ref','duration_ms','token_count','model_request_count','effort_evidence_ref','score_sample_count','source_revision_id','scorer_revision_id','model_id','budget_ms','active_submission_cooldown_ms','background_evaluation_interval_ms','resource_profile','configuration_evidence_ref'],
+    ...r.selection.map(s => [s.arm_id,s.case_id,s.run_id,s.status,s.score?.value,s.score?.origin,s.score?.normalization_id,s.score?.countable,s.rerun_reason,s.exclude_reason,s.score?.evidence_ref,s.effort?.duration_ms,s.effort?.token_count,s.effort?.model_request_count,s.effort?.evidence_ref,s.score_samples?.length ?? 0,s.configuration?.source_revision_id,s.configuration?.scorer_revision_id,s.configuration?.model_id,s.configuration?.budget_ms,s.configuration?.active_submission_cooldown_ms,s.configuration?.background_evaluation_interval_ms,s.configuration?.resource_profile,s.configuration?.evidence_ref])].map(row => row.map(q).join(',')).join('\n')+'\n';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
