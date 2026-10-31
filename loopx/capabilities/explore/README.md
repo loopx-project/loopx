@@ -31,6 +31,13 @@ attachments also require the same `input_revision`. Use a new finding id per
 evaluated candidate, and reuse an id only to correct that finding. Missing values
 are explicit `null`; zero and negative values remain valid measurements.
 
+When an `execution_observation` declares a `result_ref`, each measurement must
+cite that same result. This applies to manual findings and writeback attachments,
+including shared comparison contexts. Listing both receipts in `evidence_refs`
+does not bind a different result to the executed candidate. No result is inferred
+when execution has not declared one. These consistency checks do not independently
+verify a producer's calculator or turn `confirmed` into an evaluator attestation.
+
 To reuse verified comparison conditions, save these three fields once in
 `conditions.json`:
 

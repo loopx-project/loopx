@@ -394,7 +394,9 @@ def build_explore_finding_event(
 
         if not node_id:
             raise ValueError("measurements require an explicit node")
-        measured = normalize_measurements(measurements)
+        measured = normalize_measurements(
+            measurements, execution_observation=event.get("execution_observation"),
+        )
         if any(item["evidence_ref"] not in event.get("evidence_refs", []) for item in measured):
             raise ValueError("measurement evidence must be included in the finding's evidence_refs")
         event["measurements"] = measured
