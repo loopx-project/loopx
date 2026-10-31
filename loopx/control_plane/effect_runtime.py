@@ -447,6 +447,12 @@ def _write_source_digest(
             pass
 
 
+def _require_unchanged_snapshot(root: Path, snapshot: _RuntimeSourceSnapshot) -> None:
+    current_snapshot = _runtime_source_snapshot(root)
+    if current_snapshot != snapshot:
+        raise _RuntimeSourceChanged(current_snapshot)
+
+
 @lru_cache(maxsize=8)
 def _runtime_fingerprint_for_snapshot(
     root: str,
@@ -454,17 +460,19 @@ def _runtime_fingerprint_for_snapshot(
 ) -> str:
     # A fresh CLI process would otherwise open every source; on hosts that scan
     # each open this dominates short commands. The record is only a memo.
+    source_root = Path(root)
     location = _source_digest_location(root, snapshot)
     if location is not None:
         recorded = _read_source_digest(*location)
         if recorded is not None:
+            # A hit adopts the record only under the full hash's freshness check.
+            _require_unchanged_snapshot(source_root, snapshot)
             return recorded
     digest = hashlib.sha256()
     # The daemon's fixed Python adapter context must follow the interpreter
     # selected by this caller, even when two environments share source files.
     digest.update(sys.executable.encode("utf-8"))
     digest.update(str(sys.version_info[:3]).encode("ascii"))
-    source_root = Path(root)
     # Lazy imports and Python bridges resolve from this physical release. Equal
     # bytes in another checkout must not reuse a loader whose release may retire.
     # Resolved aliases still share one owner; the digest covers every source byte.

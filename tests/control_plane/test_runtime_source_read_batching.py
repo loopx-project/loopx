@@ -149,6 +149,34 @@ def test_fresh_process_reuses_the_private_digest_until_sources_change(tmp_path, 
 
 
 @posix_only
+def test_source_change_before_a_digest_hit_is_not_adopted(tmp_path, monkeypatch):
+    root = tmp_path / "release"
+    root.mkdir()
+    edited = root / "a.ts"
+    edited.write_bytes(b"export {};\n")
+    (root / "b.json").write_bytes(b"{}")
+    monkeypatch.setattr(runtime, "_control_plane_root", lambda: root)
+    namespace = _private_namespace(tmp_path, monkeypatch)
+    first = _fresh_process_fingerprint()
+    assert first == serial_fingerprint(root) and len(list(namespace.iterdir())) == 1
+    original, hits = runtime._read_source_digest, []
+
+    def edit_after_snapshot(path, key):
+        # The caller's snapshot is already taken; the stored key still matches it.
+        recorded = original(path, key)
+        if not hits:
+            edited.write_bytes(b"export const edited = true;\n")
+        hits.append(recorded)
+        return recorded
+
+    monkeypatch.setattr(runtime, "_read_source_digest", edit_after_snapshot)
+    reads = _count_source_reads(monkeypatch)
+
+    assert _fresh_process_fingerprint() == serial_fingerprint(root) != first
+    assert hits[0] == first and hits[1:] == [None] and reads == ["a.ts", "b.json"]
+
+
+@posix_only
 @pytest.mark.parametrize("defect", ["foreign_mode", "symlink", "shared_namespace",
                                     "corrupt", "stale_key", "invalid_digest"])
 def test_untrusted_digest_record_is_recomputed(tmp_path, monkeypatch, defect):
