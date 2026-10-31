@@ -31,6 +31,19 @@ test("read captures the exact task, transitive upstream results and goal accepta
   assert.equal(check(result.receipt).ok, true);
 });
 
+test("an inapplicable recovery does not direct the caller to repeat the same read", () => {
+  const result = read({prior: {vision_checkpoint: {
+    decision: "unchanged_with_reason", satisfied: true, delivery_boundary: "in_flight_continuation",
+  }}, writeback_committed: true, quota_spend_committed: true});
+  assert.equal(result.ok, false);
+  assert.equal(result.error_code, "checkpoint_context_not_missing");
+  assert.equal(result.reread_required, false);
+  assert.doesNotMatch(String(result.error), /run checkpoint-context/);
+  assert.match(String(result.error), /normal guard/);
+  const missing = check(undefined);
+  assert.equal(missing.reread_required, true, "a genuinely missing receipt still requires reread");
+});
+
 test("an unqualified blocked replan needs the exact committed source and no debit before reread", () => {
   const bound = settlementIdentity({goal_id: "goal", agent_id: "agent", turn_instance_id: "turn",
     replan_obligation_id: "replan-1111111111111111"});

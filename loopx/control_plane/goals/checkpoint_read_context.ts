@@ -77,8 +77,13 @@ function snapshot(request: JsonObject): JsonObject {
 }
 
 const rejected = (code: string, changed: string[] = []): JsonObject => ({
-  ok: false, error_code: code, reread_required: true, changed_components: changed,
-  error: `${code}: run checkpoint-context for the same Goal/Agent/Todo or obligation/Turn, ` +
+  ok: false, error_code: code, reread_required: code !== "checkpoint_context_not_missing", changed_components: changed,
+  error: code === "checkpoint_context_not_missing"
+    ? `${code}: this committed writeback has no missing checkpoint for this recovery. ` +
+      "Preserve the committed writeback and quota receipt; do not repeat this recovery or quota spend. " +
+      "For later authorized work, inspect current state through the normal guard with a fresh Turn identity. " +
+      "This rejection grants no work or completion authority."
+    : `${code}: run checkpoint-context for the same Goal/Agent/Todo or obligation/Turn, ` +
     "read the returned state and judge again; submit its --checkpoint-read-context with only the vision decision. " +
     "Do not repeat implementation, state mutations, or quota spend.",
 });
