@@ -174,18 +174,35 @@ export const navigationSortingScenario = {
       const goalNav = page.getByRole("navigation", { name: "Goal 视图" });
       await goalNav.getByRole("button", { name: "概览", exact: true }).click();
       const overview = page.locator(".goal-overview");
-      if (await overview.locator(".goal-overview-attention").count()) throw new Error("A quiet Goal still reserved a full attention card");
-      if (await overview.getByRole("button", { name: /查看任务|查看成果/ }).count()) throw new Error("Overview duplicated adjacent tab navigation");
-      const usageVitals = page.getByTestId("goal-vitals").locator(".goal-vital-cell")
-        .filter({ has: page.locator(".goal-vital-label", { hasText: /^(Agent 用时|成本)$/ }) });
-      const unknownUsage = await usageVitals.locator(".goal-vital-value").allTextContents();
-      if (unknownUsage.length !== 2 || unknownUsage.some(value => value !== "未采集")) {
+      // The attention region is a numbered part of the staged Goal document now, so its
+      // mere presence is not the signal. A quiet Goal must invent no decision row and
+      // must explain its own region instead of leaving a blank card.
+      if (await overview.locator(".goal-overview-attention li").count()) throw new Error("A quiet Goal still invented a decision card");
+      const quietAttentionCopy = await overview.locator(".goal-overview-attention .goal-stage-empty").innerText();
+      if (!/无法确认|没有等你决定的事|unknown|Nothing is waiting/.test(quietAttentionCopy)) {
+        throw new Error(`A quiet Goal left its attention region unexplained: ${quietAttentionCopy}`);
+      }
+      // The attention region owns one bounded-list escape hatch ("查看任务 (N)") that the
+      // review requires for unknown/partial coverage; what must not come back is a second
+      // pair of tab-equivalent buttons elsewhere in the overview.
+      const duplicatedTabNav = await overview.getByRole("button", { name: /查看任务|查看成果/ })
+        .evaluateAll(nodes => nodes.filter(node => !node.closest(".goal-overview-attention")).length);
+      if (duplicatedTabNav) throw new Error("Overview duplicated adjacent tab navigation");
+      const unknownUsage = await page.getByTestId("goal-vitals").locator(".goal-stagebar-usage-value").allTextContents();
+      if (unknownUsage.length !== 2 || unknownUsage.some(value => value.trim() !== "未采集")) {
         throw new Error(`Unknown usage lost its explicit unmeasured state: ${unknownUsage}`);
       }
-      for (const label of ["Agent 用时", "成本"]) {
-        const cell = usageVitals.filter({ has: page.getByText(label, { exact: true }) });
-        await readContextHelp(page, cell, `${label} · 未采集`, "未采集");
+      if (await page.getByTestId("goal-vitals").locator(".goal-stagebar-usage-value.is-unmeasured").count() !== 2) {
+        throw new Error("Unmeasured usage is no longer marked as unmeasured");
       }
+      // Both unmeasured facts stay asserted through the group's own surface: the
+      // usage detail it opens. The bar no longer carries a per-cell help control.
+      await page.getByTestId("goal-vitals").locator(".goal-stagebar-usage").click();
+      const usageDetail = page.locator(".personal-goal-detail-usage");
+      await usageDetail.waitFor({ state: "visible" });
+      if (!(await usageDetail.innerText()).includes("未采集")) throw new Error("The usage detail lost its unmeasured state");
+      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await page.locator("[data-context-drawer]").waitFor({ state: "detached" });
       await overview.getByRole("alert").filter({ hasText: "交付快照读取失败" }).waitFor({ state: "visible" });
       await readContextHelp(page, overview, "验收观察未获取", "验收观测不可用，Goal 是否达成仍未知。");
       // An optional media reader must reject an incomplete successful response

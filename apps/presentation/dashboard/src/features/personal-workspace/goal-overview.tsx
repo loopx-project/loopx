@@ -58,6 +58,10 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const optional = needs.availability === "ok" ? needs.optional : null;
   const totalAttention = blocking !== null && optional !== null ? blocking + optional : null;
   const showAttention = attention.length > 0 || (totalAttention !== null && totalAttention > 0);
+  // The digest only proves "nothing is waiting" when the owner read cleanly
+  // (availability ok), its counts cover the whole group, and the total is a
+  // known zero. Unavailable, partial or null counts stay unknown.
+  const attentionEmpty = needs.availability === "ok" && needs.coverage === "complete" && totalAttention === 0;
   const moreAttention = needs.availability !== "ok" || needs.coverage !== "complete" || (totalAttention ?? attention.length) > 3;
   const run = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> => item.kind === "run" && item.run.goalId === goal.goalId);
   const currentRow = digest.work.rows.find(row => row.displayClass === "running_observed")
@@ -82,6 +86,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
     <GoalWorkspaceWork onOpenAgentConversation={onOpenAgentConversation} goal={goal} digest={digest} items={items} userTodos={userTodos} selectedTodoId={selectedTodoId} onSelect={onSelect}
       readOnly={readOnly} active={active} prioritizeAttention={blocking !== null && blocking > 0} railOpen={railOpen} onCloseRail={onCloseRail} historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={onPreview} board={board}
       brief={<section className="goal-overview-direction" aria-label={copy.direction}>
+        <p className="goal-stage-label"><span className="goal-stage-n">01</span>{locale === "zh-CN" ? "现状" : "Current state"}</p>
         {digest.objective ? <p className="goal-overview-objective" data-testid="goal-declared-objective">{digest.objective}</p> : <ContextHelp icon={CircleHelp} label={locale === "zh-CN" ? "目标声明未读到" : "Declared objective unavailable"}><p>{copy.objectiveUnavailable}</p></ContextHelp>}
         {currentWork && currentRow ? <details className="goal-overview-current">
           <summary><small>{copy.current} · {goalWorkClassLabel(currentRow.displayClass, locale === "zh-CN")}</small><span>{currentWork.text}</span><ChevronDown aria-hidden size={15}/></summary>
@@ -94,24 +99,25 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
         <WorkerReadback goal={goal} zh={locale === "zh-CN"} onViewTasks={() => onView("tasks")}/>
         <GoalAcceptanceContractSection overview goalId={goal.goalId} contract={observation?.goal_acceptance_contract} copy={acceptanceCopy} current={review.usable} localSource={!readOnly} canManage={!readOnly && active && review.usable}/>
       </section>}
-      attention={showAttention ? <section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
+      attention={<section className="goal-overview-attention" aria-label={copy.attention} id={goalOverviewAttentionId} tabIndex={-1}>
         <header>
-          <h2>{copy.attention}</h2>
+          <h2><span className="goal-stage-n">02</span>{copy.attention}</h2>
           <span className={blocking ? "goal-overview-count is-blocking" : "goal-overview-count"}>{blocking ?? "—"}</span>
           {optional ? <small>{copy.optional.replace("{count}", String(optional))}</small> : null}
         </header>
-        <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" data-attention-id={item.todoId} onClick={() => onSelect({ kind: "attention", item })}>
+        {showAttention ? <ul>{attention.slice(0, 3).map(item => <li key={item.todoId}><button type="button" data-attention-id={item.todoId} onClick={() => onSelect({ kind: "attention", item })}>
           <Hand aria-hidden size={17} />
           <span className="goal-attention-text"><span>{item.text}</span>
             {item.updatedAt ? <time dateTime={item.updatedAt}>{relativeTime(item.updatedAt, locale)}</time> : null}</span>
           <ArrowRight aria-hidden size={14} />
-        </button></li>)}</ul>
+        </button></li>)}</ul> : attentionEmpty ? <p className="goal-stage-empty">{locale === "zh-CN" ? "没有等你决定的事" : "Nothing is waiting on you"}</p>
+          : <p className="goal-stage-empty is-unknown" role="status">{t("overview.attentionUnknown")}</p>}
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
-      </section> : null}
+      </section>}
       map={readOnly ? <ContextHelp label={locale === "zh-CN" ? "来源读取范围" : "Source reading scope"} icon={CircleHelp}><p className="goal-work-scope">{copy.remote}</p></ContextHelp> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>
     {readOnly ? <GoalAcceptanceObservationCard goal={goal} overview />
       : <OverviewDeliveryEvidence key={`delivery:${goal.goalId}`} review={review} zh={locale === "zh-CN"}>
-        <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />
+        <DeliveryReviewContent review={review} hideWorkMap hideAcceptanceContract hideTitle active={active} goal={goal} items={items} userTodos={userTodos} onSelect={onSelect} />
       </OverviewDeliveryEvidence>}
   </section>;
 }
@@ -130,7 +136,7 @@ function OverviewDeliveryEvidence({review, zh, children}: {review: DeliveryRevie
     }) ?? (!snapshot.graph ? (zh ? "交付链不可用" : "Delivery chain unavailable")
       : reviewCoverageIncomplete(snapshot.graph) ? (zh ? "交付链不完整" : "Incomplete delivery chain") : null);
   return <details className="goal-overview-evidence" open={open} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary><span>{zh ? "交付与依据" : "Delivery and evidence"}</span>{status ? <small>{status}</small> : null}</summary>
+    <summary><span><span className="goal-stage-n">04</span>{zh ? "交付与依据" : "Delivery and evidence"}</span>{status ? <small>{status}</small> : null}</summary>
     {children}
   </details>;
 }

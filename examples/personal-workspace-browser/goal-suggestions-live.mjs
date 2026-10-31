@@ -62,8 +62,8 @@ export const goalSuggestionsLiveScenario = {
       await summary.click();
       assert.doesNotMatch(before, /等你决定/, `an optional user action is not a decision suggestion: ${before}`);
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
-      const vitals = (await page.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
-      assert.match(vitals, /另有 1 项可选/, `the lane itself shows the item as optional: ${vitals}`);
+      assert.match(await page.locator(".goal-overview-attention header small").innerText(), /1 项可选/,
+        "The rail itself shows the item as optional");
       await home();
 
       // A real gate is a decision; the count is the lane's own count.
@@ -78,9 +78,9 @@ export const goalSuggestionsLiveScenario = {
       const count = after.match(/先处理 (\d+) 项等你决定的事项/);
       assert.ok(count, `the first suggestion is the decision: ${after}`);
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "概览", exact: true }).click();
-      const lane = (await page.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ").match(/(\d+) 等你决定/);
-      assert.ok(lane, "the lane counts the gate");
-      assert.equal(count[1], lane[1], `the suggestion count equals the lane's count (${lane[1]})`);
+      const laneCount = (await page.locator(".goal-overview-attention .goal-overview-count").innerText()).trim();
+      assert.match(laneCount, /^\d+$/, "The rail counts the gate");
+      assert.equal(count[1], laneCount, `the suggestion count equals the owner's qualified count (${laneCount})`);
       await page.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
       await summary.waitFor({ state: "visible" });
       await summary.click();

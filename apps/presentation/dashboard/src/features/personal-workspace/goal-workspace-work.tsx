@@ -1,6 +1,6 @@
 import {ContextHelp} from "./context-help";
 import {ArrowRight, ChevronDown, Circle, CircleAlert, CircleCheck, CircleHelp, Clock, Hand, Info, List, Play, Plus, Search} from "lucide-react";
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from "react";
+import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import type {GoalWorkDisplayClass, GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import type {WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem} from "./personal-workspace-model";
 import {localizedSessionStatus, useWorkspaceI18n} from "./i18n";
@@ -161,7 +161,7 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
   const quietWork = digest.work.coverage === "complete" && digest.work.total === 0
     && digest.needsYou.availability === "ok" && digest.needsYou.blocking === 0
     && digest.needsYou.optional === 0 && !attention.length;
-  const hasRail = Boolean(attentionContent) || !quietWork;
+  const hasRail = false;
   useEffect(() => {
     const node = inventory.current;
     if (!node) {setInventoryAvailable(false); return;}
@@ -207,10 +207,21 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
       </div>}
       <footer className="goal-work-scope"><time dateTime={digest.observedAt}>{new Date(digest.observedAt).toLocaleTimeString(locale)}</time><ContextHelp label={zh ? "工作统计范围" : "Work count scope"}><p>{zh ? "统计仅覆盖此 Goal；任务与历史可能分批载入。" : "Counts cover this Goal; tasks and history may be loaded in bounded pages."}</p>{railTab === "activity" && !activity.length ? <p>{zh ? "当前时间线尚无已完成或返回的记录。" : "No completed work or returned results in this timeline."}</p> : null}</ContextHelp></footer>
     </aside>;
+  const inventoryContent = quietWork ? null : <details className="goal-workspace-inventory" ref={inventory} open={inventoryOpen} onToggle={event => setInventoryOpen(event.currentTarget.open)}>
+    <summary><List size={15} aria-hidden/><span>{zh ? "全部工作" : "All work"}</span><ChevronDown size={15} aria-hidden/></summary>
+    {inventoryAvailable && inventoryOpen && !railOpen ? rail("inline") : null}
+  </details>;
+  // A narrow column promotes the blocking decision above the Goal's own
+  // direction; the DOM has to follow that order too, or the visual order and the
+  // reading order disagree for assistive readers. Keyed slots let React move the
+  // existing nodes, so the reflow keeps focus inside the decision it moved.
+  const documentSlots = attentionFirst
+    ? [<Fragment key="attention">{attentionContent}</Fragment>, <Fragment key="brief">{brief}</Fragment>]
+    : [<Fragment key="brief">{brief}</Fragment>, <Fragment key="attention">{attentionContent}</Fragment>];
   const documentContent = <div className="goal-workspace-document" ref={readingDocument} key="document">
-      {brief}
+      {documentSlots}
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
-        <header className="goal-now-header"><h2>{zh ? "当前工作" : "Now"}</h2>
+        <header className="goal-now-header"><h2><span className="goal-stage-n">03</span>{zh ? "当前工作" : "Now"}</h2>
           {digest.work.coverage !== "complete" || !digest.work.groups.length ? <ContextHelp icon={digest.work.coverage !== "complete" ? CircleHelp : Info}
             label={zh ? (digest.work.coverage !== "complete" ? "工作覆盖未确认" : "暂无当前工作") : (digest.work.coverage !== "complete" ? "Work coverage unconfirmed" : "No current work")}>
             <p>{digest.work.coverage !== "complete" ? (zh ? `已列出 ${digest.work.listedOpen} 项，当前快照的总数或覆盖范围不完整。` : `${digest.work.listedOpen} items listed; the snapshot's total or coverage is incomplete.`)
@@ -237,14 +248,9 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
         {visited.has("board") || lens === "board" ? <div hidden={lens !== "board"}>{board}</div> : null}
         {visited.has("map") || lens === "map" ? <div hidden={lens !== "map"}>{map}</div> : null}
       </section>
+      {inventoryContent ? <div className="goal-workspace-rail goal-workspace-rail-inline">{inventoryContent}</div> : null}
     </div>;
-  const railContent = hasRail ? <div className="goal-workspace-rail" data-testid="goal-workspace-inline-rail" key="rail">
-      {attentionContent}
-      {!quietWork ? <details className="goal-workspace-inventory" ref={inventory} open={inventoryOpen} onToggle={event => setInventoryOpen(event.currentTarget.open)}>
-        <summary><List size={17} aria-hidden/><span>{zh ? "全部工作" : "All work"}</span><ChevronDown size={15} aria-hidden/></summary>
-        {inventoryAvailable && inventoryOpen && !railOpen ? rail("inline") : null}
-      </details> : null}
-    </div> : null;
+  const railContent = null;
   return <div className={`goal-workspace-composition${hasRail ? " has-rail" : ""}${attentionFirst ? " is-attention-first" : ""}`} ref={composition}>
     {attentionFirst ? [railContent, documentContent] : [documentContent, railContent]}
     <dialog className="goal-work-rail-dialog" aria-label={zh ? "全部工作" : "All work"} ref={dialog} onCancel={event => {event.preventDefault(); onCloseRail();}}>

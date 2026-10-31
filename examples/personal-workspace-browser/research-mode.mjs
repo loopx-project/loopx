@@ -59,7 +59,8 @@ export const researchModeScenario = {
       const enable = control.getByRole('button', {name: '开启研究模式', exact: true});
       await enable.waitFor();
       assert.equal((await read()).revision, original.revision, "Reading cannot enable research");
-      assert.equal(await page.locator('.goal-vitals').isVisible(), false);
+assert.equal(await page.getByTestId('goal-vitals').count(), 0, 'Reading views do not mount the Overview stage bar');
+      assert.equal(await page.locator('.goal-stagebar').count(), 0, 'Reading views do not mount the stage bar at all');
       assert.equal(await page.locator('.personal-goal-navigation .personal-agent-select').isVisible(), false);
       await enable.click();
       await control.getByRole('button', {name: '关闭研究模式', exact: true}).waitFor();
@@ -102,7 +103,8 @@ export const researchModeScenario = {
       for (const name of ['任务', '成果']) {
         await tabs.getByRole('button', {name, exact: true}).click();
         await page.getByTestId('overview-composer-pill').waitFor();
-        assert.equal(await page.locator('.goal-vitals').isVisible(), false);
+assert.equal(await page.getByTestId('goal-vitals').count(), 0, 'Reading views do not mount the Overview stage bar');
+        assert.equal(await page.locator('.goal-stagebar').count(), 0, 'Reading views do not mount the stage bar at all');
       }
       await tabs.getByRole('button', {name: '研究', exact: true}).click();
       await enable.waitFor();

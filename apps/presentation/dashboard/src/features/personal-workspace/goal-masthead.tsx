@@ -8,6 +8,7 @@ import {
   type GoalWorkspaceDigest,
 } from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { goalHostSurfaces, hostSurfaceLabel, presentGoalActivity } from "./goal-activity";
+import { goalShortLabel } from "./goal-display";
 import { relativeTime, useExecutionDetail } from "./goal-activity-view";
 import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import { formatCostUsd, formatDurationMs, type WorkspaceGoal, type WorkspaceModel, type WorkspaceTimelineItem } from "./personal-workspace-model";
@@ -69,7 +70,7 @@ export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: {
         <span className="personal-sr-only" aria-current="page">{goal.title}</span>
 
       </nav>
-      <div className="goal-masthead-title"><h1>{goal.title}</h1>{onOpenDetails ? <button type="button" onClick={onOpenDetails} aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}</div>
+      <div className="goal-masthead-title"><h1 title={goal.title}>{goalShortLabel(goal)}</h1>{onOpenDetails ? <button type="button" onClick={onOpenDetails} aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}</div>
       {context.length ? <p className="goal-masthead-context" title={agents.join(", ")}>{context.join(" · ")}</p> : null}
     </>
   );
@@ -138,23 +139,6 @@ export function GoalLifecycleControl({ busy, goal, onRequest, resumeReviewed }: 
 
 export type GoalVitalRegion = "overview" | "tasks" | "attention" | "usage";
 
-const ribbonOrder = ["done", "running_observed", "needs_you", "open", "waiting_dependency", "blocked", "deferred"] as const;
-
-function Vital({ children, empty, extra, help, label, onClick, sub, tone, valueKey }: {
-  children: ReactNode; empty?: boolean; extra?: ReactNode; help?: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string; valueKey?: string;
-}) {
-  return (
-    <div className="goal-vital-cell"><button aria-disabled={empty} className={`goal-vital${empty ? " is-empty" : ""}${tone ? ` is-${tone}` : ""}`} onClick={empty ? undefined : onClick} tabIndex={empty ? -1 : undefined} type="button">
-      <span className="goal-vital-value goal-vital-swap" key={valueKey}>{children}</span>
-      <span className="goal-vital-meta">
-        <span className="goal-vital-label">{label}</span>
-        {sub ? <span className="goal-vital-sub">{sub}</span> : null}
-      </span>
-      {extra}
-    </button>{help}</div>
-  );
-}
-
 /** Holds the strip's geometry while a Goal's first read is in flight. */
 export function GoalVitalsSkeleton() {
   const { t } = useWorkspaceI18n();
@@ -181,70 +165,60 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos, digest: shar
         : goal.execution?.kind === "unknown" ? t("vitals.activityUnknown") : null;
 
   const { work } = digest;
-  const workSub = [
-    work.classes.running_observed ? t("vitals.workRunning", { count: work.classes.running_observed }) : null,
-    t("vitals.workOpen", { count: work.open }),
-    work.classes.blocked ? t("vitals.workBlocked", { count: work.classes.blocked }) : null,
-  ].filter(Boolean).join(" · ");
-  const ribbonTotal = ribbonOrder.reduce((sum, name) => sum + work.classes[name], 0);
 
-  const windowLabel = digest.usage.window === "7d" ? t("vitals.window7d") : digest.usage.window === "24h" ? t("vitals.window24h") : t("vitals.notMeasured");
+  // Cost and Agent time stay reachable in the bar: one group, values never hidden behind hover.
+  const unmeasured = t("vitals.notMeasured");
+  const usageText = (value: number | null, format: (value: number) => string) => value === null ? unmeasured : format(value);
+  const windowText = (value: number | undefined, format: (value: number) => string) => typeof value === "number" && Number.isFinite(value) ? format(value) : unmeasured;
+  const usageTitle = [
+    `${t("vitals.cost")} · ${t("vitals.window24h")} ${windowText(goal.usage?.costUsd24h, formatCostUsd)} · ${t("vitals.window7d")} ${windowText(goal.usage?.costUsd7d, formatCostUsd)}`,
+    `${t("vitals.agentTime")} · ${t("vitals.window24h")} ${windowText(goal.usage?.durationMs24h, formatDurationMs)} · ${t("vitals.window7d")} ${windowText(goal.usage?.durationMs7d, formatDurationMs)}`,
+  ].join(" · ");
+  const costValue = usageText(digest.usage.costUsd, formatCostUsd);
+  const agentTimeValue = usageText(digest.usage.agentTimeMs, formatDurationMs);
   const needs = digest.needsYou;
-  const needsEmpty = needs.availability === "ok" && needs.coverage === "complete"
-    && needs.blocking === 0 && needs.optional === 0;
   const last = digest.lastActivity;
   const lastTime = last ? relativeTime(last.at, locale) : null;
   const stateLabel = finishing ? t("vitals.stopping") : t(activity.labelKey as WorkspaceMessageKey);
 
+  const stages = locale === "zh-CN" ? ["计划", "执行", "验收"] : ["Plan", "Run", "Accept"];
+  const stageIndex = goal.state === "已完成" ? 3
+    : (work.classes.running_observed > 0 || work.open > 0 || goal.execution?.kind === "running") ? 1
+      : goal.acceptanceObservation ? 2 : 0;
+  const waitingOn = needs.availability === "ok" && needs.blocking
+    ? (locale === "zh-CN" ? "等你决定" : "Waiting on you")
+    : work.classes.running_observed ? (locale === "zh-CN" ? "Agent 执行中" : "Agent running") : null;
+
   return (
-    <section aria-label={t("vitals.label")} className="goal-vitals" data-testid="goal-vitals">
-      <Vital label={t("vitals.state")} onClick={() => onFocusRegion("overview")} sub={finishing ? t("vitals.turnFinishing") : activity.alsoKey ? t(activity.alsoKey as WorkspaceMessageKey, {host: goalHostSurfaces(goal).map(hostSurfaceLabel).join(" / ")}) : undefined}
-        help={stateSub ? <ContextHelp label={`${t("vitals.state")} · ${stateLabel}`}><p>{stateSub}</p></ContextHelp> : undefined}
-        tone={finishing ? "stopped" : activity.tone} valueKey={`${goal.goalId}:${stateLabel}`}>
-        <span aria-hidden className={`goal-vital-dot${activity.live && !finishing ? " is-live" : ""}`} />
-        <span>{stateLabel}</span>
-      </Vital>
-      <Vital label={t("vitals.work")} onClick={() => onFocusRegion("tasks")} valueKey={`${goal.goalId}:${work.done}:${work.total}:${work.open}`}
-        sub={workSub}
-        help={work.done === null || work.coverage !== "complete" ? <ContextHelp icon={CircleHelp} label={`${t("vitals.work")} · ${work.total === null ? t("vitals.workTotalUnknown") : (locale === "zh-CN" ? "部分记录" : "Partial records")}`}>
-          <p>{t("vitals.scope")}</p>{work.coverage !== "complete" ? <p>{t("vitals.workCoverageUnknown")}</p> : null}
-          {work.done === null ? <p>{t("vitals.workDoneUnknown")}</p> : null}
-          <p>{work.projectedOpen !== null ? t("vitals.workPartial", {listed: work.listedOpen, projected: work.projectedOpen}) : `${work.listedOpen} ${locale === "zh-CN" ? "项已列出" : "listed"}`}</p>
-        </ContextHelp> : undefined}
-        extra={<>
-          {work.total !== null && ribbonTotal > 0 ? <span aria-hidden className="goal-work-ribbon">{ribbonOrder.map((name) => work.classes[name]
-            ? <i className={`is-${name}`} key={name} style={{ flexGrow: work.classes[name] }} /> : null)}</span> : null}
-        </>}>
-        {work.total === null ? work.open : <span>{work.done}<small>/{work.total}</small></span>}
-      </Vital>
-      <Vital label={t("vitals.needsYou")} empty={needsEmpty} onClick={() => onFocusRegion("attention")} valueKey={`${goal.goalId}:${needs.availability}:${needs.availability === "ok" ? needs.blocking : ""}`}
-        tone={needs.availability === "ok" && needs.blocking !== null && needs.blocking > 0 ? "danger" : needs.availability === "ok" ? "recede" : undefined}
-        help={needs.availability !== "ok" || needs.coverage !== "complete" ? <ContextHelp icon={CircleHelp} label={`${t("vitals.needsYou")} · ${needs.availability !== "ok" ? t("vitals.unavailable") : (locale === "zh-CN" ? "部分记录" : "Partial records")}`}><p>{needs.availability === "ok" ? t("vitals.needsYouPartial", {count: needs.listed}) : t("vitals.unavailable")}</p></ContextHelp> : undefined}
-        sub={needs.availability !== "ok" ? null : [
-          needs.oldestWaitingSince ? t("vitals.needsYouOldest", { time: relativeTime(needs.oldestWaitingSince, locale) ?? "" }) : null,
-          needs.optional ? t("vitals.needsYouOptional", { count: needs.optional }) : null,
-        ].filter(Boolean).join(" · ")}>
-        {needs.availability !== "ok" ? t("vitals.unavailable") : needs.blocking === null ? "—" : needsEmpty ? t("vitals.needsYouNone")
-          : <>{needs.blocking > 0 ? <AlertCircle aria-hidden size={15} /> : null}{needs.blocking}</>}
-      </Vital>
-      <Vital label={t("vitals.agentTime")} onClick={() => onFocusRegion("usage")} sub={digest.usage.agentTimeMs === null ? undefined : windowLabel}
-        help={digest.usage.agentTimeMs === null ? <ContextHelp icon={Clock3} label={`${t("vitals.agentTime")} · ${t("vitals.notMeasured")}`}><p>{t("vitals.notMeasured")}</p></ContextHelp> : undefined}
-        empty={digest.usage.agentTimeMs === null}
-        valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.agentTimeMs}`}>
-        {digest.usage.agentTimeMs === null ? t("vitals.notMeasured") : formatDurationMs(digest.usage.agentTimeMs)}
-      </Vital>
-      <Vital label={t("vitals.cost")} onClick={() => onFocusRegion("usage")} sub={digest.usage.costUsd === null ? undefined : windowLabel}
-        help={digest.usage.costUsd === null ? <ContextHelp icon={CircleHelp} label={`${t("vitals.cost")} · ${t("vitals.notMeasured")}`}><p>{t("vitals.notMeasured")}</p></ContextHelp> : undefined}
-        empty={digest.usage.costUsd === null}
-        valueKey={`${goal.goalId}:${digest.usage.window}:${digest.usage.costUsd}`}>
-        {digest.usage.costUsd === null ? t("vitals.notMeasured") : formatCostUsd(digest.usage.costUsd)}
-      </Vital>
-      <Vital label={t("vitals.lastActivity")} onClick={() => onFocusRegion("overview")}
-        sub={last ? last.actor || t("vitals.turn") : undefined}
-        help={!last ? <ContextHelp icon={Clock3} label={t("vitals.noActivity")}><p>{t("vitals.noActivity")}</p></ContextHelp> : undefined} empty={!last}
-        tone={last ? undefined : "recede"}>
-        {last && lastTime ? lastTime : t("vitals.noActivity")}
-      </Vital>
+    <section aria-label={t("vitals.label")} className="goal-stagebar" data-testid="goal-vitals">
+      <ol className="goal-stagebar-track">
+        {stages.map((label, index) => (
+          <li key={label} className={index < stageIndex ? "is-done" : index === stageIndex ? "is-current" : "is-todo"}>
+            <button onClick={() => onFocusRegion(index === 1 ? "tasks" : index === 2 ? "attention" : "overview")} type="button">
+              <span aria-hidden="true" className="goal-stagebar-dot" /><span>{label}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+      <div className="goal-stagebar-meta">
+        <span title={stateSub ?? undefined}><i aria-hidden="true" className={`goal-stagebar-state is-${finishing ? "stopped" : activity.tone}`} />{stateLabel}</span>
+        {waitingOn ? <span className="goal-stagebar-wait">{waitingOn}</span> : null}
+        <span className="goal-stagebar-work">{work.total === null ? t("vitals.workOpen", { count: work.open }) : `${work.done}/${work.total}`}</span>
+        <span className="goal-stagebar-time" title={last?.actor ?? undefined}>{lastTime ?? t("vitals.noActivity")}</span>
+        {/* Cost and Agent time belong to the usage detail; the group is the only bar control for it. */}
+        <span aria-hidden="true" className="goal-stagebar-divider" />
+        <button className="goal-stagebar-usage" onClick={() => onFocusRegion("usage")} title={usageTitle} type="button">
+          <span className="goal-stagebar-usage-item">
+            <span className="goal-stagebar-usage-label">{t("vitals.cost")}</span>
+            <span className={digest.usage.costUsd === null ? "goal-stagebar-usage-value is-unmeasured" : "goal-stagebar-usage-value"}>{costValue}</span>
+          </span>
+          <span className="goal-stagebar-usage-sep">·</span>
+          <span className="goal-stagebar-usage-item">
+            <span className="goal-stagebar-usage-label">{t("vitals.agentTime")}</span>
+            <span className={digest.usage.agentTimeMs === null ? "goal-stagebar-usage-value is-unmeasured" : "goal-stagebar-usage-value"}>{agentTimeValue}</span>
+          </span>
+        </button>
+      </div>
     </section>
   );
 }

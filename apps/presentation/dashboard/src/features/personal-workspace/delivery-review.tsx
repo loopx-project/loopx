@@ -71,8 +71,8 @@ export function DeliveryReview(props: DeliveryReviewProps) {
   return <DeliveryReviewContent {...props} review={review} />;
 }
 
-export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review, active, hideWorkMap = false, hideAcceptanceContract = false }: DeliveryReviewProps & {
-  review: DeliveryReviewRead; hideWorkMap?: boolean; hideAcceptanceContract?: boolean;
+export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review, active, hideWorkMap = false, hideAcceptanceContract = false, hideTitle = false }: DeliveryReviewProps & {
+  review: DeliveryReviewRead; hideWorkMap?: boolean; hideAcceptanceContract?: boolean; hideTitle?: boolean;
 }) {
   const { locale } = useWorkspaceI18n();
   const copy = deliveryReviewCopy[locale];
@@ -123,7 +123,7 @@ export function DeliveryReviewContent({ goal, items, userTodos, onSelect, review
   }
   return <section className="delivery-review" aria-label={copy.title}>
     <header className="delivery-review-toolbar">
-      <h2>{copy.title}</h2>{snapshot ? <SourceNotice review={review} copy={copy} includeBoundary /> : null}
+      {hideTitle ? null : <h2>{copy.title}</h2>}{snapshot ? <SourceNotice review={review} copy={copy} includeBoundary /> : null}
       <div><button type="button" disabled={state.kind === "loading"} onClick={() => review.refresh()}><RefreshCw size={15} />{copy.refresh}</button><button type="button" disabled={!usable} onClick={download}><Download size={15} />{copy.export}</button></div>
     </header>
     {feedback ? <p role="status">{feedback}</p> : null}

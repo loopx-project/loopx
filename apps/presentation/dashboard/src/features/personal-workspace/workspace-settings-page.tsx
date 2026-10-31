@@ -21,14 +21,7 @@ import { OperatorCredentialSettings } from "./operator-credential-settings";
 import { CodexAccountSettings } from "./codex-account-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
-import type { AttentionNotificationSupport } from "./attention-notifications";
 
-const attentionNotificationSupportCopy = {
-  default: "settings.attentionNotificationsDefault",
-  denied: "settings.attentionNotificationsDenied",
-  granted: "settings.attentionNotificationsGranted",
-  unsupported: "settings.attentionNotificationsUnsupported",
-} as const;
 
 type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
 
@@ -59,8 +52,6 @@ export function WorkspaceSettingsPage({
   onClose,
   onThemeChange,
   theme,
-  attentionNotifications,
-  onAttentionNotificationsChange,
   onOpenOriginalConversation,
 }: {
   callbacks: PersonalWorkspaceCallbacks;
@@ -75,8 +66,6 @@ export function WorkspaceSettingsPage({
   onClose: () => void;
   onThemeChange: (theme: WorkspaceTheme) => void;
   theme: WorkspaceTheme;
-  attentionNotifications?: { enabled: boolean; support: AttentionNotificationSupport };
-  onAttentionNotificationsChange?: (enabled: boolean) => void | Promise<void>;
   onOpenOriginalConversation?: (target: import("../../data/chat").BoundConversationTarget) => void;
 }) {
   const { locale, setLocale, t } = useWorkspaceI18n();
@@ -210,7 +199,7 @@ export function WorkspaceSettingsPage({
                 </select>
               </label>}
           </div>
-          {scopeHint ? <ContextHelp label={locale === "zh-CN" ? "设置生效范围" : "Settings effect scope"}><p>{scopeHint}</p></ContextHelp> : null}
+          {scopeHint ? <p className="personal-settings-scope-hint">{scopeHint}</p> : null}
         </header>
         {scope === "goal" && initialGoalId && !editableGoal ? <p role="status" className="personal-settings-unavailable">
           {selectedGoal?.sourceAccess ? t("settings.goalReadOnly", {source: selectedGoal.sourceAccess.label})
@@ -282,24 +271,6 @@ export function WorkspaceSettingsPage({
                 <strong>{t("settings.themeHighContrast")}</strong>
               </button>
             </div>
-            {attentionNotifications && onAttentionNotificationsChange ? (
-              <div className="personal-attention-notifications" data-testid="attention-notification-settings">
-                <h3>{t("settings.attentionNotifications")}</h3>
-                <label className="personal-notification-toggle">
-                  <input
-                    checked={attentionNotifications.enabled}
-                    disabled={attentionNotifications.support === "unsupported" || attentionNotifications.support === "denied"}
-                    onChange={(event) => void onAttentionNotificationsChange(event.target.checked)}
-                    type="checkbox"
-                  />
-                  <span>{t("settings.attentionNotificationsToggle")}</span>
-                </label>
-                <ContextHelp label={t("settings.attentionNotifications")}><p className="personal-notification-hint">{t("settings.attentionNotificationsHint")}</p></ContextHelp>
-                <p className={attentionNotifications.support === "denied" ? "personal-notification-error" : "personal-notification-hint"} data-testid="attention-notification-permission" role="status">
-                  {t(attentionNotificationSupportCopy[attentionNotifications.support])}
-                </p>
-              </div>
-            ) : null}
           </section>
         ) : null}
 

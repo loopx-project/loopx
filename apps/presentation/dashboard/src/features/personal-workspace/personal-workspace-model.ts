@@ -488,6 +488,19 @@ export type WorkspaceHomeOnboarding = {
   diagnostics: string[];
 };
 
+/** One recorded Goal run from the status payload's run history. */
+export type WorkspaceRunHistoryEntry = {
+  at: string;
+  classification: string | null;
+  goalId: string;
+  goalTitle: string;
+  id: string;
+  /** Typed outcome only: a free `classification` never proves completion.
+   * `observation` is a run whose own writer typed a non-outcome receipt;
+   * `unknown` is a run with no typed outcome fact at all. */
+  status: "completed" | "failed" | "observation" | "unknown";
+};
+
 export type WorkspaceModel = {
   blockingTodoCount: number;
   goalNotifications?: WorkspaceGoalNotification[];
@@ -500,6 +513,7 @@ export type WorkspaceModel = {
   onboarding?: WorkspaceHomeOnboarding;
   systemHealth?: WorkspaceSystemHealth;
   timeline?: WorkspaceTimelineItem[];
+  recentRuns?: WorkspaceRunHistoryEntry[];
   attentionHistory?: WorkspaceAttention[];
   userTodos: WorkspaceAttention[];
   workers?: WorkspaceWorker[];

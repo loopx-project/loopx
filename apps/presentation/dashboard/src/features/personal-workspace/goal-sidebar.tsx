@@ -1,11 +1,11 @@
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Bell, Bot, ChevronDown, ChevronRight, Focus, LoaderCircle, Pause, Plus, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DesktopUpdate } from "./desktop-update";
 import { useGoalOrder } from "./use-goal-order";
 import { goalHierarchy, visibleGoalTree } from "./goal-hierarchy";
 
 import { GoalActivityHelp, GoalIdentityMark, useGoalActivity } from "./goal-activity-view";
-import { useWorkspaceI18n } from "./i18n";
+import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal, WorkspaceGoalArchiveLoadState } from "./personal-workspace-model";
 import { StatusSourceSwitcher, type StatusSourceControl } from "./status-source-switcher";
 
@@ -13,9 +13,12 @@ function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: bo
   const { t } = useWorkspaceI18n();
   const activity = useGoalActivity(goal);
   if (goal.loadState && showLoad) return <small>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</small>;
+  // One visible word keeps the row at a single line; the full sentence stays
+  // on the row as its title and its accessible name, so the host that owns the
+  // work is never hover-only.
   return (
-    <small className={`is-${activity.tone}`} title={activity.text}>
-      <span className="personal-goal-row-activity-copy">{activity.text}</span>
+    <small aria-label={activity.text} className={`is-${activity.tone}`} title={activity.text}>
+      <span className="personal-goal-row-activity-copy">{t(activity.labelKey as WorkspaceMessageKey)}</span>
       {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{activity.windowBadge.text}</span> : null}
     </small>
   );
@@ -23,6 +26,8 @@ function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: bo
 
 export function GoalSidebar({
   attentionCount,
+  attentionNotifications,
+  onToggleAttentionNotifications,
   goals,
   goalArchiveLoadState = { error: null, phase: "ready" },
   lifecycleBusyGoalIds,
@@ -39,6 +44,8 @@ export function GoalSidebar({
   statusSourceControl,
 }: {
   attentionCount: number;
+  attentionNotifications?: { enabled: boolean; support: "unsupported" | "default" | "granted" | "denied" };
+  onToggleAttentionNotifications?: (next: boolean) => void;
   goals: WorkspaceGoal[];
   goalArchiveLoadState?: WorkspaceGoalArchiveLoadState;
   lifecycleBusyGoalIds?: ReadonlySet<string>;
@@ -103,7 +110,7 @@ export function GoalSidebar({
         <span className="personal-goal-link-copy">
           <strong title={goal.title}>{goal.title}</strong>
           {tree.parents.has(goal.goalId) ? <span className="personal-sr-only">{t("sidebar.childOf", {goal: tree.byId.get(tree.parents.get(goal.goalId)!)!.title})}</span> : null}
-          <GoalRowActivity goal={goal} showLoad={!stopped || selectedGoalId === goal.goalId} />
+          <GoalRowActivity goal={goal} showLoad />
         </span>
         {tree.invalidParents.has(goal.goalId) && goal.goalId !== rootGoalId ? <AlertTriangle size={14} aria-label={t("sidebar.invalidParent")}><title>{t("sidebar.invalidParent")}</title></AlertTriangle>
           : !sorting && goal.hostThreadActivity && !stopped && !goal.loadState ? null : <ChevronRight size={15} />}
@@ -203,6 +210,20 @@ export function GoalSidebar({
       <div className="personal-sidebar-footer">
         <DesktopUpdate />
         <div className="personal-sidebar-actions">
+          {attentionNotifications && onToggleAttentionNotifications ? (
+            <button
+              aria-label={t("settings.attentionNotifications")}
+              aria-pressed={attentionNotifications.enabled}
+              className={`personal-sidebar-utility personal-notification-bell is-${attentionNotifications.enabled ? "on" : attentionNotifications.support === "denied" || attentionNotifications.support === "unsupported" ? "blocked" : "off"}`}
+              disabled={attentionNotifications.support === "denied" || attentionNotifications.support === "unsupported"}
+              onClick={() => onToggleAttentionNotifications(!attentionNotifications.enabled)}
+              title={attentionNotifications.enabled ? t("settings.attentionNotificationsHint") : t("settings.attentionNotificationsToggle")}
+              type="button"
+            >
+              <Bell aria-hidden="true" size={17} />
+              {attentionNotifications.enabled ? <span aria-hidden="true" className="personal-notification-dot" /> : null}
+            </button>
+          ) : null}
           {onOpenSettings ? (
             <button aria-label={t("settings.open")} className="personal-sidebar-utility" onClick={onOpenSettings} type="button">
               <Settings2 aria-hidden="true" size={17} /><span>{t("settings.open")}</span>

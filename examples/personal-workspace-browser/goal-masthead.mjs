@@ -60,20 +60,20 @@ async function openGoal(page, name) {
   await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
 }
 
-async function readVitalHelp(page, cell) {
-  await cell.locator('..').locator('.context-help-trigger').focus();
-  const bubble = page.locator('.context-help-popover:popover-open');
-  await bubble.waitFor();
-  const text = await bubble.innerText();
-  await page.keyboard.press('Escape');
-  await bubble.waitFor({state:'hidden'});
-  return text;
+/** The full activity sentence survives on the sidebar row's accessible name. */
+async function rowSentence(page, name) {
+  return (await page.locator(".personal-goal-row").filter({ has: page.locator("strong", { hasText: name }) }).first()
+    .locator("small").first().getAttribute("aria-label")) ?? "";
 }
 
-async function vital(page, label) {
-  const cell = page.getByTestId("goal-vitals").locator(".goal-vital").filter({ has: page.locator(".goal-vital-label", { hasText: label }) });
-  return { cell, value: (await cell.locator(".goal-vital-value").innerText()).trim(), sub: (await cell.locator(".goal-vital-sub").allInnerTexts()).join(" ").trim() };
-}
+const bar = (page) => page.getByTestId("goal-vitals");
+const stateWord = async (page) => (await bar(page).locator(".goal-stagebar-meta > span").first().innerText()).trim();
+const workText = async (page) => (await bar(page).locator(".goal-stagebar-work").innerText()).trim();
+const lastTime = async (page) => (await bar(page).locator(".goal-stagebar-time").innerText()).trim();
+const usageVals = async (page) => ({
+  cost: (await bar(page).locator(".goal-stagebar-usage-item").nth(0).locator(".goal-stagebar-usage-value").innerText()).trim(),
+  agentTime: (await bar(page).locator(".goal-stagebar-usage-item").nth(1).locator(".goal-stagebar-usage-value").innerText()).trim(),
+});
 
 export const goalMastheadScenario = {
   id: "goal-masthead",
@@ -88,36 +88,38 @@ export const goalMastheadScenario = {
       await openGoal(page, title);
       assert.equal(await page.locator(".personal-channel-title h1").innerText(), title);
       assert.match(await page.locator(".goal-masthead-breadcrumb").innerText(), /工作台\s*Goals\s*Quarterly cash-flow study/);
-      assert.equal(await page.getByTestId("goal-vitals").locator(".goal-vital").count(), 6, "At most six vitals");
+      assert.equal(await page.getByTestId("goal-vitals").locator(".goal-stagebar-track li").count(), 3, "The bar is a three-stage track");
+      assert.equal(await page.getByTestId("goal-vitals").locator(".goal-stagebar-track li.is-current").count(), 1, "Exactly one stage is current");
 
       // A native WebView may suspend its animation clock while an accessible
       // navigation commits. The first frame must still contain the real values.
-      const firstFrame = await page.locator(".goal-vital-value").evaluateAll(values => values.map(value => {
+      const firstFrame = await page.locator('[data-testid="goal-vitals"] .goal-stagebar-meta > span, [data-testid="goal-vitals"] .goal-stagebar-usage-value').evaluateAll(values => values.map(value => {
         let opacity = 1;
         for (let node = value; node; node = node.parentElement) opacity *= Number(getComputedStyle(node).opacity);
         return opacity;
       }));
       await page.screenshot({path: resolve(outputDir, "goal-masthead-paused-first-frame.png"), animations: "allow"});
+      assert.ok(firstFrame.length >= 5, "The bar exposes state, work, last activity, cost and Agent time");
       assert(firstFrame.every(opacity => opacity === 1), "Authoritative Goal readings remain visible before the animation clock advances");
       await pausedClock.evaluate(element => element.remove());
 
-      const state = await vital(page, "状态");
-      assert.equal(state.value, "等你", "A waiting decision leads the state, as in the Goal list");
-      assert.match(state.sub, /另有执行进行中/, "The observed turn stays visible beside the decision");
-      assert.equal(await state.cell.locator(".goal-vital-dot.is-live").count(), 1, "A fresh host-recorded turn is live");
-      const work = await vital(page, "工作");
-      assert.equal(work.value, "4087/4092", "done from the owner count; open counts open and deferred work and skips monitors");
-      assert.match(work.sub, /5 项未完成/);
-      const needs = await vital(page, "等你决定");
-      assert.equal(needs.value, "2");
-      assert.ok(await needs.cell.evaluate((node) => node.classList.contains("is-danger")), "Waiting decisions take the danger tone");
-      assert.match(needs.sub, /最早 3\s*小时前/);
-      const agentTime = await vital(page, "Agent 用时");
-      const cost = await vital(page, "成本");
-      assert.deepEqual([agentTime.value, agentTime.sub, cost.value, cost.sub], ["3.2h", "近 7 天", "$18.40", "近 7 天"], "Agent time and Cost share the widest window");
-      const last = await vital(page, "最近活动");
-      assert.match(last.value, /2\s*分钟前/);
-      assert.equal(last.sub, "Codex App");
+      assert.equal(await stateWord(page), "等你", "A waiting decision leads the state, as in the Goal list");
+      assert.match(await rowSentence(page, title), /另有执行进行中/, "The observed turn stays visible beside the decision on the row's full sentence");
+      assert.equal(await page.locator(".personal-goal-row").filter({ has: page.locator("strong", { hasText: title }) }).locator(".personal-goal-mark.is-live").count(), 1, "A fresh host-recorded turn is live");
+      assert.equal(await workText(page), "4087/4092", "done from the owner count; open counts open and deferred work and skips monitors");
+      const rail = page.locator(".goal-overview-attention");
+      assert.equal((await rail.locator(".goal-overview-count").innerText()).trim(), "2", "The attention rail carries the qualified blocking total");
+      assert.equal((await bar(page).locator(".goal-stagebar-wait").innerText()).trim(), "等你决定", "A blocking decision is named in the bar, not only coloured");
+      assert.equal(await bar(page).locator(".goal-stagebar-state.is-attention").count(), 1, "The state glyph takes the attention tone");
+      assert.equal(await bar(page).locator(".goal-stagebar-state.is-danger").count(), 0, "Needs-you is attention; danger stays reserved for repair");
+      assert.match((await rail.locator("li time").allInnerTexts()).join(" "), /3\s*小时前/, "The oldest waiting decision keeps its own age among the listed rows");
+      assert.deepEqual(await usageVals(page), { cost: "$18.40", agentTime: "3.2h" }, "Agent time and Cost show the widest window's values");
+      const usageTitle = await bar(page).locator(".goal-stagebar-usage").getAttribute("title");
+      assert.match(usageTitle, /近 24 小时 \$3\.10[\s\S]*近 7 天 \$18\.40/, "Cost keeps both windows in its title");
+      assert.match(usageTitle, /近 24 小时 40\.0m[\s\S]*近 7 天 3\.2h/, "Agent time keeps both windows in its title");
+      assert.match(await lastTime(page), /2\s*分钟前/, "The bar keeps the relative last-activity time");
+      assert.equal(await bar(page).locator(".goal-stagebar-time").getAttribute("title"), "Codex App",
+        "The activity's owning host stays readable on the time slot's title");
 
       await page.locator(".personal-goal-tabs button", { hasText: "概览" }).click();
       const direction = page.locator(".goal-overview-direction");
@@ -137,11 +139,11 @@ export const goalMastheadScenario = {
         const scroll = target.scrollIntoView.bind(target);
         target.scrollIntoView = (options) => { target.dataset.scrollBehavior = options?.behavior ?? "auto"; scroll(options); };
       });
-      await needs.cell.click();
+      await page.getByTestId("goal-vitals").locator(".goal-stagebar-track button").nth(2).click();
       await page.waitForFunction(() => document.activeElement?.id === "goal-overview-attention");
       assert.equal(await page.locator("#goal-overview-attention").getAttribute("data-scroll-behavior"), "auto", "Reduced motion reaches the decision directly without a scrolling animation");
       await page.emulateMedia({ reducedMotion: null });
-      await work.cell.click();
+      await page.getByTestId("goal-vitals").locator(".goal-stagebar-track button").nth(1).click();
       await page.locator('.personal-goal-tabs button[aria-current="page"]', { hasText: "任务" }).waitFor();
       const openLane = page.locator(".personal-task-lane").filter({ has: page.locator("header strong", { hasText: "待执行 / 进行中" }) });
       assert.equal(await openLane.locator("header > span").innerText(), "5", "The board lists the same open work the strip counts");
@@ -175,9 +177,10 @@ export const goalMastheadScenario = {
       await page.locator(".goal-lifecycle-trigger", { hasText: "恢复" }).waitFor({ timeout: 10_000 });
       assert.equal(api.goalActivationStates.get(goalId), "stopped");
       assert.equal(await page.locator(".personal-channel-title h1").innerText(), title, "The page stays on the Goal to read back the stop");
-      const stopping = await vital(page, "状态");
-      assert.deepEqual([stopping.value, stopping.sub], ["正在停止", "Turn 收尾中"], "An observed open turn finishes after the stop");
-      assert.equal(await stopping.cell.locator(".goal-vital-dot.is-live").count(), 0);
+      assert.equal(await stateWord(page), "正在停止", "An observed open turn finishes after the stop");
+      assert.match((await bar(page).locator(".goal-stagebar-meta > span").first().getAttribute("title")) ?? "", /Turn 收尾中/,
+        "The finishing sentence stays readable on the state slot's title");
+      assert.equal(await page.locator(".personal-goal-row").filter({ has: page.locator("strong", { hasText: title }) }).locator(".personal-goal-mark.is-live").count(), 0, "A stopping turn is no longer live");
       assert.equal(api.actionApplies.length, 1, "One confirmed stop applies once");
       await page.screenshot({ path: resolve(outputDir, "goal-masthead-stopping.png"), animations: "disabled" });
 
@@ -185,8 +188,9 @@ export const goalMastheadScenario = {
       await page.reload({ waitUntil: "networkidle" });
       await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
       assert.equal(await page.locator(".personal-channel-title h1").innerText(), title, "The stopped Goal stays selected across reload");
-      assert.equal((await vital(page, "状态")).value, "已停止", "Without an observed turn the Goal reads stopped");
-      assert.equal((await vital(page, "等你决定")).value, "暂无等待", "A stopped Goal with complete empty attention names the empty state");
+      assert.equal(await stateWord(page), "已停止", "Without an observed turn the Goal reads stopped");
+      assert.equal(await page.getByTestId("goal-vitals").locator(".goal-stagebar-wait").count(), 0, "A stopped Goal with complete empty attention names no waiting decision");
+      assert.match(await page.locator(".goal-overview-attention").innerText(), /没有等你决定的事|Nothing is waiting on you/, "The empty state is named once by its owner");
 
       await page.locator(".goal-lifecycle-trigger", { hasText: "恢复" }).click();
       assert.equal(await page.getByRole("dialog", { name: "恢复这个 Goal？" }).count(), 0, "Resume uses the owner's reviewed preview, not a second confirmation");
@@ -218,21 +222,27 @@ export const goalMastheadScenario = {
     const quiet = await openWorkspacePage(browser, url, { collectCoverage, beforeGoto: (api) => populate(api, { usage: false, hostTurn: false }) });
     try {
       await openGoal(quiet.page, title);
-      const agentTime = await vital(quiet.page, "Agent 用时");
-      const cost = await vital(quiet.page, "成本");
-      assert.deepEqual([agentTime.value, cost.value, cost.sub], ["未采集", "未采集", ""], "Absent usage names the unmeasured state, never $0.00");
-      assert.deepEqual(await Promise.all([agentTime.cell, cost.cell].map(cell => cell.getAttribute("aria-disabled"))), ["true", "true"], "Unmeasured usage has no navigation affordance");
-      const last = await vital(quiet.page, "最近活动");
-      assert.deepEqual([last.value, last.sub], ["暂无观测到的活动", ""], "A claim or Todo write is not activity");
-      assert.equal(await last.cell.getAttribute("aria-disabled"), "true", "Missing activity has no navigation affordance");
-      assert.match(await readVitalHelp(quiet.page, cost.cell), /未采集/);
-      assert.match(await readVitalHelp(quiet.page, last.cell), /暂无观测到的活动/);
-      assert.notEqual((await vital(quiet.page, "状态")).value, "执行中");
+      assert.deepEqual(await usageVals(quiet.page), { cost: "未采集", agentTime: "未采集" }, "Absent usage names the unmeasured state, never $0.00");
+      assert.equal(await bar(quiet.page).locator(".goal-stagebar-usage-value.is-unmeasured").count(), 2, "Unmeasured usage is marked as such, not rendered as a zero");
+      assert.equal(await lastTime(quiet.page), "暂无观测到的活动", "A claim or Todo write is not activity");
+      assert.equal(await bar(quiet.page).locator(".goal-stagebar-time").getAttribute("title"), null,
+        "With no observed activity the time slot claims no owning host");
+      // The bar no longer carries per-cell help; the usage group opens the usage detail instead.
+      await bar(quiet.page).locator(".goal-stagebar-usage").click();
+      const quietUsageTable = quiet.page.locator(".personal-goal-detail-usage");
+      await quietUsageTable.waitFor({ state: "visible" });
+      assert.match(await quietUsageTable.innerText(), /未采集|Not measured/, "The usage detail names the unmeasured state");
+      await quiet.page.getByRole("button", { name: /关闭详情/ }).click();
+      await quiet.page.locator("[data-context-drawer]").waitFor({ state: "detached" });
+      assert.notEqual(await stateWord(quiet.page), "执行中");
       await quiet.page.screenshot({ path: resolve(outputDir, "goal-masthead-unmeasured.png"), animations: "disabled" });
       await quiet.page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
       await quiet.page.reload({ waitUntil: "networkidle" });
       await quiet.page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
-      assert.match(await quiet.page.getByTestId("goal-vitals").innerText(), /State[\s\S]*Work[\s\S]*Needs you[\s\S]*Agent time[\s\S]*Cost[\s\S]*Last activity/);
+      const englishBar = await quiet.page.getByTestId("goal-vitals").innerText();
+      assert.match(englishBar, /Plan[\s\S]*Run[\s\S]*Accept/, "The stage track keeps its order in English");
+      assert.match(englishBar, /Cost[\s\S]*Agent time/, "Cost precedes Agent time and both stay labelled in English");
+      assert.match(englishBar, /not measured/, "The unmeasured state is spelled out in English too");
       await quiet.page.screenshot({ path: resolve(outputDir, "goal-masthead-en.png"), animations: "disabled" });
       coverageEntries.push(...await quiet.close());
     } catch (error) {
@@ -288,16 +298,15 @@ export const goalMastheadScenario = {
         for (const mode of ["unknown", "zero", "known", "unknown"]) {
           countMode = mode;
           await ui.page.getByRole("button", { name: /^(刷新状态|Refresh status)$/ }).click();
-          const expected = mode === "unknown" ? "1" : mode === "zero" ? "0/1" : "2/3";
-          const work = await vital(ui.page, locale === "en" ? "Work" : "工作");
-          await work.cell.locator(".goal-vital-value").filter({hasText: new RegExp(`^${expected}$`)}).waitFor().catch(async error => {
+          const expected = mode === "unknown" ? (locale === "en" ? /^1 open$/ : /^1 项未完成$/) : new RegExp(`^${mode === "zero" ? "0/1" : "2/3"}$`);
+          await bar(ui.page).locator(".goal-stagebar-work").filter({hasText: expected}).waitFor().catch(async error => {
             await ui.page.screenshot({ path: resolve(outputDir, `goal-work-count-failed-${locale}.png`), animations: "disabled" });
-            throw new Error(`${locale} ${mode}: expected ${expected}; observed ${await work.cell.innerText()}`, {cause: error});
+            throw new Error(`${locale} ${mode}: expected ${expected}; observed ${await workText(ui.page)}`, {cause: error});
           });
           if (mode === "unknown") {
-            const scope = await readVitalHelp(ui.page, work.cell);
-            assert.match(scope, locale === "en" ? /Total unknown/ : /总数未知/);
-            assert.equal(await work.cell.locator(".goal-work-ribbon").count(), 0, "Unknown totals cannot imply a completion proportion");
+            const unknownWork = await workText(ui.page);
+            assert.match(unknownWork, locale === "en" ? /^\d+ open$/ : /^\d+ 项未完成$/, "An unknown total shows the open count, never a ratio");
+            assert.doesNotMatch(unknownWork, /\d+\s*\/\s*\d+/, "An unknown total cannot imply a completion proportion");
             await ui.page.screenshot({ path: resolve(outputDir, `goal-work-unknown-${locale}.png`), animations: "disabled" });
           }
         }
@@ -334,22 +343,28 @@ export const goalMastheadScenario = {
       try {
         if (locale === "en") await ui.page.locator(".personal-mobile-menu").click();
         await openGoal(ui.page, title);
-        const needs = await vital(ui.page, locale === "en" ? "Needs you" : "等你决定");
         const expected = mode === "complete" ? "21" : mode === "mixed-complete" ? "1" : mode === "optional" ? "0" : "—";
-        assert.equal(needs.value, expected, "Only complete classified rows qualify a blocking total; open User Todo totals do not classify hidden rows");
         const partial = !["complete", "mixed-complete", "optional"].includes(mode);
-        const coverageHelp = partial ? await readVitalHelp(ui.page, needs.cell) : "";
-        if (partial) assert.match(coverageHelp, locale === "en" ? /oldest unknown/ : /最早时间未知/);
-        const listed = ["complete", "mixed-complete", "optional"].includes(mode) ? 21 : mode === "empty" ? 0 : 3;
-        if (partial) assert.match(coverageHelp, new RegExp(`${listed} ${locale === "en" ? "listed" : "项"}`));
-        if (mode === "optional") assert.match(needs.sub, locale === "en" ? /21 optional/ : /21 项可选/);
-        if (mode === "unknown") assert.doesNotMatch(needs.sub, /Nothing waiting|暂无等待/);
+        // The strip's per-cell coverage help is gone: vitals.needsYouOldest,
+        // vitals.workPartial and vitals.workTotalUnknown have no renderer any more.
+        // The qualified-total rule those tooltips explained is asserted on the rail.
+        if (expected === "0") assert.equal(await bar(ui.page).locator(".goal-stagebar-wait").count(), 0, "A zero decision count names no waiting decision");
         await ui.page.getByRole("navigation", { name: /^(Goal 视图|Goal view)$/ }).getByRole("button", { name: /^(概览|Overview)$/ }).click();
         const rail = ui.page.locator(".goal-overview-attention");
+        if (mode === "optional") assert.match(await rail.locator("header small").innerText(), locale === "en" ? /21 optional/ : /21 项可选/);
+        if (mode === "unknown") assert.doesNotMatch(await rail.innerText(), /Nothing waiting|暂无等待/);
         if (mode === "empty") {
-          assert.equal(await rail.count(), 0, "No unlisted row is invented as a decision card; the vital retains unknown and its partial qualifier");
+          // The stage bar keeps a numbered attention region; an empty one must
+          // explain itself and invent no decision card.
+          assert.equal(await rail.count(), 1, "The attention region is part of the Goal document");
+          assert.equal(await rail.locator("li").count(), 0, "No unlisted row is invented as a decision card");
+          // Emptying the listed rows does not prove zero: with incomplete counts the
+          // region must disclose unknown rather than claim a clean empty state.
+          const emptyCopy = await rail.locator(".goal-stage-empty").innerText();
+          assert.match(emptyCopy, locale === "en" ? /unknown/ : /无法确认/, "The region discloses that waiting items are unknown");
+          assert.doesNotMatch(emptyCopy.trim(), /^(没有等你决定的事|Nothing is waiting on you)$/, "Partial coverage is never claimed as empty");
         } else {
-          assert.equal(await rail.locator(".goal-overview-count").textContent(), expected, "Rail and strip share the same qualified count or unknown");
+          assert.equal(await rail.locator(".goal-overview-count").textContent(), expected, "The rail carries the qualified count, never a total it cannot vouch for");
           if (partial) assert.doesNotMatch(await rail.innerText(), locale === "en" ? /oldest unknown/ : /最早时间未知/, "The same coverage explanation is not repeated under the decision list");
           await rail.locator(".goal-overview-more").waitFor({ state: "visible" });
         }

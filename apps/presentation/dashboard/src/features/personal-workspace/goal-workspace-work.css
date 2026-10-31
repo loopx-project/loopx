@@ -111,3 +111,7 @@
 .goal-workspace-results:has(> .personal-files-list.is-empty > header:only-child):not(:has(> :not(h2):not(.personal-files-list.is-empty))) { display: none; }
 .goal-workspace-results :is(.personal-files-list, .goal-team-results) { border: 0; border-radius: 0; box-shadow: none; padding: 12px 0; margin: 0; background: transparent; }
 .goal-workspace-results .personal-files-list.is-empty { padding: 0; }
+
+/* The inventory is the last row of the document, not a side rail. */
+.goal-workspace-rail-inline { position: static; max-height: none; overflow: visible; margin-top: 8px; padding: 0; border-left: 0; border-top: 1px solid var(--pw-line); }
+.goal-workspace-rail-inline .goal-workspace-inventory > summary { min-height: 36px; padding: 6px 0; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); font-weight: 600; }

@@ -2,8 +2,9 @@ import {ContextHelp} from "./context-help";
 import {ArrowRight, Check, CircleHelp, Hand} from "lucide-react";
 import {useState, type ReactNode} from "react";
 import { useWorkspaceI18n } from "./i18n";
-import type { WorkspaceActionPreview, WorkspaceAttention, WorkspaceGoal } from "./personal-workspace-model";
+import type { WorkspaceActionPreview, WorkspaceAttention, WorkspaceGoal, WorkspaceRunHistoryEntry, WorkspaceTimelineItem } from "./personal-workspace-model";
 import { workspaceHomeLaneForGoal } from "./personal-workspace-model";
+import { goalShortLabel } from "./goal-display";
 import { goalWorkKind, presentGoalActivity } from "./goal-activity";
 import { GoalIdentityMark, useExecutionDetail } from "./goal-activity-view";
 import { canReviewAttention } from "./attention-details";
@@ -15,7 +16,7 @@ const briefRowLimit = 3;
 type BriefRow = { goal: WorkspaceGoal; key: string; meta?: ReactNode; text: string; proposal?: WorkspaceActionPreview; attention?: WorkspaceAttention };
 
 function RunningMeta({ goal }: { goal: WorkspaceGoal }) {
-  return <>{useExecutionDetail(goal.execution).join(" · ") || goal.title}</>;
+  return <>{useExecutionDetail(goal.execution).join(" · ") || goalShortLabel(goal)}</>;
 }
 
 function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOperation, onSelectAttention, rows, title, total }: {
@@ -43,7 +44,7 @@ function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOpe
               : row.attention && onSelectAttention ? onSelectAttention(row.attention) : onSelectGoal(row.goal.goalId)} type="button">
             {kind === "completed" ? <span className="personal-brief-check"><Check size={12} /></span>
               : row.attention ? <Hand aria-hidden size={16}/> : <GoalIdentityMark goal={row.goal} />}
-            <span><strong>{row.text}</strong><small>{row.meta ?? row.goal.title}</small></span>
+            <span><strong>{row.text}</strong><small>{row.meta ?? goalShortLabel(row.goal)}</small></span>
             <ArrowRight aria-hidden size={14} />
           </button>
         ))}
@@ -55,11 +56,51 @@ function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOpe
   );
 }
 
-export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAttention, operations = [], onSelectOperation }: {
+
+function RunBand({ runs }: { runs: WorkspaceRunHistoryEntry[] }) {
+  const { t } = useWorkspaceI18n();
+  const recent = runs.slice(-28);
+  // Nothing recorded yet: an empty band would be permanent furniture.
+  if (!recent.length) return null;
+  // Each count reads its own typed outcome; nothing is inferred by subtraction,
+  // so a run the owner left unclassified never inflates "completed".
+  const count = (status: WorkspaceRunHistoryEntry["status"]) => recent.filter((run) => run.status === status).length;
+  const completed = count("completed");
+  const failed = count("failed");
+  const observation = count("observation");
+  const unknown = count("unknown");
+  const day = (at: string) => at.slice(5, 10).replace("-", "/");
+  const span = recent.length > 1 ? `${day(recent[0].at)} → ${day(recent[recent.length - 1].at)}` : null;
+  return (
+    <section aria-label={t("runs.recent", { count: recent.length })} className="personal-runband" data-testid="personal-runband">
+      <div className="personal-runband-track" role="img" aria-label={t("runs.recent", { count: recent.length })}>
+        {recent.map((run) => (
+          <span
+            className={`personal-runband-seg is-${run.status === "completed" ? "done" : run.status === "failed" ? "failed" : run.status === "observation" ? "queued" : "unknown"}`}
+            key={run.id}
+            title={`${run.goalTitle} · ${run.classification ?? t("runs.unknown")} · ${run.at}`}
+          />
+        ))}
+      </div>
+      <p className="personal-runband-legend">
+        <span>{t("runs.recent", { count: recent.length })}</span>
+        {span ? <span className="personal-runband-span">{span}</span> : null}
+        <span className="personal-runband-key is-done">{completed} {t("runs.completed")}</span>
+        <span className="personal-runband-key is-failed">{failed} {t("runs.failed")}</span>
+        {observation ? <span className="personal-runband-key is-queued">{observation} {t("runs.observation")}</span> : null}
+        {unknown ? <span className="personal-runband-key is-unknown">{unknown} {t("runs.unknown")}</span> : null}
+      </p>
+    </section>
+  );
+}
+
+export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAttention, operations = [], onSelectOperation, timeline = [], runs = [] }: {
   goals: WorkspaceGoal[]; onSelectGoal: (goalId: string) => void;
   attention?: WorkspaceAttention[]; onSelectAttention?: (item: WorkspaceAttention) => void;
   operations?: WorkspaceActionPreview[]; onSelectOperation?: (proposal: WorkspaceActionPreview) => void;
   onViewAllOperations?: () => void;
+  timeline?: WorkspaceTimelineItem[];
+  runs?: WorkspaceRunHistoryEntry[];
 }) {
   const { t } = useWorkspaceI18n();
   const active = goals.filter((goal) => goal.activationState === "active" && !goal.loadState);
@@ -73,7 +114,7 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
     const key = JSON.stringify([item.sourceId ?? "", item.goalId, item.decisionSource ?? "todo", item.todoId]);
     if (seen.has(key)) return [];
     seen.add(key);
-    return [{goal, key, attention: item, text: item.text, meta: [goal.title,
+    return [{goal, key, attention: item, text: item.text, meta: [goalShortLabel(goal),
       item.decisionSource === "run_operator_gate" ? t("brief.runGate")
         : item.details?.interaction === "decision" ? t("brief.decision")
           : item.details?.interaction === "user_action" ? t("brief.userAction") : t("brief.attention"),
@@ -84,7 +125,7 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
   const operationRows: BriefRow[] = operations.flatMap(proposal => {
     const goal = goals.find(goal => goal.goalId === proposal.goalId && !goal.loadState);
     return goal ? [{goal, key: proposal.previewId, proposal, text: proposal.title,
-      meta: `${goal.title} · ${proposal.primaryLabel}`}]: [];
+      meta: `${goalShortLabel(goal)} · ${proposal.primaryLabel}`}]: [];
   });
   const deliveredOperations = operationRows.filter(row => row.proposal?.reviewPlan?.operationFrame?.kind === "confirmation"
     && row.proposal.reviewPlan.operationFrame.confirmationDeliveryVerified);
@@ -103,26 +144,22 @@ export function ManagerBrief({ goals, onSelectGoal, attention = [], onSelectAtte
     : executionPending ? t("brief.runningReading") : t("activity.executionUnknown");
   return (
     <section aria-label={t("brief.title")} className="personal-brief">
+      <RunBand runs={runs} />
+      <BriefTile count={completed.length} empty={t("brief.completedEmpty")} kind="completed" onSelectGoal={onSelectGoal}
+        rows={completed} title={t("brief.completed")}
+        total={completedTotal > completed.length ? t("brief.completedTotal", { count: completedTotal }) : null} />
       <BriefTile count={attentionRows.length} empty={t("brief.needsEmpty")} kind="needs" onSelectGoal={onSelectGoal}
         onSelectAttention={onSelectAttention} rows={attentionRows} title={t("brief.needs")}
         total={incomplete ? t("brief.partialGoals") : attentionRows.length ? t("brief.affectedGoals", {count: new Set(attentionRows.map(row => row.goal.goalId)).size}) : null} />
       {summarizedGoals.length ? <BriefTile count={summarizedGoals.length} empty="" kind="needs-goals" onSelectGoal={onSelectGoal}
-        rows={summarizedGoals.map(goal => ({goal, key: goal.goalId, meta: goal.title, text: goal.needsYou ?? goal.nextSentence}))}
+        rows={summarizedGoals.map(goal => ({goal, key: goal.goalId, meta: goalShortLabel(goal), text: goal.needsYou ?? goal.nextSentence}))}
         title={t("brief.needsGoals")} /> : null}
       {deliveredOperations.length ? <BriefTile count={deliveredOperations.length} empty="" kind="confirmations" onSelectGoal={onSelectGoal}
         onSelectOperation={onSelectOperation} rows={deliveredOperations} title={t("brief.confirmations")} /> : null}
       {awaitingDelivery.length ? <BriefTile count={awaitingDelivery.length} empty="" kind="operations" onSelectGoal={onSelectGoal}
         onSelectOperation={onSelectOperation} rows={awaitingDelivery}
         title={t("brief.operationDeliveryPending")} /> : null}
-      <BriefTile count={running.length} empty={runningEmpty} kind="running" live={running.some((goal) => presentGoalActivity(goal).live)} onSelectGoal={onSelectGoal}
-        rows={running.map((goal) => ({ goal, key: goal.goalId, meta: <RunningMeta goal={goal} />, text: goal.title }))}
-        title={t("brief.running")} total={queued ? (running.length ? t("brief.alsoQueued", { count: queued }) : t("brief.queuedOnly", { count: queued })) : null} />
-      {claimed.length ? <BriefTile count={claimed.length} empty={t("brief.claimedEmpty")} kind="claimed" onSelectGoal={onSelectGoal}
-        rows={claimed.map((goal) => ({ goal, key: goal.goalId, meta: <RunningMeta goal={goal} />, text: goal.title }))}
-        title={t("brief.claimed")} /> : null}
-      <BriefTile count={completed.length} empty={t("brief.completedEmpty")} kind="completed" onSelectGoal={onSelectGoal}
-        rows={completed} title={t("brief.completed")}
-        total={completedTotal > completed.length ? t("brief.completedTotal", { count: completedTotal }) : null} />
+
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import {ContextHelp} from "./context-help";
 import { ZCodeGoalControl } from "./zcode-goal-control";
 import { GoalAcceptanceObservationCard } from "./goal-acceptance-observation-card";
+import { goalShortLabel } from "./goal-display";
 import { AttentionActions } from "./attention-actions";
 import { AttentionDetailCard, AttentionProvenance } from "./attention-detail-card";
 import { attentionSuccessor } from "./attention-details";
@@ -703,7 +704,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
             <section aria-label={t("drawer.taskInfo")} className="personal-task-inspector-fields">
               <h4>{t("drawer.taskInfo")}</h4>
               <dl>
-                <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
+                <div><dt>Goal</dt><dd><span className="drawer-goal-name" title={selection.item.goalTitle}>{selection.item.goalTitle}</span></dd></div>
                 <div><dt>{t("common.owner")}</dt><dd>{selection.item.claimedBy ? selection.item.ownerLabel ?? selection.item.claimedBy : t("drawer.notAssigned")}</dd></div>
                 <div><dt>{t("common.status")}</dt><dd>{todoCompleted ? t("drawer.taskStatusCompleted") : selection.item.retryReadback ? t("drawer.resumePending") : selection.item.status === "deferred" ? t("drawer.taskStatusDeferred") : selection.item.status === "blocked" ? t("drawer.taskStatusBlocked") : t("drawer.taskStatusOpen")}</dd></div>
                 <div><dt>{t("drawer.priority")}</dt><dd>{selection.item.priority ?? t("drawer.notSet")}</dd></div>
@@ -801,8 +802,8 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
           <>
             <section className="personal-detail-card personal-goal-detail-summary">
               <small>{localizedGoalState(selection.item.state, locale)}</small>
-              <h3>{selection.item.title}</h3>
-              <p>{selection.item.agentSentence}</p>
+              <h3 title={selection.item.title}>{goalShortLabel(selection.item)}</h3>
+              <p className="personal-goal-detail-sentence" title={selection.item.agentSentence}>{selection.item.agentSentence}</p>
             </section>
             <GoalAcceptanceObservationCard goal={selection.item} />
             <section className="personal-detail-card personal-goal-detail-usage">
@@ -1065,7 +1066,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <h3>{selection.item.title}</h3>
                   <p>{selection.item.latestActivity}</p>
                   <dl>
-                    <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
+                    <div><dt>Goal</dt><dd><span className="drawer-goal-name" title={selection.item.goalTitle}>{selection.item.goalTitle}</span></dd></div>
                     <div><dt>{t("drawer.progress")}</dt><dd>{selection.item.completedSteps}/{selection.item.totalSteps}</dd></div>
                   </dl>
                 </section>
@@ -1106,7 +1107,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                   <h3>{selection.item.title}</h3>
                   <p>{selection.item.latestActivity}</p>
                   <dl>
-                    <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
+                    <div><dt>Goal</dt><dd><span className="drawer-goal-name" title={selection.item.goalTitle}>{selection.item.goalTitle}</span></dd></div>
                     <div><dt>{t("drawer.progress")}</dt><dd>{selection.item.completedSteps}/{selection.item.totalSteps}</dd></div>
                     <div><dt>{t("drawer.sessionStatus")}</dt><dd>{localizedSessionStatus(selection.item.sessionStatus ?? selection.item.status, t)}</dd></div>
                     <div><dt>{t("drawer.sessionRecoverable")}</dt><dd>{selection.item.resumable === false ? t("drawer.resumeNo") : t("drawer.resumeYes")}</dd></div>
@@ -1163,7 +1164,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <h3>{selection.item.title}</h3>
               <p>{selection.item.summary ?? t("drawer.outputRecorded")}</p>
               <dl>
-                <div><dt>Goal</dt><dd>{selection.item.goalTitle ?? selection.item.goalId}</dd></div>
+                <div><dt>Goal</dt><dd><span className="drawer-goal-name" title={selection.item.goalTitle}>{selection.item.goalTitle ?? selection.item.goalId}</span></dd></div>
                 <div><dt>{t("drawer.outputTodo")}</dt><dd>{selection.item.todoId ?? t("drawer.notLinked")}</dd></div>
                 <div><dt>{t("drawer.outputRun")}</dt><dd>{selection.item.runId ?? t("drawer.notLinked")}</dd></div>
                 <div><dt>Agent</dt><dd>{selection.item.agentLabel ?? selection.item.agentId ?? "LoopX"}</dd></div>

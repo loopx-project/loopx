@@ -19,7 +19,7 @@ import { CircleAlert, Moon, RefreshCw, Sun } from "lucide-react";
 import type { DigestAttentionSummary } from "../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import { hasGoalFailureStatus } from "../../../../../loopx/control_plane/presentation/goal_failure_status.js";
 
-import { dashboardRoute } from "../router";
+import type { dashboardRoute } from "../router";
 import {
   QueueItem,
   RunGoal,
@@ -127,7 +127,9 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
+  type WorkspaceRunHistoryEntry,
 } from "../features/personal-workspace/personal-workspace-model";
+import { deliveryOutcomeTone } from "../data/goal-channel-frontstage";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
 
@@ -249,6 +251,25 @@ type TodoExplorerItem = {
   role: "user" | "agent";
   todo: TodoItem;
 };
+
+/** A run row may claim completion only from the closed outcome vocabularies its
+ * writers already validate: `ProgressResultClass` on `progress_observation` and
+ * `DeliveryOutcome` through the shipped `deliveryOutcomeTone` owner. A free
+ * `classification` never proves completion; the shipped failure owner stays the
+ * only legacy failure signal, and everything unproven stays `unknown`. */
+function runHistoryOutcome(record: RunRecord): WorkspaceRunHistoryEntry["status"] {
+  const observed = record.progress_observation?.result_class ?? null;
+  if (observed === "advanced") return "completed";
+  if (observed === "blocked") return "failed";
+  if (observed) return "observation";
+  if (record.delivery_outcome) {
+    const tone = deliveryOutcomeTone(record.delivery_outcome);
+    if (tone === "success") return "completed";
+    if (tone === "danger") return "failed";
+    return "observation";
+  }
+  return hasGoalFailureStatus([record.classification]) ? "failed" : "unknown";
+}
 
 function inferLifecyclePhase(status?: string | null, run?: RunRecord) {
   if (run?.controller_readiness?.decision_advisor_ready || run?.controller_readiness?.write_controller_ready) {
@@ -2963,6 +2984,16 @@ function PersonalGoalHome({
     sourceIsReady && !progress?.errors[item.goalId], goalTitles.get(item.goalId),
   );
   const normalizedModel = normalizePersonalHomeModel(model);
+  const recentRuns = (payload.run_history.recent_runs ?? [])
+    .map((record) => ({
+      at: record.generated_at,
+      classification: record.classification ?? null,
+      goalId: record.goal_id,
+      goalTitle: goalTitles.get(record.goal_id) ?? record.goal_id,
+      id: `${record.goal_id}:${record.generated_at}:${record.classification ?? ""}`,
+      status: runHistoryOutcome(record),
+    }))
+    .sort((a, b) => a.at.localeCompare(b.at));
   const workspaceModel = {
     ...normalizedModel,
     goals: normalizedModel.goals.map((goal) => ({
@@ -2976,6 +3007,7 @@ function PersonalGoalHome({
       loading: periodicReportLoading,
     },
     timeline: workspaceTimeline,
+    recentRuns,
   };
   return (
     <div className={theme === "dark" ? "dark" : ""} data-testid="personal-goal-home">
@@ -3362,9 +3394,12 @@ function StatusRequestView({
 }
 
 
-export function DashboardPage() {
-  const search = dashboardRoute.useSearch();
-  const navigate = dashboardRoute.useNavigate();
+type DashboardPageProps = {
+  search: ReturnType<typeof dashboardRoute.useSearch>;
+  navigate: ReturnType<typeof dashboardRoute.useNavigate>;
+};
+
+export function DashboardPage({ search, navigate }: DashboardPageProps) {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [progress, setProgress] = useState<WorkspaceProgress | null>(null);
   const progressiveAbortRef = useRef<AbortController | null>(null);
