@@ -32,6 +32,7 @@ def list_goal_todos(
     runtime_root_arg: str | None = None,
     limit: int | None = None,
     thin: bool = False,
+    summary: bool = False,
     read_scope: Literal["active", "completed_history"] = "active",
     json_references: bool = False,
 ) -> dict[str, Any]:
@@ -44,6 +45,10 @@ def list_goal_todos(
         raise ValueError("todo_id must use the public token shape todo_<letters-digits-underscore-hyphen>")
     if normalized_todo_id and thin:
         raise ValueError("Exact Todo reads return full requirements; remove --thin or omit --todo-id for a bounded list")
+    if summary and thin:
+        raise ValueError("todo list accepts either --summary or --thin")
+    if normalized_todo_id and summary:
+        raise ValueError("Exact Todo reads return full requirements; remove --summary or omit --todo-id for a queue overview")
     normalized_agent_id = normalize_todo_claimed_by(agent_id) if agent_id else None
     if agent_id and not normalized_agent_id:
         raise ValueError("agent_id must be a public-safe agent token such as codex-main-control")
@@ -81,7 +86,7 @@ def list_goal_todos(
     from ..runtime.time import now_utc
 
     now = now_utc()
-    params = {"kind": "query",
+    params: dict[str, Any] = {"kind": "query",
         "source": {"runtime_root": str(runtime_root.expanduser().resolve(strict=False)), "goal_id": goal_id},
         "rollout_events": list(rollout_events), "rollout_event_source": rollout_events.source,
         "observed_at": now.timestamp(), "evaluated_at": now.isoformat(),
@@ -89,6 +94,8 @@ def list_goal_todos(
             "todo_id": normalized_todo_id, "agent_id": normalized_agent_id, "limit": limit,
             "read_scope": read_scope, "json_references": json_references, "thin": thin,
             "state_file": str(resolved_state_file), "project": str(resolved_project) if resolved_project else None}}
+    if summary:
+        params["query"]["summary"] = True
     result = project_todo_read(params)
     if "payload" not in result:
         failure = result["canonical"]

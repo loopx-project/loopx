@@ -457,6 +457,17 @@ def register_todo_command(
             "lower but not expand that bound."
         ),
     )
+    todo_parser.add_argument(
+        "--summary",
+        dest="todo_summary",
+        action="store_true",
+        help=(
+            "For todo list, show a versioned queue overview with at most eight "
+            "items per role; --limit can lower that bound. Use an exact "
+            "--todo-id read for complete requirements. Cannot combine with "
+            "--thin or --todo-id."
+        ),
+    )
     todo_parser.add_argument("--project", help="Project root. Defaults to the registry goal repo.")
     todo_parser.add_argument("--state-file", help="Active goal state path. Defaults to the registry goal state_file.")
     todo_parser.add_argument("--dry-run", action="store_true", help="Preview the active-state edit without writing.")

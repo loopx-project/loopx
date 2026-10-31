@@ -83,7 +83,7 @@ def read_cli(tmp_path, monkeypatch, request):
 def test_unmigrated_query_variants_refuse_without_changing_source(read_cli):
     _, run, _, state = read_cli
     before = state.read_bytes()
-    for options in [(), ("--todo-id", OWN), ("--limit", "1"), ("--thin",)]:
+    for options in [(), ("--todo-id", OWN), ("--limit", "1"), ("--thin",), ("--summary",)]:
         result = run(*options, expected_exit=1)
         assert result["error_code"] == "canonical_authority_required"
         assert result["legacy_fallback_used"] is False
