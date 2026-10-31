@@ -51,6 +51,9 @@ todos, quota, soft claims, compact run events, source warnings, and an explicit
 truth contract. It is not a write API. Dashboards may render it as a channel
 card or timeline, but project truth still comes from the registry, active
 state, quota guard, and append-only run history.
+Decision reads (`loopx quota ...` and Turn decisions) omit this row field and
+the top-level `promotion_gate`; only display consumers read them, and their
+status projection cache entries are keyed separately from `loopx status`.
 
 Rows may also include an optional `task_graph_projection` object with
 `schema_version=task_graph_projection_v0`. The default `status` hot path omits
