@@ -538,6 +538,44 @@ def test_pending_receipts_skip_foreign_and_malformed_rows(
     ]
 
 
+def test_pending_receipts_fail_closed_when_journal_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_root = tmp_path
+    journal_path = composition_retry_receipt_log_path(runtime_root, "goal-1")
+    receipt = build_composition_retry_receipt(
+        goal_id="goal-1",
+        event_kind="todo_complete",
+        identity=_identity(),
+        state_version="vision-revision-2",
+        committed_at="2026-09-06T00:00:00Z",
+        hook_identities=[{"hook_id": "h.one", "capability_id": "cap-one"}],
+        error_code="source_projection_failed",
+    )
+    append_composition_retry_receipt(journal_path, receipt)
+    assert pending_composition_retry_receipts(runtime_root, "goal-1") == [receipt]
+
+    real_read_text = Path.read_text
+
+    def deny_journal_read(
+        path: Path, *args: object, **kwargs: object
+    ) -> str:
+        if path == journal_path:
+            raise PermissionError("injected journal read denial")
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny_journal_read)
+
+    with pytest.raises(
+        RuntimeError, match="composition retry receipt journal is unreadable"
+    ):
+        pending_composition_retry_receipts(runtime_root, "goal-1")
+    with pytest.raises(
+        RuntimeError, match="composition retry receipt journal is unreadable"
+    ):
+        collect_pending_composition_retry_projection(runtime_root, "goal-1")
+
+
 def test_journal_unavailable_degrades_to_identity_without_receipt_ref(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
