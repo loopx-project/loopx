@@ -772,11 +772,16 @@ From top to bottom, one reading column with an optional right rail:
 
 1. **Masthead.** Breadcrumb, title, one context line (agents, repository) and
    the single consequential control (Stop / Resume). Nothing else competes.
-2. **Vitals.** At most six stats in one row. The value carries the weight
-   (heading size, tabular numerals); the label and its qualifier sit beneath
-   in one caption line. No cell borders: spacing separates stats, one hairline
-   separates the row from the page. Unknown is an em dash with its reason,
-   never zero.
+2. **Stage bar.** One line, not a stat row: the Plan → Run → Accept track,
+   then the Goal's own facts as captions in reading order — the state word,
+   what it waits on, the work count, and the last observed activity — and,
+   after a hairline, the 成本 / Agent 用时 pair that opens the Goal's usage
+   detail. Cost and Agent time are captions in this bar, never a second
+   heading row, and the bar never grows past one line at desktop width.
+   Values keep tabular numerals; unknown stays visible as its stated reason
+   (`未采集`, `暂无观测到的活动`), never zero and never a hidden affordance.
+   A stopped or unloaded Goal keeps its own state visible instead of an empty
+   bar.
 3. **One hero.** On the Overview, the Goal's objective is set as heading-size
    prose without a card around it, followed by a segmented criteria meter and
    a hairline checklist. Everything below the hero recedes: smaller headings,
