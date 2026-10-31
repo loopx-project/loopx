@@ -139,23 +139,6 @@ export function GoalLifecycleControl({ busy, goal, onRequest, resumeReviewed }: 
 
 export type GoalVitalRegion = "overview" | "tasks" | "attention" | "usage";
 
-const ribbonOrder = ["done", "running_observed", "needs_you", "open", "waiting_dependency", "blocked", "deferred"] as const;
-
-function Vital({ children, empty, extra, help, label, onClick, sub, tone, valueKey }: {
-  children: ReactNode; empty?: boolean; extra?: ReactNode; help?: ReactNode; label: string; onClick: () => void; sub?: ReactNode; tone?: string; valueKey?: string;
-}) {
-  return (
-    <div className="goal-vital-cell"><button aria-disabled={empty} className={`goal-vital${empty ? " is-empty" : ""}${tone ? ` is-${tone}` : ""}`} onClick={empty ? undefined : onClick} tabIndex={empty ? -1 : undefined} type="button">
-      <span className="goal-vital-value goal-vital-swap" key={valueKey}>{children}</span>
-      <span className="goal-vital-meta">
-        <span className="goal-vital-label">{label}</span>
-        {sub ? <span className="goal-vital-sub">{sub}</span> : null}
-      </span>
-      {extra}
-    </button>{help}</div>
-  );
-}
-
 /** Holds the strip's geometry while a Goal's first read is in flight. */
 export function GoalVitalsSkeleton() {
   const { t } = useWorkspaceI18n();
@@ -182,17 +165,18 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos, digest: shar
         : goal.execution?.kind === "unknown" ? t("vitals.activityUnknown") : null;
 
   const { work } = digest;
-  const workSub = [
-    work.classes.running_observed ? t("vitals.workRunning", { count: work.classes.running_observed }) : null,
-    t("vitals.workOpen", { count: work.open }),
-    work.classes.blocked ? t("vitals.workBlocked", { count: work.classes.blocked }) : null,
-  ].filter(Boolean).join(" · ");
-  const ribbonTotal = ribbonOrder.reduce((sum, name) => sum + work.classes[name], 0);
 
-  const windowLabel = digest.usage.window === "7d" ? t("vitals.window7d") : digest.usage.window === "24h" ? t("vitals.window24h") : t("vitals.notMeasured");
+  // Cost and Agent time stay reachable in the bar: one group, values never hidden behind hover.
+  const unmeasured = t("vitals.notMeasured");
+  const usageText = (value: number | null, format: (value: number) => string) => value === null ? unmeasured : format(value);
+  const windowText = (value: number | undefined, format: (value: number) => string) => typeof value === "number" && Number.isFinite(value) ? format(value) : unmeasured;
+  const usageTitle = [
+    `${t("vitals.cost")} · ${t("vitals.window24h")} ${windowText(goal.usage?.costUsd24h, formatCostUsd)} · ${t("vitals.window7d")} ${windowText(goal.usage?.costUsd7d, formatCostUsd)}`,
+    `${t("vitals.agentTime")} · ${t("vitals.window24h")} ${windowText(goal.usage?.durationMs24h, formatDurationMs)} · ${t("vitals.window7d")} ${windowText(goal.usage?.durationMs7d, formatDurationMs)}`,
+  ].join(" · ");
+  const costValue = usageText(digest.usage.costUsd, formatCostUsd);
+  const agentTimeValue = usageText(digest.usage.agentTimeMs, formatDurationMs);
   const needs = digest.needsYou;
-  const needsEmpty = needs.availability === "ok" && needs.coverage === "complete"
-    && needs.blocking === 0 && needs.optional === 0;
   const last = digest.lastActivity;
   const lastTime = last ? relativeTime(last.at, locale) : null;
   const stateLabel = finishing ? t("vitals.stopping") : t(activity.labelKey as WorkspaceMessageKey);
@@ -217,10 +201,23 @@ export function GoalVitals({ goal, items, onFocusRegion, userTodos, digest: shar
         ))}
       </ol>
       <div className="goal-stagebar-meta">
-        <span><i aria-hidden="true" className={`goal-stagebar-state is-${finishing ? "stopped" : activity.tone}`} />{stateLabel}</span>
+        <span title={stateSub ?? undefined}><i aria-hidden="true" className={`goal-stagebar-state is-${finishing ? "stopped" : activity.tone}`} />{stateLabel}</span>
         {waitingOn ? <span className="goal-stagebar-wait">{waitingOn}</span> : null}
-        <span>{work.total === null ? t("vitals.workOpen", { count: work.open }) : `${work.done}/${work.total}`}</span>
-        <span className="goal-stagebar-time">{lastTime ?? t("vitals.noActivity")}</span>
+        <span className="goal-stagebar-work">{work.total === null ? t("vitals.workOpen", { count: work.open }) : `${work.done}/${work.total}`}</span>
+        <span className="goal-stagebar-time" title={last?.actor ?? undefined}>{lastTime ?? t("vitals.noActivity")}</span>
+        {/* Cost and Agent time belong to the usage detail; the group is the only bar control for it. */}
+        <span aria-hidden="true" className="goal-stagebar-divider" />
+        <button className="goal-stagebar-usage" onClick={() => onFocusRegion("usage")} title={usageTitle} type="button">
+          <span className="goal-stagebar-usage-item">
+            <span className="goal-stagebar-usage-label">{t("vitals.cost")}</span>
+            <span className={digest.usage.costUsd === null ? "goal-stagebar-usage-value is-unmeasured" : "goal-stagebar-usage-value"}>{costValue}</span>
+          </span>
+          <span className="goal-stagebar-usage-sep">·</span>
+          <span className="goal-stagebar-usage-item">
+            <span className="goal-stagebar-usage-label">{t("vitals.agentTime")}</span>
+            <span className={digest.usage.agentTimeMs === null ? "goal-stagebar-usage-value is-unmeasured" : "goal-stagebar-usage-value"}>{agentTimeValue}</span>
+          </span>
+        </button>
       </div>
     </section>
   );
