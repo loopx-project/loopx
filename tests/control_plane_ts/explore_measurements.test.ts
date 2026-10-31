@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {normalizeExploreMeasurements, projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
+import {readFileSync} from "node:fs";
+import {normalizeExploreMeasurements, normalizeExploreMeasurementsRequest, projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
 import {parseExploreHistoryPage, projectExploreHistory} from "../../loopx/control_plane/presentation/explore_history.ts";
@@ -10,6 +11,37 @@ const metric = {metric: "quality", value: 8, unit: "points", higher_is_better: t
   evaluation_ref: "evaluator:v1", candidate_ref: "candidate:a", evidence_ref: "result:a"};
 const finding = (id: string, value: number | null, extra = {}) => ({finding_id: id, node_id: "question-a",
   measurements: [{...metric, value, candidate_ref: `candidate:${id}`, evidence_ref: `result:${id}`, ...extra}]});
+
+test("measurements cannot cite another result than the attached executed candidate", () => {
+  const execution = {schema_version: "explore_execution_observation_v0",
+    candidate_sha256: "a".repeat(64), result_candidate_sha256: "a".repeat(64),
+    input_revision: metric.input_revision, planned_method_id: "probe", executed_method_id: "probe",
+    change_reason: null, elapsed_seconds: 1, limit_seconds: 10, search_iterations: null,
+    stop_reason: "process_exit:0", evidence_refs: ["result:executed"], result_ref: "result:executed"};
+  const attachment = {schema_version: "explore_result_attachment_v0", question: "Which candidate improved?",
+    applicability: "Fixed task and budget", input_revision: metric.input_revision,
+    observation: "A measured result", interpretation: "Investigate the actual candidate",
+    status: "tentative", evidence_refs: [metric.evidence_ref, "result:executed"],
+    measurements: [metric], execution_observation: execution};
+  assert.throws(() => normalizeExploreResultAttachment({attachment}), /executed candidate's result/);
+  assert.throws(() => normalizeExploreMeasurementsRequest({measurements: [metric],
+    execution_observation: execution}), /executed candidate's result/);
+  const matching = {...metric, evidence_ref: execution.result_ref};
+  assert.deepEqual(normalizeExploreResultAttachment({attachment: {...attachment,
+    measurements: [matching]}}).measurements, [matching]);
+  assert.deepEqual(normalizeExploreMeasurementsRequest({measurements: [matching],
+    execution_observation: execution}).measurements, [matching]);
+  assert.throws(() => normalizeExploreMeasurementsRequest({measurements: [{...matching,
+    input_revision: "other-input"}], execution_observation: execution}), /executed candidate's input/);
+  const {comparison_scope, input_revision, evaluation_ref, ...observation} = matching;
+  assert.throws(() => normalizeExploreMeasurementsRequest({measurements: [{...observation,
+    evidence_ref: "result:other"}], measurement_context: {comparison_scope, input_revision, evaluation_ref},
+    execution_observation: execution}), /executed candidate's result/);
+  assert.deepEqual(normalizeExploreMeasurements([metric]), [metric], "legacy measurements remain unchanged");
+  const {result_ref: _result, result_candidate_sha256: _candidate, ...unfinished} = execution;
+  assert.deepEqual(normalizeExploreMeasurementsRequest({measurements: [metric],
+    execution_observation: unfinished}).measurements, [metric], "missing result is not inferred");
+});
 
 test("explicit comparison context is reused while each result retains its own candidate and receipt", () => {
   const {comparison_scope, input_revision, evaluation_ref, ...observation} = metric;
@@ -228,4 +260,21 @@ test("measurement feedback pages retain every group and bind manual findings to 
     "unchanged aggregates are not proof that their source evidence is unchanged");
   assert.throws(() => projectExploreTurnContext({...corrected, result_offset: 3,
     result_revision: snapshot.result_page.revision}), /changed/);
+});
+
+
+test("base-produced mixed history remains auditable but only the correction enters comparison", () => {
+  const events = readFileSync(new URL("../control_plane/fixtures/explore_measurement_history_v0.jsonl", import.meta.url), "utf8")
+    .trim().split("\n").map(line => JSON.parse(line));
+  const before = parseExploreHistoryPage({ok: true, goal_id: "research", items: events.slice(0, 2), total: 2, next_cursor: null}, "research");
+  const historical = projectExploreHistory(before.items, "research");
+  assert.equal(historical.events[1].measurements?.[0].evidence_ref, "result:b");
+  assert.equal(historical.measurementFeedback, undefined, "the contradiction is not a best, latest, unknown or scored point");
+  const corrected = parseExploreHistoryPage({ok: true, goal_id: "research", items: events, total: 3, next_cursor: null}, "research");
+  const current = projectExploreHistory(corrected.items, "research");
+  assert.equal(current.events.length, 3);
+  assert.equal(current.measurementFeedback?.[0].best?.evidence_ref, "result:a");
+  assert.equal(current.measurementFeedback?.[0].measured_count, 1);
+  const raw = {...finding("legacy", 99), execution_observation: events[1].execution_observation};
+  assert.deepEqual(projectExploreMeasurementFeedback([raw]), []);
 });

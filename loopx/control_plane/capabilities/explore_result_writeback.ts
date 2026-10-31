@@ -193,7 +193,7 @@ function normalizeAttachment(value: unknown, visionPacket?: unknown, linkedScope
     throw new EffectRuntimeRequestError("measurement_context requires measurements");
   }
   const measurements = Object.hasOwn(row, "measurements")
-    ? normalizeExploreMeasurements(row.measurements, row.measurement_context) : null;
+    ? normalizeExploreMeasurements(row.measurements, row.measurement_context, execution) : null;
   if (measurements?.some(item => item.input_revision !== text(row.input_revision, "input_revision", 160)
     || !refs.includes(item.evidence_ref))) {
     throw new EffectRuntimeRequestError("measurements must retain this finding's input revision and evidence references");

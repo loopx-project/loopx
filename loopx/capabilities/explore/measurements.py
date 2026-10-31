@@ -21,10 +21,13 @@ def _normalize(encoded: str) -> str:
     return json.dumps(result["measurements"], sort_keys=True, allow_nan=False)
 
 
-def normalize_measurements(value, *, measurement_context=_UNSET):
+def normalize_measurements(value, *, measurement_context=_UNSET, execution_observation=_UNSET):
     validate_public_safe_value(value, path="measurements")
     request = {"measurements": value}
     if measurement_context is not _UNSET:
         validate_public_safe_value(measurement_context, path="measurement_context")
         request["measurement_context"] = measurement_context
+    if execution_observation is not _UNSET:
+        validate_public_safe_value(execution_observation, path="execution_observation")
+        request["execution_observation"] = execution_observation
     return json.loads(_normalize(json.dumps(request, sort_keys=True, allow_nan=False)))

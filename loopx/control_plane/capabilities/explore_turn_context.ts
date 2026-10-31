@@ -202,7 +202,7 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
   // Manual quantitative capture uses the same finding owner. Keep its sources
   // available to the existing exact-result decision path, without requiring a
   // writeback-origin tag or admitting unrelated unmeasured notes.
-  const decisionResults = findings.filter(row => row.measurements !== undefined
+  const decisionResults = findings.filter(row => row.measurements !== undefined || row.measurement_error !== undefined
     || Array.isArray(row.tags) && row.tags.includes("writeback-result"));
   // Keep the same detail budget, but do not let unrelated newer results evict
   // the applicability of evidence linked to the next selected work item.
@@ -344,13 +344,13 @@ export function projectExploreTurnContext(params: JsonObject): JsonObject {
       counts: projection.counts ?? {},
       recent_nodes: nodes.slice(0, 3).map(row => compact(row, ["node_id", "title", "status", "blocked_reason"])),
       // The canonical evidence projection calls the finding's title `finding`.
-      recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status"]),
+      recent_findings: findings.slice(0, 3).map(row => ({...compact({...row, title: row.finding}, ["finding_id", "node_id", "title", "status", "measurement_error"]),
         ...findingDigest(row, findingSources)})),
       // Full scoped summaries; progressive reads can raise the page size.
       // These retain the observation AND applicability; clipping away conditions
       // could turn a bounded refutation into a blanket route ban.
       writeback_results: visibleResults
-        .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs"]),
+        .map(row => ({...compact(row, ["finding_id", "node_id", "finding", "status", "evidence_refs", "measurement_error"]),
           summary: String(row.summary ?? "").slice(0, EXPLORE_WRITEBACK_SUMMARY_LIMIT),
           ...(row.execution_observation ? {execution_observation: row.execution_observation} : {}),
           ...(row.measurements ? {measurements: row.measurements} : {}),

@@ -40,6 +40,41 @@ def test_real_probe_reports_early_exit_not_budget_exhaustion(tmp_path, monkeypat
     assert (tmp_path / "observation.json.stdout").read_text().strip() == "5"
 
 
+def test_finding_measurements_keep_the_executed_result_identity(tmp_path, monkeypatch):
+    from loopx.capabilities.explore.result_log import (
+        append_explore_result_event, build_explore_finding_event,
+        load_explore_result_events_strict,
+    )
+
+    observed = probe(tmp_path, monkeypatch)
+    observed.update(result_ref="result:executed", result_candidate_sha256=observed["candidate_sha256"])
+    observed["evidence_refs"].append("result:executed")
+    observed["evidence_refs"].sort()
+    measurement = {
+        "metric": "quality", "value": 8, "unit": "points", "higher_is_better": True,
+        "comparison_scope": "validation:fixed", "input_revision": observed["input_revision"],
+        "evaluation_ref": "evaluator:v1", "candidate_ref": "candidate:executed",
+        "evidence_ref": "result:other",
+    }
+    fields = dict(
+        goal_id="research", title="The exact executed result", finding_id="measured",
+        node_id="question", status="tentative", execution_observation=observed,
+        evidence_refs=[*observed["evidence_refs"], "result:other"],
+    )
+    log = tmp_path / "results.jsonl"
+    with pytest.raises(ValueError, match="executed candidate's result"):
+        build_explore_finding_event(**fields, measurements=[measurement])
+    assert not log.exists(), "inconsistent evidence must fail before publication"
+    measurement["evidence_ref"] = "result:executed"
+    with pytest.raises(ValueError, match="executed candidate's input"):
+        build_explore_finding_event(**fields, measurements=[{**measurement, "input_revision": "other-input"}])
+    event = build_explore_finding_event(**fields, measurements=[measurement])
+    append_explore_result_event(log, event)
+    [retained] = load_explore_result_events_strict(log, goal_id="research")
+    assert retained["measurements"] == [measurement]
+    assert retained["execution_observation"] == observed
+
+
 def test_missing_solver_telemetry_stays_unknown_and_timeout_is_host_observed(tmp_path, monkeypatch):
     observation = probe(tmp_path, monkeypatch, source="import time; time.sleep(10)", limit_seconds=0.05)
     assert observation["search_iterations"] is None

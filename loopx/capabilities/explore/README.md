@@ -31,6 +31,13 @@ attachments also require the same `input_revision`. Use a new finding id per
 evaluated candidate, and reuse an id only to correct that finding. Missing values
 are explicit `null`; zero and negative values remain valid measurements.
 
+When an `execution_observation` declares a `result_ref`, each measurement must
+cite that same result. This applies to manual findings and writeback attachments,
+including shared comparison contexts. Listing both receipts in `evidence_refs`
+does not bind a different result to the executed candidate. No result is inferred
+when execution has not declared one. These consistency checks do not independently
+verify a producer's calculator or turn `confirmed` into an evaluator attestation.
+
 To reuse verified comparison conditions, save these three fields once in
 `conditions.json`:
 
@@ -1413,3 +1420,17 @@ outcomes.
 Native research completion retains the graph lock and, when inheriting, the
 device-configuration lock until its transaction finishes. Inherited planning
 requires the same exact typed experiment evidence as an explicit Goal mode.
+
+Historical compatibility: stricter execution/measurement attribution is a new-write
+rule. Canonical readers preserve earlier records and their identities, including
+an inconsistent original followed by a correction. Current finding views expose
+`measurement_error` and omit contradictory quantities from comparison; raw history
+retains the producer's original statement. A matching correction becomes usable
+without deleting its prior version. Explicit ordered-prefix archival replay keeps
+the same audit boundary; ordinary single/batch writes still reject contradictions.
+Malformed, unsafe, unknown-field or forged canonical records remain rejected.
+
+历史兼容：执行与测量的一致性约束限制新写入，不能阻断旧记录及其后续更正的读取。
+当前 finding 若有归因矛盾，会返回 `measurement_error` 并排除该数量比较；历史仍保留
+生产者的原始声明。正确更正可恢复当前比较，不能删改旧行。显式按顺序恢复归档前缀也
+保留此审计边界；普通单条和批量写入仍拒绝新矛盾，结构损坏、不安全及伪造记录仍拒绝。

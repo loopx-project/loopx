@@ -352,6 +352,7 @@ def build_explore_finding_event(
     recorded_at: str | None = None,
     execution_observation: Mapping[str, Any] | None = None,
     measurements: Sequence[Mapping[str, Any]] | None = None,
+    _check_execution_measurements: bool = True,
 ) -> dict[str, Any]:
     safe_goal_id = _safe_goal_id(goal_id)
     safe_title = _compact_text(title, limit=TITLE_LIMIT, field="title")
@@ -394,7 +395,10 @@ def build_explore_finding_event(
 
         if not node_id:
             raise ValueError("measurements require an explicit node")
-        measured = normalize_measurements(measurements)
+        measured = normalize_measurements(
+            measurements, **({"execution_observation": event.get("execution_observation")}
+                if _check_execution_measurements else {}),
+        )
         if any(item["evidence_ref"] not in event.get("evidence_refs", []) for item in measured):
             raise ValueError("measurement evidence must be included in the finding's evidence_refs")
         event["measurements"] = measured
@@ -456,6 +460,8 @@ def validate_explore_result_event(
     unknown fields, invalid ids, unsafe text, forged boundary flags, and stale
     event ids. Persisted text has its own bounded compatibility budget: it is
     validated and restored before hashing, never clipped to the writer default.
+    This structural read validation preserves older attribution contradictions;
+    writers reject new contradictions, and current views exclude their numbers.
     """
 
     payload = dict(event)
@@ -518,6 +524,10 @@ def validate_explore_result_event(
             supersedes=payload.get("supersedes"),
             execution_observation=payload.get("execution_observation"),
             measurements=payload.get("measurements"),
+            # Canonical history predates the stricter new-write rule. Keep
+            # original bytes/identities auditable; current views qualify the
+            # folded result separately, and append rechecks new writes below.
+            _check_execution_measurements=False,
         )
     if summary:
         rebuilt["summary"] = summary
@@ -527,8 +537,16 @@ def validate_explore_result_event(
     return rebuilt
 
 
+def _check_finding_measurement_execution(event: Mapping[str, Any]) -> None:
+    if "measurements" in event:
+        from .measurements import normalize_measurements
+
+        normalize_measurements(event["measurements"], execution_observation=event.get("execution_observation"))
+
+
 def append_explore_result_event(path: Path, event: Mapping[str, Any]) -> dict[str, Any]:
     validated = validate_explore_result_event(event)
+    _check_finding_measurement_execution(validated)
     log_path = path.expanduser()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_file_lock(log_path):
@@ -598,6 +616,11 @@ def append_explore_result_events(
     if require_ordered_prefix and create_only_node_ids:
         raise ValueError("ordered prefix replay cannot skip existing node revisions")
     validated = [validate_explore_result_event(event, expected_goal_id=expected_goal_id) for event in events]
+    # Ordered replay restores an audited historical prefix, not new evidence.
+    # Its old contradictions remain visible only as archival facts/diagnostics.
+    if not require_ordered_prefix:
+        for event in validated:
+            _check_finding_measurement_execution(event)
     requested_ids = [str(event["event_id"]) for event in validated]
     if len(requested_ids) != len(set(requested_ids)):
         raise ValueError("Explore result event batch contains duplicate event ids")
@@ -841,10 +864,19 @@ def _materialized_parent_edges(
 
 
 def _finding_view(event: Mapping[str, Any]) -> dict[str, Any]:
+    measured: dict[str, Any] = {}
+    if "measurements" in event:
+        try:
+            _check_finding_measurement_execution(event)
+        except ValueError as error:
+            # Quarantine contradictory historical quantities in the current
+            # view, not the append-only history. Runtime failure propagates.
+            measured["measurement_error"] = str(error)
+        else:
+            measured.update(measurements=event["measurements"], recorded_order=event["_recorded_order"])
     return {
         **({"execution_observation": event["execution_observation"]} if "execution_observation" in event else {}),
-        **({"measurements": event["measurements"], "recorded_order": event["_recorded_order"]}
-           if "measurements" in event else {}),
+        **measured,
         "finding_id": str(event.get("result_id") or ""),
         "finding": str(event.get("title") or ""),
         "summary": str(event.get("summary") or ""),
