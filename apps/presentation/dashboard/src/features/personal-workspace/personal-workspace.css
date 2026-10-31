@@ -1271,7 +1271,7 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-composer-images { display: flex; gap: 8px; margin: 0 0 8px; overflow-x: auto; }
 .personal-composer-images figure { position: relative; flex: 0 0 74px; height: 58px; margin: 0; }
 .personal-composer-images img { width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--pw-line-strong); border-radius: var(--pw-r-item); background: #fff; }
-.personal-composer-images button { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid var(--pw-line-strong); border-radius: 50%; background: #fff; color: var(--pw-text); cursor: pointer; box-shadow: 0 1px 4px rgb(30 28 20 / 18%); }
+.personal-composer-images figure > button { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid var(--pw-line-strong); border-radius: 50%; background: #fff; color: var(--pw-text); cursor: pointer; box-shadow: 0 1px 4px rgb(30 28 20 / 18%); }
 .personal-composer-error { margin: 0 0 7px; color: var(--pw-red); font-size: var(--text-caption); line-height: var(--leading-caption); }
 .personal-composer-status { margin: 0 0 7px; color: var(--pw-muted); font-size: var(--text-caption); line-height: var(--leading-caption); }
 

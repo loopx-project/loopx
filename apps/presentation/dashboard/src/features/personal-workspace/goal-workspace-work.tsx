@@ -1,6 +1,6 @@
 import {ContextHelp} from "./context-help";
 import {ArrowRight, ChevronDown, Circle, CircleAlert, CircleCheck, CircleHelp, Clock, Hand, Info, List, Play, Plus, Search} from "lucide-react";
-import {useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from "react";
+import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import type {GoalWorkDisplayClass, GoalWorkspaceDigest} from "../../../../../../loopx/control_plane/presentation/goal_workspace_digest.js";
 import type {WorkspaceActionPreview, WorkspaceActionPreviewRequest, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceModel, WorkspaceTimelineItem} from "./personal-workspace-model";
 import {localizedSessionStatus, useWorkspaceI18n} from "./i18n";
@@ -211,9 +211,15 @@ export function GoalWorkspaceWork({goal, digest, items, userTodos, selectedTodoI
     <summary><List size={15} aria-hidden/><span>{zh ? "全部工作" : "All work"}</span><ChevronDown size={15} aria-hidden/></summary>
     {inventoryAvailable && inventoryOpen && !railOpen ? rail("inline") : null}
   </details>;
+  // A narrow column promotes the blocking decision above the Goal's own
+  // direction; the DOM has to follow that order too, or the visual order and the
+  // reading order disagree for assistive readers. Keyed slots let React move the
+  // existing nodes, so the reflow keeps focus inside the decision it moved.
+  const documentSlots = attentionFirst
+    ? [<Fragment key="attention">{attentionContent}</Fragment>, <Fragment key="brief">{brief}</Fragment>]
+    : [<Fragment key="brief">{brief}</Fragment>, <Fragment key="attention">{attentionContent}</Fragment>];
   const documentContent = <div className="goal-workspace-document" ref={readingDocument} key="document">
-      {brief}
-      {attentionContent}
+      {documentSlots}
       <section className="goal-now" aria-label={zh ? "当前工作" : "Now"}>
         <header className="goal-now-header"><h2><span className="goal-stage-n">03</span>{zh ? "当前工作" : "Now"}</h2>
           {digest.work.coverage !== "complete" || !digest.work.groups.length ? <ContextHelp icon={digest.work.coverage !== "complete" ? CircleHelp : Info}
