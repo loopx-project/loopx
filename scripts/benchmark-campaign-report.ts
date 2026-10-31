@@ -14,10 +14,18 @@ type Score = {
   value: number; normalization_id: string; evidence_ref: string;
   origin: 'official' | 'authorized_failure_zero'; countable: boolean;
 };
+type Effort = {
+  duration_ms: number | null; token_count: number | null;
+  model_request_count: number | null; evidence_ref: string;
+};
+type ScoreSample = {
+  elapsed_ms: number; value: number; normalization_id: string; evidence_ref: string;
+};
 type Selection = {
   arm_id: string; case_id: string; run_id: string; status: Status;
   score: Score | null; protocol_id: string; exclude_reason: string | null;
   rerun_reason: Rerun | null;
+  effort?: Effort; score_samples?: ScoreSample[];
 };
 type Incident = {
   arm_id: string; case_id: string; run_id: string; fault: Fault;
@@ -55,6 +63,8 @@ const terminal = (s: Status) => !['planned', 'running'].includes(s);
 const key = (r: { arm_id: string; case_id: string }) => `${r.arm_id}\0${r.case_id}`;
 const mean = (v: number[]) => v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
 const digest = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+const nonnegativeIntegerOrNull = (value: unknown) => value === null ||
+  (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
 
 export function validateInput(raw: unknown): CampaignInput {
   requireThat(raw && typeof raw === 'object', 'input must be an object');
@@ -79,6 +89,24 @@ export function validateInput(raw: unknown): CampaignInput {
       requireThat(token(s.normalization_id) && text(s.evidence_ref) && typeof s.countable === 'boolean', 'score provenance required');
       requireThat(s.origin === 'official' || (s.origin === 'authorized_failure_zero' && s.value === 0), 'score origin invalid');
       requireThat(!s.countable || (r.status === 'completed' && s.origin === 'official' && r.exclude_reason === null), 'countable score contradicts status/origin/exclusion');
+    }
+    if (r.effort !== undefined) {
+      const e = r.effort;
+      requireThat(e && nonnegativeIntegerOrNull(e.duration_ms) && nonnegativeIntegerOrNull(e.token_count) &&
+        nonnegativeIntegerOrNull(e.model_request_count) && text(e.evidence_ref), 'effort must use nonnegative integers or null with evidence');
+      requireThat([e.duration_ms, e.token_count, e.model_request_count].some(v => v !== null), 'effort cannot be entirely unknown');
+    }
+    if (r.score_samples !== undefined) {
+      requireThat(Array.isArray(r.score_samples), 'score samples must be an array');
+      let previous = -1;
+      for (const sample of r.score_samples) {
+        requireThat(nonnegativeIntegerOrNull(sample?.elapsed_ms) && sample.elapsed_ms !== null &&
+          sample.elapsed_ms > previous, 'score sample elapsed time must increase');
+        requireThat(typeof sample.value === 'number' && Number.isFinite(sample.value) &&
+          sample.value >= 0 && sample.value <= 100, 'score sample must be finite normalized 0..100');
+        requireThat(token(sample.normalization_id) && text(sample.evidence_ref), 'score sample provenance required');
+        previous = sample.elapsed_ms;
+      }
     }
   }
   requireThat(Array.isArray(d.incidents) && distinct(d.incidents.map(i => i.run_id)), 'incident run ids must be unique');
@@ -124,12 +152,26 @@ export function buildReport(raw: unknown) {
       unattributed_runtime_failures: audited.filter(r => r.outcome === 'runtime_failure' && r.attribution === 'unknown').length,
       goal_verdict_observed: audited.filter(r => !['unavailable', 'not_applicable'].includes(r.goal_verdict)).length,
     };
+    const known = <K extends keyof Effort>(field: K) => rows.filter(r => r.effort?.[field] !== null && r.effort?.[field] !== undefined);
+    const sum = (field: 'duration_ms' | 'token_count' | 'model_request_count') =>
+      known(field).reduce((total, row) => total + (row.effort![field] as number), 0);
+    const effort = {
+      duration_known_runs: known('duration_ms').length,
+      duration_ms: sum('duration_ms'),
+      token_known_runs: known('token_count').length,
+      token_count: sum('token_count'),
+      model_request_known_runs: known('model_request_count').length,
+      model_request_count: sum('model_request_count'),
+      complete_runs: rows.filter(r => r.effort && r.effort.duration_ms !== null &&
+        r.effort.token_count !== null && r.effort.model_request_count !== null).length,
+    };
     return { ...a, total: rows.length, ended: rows.filter(r => terminal(r.status)).length,
       running: rows.filter(r => r.status === 'running').length, queued: rows.filter(r => r.status === 'planned').length,
       ended_with_score: rows.filter(r => terminal(r.status) && r.score !== null).length,
       ended_without_score: rows.filter(r => terminal(r.status) && r.score === null).length,
       score_countable: rows.filter(r => r.score?.countable).length,
       first_attempt_execution: execution,
+      effort,
       product_failures_initial: counts('product', true), product_failures_ever: counts('product'),
       infrastructure_failures_ever: counts('infrastructure'), scoring_failures_ever: counts('scoring'),
       cancelled_cases_ever: counts('operator_cancelled'), unknown_failures_ever: counts('unknown'), pending_reruns: pending };
@@ -160,14 +202,19 @@ export function buildReport(raw: unknown) {
       qualified_case_ids: qualifiedCases, exclusions,
       interpretation: 'descriptive_common_case_scores_not_a_causal_or_matched_integrity_claim' };
   });
+  const score_time_series = d.selection.flatMap(row => (row.score_samples ?? []).map(sample => ({
+    arm_id: row.arm_id, case_id: row.case_id, run_id: row.run_id, ...sample,
+  })));
   return { schema_version: 'benchmark_campaign_report_v1', input_sha256: digest(d),
     observed_at: d.observed_at, title: d.title, summary, comparisons, selection: d.selection,
-    incidents: d.incidents, execution_audit: d.execution_audit ?? [], notes: d.notes };
+    score_time_series, incidents: d.incidents, execution_audit: d.execution_audit ?? [], notes: d.notes };
 }
 
 type Report = ReturnType<typeof buildReport>;
 const cell = (v: unknown) => String(v ?? '—').replaceAll('|', '\\|').replace(/[\r\n]+/g, ' ').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const number = (v: number | null) => v === null ? '—' : v.toFixed(2);
+const coveredTotal = (coverage: number, value: number, scale = 1) =>
+  coverage === 0 ? null : scale === 1 ? value : (value / scale).toFixed(2);
 function table(headers: string[], rows: unknown[][]) {
   return ['| ' + headers.map(cell).join(' | ') + ' |', '| ' + headers.map(() => '---').join(' | ') + ' |',
     ...rows.map(r => '| ' + r.map(cell).join(' | ') + ' |')].join('\n');
@@ -185,17 +232,20 @@ export function renderMarkdown(r: Report): string {
     })) +
     '\n\n以下仅计已记录事件，缺失记录不证明没有故障，不能据此直接比较故障率。产品归因不是所有运行异常的总数。历史按每组独立题目去重；待补跑包含正在补跑。\n\n' +
     table(['实验组','首次已归因产品故障','历史已归因产品故障','历史已归因基础设施故障','历史归因待查','历史调度取消','基础设施待补跑','评分待补跑','取消待补跑','其他待重做'], r.summary.map(a => [a.label,a.product_failures_initial,a.product_failures_ever,a.infrastructure_failures_ever,a.unknown_failures_ever,a.cancelled_cases_ever,a.pending_reruns.infrastructure,a.pending_reruns.scoring,a.pending_reruns.operator_cancelled,(a.pending_reruns.comparison_change ?? 0)+(a.pending_reruns.integrity_review ?? 0)+(a.pending_reruns.product ?? 0)+(a.pending_reruns.unknown ?? 0)])) +
+    '\n\n成本只汇总调用方提供并带证据的运行时长、token 和模型请求数；未知不按零计。各组覆盖数不同，不能直接用总量判断效率。\n\n' +
+    table(['实验组','时长覆盖','总运行时长(h)','Token覆盖','总Token','请求数覆盖','模型请求数','三项完整'], r.summary.map(a => [a.label,`${a.effort.duration_known_runs}/${a.total}`,coveredTotal(a.effort.duration_known_runs,a.effort.duration_ms,3_600_000),`${a.effort.token_known_runs}/${a.total}`,coveredTotal(a.effort.token_known_runs,a.effort.token_count),`${a.effort.model_request_known_runs}/${a.total}`,coveredTotal(a.effort.model_request_known_runs,a.effort.model_request_count),a.effort.complete_runs])) +
     '\n\n均分使用相同题目交集、相同归一化规则，尺度 0–100。未出分不填 0；授权的故障判零单独保留来源。以下为描述性比较；源版本、协议、资源差异和完整性复核仍需独立审查。\n\n' +
     table(['对比范围','共同题数',...r.summary.map(a => a.label),'第二组−第一组','共同题中双方/各方可计数'],r.comparisons.map(c => [c.arms.map(a => labels.get(a)).join(' / '),c.n,...r.summary.map(a => number(c.means[a.arm_id] ?? null)),number(c.delta_second_minus_first),c.qualified_common_n])) +
     '\n\n' + r.notes.map(n => '- ' + cell(n)).join('\n') + '\n\n## 共同题目与排除记录\n\n' +
     r.comparisons.map(c => `- ${c.arms.map(a => labels.get(a)).join(' / ')}：${c.case_ids.join('、') || '无'}。`).join('\n') +
-    '\n\n逐题状态、每项分数来源、排除原因及历史故障均保留在同名 JSON；CSV 每行是一道题的一个组。\n';
+    `\n\n分数/时间序列：${r.score_time_series.length} 个带来源的采样点，覆盖 ${new Set(r.score_time_series.map(s => s.run_id)).size} 个运行。采样覆盖不同，不从缺失点补零，也不自动计算跨题均值曲线；同名 JSON 保留可绘图序列。\n\n` +
+    '逐题状态、每项分数来源、排除原因及历史故障均保留在同名 JSON；CSV 每行是一道题的一个组。\n';
 }
 export function renderCsv(r: Report): string {
   // Neutralize spreadsheet formulas in caller-controlled labels and ids.
   const q = (v: unknown) => { let s = String(v ?? ''); if (/^\s*[=+\-@]/.test(s)) s = "'" + s; return '"' + s.replaceAll('"','""') + '"'; };
-  return [['arm_id','case_id','run_id','status','score_0_100','score_origin','normalization_id','countable','rerun_reason','exclude_reason','evidence_ref'],
-    ...r.selection.map(s => [s.arm_id,s.case_id,s.run_id,s.status,s.score?.value,s.score?.origin,s.score?.normalization_id,s.score?.countable,s.rerun_reason,s.exclude_reason,s.score?.evidence_ref])].map(row => row.map(q).join(',')).join('\n')+'\n';
+  return [['arm_id','case_id','run_id','status','score_0_100','score_origin','normalization_id','countable','rerun_reason','exclude_reason','score_evidence_ref','duration_ms','token_count','model_request_count','effort_evidence_ref','score_sample_count'],
+    ...r.selection.map(s => [s.arm_id,s.case_id,s.run_id,s.status,s.score?.value,s.score?.origin,s.score?.normalization_id,s.score?.countable,s.rerun_reason,s.exclude_reason,s.score?.evidence_ref,s.effort?.duration_ms,s.effort?.token_count,s.effort?.model_request_count,s.effort?.evidence_ref,s.score_samples?.length ?? 0])].map(row => row.map(q).join(',')).join('\n')+'\n';
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

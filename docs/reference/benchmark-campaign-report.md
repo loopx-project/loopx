@@ -73,6 +73,19 @@ are null, never zero. An explicit campaign policy can supply
 `origin=authorized_failure_zero`, value zero and an evidence reference;
 such a policy value cannot claim official countability.
 
+Each selection may also carry a minimized `effort` projection with
+`duration_ms`, `token_count`, `model_request_count`, and `evidence_ref`.
+Unknown numeric fields remain null; an effort object with every metric unknown
+is rejected. The report shows both totals and per-metric coverage, so a partial
+projection cannot silently turn missing cost into zero or support an efficiency
+claim across arms with different coverage.
+
+Optional `score_samples` preserve a run's normalized score/time series. Every
+sample has strictly increasing `elapsed_ms`, a finite 0–100 `value`, the
+`normalization_id`, and an `evidence_ref`. JSON flattens the samples with their
+arm, case, and run identities for plotting. The helper does not invent missing
+points or calculate a cross-case mean curve from changing sample coverage.
+
 `countable` projects existing score authority; the report does not grant it.
 `exclude_reason` removes a known invalid or unresolved result from comparisons.
 Cancelled runs and live runs are always excluded. A failed run can retain a
@@ -136,7 +149,8 @@ The audit does not change score selection, normalization or countability.
   and treatment fidelity still need the toolkit's matched-comparison checks.
   The helper labels every comparison descriptive and never upgrades integrity.
 - CSV provides one row per selected case/arm with score provenance and rerun
-  reasons. Spreadsheet formula prefixes are neutralized.
+  reasons, effort fields, and sample count. Spreadsheet formula prefixes are
+  neutralized. Full score/time samples remain in JSON.
 
 Validation:
 
