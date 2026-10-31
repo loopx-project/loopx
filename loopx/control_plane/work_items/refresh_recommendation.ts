@@ -83,8 +83,12 @@ export function resolveLaneRecommendation(value: unknown): JsonObject {
   const prior = request.prior_resolution == null ? null : requireJsonObject(request.prior_resolution, "prior_resolution");
   // Only the actor's latest bound receipt participates. Never search older
   // matching tasks: doing so would revive an abandoned experiment.
-  const priorRevision = prior?.recommended_action_source === "agent_lane_step" && prior.agent_id === actor
-    ? prior.step_revision : null;
+  const priorRevision = prior?.agent_id !== actor ? null
+    : prior?.recommended_action_source === "agent_lane_step" ? prior.step_revision
+    // Retiring a step is a later decision, never a return to the initial basis.
+    // Hash the existing explicit journal receipt (including its source identity)
+    // without making it a reusable step or a new task/execution authority.
+    : prior?.recommended_action_source === "explicit_arg" && prior.goal_id === goalId ? digest(prior) : null;
   const basis = digest([goalId, sourceRevision, agents, actor, taskBasis, priorRevision]);
   const runnable = actor !== null && agents.includes(actor) && selected !== null &&
     selected.task_class === "advancement_task" && candidateIsRunnable(selected, actor);
