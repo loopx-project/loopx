@@ -286,6 +286,94 @@ def test_stopped_scope_filters_goal_channel_rows_and_requests_archive_context(
     ]
 
 
+def _collect_recording_presentation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    **collect_kwargs: Any,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    monkeypatch.setattr(
+        status_collection,
+        "collect_runtime_projection_route_diagnostics",
+        lambda **_kwargs: {"available": False},
+    )
+    queue_calls: list[dict[str, Any]] = []
+    gate_calls: list[dict[str, Any]] = []
+    context = _context(tmp_path)
+    base_builder = context.build_attention_queue
+    context = status_collection.StatusCollectionContext(
+        **{
+            **context.__dict__,
+            "build_attention_queue": lambda **kwargs: (
+                queue_calls.append(kwargs),
+                base_builder(**kwargs),
+            )[1],
+            "build_promotion_gate": lambda **kwargs: (
+                gate_calls.append(kwargs),
+                {"gate_state": "fixture"},
+            )[1],
+        }
+    )
+    payload = status_collection.collect_status(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        limit=5,
+        context=context,
+        goal_id=GOAL_ID,
+        **collect_kwargs,
+    )
+    return payload, queue_calls, gate_calls
+
+
+def test_status_collection_builds_presentation_projections_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, queue_calls, gate_calls = _collect_recording_presentation(
+        tmp_path, monkeypatch
+    )
+
+    assert queue_calls[0]["include_goal_channel_projection"] is True
+    assert len(gate_calls) == 1
+    assert payload["promotion_gate"] == {"gate_state": "fixture"}
+
+
+def test_decision_status_read_skips_presentation_projections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload, queue_calls, gate_calls = _collect_recording_presentation(
+        tmp_path, monkeypatch, include_presentation_projections=False
+    )
+
+    assert queue_calls[0]["include_goal_channel_projection"] is False
+    assert gate_calls == []
+    assert "promotion_gate" not in payload
+    # Decision inputs stay in the reduced payload.
+    assert payload["attention_queue"] == {"items": [], "item_count": 0}
+    assert payload["agent_management_projection"]["agents"]
+
+
+def test_status_projection_cache_separates_presentation_scope(
+    tmp_path: Path,
+) -> None:
+    kwargs = {
+        "registry_path": tmp_path / "registry.json",
+        "runtime_root": tmp_path / "runtime",
+        "limit": 5,
+        "include_task_graph": False,
+        "goal_id": GOAL_ID,
+    }
+
+    default_key = status_projection_cache_key(**kwargs)
+
+    assert default_key == status_projection_cache_key(
+        **kwargs, include_presentation_projections=True
+    )
+    assert default_key != status_projection_cache_key(
+        **kwargs, include_presentation_projections=False
+    )
+
+
 def test_status_projection_cache_separates_capability_envelopes(
     tmp_path: Path,
 ) -> None:
