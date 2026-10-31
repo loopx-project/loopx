@@ -73,6 +73,13 @@ LOCAL_SNAPSHOT_METHODS = frozenset({
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
+# A managed runtime publishes its typed startup diagnostic when it gives up,
+# so the host can only recover the exact code after that publication. When the
+# ready budget expires while the runtime is still running, the host gives it
+# one more ready budget to publish and exit instead of discarding a diagnostic
+# the runtime already computed. The window reuses the ready budget the
+# repository already owns rather than introducing an unrelated number.
+STARTUP_DIAGNOSTIC_GRACE_SECONDS = STARTUP_READY_TIMEOUT_SECONDS
 RUNTIME_LOCATOR_PERMISSION_RETRIES = 3
 RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 RUNTIME_LOCATOR_RECOVERY_TIMEOUT_SECONDS = 1.0
@@ -1156,6 +1163,66 @@ def _startup_diagnostic(raw: bytes) -> tuple[str, str] | None:
     return None
 
 
+def _published_startup_failure(
+    startup_stderr: IO[bytes],
+) -> EffectRuntimeStartupError | None:
+    """Return the typed failure a managed runtime published, if it published one.
+
+    The runtime publishes its startup envelope before it exits, so the
+    envelope is authoritative even while the runtime is still running. Other
+    stderr content, such as a Node.js stack trace, is not a typed diagnostic
+    and must not be reported as one.
+    """
+
+    diagnostic = _startup_diagnostic(_read_startup_stderr(startup_stderr))
+    if diagnostic is None:
+        return None
+    code, message = diagnostic
+    if code == "runtime_host_permission_denied":
+        return EffectRuntimeHostPermissionError()
+    return EffectRuntimeStartupError(message, diagnostic_code=code)
+
+
+def _await_startup_publication(
+    process: subprocess.Popen[bytes],
+    startup_stderr: IO[bytes],
+    *,
+    info_path: Path,
+    fingerprint: str,
+    deadline: float,
+) -> dict[str, Any] | None:
+    """Wait for a running runtime to publish its locator or its diagnostic.
+
+    Returns the locator the runtime published. Raises the typed failure the
+    runtime published, or the stable exit diagnostic when it exits without
+    one. Returns None when the deadline passes with neither.
+    """
+
+    while time.monotonic() < deadline:
+        try:
+            info = _read_info(info_path, fingerprint=fingerprint)
+        except EffectRuntimeHostPermissionError:
+            if process.poll() is None:
+                process.terminate()
+            raise
+        if info is not None:
+            return info
+        exit_code = process.poll()
+        failure = _published_startup_failure(startup_stderr)
+        if failure is not None:
+            if exit_code is None:
+                process.terminate()
+            raise failure
+        if exit_code is not None:
+            raise EffectRuntimeStartupError(
+                "TypeScript Effect runtime exited before becoming ready "
+                f"(exit_code={exit_code})",
+                diagnostic_code="runtime_exited_before_ready",
+            )
+        time.sleep(STARTUP_POLL_SECONDS)
+    return None
+
+
 def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
     runtime_dir = info_path.parent
     runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1261,23 +1328,33 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> dict[str, Any]:
                     return info
                 exit_code = process.poll()
                 if exit_code is not None:
-                    diagnostic = _startup_diagnostic(
-                        _read_startup_stderr(startup_stderr)
-                    )
-                    if diagnostic is not None:
-                        code, message = diagnostic
-                        if code == "runtime_host_permission_denied":
-                            raise EffectRuntimeHostPermissionError()
-                        raise EffectRuntimeStartupError(
-                            message,
-                            diagnostic_code=code,
-                        )
+                    failure = _published_startup_failure(startup_stderr)
+                    if failure is not None:
+                        raise failure
                     raise EffectRuntimeStartupError(
                         "TypeScript Effect runtime exited before becoming ready "
                         f"(exit_code={exit_code})",
                         diagnostic_code="runtime_exited_before_ready",
                     )
                 time.sleep(STARTUP_POLL_SECONDS)
+            # The runtime is still running when the ready budget expires, so it
+            # may yet publish its locator or the diagnostic it has already
+            # computed. Give it a bounded window to do either before the host
+            # reports a generic timeout and terminates it.
+            info = _await_startup_publication(
+                process,
+                startup_stderr,
+                info_path=info_path,
+                fingerprint=fingerprint,
+                deadline=time.monotonic() + STARTUP_DIAGNOSTIC_GRACE_SECONDS,
+            )
+            if info is not None:
+                return info
+            failure = _published_startup_failure(startup_stderr)
+            if failure is not None:
+                if process.poll() is None:
+                    process.terminate()
+                raise failure
             if process.poll() is None:
                 process.terminate()
             raise EffectRuntimeStartupError(
