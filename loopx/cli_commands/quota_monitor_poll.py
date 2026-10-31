@@ -226,6 +226,7 @@ def record_automatic_heartbeat_stall(
         limit=context.status_limit,
         goal_id=context.status_goal_id,
         available_capabilities=args.available_capabilities,
+        include_presentation_projections=False,
     )
     rebuilt = decision_builder(
         reloaded,
