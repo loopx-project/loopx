@@ -1064,6 +1064,42 @@ values with the existing warning and never borrow another pack's measurement.
 不能反推 packet token；未采集、部分覆盖与真实零分开。比例是结构开销，不能单独
 当作净效率损失、可避免成本或因果贡献。普通阅读不调用模型。
 
+### Captured tool context inventory
+
+Add `--include-tool-context` to `trajectory-pack-register` with the existing
+`--usage-jsonl` and `--usage-session-id` to measure appended input text. The
+Research workbench's existing Sources and usage disclosure displays the saved
+inventory beside request-token attribution; browsing never launches a model.
+Omitting the option preserves historical registration and projections.
+
+The numerator is the UTF-8 text returned by recognized simple LoopX CLI calls;
+the denominator includes captured user/system/developer text and tool returns.
+Native `response_item` records are used, not their event-message mirrors.
+Duplicate output records for one call count once. Identical output from two
+different calls is still two pieces of appended input; it is not automatically
+redundant research. Operation counts distinguish context reads/projects from
+other LoopX returns. No output or command argument text is sent to the browser.
+Task lease acquisition, inspection, renewal, release and transfer have separate
+rows, as do common Todo operations such as claim and completion. These count
+observed replies, not successful mutations or proved unnecessary recovery.
+
+Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
+`-m loopx.entrypoint`, and an exact
+single literal `const/await tools.exec_command/text` wrapper are recognized.
+Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
+file reads remain unassigned. Non-text content is counted as unmeasured parts.
+The byte share covers the recorded component only: injected LoopX instructions
+can remain unassigned, and useful domain evidence may be present in LoopX
+returns. It is neither whole control-plane overhead nor per-request replay,
+billable tokens, avoidable cost, or causal benefit. Keep the separate Turn-packet
+estimate and provider counters; do not add their different units or denominators.
+
+中文：可选统计在原轨迹分析工作台中展示 LoopX 工具返回占已记录输入文本的字节
+比例，并拆出 context-read/project 等操作。未知和非文本内容分别保留；同内容的
+再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
+租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
+不证明状态写入成功或恢复操作可以省略。
+
 ### Recorded Turn packet estimate
 
 The existing native `codex-cli` Turn host can record its actual injected packet
