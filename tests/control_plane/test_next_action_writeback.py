@@ -109,6 +109,30 @@ def test_multi_agent_steps_are_independent_and_report_scope_does_not_grant_autho
     assert state.read_text() == original_state
 
 
+def test_explicit_guidance_retires_the_old_step_without_changing_the_selected_todo(tmp_path):
+    registry, state, runtime, _ = fixture(tmp_path, ("agent-a", "agent-b"))
+    original = state.read_text()
+    write(registry, runtime, next_action="Continue the old experiment.")
+    # A derived progress observation is not a new decision and keeps that step.
+    write(registry, runtime, next_action=None)
+    _, retained = routes(registry, runtime, tmp_path)
+    assert retained["agent-a"]["next_step"] == "Continue the old experiment."
+    # Another actor's explicit instruction cannot retire this actor's step.
+    write(registry, runtime, agent_id="agent-b", next_action=None,
+          recommended_action="Review the independent result.")
+    _, peer = routes(registry, runtime, tmp_path)
+    assert peer["agent-a"]["next_step"] == "Continue the old experiment."
+    decision = write(registry, runtime, next_action=None,
+                     recommended_action="The result invalidated the old experiment; reconsider the method.")
+    assert decision["recommended_action_resolution"]["recommended_action_source"] == "explicit_arg"
+    _, current = routes(registry, runtime, tmp_path)
+    assert current["agent-a"]["todo_id"] == "todo_parser"
+    assert "next_step" not in current["agent-a"], "a prior step cannot outrank later explicit guidance"
+    derived = write(registry, runtime, next_action=None)
+    assert derived["recommended_action"] != "Continue the old experiment."
+    assert state.read_text() == original
+
+
 @pytest.mark.parametrize("agents,actor", [([], "agent-a"), (["agent-b"], "agent-a"), (["agent-a"], None)])
 def test_unknown_or_unattributed_steps_do_not_append(tmp_path, agents, actor):
     registry, state, runtime, _ = fixture(tmp_path, agents)

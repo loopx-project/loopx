@@ -66,9 +66,17 @@ def recommendation_runs(runtime_root: Path, goal_id: str) -> list[dict[str, Any]
 
 def latest_bound_recommendation(runs: list[dict[str, Any]], agent_id: str) -> dict[str, Any] | None:
     # Journal decoding only. The TS owner validates source, actor and task binding.
+    from .refresh_recommendation import RECOMMENDED_ACTION_SOURCE_EXPLICIT
+
     for row in runs:
         resolution = row.get("recommended_action_resolution")
-        if row.get("agent_id") == agent_id and isinstance(resolution, dict) and resolution.get("step_revision"):
+        if row.get("agent_id") == agent_id and isinstance(resolution, dict) and (
+            resolution.get("step_revision")
+            or resolution.get("recommended_action_source") == RECOMMENDED_ACTION_SOURCE_EXPLICIT
+        ):
+            # Preserve an explicit newer decision as the read barrier. Ordinary
+            # derived observations still reuse the original step receipt; they
+            # do not mint a revision or revive a step before this decision.
             return resolution
     return None
 
