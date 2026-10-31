@@ -338,6 +338,41 @@ test("legacy descriptive Todo deltas stay readable and unresolved", () => {
   assert.equal(validateReplanContext(context), context);
 });
 
+test("busy planned work cannot crowd another declared experiment out of review", () => {
+  const decision = reviewed(1);
+  decision._source_facts.planned_todo_ids = ["todo-busy", "todo-counterexample"];
+  for (const typed of [true, false]) {
+    const observation = (position: number, todo: string): JsonObject => ({...subsequent(position), todo_id: todo,
+      health_check: todo === "todo-counterexample" ? "The comparison rejected the proposed explanation." : "Repeated validation.",
+      progress_observation: typed ? {...progress, work_item_id: todo, fingerprint: `result-${position}`} : null});
+    const counterexample = observation(2, "todo-counterexample");
+    const rows = [decision, counterexample, ...Array.from({length: 12}, (_, i) => observation(i + 3, "todo-busy"))];
+    const input = {...strideRequest, rows};
+    const context = projectReplanContext(input);
+    const follow = context.decision_followthrough;
+    const evidence = typed ? follow.observations : follow.ordinary_work.evidence;
+    assert.equal(evidence.length, 6);
+    assert.deepEqual(evidence.map((row: JsonObject) => row.todo_id),
+      [...Array(5).fill("todo-busy"), "todo-counterexample"], "source order is retained within the balanced window");
+    const ref = evidence[5].evidence_ref;
+    const work = follow.planned_work[1];
+    assert.deepEqual(typed ? work.observation_refs : work.ordinary_evidence_refs, [ref]);
+    assert.equal(typed ? follow.omitted_observation_count : follow.ordinary_work.omitted_count, 7);
+    assert.equal(typed ? follow.recorded_progress_count : follow.ordinary_work.recorded_count, 13);
+    assert.equal(validateReplanContext(context), context);
+    assert.equal(projectReplanContext({...input, operation: "resolve", evidence_ref: ref}).evidence.health_check,
+      counterexample.health_check);
+    const previous = follow.previous_decision.evidence_ref;
+    const review = {previous_review: {reference_decision_ref: previous, adoption: "executed",
+      information_gain: "new_evidence", goal_gain: "unknown", evidence_refs: [ref], lesson: "Retain the negative comparison."}};
+    const replay = projectReplanContext({...input, operation: "review_evidence", previous_decision_ref: previous, evidence_refs: [ref]});
+    assert.equal(strideReviewMismatch(review, context, replay), null);
+    assert.deepEqual(projectReplanContext({...input, stride_strategy: "off"}).decision_followthrough, follow);
+    assert.deepEqual(projectReplanContext({...input, rows: [...rows].reverse()}).decision_followthrough, follow);
+    assert.equal(follow.execution_and_goal_gain, "unknown");
+  }
+});
+
 test("declared work returns canonical state and only its subsequent observations", () => {
   const decision = reviewed(2);
   decision._source_facts.planned_todo_ids = ["todo-experiment", "todo-unavailable"];

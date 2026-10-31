@@ -202,6 +202,24 @@ function observationTodo(row: JsonObject): unknown {
   return work == null ? row.todo_id : row.todo_id == null || row.todo_id === work ? work : null;
 }
 
+/** Reserve one source-ordered observation per displayed planned Todo before
+ * filling the remaining slots. Repetition on one work item must not hide all
+ * followthrough on another; the cap is presentation, never evidence eligibility. */
+function boundedWorkEvidence(rows: JsonObject[], todoIds: string[]): JsonObject[] {
+  const first = new Set<JsonObject>();
+  const displayed = new Set(todoIds.slice(0, 6));
+  for (const id of displayed) {
+    const row = rows.find(row => observationTodo(row) === id);
+    if (row) first.add(row);
+  }
+  const relevant = rows.filter(row => displayed.has(String(observationTodo(row))));
+  for (const row of [...relevant, ...rows]) {
+    if (first.size >= 6) break;
+    first.add(row);
+  }
+  return rows.filter(row => first.has(row));
+}
+
 /** Recover the result -> decision -> subsequent work relation from the existing
  * source history. A citation alone does not consume a result, and no extra
  * ledger or execution authority is created. These are recorded associations,
@@ -326,7 +344,8 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
   // The complete denominator is retained even when the review details are capped.
   const observations = [...subsequent.values()];
   const ordinaryEvidence = [...ordinary.values()];
-  const visibleOrdinary = ordinaryEvidence.slice(0, 6);
+  const visibleOrdinary = boundedWorkEvidence(ordinaryEvidence, todoIds);
+  const visible = boundedWorkEvidence(observations, todoIds);
   const resultUse = workResultUse(scoped);
   const todos = todoItems == null ? [] : objects(todoItems, "Todo source");
   const plannedWork = todoIds.slice(0, 6).map(todoId => {
@@ -337,18 +356,11 @@ function decisionFollowthrough(rows: JsonObject[], goalFacts: unknown, fromFullI
     return {todo_id: todoId,
       current: current ? Object.fromEntries(["status", "claimed_by", "task_class", "action_kind"]
         .filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]])) : null,
-      observation_refs: observations.filter(row => observationTodo(row) === todoId)
-        .slice(0, 6).map(row => "replan-evidence-" + digest(readableEvidenceRow(row))),
+      observation_refs: visible.filter(row => observationTodo(row) === todoId)
+        .map(row => "replan-evidence-" + digest(readableEvidenceRow(row))),
       ...(ordinaryEvidence.length ? {ordinary_evidence_refs: visibleOrdinary
         .filter(row => row.todo_id === todoId).map(row => row.evidence_ref)} : {})};
   });
-  // Keep relevant experiment observations in the small visible window even
-  // when newer unrelated work would otherwise crowd them out.
-  const linkedRefs = new Set(plannedWork.flatMap(work => work.observation_refs));
-  const visible = [...observations.filter(row => linkedRefs.has("replan-evidence-" + digest(readableEvidenceRow(row)))),
-    ...observations.filter(row => !linkedRefs.has("replan-evidence-" + digest(readableEvidenceRow(row))))].slice(0, 6);
-  const visibleRefs = new Set(visible.map(row => "replan-evidence-" + digest(readableEvidenceRow(row))));
-  for (const work of plannedWork) work.observation_refs = work.observation_refs.filter(ref => visibleRefs.has(ref));
   return {
     previous_decision: decision,
     source_history_complete: fromFullIndex,
