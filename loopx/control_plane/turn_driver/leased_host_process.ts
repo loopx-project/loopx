@@ -107,20 +107,27 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
     if (finished) return;
     renewalTimer = setTimeout(() => {
       pending = (async () => {
-        const argv = [...context.renew_argv, "--expected-version", String(leaseVersion(lease)),
-          "--ttl-seconds", String(context.ttl_seconds)];
         try {
-          let renewed: unknown;
-          try { renewed = await cli(argv); }
-          catch (error) {
-            if (!(error instanceof LeaseTransportUnavailable) || controller.signal.aborted) throw error;
-            // One bounded same-intent recovery for a lost response. Never
-            // adopt a newer version by editing the rejected renewal request.
-            renewed = await cli(argv);
+          // Keep the existing revocation/proof cadence, but do not rewrite a
+          // long-lived lease on every observation. Renew in its latter half;
+          // this leaves the same retry/deadline supervision for short leases.
+          const deadline = parseIsoTimestamp(String(lease.expires_at));
+          const renew = deadline === null || deadline.valueOf() - Date.now() <= context.ttl_seconds * 500;
+          if (renew) {
+            const argv = [...context.renew_argv, "--expected-version", String(leaseVersion(lease)),
+              "--ttl-seconds", String(context.ttl_seconds)];
+            let renewed: unknown;
+            try { renewed = await cli(argv); }
+            catch (error) {
+              if (!(error instanceof LeaseTransportUnavailable) || controller.signal.aborted) throw error;
+              // One bounded same-intent recovery for a lost response. Never
+              // adopt a newer version by editing the rejected renewal request.
+              renewed = await cli(argv);
+            }
+            if (requireJsonObject(renewed, "delegated renewal").ok !== true) throw new LeaseSupervisionFailure("renewal_rejected");
           }
-          if (requireJsonObject(renewed, "delegated renewal").ok !== true) throw new LeaseSupervisionFailure("renewal_rejected");
           const observed = currentProof(await cli(context.read_argv));
-          if (leaseVersion(observed) <= leaseVersion(lease)) throw new LeaseSupervisionFailure("renewal_not_advanced");
+          if (renew && leaseVersion(observed) <= leaseVersion(lease)) throw new LeaseSupervisionFailure("renewal_not_advanced");
           lease = observed;
           schedule();
         } catch (error) { reject(error, "renewal"); }

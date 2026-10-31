@@ -479,6 +479,11 @@ five minutes total. Execution and resume keep their original one-shot CLI path,
 including the existing leased Host supervisor's current-execution readback,
 renewal and nested-process cleanup. Lease-bearing commands never enter the
 preview worker; preview reuse grants no lease or execution authority.
+The leased supervisor keeps current-execution checks at `min(30 s, remaining/2)`.
+It renews only when the remaining lifetime is at most half the requested TTL,
+then requires an advanced version and current readback. Healthy long-lived
+leases therefore avoid a write at each proof check. Owner/key/epoch checks,
+the last proved expiry, exact-intent retry and final proof still apply.
 This is an internal transport change, not a new capability setting, execution
 grant or UI source of truth. A one-shot CLI inspection still pays its original cold startup;
 a warm-service measurement is not evidence of a faster cold CLI.
@@ -508,6 +513,9 @@ best-effort 进程树边界。
 总寿命 5 分钟；执行和恢复沿用一次性 CLI，包括既有租约 Host 的当前执行读回、
 续期和嵌套进程清理。带租约的命令不进入预检 worker，预检复用不授予租约或执行
 权限。这不增加配置、授权或 UI 权威。
+租约监督器仍按 `min(30 秒, 剩余寿命/2)` 检查当前执行，只在剩余寿命不超过
+请求 TTL 的一半时续租，并要求版本前进及当前读回。因此长租约的普通证明检查
+不再每次写入；owner/key/epoch、最后已证明的到期时间、原意图重试及末次证明不变。
 一次性 CLI 仍承担原来的冷启动，热服务的加速不能冒充冷 CLI 的加速。
 
 首次验收读取或预检后的末次复读遇到权限存储不可用时，均返回同一类型化不可用
