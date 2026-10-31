@@ -390,6 +390,37 @@ assert state_refresh.resolve_goal_state is resolve_goal_state
 	assert completed.returncode == 0, completed.stderr
 
 
+def test_capability_hook_imports_defer_unselected_facade_exports() -> None:
+	script = """
+from importlib import import_module
+import sys
+
+import loopx.capabilities.issue_fix.pr_wait_hook
+import loopx.capabilities.reward_memory.turn_hooks
+
+for name in (
+    "issue_fix.periodic_report",
+    "issue_fix.pr_description",
+    "issue_fix.reward_memory",
+    "reward_memory.codex_app_outcome",
+    "reward_memory.dogfood",
+    "reward_memory.evaluation",
+):
+    assert "loopx.capabilities." + name not in sys.modules, name
+
+from loopx.capabilities import issue_fix, reward_memory
+for facade in (issue_fix, reward_memory):
+    assert set(facade._EXPORTS) == set(facade.__all__)
+    for name in facade.__all__:
+        value = getattr(facade, name)
+        owner = import_module("." + facade._EXPORTS[name], facade.__name__)
+        assert value is getattr(owner, name), name
+        assert name in dir(facade)
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
 def test_quota_facade_lazy_exports_preserve_owner_identity() -> None:
 	script = """
 from importlib import import_module
