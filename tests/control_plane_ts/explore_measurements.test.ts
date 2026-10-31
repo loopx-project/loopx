@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {readFileSync} from "node:fs";
 import {normalizeExploreMeasurements, normalizeExploreMeasurementsRequest, projectExploreMeasurementFeedback} from "../../loopx/control_plane/capabilities/explore_measurements.ts";
 import {normalizeExploreResultAttachment} from "../../loopx/control_plane/capabilities/explore_result_writeback.ts";
 import {projectExploreTurnContext} from "../../loopx/control_plane/capabilities/explore_turn_context.ts";
@@ -259,4 +260,21 @@ test("measurement feedback pages retain every group and bind manual findings to 
     "unchanged aggregates are not proof that their source evidence is unchanged");
   assert.throws(() => projectExploreTurnContext({...corrected, result_offset: 3,
     result_revision: snapshot.result_page.revision}), /changed/);
+});
+
+
+test("base-produced mixed history remains auditable but only the correction enters comparison", () => {
+  const events = readFileSync(new URL("../control_plane/fixtures/explore_measurement_history_v0.jsonl", import.meta.url), "utf8")
+    .trim().split("\n").map(line => JSON.parse(line));
+  const before = parseExploreHistoryPage({ok: true, goal_id: "research", items: events.slice(0, 2), total: 2, next_cursor: null}, "research");
+  const historical = projectExploreHistory(before.items, "research");
+  assert.equal(historical.events[1].measurements?.[0].evidence_ref, "result:b");
+  assert.equal(historical.measurementFeedback, undefined, "the contradiction is not a best, latest, unknown or scored point");
+  const corrected = parseExploreHistoryPage({ok: true, goal_id: "research", items: events, total: 3, next_cursor: null}, "research");
+  const current = projectExploreHistory(corrected.items, "research");
+  assert.equal(current.events.length, 3);
+  assert.equal(current.measurementFeedback?.[0].best?.evidence_ref, "result:a");
+  assert.equal(current.measurementFeedback?.[0].measured_count, 1);
+  const raw = {...finding("legacy", 99), execution_observation: events[1].execution_observation};
+  assert.deepEqual(projectExploreMeasurementFeedback([raw]), []);
 });
