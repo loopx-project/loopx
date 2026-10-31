@@ -9,7 +9,7 @@ function operation(argv: unknown): string | null {
   const executable = args.shift()!.split('/').at(-1);
   if (executable !== 'loopx') {
     if (!/^python(?:3(?:\.\d+)?)?$/.test(executable ?? '') || args.shift() !== '-m'
-      || !['loopx', 'loopx.entrypoint'].includes(args.shift() ?? '')) return null;
+      || !['loopx', 'loopx.cli', 'loopx.entrypoint'].includes(args.shift() ?? '')) return null;
   }
   while (['--registry', '--runtime-root', '--format', '--cli-bin'].includes(args[0] ?? '')) {
     if (args.length < 2) return null;
@@ -17,6 +17,8 @@ function operation(argv: unknown): string | null {
   }
   const group = args[0];
   if (group === 'quota' && ['context-read', 'context-project', 'should-run', 'spend-slot', 'replan-context'].includes(args[1] ?? '')) return `quota ${args[1]}`;
+  if (group === 'task-lease' && ['acquire', 'inspect', 'renew', 'release', 'transfer'].includes(args[1] ?? '')) return `task-lease ${args[1]}`;
+  if (group === 'todo' && ['add', 'list', 'claim', 'complete', 'update'].includes(args[1] ?? '')) return `todo ${args[1]}`;
   return ['todo', 'refresh-state', 'explore', 'status', 'diagnose'].includes(group ?? '') ? group! : 'other loopx';
 }
 

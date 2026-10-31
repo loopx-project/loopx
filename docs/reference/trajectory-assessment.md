@@ -1079,8 +1079,12 @@ Duplicate output records for one call count once. Identical output from two
 different calls is still two pieces of appended input; it is not automatically
 redundant research. Operation counts distinguish context reads/projects from
 other LoopX returns. No output or command argument text is sent to the browser.
+Task lease acquisition, inspection, renewal, release and transfer have separate
+rows, as do common Todo operations such as claim and completion. These count
+observed replies, not successful mutations or proved unnecessary recovery.
 
-Only literal simple shell argv, Python `-m loopx[.entrypoint]`, and an exact
+Only literal simple shell argv, Python `-m loopx`, `-m loopx.cli` or
+`-m loopx.entrypoint`, and an exact
 single literal `const/await tools.exec_command/text` wrapper are recognized.
 Compound shell, arbitrary JavaScript, indirect commands, continuation tools and
 file reads remain unassigned. Non-text content is counted as unmeasured parts.
@@ -1093,6 +1097,8 @@ estimate and provider counters; do not add their different units or denominators
 中文：可选统计在原轨迹分析工作台中展示 LoopX 工具返回占已记录输入文本的字节
 比例，并拆出 context-read/project 等操作。未知和非文本内容分别保留；同内容的
 再次返回不等于无益重复。这不是全量控制面、逐请求重放或计费 token 的占比。
+租约获取、检查、续租、释放、转移及常见 Todo 操作分别列示；计数表示可识别的返回，
+不证明状态写入成功或恢复操作可以省略。
 
 ### Recorded Turn packet estimate
 
