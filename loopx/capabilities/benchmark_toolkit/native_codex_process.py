@@ -68,7 +68,7 @@ class NativeCodexProcessObservation:
         try:
             # A missing /proc (or a child that already exited) is unknown. The
             # parent timestamp is not a substitute for a native start identity.
-            stat = Path(f"/proc/{process.pid}/stat").read_text()
+            stat = Path(f"/proc/{process.pid}/stat").read_text(encoding="utf-8")
             self._data["linux_start_ticks"] = int(stat.rsplit(")", 1)[1].split()[19])
         except (OSError, ValueError, IndexError):
             pass
