@@ -1284,7 +1284,9 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
 
 
 @pytest.mark.parametrize('custom', [False, True])
-def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, monkeypatch, custom):
+@pytest.mark.parametrize('bridge', [False, True], ids=['docker-default', 'docker-bridge'])
+@pytest.mark.parametrize('worker', ['official', 'heartbeat-resume'])
+def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, monkeypatch, custom, bridge, worker):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from types import SimpleNamespace
@@ -1313,6 +1315,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, m
         judge=SimpleNamespace(selection='score_first', score_direction='maximize')))
     def backend(**kwargs):
         assert kwargs['oauth_proxy'] is custom
+        assert kwargs.get('docker_host_bridge', False) is bridge
         return SimpleNamespace(image_exists=lambda image: True)
     monkeypatch.setattr(run, 'RecordingDockerBackend', backend)
     def stop_before_solver(**kwargs):
@@ -1326,10 +1329,12 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, m
     monkeypatch.setattr(run, 'run_agent', stop_before_solver)
     with pytest.raises(RuntimeError, match='synthetic launch boundary'):
         run.main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
-                  '--run-id', 'route', '--worker', 'official', '--model', 'fixture',
-                  '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999'])
+                  '--run-id', 'route', '--worker', worker, '--model', 'fixture',
+                  '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999',
+                  *(['--docker-host-bridge'] if bridge else [])])
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
     assert 'synthetic-provider-secret' not in receipt
+    assert json.loads(receipt).get('docker_host_bridge', False) is bridge
 
 
 @pytest.mark.parametrize("capture", [False, True])

@@ -161,6 +161,18 @@ This routing repair enables matched experiments under the
 [long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
 it establishes neither sustained operation nor a solver-quality improvement.
 
+When the runner, native judge and credential gateway run **inside the Docker
+VM**, pass `--docker-host-bridge` to every matched arm. Some VM runtimes map
+Docker's `host-gateway` alias to the desktop host, where that gateway is not
+listening. This explicit option pins `host.docker.internal` to the default
+bridge's inspected IPv4 gateway, matching the native firewall's host-service
+endpoints. A missing or ambiguous IPv4 gateway fails before container creation;
+it never guesses a fixed subnet. All services using that alias must be reachable
+on the bridge. Omit the option when services run on the desktop host or another
+topology; omitted behavior is unchanged. Select it only for new attempts and
+retain the setting in each arm's runtime receipt. It changes routing, not
+credentials, allowed ports, task input or feedback policy.
+
 ## Inert checkpoint capture
 
 This is a developer prerequisite for the [research checkpoint contract](../docs/architecture/rfcs/hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation),

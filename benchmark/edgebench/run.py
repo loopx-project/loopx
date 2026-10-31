@@ -194,6 +194,9 @@ def main(argv=None):
                         help="Native default: 3600s between accepted submissions; other modes retain 120s")
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
+    parser.add_argument("--docker-host-bridge", action="store_true",
+                        help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
+                             "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
@@ -396,6 +399,7 @@ def main(argv=None):
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
+                                     docker_host_bridge=args.docker_host_bridge,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
@@ -421,6 +425,7 @@ def main(argv=None):
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "provider_rate_limit_retry_seconds": args.provider_rate_limit_retry_seconds,
+        **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
