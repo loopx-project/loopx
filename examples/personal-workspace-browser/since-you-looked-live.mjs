@@ -79,9 +79,10 @@ export const sinceYouLookedLiveScenario = {
       const text = await line.innerText();
       assert.match(text, /新完成 1 项/, `the real completion is counted once: ${text}`);
       // The decision count is the typed attention lane's own count of items waiting on the owner.
-      const waiting = (await page.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ").match(/(\d+) 等你决定/);
-      assert.ok(waiting && Number(waiting[1]) >= 1, "the lane shows at least the gate waiting on the owner");
-      assert.match(text, new RegExp(`新增 ${waiting[1]} 项等你决定`), `decisions match the lane (${waiting[1]}): ${text}`);
+      const waiting = (await page.locator(".goal-overview-attention .goal-overview-count").innerText()).trim();
+      assert.match(waiting, /^\d+$/, "The rail shows the gate waiting on the owner");
+      assert.ok(Number(waiting) >= 1, "At least the new gate is blocking");
+      assert.match(text, new RegExp(`新增 ${waiting} 项等你决定`), `decisions match the owner's count (${waiting}): ${text}`);
       await page.screenshot({ path: resolve(outputDir, "since-you-looked-live.png"), animations: "disabled" });
       await line.getByRole("button", { name: "标记已读" }).click();
       await line.waitFor({ state: "hidden", timeout: 5_000 });

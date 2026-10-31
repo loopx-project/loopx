@@ -50,23 +50,6 @@ async function briefTile(page, kind) {
   };
 }
 
-/** Read the empty tile's explanation through the same help control an owner uses. */
-async function readEmptyBriefHelp(page, kind, explanation) {
-  const tile = page.getByTestId(`personal-brief-${kind}`);
-  const summary = await briefTile(page, kind);
-  assert.equal(summary.count, 0, "An unknown or unavailable execution never counts as running");
-  assert.equal(summary.rows, 0, "An empty execution tile contains no running Goal rows");
-  const help = tile.getByRole("button", {name: explanation, exact: true});
-  await help.click();
-  const bubble = tile.getByRole("tooltip");
-  await bubble.waitFor({state: "visible"});
-  assert.equal(await bubble.locator("p").innerText(), explanation);
-  await page.keyboard.press("Escape");
-  await bubble.waitFor({state: "hidden"});
-  assert.equal(await help.evaluate(element => element === document.activeElement), true,
-    "Closing execution help keeps focus on its originating control");
-}
-
 /** Home lane title, count and cards, mirroring the brief assertions. */
 async function lane(page, key) {
   const section = page.getByTestId(`personal-home-lane-${key}`);
@@ -94,6 +77,11 @@ async function leadVisible(row, prefix) {
   }, prefix);
 }
 
+/** The row shows one state word; the owning host and times stay on its title. */
+async function activityTitle(row) {
+  return (await row.locator("small").first().getAttribute("title")) ?? "";
+}
+
 /** Brief tiles that escape their container, so a new bucket cannot break the row. */
 async function briefTileOverflow(page) {
   return page.locator(".personal-brief").evaluate((brief) => {
@@ -118,37 +106,27 @@ export const goalActivityScenario = {
       const running = await goalRow(page, "Progress Projection");
       const queued = await goalRow(page, "Multi Agent Projection");
       await running.locator("small", { hasText: "执行中" }).waitFor({ timeout: 15_000 });
-      assert.match(await queued.locator("small").innerText(), /^已安排 · 由 Codex App 线程负责，执行情况以宿主为准/, "A Goal owned by a bound host thread defers execution to the host");
+      assert.match(await activityTitle(queued), /^已安排 · 由 Codex App 线程负责，执行情况以宿主为准/, "A Goal owned by a bound host thread defers execution to the host");
       assert.doesNotMatch(await queued.innerText(), /执行中|推进中/);
       const claimed = await goalRow(page, "Product Release");
-      assert.match(await claimed.locator("small").innerText(), /^宿主已领取 · Codex App 宿主 · 领取于\d+\s*分钟前/, "An attached claim reports its claim time, not ongoing activity");
+      assert.match(await activityTitle(claimed), /^宿主已领取 · Codex App 宿主 · 领取于\d+\s*分钟前/, "An attached claim reports its claim time, not ongoing activity");
       assert.equal(await claimed.locator(".personal-goal-mark.is-live").count(), 0, "An attached claim is never shown as live");
       const silentRow = await goalRow(page, "Research Monitor");
       assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A silent turn is never shown as live");
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1, "Only the Goal with a recently active managed turn is live");
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
-      assert.match(await running.locator("small").innerText(), /^执行中 · Codex App 宿主 · \d+\s*分钟前 · 领取于\d+\s*分钟前/, "A managed turn leads with its own activity time and the attached claim stays a claim");
-      assert.match(await silentRow.locator("small").innerText(), /^执行中 · Codex App 宿主 · 已 3\d 分钟无新动静 · 领取于\d+\s*分钟前/, "A silent turn discloses its own silence while a fresh claim stays a claim");
+      assert.match(await activityTitle(running), /^执行中 · Codex App 宿主 · \d+\s*分钟前 · 领取于\d+\s*分钟前/, "A managed turn leads with its own activity time and the attached claim stays a claim");
+      assert.match(await activityTitle(silentRow), /^执行中 · Codex App 宿主 · 已 3\d 分钟无新动静 · 领取于\d+\s*分钟前/, "A silent turn discloses its own silence while a fresh claim stays a claim");
       assert.equal(await silentRow.locator(".personal-goal-mark.is-live").count(), 0, "A recent attached claim never makes a silent managed turn live");
       // The brief splits managed execution from a host-only claim: the two
       // managed Goals are "running", the claim-only Goal never enters that count,
       // and the queued Goal stays queued.
-      const briefRunning = await briefTile(page, "running");
-      assert.equal(briefRunning.title, "正在执行");
-      assert.equal(briefRunning.count, 2, "Only a managed turn counts as running");
-      assert.equal(briefRunning.rows, 2);
-      assert.match(briefRunning.text, /Progress Projection[\s\S]*\d+\s*分钟前/);
-      assert.match(briefRunning.text, /Research Monitor\s+Codex App 宿主 · 已 3\d 分钟无新动静 · 领取于\d+\s*分钟前/, "The brief separates a silent managed turn from a fresh claim");
-      assert.doesNotMatch(briefRunning.text, /Product Release/, "A claim-only Goal never enters the running tile");
-      assert.match(briefRunning.text, /另有 1 个已安排/, "Queued work is reported without entering the running count");
-      const briefClaimed = await briefTile(page, "claimed");
-      assert.equal(briefClaimed.title, "宿主已领取");
-      assert.equal(briefClaimed.count, 1);
-      assert.equal(briefClaimed.rows, 1);
-      assert.match(briefClaimed.text, /Product Release\s+Codex App 宿主 · 领取于\d+\s*分钟前/, "The claimed tile keeps the pending work reachable with its claim fact");
-      assert.equal(await page.locator(".personal-brief .personal-brief-tile.is-live").count(), 1);
-      assert.equal(await page.locator(".personal-brief .personal-brief-tile").count(), 4, "The brief renders one tile per populated bucket");
-      assert.equal(await briefTileOverflow(page), 0, "The four brief tiles fit the manager width");
+      // The brief no longer repeats execution: the home lanes own the
+      // running/claimed split, and the silent-turn detail stays on the Goal
+      // row's title. Assert the split did not disappear with the tiles.
+      assert.equal(await page.locator(".personal-brief [data-testid=\"personal-brief-running\"]").count(), 0,
+        "Execution lives in the home lanes instead of a duplicated brief tile");
+      assert.equal(await briefTileOverflow(page), 0, "The brief tiles fit the manager width");
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(await briefTileOverflow(page), 0, "The brief tiles fit the 390px mobile width");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-home-mobile.png"), animations: "disabled" });
@@ -160,6 +138,8 @@ export const goalActivityScenario = {
       assert.equal(runningLane.title, "执行中");
       assert.equal(runningLane.count, 2, "The running lane count excludes a host-only claim");
       assert.doesNotMatch(runningLane.text, /Product Release/);
+      assert.match(runningLane.text, /Progress Projection/, "A managed turn stays reachable from the running lane");
+      assert.match(runningLane.text, /Research Monitor/, "A silent managed turn stays a running Goal, not a claim");
       const claimedLane = await lane(page, "claimed");
       assert.equal(claimedLane.title, "宿主已领取");
       assert.equal(claimedLane.count, 1);
@@ -178,10 +158,12 @@ export const goalActivityScenario = {
       await page.locator(".personal-home-lanes").scrollIntoViewIfNeeded();
       await page.screenshot({ path: resolve(outputDir, "goal-activity-home-ledger.png"), animations: "disabled" });
       await running.locator(".personal-goal-link").click();
-      await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "执行中" }).first().waitFor();
+      await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
+      assert.equal((await page.getByTestId("goal-vitals").locator(".goal-stagebar-meta > span").first().innerText()).trim(), "执行中");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-running-goal.png"), animations: "disabled" });
       await queued.locator(".personal-goal-link").click();
-      await page.getByTestId("goal-vitals").locator(".goal-vital-value", { hasText: "已安排" }).first().waitFor();
+      await page.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
+      assert.equal((await page.getByTestId("goal-vitals").locator(".goal-stagebar-meta > span").first().innerText()).trim(), "已安排");
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mobile.png"), animations: "disabled" });
       coverageEntries.push(...await live.close());
@@ -207,14 +189,20 @@ export const goalActivityScenario = {
       const { page } = observed;
       const running = await goalRow(page, "Product Release");
       await running.locator("small", { hasText: "执行中" }).waitFor({ timeout: 15_000 });
-      assert.match(await running.locator("small").innerText(), /^执行中 · Codex App 宿主 · \d+\s*分钟前/, "An open host-recorded turn is execution with its last event time");
+      assert.match(await activityTitle(running), /^执行中 · Codex App 宿主 · \d+\s*分钟前/, "An open host-recorded turn is execution with its last event time");
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1, "A recently active host turn is live");
-      assert.match(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /^已安排 · Codex App 线程空闲/, "Observed idle threads are reported as idle");
+      assert.match(await activityTitle(await goalRow(page, "Multi Agent Projection")), /^已安排 · Codex App 线程空闲/, "Observed idle threads are reported as idle");
       const abandoned = await goalRow(page, "Research Monitor");
-      assert.doesNotMatch(await abandoned.locator("small").innerText(), /执行中/, "An open turn with no event for hours is not execution");
+      assert.doesNotMatch(await activityTitle(abandoned), /执行中/, "An open turn with no event for hours is not execution");
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 1);
-      assert.match(await page.getByTestId("personal-brief-running").innerText(), /Product Release\s+Codex App 宿主 · \d+\s*分钟前/);
-      assert.equal(await page.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 1);
+      const observedLane = await lane(page, "running");
+      assert.equal(observedLane.count, 1, "The open host turn puts exactly one Goal in the running lane");
+      const observedCard = page.getByTestId("personal-home-lane-running").locator(".personal-home-goal-card").filter({ hasText: "Product Release" });
+      assert.equal(await observedCard.count(), 1, "The observed Goal is the one running card");
+      assert.match(await observedCard.locator(".personal-home-goal-meta").innerText(), /Codex App/,
+        "The lane card names the owning host the brief tile used to name");
+      // The activity age the tile also carried stays asserted on the row's full sentence (see the
+      // activityTitle read above): the card's time slot tracks goal.latestActivity, not host turns.
       await page.screenshot({ path: resolve(outputDir, "goal-activity-host-observed.png"), animations: "disabled" });
       coverageEntries.push(...await observed.close());
     } catch (error) {
@@ -250,7 +238,7 @@ export const goalActivityScenario = {
       await page.screenshot({path: resolve(outputDir, "goal-activity-observation-first.png"), animations: "disabled"});
       assert.equal(await running.locator(".personal-goal-mark.is-live").count(), 1);
       assert.match(await running.locator("small").innerText(), /缺口 2/);
-      assert.doesNotMatch(await running.locator("small").innerText(), /未观察到活动|worker-|预期时间窗/);
+      assert.doesNotMatch(await activityTitle(running), /未观察到活动|worker-|预期时间窗/);
       assert.ok(await leadVisible(running, "执行中"), "The leading execution fact survives the gap badge");
       const help = running.getByRole("button", {name: "活动观测 · Product Release", exact: true});
       const selectedBeforeHelp = new URL(page.url()).searchParams.get("goalId");
@@ -284,7 +272,7 @@ export const goalActivityScenario = {
       assert.match(await unknownHelp.innerText(), /无法读取宿主的本机记录/);
       assert.match(await unknownHelp.innerText(), /无法识别宿主记录格式/);
       await page.keyboard.press("Escape");
-      assert.doesNotMatch(await (await goalRow(page, "Multi Agent Projection")).locator("small").innerText(), /执行中|观测缺口|执行状态未知/,
+      assert.doesNotMatch(await activityTitle(await goalRow(page, "Multi Agent Projection")), /执行中|观测缺口|执行状态未知/,
         "Another Goal's completed activity stays isolated");
       await page.screenshot({path: resolve(outputDir, "goal-activity-observation-desktop.png"), animations: "disabled"});
       await page.setViewportSize({width: 390, height: 844});
@@ -330,10 +318,11 @@ export const goalActivityScenario = {
         const { api, page } = partial;
         const queued = await goalRow(page, "Multi Agent Projection");
         await queued.locator("small", { hasText: "执行状态未知" }).waitFor({ timeout: 15_000 });
-        assert.doesNotMatch(await queued.locator("small").innerText(), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
-        assert.match(await (await goalRow(page, "Product Release")).locator("small").innerText(), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
-        assert.doesNotMatch(await (await goalRow(page, "Research Monitor")).locator("small").innerText(), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");
-        assert.equal(await page.getByTestId("personal-brief-running").locator(".personal-brief-row").count(), 1);
+        assert.doesNotMatch(await activityTitle(queued), /线程空闲|执行中/, "A partial or legacy sample cannot prove every bound thread idle");
+        assert.match(await activityTitle(await goalRow(page, "Product Release")), /^执行中/, "A positive open-turn observation remains usable with partial coverage");
+        assert.doesNotMatch(await activityTitle(await goalRow(page, "Research Monitor")), /线程空闲|执行中/, "An unrecognized record never becomes idle or running");
+        assert.equal(await page.getByTestId("personal-home-lane-running").locator(".personal-home-goal-card").count(), 1,
+          "Partial coverage still surfaces the one positive open-turn observation as a running Goal");
         if (completeness === "incomplete") {
           await page.screenshot({ path: resolve(outputDir, "goal-activity-partial.png"), animations: "disabled" });
           await page.setViewportSize({ width: 390, height: 844 });
@@ -342,7 +331,13 @@ export const goalActivityScenario = {
         api.hostThreadActivity["multi-agent-projection"] = { completeness: "complete", threads: [thread("idle", minutesAgo(1))] };
         await page.setViewportSize({ width: 1512, height: 982 });
         await page.reload({ waitUntil: "networkidle" });
-        await (await goalRow(page, "Multi Agent Projection")).locator("small", { hasText: "线程空闲" }).waitFor({ timeout: 15_000 });
+        // The row shows one state word; "线程空闲" is part of the full sentence on its name.
+        await page.waitForFunction(() => {
+          const row = [...document.querySelectorAll(".personal-goal-row")].find(candidate =>
+            candidate.querySelector("strong")?.textContent?.includes("Multi Agent Projection"));
+          const sentence = row?.querySelector("small");
+          return /线程空闲/.test(sentence?.getAttribute("aria-label") ?? sentence?.getAttribute("title") ?? "");
+        }, null, { timeout: 15_000 });
         coverageEntries.push(...await partial.close());
       } catch (error) {
         await partial.page.screenshot({ path: resolve(outputDir, "goal-activity-partial-failed.png") });
@@ -405,17 +400,18 @@ export const goalActivityScenario = {
     try {
       const { page } = english;
       assert.equal(await page.locator("html").getAttribute("lang"), "en");
-      const runningTile = await briefTile(page, "running");
-      assert.equal(runningTile.title, "Running now");
-      assert.equal(runningTile.count, 2, "Only a managed turn counts as running in English too");
-      assert.equal(runningTile.rows, 2);
-      assert.doesNotMatch(runningTile.text, /Product Release/, "A claim-only Goal never enters the running tile");
-      assert.match(runningTile.text, /2 queued|more queued/, "Queued work is reported without entering the running count");
-      const claimedTile = await briefTile(page, "claimed");
-      assert.equal(claimedTile.title, "Claimed by host");
-      assert.equal(claimedTile.count, 1);
-      assert.equal(claimedTile.rows, 1);
-      assert.match(claimedTile.text, /Product Release[\s\S]*Codex App host[\s\S]*claimed \d+ min/, "The claimed tile keeps the pending work reachable with its claim fact");
+      const runningLaneEn = await lane(page, "running");
+      // The brief's "Running now" tile is gone: the home lane is the owner, so its
+      // own header copy (home.lane.running) is what must be translated.
+      assert.equal(runningLaneEn.title, "Running");
+      assert.equal(runningLaneEn.count, 2, "Only a managed turn counts as running in English too");
+      assert.doesNotMatch(runningLaneEn.text, /Product Release/, "A claim-only Goal never enters the running lane");
+      const queuedLaneEn = page.getByTestId("personal-home-lane-scheduled");
+      assert.equal(await queuedLaneEn.count(), 1, "Queued work keeps a lane of its own");
+      assert.match(await queuedLaneEn.innerText(), /Multi Agent Projection/, "Queued work is reported without entering the running count");
+      const claimedLaneEn = await lane(page, "claimed");
+      assert.match(claimedLaneEn.text, /Codex App/, "The claimed card names the host that owns the claim");
+      assert.match(await activityTitle(await goalRow(page, "Product Release")), /claimed \d+ min/, "The claimed row keeps its claim time");
       const claimedLane = await lane(page, "claimed");
       assert.equal(claimedLane.title, "Claimed by host");
       assert.equal(claimedLane.count, 1);
@@ -451,10 +447,10 @@ export const goalActivityScenario = {
         assert.ok(await leadVisible(row, "执行方式未知"), `${title}: the unknown mode survives sidebar truncation`);
       }
       assert.equal(await page.locator(".personal-goal-list .personal-goal-mark.is-live").count(), 0, "An unrecognized mode is never live");
-      const runningTile = await briefTile(page, "running");
-      assert.equal(runningTile.count, 0, "An unrecognized mode never counts as running");
-      await readEmptyBriefHelp(page, "running", "没有可确认的执行 · 2 个 Goal 执行方式未知");
-      assert.equal(await page.getByTestId("personal-brief-claimed").count(), 0, "An unrecognized mode never counts as a host claim");
+      assert.equal(await page.locator(".personal-brief [data-testid=\"personal-brief-running\"]").count(), 0,
+        "An unrecognized mode never counts as running");
+      assert.equal(await page.locator(".personal-brief [data-testid=\"personal-brief-claimed\"]").count(), 0,
+        "An unrecognized mode never counts as a host claim");
       assert.equal(await page.getByTestId("personal-home-lane-running").count(), 0, "An unrecognized mode never enters the running lane");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized.png"), animations: "disabled" });
       await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
@@ -463,7 +459,8 @@ export const goalActivityScenario = {
       await englishRow.locator("small", { hasText: "Mode unknown" }).waitFor({ timeout: 15_000 });
       assert.match(await englishRow.locator("small").innerText(), /^Mode unknown · turn open/);
       assert.ok(await leadVisible(englishRow, "Mode unknown"), "The English unknown mode survives sidebar truncation");
-      await readEmptyBriefHelp(page, "running", "No verified run · 2 Goal(s) with unknown execution mode");
+      assert.equal(await page.locator(".personal-brief [data-testid=\"personal-brief-running\"]").count(), 0,
+        "No verified run: the brief still carries no execution tile");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-mode-unrecognized-english.png"), animations: "disabled" });
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(await briefTileOverflow(page), 0, "The disclosed empty state fits the 390px mobile width");
@@ -488,9 +485,12 @@ export const goalActivityScenario = {
     try {
       const { page } = offline;
       const queued = await goalRow(page, "Multi Agent Projection");
-      await queued.locator("small", { hasText: "暂时读不到执行状态" }).waitFor({ timeout: 15_000 });
+      // "暂时读不到执行状态" is the alsoKey sentence, not the row's leading word.
+      await queued.locator("small", { hasText: "已安排" }).waitFor({ timeout: 15_000 });
+      assert.match(await activityTitle(queued), /暂时读不到执行状态/, "The unreadable run state is named in the row's full sentence");
       assert.equal(await page.locator(".personal-goal-mark.is-live").count(), 0, "An unreadable session owner never produces a live Goal");
-      await readEmptyBriefHelp(page, "running", "暂时读不到执行状态");
+      assert.equal(await page.locator(".personal-brief [data-testid=\"personal-brief-running\"]").count(), 0,
+        "An unreadable session owner is named on its row, never counted in a removed execution tile");
       await page.screenshot({ path: resolve(outputDir, "goal-activity-unavailable.png"), animations: "disabled" });
       coverageEntries.push(...await offline.close());
     } catch (error) {

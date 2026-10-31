@@ -95,21 +95,42 @@ export const confirmedOperationsScenario = {
         assert.equal(await drawer.getByRole('button', {name: /Confirm and apply|Reject|确认并应用|拒绝/}).count(), 0);
         await drawer.getByRole('button', {name: /Close|关闭/}).first().click();
         proposals.clear();
-        await page.waitForFunction(() => document.querySelectorAll('.personal-brief-tile').length === 3,
-          null, {timeout: 12_000});
+        await page.waitForFunction(() => {
+          // The brief no longer renders running/claimed tiles, so the guaranteed
+          // pair is completed + needs; the two operation tiles must be gone and no
+          // stale operation row may survive the cleared proposals.
+          const kinds = [...document.querySelectorAll('.personal-brief-tile')].map((tile) => tile.getAttribute('data-testid'));
+          return Boolean(document.querySelector('.personal-brief'))
+            && kinds.length >= 2
+            && kinds.includes('personal-brief-completed') && kinds.includes('personal-brief-needs')
+            && !document.querySelector('[data-testid="personal-brief-operations"]')
+            && !document.querySelector('[data-testid="personal-brief-confirmations"]')
+            && document.querySelectorAll('.personal-brief [data-operation-id]').length === 0;
+        }, null, {timeout: 12_000});
         const geometry = await page.locator('.personal-home-goal-card').evaluateAll(cards => cards.map(card => {
-          const footer = card.querySelector('footer');
-          const count = footer.querySelector('small');
-          const label = footer.querySelector('.personal-goal-activity-chip');
-          return {cardRight: card.getBoundingClientRect().right, footerRight: footer.getBoundingClientRect().right,
-            labelRight: label.getBoundingClientRect().right, countLeft: count.getBoundingClientRect().left,
-            countRight: count.getBoundingClientRect().right, fullLabel: label.title};
+          const state = card.querySelector('.personal-home-goal-state');
+          const time = card.querySelector('.personal-home-goal-time');
+          const reason = card.querySelector('.personal-home-goal-reason');
+          const cardBox = card.getBoundingClientRect();
+          const stateBox = state.getBoundingClientRect();
+          const timeBox = time.getBoundingClientRect();
+          return {cardRight: cardBox.right,
+            stateRight: stateBox.right, stateTop: stateBox.top,
+            timeLeft: timeBox.left, timeTop: timeBox.top,
+            stateTitle: state.title,
+            reasonTop: reason ? reason.getBoundingClientRect().top : null};
         }));
+        assert.ok(geometry.length > 0, 'The Goal cards were measured');
         for (const box of geometry) {
-          assert.ok(box.footerRight <= box.cardRight + 1 && box.countRight <= box.footerRight + 1,
-            'Long Host state must fit the Goal card without pushing its task count out');
-          assert.ok(box.labelRight <= box.countLeft - 7 && box.fullLabel.length > 0,
-            'Ellipsis must preserve the full status hint and a distinct task-count space');
+          assert.ok(box.stateRight <= box.cardRight + 1 && box.timeLeft <= box.cardRight + 1,
+            'The state word and its time must fit the Goal card');
+          assert.ok(box.stateRight <= box.timeLeft - 7,
+            'Ellipsis must preserve the full status hint and a distinct time slot');
+          assert.ok(Math.abs(box.stateTop - box.timeTop) <= 1,
+            'The state chip and the time share one first row (no implicit second row)');
+          assert.ok(box.reasonTop === null || box.reasonTop > box.timeTop,
+            'The reason line sits below the first row, beside the mark');
+          assert.ok(box.stateTitle.length > 0, 'The state word keeps its full hint in the title');
         }
         assert.equal(ui.api.durableWriteCount, 0);
         assert.equal(ui.errors.length, 0, ui.errors.join(' | '));

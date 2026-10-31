@@ -100,7 +100,7 @@ try {
     const readsBeforeHiddenRefresh = historyReads;
     state.done++;
     await page.getByRole('button', { name: '刷新状态', exact: true }).click();
-    await page.waitForFunction(() => document.querySelectorAll('[data-testid="goal-vitals"] .goal-vital')[1]?.querySelector('.goal-vital-value')?.textContent === '24/29');
+    await page.waitForFunction(() => document.querySelector('[data-testid="goal-vitals"] .goal-stagebar-work')?.textContent === '24/29');
     assert.equal(historyReads, readsBeforeHiddenRefresh, 'Refreshing a hidden inventory does not read completed history');
     await overview.evaluate(element => element.style.removeProperty('max-width'));
     await inlineRail.locator('.goal-work-filters').waitFor({ state: 'visible' });
@@ -178,7 +178,7 @@ try {
     state.quiet = true;
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('button', { name: '刷新状态', exact: true }).click();
-    await page.waitForFunction(() => document.querySelectorAll('[data-testid="goal-vitals"] .goal-vital')[1]?.querySelector('.goal-vital-value')?.textContent === '0/0');
+    await page.waitForFunction(() => document.querySelector('[data-testid="goal-vitals"] .goal-stagebar-work')?.textContent === '0/0');
     await inlineRail.waitFor({ state: 'detached' });
     assert.ok(await page.locator('.goal-workspace-composition').evaluate(element => {
       const frame = element.getBoundingClientRect(), document = element.querySelector('.goal-workspace-document').getBoundingClientRect();

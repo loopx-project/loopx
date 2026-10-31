@@ -128,11 +128,14 @@ export const goalSuggestionsScenario = {
         const { page: other } = second;
         await other.locator(".personal-goal-row").first().locator(".personal-goal-link").click();
         await other.getByTestId("goal-vitals").waitFor({ state: "visible", timeout: 15_000 });
-        const vitals = (await other.getByTestId("goal-vitals").innerText()).replace(/\s+/g, " ");
-        assert.match(vitals, /0 等你决定|可选/, `the lane shows the item as optional: ${vitals}`);
-        // The work vital marks its unknown total; its help carries the partial counts.
-        await other.getByTestId("goal-vitals").getByRole("button", { name: "工作 · 总数未知", exact: true }).focus();
-        await other.getByRole("tooltip").getByText(/已列出 5 项中的 0 项/).waitFor();
+        const railHeader = other.locator(".goal-overview-attention header");
+        assert.equal((await railHeader.locator(".goal-overview-count").innerText()).trim(), "0",
+          "An optional user action is not a blocking decision");
+        assert.match(await railHeader.innerText(), /1 项可选/, "The rail names the optional item beside a zero decision count");
+        // Total-unknown is structural in the bar: an open count, never a ratio.
+        const unknownWork = (await other.getByTestId("goal-vitals").locator(".goal-stagebar-work").innerText()).trim();
+        assert.match(unknownWork, /^0 项未完成$/, `an unknown total reads as the owner's open count: ${unknownWork}`);
+        assert.doesNotMatch(unknownWork, /\d+\s*\/\s*\d+/, "An unknown total cannot be shown as a completion ratio");
         await other.keyboard.press("Escape");
         await other.getByRole("navigation", { name: "Goal 视图" }).getByRole("button", { name: "对话", exact: true }).click();
         const otherSummary = other.locator(".personal-composer-tools > summary");
