@@ -141,3 +141,32 @@ test('effort and score-time samples reject malformed measurements', () => {
   ];
   assert.throws(()=>buildReport(d),/elapsed time must increase/);
 });
+
+test('configuration profiles preserve unknowns and split heterogeneous runs', () => {
+  const d=fixture();
+  d.selection[0].configuration={source_revision_id:'source@one',scorer_revision_id:'scorer@one',
+    model_id:'model-one',budget_ms:64_800_000,active_submission_cooldown_ms:3_600_000,
+    background_evaluation_interval_ms:300_000,resource_profile:'cpu4-mem16g',evidence_ref:'manifest:a-one'};
+  d.selection[1].configuration={source_revision_id:'source@two',scorer_revision_id:'scorer@one',
+    model_id:'model-one',budget_ms:64_800_000,active_submission_cooldown_ms:3_600_000,
+    background_evaluation_interval_ms:null,resource_profile:null,evidence_ref:'manifest:a-two'};
+  const r=buildReport(d);
+  const a=r.configuration_profiles.filter(p=>p.arm_id==='a');
+  assert.equal(a.length,3);assert.deepEqual(a.map(p=>p.run_count).sort(),[1,1,1]);
+  assert.equal(a.find(p=>p.source_revision_id==='source@two')?.background_evaluation_interval_ms,null);
+  assert.equal(a.find(p=>p.configuration_supplied===false)?.run_count,1);
+  const markdown=renderMarkdown(r);
+  assert.match(markdown,/运行配置矩阵/);assert.match(markdown,/未知/);assert.match(markdown,/同一组出现多行/);
+  assert.match(renderCsv(r),/source_revision_id/);assert.match(renderCsv(r),/manifest:a-one/);
+});
+
+test('configuration requires typed public-safe fields and evidence', () => {
+  const d=fixture();
+  d.selection[0].configuration={source_revision_id:'source',scorer_revision_id:'scorer',model_id:'model',
+    budget_ms:1,active_submission_cooldown_ms:2,background_evaluation_interval_ms:3,
+    resource_profile:'cpu4',evidence_ref:''};
+  assert.throws(()=>buildReport(d),/configuration evidence/);
+  d.selection[0].configuration.evidence_ref='manifest:one';
+  d.selection[0].configuration.budget_ms=-1;
+  assert.throws(()=>buildReport(d),/configuration numeric/);
+});

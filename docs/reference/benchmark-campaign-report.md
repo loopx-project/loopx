@@ -47,6 +47,15 @@ Minimal example:
         "evidence_ref": "receipt:run-1-score",
         "origin": "official", "countable": false
       },
+      "configuration": {
+        "source_revision_id": "runner@revision-one",
+        "scorer_revision_id": "scorer@revision-one",
+        "model_id": "model-one", "budget_ms": 64800000,
+        "active_submission_cooldown_ms": 3600000,
+        "background_evaluation_interval_ms": 300000,
+        "resource_profile": "work=4cpu/16g",
+        "evidence_ref": "manifest:run-1"
+      },
       "exclude_reason": null, "rerun_reason": null
     },
     {
@@ -85,6 +94,16 @@ sample has strictly increasing `elapsed_ms`, a finite 0–100 `value`, the
 `normalization_id`, and an `evidence_ref`. JSON flattens the samples with their
 arm, case, and run identities for plotting. The helper does not invent missing
 points or calculate a cross-case mean curve from changing sample coverage.
+
+An optional `configuration` projection records the exact selected run's source,
+scorer, model, budget, active-submission cooldown, background-evaluation cadence,
+resource profile and evidence reference. Unknown fields remain null. The JSON
+report groups identical projections into `configuration_profiles`; Markdown
+renders one row per profile and shows evidence coverage instead of expanding
+every run reference. Multiple rows for one arm disclose within-arm heterogeneity.
+An absent projection becomes an explicit unknown profile. Configuration equality
+does not establish treatment fidelity, matched-pair qualification or causality;
+the benchmark Board and integrity owners retain those decisions.
 
 `countable` projects existing score authority; the report does not grant it.
 `exclude_reason` removes a known invalid or unresolved result from comparisons.
@@ -148,9 +167,10 @@ The audit does not change score selection, normalization or countability.
   not proven causal matched comparisons. Protocol, source, resource, feedback
   and treatment fidelity still need the toolkit's matched-comparison checks.
   The helper labels every comparison descriptive and never upgrades integrity.
-- CSV provides one row per selected case/arm with score provenance and rerun
-  reasons, effort fields, and sample count. Spreadsheet formula prefixes are
-  neutralized. Full score/time samples remain in JSON.
+- CSV provides one row per selected case/arm with score provenance, rerun
+  reasons, effort, sample count and configuration provenance. Spreadsheet
+  formula prefixes are neutralized. Full score/time samples and grouped
+  configuration profiles remain in JSON.
 
 Validation:
 
@@ -161,4 +181,4 @@ node --experimental-strip-types --test \
 
 The suite exercises the real CLI and missing versus zero scores, replacements,
 unique-case incidents, incompatible normalization, known-invalid exclusions and
-qualification contradictions.
+qualification contradictions, configuration heterogeneity and unknown fields.
