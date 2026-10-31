@@ -86,6 +86,11 @@ CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS = 45.0
 CANONICAL_AUTHORITY_READ_TIMEOUT_SECONDS = 15.0
 _RUNTIME_SOURCE_SUFFIXES = frozenset({".json", ".ts"})
 _RuntimeSourceSnapshot = tuple[tuple[str, int, int, int], ...]
+_SOURCE_DIGEST_SCHEMA_VERSION = "loopx_effect_runtime_source_digest_v1"
+_SOURCE_DIGEST_MAX_BYTES = 4096
+# A coarse ctime clock can give a rewrite the timestamp it already had. Sources
+# changed this recently are hashed but not recorded for other processes.
+_SOURCE_DIGEST_SETTLE_NS = 2_000_000_000
 
 
 def source_number_tokens(value: object) -> list[list[Any]]:
@@ -347,20 +352,130 @@ def _runtime_source_files(root: Path | None = None) -> tuple[str, ...]:
     return tuple(relative for relative, *_metadata in _runtime_source_snapshot(root))
 
 
+def _source_digest_location(
+    root: str,
+    snapshot: _RuntimeSourceSnapshot,
+) -> tuple[Path, str] | None:
+    """Name one private digest per release and interpreter, keyed by metadata.
+
+    Only POSIX ctime cannot be set by a writer, so other hosts keep full reads.
+    """
+
+    if os.name != "posix":
+        return None
+    try:
+        directory = _runtime_dir()
+    except OSError:
+        return None
+    identity = hashlib.sha256()
+    for part in (_SOURCE_DIGEST_SCHEMA_VERSION, sys.executable, str(sys.version_info[:3])):
+        identity.update(part.encode("utf-8") + b"\0")
+    identity.update(os.fsencode(os.path.normcase(root)) + b"\0")
+    path = directory / f"source-digest-{identity.hexdigest()[:32]}.json"
+    identity.update(json.dumps(snapshot, separators=(",", ":")).encode("ascii"))
+    return path, identity.hexdigest()
+
+
+def _private_directory(path: Path) -> bool:
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
+            and not metadata.st_mode & 0o077)
+
+
+def _read_source_digest(path: Path, key: str) -> str | None:
+    if not _private_directory(path.parent):
+        return None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(descriptor, "rb") as file:
+            metadata = os.fstat(file.fileno())
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid()
+                    or metadata.st_mode & 0o077):
+                return None
+            payload = json.loads(file.read(_SOURCE_DIGEST_MAX_BYTES + 1))
+    except (OSError, ValueError, RecursionError):
+        return None
+    if (not isinstance(payload, dict)
+            or payload.get("schema_version") != _SOURCE_DIGEST_SCHEMA_VERSION
+            or payload.get("key") != key):
+        return None
+    fingerprint = payload.get("fingerprint")
+    if not isinstance(fingerprint, str) or BARE_SHA256_PATTERN.fullmatch(fingerprint) is None:
+        return None
+    return fingerprint
+
+
+def _write_source_digest(
+    path: Path,
+    key: str,
+    fingerprint: str,
+    snapshot: _RuntimeSourceSnapshot,
+) -> None:
+    """Best-effort publication into an existing private runtime namespace."""
+
+    settled_before = time.time_ns() - _SOURCE_DIGEST_SETTLE_NS
+    if any(max(mtime, ctime) > settled_before for _name, mtime, ctime, _size in snapshot):
+        return
+    if not _private_directory(path.parent):
+        return
+    data = json.dumps({
+        "schema_version": _SOURCE_DIGEST_SCHEMA_VERSION,
+        "key": key,
+        "fingerprint": fingerprint,
+    }, separators=(",", ":")).encode("ascii")
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        descriptor = os.open(
+            temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600,
+        )
+    except OSError:
+        return
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(data)
+        os.replace(temporary, path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _require_unchanged_snapshot(root: Path, snapshot: _RuntimeSourceSnapshot) -> None:
+    current_snapshot = _runtime_source_snapshot(root)
+    if current_snapshot != snapshot:
+        raise _RuntimeSourceChanged(current_snapshot)
+
+
 @lru_cache(maxsize=8)
 def _runtime_fingerprint_for_snapshot(
     root: str,
     snapshot: _RuntimeSourceSnapshot,
 ) -> str:
+    # A fresh CLI process would otherwise open every source; on hosts that scan
+    # each open this dominates short commands. The record is only a memo.
+    source_root = Path(root)
+    location = _source_digest_location(root, snapshot)
+    if location is not None:
+        recorded = _read_source_digest(*location)
+        if recorded is not None:
+            # A hit adopts the record only under the full hash's freshness check.
+            _require_unchanged_snapshot(source_root, snapshot)
+            return recorded
     digest = hashlib.sha256()
     # The daemon's fixed Python adapter context must follow the interpreter
     # selected by this caller, even when two environments share source files.
     digest.update(sys.executable.encode("utf-8"))
     digest.update(str(sys.version_info[:3]).encode("ascii"))
-    source_root = Path(root)
     # Lazy imports and Python bridges resolve from this physical release. Equal
     # bytes in another checkout must not reuse a loader whose release may retire.
-    # Resolved aliases still share one owner; source bytes remain fully checked.
+    # Resolved aliases still share one owner; the digest covers every source byte.
     digest.update(b"loopx_effect_runtime_source_instance_v1\0")
     digest.update(os.fsencode(os.path.normcase(root)))
     digest.update(b"\0")
@@ -377,7 +492,10 @@ def _runtime_fingerprint_for_snapshot(
     current_snapshot = _runtime_source_snapshot(source_root)
     if current_snapshot != snapshot:
         raise _RuntimeSourceChanged(current_snapshot)
-    return digest.hexdigest()
+    fingerprint = digest.hexdigest()
+    if location is not None:
+        _write_source_digest(*location, fingerprint, snapshot)
+    return fingerprint
 
 
 def _runtime_fingerprint() -> str:
