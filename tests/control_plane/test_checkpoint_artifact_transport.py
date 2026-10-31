@@ -9,6 +9,7 @@ from loopx.cli import main
 from loopx.control_plane.effect_runtime import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
+    EffectRuntimeRejected,
     EffectRuntimeRemoteError,
     EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
@@ -98,8 +99,8 @@ def test_large_rpc_allowance_cannot_extend_artifact_capture_deadline(tmp_path):
     components = [{"id": "code", "source_path": str(source)}]
     observed = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "probe", "components": components}, large_local_snapshot=True)
-    # The same valid request succeeds with a future artifact deadline. Do not
-    # infer the rejection cause from internal error prose hidden by the bridge.
+    # The same valid request succeeds with a future artifact deadline. The
+    # known expired-window refusal must survive the real typed RPC boundary.
     live = effect_runtime_result("runtime.checkpoint_artifacts", {
         "action": "capture", "components": components,
         "destination": str(tmp_path / "live"), "point_metadata": {},
@@ -108,10 +109,13 @@ def test_large_rpc_allowance_cannot_extend_artifact_capture_deadline(tmp_path):
     }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
     assert live["source_stability_verified"]
     unit = tmp_path / "expired"
-    with pytest.raises(EffectRuntimeRemoteError):
+    with pytest.raises(EffectRuntimeRejected) as rejected:
         effect_runtime_result("runtime.checkpoint_artifacts", {
             "action": "capture", "components": components,
             "destination": str(unit), "point_metadata": {},
             "expected_source_sha256": observed["source_sha256"], "deadline_epoch_ms": 0,
         }, timeout=LARGE_ARTIFACT_RPC_SECONDS, retry_safe=False, large_local_snapshot=True)
+    assert rejected.value.error_kind == "request_rejected"
+    assert rejected.value.diagnostic_code == "checkpoint_capture_window_closed"
+    assert str(rejected.value) == "checkpoint capture window has closed"
     assert not unit.exists()
