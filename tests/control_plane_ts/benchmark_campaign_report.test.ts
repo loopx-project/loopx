@@ -113,3 +113,31 @@ test('same-attempt recovered error is not a terminal failure', () => {
   const e=buildReport(d).summary[0].first_attempt_execution;
   assert.equal(e.outcomes.normal_end,1);assert.equal(e.outcomes.runtime_failure,0);
 });
+
+test('effort and score-time samples preserve coverage and unknowns', () => {
+  const d=fixture();
+  d.selection[0].effort={duration_ms:3_600_000,token_count:1200,model_request_count:null,evidence_ref:'usage:a-one'};
+  d.selection[0].score_samples=[
+    {elapsed_ms:60_000,value:10,normalization_id:'scale-one',evidence_ref:'score:first'},
+    {elapsed_ms:3_600_000,value:40,normalization_id:'scale-one',evidence_ref:'score:last'},
+  ];
+  const r=buildReport(d);
+  assert.deepEqual(r.summary[0].effort,{duration_known_runs:1,duration_ms:3_600_000,
+    token_known_runs:1,token_count:1200,model_request_known_runs:0,model_request_count:0,complete_runs:0});
+  assert.equal(r.score_time_series.length,2);assert.equal(r.score_time_series[1].run_id,'a-one');
+  assert.match(renderMarkdown(r),/1\.00/);assert.match(renderMarkdown(r),/未知不按零计/);
+  assert.match(renderMarkdown(r),/0\/3 \| — \| 0\/3 \| —/);
+  assert.match(renderCsv(r),/3600000/);
+});
+
+test('effort and score-time samples reject malformed measurements', () => {
+  const d=fixture();
+  d.selection[0].effort={duration_ms:null,token_count:null,model_request_count:null,evidence_ref:'usage:none'};
+  assert.throws(()=>buildReport(d),/entirely unknown/);
+  d.selection[0].effort={duration_ms:1,token_count:2,model_request_count:3,evidence_ref:'usage:ok'};
+  d.selection[0].score_samples=[
+    {elapsed_ms:2,value:10,normalization_id:'scale-one',evidence_ref:'score:2'},
+    {elapsed_ms:1,value:20,normalization_id:'scale-one',evidence_ref:'score:1'},
+  ];
+  assert.throws(()=>buildReport(d),/elapsed time must increase/);
+});
