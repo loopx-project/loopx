@@ -32,9 +32,12 @@ def list_goal_todos(
     runtime_root_arg: str | None = None,
     limit: int | None = None,
     thin: bool = False,
+    full_text: bool = False,
     read_scope: Literal["active", "completed_history"] = "active",
     json_references: bool = False,
 ) -> dict[str, Any]:
+    if full_text and (thin or json_references):
+        raise ValueError("Full Todo body reads cannot use compact presentation")
     if read_scope not in {"active", "completed_history"}:
         raise ValueError("Todo read_scope must be active or completed_history")
     if read_scope == "completed_history" and (role != "agent" or status != "done"):
@@ -88,6 +91,7 @@ def list_goal_todos(
         "query": {"goal_id": goal_id, "role": role, "status": normalize_todo_status(status),
             "todo_id": normalized_todo_id, "agent_id": normalized_agent_id, "limit": limit,
             "read_scope": read_scope, "json_references": json_references, "thin": thin,
+            **({"full_text": True} if full_text else {}),
             "state_file": str(resolved_state_file), "project": str(resolved_project) if resolved_project else None}}
     result = project_todo_read(params)
     if "payload" not in result:
@@ -99,6 +103,8 @@ def list_goal_todos(
         raise LocalCoordinationAuthorityUnavailable(str(failure.get("reason") or "canonical Todo authority is unavailable"),
             code=code, payload=payload)
     payload = result["payload"]
+    if full_text and payload.get("full_text") is not True:
+        raise ValueError("Complete Todo body delivery is unsupported by this runtime")
     if "canonical_acceptance" in result:
         from .goal_todo_projection import observe_todo_acceptance
         payload = observe_todo_acceptance(payload, result["canonical_acceptance"],
