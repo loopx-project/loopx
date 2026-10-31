@@ -102,8 +102,10 @@ export function GoalResearchResults({goalId, api, zh, hideEmpty = false, catalog
   }
 
   if (hideEmpty && !reading && !busy && !error && !results.length) return null;
+  // The read above is the owner fact: an empty, finished index read is empty.
+  const catalogEmpty = listed && !busy && !results.length;
   return <section ref={focus.root} tabIndex={-1} className={`goal-team-results goal-research-results${catalogOnly ? " is-catalog" : ""}`}
-    aria-label={zh ? "研究成果" : "Research results"} aria-busy={busy}>
+    aria-label={zh ? "研究成果" : "Research results"} aria-busy={busy} data-result-empty={catalogEmpty ? "" : undefined}>
     <header><div><h3>{zh ? "研究成果" : "Research results"}</h3></div>
       <button type="button" disabled={busy} onClick={() => void list()}>
         <RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新" : "Refresh"}

@@ -111,7 +111,10 @@ export function GoalManagedResults({goalId, zh, hideEmpty = false, catalogOnly =
   const artifact = selected ? managedReportArtifact(
     selected.row.content_type, selected.row.sha256, selected.read.text) : null;
   if (hideEmpty && !openedCatalog.current && page && !reading && !busy && !error && !page.items.length && !page.unavailable_count && !page.next_cursor) return null;
-  return <section ref={focus.root} tabIndex={-1} className={`goal-team-results goal-managed-results${catalogOnly ? " is-catalog" : ""}`} aria-label={zh ? "已验收的团队报告" : "Accepted team reports"} aria-busy={busy}>
+  // Empty only when this page is final: a next cursor keeps the catalog so its
+  // "next page" control stays reachable.
+  const catalogEmpty = page !== null && !busy && page.items.length === 0 && !page.next_cursor;
+  return <section ref={focus.root} tabIndex={-1} className={`goal-team-results goal-managed-results${catalogOnly ? " is-catalog" : ""}`} aria-label={zh ? "已验收的团队报告" : "Accepted team reports"} aria-busy={busy} data-result-empty={catalogEmpty ? "" : undefined}>
     <header><div><h3>{zh ? "团队报告" : "Team reports"}</h3>
       <p>{zh ? "只有仍能通过当前验收的报告会出现在这里。" : "Only reports that still pass current acceptance appear here."}</p></div>
       <button type="button" disabled={busy} onClick={() => void load(pageCursor.current)}><RefreshCw size={14} aria-hidden="true"/>{zh ? "刷新" : "Refresh"}</button></header>

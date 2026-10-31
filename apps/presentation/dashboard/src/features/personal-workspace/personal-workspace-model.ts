@@ -495,7 +495,10 @@ export type WorkspaceRunHistoryEntry = {
   goalId: string;
   goalTitle: string;
   id: string;
-  status: "completed" | "failed";
+  /** Typed outcome only: a free `classification` never proves completion.
+   * `observation` is a run whose own writer typed a non-outcome receipt;
+   * `unknown` is a run with no typed outcome fact at all. */
+  status: "completed" | "failed" | "observation" | "unknown";
 };
 
 export type WorkspaceModel = {

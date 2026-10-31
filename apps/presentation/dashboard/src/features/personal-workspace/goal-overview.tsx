@@ -58,6 +58,10 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   const optional = needs.availability === "ok" ? needs.optional : null;
   const totalAttention = blocking !== null && optional !== null ? blocking + optional : null;
   const showAttention = attention.length > 0 || (totalAttention !== null && totalAttention > 0);
+  // The digest only proves "nothing is waiting" when the owner read cleanly
+  // (availability ok), its counts cover the whole group, and the total is a
+  // known zero. Unavailable, partial or null counts stay unknown.
+  const attentionEmpty = needs.availability === "ok" && needs.coverage === "complete" && totalAttention === 0;
   const moreAttention = needs.availability !== "ok" || needs.coverage !== "complete" || (totalAttention ?? attention.length) > 3;
   const run = items.find((item): item is Extract<WorkspaceTimelineItem, { kind: "run" }> => item.kind === "run" && item.run.goalId === goal.goalId);
   const currentRow = digest.work.rows.find(row => row.displayClass === "running_observed")
@@ -106,7 +110,8 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           <span className="goal-attention-text"><span>{item.text}</span>
             {item.updatedAt ? <time dateTime={item.updatedAt}>{relativeTime(item.updatedAt, locale)}</time> : null}</span>
           <ArrowRight aria-hidden size={14} />
-        </button></li>)}</ul> : <p className="goal-stage-empty">{locale === "zh-CN" ? "没有等你决定的事" : "Nothing is waiting on you"}</p>}
+        </button></li>)}</ul> : attentionEmpty ? <p className="goal-stage-empty">{locale === "zh-CN" ? "没有等你决定的事" : "Nothing is waiting on you"}</p>
+          : <p className="goal-stage-empty is-unknown" role="status">{t("overview.attentionUnknown")}</p>}
         {moreAttention ? <button className="goal-overview-more" type="button" onClick={() => onView("tasks")}>{copy.tasks}{totalAttention !== null ? ` (${totalAttention})` : ""}<ArrowRight aria-hidden size={14} /></button> : null}
       </section>}
       map={readOnly ? <ContextHelp label={locale === "zh-CN" ? "来源读取范围" : "Source reading scope"} icon={CircleHelp}><p className="goal-work-scope">{copy.remote}</p></ContextHelp> : <DeliveryWorkMap goal={goal} userTodos={userTodos} review={review} onSelect={onSelect} selectedTodoId={selectedTodoId}/>}/>

@@ -58,28 +58,37 @@ function BriefTile({ count, empty, kind, live = false, onSelectGoal, onSelectOpe
 
 
 function RunBand({ runs }: { runs: WorkspaceRunHistoryEntry[] }) {
+  const { t } = useWorkspaceI18n();
   const recent = runs.slice(-28);
   // Nothing recorded yet: an empty band would be permanent furniture.
   if (!recent.length) return null;
-  const failed = recent.filter((run) => run.status === "failed").length;
+  // Each count reads its own typed outcome; nothing is inferred by subtraction,
+  // so a run the owner left unclassified never inflates "completed".
+  const count = (status: WorkspaceRunHistoryEntry["status"]) => recent.filter((run) => run.status === status).length;
+  const completed = count("completed");
+  const failed = count("failed");
+  const observation = count("observation");
+  const unknown = count("unknown");
   const day = (at: string) => at.slice(5, 10).replace("-", "/");
   const span = recent.length > 1 ? `${day(recent[0].at)} → ${day(recent[recent.length - 1].at)}` : null;
   return (
-    <section aria-label="Recent runs" className="personal-runband" data-testid="personal-runband">
-      <div className="personal-runband-track" role="img" aria-label={`${recent.length} recent runs`}>
+    <section aria-label={t("runs.recent", { count: recent.length })} className="personal-runband" data-testid="personal-runband">
+      <div className="personal-runband-track" role="img" aria-label={t("runs.recent", { count: recent.length })}>
         {recent.map((run) => (
           <span
-            className={`personal-runband-seg is-${run.status === "failed" ? "failed" : "done"}`}
+            className={`personal-runband-seg is-${run.status === "completed" ? "done" : run.status === "failed" ? "failed" : run.status === "observation" ? "queued" : "unknown"}`}
             key={run.id}
-            title={`${run.goalTitle} · ${run.classification ?? "run"} · ${run.at}`}
+            title={`${run.goalTitle} · ${run.classification ?? t("runs.unknown")} · ${run.at}`}
           />
         ))}
       </div>
       <p className="personal-runband-legend">
-        <span>最近 {recent.length} 次运行</span>
+        <span>{t("runs.recent", { count: recent.length })}</span>
         {span ? <span className="personal-runband-span">{span}</span> : null}
-        <span className="personal-runband-key is-done">{recent.length - failed} 完成</span>
-        <span className="personal-runband-key is-failed">{failed} 失败</span>
+        <span className="personal-runband-key is-done">{completed} {t("runs.completed")}</span>
+        <span className="personal-runband-key is-failed">{failed} {t("runs.failed")}</span>
+        {observation ? <span className="personal-runband-key is-queued">{observation} {t("runs.observation")}</span> : null}
+        {unknown ? <span className="personal-runband-key is-unknown">{unknown} {t("runs.unknown")}</span> : null}
       </p>
     </section>
   );

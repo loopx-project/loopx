@@ -127,7 +127,9 @@ import {
   type WorkspaceGoalArchiveLoadState,
   type WorkspaceActionPreviewRequest,
   type WorkspaceAgentTodo,
+  type WorkspaceRunHistoryEntry,
 } from "../features/personal-workspace/personal-workspace-model";
+import { deliveryOutcomeTone } from "../data/goal-channel-frontstage";
 import { monitorTodoReadback } from "../features/personal-workspace/monitor-readback";
 import { goalExecution, taskSessionStatus } from "../features/personal-workspace/goal-activity";
 
@@ -249,6 +251,25 @@ type TodoExplorerItem = {
   role: "user" | "agent";
   todo: TodoItem;
 };
+
+/** A run row may claim completion only from the closed outcome vocabularies its
+ * writers already validate: `ProgressResultClass` on `progress_observation` and
+ * `DeliveryOutcome` through the shipped `deliveryOutcomeTone` owner. A free
+ * `classification` never proves completion; the shipped failure owner stays the
+ * only legacy failure signal, and everything unproven stays `unknown`. */
+function runHistoryOutcome(record: RunRecord): WorkspaceRunHistoryEntry["status"] {
+  const observed = record.progress_observation?.result_class ?? null;
+  if (observed === "advanced") return "completed";
+  if (observed === "blocked") return "failed";
+  if (observed) return "observation";
+  if (record.delivery_outcome) {
+    const tone = deliveryOutcomeTone(record.delivery_outcome);
+    if (tone === "success") return "completed";
+    if (tone === "danger") return "failed";
+    return "observation";
+  }
+  return hasGoalFailureStatus([record.classification]) ? "failed" : "unknown";
+}
 
 function inferLifecyclePhase(status?: string | null, run?: RunRecord) {
   if (run?.controller_readiness?.decision_advisor_ready || run?.controller_readiness?.write_controller_ready) {
@@ -2970,7 +2991,7 @@ function PersonalGoalHome({
       goalId: record.goal_id,
       goalTitle: goalTitles.get(record.goal_id) ?? record.goal_id,
       id: `${record.goal_id}:${record.generated_at}:${record.classification ?? ""}`,
-      status: /block|fail|error|timeout|refus/i.test(record.classification ?? "") ? "failed" as const : "completed" as const,
+      status: runHistoryOutcome(record),
     }))
     .sort((a, b) => a.at.localeCompare(b.at));
   const workspaceModel = {
