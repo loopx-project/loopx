@@ -130,6 +130,20 @@ def _request_usage_record(value: object) -> object:
         )
     return result
 
+
+def _usage_rows(path: Path, digest):
+    """Hash the exact captured bytes while parsing one JSONL record at a time."""
+    with path.open("rb") as stream:
+        for line_number, line in enumerate(stream, 1):
+            digest.update(line)
+            yield line_number, json.loads(line.decode("utf-8"))
+
+
+def _source_digest(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def _usage_capture(
     source_root: Path,
     artifact: str,
@@ -139,12 +153,12 @@ def _usage_capture(
     loopx_input_json: str | None = None,
     input_goal_id: str | None = None,
 ) -> dict:
-    data = _source_path(source_root, artifact).read_bytes()
+    path = _source_path(source_root, artifact)
+    digest = hashlib.sha256()
     events = []
     # Transport only the provider's counter/lifecycle fields, not model text,
     # account metadata or tool outputs. TS owns all accounting decisions.
-    for line_number, line in enumerate(data.decode("utf-8").splitlines(), 1):
-        event = json.loads(line)
+    for line_number, event in _usage_rows(path, digest):
         if not isinstance(event, dict):
             raise ValueError("Usage capture contains a non-object event")
         payload = event.get("payload") or {}
@@ -236,7 +250,7 @@ def _usage_capture(
     )
     return {
         "artifact": artifact,
-        "artifact_sha256": hashlib.sha256(data).hexdigest(),
+        "artifact_sha256": digest.hexdigest(),
         "projection": projection,
         **({"input_artifacts": input_artifacts} if input_artifacts else {}),
     }
@@ -248,14 +262,14 @@ def _captured_view(record: dict, field: str) -> dict | None:
         return None
     reason = None
     try:
-        data = _source_path(
+        path = _source_path(
             Path(record["source_root"]), captured["artifact"]
-        ).read_bytes()
-        if hashlib.sha256(data).hexdigest() != captured["artifact_sha256"]:
+        )
+        if _source_digest(path) != captured["artifact_sha256"]:
             reason = "source_changed"
         for artifact in captured.get("input_artifacts", []):
-            data = _source_path(Path(record["source_root"]), artifact["artifact"]).read_bytes()
-            if hashlib.sha256(data).hexdigest() != artifact["artifact_sha256"]:
+            path = _source_path(Path(record["source_root"]), artifact["artifact"])
+            if _source_digest(path) != artifact["artifact_sha256"]:
                 reason = "source_changed"
     except (OSError, ValueError):
         reason = "source_unavailable"
