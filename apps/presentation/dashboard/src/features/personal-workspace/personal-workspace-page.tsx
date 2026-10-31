@@ -90,7 +90,7 @@ import type {
   WorkspaceTodo,
 } from "./personal-workspace-model";
 import { goalHasExecutionSummary, goalTitleFor, workspaceHomeLaneForGoal } from "./personal-workspace-model";
-import { goalWorkKind } from "./goal-activity";
+import { goalHostSurfaces, goalWorkKind, hostSurfaceLabel } from "./goal-activity";
 import { WorkspaceActionForm, type WorkspaceActionDraft } from "./workspace-action-form";
 import { GoalIdentityMark } from "./goal-activity-view";
 import { ManagerBrief } from "./manager-brief";
@@ -230,18 +230,23 @@ function ManagerHomeBoard({
     if (lane === "history") history.push(goal);
     else if (lane !== "stopped") active[lane].push(goal);
   });
-  const goalCard = (goal: WorkspaceGoal) => (
-    <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
-      <GoalIdentityMark goal={goal} />
-      <strong className="personal-home-goal-title" title={goal.title}>{goalShortLabel(goal)}</strong>
-      <p className="personal-home-goal-reason" title={goal.needsYou ?? goal.nextSentence}>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
-      <span className="personal-home-goal-meta">{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.agentLaneCount && goal.agentLaneCount > 1
-        ? t("header.workAgentCount", { count: goal.agentLaneCount })
-        : goal.agentLabel ?? goal.agentId}</span>
-      <span className="personal-home-goal-state">{goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : goal.state}</span>
-      <small className="personal-home-goal-time" title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small>
-    </button>
-  );
+  const goalCard = (goal: WorkspaceGoal) => {
+    // A Goal whose work runs in a bound host must name that host here; the raw
+    // agent id reads as if LoopX itself were executing the work.
+    const hostLabel = goalHostSurfaces(goal).map(hostSurfaceLabel).join(" / ");
+    return (
+      <button className="personal-home-goal-card" data-goal-state={goal.loadState ?? goal.state} data-load-error={goal.loadError} key={goal.goalId} onClick={() => onSelectGoal(goal.goalId)} type="button">
+        <GoalIdentityMark goal={goal} />
+        <strong className="personal-home-goal-title" title={goal.title}>{goalShortLabel(goal)}</strong>
+        <p className="personal-home-goal-reason" title={goal.needsYou ?? goal.nextSentence}>{goal.loadError ? t(`startup.error.${goal.loadError}`) : goal.needsYou ?? goal.nextSentence}</p>
+        <span className="personal-home-goal-meta" title={hostLabel || undefined}>{goal.loadError ? t(`startup.error.${goal.loadError}`) : hostLabel || (goal.agentLaneCount && goal.agentLaneCount > 1
+          ? t("header.workAgentCount", { count: goal.agentLaneCount })
+          : goal.agentLabel ?? goal.agentId)}</span>
+        <span className="personal-home-goal-state" title={goal.state}>{goal.loadState ? t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading") : goal.state}</span>
+        <small className="personal-home-goal-time" title={goal.latestActivity}>{goal.loadState ? "" : goal.latestActivity ? activityTimeLabel(goal.latestActivity, locale, t) : goal.agentTodos.length ? t("home.taskCount", { count: goal.agentTodos.length }) : t("home.noActivity")}</small>
+      </button>
+    );
+  };
   return (
     <section aria-label={t("home.workspace")} className="personal-home-board">
       {runtimeReadiness ? <RuntimeReadinessNotice readiness={runtimeReadiness} rechecking={recheckingRuntimes ?? false} onRecheck={onRecheckRuntimes} /> : null}

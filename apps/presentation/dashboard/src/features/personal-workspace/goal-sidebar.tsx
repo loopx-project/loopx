@@ -5,7 +5,7 @@ import { useGoalOrder } from "./use-goal-order";
 import { goalHierarchy, visibleGoalTree } from "./goal-hierarchy";
 
 import { GoalActivityHelp, GoalIdentityMark, useGoalActivity } from "./goal-activity-view";
-import { useWorkspaceI18n } from "./i18n";
+import { useWorkspaceI18n, type WorkspaceMessageKey } from "./i18n";
 import type { WorkspaceGoal, WorkspaceGoalArchiveLoadState } from "./personal-workspace-model";
 import { StatusSourceSwitcher, type StatusSourceControl } from "./status-source-switcher";
 
@@ -13,9 +13,12 @@ function GoalRowActivity({ goal, showLoad }: { goal: WorkspaceGoal; showLoad: bo
   const { t } = useWorkspaceI18n();
   const activity = useGoalActivity(goal);
   if (goal.loadState && showLoad) return <small>{t(goal.loadState === "error" ? "startup.goalError" : "startup.goalLoading")}</small>;
+  // One visible word keeps the row at a single line; the full sentence stays
+  // on the row as its title and its accessible name, so the host that owns the
+  // work is never hover-only.
   return (
-    <small className={`is-${activity.tone}`} title={activity.text}>
-      <span className="personal-goal-row-activity-copy">{activity.text}</span>
+    <small aria-label={activity.text} className={`is-${activity.tone}`} title={activity.text}>
+      <span className="personal-goal-row-activity-copy">{t(activity.labelKey as WorkspaceMessageKey)}</span>
       {activity.windowBadge ? <span className={`personal-goal-window-badge is-${activity.windowBadge.state}`}>{activity.windowBadge.text}</span> : null}
     </small>
   );
@@ -107,7 +110,7 @@ export function GoalSidebar({
         <span className="personal-goal-link-copy">
           <strong title={goal.title}>{goal.title}</strong>
           {tree.parents.has(goal.goalId) ? <span className="personal-sr-only">{t("sidebar.childOf", {goal: tree.byId.get(tree.parents.get(goal.goalId)!)!.title})}</span> : null}
-          {goal.loadState ? <GoalRowActivity goal={goal} showLoad /> : null}
+          <GoalRowActivity goal={goal} showLoad />
         </span>
         {tree.invalidParents.has(goal.goalId) && goal.goalId !== rootGoalId ? <AlertTriangle size={14} aria-label={t("sidebar.invalidParent")}><title>{t("sidebar.invalidParent")}</title></AlertTriangle>
           : !sorting && goal.hostThreadActivity && !stopped && !goal.loadState ? null : <ChevronRight size={15} />}
