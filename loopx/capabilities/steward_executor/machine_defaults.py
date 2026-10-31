@@ -27,12 +27,40 @@ import importlib
 from pathlib import Path
 from typing import Any
 
+from ...control_plane.turn_driver.host_binding import (
+    EXECUTOR_KIND_MANAGED,
+    MANAGED_TURN_HOST,
+)
 from ...reasoning_effort import REASONING_EFFORTS
 from ..machine_configuration.contract import (
     MACHINE_CONFIGURATION_SCHEMA,
     MachineConfigurationNamespace,
     machine_configuration_revision,
 )
+
+# The endpoint an operator selects to run the steward on the managed executor,
+# and the endpoint the channel runs when nothing is selected. Neither name is
+# "default" beyond that: the shipped default is stated once, in the channel
+# resolution in ``loopx.chat_manager``, so a reader cannot mistake the pair for
+# two competing defaults. The vocabulary lives here, beside the namespace that
+# validates it, so reading machine configuration never loads the chat layer;
+# ``loopx.chat_manager`` re-exports every name unchanged.
+MANAGER_ENDPOINT_MANAGED = MANAGED_TURN_HOST
+MANAGER_ENDPOINT_INDIVIDUAL = "codex"
+# Executor kinds name where this channel's model work is billed and bounded
+# rather than which adapter is launched, and they use the same vocabulary as the
+# governed Turn surface: an individual executor runs on one person's own CLI
+# login, a managed executor on an operator-supplied credential. Which kind an
+# endpoint is decides whether an operator credential belongs to it at all; the
+# mere presence of a credential decides nothing.
+MANAGER_EXECUTOR_KIND_INDIVIDUAL = "individual"
+MANAGER_EXECUTOR_KIND_MANAGED = EXECUTOR_KIND_MANAGED
+MANAGER_ENDPOINT_KINDS = {
+    MANAGER_ENDPOINT_INDIVIDUAL: MANAGER_EXECUTOR_KIND_INDIVIDUAL,
+    # The managed host is billed to the operator's own endpoint, not to one
+    # person's CLI login, so it is reached only by selecting it.
+    MANAGER_ENDPOINT_MANAGED: MANAGER_EXECUTOR_KIND_MANAGED,
+}
 
 STEWARD_EXECUTOR_NAMESPACE = "steward_executor"
 STEWARD_EXECUTOR_SCHEMA_V0 = "steward_executor_machine_defaults_v0"
@@ -57,14 +85,11 @@ _TEXT_LIMIT = 100
 def steward_executor_endpoints() -> frozenset[str]:
     """Return the executor ids this namespace accepts for the steward channel.
 
-    The chat layer owns the endpoint vocabulary, so this reads it from the same
-    owner that resolves the channel instead of restating a second list here.
-    The import stays local because the chat layer resolves *through* this
-    namespace, and a module-level import would close that loop.
+    The channel resolution and this namespace read one endpoint vocabulary,
+    defined above, instead of restating a second list here.
     """
 
-    manager = importlib.import_module("loopx.chat_manager")
-    return frozenset(manager.MANAGER_ENDPOINT_KINDS)
+    return frozenset(MANAGER_ENDPOINT_KINDS)
 
 
 def steward_reasoning_efforts() -> tuple[str, ...]:

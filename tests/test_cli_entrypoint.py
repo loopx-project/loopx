@@ -368,6 +368,57 @@ assert "loopx.control_plane.quota.void_commit" not in sys.modules
 	assert completed.returncode == 0, completed.stderr
 
 
+def test_steward_endpoint_vocabulary_is_read_without_the_chat_layer() -> None:
+	script = """
+import sys
+from loopx.capabilities.steward_executor import (
+    normalize_steward_executor_machine_defaults,
+    steward_executor_endpoints,
+)
+
+assert steward_executor_endpoints() == frozenset({"codex", "dsh"})
+normalize_steward_executor_machine_defaults(
+    {"schema_version": "steward_executor_machine_defaults_v0", "executor_endpoint": "dsh"}
+)
+for name in ("loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"):
+    assert name not in sys.modules, name
+
+import loopx.chat_manager as manager
+from loopx.capabilities.steward_executor import machine_defaults
+for name in (
+    "MANAGER_ENDPOINT_INDIVIDUAL", "MANAGER_ENDPOINT_MANAGED", "MANAGER_ENDPOINT_KINDS",
+    "MANAGER_EXECUTOR_KIND_INDIVIDUAL", "MANAGER_EXECUTOR_KIND_MANAGED",
+):
+    assert getattr(manager, name) is getattr(machine_defaults, name), name
+assert manager.MANAGER_ENDPOINT_KINDS == {"codex": "individual", "dsh": "managed"}
+"""
+	completed = run_isolated_script(script)
+	assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("command", [
+	["heartbeat-prompt", "--thin", "--codex-app", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--agent-scope", "fixture", "--available-capability", "shell"],
+	["quota", "should-run", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--available-capability", "shell", "--codex-app", "--turn-instance-id", "2026-10-31T00:00:00Z"],
+	["status", "--goal-id", "perf-goal"],
+	["refresh-state", "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+		"--next-action", "Continue bounded fixture work.", "--no-global-sync", "--dry-run"],
+], ids=["heartbeat-prompt", "should-run", "status", "refresh-state"])
+def test_heartbeat_chain_routes_do_not_load_the_chat_layer(tmp_path, monkeypatch, command):
+	from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture, isolate_sqlite_runtime
+
+	isolate_sqlite_runtime(tmp_path, monkeypatch)
+	registry, runtime = write_command_fixture(tmp_path)
+	state = registry.parent.parent / ".codex/goals/perf-goal/ACTIVE_GOAL_STATE.md"
+	initialize_canonical_source_fixture(runtime, "perf-goal", state_path=state, provider="sqlite")
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *command]
+	result = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", "loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"))
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["ok"] is True
+
+
 def test_turn_facade_preserves_every_export_owner_identity() -> None:
 	script = """
 from importlib import import_module
