@@ -1,51 +1,83 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from importlib import import_module
 from typing import Any
 
-from .contract import MachineConfigurationRegistry
+from .contract import MachineConfigurationNamespace, MachineConfigurationRegistry
+
+# Namespace id, owner module and factory. Owners stay at the composition
+# boundary: the generic contract does not depend on any consumer capability,
+# and a reader loads only the namespaces it resolves.
+_BUILTIN_NAMESPACES = (
+    (
+        "context_delivery",
+        "loopx.capabilities.machine_configuration.context_delivery",
+        "context_delivery_machine_configuration_namespace",
+    ),
+    (
+        "explore_harness",
+        "loopx.capabilities.explore.machine_defaults",
+        "explore_machine_configuration_namespace",
+    ),
+    (
+        "codex_chat",
+        "loopx.capabilities.native_chat.machine_defaults",
+        "codex_chat_machine_configuration_namespace",
+    ),
+    (
+        "goal_storage",
+        "loopx.capabilities.machine_configuration.goal_storage",
+        "goal_storage_machine_configuration_namespace",
+    ),
+    (
+        "manager_runtime",
+        "loopx.capabilities.manager_runtime.machine_profile",
+        "manager_runtime_machine_configuration_namespace",
+    ),
+    (
+        "periodic_report",
+        "loopx.capabilities.periodic_report.machine_defaults",
+        "periodic_report_machine_configuration_namespace",
+    ),
+    (
+        "todo_replan_cadence",
+        "loopx.capabilities.todo_replan_cadence.machine_defaults",
+        "todo_replan_cadence_machine_configuration_namespace",
+    ),
+    (
+        "change_quality_qualification",
+        "loopx.capabilities.change_quality.machine_defaults",
+        "change_quality_machine_configuration_namespace",
+    ),
+    (
+        "pull_request_review",
+        "loopx.capabilities.pr_review_queue.machine_defaults",
+        "pull_request_review_machine_configuration_namespace",
+    ),
+    (
+        "steward_executor",
+        "loopx.capabilities.steward_executor.machine_defaults",
+        "steward_executor_machine_configuration_namespace",
+    ),
+)
+
+
+def _owner(module: str, factory: str) -> Callable[[], MachineConfigurationNamespace]:
+    def load() -> MachineConfigurationNamespace:
+        contract: MachineConfigurationNamespace = getattr(
+            import_module(module), factory
+        )()
+        return contract
+
+    return load
 
 
 def build_builtin_machine_configuration_registry() -> MachineConfigurationRegistry:
-    # Imports stay at the composition boundary: the generic contract does not
-    # depend on any consumer capability.
-    from ..change_quality.machine_defaults import (
-        change_quality_machine_configuration_namespace,
-    )
-    from ..periodic_report.machine_defaults import (
-        periodic_report_machine_configuration_namespace,
-    )
-    from ..manager_runtime.machine_profile import (
-        manager_runtime_machine_configuration_namespace,
-    )
-    from ..pr_review_queue.machine_defaults import (
-        pull_request_review_machine_configuration_namespace,
-    )
-    from ..steward_executor.machine_defaults import (
-        steward_executor_machine_configuration_namespace,
-    )
-    from ..todo_replan_cadence.machine_defaults import (
-        todo_replan_cadence_machine_configuration_namespace,
-    )
-
-    from ..explore.machine_defaults import explore_machine_configuration_namespace
-    from .goal_storage import goal_storage_machine_configuration_namespace
-    from ..native_chat.machine_defaults import codex_chat_machine_configuration_namespace
-    from .context_delivery import context_delivery_machine_configuration_namespace
-
-    return (
-        MachineConfigurationRegistry()
-        .register(context_delivery_machine_configuration_namespace())
-        .register(explore_machine_configuration_namespace())
-        .register(codex_chat_machine_configuration_namespace())
-        .register(goal_storage_machine_configuration_namespace())
-        .register(manager_runtime_machine_configuration_namespace())
-        .register(periodic_report_machine_configuration_namespace())
-        .register(todo_replan_cadence_machine_configuration_namespace())
-        .register(change_quality_machine_configuration_namespace())
-        .register(pull_request_review_machine_configuration_namespace())
-        .register(steward_executor_machine_configuration_namespace())
-    )
+    registry = MachineConfigurationRegistry()
+    for namespace, module, factory in _BUILTIN_NAMESPACES:
+        registry.register_deferred(namespace, _owner(module, factory))
+    return registry
 
 
 def project_goal_with_builtin_machine_configuration(

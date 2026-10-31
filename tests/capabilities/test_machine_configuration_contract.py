@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
+
+from loopx.capabilities.machine_configuration.builtins import (
+    build_builtin_machine_configuration_registry,
+)
 
 from loopx.capabilities.machine_configuration.contract import (
     MachineConfigurationNamespace,
@@ -42,25 +49,28 @@ def _apply_example_public_update(
     return {**dict(current or {}), **dict(update)}
 
 
+def _example_namespace(**overrides: Any) -> MachineConfigurationNamespace:
+    fields: dict[str, Any] = {
+        "namespace": "example",
+        "schema_versions": frozenset({"example_v0"}),
+        "normalize": _normalize_example,
+        "project_public": lambda value: {
+            key: item for key, item in value.items() if key != "secret"
+        },
+        "apply_public_update": _apply_example_public_update,
+        "title": "Example defaults",
+        "description": "Example machine-level defaults.",
+        "default_configuration": {
+            "schema_version": "example_v0",
+            "enabled": False,
+            "secret": "hidden",
+        },
+    }
+    return MachineConfigurationNamespace(**{**fields, **overrides})
+
+
 def _registry() -> MachineConfigurationRegistry:
-    return MachineConfigurationRegistry().register(
-        MachineConfigurationNamespace(
-            namespace="example",
-            schema_versions=frozenset({"example_v0"}),
-            normalize=_normalize_example,
-            project_public=lambda value: {
-                key: item for key, item in value.items() if key != "secret"
-            },
-            apply_public_update=_apply_example_public_update,
-            title="Example defaults",
-            description="Example machine-level defaults.",
-            default_configuration={
-                "schema_version": "example_v0",
-                "enabled": False,
-                "secret": "hidden",
-            },
-        )
-    )
+    return MachineConfigurationRegistry().register(_example_namespace())
 
 
 def _config() -> dict[str, Any]:
@@ -228,3 +238,144 @@ def test_namespace_merge_rejects_private_fields_in_a_public_update() -> None:
             },
             registry=_registry(),
         )
+
+
+def test_deferred_owner_loads_once_on_first_resolution() -> None:
+    loads: list[str] = []
+
+    def load() -> MachineConfigurationNamespace:
+        loads.append("example")
+        return _example_namespace()
+
+    registry = MachineConfigurationRegistry().register_deferred("example", load)
+
+    assert registry.namespace_ids == ("example",)
+    assert loads == []
+    assert normalize_machine_configuration(_config(), registry=registry) == _config()
+    assert registry.public_catalog() == _registry().public_catalog()
+    assert loads == ["example"]
+
+
+def test_deferred_owner_template_is_validated_before_it_can_be_used() -> None:
+    registry = MachineConfigurationRegistry().register_deferred(
+        "example",
+        lambda: _example_namespace(default_configuration={"schema_version": "example_v0"}),
+    )
+
+    for _attempt in range(2):
+        with pytest.raises(TypeError, match="example.enabled must be a boolean"):
+            normalize_machine_configuration(_config(), registry=registry)
+    with pytest.raises(TypeError, match="example.enabled must be a boolean"):
+        registry.public_catalog()
+
+
+def test_deferred_owner_must_declare_its_registered_namespace() -> None:
+    registry = MachineConfigurationRegistry().register_deferred(
+        "other", _example_namespace
+    )
+
+    with pytest.raises(ValueError, match="owner declares another id: other"):
+        registry.resolve("other")
+    with pytest.raises(ValueError, match="unsupported machine-configuration namespace"):
+        registry.resolve("example")
+
+
+def test_deferred_and_eager_owners_share_one_namespace_reservation() -> None:
+    with pytest.raises(ValueError, match="already registered: example"):
+        _registry().register_deferred("example", _example_namespace)
+    with pytest.raises(ValueError, match="already registered: example"):
+        MachineConfigurationRegistry().register_deferred(
+            "example", _example_namespace
+        ).register(_example_namespace())
+    with pytest.raises(ValueError, match="namespace is invalid"):
+        MachineConfigurationRegistry().register_deferred("Example", _example_namespace)
+
+
+def test_builtin_catalog_lists_every_owner_in_namespace_order() -> None:
+    registry = build_builtin_machine_configuration_registry()
+
+    assert registry.namespace_ids == (
+        "change_quality_qualification",
+        "codex_chat",
+        "context_delivery",
+        "explore_harness",
+        "goal_storage",
+        "manager_runtime",
+        "periodic_report",
+        "pull_request_review",
+        "steward_executor",
+        "todo_replan_cadence",
+    )
+    assert [
+        descriptor["namespace"]
+        for descriptor in registry.public_catalog()["namespaces"]
+    ] == list(registry.namespace_ids)
+
+
+def test_builtin_registry_still_fails_closed_on_an_invalid_stored_sibling() -> None:
+    configuration = {
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {
+            "context_delivery": {
+                "schema_version": "context_delivery_machine_defaults_v0",
+                "mode": "on",
+            },
+            "periodic_report": {"schema_version": "unknown_v0"},
+        },
+    }
+
+    with pytest.raises(ValueError, match="unsupported schema_version"):
+        normalize_machine_configuration(
+            configuration, registry=build_builtin_machine_configuration_registry()
+        )
+
+
+def test_builtin_registry_loads_only_the_owners_a_reader_resolves() -> None:
+    script = """
+import sys
+
+from loopx.capabilities.machine_configuration.builtins import (
+    build_builtin_machine_configuration_registry,
+)
+from loopx.capabilities.machine_configuration.contract import (
+    normalize_machine_configuration,
+)
+
+normalize_machine_configuration(
+    {
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {
+            "context_delivery": {
+                "schema_version": "context_delivery_machine_defaults_v0",
+                "mode": "on",
+            }
+        },
+    },
+    registry=build_builtin_machine_configuration_registry(),
+)
+unrelated = sorted(
+    module
+    for module in (
+        "loopx.capabilities.change_quality.machine_defaults",
+        "loopx.capabilities.explore.machine_defaults",
+        "loopx.capabilities.manager_runtime.machine_profile",
+        "loopx.capabilities.native_chat.machine_defaults",
+        "loopx.capabilities.periodic_report.machine_defaults",
+        "loopx.capabilities.pr_review_queue.machine_defaults",
+        "loopx.capabilities.steward_executor.machine_defaults",
+        "loopx.capabilities.todo_replan_cadence.machine_defaults",
+    )
+    if module in sys.modules
+)
+assert unrelated == [], unrelated
+assert "loopx.capabilities.machine_configuration.context_delivery" in sys.modules
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
