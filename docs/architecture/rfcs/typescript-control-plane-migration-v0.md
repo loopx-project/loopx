@@ -301,10 +301,16 @@ Canonical summaries prepare recovery history only for role groups that contain
 a resume condition. Succession still uses complete active and archived lineage.
 Role summaries reuse request-local lineage facts and the succession owner's
 existing context fields. That owner validates and indexes the complete graph
-before materializing requested evaluations. Source fingerprinting still reads
-every admitted byte and rechecks freshness; sequential reads avoid starting a
-thread pool in each process. Healthy read commands use canonical registry/path
-owners and defer mutation error imports until needed.
+before materializing requested evaluations. Source fingerprinting hashes every
+admitted byte and rechecks freshness; sequential reads avoid a thread pool. On
+POSIX, a private per-user digest keyed by release, interpreter and complete
+source metadata lets later processes skip reopening unchanged sources. Only
+sources unchanged for two seconds are recorded; a key mismatch or untrusted
+record rereads every byte. A different file matching size, mtime and ctime,
+such as a retargeted symlink, or a filesystem that does not maintain ctime can
+hide a change; other hosts reread in every process.
+Healthy read commands use canonical registry/path owners and defer mutation
+error imports until needed.
 Exact detail queries push selection into the existing source projection after
 complete source validation. Queries that report unfiltered counts retain the
 complete first projection.
