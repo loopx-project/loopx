@@ -212,7 +212,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  selection_sha256: str | None = None,
                                  list_fields: bool = False,
                                  list_depth: int | None = None,
-                                 initial_read: bool = False) -> str:
+                                 initial_read: bool = False,
+                                 reference_file: Path | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -220,7 +221,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
         if max_page_output_bytes is None:
             max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
-        "--capture-file", str(path), "--capture-sha256", digest,
+        *(["--reference-file", str(reference_file)] if reference_file is not None
+          else ["--capture-file", str(path), "--capture-sha256", digest]),
         "--offset", str(offset), "--page-bytes", str(page_bytes),
         *(["--initial-read"] if initial_read else []),
         *(["--list"] if list_fields else []),
@@ -228,6 +230,56 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
         *(argument for pointer in select or [] for argument in ("--select", pointer)),
         *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
         *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])
+
+
+def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
+                                 navigation: dict[str, Any] | None = None) -> Path:
+    """Immutable reader IO metadata, not a new identity or authority store.
+
+    A short filename locates the document; only its complete stored digests are
+    checked. A collision or replaced document fails closed, never overwrites.
+    """
+    payload = {"schema_version": "context_capture_read_reference_v1", "path": str(path), "sha256": digest}
+    if selection is not None:
+        payload["selection"] = selection
+    if navigation is not None:
+        payload["navigation"] = navigation
+    suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+              if selection is not None or navigation is not None else "")
+    reference = path.with_name(path.stem + suffix + ".reader.json")
+    try:
+        write_decision_capture(reference, payload)
+    except FileExistsError:
+        existing = read_context_read_reference(str(reference))[1]
+        if json.dumps(existing, sort_keys=True) != json.dumps(payload, sort_keys=True):
+            raise ValueError("original reader reference changed; restore it without rerunning admission") from None
+    return reference
+
+
+def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
+    """Read one private physical descriptor; the caller verifies capture bytes."""
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    path = Path(value).expanduser().absolute()
+    path = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink():
+        raise ValueError("reader reference must be a physical file, not a symlink")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
+                or info.st_size > MAX_REQUEST_BYTES):
+            raise ValueError("reader reference must be a private regular file owned by this user")
+        raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("reader reference exceeds the existing transport limit")
+    payload = json.loads(raw)
+    if (not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_read_reference_v1"
+            or not isinstance(payload.get("path"), str) or not isinstance(payload.get("sha256"), str)
+            or BARE_SHA256_PATTERN.fullmatch(payload["sha256"]) is None
+            or ("selection" in payload and not isinstance(payload["selection"], dict))):
+        raise ValueError("reader reference is incomplete or unsupported")
+    return path, payload
 
 
 def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:

@@ -15,7 +15,7 @@ from .quota_presentation import (
 from .quota_capture import (
     bind_capture_selection_transport, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
-    native_context_activation,
+    native_context_activation, model_context_reference,
 )
 from ..control_plane.turn_driver.decision_capture import (
     context_capture_read_command,
@@ -431,6 +431,7 @@ def _emit_quota_result(
             payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
                 metadata={"capture_sha256": capture_id, "recovery": recovery},
                 max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
+            payload = model_context_reference(payload)
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(

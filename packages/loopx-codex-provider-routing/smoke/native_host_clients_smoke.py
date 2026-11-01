@@ -65,7 +65,8 @@ class Fixture:
         del self.records[100]
         return True
 
-    def open_app(self, *_):
+    def open_app(self, *_, spec):
+        assert spec is self.host.spec, "Reopen must retain the inspected native profile"
         self.app_pid = 400
 
     def idle(self):

@@ -256,6 +256,14 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
         value = value[keyword.end() :].lstrip(" \t\"'`")
     if last_keyword is None:
         return bool(CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN.fullmatch(match.group(0)))
+    return _credential_value_is_reference(
+        value, bearer=CREDENTIAL_BEARER_KEYWORD_PATTERN.fullmatch(last_keyword) is not None,
+    )
+
+
+def _credential_value_is_reference(value: str, *, bearer: bool = False) -> bool:
+    """Classify a credential field value for source and distribution scanners."""
+    value = value.lstrip(" \t\"'`")
     if not value:
         return True
     if CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN.match(value):
@@ -268,7 +276,7 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
         return True
     if CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN.match(value):
         return False
-    if CREDENTIAL_BEARER_KEYWORD_PATTERN.fullmatch(last_keyword):
+    if bearer:
         return True
     return bool(CREDENTIAL_VARIABLE_REFERENCE_PATTERN.match(value))
 

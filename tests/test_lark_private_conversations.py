@@ -2956,8 +2956,10 @@ def test_slow_reply_readback_does_not_hold_independent_stop_or_other_app(ordinar
     transport.admit("notes-app", provider.event("notes-app", "old-status", "/status"))
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=store.root.parent,
         runtime_controller=runtime, private_conversations=transport)
-    worker = threading.Thread(target=service._reconcile_private)
-    worker.start()
+    service.start()
+    service.start()
+    worker = service._delivery_thread
+    assert worker is not None
     try:
         assert blocked.wait(10)
         transport.admit("notes-app", provider.event("notes-app", "urgent-stop", "/stop"))
@@ -2975,7 +2977,7 @@ def test_slow_reply_readback_does_not_hold_independent_stop_or_other_app(ordinar
         assert store.list_sessions() == []
     finally:
         release.set()
-        service._closed.set()
+        service.close()
         worker.join(10)
         runtime.close()
     assert not worker.is_alive()
@@ -3007,13 +3009,18 @@ def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_
 
     service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
         runtime_controller=None, private_conversations=Pending())
-    worker = threading.Thread(target=service._reconcile_private)
-    worker.start()
+    service.start()
+    worker = service._delivery_thread
+    assert worker is not None
     try:
         assert full.wait(5)
         assert len(calls) == 4 and len(set(calls)) == 4
-        service._closed.set()
+        closer = threading.Thread(target=service.close)
+        closer.start()
+        assert service._closed.wait(1)
         release.set()
+        closer.join(5)
+        assert not closer.is_alive()
         worker.join(5)
         assert not worker.is_alive()
         assert len(calls) == 4  # Five durable requests remain; none were queued in memory.

@@ -23,7 +23,7 @@ def has_explicit_context_read_source(args: argparse.Namespace) -> bool:
     """
     return getattr(args, "quota_command", None) == "context-read" and any(
         getattr(args, key, None) for key in (
-            "capture_file", "capture_sha256", "codex_context_dir", "codex_context_root"
+            "capture_file", "capture_sha256", "reference_file", "codex_context_dir", "codex_context_root"
         )
     )
 

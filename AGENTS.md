@@ -232,8 +232,9 @@ metadata, test, example or narrow-cleanup PRs when all these conditions hold:
 - none of the protected behavior surfaces above is changed;
 - the diff is easy to review and required checks/focused smokes passed;
 - its exact head has the published review, and
-  `uv run --extra test loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID`
-  returned ready for that unchanged head;
+  `uv run --extra test loopx pr-review --check-merge-readiness NUMBER@HEAD_OID`
+  returned ready for that unchanged head (add `--goal-id GOAL` for already
+  Goal-managed work; standalone delivery requires no Goal);
 - no private state, raw benchmark evidence, credentials, local paths or
   generated logs are included;
 - no runtime behavior, benchmark adapter, permission, destructive Git or public

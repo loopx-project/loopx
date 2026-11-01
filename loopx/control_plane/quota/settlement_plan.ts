@@ -6,10 +6,11 @@ import {
 } from "../effect_program.ts";
 import {VISION_MATERIAL_CLOSEOUT_HINT, visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {parseExactGoalRef} from "../goals/goal_instance_identity.ts";
-import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString, requireStringArray, requireStringLiteral} from "../runtime_decode.ts";
 import {MATERIAL_DELIVERY_OUTCOMES} from "../work_items/delivery_outcome.ts";
 import {DELIVERY_BOUNDARIES} from "../turn_driver/delivery_continuity.ts";
 import {PROGRESS_RESULT_CLASSES} from "../work_items/replan_history.ts";
+import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 
 export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan {
   const identity = settlementIdentity(
@@ -54,15 +55,28 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const inFlight = params.delivery_boundary === "in_flight_continuation";
   const autonomousReplan = (params.autonomous_replan === undefined ? false
     : requireBoolean(params.autonomous_replan, "autonomous_replan")) || identity.binding_kind === "autonomous_replan";
+  const mode = params.handoff_mode == null ? null
+    : requireStringLiteral(params.handoff_mode, HANDOFF_MODES, "handoff_mode");
+  const managedClaim = identity.binding_kind === "todo" && mode === "hard_lease";
+  const proofSupplied = params.completion_proof_supplied === undefined ? false
+    : requireBoolean(params.completion_proof_supplied, "completion_proof_supplied");
+  const completionProof = managedClaim && !proofSupplied
+    ? " --claim-operation-id '<original claim_operation_id>'" : "";
   const validation: SettlementStep = {
     kind: "validation", owner: "agent", idempotency_key_ref: "$.identity.effect_id",
     expected_receipt: "validation_receipt",
     precondition: "delivery result is independently validated",
   };
   if (identity.binding_kind === "todo") {
-    validation.command_template = requireNonEmptyString(commands.todo_completion, "todo_completion");
+    validation.command_template = requireNonEmptyString(commands.todo_completion, "todo_completion") + completionProof;
     validation.command_condition = "todo_deliverable_complete";
-    validation.precondition = "validate the original Todo deliverable; when complete, run ordinary Todo completion " +
+    const claimHint = managedClaim ? "Before task execution, prepare it with ordinary Todo claim: `" +
+      requireNonEmptyString(commands.todo_claim, "todo_claim") +
+      "`. Reuse an already accepted current claim or explicit lease proof; keep the original " +
+      "claim_operation_id for managed progress/completion retries. claimed_by alone is not an execution lease. " +
+      "An expired, released or replaced execution requires normal ownership recovery; " +
+      "this plan neither acquires nor renews execution. " : "";
+    validation.precondition = claimHint + "validate the original Todo deliverable; when complete, run ordinary Todo completion " +
       "with its original declaration and current lease before writeback/spend. Use --evidence for " +
       "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
       "not merely a Todo validator. No invented successor " +
@@ -108,7 +122,7 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     precondition: "the selected Todo is final with no runnable successor and matching " +
       "writeback and quota spend receipts exist",
     idempotency_key_ref: "$.identity.effect_id", expected_receipt: "terminal_closeout_receipt",
-    command_template: requireNonEmptyString(commands.terminal_closeout, "terminal_closeout"),
+    command_template: requireNonEmptyString(commands.terminal_closeout, "terminal_closeout") + completionProof,
     conditional: true,
   });
   return {

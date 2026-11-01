@@ -341,9 +341,6 @@ def handle_pr_review_command(
             )
             return 0 if payload["ok"] else 1
         if args.check_merge_readiness:
-            if not goal_id:
-                raise ValueError("merge readiness requires --goal-id")
-            assert runtime_root is not None  # the Goal configuration guard already checked this
             if (
                 args.autonomous_observation
                 or args.observation_state_file
@@ -416,25 +413,28 @@ def handle_pr_review_command(
                 source=source,
                 wait_for_ci=wait_for_ci,
             )
-            observation = record_readiness_observation(
-                runtime_root=runtime_root,
-                goal_id=goal_id,
-                readiness=payload,
-            )
-            payload["readiness_observation"] = {
-                key: observation[key]
-                for key in (
-                    "schema_version",
-                    "goal_id",
-                    "repository",
-                    "exact_head",
-                    "material_fingerprint",
-                    "ready",
-                    "blocking_reasons",
-                    "observed_at",
+            payload["local_goal_observation_write_performed"] = False
+            if goal_id:
+                assert runtime_root is not None  # checked with the Goal configuration above
+                observation = record_readiness_observation(
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    readiness=payload,
                 )
-            }
-            payload["local_goal_observation_write_performed"] = True
+                payload["readiness_observation"] = {
+                    key: observation[key]
+                    for key in (
+                        "schema_version",
+                        "goal_id",
+                        "repository",
+                        "exact_head",
+                        "material_fingerprint",
+                        "ready",
+                        "blocking_reasons",
+                        "observed_at",
+                    )
+                }
+                payload["local_goal_observation_write_performed"] = True
             print_payload(
                 payload,
                 output_format(args),

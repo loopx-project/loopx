@@ -144,6 +144,7 @@ def _todo_settlement_plan(
     path_args = ""
     for name, option in (
         ("project", "--project"), ("state_file", "--state-file"),
+        ("claim_operation_id", "--claim-operation-id"),
         ("task_lease_idempotency_key", "--task-lease-idempotency-key"),
         ("task_lease_expected_version", "--task-lease-expected-version"),
     ):
