@@ -29,8 +29,9 @@ retry. Its `repeat` driver owns reconciliation repetition, next-observation
 waits and step-error backoff without rebuilding the caller's live scope. This
 is Python thread IO, not another policy or Agent supervisor. Native
 account observation, manager returns/queued-source recovery and Lark private
-delivery use it through their existing owners. A normal return is terminal;
-retry is off unless that owner explicitly enables it. A live thread does not
+delivery use it through their existing owners. A host target's normal return is
+terminal; an explicitly repeated step returning `None` uses its declared interval.
+Failure retry is off unless that owner explicitly enables it. A live thread does not
 establish provider health, and waiting, cooldown or disabled work is not a fault.
 Keep authorization, election locks, receipts, cursors/backoff and ambiguous-write
 recovery with the provider. Never use host restart to replay a model request or
