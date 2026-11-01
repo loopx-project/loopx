@@ -1349,14 +1349,23 @@ A first implementation is acceptable when:
 `pull_request_review.wait_for_ci` defaults to `true`. Machine defaults use the
 existing capability editor. A Goal may override the complete review namespace;
 clearing that override restores live machine defaults. Local required validation
-and exact-head review/thread gates apply in both modes. Attribute a red required
-check before selecting the review verdict: an unchanged failure reproduced on
-the immutable base and exact head, or an independently evidenced external
-outage, is not a reason to request code changes on an unrelated PR when its
-changed invariant has separate passing coverage. Record the red check and its
-owner; approval does not make a blocked merge ready. A new, worsened or
-unattributed current failure remains a review blocker. Policy revision 18 scopes
-the matrix to the reviewed head. Keep relevant older failures in existing
+and exact-head review/thread gates apply in both modes. CI completion, success
+and exhaustive failure attribution are not approval prerequisites. Unknown,
+failed, skipped, cancelled or pending remote jobs remain diagnostic rows with
+`required=false` when independent current evidence establishes the affected
+invariants. Preserve an unknown cause as `unresolved`; do not invent baseline or
+infrastructure attribution, demand CI logs solely to approve, or require the PR
+to repair unrelated jobs. A confirmed `pr_regression` blocks approval even if
+its row is marked diagnostic. Missing necessary review evidence and material
+instability remain blockers: name the current invariant and smallest decisive
+check instead of using “CI evidence unknown” as the finding.
+
+Claim that failed **required review validation** is unrelated only with the
+same failure reproduced on the immutable base and exact head, or independent
+evidence of an external outage, and separate passing coverage of the changed
+invariant. Record the red check and its owner; approval does not make a blocked
+merge ready. An unresolved required review validation still blocks approval.
+The matrix assesses the reviewed head. Keep relevant older failures in existing
 result/evidence text with their source and explain why current independent
 evidence covers the exposed invariant and conditions. An unknown historical
 cause alone is not a veto, nor does current passing evidence prove that cause
@@ -1371,7 +1380,7 @@ available CI and retain the configured merge gate, but do not require every
 remote job to finish or succeed before approving independently verified code.
 `repository_required_checks` records decisive repository validation for the
 review; each matrix row's `required` flag means review evidence, not GitHub
-branch protection. Record merely pending remote jobs as diagnostic rows with
+branch protection. Record remote CI observations as diagnostic rows with
 `required=false` when current independent coverage establishes their relevant
 invariants. If a queued job is the only decisive coverage, leave that invariant
 required and unverified. Pending CI alone never justifies `REQUEST_CHANGES`;
