@@ -64,12 +64,27 @@ def recommendation_runs(runtime_root: Path, goal_id: str) -> list[dict[str, Any]
         key=lambda item: (*chronology_key(item[1].get("generated_at")), item[0]), reverse=True)]
 
 
-def latest_bound_recommendation(runs: list[dict[str, Any]], agent_id: str) -> dict[str, Any] | None:
+def recommendation_run_decision(row: dict[str, Any]) -> dict[str, Any] | None:
     # Journal decoding only. The TS owner validates source, actor and task binding.
+    from .refresh_recommendation import RECOMMENDED_ACTION_SOURCE_EXPLICIT
+
+    resolution = row.get("recommended_action_resolution")
+    if not isinstance(resolution, dict):
+        return None
+    if resolution.get("recommended_action_source") == RECOMMENDED_ACTION_SOURCE_EXPLICIT:
+        # Preserve the same committed decision identity in full and retained
+        # history. A derived observation does not retire or mint a step.
+        return {**resolution, "agent_id": row.get("agent_id"), "goal_id": row.get("goal_id"),
+            "journal_source": {key: row.get(key) for key in ("generated_at", "json_path")}}
+    return resolution if resolution.get("step_revision") else None
+
+
+def latest_bound_recommendation(runs: list[dict[str, Any]], agent_id: str) -> dict[str, Any] | None:
     for row in runs:
-        resolution = row.get("recommended_action_resolution")
-        if row.get("agent_id") == agent_id and isinstance(resolution, dict) and resolution.get("step_revision"):
-            return resolution
+        if row.get("agent_id") == agent_id:
+            decision = recommendation_run_decision(row)
+            if decision is not None:
+                return decision
     return None
 
 
