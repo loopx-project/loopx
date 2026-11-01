@@ -140,6 +140,10 @@ def test_private_lark_tenant_urls_remain_blocked(tmp_path: Path, line: str) -> N
 # second list here: this rule gates repository publication, and a list that
 # recognized only some issuers certified the rest as public-safe.
 PROVIDER_TOKEN_SAMPLES = [
+    "sk-proj-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+    "sk-svcacct-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+    "sk-admin-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+    "sk-ant-api03-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
     "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a",
     "github_pat_" + "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789",
     "xoxb-" + "123456789012-abcdefghijkl",
@@ -182,6 +186,10 @@ def test_a_short_provider_lookalike_stays_clean(tmp_path: Path) -> None:
 PROVIDER_TOKENS_WITH_PLACEHOLDER_BODY = [
     "ghp_" + "dummy" + "1234567890abcdefghijklmnop",
     "npm_" + "example" + "1234567890abcdefghij",
+    "sk-proj-" + "example" + "1234567890abcdefghij",
+    "sk-svcacct-" + "example" + "1234567890abcdefghij",
+    "sk-admin-" + "example" + "1234567890abcdefghij",
+    "sk-ant-api03-" + "example" + "1234567890abcdefghij",
 ]
 
 

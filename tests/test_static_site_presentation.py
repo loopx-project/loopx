@@ -211,6 +211,18 @@ def test_package_requires_visual_and_link_validation_receipts(
         _package(site, tmp_path / "publish", tmp_path / "state", **{field: value})
 
 
+@pytest.mark.parametrize("prefix", ["sk-proj-", "sk-svcacct-", "sk-admin-", "sk-ant-api03-"])
+def test_package_rejects_unlabeled_ai_provider_tokens(tmp_path: Path, prefix: str) -> None:
+    site = _site(tmp_path)
+    token = prefix + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0"
+    (site / "notes.txt").write_text(f"provider output: {token}\n", encoding="utf-8")
+    destination = tmp_path / "publish"
+
+    with pytest.raises(StaticSiteContractError, match="public boundary scan failed"):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
 def test_package_rejects_reserved_paths_symlinks_and_public_boundary_leaks(
     tmp_path: Path,
 ) -> None:
