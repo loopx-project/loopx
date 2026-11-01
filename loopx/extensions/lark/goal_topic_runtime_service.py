@@ -15,6 +15,7 @@ from typing import Any
 
 from ...chat_manager import MANAGER_AGENT_OBJECTIVE
 from ...file_lock import try_exclusive_file_lock
+from ..background_runtime import HostedWorker
 from .goal_channel_contracts import bindings_for_goal
 from .manager_context import session_turn_effect
 from .team_plan_confirmation import (
@@ -59,6 +60,7 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
         self._delivery_thread: threading.Thread | None = None
+        self._delivery_worker: HostedWorker | None = None
 
     def start(self) -> None:
         """Discover existing bindings without blocking the HTTP readiness path."""
@@ -73,8 +75,10 @@ class LarkGoalTopicRuntimeService:
             )
             self._startup_thread.start()
             if self.private_conversations is not None:
-                self._delivery_thread = threading.Thread(target=self._reconcile_private, name="loopx-lark-private-delivery", daemon=True)
-                self._delivery_thread.start()
+                self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
+                    name="loopx-lark-private-delivery", retry_seconds=5)
+                self._delivery_worker.start()
+                self._delivery_thread = self._delivery_worker.thread
 
     def _reconcile_private(self) -> None:
         # Keep slow provider writes/readbacks off the scan loop. At most four
@@ -559,8 +563,8 @@ class LarkGoalTopicRuntimeService:
             stop.set()
         for _stop, thread, _fingerprint in workers:
             thread.join(timeout=3)
-        if self._delivery_thread is not None:
-            self._delivery_thread.join(timeout=3)
+        if self._delivery_worker is not None:
+            self._delivery_worker.close(timeout=3)
 
 
 __all__ = ["LarkGoalTopicRuntimeService"]

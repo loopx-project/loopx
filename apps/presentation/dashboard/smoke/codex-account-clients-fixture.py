@@ -82,7 +82,7 @@ def main() -> None:
         service = CodexAccountService(runtime)
         service.watcher.close()
         service.provider = provider
-        service.watcher = native.Watcher(provider)
+        service.watcher = service._new_observer(native)
         server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
         server.verbose = False
         server.codex_account_service = service

@@ -23,6 +23,19 @@ LoopX Core
 
 ## Runtime Responsibilities
 
+Python-hosted background loops share `loopx.extensions.background_runtime.HostedWorker`
+for idempotent thread start, cooperative close and explicitly selected failure
+retry. This is Python thread IO, not another policy or Agent supervisor. Native
+account observation, manager returns/queued-source recovery and Lark private
+delivery use it through their existing owners. A normal return is terminal;
+retry is off unless that owner explicitly enables it. A live thread does not
+establish provider health, and waiting, cooldown or disabled work is not a fault.
+Keep authorization, election locks, receipts, cursors/backoff and ambiguous-write
+recovery with the provider. Never use host restart to replay a model request or
+discard an in-flight journal. The standalone native account wheel retains its
+own process entrypoint and needs no Core import for account IO; when hosted by
+Core, it delegates thread lifetime to this shared host.
+
 The experimental [MemT Nano Turn host](../../packages/loopx-memt-turn/README.md)
 is a separately installed `generic-cli` execution provider. Its native memory
 is scoped advisory history, not canonical work state or accepted Reward Memory.

@@ -12,6 +12,8 @@ from itertools import islice
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 
+from ...extensions.background_runtime import HostedWorker
+
 from . import _root, _read, _write, _hash, authority, target_authority
 from .tracking import _entry, _now
 from ...file_lock import (
@@ -588,16 +590,19 @@ class ReturnService:
     def __init__(self, root, registry, store, external_sender):
         self.args = (root, registry, store, external_sender)
         self.stop = threading.Event()
-        self.thread = threading.Thread(
-            target=self.run, daemon=True, name="loopx-manager-returns"
-        )
-        self.execution_thread = threading.Thread(
-            target=self.run_executions, daemon=True, name="loopx-manager-executions"
-        )
+        self._execution_pump = None
+        self._return_worker = HostedWorker(target=self.run, stop=self.stop,
+                                          name="loopx-manager-returns", retry_seconds=3)
+        self._execution_worker = HostedWorker(target=self.run_executions, stop=self.stop,
+                                             name="loopx-manager-executions", retry_seconds=3)
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def start(self) -> None:
-        self.thread.start()
-        self.execution_thread.start()
+        self._return_worker.start()
+        self._execution_worker.start()
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def run(self):
         try:
@@ -617,7 +622,9 @@ class ReturnService:
         # Native previews may wait on a subprocess. Keep result publication
         # independent, using the same server lifetime and one serial probe.
         from .execution import QueuedSourcePump
-        execution_pump = QueuedSourcePump(*self.args[:3])
+        if self._execution_pump is None:
+            self._execution_pump = QueuedSourcePump(*self.args[:3])
+        execution_pump = self._execution_pump
         while not self.stop.is_set():
             try:
                 execution_pump.tick(cancelled=self.stop.is_set)
@@ -627,6 +634,5 @@ class ReturnService:
 
     def close(self) -> None:
         self.stop.set()
-        for thread in (self.thread, self.execution_thread):
-            if thread.ident is not None:
-                thread.join(timeout=1.5)
+        self._return_worker.close(timeout=1.5)
+        self._execution_worker.close(timeout=1.5)

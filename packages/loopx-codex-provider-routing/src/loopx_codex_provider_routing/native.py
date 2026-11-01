@@ -497,9 +497,22 @@ class Watcher:
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
         self.start_lock = threading.Lock()
+        self._hosted = None
         self.provider.switch_allowed = lambda: not self.stop.is_set()
 
+    def hosted_by(self, runner_factory):
+        """Let Core host the loop without making standalone account IO depend on it."""
+        if self.thread is not None:
+            raise HostError("observer_already_started")
+        self._hosted = runner_factory(name="codex-account-observer", target=self.run,
+                                      stop=self.stop, retry_seconds=60)
+        return self
+
     def start(self):
+        if self._hosted is not None:
+            self._hosted.start()
+            self.thread = self._hosted.thread
+            return self
         with self.start_lock:
             if not self.stop.is_set() and (self.thread is None or not self.thread.is_alive()):
                 self.thread = threading.Thread(target=self.run, daemon=True, name="codex-account-observer")
@@ -547,6 +560,9 @@ class Watcher:
                "next_check_at": next_check, "phase": phase})
 
     def close(self):
+        if self._hosted is not None:
+            self._hosted.close(timeout=2)
+            return
         self.stop.set()
         if self.thread:
             self.thread.join(timeout=2)

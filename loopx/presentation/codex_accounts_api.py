@@ -10,6 +10,8 @@ import importlib
 import threading
 from typing import Any, Protocol, cast
 
+from ..extensions.background_runtime import HostedWorker
+
 CODEX_ACCOUNTS_PATH = "/api/chat/codex-accounts"
 
 
@@ -25,7 +27,7 @@ class CodexAccountService:
         except ImportError:
             return
         self.provider = provider_module.NativeAccounts(runtime_root)
-        self.watcher = provider_module.Watcher(self.provider)
+        self.watcher = self._new_observer(provider_module)
         self.error = None
         # Rehydrate an explicitly enabled observer after an App restart. The
         # absent/default-off path neither creates state nor reads native auth.
@@ -34,13 +36,20 @@ class CodexAccountService:
         except Exception:
             self.error = "state_unavailable"
 
+    def _new_observer(self, module):
+        watcher = module.Watcher(self.provider)
+        host = getattr(watcher, "hosted_by", None)
+        # Already-installed older optional providers retain their existing
+        # entrypoint until upgrade; no credential or decision owner is copied.
+        return host(HostedWorker) if callable(host) else watcher
+
     def _reconcile_observer(self) -> None:
         if self.closed:
             return
         if self.provider.path.exists() and self.provider._load()["policy"]["enabled"]:
             if self.watcher.stop.is_set():
                 module = importlib.import_module("loopx_codex_provider_routing.native")
-                self.watcher = module.Watcher(self.provider)
+                self.watcher = self._new_observer(module)
             self.watcher.start()
         else:
             self.watcher.close()
