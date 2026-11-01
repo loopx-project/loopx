@@ -42,6 +42,7 @@ from .history import (
     collect_history,
 )
 from .paths import DEFAULT_RUNTIME_ROOT, LEGACY_RUNTIME_ROOT, rel_or_abs, resolve_runtime_root
+from .public_safe_text import PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
 from .registry import inspect_registry, inspect_registry_boundary, registry_goals, resolve_state_file
 from .state_projection import state_projection_gap_warning
 from .control_plane.todos.contract import (
@@ -111,6 +112,13 @@ LEAK_RULES = {
                     r"(?<![A-Za-z0-9_])" + "tok" + "en=",
                     r"(?<![A-Za-z0-9_])" + "pass" + "word=",
                     "Author" + "ization:",
+                    # A provider token carries its issuer in the prefix, so it
+                    # needs no label. The shapes come from the canonical
+                    # public-safety owner rather than a second copy here: this
+                    # scan gates repository publication, and a credential list
+                    # that recognized only some issuers certified the rest as
+                    # public-safe (Refs #5136, #7635).
+                    PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE,
                 ]
             ),
             re.I,
@@ -121,6 +129,23 @@ LEAK_RULES = {
             "tok" + "en=",
             "pass" + "word=",
             "author" + "ization:",
+            "ghp_",
+            "gho_",
+            "ghu_",
+            "ghs_",
+            "ghr_",
+            "github_pat_",
+            "akia",
+            "asia",
+            "xox",
+            "aiza",
+            "sk_live_",
+            "sk_test_",
+            "rk_live_",
+            "rk_test_",
+            "npm_",
+            "pypi-",
+            "eyj",
         ),
     ),
     # The private roots take the host's own separator, so a Windows host
@@ -204,6 +229,11 @@ CREDENTIAL_PLACEHOLDER_PATTERN = re.compile(
     r"<[^>]{1,64}>|\{\{|example|dummy|placeholder|changeme|redacted|your[-_]",
     re.I,
 )
+# A provider token has no keyword that separates its value from surrounding
+# text, so only the exact access-key id published in the AWS documentation may
+# be treated as an example. A placeholder word inside an opaque token body is
+# part of the value, not an external reference (Refs #7713 review).
+CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN = re.compile(r"AKIAIOSFODNN7EXAMPLE")
 CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{20,}")
 CREDENTIAL_VARIABLE_REFERENCE_PATTERN = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)\]}]"
@@ -225,7 +255,7 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
         last_keyword = keyword.group(0)
         value = value[keyword.end() :].lstrip(" \t\"'`")
     if last_keyword is None:
-        return bool(CREDENTIAL_PLACEHOLDER_PATTERN.search(match.group(0)))
+        return bool(CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN.fullmatch(match.group(0)))
     if not value:
         return True
     if CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN.match(value):
