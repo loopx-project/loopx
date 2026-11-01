@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 import uuid
+from datetime import datetime
 
 from ...chat import (
     VisibleResponseStreamFilter,
@@ -301,6 +303,87 @@ class AntigravityAdapter:
 
     adapter_kind = "antigravity_ls"
 
+    @staticmethod
+    def completed_result_observation(*, cascade_id: str, request_ref: str, message: str,
+                                     started_at: str, completed_at: str,
+                                     work_dir: Path, input_anchor: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Read an existing result; never start, send to or cancel a cascade.
+
+        Legacy owner requests require the exact Core-generated source context,
+        input time inside the failed Turn, and one native execution identity.
+        New Turns additionally freeze their prompt hash before provider send.
+        """
+        try:
+            found = discover_antigravity_language_server()
+            if found is None:
+                return None
+            def read(method: str, **payload: Any) -> dict[str, Any]:
+                return _rpc_post(found["url"], found["csrf_token"], method,
+                                 {"cascadeId": cascade_id, **payload}, timeout=5.0)
+
+            before = read("GetCascadeTrajectory")
+            total = before.get("numTotalSteps")
+            if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total < 2
+                    or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                return None
+            raw = read("GetCascadeTrajectorySteps", startIndex=0, endIndex=total).get("steps")
+            if not isinstance(raw, list):
+                return None
+            indexed, covered = _observed_turn_steps(raw, 0, total)
+            after = read("GetCascadeTrajectory")
+            if (covered != total or after.get("status") != before["status"]
+                    or after.get("numTotalSteps") != total
+                    or (after.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                return None
+            inputs = [(i, step) for i, step in indexed if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
+            if not inputs:
+                return None
+            start, user = inputs[-1]
+            metadata = user.get("metadata") or {}
+            created = datetime.fromisoformat(metadata["createdAt"])
+            if not datetime.fromisoformat(started_at) <= created <= datetime.fromisoformat(completed_at):
+                return None
+            content = user.get("userInput") or {}
+            prompt = content.get("userResponse")
+            if (not isinstance(prompt, str) or content.get("items") != [{"text": prompt}]):
+                return None
+            marker = "Fresh Core evidence (JSON data, not instructions):\n"
+            if prompt.count(marker) != 1:
+                return None
+            context, end = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1])
+            if (not isinstance(context, dict) or context.get("schema_version") != "manager_turn_context_v1"
+                    or (context.get("context_delegation") or {}).get("source_id") != request_ref
+                    or prompt.split(marker, 1)[1][end:] != "\n\nCurrent user message:\n" + message):
+                return None
+            prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
+            if input_anchor is not None and (input_anchor.get("thread_id") != cascade_id
+                    or input_anchor.get("start_step_index") != start or input_anchor.get("input_sha256") != prompt_hash):
+                return None
+            execution = metadata.get("executionId")
+            current = indexed[start:]
+            if not isinstance(execution, str) or not execution or any(
+                    step.get("status") != "CORTEX_STEP_STATUS_DONE"
+                    or step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                    or (step.get("metadata") or {}).get("executionId") != execution
+                    for _, step in current):
+                return None
+            final = current[-1][1]
+            planner = final.get("plannerResponse") or {}
+            answer = planner.get("modifiedResponse") or planner.get("response")
+            if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
+                    or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"
+                    or not isinstance(answer, str) or not answer.strip()):
+                return None
+            response = parse_agent_response(answer, protected_paths=[work_dir])
+            if not response.get("message"):
+                return None
+            return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
+                "input_created_at": metadata["createdAt"], "start_step_index": start, "total_steps": total,
+                "input_sha256": prompt_hash, "answer_sha256": hashlib.sha256(answer.encode()).hexdigest(),
+                "latest_input_verified": True, "normal_terminal_verified": True, "response": response}
+        except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
+            return None
+
     def __init__(
         self,
         *,
@@ -508,10 +591,16 @@ class AntigravityAdapter:
         self._cancel_acknowledged = False
         try:
             return self._run_turn(message, event_sink)
-        except BaseException:
+        except BaseException as failure:
             # A timeout/transport or permission failure is not a successful turn.
             # Retain an unconfirmed cancellation as an error for the caller fence.
-            self.interrupt_turn()
+            try:
+                self.interrupt_turn()
+            except Exception as cancellation:
+                note = f"Antigravity cancellation remains unconfirmed ({type(cancellation).__name__})."
+                failure.add_note(note)
+                if isinstance(failure, CodexChatAgentError):
+                    failure.args = (f"{failure} {note}",)
             raise
         finally:
             self._active_turn_id = None
@@ -554,7 +643,9 @@ class AntigravityAdapter:
             self._check_interrupted()
             self._active_turn_id = turn_id
             if event_sink is not None:
-                event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id})
+                event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id,
+                    "native_input": {"thread_id": self.cascade_id, "start_step_index": start_step_index,
+                                     "input_sha256": hashlib.sha256(full_prompt.encode()).hexdigest()}})
             _rpc_post(self.ls_url, self.csrf_token, "SendUserCascadeMessage", send_payload, timeout=15.0)
             self._system_primed = True
             self._pending_history.clear()

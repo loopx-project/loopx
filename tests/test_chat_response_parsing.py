@@ -10,6 +10,19 @@ from loopx.chat import (
 )
 
 
+@pytest.mark.parametrize("metadata", [
+    {"context_handoff": [{"goal_id": "work", "agent_id": "worker", "brief": "invalid brief"}]},
+    {"context_handoff": {"goal_id": "work", "agent_id": "worker", "brief": []}},
+])
+def test_invalid_action_metadata_preserves_answer_without_admitting_actions(metadata):
+    response = parse_agent_response("The original answer.\n" + CHAT_REVIEW_OPEN_TAG
+        + json.dumps({"message": "", **metadata}) + CHAT_REVIEW_CLOSE_TAG)
+    assert response["message"] == "The original answer."
+    assert response["gate"]["kind"] == "response_metadata_invalid"
+    assert not response.get("context_handoff") and not response.get("goal_draft")
+    assert response["proposals"] == [] and response["protected_action"] is None
+
+
 @pytest.mark.parametrize("change", [None, {"effects_settled": False}, {"effects_settled": "true"},
     {"remaining": ""}, {"remaining": "x" * 1001}, {"dependency": 4}, {"grant": "workspace_write"}])
 def test_unfinished_work_is_explicit_bounded_data_never_inferred_from_prose(change):

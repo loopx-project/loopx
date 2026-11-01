@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from test_chat_ordinary_project import ordinary  # noqa: F401
+from test_antigravity_steward_adapter import language_server  # noqa: F401
 
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
@@ -218,6 +219,100 @@ def connect(fixture):
         bindings.configure(transport_ref=profile, project_ref=contexts.available()[0]["project_ref"], executor_endpoint_id="codex")
     return store, runtime, provider, LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
                                                              runner=provider, cli_bin="lark-cli")
+
+
+@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "unfinished", "source-changed", "closed", "lost-ack", "message-crash"])
+def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.chat_store import _read_json
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, _, workspace = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        original = AntigravityAdapter.start_turn
+        language_server["invalid_handoff"] = case == "invalid-metadata"
+        language_server["unfinished"] = case == "unfinished"
+        def lost_core_terminal(adapter, message, event_sink):
+            original(adapter, message, event_sink)
+            raise CodexChatAgentError("Synthetic lost Core terminal commit", gate=None, error_code="antigravity_rpc_error")
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", lost_core_terminal)
+        event = provider.event("steward-app", "native-original", "Complete the original request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        row = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+        assert failed["status"] == "failed" and failed["error_code"] == "antigravity_rpc_error"
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
+        path = transport.root / f"{ref}.json"
+        old = _read_json(path)
+        if case not in {"source-changed", "closed"}:
+            assert transport.core.context_recovery_candidate(ref)
+        failed_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+        writes = len(provider.writes)
+        monkeypatch.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("Result recovery enqueued work"))
+        monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: pytest.fail("Result recovery resumed work"))
+        if case == "source-changed":
+            provider.messages[event["message_id"]]["content"] = "Edited source"
+        elif case == "closed":
+            store.update_session(row["session_id"], status="closed")
+        elif case == "lost-ack":
+            provider.lose_next_reply = True
+        elif case == "message-crash":
+            append = store.append_message
+            def crash(*args, **kwargs):
+                if str(kwargs.get("message_id", "")).startswith("native."):
+                    raise OSError("Synthetic journal/message crash")
+                return append(*args, **kwargs)
+            monkeypatch.setattr(store, "append_message", crash)
+            with pytest.raises(OSError, match="journal/message crash"):
+                transport.reconcile()
+            monkeypatch.setattr(store, "append_message", append)
+        if case == "lost-ack":
+            # The original intent owner retains/reconciles an uncertain write.
+            try:
+                transport.reconcile()
+            except OSError:
+                pass
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        restarted.reconcile()
+        native = restarted.core.read_request(ref)
+        recovered = native.get("native_result_recovery")
+        if case in {"source-changed", "closed"}:
+            assert recovered is None and len(provider.writes) == writes
+        elif case == "lost-ack":
+            assert recovered["delivery_verified"] is False
+            receipt = _read_json(path)["deliveries"][f"native_result.{row['turn_id']}"]
+            assert receipt["started"] and not receipt.get("attempt")
+            assert receipt["blocker"] == "provider_delivery_receipt_unknown"
+            assert len(provider.writes) == writes + 1
+            restarted.reconcile()
+            assert len(provider.writes) == writes + 1  # Unknown delivery remains owed.
+            assert restarted.health()[row["binding_id"]]["pending_count"] == 1
+        else:
+            assert recovered["delivery_verified"] is True
+            message = next(item for item in store.messages(row["session_id"]) if item["message_id"] == recovered["message_id"])
+            receipt = _read_json(path)["deliveries"][f"native_result.{row['turn_id']}"]
+            body = json.loads(provider.messages[receipt["attempt"]["message_ref"]]["body"]["content"])
+            assert body["zh_cn"]["content"][0][0]["text"] == message["text"]
+            assert "Argon answer 1" in message["text"]
+            assert len(provider.writes) == writes + 1
+            assert restarted.health()[row["binding_id"]]["pending_count"] == (case in {"invalid-metadata", "unfinished"})
+            if case == "unfinished":
+                assert "Original work still owed" in message["text"]
+            assert len([item for item in store.messages(row["session_id"]) if item["message_id"] == recovered["message_id"]]) == 1
+        assert _read_json(path)["deliveries"]["terminal"] == old["deliveries"]["terminal"]
+        assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == failed_bytes
+        assert len(list(store._turn_path(row["session_id"], row["turn_id"]).parent.glob("*.json"))) == 1
+        assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+    finally:
+        fixture.close()
 
 
 def connect_group(fixture):

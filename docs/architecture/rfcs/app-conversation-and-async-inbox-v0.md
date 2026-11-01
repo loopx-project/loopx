@@ -1802,3 +1802,28 @@ explicit quota refusal, unknown failure, lost post-write receipt, unavailable
 readback, recovery of older failed journals and two-App isolation. Live provider
 delivery remains separate. Model completion, material intake and an intermediate
 card cannot substitute for final-message readback.
+
+### Recovering a native result after Core failure
+
+An Antigravity owner request can finish natively while Core retains a transport
+failure. The original reply worker may adopt that existing answer, without
+admitting another Turn, sending native input or cancelling an invocation. The
+typed conversation owner requires the original private steward binding, source,
+failed Turn and current grant, with no attachments, steering, stop/new command
+or attached-host routing. The provider read must cover a stable, idle trajectory,
+its latest input and one fully settled native execution ending in a normal final
+response. Correlation requires the exact Core source context, original message
+and input time inside the failed Turn. New inputs additionally persist the
+pre-send prompt hash and native start index in the existing `turn.started` event.
+Missing, conflicting or stream-error evidence keeps the request pending.
+
+The existing request journal reserves the adopted result before appending one
+deterministic canonical Chat message. The original failed Turn, events and
+delivered failure notice remain unchanged. Lark uses a distinct phase in the
+same Inbox intent/readback path; a crash resumes the same message and receipt.
+An unknown post-write acknowledgement remains owed and cannot cause a blind
+resend. Invalid action metadata preserves the answer with an explicit gate and
+submits none of its actions. Recovery itself does not execute even valid action
+metadata. Such work remains pending after the recovered prose is delivered;
+answer restoration does not certify the requested business or handoff complete.
+Cancellation failure retains the primary provider error and unconfirmed cleanup.
