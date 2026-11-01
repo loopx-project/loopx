@@ -105,6 +105,15 @@ def native_process_continuation(request, identity, *, code_mode=False):
     return None
 
 
+def reference_metadata_oracle(view):
+    """Inspect complete metadata as an oracle, never as a model read receipt."""
+    if view.get("schema_version") == "context_capture_navigation_v1":
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+        return read_context_read_reference(view["reference_file"])[1]["navigation"]
+    return view
+
+
 class NativeContextReader:
     """Static inference which follows only model-visible native reader cursors.
 
@@ -166,10 +175,7 @@ class NativeContextReader:
         if self.pending.get("reference", {}).get("schema_version") == "context_capture_navigation_v1":
             # Resolve oracle metadata only after complete model-visible byte
             # coverage; a reference never seeds the retained-input baseline.
-            from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
-
-            _, descriptor = read_context_read_reference(first["reference_file"])
-            navigation = descriptor["navigation"]
+            navigation = reference_metadata_oracle(self.pending["reference"])
             assert navigation["sha256"] == first["sha256"]
             first = {**first, **navigation}
         # The original reader owns digest verification. This separate oracle

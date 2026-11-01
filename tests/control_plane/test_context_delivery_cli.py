@@ -598,10 +598,10 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
     assert _spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("native_failure", [None, "projection", "directory"])
+@pytest.mark.parametrize("native_failure", [None, "projection", "directory", "reader_reference"])
 def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota
+    from loopx.cli_commands import quota, quota_capture
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
@@ -625,10 +625,15 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     def unavailable_directory(**kwargs):
         raise OSError("native directory unavailable")
 
+    def unavailable_reference(*args, **kwargs):
+        raise OSError("synthetic reader metadata unavailable")
+
     monkeypatch.setattr(quota, "project_captured_context", competing)
     monkeypatch.setattr(codex_context, "project_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
+    elif native_failure == "reader_reference":
+        monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable_reference)
     printed = []
     assert quota._emit_quota_result(original, args, context=None, registry_path=tmp_path / "absent.json",
         heartbeat_turn_id=None, usage_quota_started=0, capture_directory=tmp_path,

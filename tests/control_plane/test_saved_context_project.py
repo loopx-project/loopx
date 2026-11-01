@@ -9,15 +9,7 @@ import sys
 import pytest
 
 from tests.control_plane.test_quota_settlement_cli import _run_cli
-
-
-def machine_reference_oracle(view):
-    """Inspect complete metadata as an oracle, never as a model read receipt."""
-    if view.get("schema_version") == "context_capture_navigation_v1":
-        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
-
-        return read_context_read_reference(view["reference_file"])[1]["navigation"]
-    return view
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle as machine_reference_oracle
 
 
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
@@ -206,10 +198,11 @@ def test_saved_projection_reference_allows_optional_exact_read_and_restart(tmp_p
     assert source.read_bytes() == raw and not registry.exists() and not runtime.exists()
 
 
-@pytest.mark.parametrize("failure", ["wire", "inline_read"])
+@pytest.mark.parametrize("failure", ["wire", "inline_read", "reader_reference", "reader_recovery_reference"])
 def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path, monkeypatch, failure):
-    from loopx.cli import build_parser
-    from loopx.cli_commands.quota_capture import project_saved_context_capture
+    import errno
+
+    from loopx.cli_commands import quota_capture
     from loopx.control_plane.turn_driver import codex_context, decision_capture
 
     path, root, context = tmp_path / "original.json", tmp_path / "cache", tmp_path / "native"
@@ -232,14 +225,24 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
 
     monkeypatch.setattr(decision_capture, "write_decision_capture", fail_optional_wire)
     if failure == "inline_read":
-        from loopx.cli_commands import quota_capture
         monkeypatch.setattr(quota_capture, "read_context_capture", lambda args, **kwargs: {"ok": False})
+    elif failure.startswith("reader_"):
+        publish = quota_capture.write_context_read_reference
+        calls = []
+
+        def fail_reference(*args, **kwargs):
+            calls.append(args)
+            if len(calls) == (2 if failure == "reader_recovery_reference" else 1):
+                raise OSError(errno.ENOSPC, "synthetic reference publication failure")
+            return publish(*args, **kwargs)
+
+        monkeypatch.setattr(quota_capture, "write_context_read_reference", fail_reference)
     digest = hashlib.sha256(raw).hexdigest()
-    args = build_parser().parse_args(["--format", "json", "quota", "context-project",
+    code, wire = _run_cli(tmp_path / "absent.json", tmp_path / "absent-runtime", "quota", "context-project",
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
         "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn", "--context-delivery", "on",
-        "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(root)])
-    wire = project_saved_context_capture(args)
+        "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(root), cwd=tmp_path)
+    assert code == 0, wire  # Actual CLI must return JSON, never an IO traceback.
     result = machine_reference_oracle(wire)
     assert result["ok"] and result["mode"] == "full"
     recovered_path, recovered_digest = codex_context.read_codex_context_reference(str(context),

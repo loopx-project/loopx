@@ -616,7 +616,13 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
         reference = {key: native_view[key] for key in ("path", "sha256", "command")}
         mode, target = native_view["mode"], native_view.get("target")
+        native_view = model_context_reference(native_view)
     except (QuotaDecisionTransportError, OSError, ValueError, TypeError, RecursionError) as exc:
+        if native_view is not None and not isinstance(exc, QuotaDecisionTransportError):
+            # The native view and journal are already valid. Publishing the
+            # shorter reader metadata is optional; retain their exact legacy
+            # recovery rather than losing the original capture or admitting again.
+            return native_view
         if isinstance(exc, QuotaDecisionTransportError) or (activation["enabled"] and not native_prepared):
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(
@@ -650,7 +656,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if activation["enabled"] else CONTEXT_CAPTURE_READ_GUIDANCE)}
     if native_view is not None:
-        return model_context_reference(native_view)
+        return native_view
     return result
 
 
