@@ -222,7 +222,7 @@ export const configurationBackupScenario = {
       await contextSwitch.scrollIntoViewIfNeeded();
       await page.screenshot({path: resolve(outputDir, "context-default-on-mobile.png"), animations: "disabled"});
       await page.setViewportSize({width: 1512, height: 982});
-      await contextSwitch.uncheck();
+      await contextSwitch.click();
       await page.getByText("Off for Codex.", {exact: true}).waitFor();
       const storedSettings = () => readFile(join(root, "runtime/machine/configuration.json"), "utf8").then(JSON.parse);
       assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off");
@@ -230,11 +230,11 @@ export const configurationBackupScenario = {
       assert.equal(await contextSwitch.isChecked(), false, "A saved off must survive reload and the new on default");
       const applyRoute = "**/api/chat/machine-configuration/apply";
       await page.route(applyRoute, route => route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({ok: false, error: "Fixture unavailable"})}));
-      await contextSwitch.check();
-      await page.getByRole("alert").waitFor();
+      await contextSwitch.click();
+      await page.locator(".personal-capability-detail").getByRole("alert").waitFor();
       assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off", "Failed apply must preserve saved off");
       await page.unroute(applyRoute);
-      await contextSwitch.check();
+      await contextSwitch.click();
       await page.getByText("Codex preference is on; host readiness and actual use are not verified.", {exact: true}).waitFor();
       const afterSettings = await storedSettings();
       assert.equal(afterSettings.namespaces.context_delivery.mode, "on");
