@@ -80,7 +80,9 @@ def main() -> None:
         before = provider.path.read_bytes()
         calls.clear()
         service = CodexAccountService(runtime)
+        service.watcher.close()
         service.provider = provider
+        service.watcher = native.Watcher(provider)
         server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
         server.verbose = False
         server.codex_account_service = service
@@ -92,7 +94,13 @@ def main() -> None:
                 command = line.strip()
                 if command == "inspect":
                     print(json.dumps({"state_unchanged": provider.path.read_bytes() == before,
-                                      "calls": calls, "watcher_started": service.watcher.thread is not None}), flush=True)
+                                      "calls": calls, "policy": provider._load()["policy"],
+                                      "watcher_started": service.watcher.thread is not None}), flush=True)
+                elif command == "authorize-a" and api_fixture:
+                    result = service.call("configure", {"expected_revision": provider.status()["revision"],
+                                          "enabled": True, "slots": ["a"], "api_fallback": False})
+                    assert result["ok"]
+                    print(json.dumps({"policy": result["policy"]}), flush=True)
                 elif command in {"many", "sparse", "empty", "partial", "unavailable"}:
                     mode = command
                     print(json.dumps({"mode": mode}), flush=True)

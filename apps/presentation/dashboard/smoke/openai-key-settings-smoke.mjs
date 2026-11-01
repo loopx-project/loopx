@@ -27,6 +27,7 @@ async function command(value) { fixture.stdin.write(`${value}\n`); return next()
 let server, browser, workspace;
 let loseNextAdd = false;
 let addRequests = 0;
+const rejectedRequests = [];
 const syntheticKey = index => `sk-${"synthetic-only-".repeat(4)}${index}`;
 try {
   const { origin } = await next();
@@ -41,7 +42,9 @@ try {
         const body = request.method() === "POST" ? request.postDataJSON() : null;
         if (body?.operation === "keys-add") addRequests++;
         const response = await fetchWorkspaceBackend(route, origin);
-        assert.ok(!(await response.text()).includes("synthetic-only-"), "No response may contain the complete key");
+        const responseText = await response.text();
+        assert.ok(!responseText.includes("synthetic-only-"), "No response may contain the complete key");
+        if (response.status() >= 400) rejectedRequests.push({operation: body?.operation, code: JSON.parse(responseText).code});
         if (body?.operation === "keys-add" && loseNextAdd) {
           loseNextAdd = false;
           await route.abort("failed");
@@ -81,7 +84,7 @@ try {
   await add(3, "Recovery project");
   await panel.getByRole("alert").waitFor();
   await panel.getByRole("button", {name: "取消", exact: true}).click();
-  assert.equal(addRequests, 3, "A lost write response must be read back, never replayed");
+  assert.equal(addRequests, 3, "The application must read back a lost response without another submit");
   assert.equal(await panel.locator("article").count(), 3);
   await page.screenshot({path: resolve(outputDir, "openai-keys-populated-desktop.png"), animations: "disabled"});
   const native = page.getByTestId("codex-account-settings");
@@ -119,6 +122,53 @@ try {
   assert.equal(state.watcher_started, true);
   assert.equal(state.calls.filter(operation => operation === "switch").length, 2, "API fallback then recovered subscription return");
   assert.equal(api.turnRequests.length, 0);
+  const automatic = native.getByRole("checkbox", {name: "Switch automatically when quota runs out", exact: true});
+  const fallback = panel.getByRole("checkbox", {name: "Use API after subscription exhaustion (usage based billing)", exact: true});
+  async function configure(control) {
+    const acknowledged = page.waitForResponse(response => response.url().endsWith("/api/chat/codex-accounts")
+      && response.request().method() === "POST" && response.request().postDataJSON().operation === "configure");
+    await control.click();
+    const response = await acknowledged;
+    assert.equal(response.status(), 200);
+    const result = await response.json();
+    await page.waitForFunction(() => document.querySelector('[data-testid="codex-account-settings"]')?.getAttribute("aria-busy") === "false");
+    assert.deepEqual((await command("inspect")).policy, result.policy, "The acknowledged policy must be durable");
+    return result.policy;
+  }
+  await command("authorize-a");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="openai-key-settings"] input[type="checkbox"]')?.checked);
+  await native.getByRole("button", {name: "Check quota", exact: true}).click();
+  assert.deepEqual((await configure(fallback)).slots, ["a"], "An API-only edit must retain the subscription allowlist");
+  const restart = native.getByRole("checkbox", {name: "Allow automatic GPT client quit and restart", exact: true});
+  assert.deepEqual((await configure(restart)).slots, ["a"], "Restart permission cannot authorize another account");
+  await configure(restart);
+  await configure(automatic);
+  assert.equal(await fallback.isChecked(), true);
+  assert.equal(await fallback.isEnabled(), true, "API permission must remain revocable while routing is off");
+  assert.deepEqual((await command("inspect")).policy.slots, ["a"]);
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "openai-api-revoke-paused-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await page.screenshot({path: resolve(outputDir, "openai-api-revoke-paused-narrow.png"), animations: "disabled"});
+  assert.equal((await configure(fallback)).api_fallback, false);
+  assert.equal(await fallback.isEnabled(), false, "Enabling still requires automatic routing");
+  assert.deepEqual((await configure(automatic)).slots, ["a"]);
+  await native.getByRole("button", {name: "Check quota", exact: true}).click();
+  await configure(fallback);
+  await configure(automatic);
+  for (let remaining = 1; remaining >= 0; remaining--) {
+    await panel.locator("article").first().getByRole("button", {name: "Remove", exact: true}).click();
+    await page.waitForFunction(count => document.querySelectorAll('[data-testid="openai-key-settings"] article').length === count, remaining);
+  }
+  assert.equal(await fallback.isChecked(), true);
+  assert.equal(await fallback.isEnabled(), true, "Removing the last key cannot prevent permission revocation");
+  await page.setViewportSize({width: 1512, height: 982});
+  await panel.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "openai-api-revoke-no-keys-desktop.png"), animations: "disabled"});
+  const revoked = await configure(fallback);
+  assert.deepEqual({enabled: revoked.enabled, api_fallback: revoked.api_fallback, slots: revoked.slots},
+    {enabled: false, api_fallback: false, slots: ["a"]});
+  assert.equal(await fallback.isEnabled(), false);
   await command("unregistered");
   const register = native.getByRole("button", {name: "Register current Codex login", exact: true});
   await register.waitFor();
@@ -129,10 +179,16 @@ try {
   await native.locator("header").getByText(/Current PRIMARY/).waitFor();
   assert.equal(await native.getByRole("checkbox", {name: "Switch automatically when quota runs out", exact: true}).isChecked(), false);
   assert.equal(await panel.getByRole("checkbox", {name: "Use API after subscription exhaustion (usage based billing)", exact: true}).isChecked(), false);
-  // The lost write response and occupied-login registration are deliberate failures.
-  assert.equal(workspace.errors.filter(error => error.includes("status of 409")).length, 1);
+  // Quota reads may contend with the real observer. Permission writes must
+  // still acknowledge and persist; only the deliberate registration hold and
+  // that read-only conflict can return an error here.
+  assert.deepEqual(rejectedRequests.filter(request => request.operation !== "refresh"),
+    [{operation: "enroll-current", code: "waiting_for_idle"}]);
+  assert.ok(rejectedRequests.every(request => request.operation === "enroll-current"
+    || (request.operation === "refresh" && request.code === "native_unavailable")), JSON.stringify(rejectedRequests));
+  assert.equal(workspace.errors.filter(error => error.includes("status of 409")).length, rejectedRequests.length);
   assert.ok(workspace.errors.every(error => error.includes("net::ERR_FAILED") || error.includes("status of 409")), workspace.errors.join("\n"));
-  console.log(JSON.stringify({ok: true, boundary: "packaged UI / real HTTP, native policy and private store / synthetic process and OpenAI IO", added: 3, removed: 1, lostWriteReplayed: false, automaticSwitches: 2, registrationRecovery: true}));
+  console.log(JSON.stringify({ok: true, boundary: "packaged UI / real HTTP, native policy and private store / synthetic process and OpenAI IO", added: 3, removed: 3, applicationWriteReplayed: false, automaticSwitches: 2, registrationRecovery: true, allowlistPreserved: true, revocationWhilePaused: true, revocationWithoutKeys: true}));
 } finally {
   await workspace?.close();
   await browser?.close();

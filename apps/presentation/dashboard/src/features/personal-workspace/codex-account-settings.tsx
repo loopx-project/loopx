@@ -171,6 +171,7 @@ export function CodexAccountSettings() {
     finally { setBusy(false); void readInventory(); }
   }
   const enabled = status?.policy?.enabled === true;
+  const authorizedSlots = status?.policy?.slots ?? [];
   const restartClients = status?.policy?.restart_clients === true;
   const forceQuitClients = status?.policy?.force_quit_clients === true;
   const problem = status?.code || (status?.ok === false ? "native_unavailable" : null);
@@ -181,7 +182,7 @@ export function CodexAccountSettings() {
   for (const client of appHolders) appProcesses.set(client.process, [...(appProcesses.get(client.process) ?? []), client.pid]);
   return <><OpenAIKeySettings automatic={enabled} supported={status ? status.api_fallback_supported === true : null}
     apiEnabled={status?.policy?.api_fallback === true} nativeBusy={busy || ["checking", "restarting", "handoff_pending"].includes(status?.action ?? "")} onToggle={value => void act("configure", {
-      expected_revision: status?.revision, enabled, slots: status?.slots ?? [], api_fallback: value,
+      expected_revision: status?.revision, enabled, slots: authorizedSlots, api_fallback: value,
     })} /><section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>
     <header><h2>{c.title}</h2><span>{status?.active_slot ? `${c.current} ${status.active_slot.toUpperCase()} · ` : ""}{enabled ? c.enabled : c.disabled}</span></header>
     {!status ? <p role="status">{c.checking}</p> : null}
@@ -194,16 +195,16 @@ export function CodexAccountSettings() {
       <p className="codex-account-effect">{restartClients ? forceQuitClients ? c.effectForce : c.effect : c.effectWait}</p>
       <div className="codex-account-enable"><label><input type="checkbox" checked={enabled} disabled={busy}
         onChange={event => void act("configure", { expected_revision: status.revision, enabled: event.target.checked,
-          slots: status.slots })} /><span>{c.enable}</span></label>
+          slots: event.target.checked && !authorizedSlots.length ? status.slots : authorizedSlots })} /><span>{c.enable}</span></label>
         <ContextHelp label={c.selectionHelp}><p>{c.selectionDetail}</p></ContextHelp>
       </div>
       <label className="codex-account-enable"><input type="checkbox" checked={restartClients} disabled={busy}
         onChange={event => void act("configure", { expected_revision: status.revision, enabled,
           restart_clients: event.target.checked, force_quit_clients: event.target.checked && forceQuitClients,
-          slots: status.slots })} /><span>{c.restart}</span></label>
+          slots: authorizedSlots })} /><span>{c.restart}</span></label>
       {restartClients ? <label className="codex-account-enable"><input type="checkbox" checked={forceQuitClients} disabled={busy}
         onChange={event => void act("configure", { expected_revision: status.revision, enabled,
-          restart_clients: true, force_quit_clients: event.target.checked, slots: status.slots })} /><span>{c.forceQuit}</span></label> : null}
+          restart_clients: true, force_quit_clients: event.target.checked, slots: authorizedSlots })} /><span>{c.forceQuit}</span></label> : null}
       <div className="codex-account-state" role="status" aria-live="polite">
         {status.action === "ready" || status.action === "selected" ? <CheckCircle2 size={17} aria-hidden />
           : <Circle size={17} aria-hidden />}
@@ -262,7 +263,7 @@ export function CodexAccountSettings() {
     </> : null}
     {error ? <p role="alert"><AlertCircle aria-hidden size={16} />{c.failure}</p> : null}
     {status?.code === "adapter_changed" || error ? <button type="button" disabled={busy} onClick={() => void act("configure", {
-      expected_revision: status?.revision, enabled, slots: status?.slots ?? status?.policy?.slots ?? [], reconnect: true,
+      expected_revision: status?.revision, enabled, slots: authorizedSlots, reconnect: true,
       restart_clients: restartClients,
       force_quit_clients: forceQuitClients,
     })}>{c.retry}</button> : null}

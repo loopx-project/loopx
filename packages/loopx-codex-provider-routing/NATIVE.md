@@ -32,6 +32,9 @@ native policy selects API. A healthy subscription always ranks first; an unknown
 or failed subscription check cannot opt a request into paid use. While API is
 active, a recovered subscription wins at the existing idle/restart boundary and
 switch cooldown. Model settings and history stay with the same GPT route.
+API and client-restart permission edits retain the existing subscription
+allowlist. API permission can be revoked while automatic routing is off or the
+last key has been removed; enable prerequisites do not prevent revocation.
 
 The packaged native account owner supports `API_KEY_SLOTS_VERSION = 1`. It enrolls
 one loopback relay credential and uses the same launch/account locks, idle checks,
@@ -86,6 +89,8 @@ Key 轮换依据输出前收到的明确额度、认证、权限或限流错误�
 尝试一次；网络效果不明、普通请求错误和已开始输出的流不会重放，不替换模型，也不做
 后台付费探测。关闭后停止新请求并等待已接收请求结束。App 显示实际请求结果和上次
 限流窗口余量；项目 Key 的账单余额保持未知，连接检查成功也不代表还有可消费额度。
+API 及重启权限的编辑保留原订阅授权范围；关闭自动接续或移除最后一把 Key 后，仍可
+撤销已授予的 API 权限。
 
 **An open native Codex client is an occupied owner, even between turns.** With
 restart permission, the provider requests a normal AppKit quit of only the

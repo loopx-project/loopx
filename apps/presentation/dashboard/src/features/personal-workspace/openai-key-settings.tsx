@@ -109,9 +109,9 @@ export function OpenAIKeySettings({ automatic, supported, apiEnabled, onToggle, 
       <ContextHelp label={c.help}><p>{c.detail}</p></ContextHelp></header>
     <p className="codex-account-effect">{c.boundary}</p>
     <label className="codex-account-enable"><input type="checkbox" checked={apiEnabled}
-      disabled={busy || nativeBusy || !automatic || !supported || !status?.keys.length}
+      disabled={busy || nativeBusy || (!apiEnabled && (!automatic || !supported || !status?.keys.length))}
       onChange={event => onToggle(event.target.checked)} /><span>{c.auto}</span></label>
-    {supported === false ? <p className="codex-account-effect">{c.ownerMissing}</p> : !automatic ? <p className="codex-account-effect">{c.autoOff}</p> : null}
+    {!apiEnabled && supported === false ? <p className="codex-account-effect">{c.ownerMissing}</p> : !apiEnabled && !automatic ? <p className="codex-account-effect">{c.autoOff}</p> : null}
     {status ? <>
       <div className="codex-account-list">
         {status.keys.map(row => <article key={row.id}>
