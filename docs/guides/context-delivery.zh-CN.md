@@ -21,7 +21,7 @@
 ## 沿信息链理解，而不只看 prompt
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[当前权威与来源] --> B[不可变 capture]
   B --> C[必要视图与详情引用]
   C --> D[全量或精确差分]

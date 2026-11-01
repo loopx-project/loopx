@@ -26,7 +26,7 @@ another protocol.
 ## Follow the information, not just the prompt
 
 ```mermaid
-flowchart LR
+flowchart TD
   A[Current authority and sources] --> B[Immutable capture]
   B --> C[Required view and detail references]
   C --> D[Full or exact delta]
