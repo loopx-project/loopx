@@ -282,6 +282,9 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     const returnFocus = returnFocusRef.current;
     onClose();
     window.requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLElement && activeElement !== document.body
+        && !drawerRef.current?.contains(activeElement)) return;
       if (returnFocus && returnFocus !== document.body) {
         returnFocus.focus();
         if (document.activeElement === returnFocus) return;
