@@ -146,9 +146,12 @@ def test_http_owner_add_read_remove_and_bad_origin(owner):
 def test_cli_takes_secrets_only_on_stdin(owner, tmp_path):
     command = [sys.executable, "-m", "loopx_codex_provider_routing.native"]
     arguments = ["--runtime-root", str(tmp_path)]
+    source = Path(__file__).resolve().parents[2] / "packages/loopx-codex-provider-routing/src"
+    environment = {**os.environ, "PYTHONPATH": str(source)}
     result = subprocess.run([*command, "keys-add", *arguments], input=json.dumps({"expected_revision": 0, "label": "Primary", "api_key": KEY}),
-                            text=True, capture_output=True, check=True, timeout=10)
+                            env=environment, cwd=tmp_path, text=True, capture_output=True, check=True, timeout=10)
     assert KEY not in result.stdout + result.stderr
     assert len(json.loads(result.stdout)["keys"]) == 1
-    read = subprocess.run([*command, "keys-status", *arguments], text=True, capture_output=True, check=True, timeout=10)
+    read = subprocess.run([*command, "keys-status", *arguments], env=environment, cwd=tmp_path,
+                          text=True, capture_output=True, check=True, timeout=10)
     assert json.loads(read.stdout)["keys"][0]["label"] == "Primary"
