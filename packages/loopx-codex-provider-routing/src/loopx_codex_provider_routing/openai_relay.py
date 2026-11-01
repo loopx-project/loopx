@@ -1,6 +1,6 @@
 """Loopback Responses transport for the explicitly enabled API fallback.
 
-Native login transactions remain in Personal Apps. This transport holds only
+Native login transactions stay in the packaged account owner. This transport holds only
 upstream API keys, never subscription credentials, prompts or response logs.
 """
 from __future__ import annotations
