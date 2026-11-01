@@ -441,7 +441,7 @@ loopx-canary heartbeat-prompt \
 
 ### Opt-in native context delivery
 
-`--context-delivery {off,on}` is experimental and defaults to `off`. It reuses
+`--context-delivery {off,on}` defaults to `on` for supported native Codex App/SSH and benchmark heartbeat entries; save the machine setting as off or pass `--context-delivery off` to disable. An explicitly saved off is preserved. Other hosts and ordinary CLI keep full delivery. It reuses
 existing scheduler-owned host declarations and the benchmark worker's explicit
 execution settings; it does not guess a host from process names or ambient native
 session variables. These declared run modes can activate it:

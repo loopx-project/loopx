@@ -34,6 +34,8 @@ def run_should_run(
     return run_json_cli(
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",

@@ -87,6 +87,7 @@ def test_enabled_cache_preparation_failure_returns_error_with_original_reference
 def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, monkeypatch, enabled, cache_location):
     from loopx.control_plane.turn_driver.codex_context import read_codex_context_reference
 
+    native_enabled = enabled is True or (enabled is None and os.name == "posix")
     context, root = tmp_path / "native", tmp_path / "cache"
     context.mkdir(mode=0o700)
     if cache_location == "existing":
@@ -100,7 +101,7 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     digest = hashlib.sha256(raw).hexdigest()
     monkeypatch.setenv("CODEX_THREAD_ID", "native-session")
     monkeypatch.chdir(tmp_path)
-    if enabled:
+    if native_enabled:
         from loopx.control_plane.turn_driver.codex_context import codex_context_hook
         codex_context_hook(str(context), {"hook_event_name": "SessionStart", "source": "startup",
             "session_id": "native-session", "cwd": str(tmp_path)})
@@ -115,7 +116,8 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     code, result = _run_cli(registry, runtime, *args, cwd=tmp_path)
     assert code == 0 and result["ok"] and result["mode"] == "full", result
     assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
-    if enabled:
+    if native_enabled:
+        assert result["schema_version"] == "context_capture_navigation_v1", result
         assert "content" not in result and "offset" not in result
         machine = machine_reference_oracle(result)
         assert "index_command" in machine and "select_command" in machine

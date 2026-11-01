@@ -318,6 +318,8 @@ def assert_due_monitor_selected(registry_path: Path, *, due_count: int = 1) -> N
         registry_path,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -378,6 +380,8 @@ def assert_unchanged_writeback() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -423,6 +427,8 @@ def assert_interleaved_monitor_stalls_replan_blocked_benchmark() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -449,6 +455,8 @@ def assert_stalled_monitor_does_not_preempt_runnable_advancement() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -622,6 +630,8 @@ def assert_material_transition_followup() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -657,7 +667,7 @@ def assert_material_transition_followup() -> None:
         selection = contract["cli_channel"]["selection_command"]
         selected = run_cli(registry_path, *shlex.split(
             selection["command_args_template"].replace("{todo_id}", successor_id)
-        ))
+        ), "--context-delivery", "off")
         assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == successor_id, selected
         assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True, selected
         assert not find_todo(state_file, successor_id).get("claimed_by")  # Selection is not a claim.
@@ -716,6 +726,8 @@ def assert_due_monitor_poll_allowed_with_open_user_gate() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -825,6 +837,8 @@ def assert_compacted_auxiliary_due_monitor_can_write_back() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -884,6 +898,8 @@ def assert_capability_gated_monitor_poll_requires_declaration_parity() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -980,6 +996,8 @@ def assert_should_run_turn_receipt_is_idempotent() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -995,6 +1013,8 @@ def assert_should_run_turn_receipt_is_idempotent() -> None:
             registry_path,
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",
@@ -1011,6 +1031,8 @@ def assert_should_run_turn_receipt_is_idempotent() -> None:
         command = (
             "quota",
             "should-run",
+            "--context-delivery",
+            "off",
             "--goal-id",
             GOAL_ID,
             "--agent-id",

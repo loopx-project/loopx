@@ -26,6 +26,10 @@ from loopx.control_plane.quota.settlement_validation import (
 )
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
+from loopx.control_plane.turn_driver.decision_capture import (
+    read_context_capture_file,
+    read_context_read_reference,
+)
 from loopx.control_plane.scheduler.state import (
     APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
     load_scheduler_state,
@@ -210,7 +214,13 @@ def _run_cli(
     runtime: Path,
     *args: str,
     cwd: Path = REPO_ROOT,
+    raw_guard: bool = True,
 ) -> tuple[int, dict[str, Any]]:
+    # Existing guard observers consume the authority decision, independently of
+    # machine presentation defaults. Native lifecycle tests use raw_guard=False
+    # to exercise omitted/default activation; explicit on/off is never replaced.
+    if raw_guard and args[:2] == ("quota", "should-run") and "--context-delivery" not in args:
+        args = (*args, "--context-delivery", "off")
     result = subprocess.run(
         [
             sys.executable,
@@ -271,7 +281,16 @@ def _run_generated_cli(
         text=True,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
     )
-    return result.returncode, json.loads(result.stdout)
+    payload = json.loads(result.stdout)
+    if payload.get("mode") in {"full", "delta"} and isinstance(payload.get("recovery"), dict):
+        # Execute the generated default-on command unchanged. These policy
+        # oracles inspect its current immutable capture without another guard,
+        # admission or retention claim; native reader coverage lives separately.
+        recovery = payload["recovery"]
+        if "reference_file" in recovery:
+            recovery = read_context_read_reference(recovery["reference_file"])[1]
+        _, _, payload = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)
+    return result.returncode, payload
 
 
 def _spend_run_count(runtime: Path) -> int:
@@ -4162,14 +4181,13 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
 
     assert first_rc == 0, first
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    reentry_packet = first["interaction_contract"]["cli_channel"]["runtime_capability_reentry"]
     if fallback_available:
         assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
         assert first["selected_todo"]["todo_id"] == TODO_ID
         assert first["interaction_contract"]["agent_channel"]["next_task_action"]["kind"] == "capability_verification"
-        assert first["interaction_contract"]["cli_channel"]["next_cli_actions"][0] == first["runtime_capability_reentry"]["candidates"][0]["command"]
-    reentry_command = first["runtime_capability_reentry"]["candidates"][0][
-        "command"
-    ]
+        assert first["interaction_contract"]["cli_channel"]["next_cli_actions"][0] == reentry_packet["candidates"][0]["command"]
+    reentry_command = reentry_packet["candidates"][0]["command"]
     assert f"--turn-instance-id {turn_instance_id}" in reentry_command
 
     reentry_rc, reentry = _run_generated_cli(

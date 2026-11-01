@@ -45,13 +45,17 @@ fail before execution. Set it back to `false` for the next run to roll back;
 do not change a running trial's treatment. Captures contain private Goal context.
 Transport tests do not establish lower token cost or better model decisions.
 
-For an explicitly selected native context-delivery treatment, add
-`context_delivery: "on"` to the same heartbeat agent `kwargs` (default `"off"`).
+New native heartbeat trials default to context delivery `on`. Add
+`context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
+An explicit off is pinned into both native tools and worker preflight; it cannot
+inherit a machine-wide on. Plain, native-Goal and Turn execution remain off.
 Only the existing Codex heartbeat worker accepts `"on"`; booleans, other modes and
 scenario names are rejected. This is an experimental transport setting, separate
 from `turn_envelope`.
 The existing EdgeBench/SForge entry exposes the same selection through
-`--context-delivery on` on a heartbeat worker (`off` is the default).
+`--context-delivery off` to disable a heartbeat worker's on default. Existing
+running or frozen trials retain their recorded source and treatment; do not
+change them in place or infer a matched comparison from the new default.
 The worker preserves its existing `generic_cli` scheduler profile. Its execution
 owner requires `mode=heartbeat` and explicitly propagates `LOOPX_EXECUTION_MODE=heartbeat`
 and `LOOPX_CONTEXT_DELIVERY=on` into the native tool environment. Generic CLI
