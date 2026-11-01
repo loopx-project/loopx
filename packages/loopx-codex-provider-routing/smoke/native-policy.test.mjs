@@ -103,3 +103,15 @@ test("normal client restart needs its own permission and the quota proof expires
   assert.equal(decide(input({ policy: allowed, manual_slot: "b" })).valid_until, null,
     "An explicit sign-in choice is not an automatic quota decision");
 });
+
+test("API is opt-in and strictly after every measured subscription; recovery returns to subscriptions", () => {
+  const api = {slot: "openai-api", ready: true};
+  const enabled = {enabled: true, slots: ["a", "b", "c"], cooldown_seconds: 300, api_fallback: true};
+  const exhausted = [sample("a", 100), sample("b", 100), sample("c", 100)];
+  assert.equal(decide(input({policy: enabled, api})).target, "b", "API never outranks an available subscription");
+  assert.equal(decide(input({policy: enabled, api, observations: exhausted})).target, api.slot);
+  assert.equal(decide(input({api, observations: exhausted})).target, null, "Absent opt-in preserves subscription-only behavior");
+  assert.equal(decide(input({policy: enabled, api, observations: [sample("a", 100), sample("b", 100), {...sample("c", 100), observed_at: now - 121}]})).target, null);
+  assert.equal(decide(input({policy: enabled, api, active: api.slot, observations: exhausted})).action, "api_active");
+  assert.equal(decide(input({policy: enabled, api, active: api.slot, observations: [sample("a", 80), sample("b", 20), sample("c", 100)]})).target, "b");
+});

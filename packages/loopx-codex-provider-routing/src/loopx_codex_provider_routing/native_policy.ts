@@ -18,7 +18,7 @@ export type Account = {
   credits_available: boolean | null;
 };
 export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
-  restart_clients?: boolean; force_quit_clients?: boolean };
+  restart_clients?: boolean; force_quit_clients?: boolean; api_fallback?: boolean };
 
 const number = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const percent = (v: unknown): number | null => number(v) && v >= 0 && v <= 100 ? v : null;
@@ -69,21 +69,25 @@ export function decide(input: {
   now: number; policy: Policy; active: string | null; observations: Observation[];
   last_switch_at: number | null; recovery_required: boolean; login_matches: boolean;
   manual_slot?: string;
+  api?: { slot: string; ready: boolean };
 }) {
   const accounts = input.observations.map(o => account(o, input.now));
+  const onApi = input.api?.slot === input.active;
   const output = (action: string, target: string | null = null, retry_at: number | null = null) =>
     ({ action, target, retry_at, accounts,
       restart_clients: action === "switch" && input.policy.restart_clients === true,
       force_quit_clients: action === "switch" && input.policy.restart_clients === true
         && input.policy.force_quit_clients === true,
       valid_until: action === "switch" && !input.manual_slot
-        ? Math.min(...accounts.filter(a => a.slot === input.active || a.slot === target).map(a => a.observed_at + 120))
+        ? Math.min(...accounts.filter(a => target === input.api?.slot
+          ? a.slot === input.active || input.policy.slots.includes(a.slot)
+          : a.slot === input.active || a.slot === target).map(a => a.observed_at + 120))
         : null });
   if (input.recovery_required) return output("recovery_required");
   if (!input.login_matches || !input.active) return output("selection_changed");
   if (!input.manual_slot && !input.policy.enabled) return output("disabled");
   const current = accounts.find(a => a.slot === input.active);
-  if (!input.manual_slot && current?.availability !== "exhausted") {
+  if (!input.manual_slot && !onApi && current?.availability !== "exhausted") {
     return output(current?.availability === "available" ? "ready"
       : current?.availability === "auth_required" ? "auth_required" : "quota_unknown", null, input.now + 60);
   }
@@ -104,6 +108,13 @@ export function decide(input: {
     ? [input.manual_slot].find(slot => slot !== input.active && allowed.includes(slot))
     : candidates.sort((a, b) => b.remaining - a.remaining)[0]?.slot;
   if (target) return output("switch", target);
+  if (!input.manual_slot && onApi) return output(input.policy.api_fallback ? "api_active" : "api_disabled_active", null, input.now + 60);
+  // A failed/stale subscription read is not permission to incur API costs.
+  // Every authorized subscription must have fresh, measured exhaustion.
+  if (!input.manual_slot && input.policy.api_fallback === true && input.api?.ready
+      && allowed.length > 0 && allowed.every(slot => accounts.find(a => a.slot === slot)?.availability === "exhausted")) {
+    return output("switch", input.api.slot);
+  }
   const resets = accounts.filter(a => allowed.includes(a.slot) && a.availability === "exhausted")
     .flatMap(a => a.reset_at && a.reset_at > input.now ? [a.reset_at] : []);
   const uncertain = accounts.some(a => allowed.includes(a.slot) && a.availability === "unknown");

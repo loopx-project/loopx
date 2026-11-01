@@ -23,13 +23,13 @@ from .native_host import HostError, discover
 SCHEMA = "codex_native_accounts_v1"
 
 
-def private_read(path: Path) -> dict:
+def private_read(path: Path, *, schema: str = SCHEMA) -> dict:
     if any(p.is_symlink() for p in (path, *path.parents)):
         raise HostError("state_untrusted")
     if path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid():
         raise HostError("state_untrusted")
     value = json.loads(path.read_text())
-    if value.get("schema_version") != SCHEMA:
+    if value.get("schema_version") != schema:
         raise HostError("state_incompatible")
     return value
 
@@ -117,6 +117,11 @@ class NativeAccounts:
         self.transport, self.clock = transport, clock
         self.switch_allowed = lambda: True
 
+    def api_keys(self):
+        # Configuration works without discovering or touching a native login.
+        from .openai_keys import OpenAIKeys
+        return OpenAIKeys(self)
+
     def _load(self) -> dict:
         if self.path.exists():
             return private_read(self.path)
@@ -156,6 +161,8 @@ class NativeAccounts:
         return {"schema_version": SCHEMA, "available": True, "revision": state["revision"],
                 "policy": state["policy"], "slots": native.get("slots", []),
                 "active_slot": native.get("active_slot"),
+                "api_fallback_supported": native.get("api_fallback_supported", False),
+                "api_active": native.get("api_slot") is not None and native.get("active_slot") == native.get("api_slot"),
                 "selection_revision": native.get("selection_revision"),
                 "login_matches": native.get("current_login_matches"),
                 "recovery_required": native.get("recovery_required", False) or state.get("action") == "handoff_interrupted",
@@ -178,12 +185,15 @@ class NativeAccounts:
         return self.transport(state.get("adapter") or discover(), "clients")
 
     def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False,
-                  restart_clients: bool | None = None, force_quit_clients: bool | None = None) -> dict:
+                  restart_clients: bool | None = None, force_quit_clients: bool | None = None,
+                  api_fallback: bool | None = None) -> dict:
         if type(enabled) is not bool or not isinstance(slots, list) or len(slots) > 16 or len(slots) != len(set(slots)):
             raise HostError("invalid_policy")
         if restart_clients is not None and type(restart_clients) is not bool:
             raise HostError("invalid_policy")
         if force_quit_clients is not None and type(force_quit_clients) is not bool:
+            raise HostError("invalid_policy")
+        if api_fallback is not None and type(api_fallback) is not bool:
             raise HostError("invalid_policy")
         # Stop requests fence new effects at the Watcher first, then persist
         # after an already dispatched atomic switch finishes. Other mutations
@@ -196,7 +206,8 @@ class NativeAccounts:
             if pending.get("handoff_receipt") and enabled:
                 raise HostError("handoff_pending")
             # Disabling works offline and never needs credentials or a client.
-            if enabled or reconnect:
+            use_api = api_fallback if api_fallback is not None else state["policy"].get("api_fallback", False)
+            if enabled or reconnect or api_fallback is True:
                 adapter = discover() if reconnect or "adapter" not in state else state["adapter"]
                 native = self.transport(adapter, "status")
                 if reconnect and not slots and not enabled:
@@ -204,16 +215,33 @@ class NativeAccounts:
                 if not slots or not set(slots) <= set(native["slots"]):
                     raise HostError("invalid_slots")
                 state.update(adapter=adapter, native=native)
+                if enabled and use_api:
+                    self._validate_api(native)
             state.update(policy={"enabled": enabled, "slots": slots, "cooldown_seconds": 300,
                                  "restart_clients": restart_clients if restart_clients is not None
                                  else state["policy"].get("restart_clients", False),
                                  "force_quit_clients": force_quit_clients if force_quit_clients is not None
-                                 else state["policy"].get("force_quit_clients", False)},
+                                 else state["policy"].get("force_quit_clients", False),
+                                 **({"api_fallback": use_api} if api_fallback is not None or "api_fallback" in state["policy"] else {})},
                          revision=state["revision"] + 1, retry_at=None, code=None,
                          intent=pending if pending.get("handoff_receipt") else None,
                          action="checking" if enabled else "disabled", failure_count=0)
             atomic(self.path, state)
             return self._projection(state)
+
+    def _validate_api(self, native: dict) -> None:
+        if native.get("api_fallback_supported") is not True:
+            raise HostError("api_owner_upgrade_required")
+        if not self.api_keys().status()["keys"]:
+            raise HostError("api_keys_missing")
+
+    def _prepare_api(self, state: dict, native: dict) -> dict:
+        self._validate_api(native)
+        from .openai_relay import ensure
+        endpoint = ensure(self)
+        if native.get("api_slot") is None:
+            return self.transport(state["adapter"], "enroll_api", **endpoint)
+        return native
 
     def tick(self, *, refresh: bool = False, manual_slot: str | None = None,
              expected_selection: str | None = None, operation_id: str | None = None) -> dict:
@@ -298,7 +326,13 @@ class NativeAccounts:
                     state["failure_count"] = 0
                 # Inspect the active account even when it is not an authorized
                 # destination. Candidates stay strictly inside the allowlist.
+                api = None
+                if state["policy"].get("api_fallback") or native.get("api_slot"):
+                    ready = bool(state["policy"].get("api_fallback") and native.get("api_fallback_supported")
+                                 and self.api_keys().status()["keys"])
+                    api = {"slot": native.get("api_slot") or "openai-api", "ready": ready}
                 slots = list(dict.fromkeys([native["active_slot"], *state["policy"]["slots"]]))
+                slots = [slot for slot in slots if slot != native.get("api_slot")]
                 failures = {} if refresh or manual_slot else {
                     row["slot"]: {"revision": row["credential_revision"], "observed_at": row["observed_at"]}
                     for row in state.get("observations", [])
@@ -311,6 +345,7 @@ class NativeAccounts:
                 decision = policy({"now": self.clock(), "policy": state["policy"], "active": native["active_slot"],
                                    "observations": public_observations, "last_switch_at": state["last_switch_at"],
                                    "recovery_required": False, "login_matches": True,
+                                   **({"api": api} if api else {}),
                                    **({"manual_slot": manual_slot} if manual_slot else {})})
                 state.update(observations=observed["observations"], accounts=decision["accounts"],
                              last_checked_at=self.clock(), action=decision["action"], target=decision["target"],
@@ -318,6 +353,9 @@ class NativeAccounts:
                 if decision["action"] == "switch":
                     if not manual_slot and not self.switch_allowed():
                         raise HostError("observer_stopped")
+                    if api and decision["target"] == api["slot"]:
+                        native = self._prepare_api(state, native)
+                        state["native"] = native
                     # Durable before the effect, with source selection and target.
                     # Native owner rechecks the same fence inside its transaction.
                     state["intent"] = {"id": operation_id or uuid.uuid4().hex,
@@ -348,11 +386,13 @@ class NativeAccounts:
                                  target=None, retry_at=self.clock() + 300, launch_failed=result["launch_failed"], failure_count=0)
                 if operation_id:
                     state["last_operation_id"] = operation_id
+                if decision["action"] == "api_active" and api and api["ready"]:
+                    self._prepare_api(state, native)
             except (HostError, OSError, ValueError, subprocess.SubprocessError) as error:
                 code = error.code if isinstance(error, HostError) else "native_unavailable"
                 # Unrelated/remaining owners still require a safe-boundary wait.
                 # Other repeated failures stop automatic attempts until Refresh.
-                failures = state.get("failure_count", 0) + (code not in ("waiting_for_idle", "other_clients_busy", "handoff_pending"))
+                failures = state.get("failure_count", 0) + (code not in ("waiting_for_idle", "other_clients_busy", "handoff_pending", "api_relay_unavailable"))
                 if code in ("client_quit_refused", "client_quit_timeout"):
                     failures = 3  # Do not repeatedly close/reopen a refused client.
                 state.update(action="waiting_for_idle" if code == "other_clients_busy" else code if code in ("waiting_for_idle", "selection_changed", "adapter_changed", "client_quit_refused", "client_quit_timeout", "client_changed", "handoff_pending") else "unavailable",
@@ -448,7 +488,8 @@ class Watcher:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="loopx-codex-accounts")
-    parser.add_argument("operation", choices=("status", "clients", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch"))
+    parser.add_argument("operation", choices=("status", "clients", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch",
+                                               "keys-status", "keys-add", "keys-remove", "keys-check"))
     parser.add_argument("--runtime-root", type=Path, default=Path.home() / ".loopx")
     args = parser.parse_args()
     provider = NativeAccounts(args.runtime_root)
@@ -460,8 +501,11 @@ def main() -> int:
             except KeyboardInterrupt:
                 watcher.close()
             return 0
-        request = {} if args.operation in ("status", "clients", "refresh") else json.load(sys.stdin)
-        if args.operation == "status":
+        request = {} if args.operation in ("status", "clients", "refresh", "keys-status") else json.load(sys.stdin)
+        if args.operation.startswith("keys-"):
+            operation = args.operation.removeprefix("keys-")
+            result = getattr(provider.api_keys(), operation)(**request)
+        elif args.operation == "status":
             result = provider.status()
         elif args.operation == "clients":
             result = provider.clients()

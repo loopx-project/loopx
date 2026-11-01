@@ -38,7 +38,11 @@ class CodexAccountService:
         if self.provider is None:
             return {"ok": True, "available": False, "code": self.error}
         try:
-            if operation == "status":
+            if operation.startswith("keys-"):
+                if operation not in {"keys-status", "keys-add", "keys-remove", "keys-check"}:
+                    raise ValueError("Unsupported key operation")
+                value = getattr(self.provider.api_keys(), operation.removeprefix("keys-"))(**parameters)
+            elif operation == "status":
                 value = self.provider.status()
             elif operation == "clients":
                 value = self.provider.clients()
@@ -72,7 +76,8 @@ class CodexAccountService:
             code = getattr(error, "code", "native_unavailable")
             cached = {}
             try:
-                cached = self.provider._projection(self.provider._load())
+                cached = (self.provider.api_keys().status() if operation.startswith("keys-")
+                          else self.provider._projection(self.provider._load()))
             except Exception:
                 pass
             return {**cached, "ok": False, "available": True, "code": code, "error_code": code}
@@ -97,6 +102,25 @@ class CodexAccountsRequestMixin:
     def _codex_account_clients(self) -> None:
         cast(_HTTP, self)._send_json(self.server.codex_account_service.call("clients", {}))
 
+    def _codex_api_keys_read(self) -> None:
+        cast(_HTTP, self)._send_json(self.server.codex_account_service.call("keys-status", {}))
+
+    def _codex_api_keys_write(self) -> None:
+        http = cast(_HTTP, self)
+        try:
+            body = http._read_json()
+            fields = {"keys-add": {"expected_revision", "label", "api_key"},
+                      "keys-remove": {"expected_revision", "key_id"},
+                      "keys-check": {"expected_revision", "key_id"}}
+            if (set(body) != {"operation", "parameters"} or not isinstance(body["operation"], str)
+                    or body["operation"] not in fields or not isinstance(body["parameters"], dict)
+                    or set(body["parameters"]) != fields[body["operation"]]):
+                raise ValueError("Invalid key operation")
+            result = self.server.codex_account_service.call(body["operation"], body["parameters"])
+        except (TypeError, ValueError, KeyError):
+            result = {"ok": False, "code": "invalid_request"}
+        http._send_json(result, status=200 if result["ok"] else 409)
+
     def _codex_accounts_write(self) -> None:
         http = cast(_HTTP, self)
         try:
@@ -104,7 +128,7 @@ class CodexAccountsRequestMixin:
             if set(body) != {"operation", "parameters"} or not isinstance(body["parameters"], dict):
                 raise ValueError("Invalid account operation")
             operation, parameters = body["operation"], body["parameters"]
-            fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect", "restart_clients", "force_quit_clients"},
+            fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect", "restart_clients", "force_quit_clients", "api_fallback"},
                       "switch": {"manual_slot", "expected_selection", "operation_id"},
                       "recover": {"expected_revision", "expected_selection"}, "rollback": {"expected_revision", "expected_selection"},
                       "reopen": {"expected_selection"}, "refresh": set()}

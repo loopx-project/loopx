@@ -181,10 +181,20 @@ class NativeHost:
         result = {key: value[key] for key in (
             "slots", "active_slot", "current_login_matches", "recovery_required"
         )} | {"selection_revision": self.revision()}
+        kinds = value.get("slot_kinds", {})
+        result["slots"] = [slot for slot in result["slots"] if kinds.get(slot) != "api"]
+        result["api_slot"] = "openai-api" if kinds.get("openai-api") == "api" else None
+        result["api_fallback_supported"] = getattr(self.accounts, "API_KEY_SLOTS_VERSION", 0) == 1
         if sys.platform == "darwin":
             exe = self.apps.executable(self.apps.app_bundle(self.spec, "gpt", self.home))
             result["client_running"] = self.apps.running(exe, self.spec) is not None
         return result
+
+    def enroll_api(self, slot: str, api_key: str, base_url: str) -> dict:
+        if slot != "openai-api" or getattr(self.accounts, "API_KEY_SLOTS_VERSION", 0) != 1:
+            raise HostError("api_owner_upgrade_required")
+        self.manager.enroll_api(slot, api_key=api_key, base_url=base_url)
+        return self.status()
 
     def close_client(self, expected: str, *, timeout: float = 25, force: bool = False,
                      inspected: tuple | None = None) -> bool:
@@ -1072,6 +1082,8 @@ def main() -> int:
             value = host.clients()
         elif operation == "observe":
             value = host.observe(request["slots"], request["expected_revision"], request.get("auth_failures"))
+        elif operation == "enroll_api":
+            value = host.enroll_api(request["slot"], request["api_key"], request["base_url"])
         elif operation == "switch":
             value = host.switch(request["slot"], request["expected_revision"], reopen=request["reopen"],
                                 restart_clients=request.get("restart_clients", False),

@@ -4,14 +4,16 @@ import { RefreshCw, CheckCircle2, Circle, AlertCircle } from "lucide-react";
 import { requestJson } from "../../data/chat";
 import { useWorkspaceI18n } from "./i18n";
 import { ContextHelp } from "./context-help";
+import { OpenAIKeySettings } from "./openai-key-settings";
 import "./codex-account-settings.css";
 
 type AccountStatus = {
   ok: boolean; available: boolean; code?: string | null; revision?: number;
   active_slot?: string | null; selection_revision?: string; action?: string;
   target?: string | null; recovery_required?: boolean; launch_failed?: boolean;
+  api_fallback_supported?: boolean; api_active?: boolean;
   policy?: { enabled: boolean; slots: string[]; cooldown_seconds: number; restart_clients?: boolean;
-    force_quit_clients?: boolean };
+    force_quit_clients?: boolean; api_fallback?: boolean };
   slots?: string[]; last_checked_at?: number | null; last_switch_at?: number | null;
   accounts?: Array<{ slot: string; availability: string; observed_at: number;
     primary_used: number | null; secondary_used: number | null; reset_at: number | null;
@@ -66,6 +68,8 @@ const copy = {
     clientsApp: "GPT 客户端", clientsService: "后台服务", clientsOther: "外部进程", clientsProcesses: "个进程",
     clientsDetail: "清单记录检查时的进程归属，切换时会重新核验。支持受控重启仍需已启用退出与重开权限；外部工作负载须先核实空闲及恢复条件。检查占用不读取凭证内容、不换号、不结束进程。",
     manager_unverified: "尚未核实管理器，保留占用等待",
+    api_active: "正在使用 OpenAI API，订阅恢复后优先返回", api_disabled_active: "API 接续已关闭，等待可用订阅",
+    api_owner_upgrade_required: "请更新原生槽位管理器以支持 API 接续", api_keys_missing: "请先添加 OpenAI API Key", api_relay_unavailable: "API 接续服务暂不可用，请重新检查",
     external_workload_unverified: "外部工作负载的空闲与恢复条件尚未核实",
   },
   en: {
@@ -101,6 +105,8 @@ const copy = {
     clientsApp: "GPT client", clientsService: "Background service", clientsOther: "External process", clientsProcesses: "processes",
     clientsDetail: "This inventory records process ownership at check time; switching revalidates it. Controlled restart still requires quit-and-reopen permission. External workloads need verified idle and recovery conditions. This check reads no credential contents, switches no account and ends no process.",
     manager_unverified: "Manager not verified; the holder remains a hold",
+    api_active: "Using OpenAI API; recovered subscriptions take priority", api_disabled_active: "API fallback is off; waiting for a subscription",
+    api_owner_upgrade_required: "Update the native slot manager for API fallback", api_keys_missing: "Add an OpenAI API key first", api_relay_unavailable: "API fallback transport unavailable; recheck",
     external_workload_unverified: "External workload idle and recovery conditions are unverified",
   },
 };
@@ -171,7 +177,10 @@ export function CodexAccountSettings() {
   const appHolders = holders.filter(client => client.kind === "app" && client.restartable);
   const appProcesses = new Map<string, number[]>();
   for (const client of appHolders) appProcesses.set(client.process, [...(appProcesses.get(client.process) ?? []), client.pid]);
-  return <section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>
+  return <><OpenAIKeySettings automatic={enabled} supported={status ? status.api_fallback_supported === true : null}
+    apiEnabled={status?.policy?.api_fallback === true} nativeBusy={busy || ["checking", "restarting", "handoff_pending"].includes(status?.action ?? "")} onToggle={value => void act("configure", {
+      expected_revision: status?.revision, enabled, slots: status?.slots ?? [], api_fallback: value,
+    })} /><section className="personal-codex-accounts" data-testid="codex-account-settings" aria-busy={busy}>
     <header><h2>{c.title}</h2><span>{status?.active_slot ? `${c.current} ${status.active_slot.toUpperCase()} · ` : ""}{enabled ? c.enabled : c.disabled}</span></header>
     {!status ? <p role="status">{c.checking}</p> : null}
     {(problem && problem !== status?.action) || status?.available === false ? <p role="alert">{label(problem)}</p> : null}
@@ -251,5 +260,5 @@ export function CodexAccountSettings() {
       restart_clients: restartClients,
       force_quit_clients: forceQuitClients,
     })}>{c.retry}</button> : null}
-  </section>;
+  </section></>;
 }
