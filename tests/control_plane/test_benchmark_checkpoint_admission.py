@@ -39,6 +39,12 @@ body = sys.stdin.read()
 with Path("checkpoint-model.jsonl").open("a") as stream:
     stream.write(json.dumps({"turn":env["LOOPX_TURN"]})+"\n")
 print(json.dumps({"type":"thread.started", "thread_id":"benchmark-original-session"}), flush=True)
+if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION") == "on":
+    import urllib.request
+    override = next(arg for arg in sys.argv if arg.startswith("model_providers.harbor.base_url="))
+    endpoint = json.loads(override.split("=", 1)[1])
+    with urllib.request.urlopen(urllib.request.Request(endpoint + "/responses", data=b"{}"), timeout=30) as response:
+        assert response.status == 200
 base = [env["LOOPX_CLI"], "--format", "json", "--registry", env["LOOPX_REGISTRY"],
         "--runtime-root", env["LOOPX_RUNTIME_ROOT"]]
 def cli(*args):
@@ -147,13 +153,34 @@ def test_checkpoint_unbound_guard_selects_existing_work_in_original_turn(tmp_pat
     _run_checkpoint(tmp_path, monkeypatch, provider, refusal=None, todo_bound=False, unbound=True)
 
 
-def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unbound=False, workspace_change=False, work_bound=False):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_checkpoint_request_admission_creates_a_new_invocation_for_original_turn(tmp_path, monkeypatch, provider):
+    from tests.capabilities.test_provider_gateway import _recording_upstream
+
+    with _recording_upstream() as (upstream, observed):
+        receipt, native, home = _run_checkpoint(tmp_path, monkeypatch, provider,
+            refusal=None, todo_bound=False, provider_url=upstream)
+    assert observed["path"] == "/v1/responses"
+    invocations = receipt["provider_request_invocations"]
+    assert [row["turn_id"] for row in invocations] == [OUTER_TURN, HELD_TURN]
+    assert len({row["invocation_id"] for row in invocations}) == 2
+    assert all(row["requests"] == row["sent"] == 1 and row["refused"] == 0 for row in invocations)
+    endpoints = [next(arg for arg in row["argv"] if arg.startswith("model_providers.harbor.base_url="))
+        for row in native]
+    assert endpoints[0] != endpoints[1]
+    assert upstream in home.read_text()
+    assert all(endpoint.split("=", 1)[1] not in home.read_text() for endpoint in endpoints)
+
+
+def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unbound=False, workspace_change=False, work_bound=False, provider_url=None):
     unbound = unbound or refusal == "original_event_changed"
     env, project, runtime, source, state = _environment(
         tmp_path, monkeypatch, provider, replan="todo" if todo_bound or unbound else not work_bound)
     env["CODEX_BIN"] = str(write_python_host_fixture(project / "checkpoint-host", f"#!{sys.executable}\n" + _HOST))
     env = process_environment(Path(env["LOOPX_CODEX_HOME"]), base=env)
     env.update(LOOPX_TURN=OUTER_TURN, FIXTURE_OUTER_TURN=OUTER_TURN, FIXTURE_HELD_TURN=HELD_TURN)
+    if provider_url is not None:
+        env.update(OPENAI_BASE_URL=provider_url, LOOPX_PROVIDER_REQUEST_ADMISSION="on")
     if unbound:
         env["FIXTURE_SELECTION_TODO"] = fixture.SELECTED_REPLAN_TODO_ID
     if todo_bound:
@@ -291,3 +318,4 @@ def _run_checkpoint(tmp_path, monkeypatch, provider, *, refusal, todo_bound, unb
             assert events[:len(observations["events"])] == observations["events"]
             if not unbound:
                 assert events == observations["events"]
+    return receipt, native, Path(env["LOOPX_CODEX_HOME"]) / "config.toml"

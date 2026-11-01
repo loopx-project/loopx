@@ -1217,8 +1217,11 @@ def test_custom_provider_uses_environment_credential_without_copying_login(tmp_p
         SForgeWorker(config, profile=profile, cwd='/task')
 
 
-@pytest.mark.parametrize('profile', ['official', 'native-goal'])
-def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize('profile,provider_request_admission', [
+    ('official', False), ('native-goal', False),
+    ('heartbeat-resume', False), ('heartbeat-resume', True), ('heartbeat-explore', True),
+])
+def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch, profile, provider_request_admission):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     import tomllib
@@ -1233,6 +1236,8 @@ def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch,
     monkeypatch.setenv('CODEX_AUTH_JSON_PATH', str(tmp_path / 'must-not-read-auth.json'))
     monkeypatch.setenv('OPENAI_API_KEY', provider_key)
     monkeypatch.setenv('OPENAI_BASE_URL', provider_url)
+    monkeypatch.setenv('CODEX_WIRE_API', 'responses')
+    monkeypatch.setenv('LOOPX_PROVIDER_REQUEST_ADMISSION', 'on')
 
     async def installed(self, environment):
         pass
@@ -1254,7 +1259,8 @@ def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch,
         agent_model='fixture', agent_effort='xhigh',
         agent_api_base_url=provider_url, agent_api_key=provider_key,
     )
-    worker = SForgeWorker(config, profile=profile, cwd='/task')
+    worker = SForgeWorker(config, profile=profile, cwd='/task',
+                          provider_request_admission=provider_request_admission)
     worker.install_stop_hook(backend, None, tmp_path, None)
 
     if profile == 'official':
@@ -1264,12 +1270,70 @@ def test_custom_provider_preserves_sforge_runtime_gateway(tmp_path, monkeypatch,
         env = worker.runtime._worker_env(cwd='/task')
         assert env['OPENAI_BASE_URL'] == runtime_url
         assert env['OPENAI_API_KEY'] == 'runtime-managed-credential'
+        assert env.get('LOOPX_PROVIDER_REQUEST_ADMISSION') == ('on' if provider_request_admission else None)
         worker.prepared = True
+    assert config.agent_api_base_url == provider_url
+    receipt = (tmp_path / 'worker-profile.json').read_text()
+    assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
+    assert provider_key not in receipt
     command = worker.format_run_cmd('/task/prompt.md')
     assert provider_url not in command
     assert provider_key not in command
     assert all(provider_url not in contents for contents in copied.values())
     assert all(provider_key not in contents for contents in copied.values())
+
+
+@pytest.mark.parametrize('option,profile,base_url,api_key,wire_api', [
+    ('on', 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (1, 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (None, 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'official', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'single', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'native-goal', 'https://provider.invalid/v1', 'synthetic-key', 'responses'),
+    (True, 'heartbeat-resume', None, 'synthetic-key', 'responses'),
+    (True, 'heartbeat-resume', 'https://provider.invalid/v1', None, 'responses'),
+    (True, 'heartbeat-resume', 'https://provider.invalid/v1', 'synthetic-key', 'chat'),
+])
+def test_sforge_provider_request_admission_rejects_unsupported_activation(
+    tmp_path, monkeypatch, option, profile, base_url, api_key, wire_api,
+):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from sforge.harness.config import SForgeConfig
+    from benchmark.runtime.sforge import SForgeWorker
+
+    monkeypatch.setenv('CODEX_AUTH_JSON_PATH', str(tmp_path / 'unused-login.json'))
+    monkeypatch.setenv('CODEX_WIRE_API', wire_api)
+    config = SForgeConfig(agent_model='fixture', agent_effort='xhigh',
+                         agent_api_base_url=base_url, agent_api_key=api_key)
+    with pytest.raises(ValueError, match='provider_request_admission'):
+        SForgeWorker(config, profile=profile, cwd='/task', provider_request_admission=option)
+
+
+@pytest.mark.parametrize('profile,base_url,wire_api', [
+    ('official', 'https://provider.invalid/v1', 'responses'),
+    ('single', 'https://provider.invalid/v1', 'responses'),
+    ('native-goal', 'https://provider.invalid/v1', 'responses'),
+    ('heartbeat-resume', '', 'responses'),
+    ('heartbeat-resume', 'https://provider.invalid/v1', 'chat'),
+])
+def test_edgebench_request_admission_preflight_creates_no_attempt(
+    tmp_path, monkeypatch, capsys, profile, base_url, wire_api,
+):
+    pytest.importorskip('sforge')
+    pytest.importorskip('harbor')
+    from benchmark.edgebench.run import main
+
+    monkeypatch.setenv('OPENAI_BASE_URL', base_url)
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-provider-key')
+    monkeypatch.setenv('CODEX_WIRE_API', wire_api)
+    with pytest.raises(SystemExit, match='2'):
+        main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+              '--run-id', 'unsupported-admission', '--worker', profile, '--model', 'fixture',
+              '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999',
+              '--provider-request-admission'])
+    assert '--provider-request-admission requires' in capsys.readouterr().err
+    assert not (tmp_path / 'runs').exists()
 
 
 def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, monkeypatch):
@@ -1285,10 +1349,13 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
     assert not (tmp_path / 'runs').exists()
 
 
-@pytest.mark.parametrize('custom', [False, True])
+@pytest.mark.parametrize('custom,profile,provider_request_admission', [
+    (False, 'official', False), (True, 'official', False),
+    (True, 'heartbeat-resume', False), (True, 'heartbeat-resume', True),
+])
 @pytest.mark.parametrize('bridge', [False, True], ids=['docker-default', 'docker-bridge'])
-@pytest.mark.parametrize('worker', ['official', 'heartbeat-resume'])
-def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, monkeypatch, custom, bridge, worker):
+def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
+        tmp_path, monkeypatch, custom, profile, bridge, provider_request_admission):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from types import SimpleNamespace
@@ -1297,6 +1364,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, m
     monkeypatch.setenv('LOOPX_EXPECTED_COMMIT', 'fixture')
     monkeypatch.setenv('CODEX_AUTH_JSON_PATH', '/synthetic-login')
     monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-provider-secret')
+    monkeypatch.setenv('CODEX_WIRE_API', 'responses')
     attestation_key = tmp_path / 'runtime-attestation.key'
     attestation_key.write_text('synthetic-attestation-key')
     monkeypatch.setenv('SFORGE_RUNTIME_ATTESTATION_KEY_FILE', str(attestation_key))
@@ -1327,15 +1395,21 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, m
         assert config.runtime_attestation_key_file == attestation_key
         assert config.runner_source_revision == 'a' * 40
         assert config.work_cpu_limit == 4
+        assert kwargs['agent'].provider_request_admission is provider_request_admission
         raise RuntimeError('synthetic launch boundary')
     monkeypatch.setattr(run, 'run_agent', stop_before_solver)
+    args = ['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
+            '--run-id', 'route', '--worker', profile, '--model', 'fixture',
+            '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999']
+    if provider_request_admission:
+        args += ['--provider-request-admission']
+    if bridge:
+        args += ['--docker-host-bridge']
     with pytest.raises(RuntimeError, match='synthetic launch boundary'):
-        run.main(['--task', 'fixture', '--tasks-dir', str(tmp_path), '--log-dir', str(tmp_path),
-                  '--run-id', 'route', '--worker', worker, '--model', 'fixture',
-                  '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999',
-                  *(['--docker-host-bridge'] if bridge else [])])
+        run.main(args)
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
     assert 'synthetic-provider-secret' not in receipt
+    assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
     assert json.loads(receipt).get('docker_host_bridge', False) is bridge
 
 

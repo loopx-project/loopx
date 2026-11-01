@@ -365,6 +365,7 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
     """Decode native shell/MCP JSON records; never classify arbitrary prose.
 
     Incomplete JSON has no successful page. The pending delivery stays pending.
+    Enclosing tool failures override embedded successful reader pages.
     Native output truncation that is not reported here remains an assumption gap.
     """
     if isinstance(value, str):
@@ -391,14 +392,15 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
         return [value]
     if isinstance(value.get("output"), str):
         pages = _context_pages(value["output"])
-        if pages and "exit_code" in value and value["exit_code"] != 0:
-            return [{"schema_version": "context_capture_page_v1", "ok": False}]
-        return pages
-    content = value.get("content")
-    if isinstance(content, list):
-        return [page for item in content if isinstance(item, dict)
-                for page in _context_pages(item.get("text"))]
-    return []
+        failed = "exit_code" in value and value["exit_code"] != 0
+    else:
+        content = value.get("content")
+        pages = [page for item in content if isinstance(item, dict)
+                 for page in _context_pages(item.get("text"))] if isinstance(content, list) else []
+        failed = False
+    if pages and (failed or value.get("isError") is True):
+        return [{"schema_version": "context_capture_page_v1", "ok": False}]
+    return pages
 
 
 def _verified_context_pages(state: dict[str, Any], pages: list[dict[str, Any]]) -> list[dict[str, Any]]:

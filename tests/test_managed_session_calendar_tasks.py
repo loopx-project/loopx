@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import http.client
 import json
 from pathlib import Path
+import subprocess
 import sys
 import threading
 from types import SimpleNamespace
@@ -655,6 +656,110 @@ def test_same_calendar_task_lifecycle_retains_results_and_rejects_late_dispatch(
             assert bot.writes == initial[2]
     finally:
         recovered.close()
+
+
+def _resume_calendar_process(request):
+    """A fresh OS process opens only the supplied disposable physical store."""
+    import os
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    import loopx.capabilities.native_chat.session_calendar_tasks as calendar
+
+    point = datetime(2020, 1, request["day"], 9, 0, 1, tzinfo=timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz)
+    calendar.datetime = Clock
+    runtime = ChatRuntimeController(store=ChatSessionStore(Path(request["runtime_root"])),
+        codex_bin=request["codex_bin"], registry_path=Path(request["registry_path"]),
+        project_contexts=ChatProjectContexts([Path(request["workspace"])]))
+    sid, actor = request["session_id"], request["actor"]
+    capture = Path(request["capture"])
+    try:
+        service = SessionCalendarTasks(runtime)
+        assert service.selected(sid)["actor"] == actor
+        before = capture.read_bytes(), runtime.store.messages(sid)
+        # Neither a persisted pause nor cancellation can dispatch on startup.
+        assert not pump_steward_monitors(runtime)
+        assert (capture.read_bytes(), runtime.store.messages(sid)) == before
+        result = {"pid": os.getpid(), "session_id": sid, "actor": actor}
+        if request["continue"]:
+            # This local Session has no Lark transport or external recipient.
+            data = (runtime.store, runtime, None, None)
+            with settings_server(data) as call:
+                apply_configuration(call, actor["goal_id"], request["configuration"])
+                getattr(runtime, "_steward_monitor_next_check", {}).clear()
+                turns = pump_steward_monitors(runtime)
+                assert len(turns) == 1
+                completed = finish(runtime, turns[0])
+                assert completed["response"]["native_loopx"]["status"] == "committed", completed
+                runtime._steward_monitor_next_check.clear()
+                assert not pump_steward_monitors(runtime)
+                assert service.health(sid)["completion_verified"]
+                result["turn_id"] = completed["turn_id"]
+                apply_configuration(call, actor["goal_id"], None)
+        else:
+            assert not service.health(sid).get("enabled")
+        print(json.dumps(result))
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_calendar_physical_state_survives_independent_processes(steward, tmp_path, monkeypatch, provider):
+    import os
+
+    session, actor, _, capture, _, config = setup_task(steward, tmp_path, monkeypatch, provider)
+    store, runtime, bot, _, _, _, original_workspace = steward
+    sid = session["session_id"]
+    actor = SessionCalendarTasks(runtime).selected(sid)["actor"]
+    fixed_clock(monkeypatch)
+    with settings_server(steward) as call:
+        apply_configuration(call, actor["goal_id"], config)
+        first = finish(runtime, pump_steward_monitors(runtime)[0])
+        assert first["response"]["native_loopx"]["status"] == "committed", first
+        runtime._steward_monitor_next_check.clear()
+        assert not pump_steward_monitors(runtime)
+        apply_configuration(call, actor["goal_id"], {**config, "enabled": False})
+    first_bytes = store._turn_path(sid, first["turn_id"]).read_bytes()
+    history, calls, writes = store.messages(sid), capture.read_bytes(), list(bot.writes)
+    runtime.close()
+    assert runtime.closed.is_set()
+
+    request = {"runtime_root": str(store.root.parent), "codex_bin": runtime.codex_bin,
+        "registry_path": str(runtime.registry_path), "workspace": str(original_workspace),
+        "session_id": sid, "actor": actor, "capture": str(capture), "configuration": config}
+    command = [sys.executable, "-c",
+        "import json,sys;sys.path.insert(0,'tests');"
+        "from test_managed_session_calendar_tasks import _resume_calendar_process;"
+        "_resume_calendar_process(json.load(sys.stdin))"]
+    def restart(*, continue_task, day=2):
+        completed = subprocess.run(command, input=json.dumps({**request, "continue": continue_task, "day": day}),
+            cwd=Path(__file__).resolve().parents[1], text=True, capture_output=True, timeout=90)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        result = json.loads(completed.stdout)
+        assert result["pid"] != os.getpid() and result["session_id"] == sid and result["actor"] == actor
+        assert store._turn_path(sid, first["turn_id"]).read_bytes() == first_bytes
+        assert store.messages(sid)[:len(history)] == history and bot.writes == writes
+        return result
+
+    restart(continue_task=False)
+    assert capture.read_bytes() == calls and store.messages(sid) == history
+    resumed = restart(continue_task=True)
+    second = store.load_turn(sid, resumed["turn_id"])
+    assert second["turn_id"] != first["turn_id"]
+    assert second["loopx_request"]["schedule_window_id"] != first["loopx_request"]["schedule_window_id"]
+    requests = [json.loads(line) for line in capture.read_bytes()[len(calls):].splitlines()]
+    assert sum(row.get("method") == "turn/start" for row in requests) == 1
+    for turn in (first, second):
+        replies = [row for row in store.messages(sid) if row["role"] == "agent" and row.get("turn_id") == turn["turn_id"]]
+        assert len(replies) == 1 and replies[0]["text"] == turn["response"]["message"]
+    final = capture.read_bytes(), store.messages(sid)
+    # A later due window would execute if cancellation were lost on restart.
+    restart(continue_task=False, day=3)
+    assert (capture.read_bytes(), store.messages(sid)) == final
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

@@ -12,7 +12,7 @@ from .file_lock import exclusive_file_lock
 
 
 SESSION_QUEUE_MAX_PENDING = 20
-SESSION_QUEUE_TTL_SECONDS = 3600
+SESSION_QUEUE_TTL_SECONDS: int | None = None
 
 
 def chat_runtime_activation_lock(runtime_root: Path, *, timeout_seconds: float | None = None):
@@ -80,12 +80,17 @@ class ChatIngressStore:
         message: str,
         attachments: list[dict[str, Any]] | None = None,
         goal_instance_id: str | None = None,
-        ttl_seconds: int = SESSION_QUEUE_TTL_SECONDS,
+        ttl_seconds: int | None = SESSION_QUEUE_TTL_SECONDS,
         origin: str = "external",
         external_agent_target: dict[str, Any] | None = None,
         collaboration_request: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        """Persist one bounded follow-up without replacing the active Turn."""
+        """Persist one follow-up without replacing the active Turn.
+
+        Accepted user input has no implicit wall-clock expiry. Callers may
+        still supply an explicit TTL for time-sensitive work. Queue capacity,
+        source revalidation and Stop remain independent bounds.
+        """
 
         from .chat_store import _opaque_id, _instant, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
 
@@ -159,9 +164,8 @@ class ChatIngressStore:
                     "error_code": None,
                     "error": None,
                     "created_at": now_text,
-                    "expires_at": (now + timedelta(seconds=max(1, ttl_seconds)))
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    "expires_at": ((now + timedelta(seconds=max(1, ttl_seconds)))
+                        .isoformat().replace("+00:00", "Z") if ttl_seconds is not None else None),
                     "started_at": None,
                     "first_event_at": None,
                     "completed_at": None,

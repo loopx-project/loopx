@@ -123,6 +123,8 @@ def main(argv=None):
                         help="Opt-in short heartbeat context with same-invocation full captures")
     parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
                         help="Experimental native Codex benchmark heartbeat reuse only; off by default")
+    parser.add_argument("--provider-request-admission", action="store_true",
+                        help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
@@ -197,6 +199,13 @@ def main(argv=None):
         parser.error("--turn-envelope requires a heartbeat worker")
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
+    if args.provider_request_admission:
+        if not args.worker.startswith("heartbeat-"):
+            parser.error("--provider-request-admission requires a heartbeat worker")
+        if not (api_base_url or "").strip() or not (api_key or "").strip():
+            parser.error("--provider-request-admission requires OPENAI_BASE_URL and OPENAI_API_KEY")
+        if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
+            parser.error("--provider-request-admission requires CODEX_WIRE_API=responses")
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
@@ -345,6 +354,7 @@ def main(argv=None):
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
+                         **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
@@ -412,6 +422,7 @@ def main(argv=None):
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,

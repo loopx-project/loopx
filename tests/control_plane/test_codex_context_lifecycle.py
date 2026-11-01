@@ -175,6 +175,9 @@ def test_complete_reader_delivery_allows_delta_without_diagnostics_or_ack(tmp_pa
         context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": name,
             "tool_response": "ordinary tool output"})
     assert context._state(tmp_path) == state
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_response": {"isError": True, "content": [{"type": "text", "text": "Unrelated tool failed."}]}})
+    assert context._state(tmp_path) == state
     _, second = project(tmp_path, "two", payload=payload)
     assert second["mode"] == "delta" and second["continuity_basis"] == "captured_file"
     assert not (tmp_path / "traces").exists()
@@ -443,7 +446,8 @@ def test_known_incomplete_delivery_cannot_establish_baseline(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
-@pytest.mark.parametrize("damage", ["changed_bytes", "missing_file", "changed_file", "symlink"])
+@pytest.mark.parametrize("damage", ["changed_bytes", "missing_file", "changed_file", "symlink",
+    "failed_mcp", "failed_mcp_nested"])
 def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, monkeypatch, mode, damage):
     event = setup(tmp_path, monkeypatch)
     payload = {"ok": True, "plan_summary": {"requirements": "Preserve every obligation. " * 1000}}
@@ -469,7 +473,7 @@ def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, mon
         assert json.loads("".join(page["content"] for page in changed))
     elif damage == "changed_file":
         source.write_bytes(source_raw + b" ")  # valid JSON, different pinned digest
-    else:
+    elif damage in {"missing_file", "symlink"}:
         source.unlink()
         if damage == "symlink":
             alias_target = tmp_path / "same-bytes.json"
@@ -481,18 +485,21 @@ def test_hook_cli_rejects_changed_page_bytes_and_recovers_original(tmp_path, mon
         "--format", "json", "quota", "context-hook", "--context-delivery", "on", "--codex-app",
         "--codex-context-dir", str(tmp_path)]
 
-    def hook(values):
-        response = {"content": [{"type": "text", "text": json.dumps(page)} for page in values]}
+    def hook(values, *, failed=False, nested=False):
+        response = {"isError": failed,
+            "content": [{"type": "text", "text": json.dumps(page)} for page in values]}
+        if nested:
+            response = {"exit_code": 0, "output": json.dumps(response)}
         result = subprocess.run(cmd, input=json.dumps({**event, "hook_event_name": "PostToolUse",
             "tool_use_id": "capture-read", "tool_response": response}), capture_output=True, text=True,
             cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(repo)}, timeout=20)
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout) == {}
 
-    hook(changed)
+    hook(changed, failed=damage.startswith("failed_mcp"), nested=damage == "failed_mcp_nested")
     assert "candidate" not in context._state(tmp_path)
     assert context._state(tmp_path)["recovery"] == recovery
-    if damage != "changed_bytes":
+    if damage in {"missing_file", "changed_file", "symlink"}:
         source.unlink(missing_ok=True)
         source.write_bytes(source_raw)
         source.chmod(0o600)

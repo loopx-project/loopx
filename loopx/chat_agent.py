@@ -682,7 +682,7 @@ class CodexChatAgentSession:
     service_tier: str | None = None
     response_timeout_sec: float = 30.0
     idle_timeout_sec: float = 180.0
-    hard_timeout_sec: float | None = 900.0
+    hard_timeout_sec: float | None = None
     next_request_id: int = 5
     current_turn_id: str = ""
     model_catalog_compatibility_applied: bool = False
@@ -726,7 +726,7 @@ class CodexChatAgentSession:
         objective: str,
         response_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float | None = 900.0,
+        hard_timeout_sec: float | None = None,
         resume_thread_id: str | None = None,
         execution_mode: bool = False,
         isolate_process_tree: bool = False,

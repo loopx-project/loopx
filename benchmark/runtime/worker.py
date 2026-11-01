@@ -194,6 +194,30 @@ def heartbeat_launch_check(env, session_wake, *, original_quota=None):
     return check
 
 
+@contextmanager
+def native_child_process(command, *, env, stdout, stderr, session_wake, receipt, wake,
+                         timeout=None, original_quota=None):
+    """Share invocation ownership across ordinary and checkpoint launches."""
+    guard = None
+    scope = nullcontext(command)
+    if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") == "on":
+        from .provider_request_admission import ProviderRequestAdmission
+
+        guard = ProviderRequestAdmission(env, session_wake, receipt, wake,
+            timeout=timeout, original_quota=original_quota)
+        scope = guard.serve(command)
+    with scope as routed:
+        with child_process(routed, env=env, stdout=stdout, stderr=stderr,
+                goal_admission=session_wake.admission if session_wake is not None else None,
+                check_current_launch=heartbeat_launch_check(env, session_wake, original_quota=original_quota),
+                **({"process_observation": guard} if guard is not None else {})) as process:
+            yield process
+    if guard is not None and guard.refusal_code is not None:
+        from loopx.control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
+
+        raise FirstPartyHostRuntimeRejected(guard.refusal_code)
+
+
 def _reap_child_process(process, *, process_observation=None):
     """Reap the process group created by child_process, including descendants."""
     try:
@@ -468,6 +492,11 @@ def run_once(env: dict[str, str]) -> dict:
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY", "off"),
     )
+    request_admission = False
+    if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
+        from .provider_request_admission import request_admission_enabled
+
+        request_admission = request_admission_enabled(env, execution.mode)
     stage = env.get("LOOPX_TASK_STAGE", "execute")
     if stage not in {"plan", "execute"} or (stage == "plan" and execution.task_entry != "loopx-planned"):
         raise ValueError("invalid task-entry stage")
@@ -485,6 +514,11 @@ def run_once(env: dict[str, str]) -> dict:
     # Preserve this trial's resolved off/on choice in both preflight and solver
     # subprocesses; an omitted off must not inherit a machine-wide opt-in.
     env["LOOPX_CONTEXT_DELIVERY"] = execution.context_delivery
+    # The resolved trial treatment must not inherit an ambient parent opt-in.
+    if request_admission:
+        env["LOOPX_PROVIDER_REQUEST_ADMISSION"] = "on"
+    else:
+        env.pop("LOOPX_PROVIDER_REQUEST_ADMISSION", None)
     if execution.context_delivery == "on":
         # The CLI validates this declaration before enabling native transport.
         # Carry the resolved default as well as an explicitly supplied mode.
@@ -503,6 +537,7 @@ def run_once(env: dict[str, str]) -> dict:
         **({"turn_envelope": True, "turn_envelope_source": "explicit"}
            if execution.turn_envelope else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
+        **({"provider_request_admission": "on"} if request_admission else {}),
         "stage": stage,
         "home_scope": "trial",
         "ok": False,
@@ -644,9 +679,9 @@ def run_once(env: dict[str, str]) -> dict:
                             phase_limited=phase_limited)
                         receipt["ok"] = receipt["return_code"] == 0
                     else:
-                        with child_process(command, env=env, stdout=stdout, stderr=stderr,
-                                goal_admission=session_wake.admission if session_wake is not None else None,
-                                check_current_launch=heartbeat_launch_check(env, session_wake)) as process:
+                        with native_child_process(command, env=env, stdout=stdout, stderr=stderr,
+                                session_wake=session_wake, receipt=receipt, wake=wake,
+                                timeout=timeout) as process:
                             if session_wake is not None:
                                 receipt["host_invoked"] = True
                             timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
