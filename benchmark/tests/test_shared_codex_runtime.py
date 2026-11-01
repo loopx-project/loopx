@@ -8,12 +8,14 @@ import subprocess
 import sys
 import time
 import tomllib
+from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
 from benchmark.runtime.codex import Execution, prepare_codex_home
+from benchmark.runtime import worker
 from benchmark.runtime.worker import run_once, turn_command
 
 
@@ -411,7 +413,7 @@ raise SystemExit(worker.main())
     assert retained.read_bytes() == b"existing participant must remain exact"
 
 
-def test_timeout_keeps_receipt_and_reaps_child(tmp_path):
+def test_timeout_keeps_receipt_and_reaps_child(tmp_path, monkeypatch):
     env = worker_env(tmp_path)
     env["LOOPX_CODEX_TURN_TIMEOUT_SEC"] = "1"
     Path(env["CODEX_BIN"]).write_text(
@@ -422,10 +424,25 @@ pathlib.Path("pid").write_text(str(os.getpid()))
 time.sleep(60)
 """
     )
+    child_pids = []
+    original_child_process = worker.child_process
+
+    @contextmanager
+    def observe_child(*args, **kwargs):
+        with original_child_process(*args, **kwargs) as process:
+            # Observe the real OS launch even if the one-second deadline fires
+            # before this child can write its fixture file under parallel load.
+            child_pids.append(process.pid)
+            yield process
+
+    monkeypatch.setattr(worker, "child_process", observe_child)
     receipt = run_once(env)
     assert receipt["timed_out"] and not receipt["ok"]
+    assert len(child_pids) == 1
+    if (tmp_path / "pid").exists():
+        assert int((tmp_path / "pid").read_text()) == child_pids[0]
     with pytest.raises(ProcessLookupError):
-        os.kill(int((tmp_path / "pid").read_text()), 0)
+        os.kill(child_pids[0], 0)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX scheduler cancellation")
