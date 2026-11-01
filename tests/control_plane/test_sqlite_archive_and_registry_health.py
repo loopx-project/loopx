@@ -25,8 +25,9 @@ from loopx.control_plane.todos.completed_archive import (
     DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
 )
 from loopx.control_plane.todos.machine_section_projection import (
+    BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS,
     BOUNDED_ACTIVE_VIEW_TEXT_LIMIT,
-    SQLITE_ARCHIVE_POINTER_COMMENT,
+    format_sqlite_archive_pointer_comment,
     render_canonical_todo_sections,
 )
 from loopx.control_plane.todos.provider_terminal_lifecycle import (
@@ -67,6 +68,19 @@ def test_sqlite_bounded_active_view_projection_omits_archive_and_large_inline_fi
             "required_write_scopes": [f"loopx/module_{idx}/**/*.py" for idx in range(20)],
         }
     ]
+    for index in range(8):
+        records.append(
+            {
+                "schema_version": "todo_domain_record_v0",
+                "todo_id": f"todo_active_done_{index:02d}",
+                "role": "agent",
+                "status": "done",
+                "done": True,
+                "text": f"Active done step {index}.",
+                "archive_state": "active",
+                "task_class": "advancement_task",
+            }
+        )
     for index in range(30):
         records.append(
             {
@@ -89,16 +103,24 @@ def test_sqlite_bounded_active_view_projection_omits_archive_and_large_inline_fi
         bounded_active_view=True,
     )
     assert projected.changed is True
-    assert projected.todo_count == 31
-    assert SQLITE_ARCHIVE_POINTER_COMMENT in projected.markdown
+    assert projected.todo_count == 39
+    assert (
+        format_sqlite_archive_pointer_comment(
+            archived_count=30,
+            active_done_omitted=8 - BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS,
+        )
+        in projected.markdown
+    )
     assert "note=" not in projected.markdown
     assert "evidence=" not in projected.markdown
     assert "reason=" not in projected.markdown
     assert "required_write_scopes=" not in projected.markdown
     assert "Archived work item" not in projected.markdown
+    assert "Active done step 0." not in projected.markdown
+    assert "Active done step 7." in projected.markdown
     active_by_role, archived_rows, _ = parse_todo_source(projected.markdown)
     assert archived_rows == []
-    assert len(active_by_role["agent"]) == 1
+    assert len(active_by_role["agent"]) == 1 + BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS
     assert len(active_by_role["agent"][0]["text"]) <= BOUNDED_ACTIVE_VIEW_TEXT_LIMIT
 
     replay = render_canonical_todo_sections(
@@ -198,7 +220,12 @@ def test_provider_projection_uses_bounded_active_view_for_sqlite_v0(
     assert delivered["status"] == "delivered"
     assert delivered["todo_count"] == 26
     rendered = state_file.read_text(encoding="utf-8")
-    assert SQLITE_ARCHIVE_POINTER_COMMENT in rendered
+    assert (
+        format_sqlite_archive_pointer_comment(
+            archived_count=25, active_done_omitted=0
+        )
+        in rendered
+    )
     assert "note=" not in rendered
     assert "evidence=" not in rendered
     _, archived_rows, _ = parse_todo_source(rendered)

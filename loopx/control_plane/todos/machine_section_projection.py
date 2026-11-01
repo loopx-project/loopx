@@ -57,10 +57,26 @@ from ..content_digest import BARE_SHA256_PATTERN
 
 TODO_SECTION_PROJECTION_SCHEMA_VERSION = "loopx_todo_section_projection_v0"
 DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT = 20
+BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS = 5
 SQLITE_ARCHIVE_POINTER_COMMENT = (
     '<!-- loopx:todo-archive-pointer authority=sqlite_v0 '
     'query="loopx todo list --include-archived" -->'
 )
+
+
+def format_sqlite_archive_pointer_comment(
+    *,
+    archived_count: int,
+    active_done_omitted: int = 0,
+) -> str:
+    return (
+        f"<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
+        f"archived_count={archived_count} "
+        f"active_done_omitted={active_done_omitted} "
+        f'query="loopx todo list --include-archived" -->'
+    )
+
+
 BOUNDED_ACTIVE_VIEW_TEXT_LIMIT = 160
 BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS = 120
 BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS = frozenset(
@@ -468,6 +484,40 @@ def _select_projected_archive_records(
     ]
 
 
+def _select_bounded_active_role_records(
+    records: Sequence[dict[str, object]],
+    *,
+    referenced_ids: set[str],
+    max_done_items: int = BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS,
+) -> tuple[list[dict[str, object]], int]:
+    done_records = [
+        record
+        for record in records
+        if normalize_todo_status(record.get("status")) == "done"
+        or record.get("done") is True
+    ]
+    if len(done_records) <= max_done_items:
+        return list(records), 0
+    tail_done_ids = {
+        str(record.get("todo_id") or "")
+        for record in (done_records[-max_done_items:] if max_done_items > 0 else [])
+    }
+    retained_done_ids = tail_done_ids | referenced_ids
+    selected: list[dict[str, object]] = []
+    omitted_done = 0
+    for record in records:
+        is_done = (
+            normalize_todo_status(record.get("status")) == "done"
+            or record.get("done") is True
+        )
+        todo_id = str(record.get("todo_id") or "")
+        if not is_done or todo_id in retained_done_ids:
+            selected.append(record)
+        else:
+            omitted_done += 1
+    return selected, omitted_done
+
+
 def _compact_record_for_bounded_active_view(
     record: Mapping[str, object],
 ) -> dict[str, object]:
@@ -564,39 +614,57 @@ def render_canonical_todo_sections(
                 f"Todo {todo_id!r} private validation declaration does not match authority"
             )
         private_validation[todo_id] = source[1]
-    by_role = {
-        role: [
-            (
-                _compact_record_for_bounded_active_view(record)
-                if bounded_active_view
-                else record
-            )
-            for record in sorted(
-                [
-                    record
-                    for record in canonical
-                    if record.get("role") == role
-                    and record.get("archive_state") == "active"
-                ],
-                key=_record_sort_key,
-            )
-        ]
+    raw_active_by_role = {
+        role: sorted(
+            [
+                record
+                for record in canonical
+                if record.get("role") == role
+                and record.get("archive_state") == "active"
+            ],
+            key=_record_sort_key,
+        )
         for role in TODO_SECTION_HEADINGS
     }
-    all_active = [*by_role["user"], *by_role["agent"]]
+    raw_all_active = [*raw_active_by_role["user"], *raw_active_by_role["agent"]]
+    referenced_active_ids = _active_referenced_todo_ids(
+        [
+            record
+            for record in raw_all_active
+            if normalize_todo_status(record.get("status")) != "done"
+            and record.get("done") is not True
+        ]
+    )
+    omitted_done_total = 0
+    by_role: dict[str, list[dict[str, object]]] = {}
+    for role in TODO_SECTION_HEADINGS:
+        role_records = raw_active_by_role[role]
+        if bounded_active_view:
+            selected_role_records, omitted_count = _select_bounded_active_role_records(
+                role_records,
+                referenced_ids=referenced_active_ids,
+            )
+            omitted_done_total += omitted_count
+            by_role[role] = [
+                _compact_record_for_bounded_active_view(record)
+                for record in selected_role_records
+            ]
+        else:
+            by_role[role] = role_records
+    canonical_archived = sorted(
+        [
+            record
+            for record in canonical
+            if record.get("archive_state") == "archive"
+        ],
+        key=_record_sort_key,
+    )
     archived = (
         []
         if bounded_active_view
         else _select_projected_archive_records(
-            sorted(
-                [
-                    record
-                    for record in canonical
-                    if record.get("archive_state") == "archive"
-                ],
-                key=_record_sort_key,
-            ),
-            active_records=all_active,
+            canonical_archived,
+            active_records=raw_all_active,
             max_projected_archive_records=max_projected_archive_records,
         )
     )
@@ -611,7 +679,11 @@ def render_canonical_todo_sections(
             newline=newline,
             private_validation=private_validation,
         )
-    if archived or "archive" in source_document.spans:
+    if (
+        archived
+        or "archive" in source_document.spans
+        or (bounded_active_view and (canonical_archived or omitted_done_total > 0))
+    ):
         rendered_sections["archive"], section_digests["archive"] = _render_section(
             role="archive",
             records=archived,
@@ -619,7 +691,12 @@ def render_canonical_todo_sections(
             newline=newline,
             private_validation=private_validation,
             archive_pointer_comment=(
-                SQLITE_ARCHIVE_POINTER_COMMENT if bounded_active_view else None
+                format_sqlite_archive_pointer_comment(
+                    archived_count=len(canonical_archived),
+                    active_done_omitted=omitted_done_total,
+                )
+                if bounded_active_view
+                else None
             ),
         )
 
@@ -683,6 +760,7 @@ def inspect_todo_section_projection(markdown: str) -> dict[str, object]:
 
 
 __all__ = [
+    "BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS",
     "BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS",
     "BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS",
     "BOUNDED_ACTIVE_VIEW_TEXT_LIMIT",
@@ -691,6 +769,7 @@ __all__ = [
     "TODO_SECTION_PROJECTION_SCHEMA_VERSION",
     "TodoSectionProjectionError",
     "TodoSectionProjectionResult",
+    "format_sqlite_archive_pointer_comment",
     "inspect_todo_section_projection",
     "render_canonical_todo_sections",
 ]
