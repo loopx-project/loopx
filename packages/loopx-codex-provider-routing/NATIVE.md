@@ -2,8 +2,10 @@
 
 The optional `loopx-codex-provider-routing` provider replaces the recommended CPA
 path with native slots. It has no new Core capability id. Credentials and lifecycle
-stay in this package; Core composes the App transport. Python adapts existing
-private file/process owners; `native_policy.ts` owns availability and selection.
+stay in this package; Core composes the App transport. Its packaged Python owner
+handles credential/file/process IO; `native_policy.ts` owns availability and
+selection. No dotfiles checkout, Personal Apps command or external Python module
+is required.
 
 ## The user task
 
@@ -31,11 +33,11 @@ or failed subscription check cannot opt a request into paid use. While API is
 active, a recovered subscription wins at the existing idle/restart boundary and
 switch cooldown. Model settings and history stay with the same GPT route.
 
-The native Personal Apps account owner must support `API_KEY_SLOTS_VERSION = 1`.
-It enrolls one loopback relay credential and reuses its original launch/account
-locks, idle checks, credential/config transaction, readback and rollback. Real
-OpenAI keys stay in this extension, outside the native account vault. An older
-owner reports `api_owner_upgrade_required`; it is never monkey-patched or bypassed.
+The packaged native account owner supports `API_KEY_SLOTS_VERSION = 1`. It enrolls
+one loopback relay credential and uses the same launch/account locks, idle checks,
+credential/config transaction, readback and rollback as subscription switching.
+Real OpenAI keys stay in this extension, outside the native account vault. The
+dotfiles adapter imports this owner; it contains no second credential writer.
 The native owner uses the official `openai_base_url` override on the built-in
 `openai` provider and removes that override on subscription return. The provider
 identity stays stable for existing conversations; other custom providers remain
@@ -77,8 +79,9 @@ incomplete credential transaction.
 
 0.13.0 在同一设置中提供 Key 配置、脱敏回读、只读检查和默认关闭的 API 接续开关。
 订阅始终优先：所有授权订阅均被新鲜观测确认为耗尽后才进入 API；订阅恢复后沿用原有
-空闲、重启、冷却和恢复边界返回。原生账号 owner 需要支持 API 槽位版本 1，API 上游
-Key 留在扩展私有存储，原生槽位只保存本地中转凭据，不绕过原事务或复制会话历史。
+空闲、重启、冷却和恢复边界返回。扩展内置唯一原生账号 owner，dotfiles 只导入并映射
+旧配置；LoopX 不依赖 dotfiles。API 上游 Key 留在扩展私有存储，原生槽位只保存本地
+中转凭据，不绕过原事务或复制会话历史。
 Key 轮换依据输出前收到的明确额度、认证、权限或限流错误，每次请求每把 Key 最多
 尝试一次；网络效果不明、普通请求错误和已开始输出的流不会重放，不替换模型，也不做
 后台付费探测。关闭后停止新请求并等待已接收请求结束。App 显示实际请求结果和上次
@@ -108,12 +111,37 @@ python -m pip install ./packages/loopx-codex-provider-routing
 loopx-codex-accounts status
 ```
 
-The native adapter requires POSIX, the installed **Personal Apps** GPT slot owner
-(`personal-apps` with adjacent `personal_apps.py` and `personal_accounts.py`), its
-registered native GPT route, and the official `codex` CLI. Switching is macOS-only
-in that owner. This package adapts that installation; it ships no second account
-vault or launcher. Other hosts show unavailable. Node 22.18+ or 24+ runs the
-TypeScript selector. Enrol accounts through the native owner's official login.
+The native adapter requires POSIX and the official `codex` CLI; App switching and
+controlled client restart require the macOS Codex App. Other hosts show
+unavailable for those effects. Node 22.18+ or 24+ runs the TypeScript selector.
+The standalone wheel includes the account vault and App IO; it does not require
+LoopX Core to import or use its native CLI.
+
+For a new installation, sign in with ChatGPT in native Codex, close clients using
+that login, then choose **Register current Codex login** on the settings page.
+Registration retains model settings and history and leaves automatic switching
+off. The CLI equivalent is `enroll-current`, taking `expected_revision` and
+`expected_selection` from `status` as JSON on stdin. The default profile reads
+`CODEX_HOME` (otherwise `~/.codex`) and `CODEX_ELECTRON_USER_DATA_PATH` (otherwise
+`~/.loopx/frontends/codex`); the vault lives in
+`~/.loopx/codex-native-accounts/vault`.
+
+When trusted version-1 `~/.config/personal/apps.json` GPT metadata already exists,
+the package reuses that home/frontend, the existing
+`~/.local/state/personal-apps/gpt-accounts` vault and its original locks in place.
+It does not copy credentials or history. An upgrade changes the pinned owner, so
+use **Reconnect** to inspect and accept that owner while retaining the previous
+explicit policy permissions. The updated dotfiles commands import the installed
+package and use those same files and locks. LoopX never imports dotfiles. The
+installed-wheel regression runs without that command, repository or modules:
+
+```sh
+uv run --extra test python -m pytest tests/presentation/test_native_accounts_install.py
+```
+
+新安装无需 dotfiles：先在原生 Codex 登录，关闭使用该登录的客户端，再从设置页登记
+当前登录。登记后自动切换仍关闭。已有个人配置原地复用旧 vault 和锁，不复制凭据、
+SQLite 或会话；升级后通过「重新连接」接受新的扩展 owner。dotfiles 是该扩展的调用方。
 
 Click **Switch automatically when quota runs out** to authorize the listed slots
 as destinations. Installation alone grants no account effect. The App observer
