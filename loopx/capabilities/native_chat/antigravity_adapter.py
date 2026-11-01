@@ -568,9 +568,9 @@ class AntigravityAdapter:
                         step_status = str(step.get("status") or "")
                         if step_status == "CORTEX_STEP_STATUS_WAITING":
                             raise CodexChatAgentError(
-                                "Antigravity needs your response in its application; resolve it there and retry.",
-                                gate={"kind": "host_tool_gate", "summary": "Antigravity is waiting for input.",
-                                      "next_action": "Open Antigravity and resolve the pending interaction."},
+                                "Antigravity requested native permission; this invocation was cancelled. Review its permissions, then retry.",
+                                gate={"kind": "host_tool_gate", "summary": "Antigravity requires native permission.",
+                                      "next_action": "Review permissions in Antigravity, then resend this request in LoopX."},
                                 error_code="host_tool_gate",
                             )
                         if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":

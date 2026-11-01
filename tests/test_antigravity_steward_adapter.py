@@ -245,6 +245,8 @@ def test_pending_native_approval_is_actionable_and_not_auto_accepted(tmp_path, l
     with pytest.raises(CodexChatAgentError) as error:
         adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("requires native approval")
     assert error.value.gate["kind"] == "host_tool_gate"
+    assert "permissions" in error.value.gate["next_action"]
+    assert "cancelled" in str(error.value)
     assert language_server["cancelled"].is_set()
 
 
