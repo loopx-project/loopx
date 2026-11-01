@@ -151,13 +151,15 @@ For CLI operators, the same `context_delivery` machine namespace is documented
 under [Machine default](../reference/required-work-context.md#machine-default).
 There is no separate Goal configuration to duplicate:
 
-| Choice | Effect on subsequent invocations |
-| --- | --- |
-| Explicit `--context-delivery on` or `off` | Overrides the inherited machine choice for that invocation |
-| No explicit choice | Uses the saved machine preference when present |
-| No machine preference | Supported native Codex callers default on; other callers keep full delivery |
-| Explicit worker `LOOPX_CONTEXT_DELIVERY=off` | Overrides inheritance; environment on alone does not enable native delivery |
-| Turn the App switch off | Saves off through the same transaction; it does not reverse task effects or rewrite old captures |
+- **Explicit `--context-delivery on` or `off`:** overrides the inherited machine
+  choice for that invocation.
+- **No explicit choice:** uses the saved machine preference when present.
+- **No machine preference:** supported native Codex callers default on; other
+  callers keep full delivery.
+- **Worker `LOOPX_CONTEXT_DELIVERY=off`:** overrides inheritance; environment on
+  alone does not enable native delivery.
+- **Turn the App switch off:** saves off through the same transaction; it does
+  not reverse task effects or rewrite old captures.
 
 After enabling, inspect an actual supported invocation: its target binding,
 full/delta mode, current recovery reference and supported lifecycle context must

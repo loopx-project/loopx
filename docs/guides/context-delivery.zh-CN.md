@@ -121,13 +121,11 @@ session，也不证明生命周期 hook 已安装。只读设置页不能保存�
 CLI 使用同一个 `context_delivery` 机器 namespace，详见
 [机器级默认](../reference/required-work-context.md#机器级默认)，无需再建 Goal 配置。
 
-| 选择 | 对后续调用的影响 |
-| --- | --- |
-| 显式 `--context-delivery on` 或 `off` | 覆盖该次调用继承的机器选择 |
-| 没有显式选择 | 已保存机器偏好时使用该偏好 |
-| 没有机器偏好 | 受支持原生 Codex 调用方默认开启；其他调用方保持完整交付 |
-| Worker 显式 `LOOPX_CONTEXT_DELIVERY=off` | 覆盖继承；环境变量 on 本身不开启原生交付 |
-| 关闭 App 开关 | 经同一事务保存 off，不撤销任务效果或改写历史 capture |
+- **显式 `--context-delivery on` 或 `off`**：覆盖该次调用继承的机器选择。
+- **没有显式选择**：已保存机器偏好时使用该偏好。
+- **没有机器偏好**：受支持原生 Codex 调用方默认开启；其他调用方保持完整交付。
+- **Worker 显式 `LOOPX_CONTEXT_DELIVERY=off`**：覆盖继承；环境变量 on 本身不开启原生交付。
+- **关闭 App 开关**：经同一事务保存 off，不撤销任务效果或改写历史 capture。
 
 开启后核对一次真实受支持调用：target 绑定、full/delta 模式、当前恢复引用与宿主
 生命周期上下文应一致。冷启动、丢失后或完整交付更便宜时，full 完全合法；保存 on
