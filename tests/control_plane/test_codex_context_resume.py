@@ -313,7 +313,7 @@ def test_unrelated_history_size_does_not_change_replay_or_decode_cost(tmp_path, 
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert peak < 4 * 1024 * 1024  # no history-sized allocation, including above the former 64 MiB cutoff
+    assert peak < 1024 * 1024  # bounded by observed files, not the transport ceiling or history size
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == "delta"
