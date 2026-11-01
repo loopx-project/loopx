@@ -193,6 +193,7 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
     before = state.read_bytes()
     code, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
+        "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
@@ -226,6 +227,7 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     before_source = state.read_bytes()
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
+        "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "context-presentation", cwd=project)
     assert rc == 0 and guard["should_run"] is True, guard
