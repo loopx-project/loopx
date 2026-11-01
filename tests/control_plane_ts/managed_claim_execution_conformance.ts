@@ -46,6 +46,47 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       clear_claim: false, validation_declaration: null, validation_receipt: null,
       completion_policy_request: null, dry_run: false, now: request.now};
   }
+  test(`${provider} managed execution: worktree observation uses canonical code scopes only for new execution`, async t => {
+    const {store, request} = await setup(t);
+    const before = await loaded(store);
+    const todo = (before.head.todos as JsonObject[])[0]!;
+    const repository = "git:github.com/example/project";
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      operation_id: "declare-code", expected_provider_revision: before.provider_revision, projection: before.head,
+      mutations: [{kind: "todo_upsert", todo: {...todo, task_domain: "code", task_repository: repository}}]}))).status, "applied");
+    const workspace = {host: "1".repeat(64), common_directory: "2".repeat(64), worktree: "3".repeat(64), repository};
+    const observed: string[][] = [];
+    const accepted = await claim(store, request, undefined, async scopes => {
+      observed.push([...scopes]); return workspace;
+    });
+    assert.equal(accepted.status, "applied", JSON.stringify(accepted));
+    assert.deepEqual(observed, [["src/**"]]);
+    assert.deepEqual((accepted.lease as JsonObject).write_workspace, workspace);
+    const current = await loaded(store);
+    const unexpected = async () => {throw new Error("Recovery must retain the accepted execution, not acquire another workspace");};
+    assert.equal((await claim(store, request, undefined, unexpected)).status, "replayed");
+    assert.deepEqual(await loaded(store), current);
+    const continuation = await claim(store, {...request, operation_id: "continue-current-execution"}, undefined, unexpected);
+    assert.equal(continuation.status, "no_change");
+    assert.deepEqual((continuation.lease as JsonObject).write_workspace, workspace);
+  });
+  test(`${provider} managed execution: a failed worktree observation cannot grant or assign work`, async t => {
+    const {store, request} = await setup(t);
+    const before = await loaded(store);
+    const todo = (before.head.todos as JsonObject[])[0]!;
+    assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+      operation_id: "declare-code", expected_provider_revision: before.provider_revision, projection: before.head,
+      mutations: [{kind: "todo_upsert", todo: {...todo, task_domain: "code", task_repository: "git:github.com/example/project"}}]}))).status, "applied");
+    const declared = await loaded(store);
+    const rejected = await claim(store, request, undefined, async () => {throw new Error("Physical isolation unavailable");});
+    assert.equal(rejected.reason_code, "invalid_coordination_task_lease");
+    assert.deepEqual(await loaded(store), declared);
+    assert.equal((await store.readReceipt(request.operation_id)).status, "missing");
+    const legacy = await setup(t);
+    const unchanged = await claim(legacy.store, legacy.request, undefined, async () => {throw new Error("Non-code work must keep shared-state exclusion");});
+    assert.equal(unchanged.status, "applied");
+    assert.equal((unchanged.lease as JsonObject).write_workspace, undefined);
+  });
   test(`${provider} managed execution: terminal recovery uses ordinary claim admission without effects`, async t => {
     for (const active of [false, true]) {
       const {store, request} = await setup(t);
