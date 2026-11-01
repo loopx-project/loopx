@@ -15,6 +15,75 @@ selects/reopens when the native owner admits it. Enable automatic handoff and
 The page reads back accounts,
 windows, waiting cause and recovery. Tokens and identity claims stay private.
 
+### OpenAI API fallback
+
+Version 0.13.0 adds **OpenAI API keys** on the same Model provider page. Add a
+named project key, read its masked suffix, explicitly check connection, or remove
+it. Keys remain in a separate private mode-0600 file under the same runtime owner;
+browser/CLI responses never return their complete values. Adding a key alone does
+not enable an observer, change the native login or authorize paid model calls.
+
+Enable subscription automatic handoff, then **Use API after subscription exhaustion
+(usage based billing)**. API fallback is a separate, default-off permission.
+Every authorized subscription must have fresh measured exhaustion before the
+native policy selects API. A healthy subscription always ranks first; an unknown
+or failed subscription check cannot opt a request into paid use. While API is
+active, a recovered subscription wins at the existing idle/restart boundary and
+switch cooldown. Model settings and history stay with the same GPT route.
+
+The native Personal Apps account owner must support `API_KEY_SLOTS_VERSION = 1`.
+It enrolls one loopback relay credential and reuses its original launch/account
+locks, idle checks, credential/config transaction, readback and rollback. Real
+OpenAI keys stay in this extension, outside the native account vault. An older
+owner reports `api_owner_upgrade_required`; it is never monkey-patched or bypassed.
+The native owner uses the official `openai_base_url` override on the built-in
+`openai` provider and removes that override on subscription return. The provider
+identity stays stable for existing conversations; other custom providers remain
+outside this owner.
+
+A local authenticated transport sends the original selected model and Responses
+body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
+try the next configured key before output. Each key is attempted at most once per
+request, with typed cooldowns; model permission failures are scoped to that model.
+Unknown network effects, ordinary request/server failures and any started stream
+are not retried on another key. No job replay, model substitution or synthetic
+completion is added. There are no background paid probes. The transport survives
+the Chat/App restart used for native handoff; disabling stops new admissions and
+drains already accepted requests before its process exits. With the policy off,
+an existing subscription is never routed through this transport.
+
+**Check connection** only requests the official
+[`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
+It makes no inference call and does not establish spendable quota. Its 401, 403,
+429 and network states remain distinct. A models permission denial does not prove
+inference is unavailable. The App shows per-key actual request outcomes, model,
+last observation time and the last reported rate-window requests/tokens left when
+OpenAI supplies those headers. These are observations of a rate window, not a
+monthly allowance or account balance. OpenAI's
+[`Costs` endpoint](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs)
+requires an Admin API key; project keys do not expose an authoritative billing
+balance. The page retains **API balance unavailable** and links to OpenAI usage.
+
+The same private store is available through `loopx-codex-accounts keys-status`,
+`keys-add`, `keys-remove` and `keys-check`. Mutations accept JSON on stdin with
+`expected_revision` from `keys-status`. `keys-add` takes `label` and `api_key`;
+`keys-remove` and `keys-check` take the returned `key_id`. Never pass a key as a
+command-line argument. Native `configure` accepts `api_fallback: true` alongside
+its existing policy fields. A stale revision refuses a mutation; re-read before
+retrying. Removing a saved key does not revoke it at OpenAI. Disable API fallback
+to stop new API requests; select an available subscription through the existing
+native handoff controls. The current native recovery/rollback owner retains any
+incomplete credential transaction.
+
+0.13.0 在同一设置中提供 Key 配置、脱敏回读、只读检查和默认关闭的 API 接续开关。
+订阅始终优先：所有授权订阅均被新鲜观测确认为耗尽后才进入 API；订阅恢复后沿用原有
+空闲、重启、冷却和恢复边界返回。原生账号 owner 需要支持 API 槽位版本 1，API 上游
+Key 留在扩展私有存储，原生槽位只保存本地中转凭据，不绕过原事务或复制会话历史。
+Key 轮换依据输出前收到的明确额度、认证、权限或限流错误，每次请求每把 Key 最多
+尝试一次；网络效果不明、普通请求错误和已开始输出的流不会重放，不替换模型，也不做
+后台付费探测。关闭后停止新请求并等待已接收请求结束。App 显示实际请求结果和上次
+限流窗口余量；项目 Key 的账单余额保持未知，连接检查成功也不代表还有可消费额度。
+
 **An open native Codex client is an occupied owner, even between turns.** With
 restart permission, the provider requests a normal AppKit quit of only the
 inspected GPT instance, waits for exit and native idle, saves/switches the login,
