@@ -243,7 +243,7 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
         capture_output=True, check=True)
     args = ["quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "machine-original-turn"]
-    code, wire = _run_cli(registry, runtime, *args, cwd=project)
+    code, wire = _run_cli(registry, runtime, *args, cwd=project, raw_guard=False)
     assert code == 0 and wire["mode"] == "full", wire
     recovery = read_context_read_reference(wire["recovery"]["reference_file"])[1]
     raw = Path(recovery["path"]).read_bytes()
@@ -270,7 +270,7 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
         assert hashlib.sha256(observed).hexdigest() == view["sha256"]
 
     complete_reader(wire)
-    code, warm = _run_cli(registry, runtime, *args, cwd=project)
+    code, warm = _run_cli(registry, runtime, *args, cwd=project, raw_guard=False)
     assert code == 0 and warm["mode"] == "delta", warm
     complete_reader(warm)
     old_generation = read_context_read_reference(
@@ -278,6 +278,7 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     )[1]["navigation"]["target"].get("continuity_generation")
     configuration_file = runtime / "machine/configuration.json"
     old_configuration = configuration_file.read_bytes() if configuration_file.exists() else None
+    assert (old_generation is None) is (stored_mode is None)
     assert (old_configuration is None) is (stored_mode is None)
     assert configure(registry, runtime, tmp_path, "off")[0] == 0
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
@@ -285,7 +286,7 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
         assert configuration_file.read_bytes() == old_configuration
     else:
         assert json.loads(configuration_file.read_text())["namespaces"]["context_delivery"]["mode"] == "on"
-    code, fresh = _run_cli(registry, runtime, *args, cwd=project)
+    code, fresh = _run_cli(registry, runtime, *args, cwd=project, raw_guard=False)
     assert code == 0 and fresh["mode"] == "full", fresh
     fresh = read_context_read_reference(fresh["reference_file"])[1]["navigation"]
     assert fresh["target"]["continuity_generation"] != old_generation
