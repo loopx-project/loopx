@@ -73,12 +73,35 @@ def source_request(tmp_path, monkeypatch, *, provider="file", colocated=False):
     response = apply_context_handoff(
         controller, {"kind": "external_audience"}, session, turn,
         {"context_handoff": {"goal_id": "goal-a", "agent_id": "agent-a"}},
-        {"authorization_scope_id": "synthetic-host-scope"}, execution_allowed=lambda: False,
+        # The source Turn is active. Worker launch separately requires an
+        # execution_binding_id, which this delivery-only request does not have.
+        {"authorization_scope_id": "synthetic-host-scope"}, execution_allowed=lambda: True,
     )
+    assert response["context_execution"]["submitted"] is False
     receipt = response["context_handoff_receipt"]
     store.update_turn(session["session_id"], turn["turn_id"], status="completing", response=response)
     store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
     return root, registry, store, session, turn, receipt
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
+def test_stopped_source_cannot_republish_a_previous_delivery(tmp_path, monkeypatch, provider):
+    root, registry, store, session, turn, _ = source_request(tmp_path, monkeypatch, provider=provider)
+
+    def snapshot():
+        return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+    before = snapshot()
+    controller = SimpleNamespace(store=store, coordination_runtime_root=root,
+                                 registry_path=registry, manager_scope_resolver=None)
+    response = apply_context_handoff(
+        controller, {"kind": "external_audience"}, session, turn,
+        {"context_handoff": {"goal_id": "goal-a", "agent_id": "agent-a"}},
+        {"authorization_scope_id": "synthetic-host-scope"}, execution_allowed=lambda: False,
+    )
+    assert response.get("context_handoff_receipt") is None
+    assert not response.get("context_execution", {}).get("submitted", False)
+    assert snapshot() == before
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite", "source_session"])
