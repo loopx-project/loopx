@@ -23,8 +23,8 @@ before model/container entry. Use a new log directory to adopt a newer source;
 never repin an active or historical cohort.
 
 For a **new cohort with no explicit source options**, `source-default.json`
-selects the reviewed integration commit
-[`2f9f16cfe724aca6efe63d690ac77ca955395748`](https://github.com/huangruiteng/EdgeBench/commit/2f9f16cfe724aca6efe63d690ac77ca955395748)
+selects the reviewed provider commit
+[`118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2`](https://github.com/huangruiteng/EdgeBench/commit/118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2)
 and the versioned
 [`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
 This LoopX-owned patch fixes the native checkpoint representation of nonfinite
