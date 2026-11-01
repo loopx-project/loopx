@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
     (["todo", "list"], ["--todo-id", "--thin", "--limit"], ["--claimed-by", "--next-agent-todo"]),
     (["todo", "claim"], ["--claimed-by", "--claim-operation-id"],
      ["--note", "--next-agent-todo", "--task-lease-expected-version", "--task-lease-idempotency-key"]),
+    (["todo", "update"], ["--note", "--update-operation-id", "--validation-command", "--resume-when"],
+     ["--next-agent-todo", "--decision-outcome", "--result-file", "--task-lease-expected-version"]),
     (["todo", "receipt"], ["--operation-id"], ["--todo-id", "--claimed-by"]),
     (["todo", "result-read"], ["--todo-id"], ["--text", "--claimed-by"]),
     (["todo", "plan"], ["--agent-id", "--text"], ["--claimed-by", "--todo-id"]),
@@ -36,6 +38,20 @@ def test_action_help_from_real_cli_with_unavailable_registry(tmp_path, command, 
     assert all(flag in declared for flag in expected)
     assert all(flag not in declared for flag in absent)
     assert not registry.exists()
+
+
+def test_action_help_keeps_required_usage_and_lists_optional_grammar_once(capsys):
+    parser = build_parser()
+    command = ["todo", "update", "--goal-id", "fixture", "--todo-id", "todo_a", "--note", "progress"]
+    before = vars(parser.parse_args(command))
+    with pytest.raises(SystemExit) as exited:
+        parser.parse_args(["todo", "update", "--help"])
+    assert exited.value.code == 0
+    output = capsys.readouterr().out
+    usage = output.split("\n\n", 1)[0]
+    assert "--goal-id" in usage and "[options]" in usage
+    assert "--note" not in usage and "--note NOTE" in output
+    assert vars(parser.parse_args(command)) == before
 
 
 def test_help_does_not_mutate_reused_parser_or_change_claim_input(capsys):

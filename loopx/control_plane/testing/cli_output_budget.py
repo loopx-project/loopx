@@ -312,13 +312,15 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            # The complete first-guard selection guidance and supported
-            # 320-char scope emit 4,532 JSON chars at immutable b47bbc6c9.
-            # Retain the old 4,500 failure; allow 68 chars of JSON headroom.
-            # Body presentation stays 4,200; Markdown/line guards are unchanged.
-            "small": {"json": 4_600, "markdown": 6_200},
-            "crowded": {"json": 4_600, "markdown": 6_200},
-            "multi_agent": {"json": 4_600, "markdown": 6_200},
+            # Same fixed-path, 320-char scope workload at 9cae3b289 emitted
+            # 4,532 JSON / 6,648 Markdown chars; timed-wait guidance adds 321
+            # chars, retaining the original Turn, due time and fresh admission.
+            # All three scenarios now emit 4,853 / 6,969 chars and 63 Markdown
+            # lines. Preserve historical misses; retain complete instructions,
+            # the current 4,500 body allowance and unchanged line/growth guards.
+            "small": {"json": 5_000, "markdown": 7_100},
+            "crowded": {"json": 5_000, "markdown": 7_100},
+            "multi_agent": {"json": 5_000, "markdown": 7_100},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -610,6 +612,20 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         markdown_anchor="# LoopX Todo List",
         max_chars={"json": 20_000, "markdown": 6_000},
         max_lines={"json": 600, "markdown": 60},
+    ),
+    CliOutputModeVariantSpec(
+        variant_id="todo_list_summary",
+        parent_surface_id="todo_list",
+        command="todo list --summary",
+        output_formats=("json", "markdown"),
+        semantic_json_keys=(
+            "todos", "summary", "matched_todo_count", "returned_todo_count",
+            "omitted_todo_count", "authority_read", "todo_list_summary_projection",
+            "projection_envelope",
+        ),
+        markdown_anchor="# LoopX Todo List Summary",
+        max_chars={"json": 12_000, "markdown": 8_000},
+        max_lines={"json": 320, "markdown": 40},
     ),
 )
 

@@ -22,7 +22,7 @@ from .chat_manager import (
 )
 from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
-from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter, start_attachment_turn
 from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
 from .capabilities.native_chat.steward_managed_mode import prepare_managed_session_route, require_managed_agent_session
 from .capabilities.native_chat.turn_release import TurnReleaseWakeup
@@ -722,6 +722,13 @@ class ChatRuntimeController:
         with self.lock:
             return self.session_adapter_locks.setdefault(session_id, threading.Lock())
 
+    def _has_live_turn_worker(self, session: dict[str, Any], turn: dict[str, Any] | None) -> bool:
+        """Under the controller lock, distinguish local work from model transport."""
+        if not turn or turn.get("status") not in {"starting", "running", "interrupting"}:
+            return False
+        done = self.turn_done_events.get((session["session_id"], turn["turn_id"]))
+        return done is not None and not done.is_set()
+
     def _ensure_adapter(
         self,
         session: dict[str, Any],
@@ -841,6 +848,10 @@ class ChatRuntimeController:
                 and not settings_changed
             ):
                 reusable = current
+            elif current is None and self._has_live_turn_worker(session, active):
+                # A native observation needs no model adapter. Absence of that
+                # transport cannot prove that its original Chat worker exited.
+                raise ValueError("the original Chat worker is still active; read its current Turn")
             elif current is not None:
                 current.close_session()
                 self.adapters.pop(session_id, None)
@@ -1056,6 +1067,8 @@ class ChatRuntimeController:
         session = self.store.load_session(session_id)
         if session is None:
             raise KeyError("chat session was not found")
+        from .chat_attachments import require_text_document_route
+        require_text_document_route(session, attachments)
         if session.get("steward_context") is not None:
             raise ValueError("bound steward Chat requires its external source admission")
         if session.get("project_context") is not None:
@@ -1842,9 +1855,7 @@ class ChatRuntimeController:
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
                 with observe_goal_execution(self.store.root.parent, observed_goal, host=str(session.get("agent_id") or "unknown")):
                     if attachments:
-                        if not isinstance(adapter, CodexAppServerAdapter):
-                            raise ValueError("image attachments currently require the Codex Agent endpoint")
-                        response = adapter.start_turn_with_attachments(message, event_sink, attachments)
+                        response = start_attachment_turn(adapter, session, current_turn, message, event_sink, attachments)
                     else:
                         response = adapter.start_turn(message, event_sink)
             if execution_ended():
@@ -2271,9 +2282,11 @@ class ChatRuntimeController:
             with self.lock:
                 current = self.adapters.get(session_id)
                 adapter_healthy = current is not None and current.healthcheck()
+                active = self.store.load_turn(session_id, session["active_turn_id"]) if session.get("active_turn_id") else None
+                preserve_active = adapter_healthy or self._has_live_turn_worker(session, active)
             with goal_commit():
                 session, active_turn_preserved = self.store.prepare_managed_session_resume(
-                    session_id, preserve_active_turn=adapter_healthy,
+                    session_id, preserve_active_turn=preserve_active,
                 )
             if active_turn_preserved:
                 return session

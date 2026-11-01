@@ -6,12 +6,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
 import os
+import subprocess
+import sys
 import tarfile
 import threading
 
 import pytest
 
 from loopx.cli_commands import update_artifact as update
+
+
+def test_exported_bootstrap_validates_metadata_without_an_installed_package(tmp_path):
+    script = tmp_path / "bootstrap.py"
+    script.write_text(update.standalone_source(), encoding="utf-8")
+    descriptor = manifest(b"runtime", "https://publisher.invalid/runtime.tar.gz")
+    probe = """
+import json,runpy,sys
+module=runpy.run_path(sys.argv[1])
+value=json.load(sys.stdin)
+assert module['validate_manifest'](value)==value
+for invalid in ['A'*64,'a'*63,'a'*65,'sha256:'+('a'*64),'a'*63+'g']:
+    try:module['validate_manifest']({**value,'sha256':invalid})
+    except ValueError:pass
+    else:raise AssertionError('invalid digest accepted')
+assert not any(name=='loopx' or name.startswith('loopx.') for name in sys.modules)
+print('standalone metadata boundary passed')
+"""
+    result = subprocess.run([sys.executable, "-I", "-c", probe, str(script)],
+        cwd=tmp_path, input=json.dumps(descriptor), capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == "standalone metadata boundary passed"
 
 
 @contextmanager

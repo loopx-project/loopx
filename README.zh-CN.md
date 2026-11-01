@@ -23,19 +23,22 @@
 
 ## 两步开始
 
-准备好 Python 3.11+、Node.js 22.22.3+（推荐 24 LTS），安装一次：
+**1. 安装 LoopX 和 Agent 技能。** 需要 Python 3.11+、Node.js 22.22.3+（推荐 24 LTS）。
 
 ```bash
 python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 ```
 
-重启 Agent 宿主，打开项目，再给 Codex 一个具体任务：
+[其他安装方式与升级说明](docs/guides/installing-loopx.md)
+
+**2. 给 Agent 一个具体任务。** 重启 Agent 宿主，打开项目，再在 Codex 对话中输入：
 
 ```text
 $loopx 优化这个项目最慢的流程，对比方案并验证性能提升
 ```
 
-Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升级说明 ↓](#试用-loopx)
+Claude Code 使用 `/loopx <复杂任务>`；其他运行时见[宿主接入](#从你已经在用的-agent-启动)。
+想跟着教程试一次？[选择一个入门任务](#试用-loopx)。
 
 ## 📰 最新动态
 
@@ -72,7 +75,7 @@ Claude Code 使用 `/loopx <复杂任务>`。[其他宿主、安装方式与升�
 
 | 你想做什么 | 从这里开始 |
 | --- | --- |
-| 让编程或研究 Agent 跨会话持续干活 | [安装并开始](#试用-loopx) |
+| 让编程或研究 Agent 跨会话持续干活 | [安装并开始](#快速开始) |
 | 在一个入口管理个人项目、定时任务与待决事项 | [个人 Agent 工作区](#认识个人-agent-工作区) |
 | 让多个 Agent 分工协作，交付可验收的结果 | [Agent 协作指南](docs/product/use-cases/cross-runtime/README.md#中文指南) |
 
@@ -178,33 +181,31 @@ App 为 ad-hoc 签名，尚未 notarize。Windows 预览版目前手动更新，
 
 ## 试用 LoopX
 
-先安装一次：
+选一个能检查实际成果的教程：
 
-```bash
-python3 -m pip install --upgrade loopx && loopx workflow-skills --install
-```
+| 从哪里开始 | 你会完成什么 |
+| --- | --- |
+| [查 bug 入门教程](docs/guides/first-bugfix-loop.zh-CN.md) | 在小型 Python 项目中复现两个 bug，让 Agent 修复，再检查测试和补丁。 |
+| [长程编程任务指南（English）](docs/guides/long-running-coding-agents.md) | 修复 issue 或持续改进自己的仓库，保留评审、证据和跨会话恢复。 |
+| [图文工作区手册](docs/guides/personal-workspace-user-guide.md) | 跟着截图在 App 中管理项目、对话、任务和交付结果。 |
 
 ### 从你已经在用的 Agent 启动
 
-重启 Agent 宿主，在打开了你项目的会话里开始：
+完成上面的[两步启动](#快速开始)后，在打开了你项目的会话里使用对应入口：
 
-| 宿主 | 输入 |
+| 宿主 | 启动并确认续跑 |
 | --- | --- |
-| Codex App、Codex CLI | `$loopx <复杂任务>` |
-| Claude Code | `/loopx <复杂任务>` |
+| Codex App | `$loopx <复杂任务>`；确认 [heartbeat 自动化已保存](docs/guides/first-bugfix-loop.zh-CN.md#确认它真的开始执行)。 |
+| Codex CLI | `$loopx <复杂任务>`；在同一会话中激活生成的[原生 `/goal`](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md#current-user-path)。 |
+| Claude Code | `/loopx <复杂任务>`；按 [loop driver 接入说明](docs/guides/newcomer-command-path.md#choose-the-loop-driver)设置周期性续跑。 |
 | DeepSeek Harness | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中选 `loopx`，然后直接描述任务 |
 
-例如，给 Agent 一个具体成果要求：
+LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并引导宿主激活。
+让 Agent 回报当前 Goal、下一条 Todo 和实际续跑机制；生成 setup packet 不等于循环已经启动。
+持续工作需要宿主保持可用。`loopx status` 显示目标、等你处理的决策和下一条 Todo；
+`loopx doctor` 诊断安装。
 
-```text
-$loopx 优化这个项目最慢的流程，对比方案并验证性能提升
-```
-
-LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并设置宿主的循环。
-`loopx status` 显示目标、等你处理的决策和下一条 Todo；`loopx doctor` 诊断安装。
-
-需要 Python 3.11+ 与 Node.js 22.22.3+（推荐 24 LTS）。原生 Windows、`pipx`、
-升级、回滚与卸载见 [Installing LoopX](docs/guides/installing-loopx.md)。
+原生 Windows、`pipx`、升级、回滚与卸载见[安装指南](docs/guides/installing-loopx.md)。
 
 **从 1.x 升级？** 继续既有 Goal 前，先读 [2.0 迁移与恢复指南](docs/product/releases/v2.0.0.md#中文指南)。
 

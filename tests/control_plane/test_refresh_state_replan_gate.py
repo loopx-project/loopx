@@ -11,6 +11,7 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_source_fixture
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.effect_runtime import EffectRuntimeRejected
 from loopx.control_plane.status.autonomous_replan_projection import (
     AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD,
 )
@@ -194,6 +195,23 @@ def test_turn_guard_keeps_its_exact_replan_target_strict() -> None:
             goal_id=GOAL_ID,
             guard_scoped=True,
             guard_semantic_replan_obligation_id=obligation_id,
+        )
+
+
+@pytest.mark.parametrize("run_count", [0, AUTONOMOUS_REPLAN_PERIODIC_RUN_THRESHOLD])
+def test_selected_replan_cannot_write_when_its_source_cannot_be_reconstructed(run_count: int) -> None:
+    # Deferring an obligation not selected by an ordinary Turn is legal. Losing
+    # the exact source of an already selected replan must instead fail closed.
+    with pytest.raises(EffectRuntimeRejected, match="identity conflicts"):
+        enforce_open_replan_writeback(
+            newest_first_runs=_durable_runs(run_count), state_text=STATE_TEXT,
+            agent_id=AGENT_ID, goal_id=GOAL_ID, guard_scoped=True,
+            guard_semantic_replan_obligation_id="replan-1111111111111111",
+            progress_observation={
+                "schema_version": "typed_progress_observation_v0",
+                "result_class": "blocked", "work_item_id": "replan-1111111111111111",
+                "blocker_id": "blocker:source-missing", "evidence_ids": ["evidence:source-read"],
+            },
         )
 
 

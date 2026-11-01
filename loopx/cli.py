@@ -89,7 +89,6 @@ from .capabilities.external_research.cli import (
     register_external_evidence_commands,
 )
 from .capabilities.performance_diagnosis.cli import (
-    handle_performance_diagnosis_command,
     register_performance_diagnosis_commands,
 )
 from .cli_commands import (
@@ -707,12 +706,6 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if external_evidence_result is not None:
         return external_evidence_result
-
-    performance_diagnosis_result = handle_performance_diagnosis_command(
-        args, output_format=output_format, print_payload=print_payload,
-    )
-    if performance_diagnosis_result is not None:
-        return performance_diagnosis_result
 
     registry_admin_result = handle_registry_admin_command(
         args,

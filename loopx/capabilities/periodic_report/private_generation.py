@@ -20,6 +20,13 @@ from .pending_intent import (
 )
 
 
+_SOURCE_NARRATIVE_REQUIREMENTS = (
+    "Current source state is observed at collection time, not reconstructed as of the period end. Disclose the collection time when available and retain unreadable views as gaps.",
+    "Use recorded completion/evidence times for the exact half-open window [window.start_at, window.due_at). Separate its outcomes, older history and changes at or after its end; a later completed Task is not proof of an in-window outcome. Unknown times stay unknown.",
+    "Describe current work and relevant completed Tasks. Preserve concrete outcomes, quantified before/after comparisons, relevant counterevidence and the responsible owner's next action in the body. State shared limitations once; supporting evidence must not crowd out the substantive findings.",
+)
+
+
 def attempt_directory(root: Path, window: dict[str, Any]) -> Path:
     return _attempt_dir(root, window["goal_id"], cadence_intent(window))
 
@@ -132,9 +139,8 @@ def prepare_private_report(*, root: Path, window: dict[str, Any], read,
             "Read full frozen source records for substantive claims; excerpts and Agent claims are not independent verification.",
             "Recorded source references are scoped provenance, not proof of access, public status or publication permission. Keep unverified references explicit; never infer a URL from a digest or reuse private sources for another audience.",
             "Distinguish implementation, merged source, installed adoption and actual original-message delivery.",
-            "Describe current and relevant completed tasks, counterevidence, source gaps and concrete next steps.",
             "A due unchanged window still needs a substantive report; observations or CI counts are not business progress.",
-        ]
+        ] + list(_SOURCE_NARRATIVE_REQUIREMENTS)
         request["request_digest"] = _canonical_digest(request)
         atomic_write_json(path, request)
         return request
@@ -207,11 +213,9 @@ def prepare_session_report(*, root: Path, window: dict[str, Any], actor: dict[st
             source_fact_binding="frozen_source_v2")
         request["narrative_contract"]["requirements"] += [
             "Use only this original Goal's frozen evidence and permitted artifacts; no portfolio or other Goal access is granted.",
-            "Current Task status is observed at collection time, not reconstructed as of the period end.",
-            "Use recorded completion/evidence times to distinguish this fixed window's outcomes, older history and current open work; unknown times stay unknown.",
             "Separate native Task completion, independent outcome evidence and actual message delivery. Preserve failed, blocked and unreadable evidence.",
             "A due unchanged period still needs a report; exclude report generation itself from business progress.",
-        ]
+        ] + list(_SOURCE_NARRATIVE_REQUIREMENTS)
         request["request_digest"] = _canonical_digest(request)
         folder.mkdir(parents=True, exist_ok=True)
         atomic_write_json(folder / "source.json", source)

@@ -177,6 +177,7 @@ def build_autonomous_replan_cli_actions(
         f"{cli_prefix} --format json refresh-state --goal-id {goal_id} "
         "--progress-scope agent_lane "
         "--classification bounded_replan_progress "
+        "--delivery-boundary semantic_closeout "
         f"{delivery_args}{semantic_delta_args}"
         f"{settlement_args}{scoped_cli_args}"
     )

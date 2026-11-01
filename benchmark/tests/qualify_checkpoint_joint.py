@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from xml.etree import ElementTree
@@ -20,6 +22,40 @@ SYNTHETIC_PHASE_SECONDS = 7200
 # Parent transport waits cover the fixture's original phase and cleanup. They
 # never replace its phase file, individual capture window or native opportunity.
 CONTROLLER_WAIT_SECONDS = SYNTHETIC_PHASE_SECONDS + 60
+
+
+def require_source_checkout(source: Path, expected_revision: str):
+    """Bind qualification to the caller's pin and the Python code actually used.
+
+    PYTHONPATH does not take precedence over Python's current working directory,
+    and already imported submodules can survive a later path correction.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_revision):
+        raise ValueError("Source revision must be an explicit full commit SHA")
+    source = source.resolve(strict=True)
+    revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    if revision != expected_revision:
+        raise ValueError("Source checkout does not match its declared immutable revision")
+    if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
+        raise ValueError("Use a clean dedicated source checkout and keep it frozen during qualification")
+    packages = ("loopx", "benchmark", "tests")
+    for name in packages:
+        importlib.import_module(name)
+    for name, module in tuple(sys.modules.items()):
+        package = name.split(".", 1)[0]
+        if package not in packages:
+            continue
+        filename = getattr(module, "__file__", None)
+        if filename:
+            matches = Path(filename).resolve(strict=True).is_relative_to(source / package)
+        else:
+            # Namespace search paths may include the native provider's unused
+            # test tree. Verify executable members separately, not unused paths.
+            matches = any(Path(path).resolve(strict=True).is_relative_to(source / package)
+                          for path in getattr(module, "__path__", ()))
+        if not matches:
+            raise ValueError(f"Imported {name} does not match the declared source checkout")
+    return revision
 
 
 def require_one_pass(report):
@@ -45,6 +81,8 @@ def _stage_source_configuration(container, native, destination):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-revision", required=True,
+                        help="Exact immutable LoopX commit expected by the caller, not inferred from imports")
     parser.add_argument("--provider-source", type=Path, required=True)
     parser.add_argument("--provider-revision", default=PROVIDER_REVISION,
                         help="Exact caller-selected native provider pin; default is the documented compatibility revision")
@@ -60,12 +98,10 @@ def main():
     args = parser.parse_args()
     if bool(args.reuse_point) != bool(args.captured_config):
         parser.error("--reuse-point and --captured-config must be supplied together")
+    source = Path(__file__).resolve().parents[2]
+    source_revision = require_source_checkout(source, args.source_revision)
     if sys.platform != "linux" or os.getuid() == 0:
         parser.error("Run on Linux as the ordinary owner of a disposable Docker daemon")
-    source = Path(__file__).resolve().parents[2]
-    source_revision = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip():
-        parser.error("Use a clean dedicated source checkout and keep it frozen during qualification")
     provider = args.provider_source.resolve(strict=True)
     if subprocess.check_output(["git", "-C", str(provider), "rev-parse", "HEAD"], text=True).strip() != args.provider_revision:
         parser.error("Provider must match its exact declared immutable revision")
@@ -78,7 +114,6 @@ def main():
     output.parent.resolve(strict=True)
     if output.resolve() != output or output.exists():
         parser.error("Output must be a fresh physical directory; prior evidence is never overwritten")
-    output.mkdir(mode=0o700)
     sys.path.insert(0, str(provider))
     import docker
     import pytest
@@ -90,6 +125,8 @@ def main():
 
     if Path(sforge.__file__).resolve().parent != provider / "sforge":
         parser.error("Imported provider does not match the declared source")
+    require_source_checkout(source, source_revision)
+    output.mkdir(mode=0o700)
     base = {str(source): {"bind": "/source", "mode": "ro"},
             str(provider): {"bind": "/provider", "mode": "ro"},
             str(dependencies): {"bind": "/deps", "mode": "ro"},
@@ -289,10 +326,9 @@ def main():
                "--junitxml=/results/junit.xml"],
               {str(results): {"bind": "/results", "mode": "rw"}},
               {"LOOPX_RUNTIME_ROOT": "/results/transport-runtime"}, output / "core.log")
-        assert subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip() == source_revision, "Source changed during qualification"
-        assert not subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"], text=True).strip(), "Source changed during qualification"
+        require_source_checkout(source, source_revision)
         receipt = {"passed": True, "controller_uid": os.getuid(), "provider_revision": args.provider_revision,
-                   "source_revision": source_revision, "source_tree_dirty": False,
+                   "source_revision": source_revision, "source_tree_dirty": False, "source_imports_verified": True,
                    "context_delivery": args.context_delivery,
                    "native_context_reads": context_results,
                    "qualification_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in

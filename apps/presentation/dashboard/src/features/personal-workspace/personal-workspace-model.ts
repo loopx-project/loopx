@@ -424,6 +424,7 @@ export type WorkspaceReturnDelivery = {
   request_revision?: number | null;
 };
 
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type WorkspaceImageAttachment = {
   dataUrl: string;
   id: string;

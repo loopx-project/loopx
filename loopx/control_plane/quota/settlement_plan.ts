@@ -52,8 +52,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     throw new Error("settlement plan GoalRef is invalid or does not match identity");
   }
   const inFlight = params.delivery_boundary === "in_flight_continuation";
-  const autonomousReplan = params.autonomous_replan === undefined ? false
-    : requireBoolean(params.autonomous_replan, "autonomous_replan");
+  const autonomousReplan = (params.autonomous_replan === undefined ? false
+    : requireBoolean(params.autonomous_replan, "autonomous_replan")) || identity.binding_kind === "autonomous_replan";
   const validation: SettlementStep = {
     kind: "validation", owner: "agent", idempotency_key_ref: "$.identity.effect_id",
     expected_receipt: "validation_receipt",
@@ -80,7 +80,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
           " Pass a new packet with --agent-vision-json.") +
         " Route elimination needs evidence; failure alone is not progress. " +
-        "outcome_progress may use in_flight_continuation; outcome_gap requires " +
+        (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open; "
+          : "outcome_progress may use in_flight_continuation; ") + "outcome_gap requires " +
         "semantic_closeout plus blocked + blocker/evidence IDs and continuation checks. " +
         "For an admitted open continuous Monitor whose observation is unavailable, " +
         "use this original identity for typed blocked outcome_gap; it settles without " +

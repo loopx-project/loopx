@@ -96,6 +96,16 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
   const lineage = requireJsonObject(receipt.lineage, "original report lineage");
   const keys = Object.keys(request).filter(key => key !== "report_quota_recovery");
   const accepting = params.turn == null && params.report_settlement_recovery == null;
+  const history = session.upstream_context_history ?? [];
+  if (!Array.isArray(history)) throw new EffectRuntimeRequestError("invalid native context provenance");
+  const nativeThreads = [session.upstream_thread_id, ...history.map(value => {
+    const item = requireJsonObject(value, "native context provenance");
+    if (item.manager_context_version !== null && (!Number.isSafeInteger(item.manager_context_version)
+        || Number(item.manager_context_version) < 0)) {
+      throw new EffectRuntimeRequestError("invalid native context provenance");
+    }
+    return requireNonEmptyString(item.thread_id, "original native context thread");
+  })];
   if (request.work_kind !== "report" || prior.work_kind !== "report" || prior.report_quota_recovery !== undefined
       || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
       || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
@@ -119,7 +129,7 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || ["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].some(key => inspection[key] !== true)
       || inspection.journal_status !== "failed"
       || ![null, true].includes(recorded.host_invoked as null | boolean)
-      || observation.thread_id !== session.upstream_thread_id || typeof observation.thread_id !== "string" || !observation.thread_id
+      || !nativeThreads.includes(observation.thread_id) || typeof observation.thread_id !== "string" || !observation.thread_id
       || observation.turn_id !== original.upstream_turn_id || observation.only_original_user_item !== true
       || observation.codex_error_info !== "usageLimitExceeded" || observation.quota_available !== true
       || typeof observation.quota_observed_at !== "number" || !Number.isFinite(observation.quota_observed_at)

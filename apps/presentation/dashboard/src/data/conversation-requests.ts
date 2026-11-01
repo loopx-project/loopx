@@ -21,8 +21,9 @@ const inventorySchema = z.object({ok: z.literal(true), session_id: z.string(), r
 export type ConversationRequest = z.infer<typeof rowSchema>;
 export type ConversationRequestInventory = z.infer<typeof inventorySchema>;
 
-export async function fetchConversationRequests(sessionId: string, history: boolean, offset = 0, signal?: AbortSignal, search = "") {
+export async function fetchConversationRequests(sessionId: string, history: boolean, offset = 0, signal?: AbortSignal, search = "", limit = 12) {
   const query = new URLSearchParams({session_id: sessionId, view: history ? "history" : "unfinished", offset: String(offset), search});
+  if (limit !== 12) query.set("limit", String(limit));
   const result = inventorySchema.parse(await requestJson<unknown>(`/api/chat/request-inventory?${query}`, {signal}));
   if (result.session_id !== sessionId) throw new Error("Conversation request scope changed.");
   return result;

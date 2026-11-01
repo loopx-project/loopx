@@ -151,6 +151,8 @@ def main() -> None:
                 "calendar_task_configuration": configuration} if args.managed_calendar_task else {})}))
         wake, outbound, delivery = None, None, None
         owner_start_count = 0
+        restart_tokens = set()
+        restart_refusals = set()
         try:
             while not stop.wait(.2):
                 server.assets_dir = current_assets if (output / "use-current-assets").exists() else baseline_assets
@@ -159,6 +161,58 @@ def main() -> None:
                 if owners_stopped and wake:
                     wake.close()
                     wake = None
+                restart_file = output / "restart-runtime"
+                restart_token = restart_file.read_text().strip() if restart_file.is_file() else None
+                if (args.managed_calendar_task and restart_token
+                        and restart_token not in restart_tokens | restart_refusals):
+                    with runtime.lock:
+                        restart_busy = (not owners_stopped or store.load_session(sid).get("active_turn_id")
+                            or any(not done.is_set() for done in runtime.turn_done_events.values()))
+                    if restart_busy:
+                        restart_refusals.add(restart_token)
+                        (output / "restart-rejected.json").write_text(json.dumps({
+                            "operation": restart_token, "reason": "stop_wake_and_await_original_work",
+                            "session_id": sid, "runtime_restarted": False, "synthetic_only": True}))
+                if (args.managed_calendar_task and restart_token
+                        and restart_token not in restart_tokens | restart_refusals):
+                    # Disposable QA only: reconstruct the normal controller over
+                    # its original physical state, never reseed the fixture or
+                    # retain a second wake/model owner across the restart.
+                    from loopx.chat_actions import ChatActionService
+                    from loopx.chat_action_store import ChatActionStore
+                    from loopx.chat_runtime import ChatRuntimeController
+                    from loopx.chat_store import ChatSessionStore
+                    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+                    history, prior_session = store.messages(sid), store.load_session(sid)
+                    prior_calls, prior_writes = capture.read_bytes(), list(provider.writes)
+                    server.shutdown()
+                    old_runtime = runtime
+                    old_runtime.close()
+                    store = ChatSessionStore(store.root.parent)
+                    runtime = ChatRuntimeController(store=store, codex_bin=old_runtime.codex_bin,
+                        project_contexts=old_runtime.project_contexts, registry_path=old_runtime.registry_path)
+                    transport = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                        runner=provider, cli_bin="lark-cli")
+                    runtime.manager_scope_resolver = transport.bindings.steward_scope
+                    transport.core.actions = ChatActionService(store=ChatActionStore(store.root / "actions"),
+                        registry_path=runtime.registry_path, chat_store=store, runtime_controller=runtime,
+                        workspace_roots=[workspace])
+                    local_tasks = SessionCalendarTasks(runtime)
+                    local_owner = local_tasks
+                    server.chat_store, server.runtime_controller = store, runtime
+                    server.lark_private_conversations = transport
+                    server.action_service, server.action_store = transport.core.actions, transport.core.actions.store
+                    threading.Thread(target=server.serve_forever, daemon=True).start()
+                    assert old_runtime.closed.is_set()
+                    assert store.load_session(sid) == prior_session and store.messages(sid) == history
+                    assert local_owner.selected(sid)["actor"] == actor
+                    assert capture.read_bytes() == prior_calls and provider.writes == prior_writes
+                    restart_tokens.add(restart_token)
+                    (output / "restart-readback.json").write_text(json.dumps({
+                        "operation": restart_token, "runtime_restarts": len(restart_tokens),
+                        "session_id": sid, "actor": actor, "message_count": len(history),
+                        "prior_runtime_closed": True, "history_and_identity_preserved": True,
+                        "model_or_delivery_replayed": False, "synthetic_only": True}))
                 if wake is None and not owners_stopped and (output / "start-existing-owners").exists():
                     wake = DelegationWakeService(runtime, interval=.1).start()
                     owner_start_count += 1
@@ -181,6 +235,8 @@ def main() -> None:
                     "provider_history_pages": sum("+chat-messages-list" in call for call in provider.calls),
                     "existing_wake_owner_running": wake is not None,
                     "existing_wake_owner_starts": owner_start_count,
+                    "runtime_restarts": len(restart_tokens),
+                    "runtime_restart_rejections": len(restart_refusals),
                     **({"managed_source_present": artifact.exists(),
                         "managed_session": store.load_session(managed_session["session_id"])} if args.managed_session else {}),
                     **({"managed_report": True,

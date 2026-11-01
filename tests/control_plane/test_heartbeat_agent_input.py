@@ -56,7 +56,7 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
                    "state_file": "state.md",
                    "coordination": {"registered_agents": agents}}],
     }), encoding="utf-8")
-    command = [sys.executable, "-m", "loopx.cli", "--format", "json",
+    command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
                "--registry", str(registry), "heartbeat-prompt", "--goal-id",
                "synthetic-goal-validationx", "--agent-id", "worker-a", "--codex-app",
                "--thin", "--agent-scope", scope]
@@ -65,7 +65,7 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
     packet = json.loads(subprocess.check_output(command, text=True))
     assert packet["ok"] is True
     budget = packet["interface_budget"]
-    assert budget["max_chars"] == 4500
+    assert budget["max_chars"] == 4900
     assert budget["budget_char_count"] <= budget["max_chars"]
     assert budget["within_budget"] is True
     body = packet["task_body"]

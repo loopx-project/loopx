@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
+import {effectRuntimeErrorPayload} from "../../loopx/control_plane/effect_runtime_errors.ts";
 
 const select = (context: object, pointers: unknown) => evaluateTurnEnvelope({operation: "context_select", context, select: pointers});
 
@@ -54,4 +55,39 @@ test("bounded depth discovers nested addresses in one batch without values", () 
   for (const list_depth of [0, -1, 9, 1.5, true, "2", null])
     assert.throws(() => evaluateTurnEnvelope({...request, list_depth}));
   assert.throws(() => evaluateTurnEnvelope({...request, list_fields: false, list_depth: 2}));
+});
+
+
+test("selection failures identify original argument and token without echoing content", () => {
+  const context = {z: true, rows: [{stop: "private-value"}]};
+  for (const [pointer, token] of [["/rows/0/missing", 3], ["/rows/9", 2], ["/rows/01", 2], ["/rows/0/stop/x", 4]] as const) {
+    assert.throws(() => select(context, ["/z", "/z", pointer]), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, new RegExp(`--select argument 3, token ${token}`));
+      assert.ok(!error.message.includes("private-value") && !error.message.includes(pointer));
+      assert.ok(error.message.length < 240);
+      return true;
+    });
+  }
+  assert.throws(() => select(context, ["/z", "secret-".repeat(1000)]), /--select argument 2/);
+});
+
+test("selection failures retain machine-readable causes at the runtime boundary", () => {
+  const context = {rows: [{stop: "private-value"}]};
+  for (const [pointer, code] of [
+    ["rows", "context_selection_invalid_pointer"],
+    ["/~2", "context_selection_invalid_pointer"],
+    ["/rows/01", "context_selection_invalid_index"],
+    ["/rows/9", "context_selection_invalid_index"],
+    ["/rows/0/missing", "context_selection_missing_pointer"],
+    ["/toString", "context_selection_missing_pointer"],
+  ]) {
+    assert.throws(() => select(context, ["/rows", pointer]), (error: unknown) => {
+      const failure = effectRuntimeErrorPayload(error);
+      assert.equal(failure.kind, "request_rejected");
+      assert.equal(failure.code, code);
+      assert.ok(!failure.message.includes(pointer) && !failure.message.includes("private-value"));
+      return true;
+    });
+  }
 });

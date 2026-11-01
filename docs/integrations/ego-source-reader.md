@@ -215,6 +215,14 @@ transport does not grant control or prove a live human handoff was tested.
 A source's actual login or verification requirement remains a
 separate boundary; follow the installed Ego skill and continue independent work.
 
+The direct `ego-browser` CLI used for interactive UI work is a separate route.
+LoopX's existing [host-skill refresh](../../skills/loopx-project/references/installation-and-diagnosis.md#ego-host-skill-refresh)
+delivers its same-task continuation guidance. Before repeating an old control
+question, inspect live inventory once: Agent control restored for the same task
+allows continuation without another chat approval. Normal handback can qualify
+one claim; a live user stop, explicit pause or unresolved user step still holds.
+Neither this reader nor a stored STOP note is a second browser-ownership owner.
+
 On normal MCP shutdown or SIGTERM, it finishes only its own created,
 still-agent-owned space, checking live control rather than the handle's creation
 snapshot before resolving it. Missing spaces, unreadable state and user control

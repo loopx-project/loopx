@@ -8,8 +8,16 @@ import pytest
 
 from loopx import chat_action_normalization, chat_actions, chat_action_store, domain_state
 from loopx.capabilities.benchmark_toolkit import integrity
+from loopx.capabilities.context_providers import service_ownership
 from loopx.capabilities.decision_context import packets, profile, sources
+from loopx.capabilities.issue_fix import (
+    repository_context,
+    repository_memory,
+    repository_memory_provider,
+    reviewer_recommendation,
+)
 from loopx.capabilities.material_lifecycle import _validation
+from loopx.capabilities.reliability_diagnostics import envelope
 from loopx.capabilities.reward_memory import (
     application,
     candidate_review,
@@ -20,6 +28,7 @@ from loopx.capabilities.reward_memory import (
     registry,
 )
 from loopx.capabilities.semantic_preference import contract
+from loopx.control_plane.runtime import public_safety
 from loopx.domain_packs import ml_experiment
 from loopx.control_plane.goals import (
     botmux_runtime,
@@ -27,8 +36,11 @@ from loopx.control_plane.goals import (
     goal_ref_validation,
 )
 from loopx.extensions import presentation
+from loopx.extensions.openviking_semantic_preference import history_export
 from loopx.public_safe_text import (
+    COMPACT_LABEL_PATTERN,
     COMPACT_TOKEN_PATTERN,
+    IDENTITY_TOKEN_PATTERN,
     LETTER_LED_COMPACT_TOKEN_PATTERN,
     OPAQUE_ID_PATTERN as PUBLIC_OPAQUE_ID,
     MODULE_QUALIFIED_SURFACE_PATTERN,
@@ -40,6 +52,8 @@ OWNER_MODULE = "loopx/public_safe_text.py"
 REFERENCE_SHAPE = "^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,199}$"
 COMPACT_SHAPE = "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
 LETTER_LED_SHAPE = "^[A-Za-z][A-Za-z0-9_.:-]{0,79}$"
+LABEL_SHAPE = "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$"
+IDENTITY_SHAPE = "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$"
 SURFACE_SHAPE = "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)+$"
 OPAQUE_SHAPE = "^[A-Za-z0-9._:-]{1,200}$"
 
@@ -49,6 +63,8 @@ OPAQUE_SHAPE = "^[A-Za-z0-9._:-]{1,200}$"
 OPEN_OPAQUE_SITES: dict[str, int] = {}
 OPEN_COMPACT_SITES: dict[str, int] = {}
 OPEN_LETTER_LED_SITES: dict[str, int] = {}
+OPEN_LABEL_SITES: dict[str, int] = {}
+OPEN_IDENTITY_SITES: dict[str, int] = {}
 
 
 SHAPE_CONSUMERS = {
@@ -69,6 +85,18 @@ SHAPE_CONSUMERS = {
         "loopx/capabilities/decision_context/sources.py",
         "loopx/capabilities/material_lifecycle/_validation.py",
         "loopx/extensions/presentation.py",
+    ),
+    LABEL_SHAPE: (
+        "loopx/capabilities/context_providers/service_ownership.py",
+        "loopx/capabilities/issue_fix/repository_context.py",
+        "loopx/capabilities/issue_fix/repository_memory.py",
+        "loopx/capabilities/issue_fix/repository_memory_provider.py",
+        "loopx/capabilities/issue_fix/reviewer_recommendation.py",
+    ),
+    IDENTITY_SHAPE: (
+        "loopx/capabilities/reliability_diagnostics/envelope.py",
+        "loopx/control_plane/runtime/public_safety.py",
+        "loopx/extensions/openviking_semantic_preference/history_export.py",
     ),
     SURFACE_SHAPE: (
         "loopx/capabilities/reward_memory/application.py",
@@ -142,6 +170,48 @@ def test_the_letter_led_token_body_is_compiled_only_by_the_owner_and_declared_si
 def test_domain_state_and_ml_experiment_share_the_letter_led_token_shape() -> None:
     assert domain_state._DOMAIN_STATE_TOKEN_RE is LETTER_LED_COMPACT_TOKEN_PATTERN
     assert ml_experiment._TOKEN_RE is LETTER_LED_COMPACT_TOKEN_PATTERN
+
+
+def test_the_label_body_is_compiled_only_by_the_owner_and_declared_sites() -> None:
+    found: dict[str, int] = {}
+    for path in sorted(REPOSITORY_ROOT.glob("loopx/**/*.py")):
+        relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+        count = path.read_text(encoding="utf-8").count(LABEL_SHAPE)
+        if count:
+            found[relative] = count
+    assert found == {OWNER_MODULE: 1, **OPEN_LABEL_SITES}
+
+
+def test_the_identity_body_is_compiled_only_by_the_owner_and_declared_sites() -> None:
+    found: dict[str, int] = {}
+    for path in sorted(REPOSITORY_ROOT.glob("loopx/**/*.py")):
+        relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+        count = path.read_text(encoding="utf-8").count(IDENTITY_SHAPE)
+        if count:
+            found[relative] = count
+    assert found == {OWNER_MODULE: 1, **OPEN_IDENTITY_SITES}
+
+
+def test_labels_and_identities_import_the_owners_object() -> None:
+    assert service_ownership._LABEL is COMPACT_LABEL_PATTERN
+    assert repository_context._SOURCE_ID_PATTERN is COMPACT_LABEL_PATTERN
+    assert repository_memory._LABEL_PATTERN is COMPACT_LABEL_PATTERN
+    assert repository_memory_provider._LABEL is COMPACT_LABEL_PATTERN
+    assert reviewer_recommendation.REVIEWER_SOURCE_ID_PATTERN is COMPACT_LABEL_PATTERN
+    assert envelope.IDENTITY_TOKEN_PATTERN is IDENTITY_TOKEN_PATTERN
+    assert public_safety.LOOPX_COMMAND_RECORD_GOAL_ID_PATTERN is IDENTITY_TOKEN_PATTERN
+    assert history_export._PUBLIC_GOAL_ID_RE is IDENTITY_TOKEN_PATTERN
+
+
+def test_the_label_and_identity_bounds_stay_one_character_apart() -> None:
+    # These two shapes share their grammar and differ only in the bound each
+    # consumer already enforced, so a fold that merges them would silently widen
+    # one side. The pair of values that separates them is pinned here.
+    longest_label = "a" + "b" * 119
+    one_character_longer = "a" + "b" * 120
+    assert COMPACT_LABEL_PATTERN.fullmatch(longest_label)
+    assert COMPACT_LABEL_PATTERN.fullmatch(one_character_longer) is None
+    assert IDENTITY_TOKEN_PATTERN.fullmatch(one_character_longer)
 
 
 def test_each_contract_holds_the_owners_object_and_reports_its_own_field() -> None:

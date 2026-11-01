@@ -127,6 +127,66 @@ def test_reference_transport_keeps_distinct_original_numbers_and_later_exact_own
     assert json.dumps(project(result)) == json.dumps(result)
 
 
+@pytest.mark.parametrize("existing_owner", ["planning", "replan"])
+def test_existing_reference_follows_its_relocated_complete_owner(existing_owner):
+    source = packet()
+    del source["agent_todo_summary"]["goal_acceptance_contract"]
+    owner = ("$.planning_horizon.core_goal.acceptance_contract" if existing_owner == "planning"
+             else "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract")
+    source["agent_todo_summary"]["goal_acceptance_contract_ref"] = owner
+    shared = _reference_inline_goal_acceptance(source)
+    assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == (
+        "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract")
+    envelope = build_turn_envelope(shared)
+    assert envelope["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()
+    assert envelope["action_signature"]["matches"] is True
+
+
+def test_reference_visited_before_its_owner_is_retargeted_after_sharing():
+    source = packet()
+    core = source["planning_horizon"]["core_goal"]
+    del core["acceptance_contract"]
+    core["acceptance_contract_ref"] = "$.autonomous_replan_obligation.replan_context.core_goal.acceptance_contract"
+    original = json.dumps(source)
+    shared = _reference_inline_goal_acceptance(source)
+    assert shared["planning_horizon"]["core_goal"]["acceptance_contract_ref"] == (
+        "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract")
+    assert shared["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()
+    assert json.dumps(source) == original
+    assert _reference_inline_goal_acceptance(shared) == shared
+
+
+@pytest.mark.parametrize("reference", ["$.planning_horizon.core_goal.acceptance_contract",
+    "$.unknown.acceptance_contract"])
+def test_unmoved_or_unknown_reference_is_not_inferred_or_rewritten(reference):
+    source = packet(False)
+    del source["agent_todo_summary"]["goal_acceptance_contract"]
+    source["agent_todo_summary"]["goal_acceptance_contract_ref"] = reference
+    shared = _reference_inline_goal_acceptance(source)
+    assert shared["agent_todo_summary"]["goal_acceptance_contract_ref"] == reference
+    assert shared["planning_horizon"]["core_goal"]["acceptance_contract"] == acceptance()
+
+
+def test_shared_acceptance_survives_delta_and_lost_baseline_recovery():
+    from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+
+    initial = _reference_inline_goal_acceptance(packet())
+    changed = packet()
+    changed["reason"] = "New feedback retains original requirements and publication stops."
+    current = _reference_inline_goal_acceptance(changed)
+    scope = dict(goal_id="fixture", agent_id="worker", session_id="session", context_epoch="one")
+    baseline = prepare_context_delivery(initial, scope=scope, capture_id="one", surface="quota_packet")
+    full = prepare_context_delivery(current, scope=scope, capture_id="two", surface="quota_packet")
+    delta = prepare_context_delivery(current, scope=scope, capture_id="two", surface="quota_packet",
+        baseline=baseline, retained={"complete": True, "target": baseline["target"]})
+    assert delta["mode"] == "delta"
+    for retained in (baseline, None):
+        restored = restore_context_delivery(delta, baseline=retained, current=full)["context"]
+        assert restored == current
+        assert _reference_inline_goal_acceptance(restored) == current
+        assert restored["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"] == acceptance()
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_real_cli_reuses_complete_acceptance_for_selection_and_replan(tmp_path, monkeypatch, provider):
     from test_replan_successor_guard_reentry import _fixture, AGENT, GOAL

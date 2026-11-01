@@ -419,3 +419,13 @@ class CodexAppServerAdapter:
 
     def healthcheck(self) -> bool:
         return self.session.process.poll() is None
+
+
+def start_attachment_turn(adapter: Any, session: dict[str, Any], turn: dict[str, Any], message: str,
+                          event_sink: Callable[[str, dict[str, Any]], None], attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    """Keep attachment support and recovered source-route checks at the adapter."""
+    from ...chat_attachments import require_text_document_route
+    require_text_document_route(session, attachments, origin=str(turn.get("origin") or "web"))
+    if not isinstance(adapter, CodexAppServerAdapter):
+        raise ValueError("attachments currently require the Codex Agent endpoint")
+    return adapter.start_turn_with_attachments(message, event_sink, attachments)

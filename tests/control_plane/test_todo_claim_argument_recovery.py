@@ -212,6 +212,31 @@ def test_ordinary_claim_progress_completion_need_no_lease_flags(claim_cli):
     assert snapshot() == before
 
 
+def test_terminal_refusal_recovers_through_ordinary_claim(claim_cli):
+    _, run, snapshot, prefix, _, _, _, _ = claim_cli
+    complete = [*prefix, "todo", "complete", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", "peer-a", "--evidence", "evidence:validated-output"]
+    before = snapshot()
+    rejected = run(complete, expected_exit=1)
+    assert snapshot() == before
+    assert rejected["error_code"] == "handoff_mode_requires_lease"
+    recovery = rejected["recovery"]
+    assert recovery["action"] == "claim_task"
+    assert recovery["execution_authority_granted"] is False
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    rendered = render_todo_markdown(rejected)
+    assert "loopx todo claim" in rendered and "--claim-operation-id" in rendered
+    assert "task-lease" not in rendered and "handoff_mode:" not in rendered
+    prepared = run([*prefix, *recovery["claim"]["cli_args"],
+        "--claim-operation-id", "after-terminal-refusal"])
+    assert prepared["ok"] and prepared["execution_managed"]
+    retry = [*complete, "--claim-operation-id", prepared["claim_operation_id"]]
+    assert run(retry)["ok"]
+    completed = snapshot()
+    assert run(retry)["ok"]
+    assert snapshot() == completed
+
+
 @pytest.mark.parametrize("command", ["update", "complete"])
 def test_empty_managed_reference_is_rejected_without_mutation(claim_cli, command):
     _, run, snapshot, prefix, claim, _, _, _ = claim_cli

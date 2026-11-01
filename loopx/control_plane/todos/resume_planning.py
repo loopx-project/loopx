@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import Any
 
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
@@ -102,17 +103,19 @@ def build_referenced_todo_resume_planning_request(
         item_limit=item_limit,
         available_capabilities=available_capabilities,
     )
+    distinct_rows = {id(row): row for rows in request["sources"].values() for row in rows}
+    id_counts = Counter(row["id"] for row in distinct_rows.values())
     records: list[dict[str, Any]] = []
-    references: dict[str, int] = {}
+    references: dict[tuple[str | None, str | None], int] = {}
     sources: dict[str, list[int]] = {}
     for source_name, source_rows in request["sources"].items():
         source_refs: list[int] = []
         for row in source_rows:
-            # Equal normalized records are semantically interchangeable.  Use
-            # their exact JSON form instead of Todo id alone so conflicting
-            # historical facts remain separate and are still diagnosed.
-            identity = json.dumps(
-                row, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            # Distinct ids cannot share a full record; repeated ids still need exact facts.
+            identity = (
+                row["id"],
+                json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                if id_counts[row["id"]] > 1 else None,
             )
             reference = references.get(identity)
             if reference is None:

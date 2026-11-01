@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
+import json
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -56,27 +58,6 @@ def bound_steward_inventory_scope(
     return read
 
 
-def manager_source_scope_resolver(
-    server: Any, *, registry_path: Path, executor_runtime_root: Path,
-) -> Callable[[dict[str, Any]], list[str] | None]:
-    """Keep the default manager's native and legacy source routing together."""
-    from ..chat_lark_api import build_lark_goal_topic_runtime_snapshot
-    from ..extensions.lark.manager_routing import authorized_manager_goal_ids
-
-    def read(session):
-        controller = server.runtime_controller
-        if isinstance(session.get("steward_context"), dict):
-            bindings = controller.project_contexts.conversation_bindings
-            if bindings is None:
-                raise ValueError("Steward conversation bindings are unavailable")
-            return bindings.steward_scope(session)
-        return authorized_manager_goal_ids(
-            build_lark_goal_topic_runtime_snapshot(
-                registry_path=server.registry_path, runtime_root_override=server.runtime_root_override,
-            ), session, runtime_root=controller.coordination_runtime_root,
-            registry_path=registry_path, executor_runtime_root=executor_runtime_root,
-        )
-    return read
 
 
 class RequestControlMixin:
@@ -129,7 +110,7 @@ class RequestControlMixin:
 
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            if (set(query) - {"session_id", "view", "offset", "search"} or "session_id" not in query
+            if (set(query) - {"session_id", "view", "offset", "search", "limit"} or "session_id" not in query
                     or any(len(values) != 1 for values in query.values())):
                 raise ValueError("select one original conversation")
             view = query.get("view", ["unfinished"])[0]
@@ -137,8 +118,18 @@ class RequestControlMixin:
                 raise ValueError("invalid request inventory view")
             session, goals, core = self._request_inventory_scope(query["session_id"][0])
             controller = self.server.runtime_controller
+            source_bases = {}
             def source_basis(source):
-                return conversation_scope(source), source.get("steward_context")
+                # Reuse only the pure identity projection for identical host
+                # facts in this read. Keep all Session fields in the key so
+                # changed or newly supported inputs reach the typed owner.
+                sid = source["session_id"]
+                signature = json.dumps(source, sort_keys=True, separators=(",", ":"))
+                previous = source_bases.get(sid)
+                if previous is None or previous[0] != signature:
+                    previous = (signature, (conversation_scope(source), deepcopy(source.get("steward_context"))))
+                    source_bases[sid] = previous
+                return previous[1]
             # Provider identity belongs to a source, not to every historical row.
             # Keep this proof within one read and fence every observed source
             # again before returning any content. Receipt/grant IO stays live.
@@ -155,7 +146,7 @@ class RequestControlMixin:
             result = read_conversation_requests(controller.coordination_runtime_root, self.server.registry_path,
                 self.server.chat_store, session, goal_ids=goals, core_goal_ids=core,
                 validate_source_session=validate_source, history=view == "history", offset=int(query.get("offset", ["0"])[0]),
-                search=query.get("search", [""])[0])
+                limit=int(query.get("limit", ["12"])[0]), search=query.get("search", [""])[0])
             for sid, proof in sources.items():
                 current, current_goals, current_core = self._request_inventory_scope(sid)
                 if (source_basis(current), current_goals, current_core) != proof:

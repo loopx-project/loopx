@@ -92,8 +92,10 @@ test("Todo-bound semantic planning shares its exact autonomous authoring contrac
   assert.deepEqual(turnScopedCliSettlementPlan({...input, autonomous_replan: false}), ordinary);
   const replan = turnScopedCliSettlementPlan({...input, autonomous_replan: true});
   assert.deepEqual(replan.steps[1].vision_authoring, visionAuthoringContract(true));
-  assert.deepEqual({...replan, steps: replan.steps.map((step, i) => i === 1
-    ? {...step, vision_authoring: ordinary.steps[1].vision_authoring} : step)}, ordinary);
+  assert.match(replan.steps[1].precondition, /Autonomous replan uses --delivery-boundary semantic_closeout/);
+  assert.doesNotMatch(replan.steps[1].precondition, /outcome_progress may use in_flight_continuation/);
+  assert.deepEqual(replan.identity, ordinary.identity);
+  for (const i of [0, 2, 3]) assert.deepEqual(replan.steps[i], ordinary.steps[i]);
   for (const autonomous_replan of [null, "true", 1]) {
     assert.throws(() => turnScopedCliSettlementPlan({...input, autonomous_replan}), /must be a boolean/);
   }
@@ -107,6 +109,7 @@ test("autonomous replan never manufactures a Todo completion step", () => {
   assert.deepEqual(plan.steps.map(step => step.kind), ["validation", "durable_writeback", "quota_spend"]);
   assert.equal(plan.steps[0].command_template, undefined);
   assert.equal(plan.identity.binding_kind, "autonomous_replan");
+  assert.match(plan.steps[1].precondition, /Autonomous replan uses --delivery-boundary semantic_closeout/);
   assert.ok(plan.steps.every(step => step.vision_authoring === undefined));
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);

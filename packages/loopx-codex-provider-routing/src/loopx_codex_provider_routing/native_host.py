@@ -564,7 +564,7 @@ class NativeHost:
         try:
             # Reuse the running product's accepted-work reader and ingress
             # lock. Missing/unsupported Core cannot authorize a service stop.
-            from loopx.runtime_activation import managed_chat_activation_guard, RuntimeActivationDeferred
+            from loopx.extensions.chat_service_guard import managed_chat_activation_guard, RuntimeActivationDeferred
         except ImportError as error:
             raise HostError("waiting_for_idle") from error
         frozen = {label: (pid, identity, self._chat_definition(plist, label))

@@ -190,11 +190,16 @@ def test_native_goal_staged_source_is_importable_without_loopx_control_plane(tmp
     result = subprocess.run(
         [sys.executable, "-I", "-S", "-c",
          f"import sys; sys.path.insert(0, {str(staged)!r}); "
-         "import loopx.capabilities.benchmark_toolkit.native_codex_goal as m; print(m.__name__)"],
+         "import loopx.capabilities.benchmark_toolkit.native_codex_goal as goal; "
+         "import loopx.capabilities.benchmark_toolkit.native_codex_process as process; "
+         "print(goal.__name__, process.__name__)"],
         cwd=tmp_path, env={"PATH": os.environ["PATH"]}, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "loopx.capabilities.benchmark_toolkit.native_codex_goal"
+    assert result.stdout.strip() == (
+        "loopx.capabilities.benchmark_toolkit.native_codex_goal "
+        "loopx.capabilities.benchmark_toolkit.native_codex_process"
+    )
 
 
 def test_native_goal_rounds_graceful_deadline_and_opt_in_continuation():

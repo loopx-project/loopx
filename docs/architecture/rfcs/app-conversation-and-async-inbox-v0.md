@@ -1626,6 +1626,21 @@ acceptance. GQ06's material entry and GQ07–09's continuity remain subject to t
 full delivery and recovery acceptance.
 
 
+### Local text document attachments
+
+Local managed Codex conversations also accept UTF-8 `.md` and `.txt` source
+attachments. The existing four-attachment limit and 64,000-byte serialized
+message/metadata budget apply; text data does not use the image allowance.
+The original bytes remain in the accepted Session request and queue, reach the
+native input as labelled source text, and can be previewed/downloaded from the
+original conversation. Busy-session FIFO, replay identity and restart recovery
+remain owned by the existing queue. Invalid encoding, mismatched type/name,
+binary NUL data and excess size reject the entire request without truncation.
+Attached hosts, other executors and linked/Lark conversations reject this new
+input before admission; this is not a file-sync or arbitrary-path grant. Images
+retain their existing routes. Source delivery does not prove comprehension,
+automatic material adoption, full GQ06 qualification or lower model cost.
+
 ### Default Lark private images reuse native Turn attachments
 
 Ordinary project and steward private conversations accept images and image/text

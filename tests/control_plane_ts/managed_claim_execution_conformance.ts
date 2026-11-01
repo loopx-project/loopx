@@ -34,6 +34,97 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
       claim_operation_id: request.operation_id};
     return {store, request, progress};
   }
+  function completion(request: Awaited<ReturnType<typeof setup>>["request"]) {
+    return {goal_id: request.goal_id, todo_id: request.todo_id, actor_agent_id: "agent-a",
+      expected_role: "agent" as const, registered_agents: request.registered_agents, command: "complete" as const,
+      operation_identity: {kind: "completion_turn" as const}, claim_operation_id: request.operation_id,
+      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
+      lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
+      requested_no_followup: false, requested_completion_turn_key: "original-turn",
+      requested_completion_identity_source: "turn_settlement" as const, linked_successor_todo_ids: [],
+      successor_intents: [], note: null, evidence: "evidence:validated-output", reason: null,
+      clear_claim: false, validation_declaration: null, validation_receipt: null,
+      completion_policy_request: null, dry_run: false, now: request.now};
+  }
+  test(`${provider} managed execution: terminal recovery uses ordinary claim admission without effects`, async t => {
+    for (const active of [false, true]) {
+      const {store, request} = await setup(t);
+      if (active) assert.equal((await claim(store, request)).status, "applied");
+      const original = {...completion(request), claim_operation_id: undefined};
+      const before = await loaded(store);
+      const rejected = await complete(store, original);
+      assert.equal(rejected.status, "failed");
+      assert.equal(rejected.reason_code, active ? "lease_fence_required" : "handoff_mode_requires_lease");
+      const recovery = rejected.recovery as JsonObject;
+      assert.equal(recovery.action, "claim_task");
+      assert.equal(recovery.execution_authority_granted, false);
+      assert.deepEqual((recovery.claim as JsonObject).cli_args, ["todo", "claim", "--goal-id", request.goal_id,
+        "--todo-id", request.todo_id, "--agent-id", "agent-a", "--claimed-by", "agent-a"]);
+      assert.deepEqual((recovery.retry as JsonObject).requires_flags, ["--claim-operation-id"]);
+      assert.equal(recovery.inspect, undefined);
+      assert.equal(recovery.acquire, undefined);
+      assert.deepEqual(await loaded(store), before, "the completion refusal and its claim preview never write");
+      const prepared = await claim(store, {...request, operation_id: "prepared-after-refusal"});
+      assert.ok(["applied", "no_change"].includes(String(prepared.status)), JSON.stringify(prepared));
+      const retry = {...original, claim_operation_id: String(prepared.claim_operation_id)};
+      assert.equal((await complete(store, retry)).status, "applied");
+      const done = await loaded(store);
+      assert.equal((done.head.leases as JsonObject[])[0]!.status, "released");
+      assert.equal((await complete(store, retry)).status, "replayed");
+      assert.deepEqual(await loaded(store), done, "recovery keeps the original terminal identity and releases once");
+    }
+  });
+  test(`${provider} managed execution: terminal advice does not replace explicit proof or bypass task blockers`, async t => {
+    for (const scenario of ["explicit-proof", "foreign-holder", "excluded", "blocked", "overlapping-work"]) {
+      const {store, request} = await setup(t);
+      let original = {...completion(request), claim_operation_id: undefined} as Parameters<typeof complete>[1];
+      if (scenario === "explicit-proof") original = {...original, lease_idempotency_key: "unproven-key"};
+      if (scenario === "foreign-holder") {
+        assert.equal((await claim(store, {...request, actor_agent_id: "agent-b", claimed_by: "agent-b"})).status, "applied");
+      }
+      if (["excluded", "blocked", "overlapping-work"].includes(scenario)) {
+        const head = await loaded(store); const todo = (head.head.todos as JsonObject[])[0]!;
+        const change = scenario === "excluded" ? {...todo, excluded_agents: ["agent-a"]}
+          : scenario === "blocked" ? {...todo, status: "blocked"}
+          : {...todo, todo_id: "todo_other", text: "Independent work occupying the same scope"};
+        assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
+          operation_id: "prepare-blocker", expected_provider_revision: head.provider_revision, projection: head.head,
+          mutations: [{kind: "todo_upsert", todo: change}]}))).status, "applied");
+        if (scenario === "overlapping-work") assert.equal((await claim(store, {...request, todo_id: "todo_other",
+          actor_agent_id: "agent-b", claimed_by: "agent-b", operation_id: "occupy-scope"})).status, "applied");
+      }
+      const before = await loaded(store); const result = await complete(store, original);
+      assert.equal(result.status, "failed", scenario);
+      assert.notEqual((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      if (scenario === "explicit-proof") assert.equal(result.recovery, undefined);
+      assert.deepEqual(await loaded(store), before, scenario);
+    }
+  });
+  test(`${provider} managed execution: unavailable recovery observation retains the original terminal refusal`, async t => {
+    const {store, request} = await setup(t); const before = await loaded(store);
+    const unavailable = new Proxy(store, {get(target, key) {
+      if (key === "readReceipt") return async (id: string) => {
+        if (id.startsWith("terminal-claim-preview-")) throw new Error("synthetic observation unavailable");
+        return target.readReceipt(id);
+      };
+      const value = Reflect.get(target, key, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }});
+    const result = await complete(unavailable, {...completion(request), claim_operation_id: undefined});
+    assert.equal(result.reason_code, "handoff_mode_requires_lease");
+    assert.equal(result.recovery, undefined);
+    assert.deepEqual(await loaded(store), before);
+  });
+  test(`${provider} managed execution: supersede never recommends an unsupported claim-reference retry`, async t => {
+    const {store, request} = await setup(t);
+    const before = await loaded(store);
+    const rejected = await complete(store, {...completion(request), command: "supersede" as const,
+      claim_operation_id: undefined, operation_identity: {kind: "explicit" as const, operation_id: "terminal-supersede"},
+      requested_completion_turn_key: null, reason: "Continue through declared successor work"});
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.recovery, undefined);
+    assert.deepEqual(await loaded(store), before);
+  });
   test(`${provider} managed execution: ordinary claim/progress carry one execution, renew only near expiry, recover without writes`, async t => {
     const {store, request, progress} = await setup(t);
     const before = await loaded(store);
@@ -213,16 +304,7 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
   test(`${provider} managed execution: completion releases once and the original Turn closes without new execution`, async t => {
     const {store, request} = await setup(t);
     assert.equal((await claim(store, request)).status, "applied");
-    const terminal = {goal_id: request.goal_id, todo_id: request.todo_id, actor_agent_id: "agent-a",
-      expected_role: "agent" as const, registered_agents: request.registered_agents, command: "complete" as const,
-      operation_identity: {kind: "completion_turn" as const}, claim_operation_id: request.operation_id,
-      lifecycle_grants: [], authority_reason: null, decision_outcome: null,
-      lease_idempotency_key: null, lease_expected_version: null, allow_user_gate_auto_acquire: false,
-      requested_no_followup: false, requested_completion_turn_key: "original-turn",
-      requested_completion_identity_source: "turn_settlement" as const, linked_successor_todo_ids: [],
-      successor_intents: [], note: null, evidence: "evidence:validated-output", reason: null,
-      clear_claim: false, validation_declaration: null, validation_receipt: null,
-      completion_policy_request: null, dry_run: false, now: request.now};
+    const terminal = completion(request);
     const done = await complete(store, terminal);
     assert.equal(done.status, "applied", JSON.stringify(done));
     const completed = await loaded(store);

@@ -465,6 +465,7 @@ export function createEffectRuntimeHandlers(
       lazyHandler(() => import("./coordination/legacy_writer_fence.ts"), ({checkLegacyCoordinationWriteAllowed}) => checkLegacyCoordinationWriteAllowed),
     ],
     ["task_lease.write_scopes.overlap", lazyHandler(() => import("./work_items/task_lease_acquire_decision.ts"), ({evaluateTaskLeaseWriteScopesOverlap}) => evaluateTaskLeaseWriteScopesOverlap)],
+    ["quota.task_orchestration.write_scope_overlap", lazyHandler(() => import("./work_items/task_lease_acquire_decision.ts"), ({evaluateQuotaSchedulingWriteScopesOverlap}) => evaluateQuotaSchedulingWriteScopesOverlap)],
     ["quota.monitor_poll.commit", lazyHandler(() => import("./quota/monitor_poll_commit.ts"), ({evaluateQuotaMonitorPollCommit}) => evaluateQuotaMonitorPollCommit)],
     ["presentation.decision_notice.project", lazyHandler(() => import("./presentation/decision_notice.ts"), ({projectDecisionNotice}) => projectDecisionNotice)],
     ["presentation.decision_notice.validate_references", lazyHandler(() => import("./presentation/decision_notice.ts"), ({validateDecisionNoticeReferences}) => validateDecisionNoticeReferences)],

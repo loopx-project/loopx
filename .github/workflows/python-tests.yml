@@ -484,6 +484,15 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+      - name: Upload text document visual evidence
+        if: always() && hashFiles('output/playwright/personal-workspace/document-*.png') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: text-document-evidence-${{ matrix.shard }}
+          path: output/playwright/personal-workspace/document-*.png
+          if-no-files-found: error
+          retention-days: 14
+
   dashboard-acceptance:
     needs: [changes, dashboard-browser]
     if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.dashboard-browser.result == 'success'

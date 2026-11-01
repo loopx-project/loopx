@@ -1735,10 +1735,8 @@ class CodexChatAgentSession:
                 ),
             }
         ]
-        for attachment in attachments or []:
-            image_url = str(attachment.get("data_url") or "")
-            if image_url:
-                turn_input.append({"type": "image", "url": image_url, "detail": "auto"})
+        from .chat_attachments import native_attachment_inputs
+        turn_input.extend(native_attachment_inputs(attachments))
         # A running app-server is not permission for a new native Turn. Hold
         # the caller's fence through its write, then release before waiting for
         # the native acknowledgement or model output.

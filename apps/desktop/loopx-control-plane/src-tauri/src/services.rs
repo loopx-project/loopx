@@ -55,7 +55,7 @@ impl ServiceKind {
     fn probe_path(self) -> &'static str {
         match self {
             Self::Status => "/?readiness=1",
-            Self::Chat => "/api/chat/capabilities",
+            Self::Chat => "/api/chat/readiness",
         }
     }
 
@@ -659,6 +659,25 @@ fn terminate_verified_listener(
     loopx_executable: &str,
     port: u16,
 ) -> Result<(), ServiceError> {
+    #[cfg(target_os = "macos")]
+    if kind == ServiceKind::Chat {
+        // Core owns the loaded manager's route, accepted-work fence and exact
+        // listener PID. A desktop Python-template match cannot authorize
+        // stopping a Chat worker, including one using a private bootstrap.
+        let mut command = Command::new(loopx_executable);
+        configure_runtime_environment(&mut command);
+        command.args([
+            "--format",
+            "json",
+            "update",
+            "activate",
+            "--service",
+            "chat",
+            "--port",
+            &port.to_string(),
+        ]);
+        return managed_chat_activation_result(timed_output_with_timeout(command, STARTUP_TIMEOUT));
+    }
     #[cfg(not(windows))]
     {
         let processes = listener_processes(port)?;
@@ -691,6 +710,37 @@ fn terminate_verified_listener(
             "port {port} is serving stale LoopX {}; automatic replacement is unavailable on Windows",
             kind.label()
         )))
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn managed_chat_activation_result(
+    output: Option<std::process::Output>,
+) -> Result<(), ServiceError> {
+    let payload = output
+        .as_ref()
+        .and_then(|result| serde_json::from_slice::<serde_json::Value>(&result.stdout).ok());
+    let Some(payload) = payload.filter(|value| {
+        value["schema_version"] == "loopx_runtime_service_activation_v1"
+            && value["service"] == "chat"
+    }) else {
+        // An older Core or lost result grants no fallback raw kill. The next
+        // HTTP read observes whether the original manager actually recovered.
+        return Err(ServiceError("chat_service_unverified".into()));
+    };
+    match (payload["ok"].as_bool(), payload["status"].as_str()) {
+        (Some(true), Some("restart_requested" | "not_running"))
+            if output
+                .as_ref()
+                .is_some_and(|result| result.status.success()) =>
+        {
+            Ok(())
+        }
+        (Some(false), Some("deferred")) => match payload["reason"].as_str() {
+            Some("chat_work_pending") => Err(ServiceError("chat_work_pending".into())),
+            _ => Err(ServiceError("chat_state_unverified".into())),
+        },
+        _ => Err(ServiceError("chat_service_unverified".into())),
     }
 }
 
@@ -1216,20 +1266,41 @@ fn probe_on_port(
     port: u16,
     expected_runtime_identity: Option<&serde_json::Value>,
 ) -> Probe {
+    let mut response = match read_probe_response(port, kind.probe_path()) {
+        Ok(response) => response,
+        Err(probe) => return probe,
+    };
+    if kind == ServiceKind::Chat
+        && response
+            .lines()
+            .next()
+            .and_then(|line| line.split_ascii_whitespace().nth(1))
+            == Some("404")
+    {
+        // A legacy Core has no lightweight endpoint. Keep its original
+        // fingerprint/identity checks; new services never enumerate metadata.
+        response = match read_probe_response(port, "/api/chat/capabilities") {
+            Ok(response) => response,
+            Err(probe) => return probe,
+        };
+    }
+    classify_response(kind, &response, expected_runtime_identity)
+}
+
+fn read_probe_response(port: u16, path: &str) -> Result<String, Probe> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = match TcpStream::connect_timeout(&address, PROBE_TIMEOUT) {
         Ok(stream) => stream,
-        Err(_) => return Probe::Unavailable,
+        Err(_) => return Err(Probe::Unavailable),
     };
     let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
     let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-        kind.probe_path(),
-        port
+        path, port
     );
     if stream.write_all(request.as_bytes()).is_err() {
-        return Probe::Unresponsive;
+        return Err(Probe::Unresponsive);
     }
     let mut response = String::new();
     if stream
@@ -1237,12 +1308,12 @@ fn probe_on_port(
         .read_to_string(&mut response)
         .is_err()
     {
-        return Probe::Unresponsive;
+        return Err(Probe::Unresponsive);
     }
     if response.len() as u64 > MAX_PROBE_RESPONSE_BYTES {
-        return Probe::Foreign;
+        return Err(Probe::Foreign);
     }
-    classify_response(kind, &response, expected_runtime_identity)
+    Ok(response)
 }
 
 fn classify_response(
@@ -1266,6 +1337,18 @@ fn classify_response(
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(body) else {
         return Probe::Foreign;
     };
+    if kind == ServiceKind::Chat && payload["schema_version"] == "loopx_chat_readiness_v1" {
+        if payload["ok"] != true || payload["state"] != "ready" {
+            return Probe::Foreign;
+        }
+        return if expected_runtime_identity
+            .is_some_and(|expected| payload.get("runtime_identity") != Some(expected))
+        {
+            Probe::Stale
+        } else {
+            Probe::Matching
+        };
+    }
     let (field, expected) = kind.expected_fingerprint();
     if payload
         .as_object()

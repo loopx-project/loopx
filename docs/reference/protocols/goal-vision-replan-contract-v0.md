@@ -1358,6 +1358,20 @@ advances the original generation fence so the successor can resume. Goal stop,
 user gates and independently runnable advancement retain their existing
 priority.
 
+For multiple automatic successors, the existing TypeScript wait owner checks
+every canonical witness before display compaction and exposes
+`pending_resume_count`. Only a complete match to `waiting_todo_count` can extend
+the positively qualified quiet path beyond one successor. The displayed ids
+remain bounded; they are not used to count or certify unseen sources. A
+clock-only frontier selects its earliest pending deadline for rechecks; a
+pending dependency retains periodic source rechecks. Missing or unsupported
+source proof, a foreign actor, pending action selection and an existing
+settlement binding retain supervision. An optional `user_action` notice does
+not turn this proven automatic wait into a user gate; actual gates retain
+their existing behavior. An unbound heartbeat is not told to execute
+`monitor-poll`, whose Todo-binding checks remain unchanged. Replaying that
+heartbeat preserves its original receipt without creating work or a debit.
+
 This is a read model, not a stored vision or todo lifecycle state. When the
 condition becomes ready, normal open-todo or deferred-successor routing resumes
 automatically and the active vision remains available for acceptance auditing.

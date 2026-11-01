@@ -1,13 +1,15 @@
 """Bootstrap IO for prebuilt snapshots (stdlib only, including before Node exists).
 
-This is also the website installer's Python bootstrap. It deliberately reuses
-install-local.sh for candidate validation, migrations and activation. It is not
-a second control-plane decision owner or a package-manager replacement.
+The website exports a standalone copy through ``standalone_source``. Shared
+metadata grammars are bound at export time, so that copy needs only stdlib
+before LoopX or Node exists. Candidate validation and activation still reuse
+install-local.sh.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import contextmanager
 import hashlib
 from http.client import HTTPException
@@ -25,12 +27,39 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
+from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
+
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
 SHA = re.compile(r"[0-9a-f]{40}")
-HASH = re.compile(r"[0-9a-f]{64}")
 MAX_MANIFEST = 256 * 1024
 MAX_ARCHIVE = 256 * 1024 * 1024
 MAX_EXPANDED = 1024 * 1024 * 1024
+
+
+def standalone_source() -> str:
+    """Bind existing grammar owners into the independent bootstrap artifact."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    for statement, owner_path, symbol, alias in (
+        ("from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH",
+         "control_plane/content_digest.py", "BARE_SHA256_PATTERN", "HASH"),
+        ("from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN",
+         "capabilities/issue_fix/repository_snapshot.py", "_REPO_PATTERN", "REPOSITORY_PATTERN"),
+    ):
+        owner = (Path(__file__).resolve().parents[1] / owner_path).read_text(encoding="utf-8")
+        assignments = [node for node in ast.parse(owner).body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == symbol for target in node.targets)]
+        if len(assignments) != 1:
+            raise ValueError("Bootstrap grammar owner no longer has one source binding")
+        # Copy the canonical binding verbatim. A consumer must not rebuild a
+        # regex by reading and recompiling the compiled owner's pattern text.
+        binding = ast.get_source_segment(owner, assignments[0]) + f"\n{alias} = {symbol}"
+        # Match import lines only, never this generator's statement literals.
+        old = "\n" + statement + "\n"
+        if source.count(old) != 1:
+            raise ValueError("Bootstrap grammar binding no longer matches its source import")
+        source = source.replace(old, "\n" + binding + "\n", 1)
+    return source
 
 
 def safe_url(url: str) -> str:
@@ -89,7 +118,7 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
 
 
 def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+    if not REPOSITORY_PATTERN.fullmatch(repo):
         raise ValueError("Update repo must use GitHub owner/name syntax")
     if ref == "stable":
         url = f"https://github.com/{repo}/releases/latest/download/loopx-runtime.json"
@@ -201,7 +230,7 @@ def download_artifact(manifest: dict[str, Any], *, progress=lambda _event: None,
             url = urls[attempt % len(urls)]
             offset, etag = 0, None
             try:
-                saved = json.loads(metadata.read_text())
+                saved = json.loads(metadata.read_text(encoding="utf-8"))
                 candidate = saved.get("etag")
                 if (saved.get("url_hash") == hashlib.sha256(url.encode()).hexdigest()
                     and isinstance(candidate, str) and candidate.startswith('"') and not candidate.startswith('W/')
@@ -348,7 +377,7 @@ def install_artifact(manifest: dict[str, Any], *, env: dict[str, str], timeout_s
     progress({"stage": "verify"})
     with tempfile.TemporaryDirectory(prefix="loopx-runtime-") as raw:
         root = extract_artifact(archive, Path(raw))
-        identity = json.loads((root / "runtime-artifact.json").read_text())
+        identity = json.loads((root / "runtime-artifact.json").read_text(encoding="utf-8"))
         if identity.get("source_revision") != manifest["source_revision"] or identity.get("package_version") != manifest["package_version"]:
             raise ValueError("Runtime identity disagrees with its release metadata")
         selected = dict(env)
@@ -375,7 +404,7 @@ def main() -> int:
         entry = Path(os.environ.get("LOOPX_BIN_DIR") or Path.home() / ".local/bin") / "loopx"
         if entry.is_symlink():
             try:
-                installed = json.loads((entry.resolve().parents[1] / "release.json").read_text()).get("source", {})
+                installed = json.loads((entry.resolve().parents[1] / "release.json").read_text(encoding="utf-8")).get("source", {})
             except (OSError, ValueError):
                 pass
         if (entry.exists() or entry.is_symlink()) and not installed:

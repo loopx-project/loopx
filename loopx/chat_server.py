@@ -31,7 +31,7 @@ from .capabilities.native_chat.project_context import ChatProjectContexts
 from .chat_attachments import (
     CHAT_JSON_MAX_BYTES,
     CHAT_TURN_MAX_BODY_BYTES,
-    normalize_chat_image_attachments,
+    normalize_local_chat_attachments,
     validate_chat_turn_envelope,
 )
 from .chat_actions import ChatActionService, ProtectedActionGate, goal_workspace_labels, goal_workspace_ref
@@ -124,6 +124,7 @@ DEFAULT_CHAT_PORT = 8767
 DEFAULT_CHAT_PATH = "/chat/"
 DEFAULT_CHAT_STATUS_PATH = "/status.json"
 CHAT_CAPABILITIES_PATH = "/api/chat/capabilities"
+CHAT_READINESS_PATH = "/api/chat/readiness"
 CHAT_ENDPOINTS_PATH = "/api/chat/endpoints"
 CHAT_AGENT_MODEL_OPTIONS_PATH = "/api/chat/agent-model-options"
 CHAT_SESSIONS_PATH = "/api/chat/sessions"
@@ -800,7 +801,7 @@ class ChatRequestHandler(
             message = str(body.get("message") or "").strip()
             if not message:
                 raise ValueError("message is required")
-            attachments = normalize_chat_image_attachments(body.get("attachments"))
+            attachments = normalize_local_chat_attachments(session, body.get("attachments"))
             client_turn_id = _compact_text(body.get("client_turn_id"), limit=160) or uuid.uuid4().hex
         except (ValueError, TypeError, OverflowError) as exc:
             self._send_error(str(exc), turn_replay_safe=True, delivery_state="not_delivered")
@@ -1653,6 +1654,13 @@ class ChatRequestHandler(
         if path == "/healthz":
             self._send_json({"ok": True})
             return
+        if path == CHAT_READINESS_PATH:
+            # Readiness pairs the frontend with this loaded service artifact.
+            # Model/provider availability and original-conversation grants are
+            # separate fresh reads, never prerequisites for this cheap probe.
+            self._send_json({"ok": True, "schema_version": "loopx_chat_readiness_v1",
+                "state": "ready", "runtime_identity": self.server.runtime_identity})
+            return
         if path == CHAT_CAPABILITIES_PATH:
             # The steward section is composed by its own owner so the model
             # arguments, the availability verdict and the readback cannot
@@ -1921,7 +1929,8 @@ def serve_chat(
     )
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
-    from .presentation.request_control_api import bound_steward_inventory_scope, manager_source_scope_resolver
+    from .presentation.request_control_api import bound_steward_inventory_scope
+    from .chat_lark_api import manager_source_scope_resolver
     manager_scope = manager_source_scope_resolver(server,
         registry_path=resolved_registry_path, executor_runtime_root=runtime_root)
 

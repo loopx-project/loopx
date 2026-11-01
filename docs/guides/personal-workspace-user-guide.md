@@ -1,46 +1,93 @@
-# LoopX 个人工作区控制台（Personal Workspace Console）使用指南
+<a id="loopx-个人工作区控制台personal-workspace-console使用指南"></a>
 
-LoopX 控制台是为工程师与 Agent 深度协作打造的统一本地工作台。它将分散在不同会话、话题与后台运行中的 Agent 任务统一汇聚，提供**「LoopX 管家全局总览」**、**「Goal 4 列任务看板」**、**「轻量悬浮会话托盘」**、**「先预览后确认安全门禁」**与**「Lark / 飞书话题直连」**。
+# LoopX 个人工作区使用指南
 
----
+在 LoopX 工作区里，你可以交代任务、查看 Agent 的进展、处理需要你决定的事项，
+再检查交付结果。**Goal 是你想要的结果，Todo 是为实现它而推进的具体工作。**
+管家汇总多个 Goal；进入一个 Goal 后，再看它的任务、对话和成果。
 
-## 🎬 30 秒产品发布演示视频
-
-<video controls width="100%" poster="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/guide_manager_overview.png" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
-  <source src="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4" type="video/mp4">
-  您的浏览器暂不支持直接播放视频，可下载 <a href="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4">MP4 视频文件</a> 进行查看。
-</video>
-
-> 💡 **视频高光**：终端一键启动 ➔ 管家 4 泳道任务流 ➔ 快捷指令浮动托盘 ➔ 4 列看板与智能「转为 Task」清洗 ➔ 飞书话题直连 ➔ Brutal 野兽派主题切换。
+第一次使用，先按第 1 节完成一个小任务。第 3–4 节说明日常查看与跟进，第 6 节
+按需接入飞书，第 8 节解释操作确认与结果核对。演示视频放在文末，不必看完视频再开始。
+想从代码修复入手，也可以先做[查 bug 练习](first-bugfix-loop.zh-CN.md)。
 
 ---
 
 ## 🚀 1. 快速启动与访问
 
-在本地仓库或已安装 LoopX 的终端中执行：
+先按[安装指南](installing-loopx.md)准备 LoopX、Python 3.11+ 和 Node.js 22.22.3+
+（推荐 24 LTS）。普通使用不需要克隆源码或启动前端开发服务器。
+在你要使用的项目目录打开终端，执行：
 
 ```bash
+loopx doctor
 # 启动本地 Dashboard 控制台（默认自动打开浏览器）
 loopx dashboard
 ```
+
+若 `doctor` 报告缺少依赖，先修复它指出的问题。若缺的是 Agent 登录或运行环境，
+按下文「Agent 运行环境未就绪」处理；看到页面不等于 Agent 已可执行。
 
 安装版会在同一个进程中启动打包后的工作区、状态投影和 Agent Chat，不需要另开
 终端运行 `loopx serve-status`。命令默认自动打开浏览器；无界面启动可使用
 `loopx dashboard --no-open`，并访问命令实际打印的 URL。默认地址为
 `http://127.0.0.1:8767/chat/`。
 
-可用下面两条命令验证页面和状态投影都来自同一个进程：
+<details>
+<summary>可选：从终端检查页面和状态是否可读</summary>
+
+下面使用默认地址；若启动命令打印了其他端口，替换为实际地址。两项均读取本地服务，
+不创建 Goal，也不启动 Agent：
 
 ```bash
 curl -fsS http://127.0.0.1:8767/chat/ >/dev/null
 curl -fsS http://127.0.0.1:8767/status.json
 ```
 
+</details>
+
 > 💡 **两种入口可共存**：`loopx dashboard`（浏览器 / PWA）与 Tauri 原生桌面壳
 > 都会复用已经在运行且版本匹配的 LoopX Chat 服务。先开 dashboard 再开桌面壳，
 > 或先开桌面壳再执行 `loopx dashboard`，两种顺序都可以；当桌面壳已经启动时，
 > 也可以直接访问 `http://127.0.0.1:8767/chat/` 使用浏览器 / PWA，无需再启动一套
 > 服务。
+
+### 第一次使用：完成一个小任务
+
+先用你愿意让 Agent 读取的项目，体验一次「提出要求 → 确认 → 执行 → 核对结果」。
+已有同一目标的 Goal 时直接打开它，不重复创建。
+
+1. 点击 **创建 Goal**（或侧栏 `+`），可以用下面这组内容填写：
+
+   - **目标：** 梳理这个项目的启动与测试方式。
+   - **完成标准：** 给出启动命令、测试命令及对应文件依据；没有找到明确说明时如实说明。
+   - **执行边界：** 只读取项目文件，不启动项目、不运行测试、不修改文件、不调用外部服务；回答后停止。
+
+2. 选择正确的**工作目录**，将**执行权限**设为「只读」，点击**检查配置**。
+   预览应写明目标、完成标准、实际目录和权限；先检查这些内容。检查配置仍未创建 Goal。
+3. 确认预览后点击**创建 Goal 并开始首轮**。这一步会创建 Goal 和首个 Todo，并让
+   选定 Agent 开始首轮推进。随后进入该 Goal 的**对话**查看实际回答；排队与正在执行
+   是不同状态，失败时先看原错误，不重复创建同一个 Goal。
+4. 按回答给出的文件依据核对命令。这个任务没有运行测试，回答也就不能声称“测试通过”。
+   要让 Agent 继续验证或修改代码，再在原 Goal 中说明新增范围与权限，沿既有流程处理。
+
+跑通的标志是：找到了正确的项目、Agent 返回了有依据的说明、你能核对它的结果。
+不是只看到一张 Goal 卡片或“已完成”标签。没有可用执行器、目录不可用或来源只读时，
+先处理页面报告的具体问题，不把本机新建 Goal 当作远端工作的替代。
+
+**准备与费用：** 本地页面与 Agent 执行是两件事。创建首轮或发送执行任务会使用所选
+宿主的模型额度和工具资源；周期任务还会增加唤醒与检查开销。先用这个有终点的小任务，
+确认既有额度、运行环境和停止条件，再考虑定时任务。升级沿用原安装渠道；运行时登录、
+飞书连接等按各自设置维护，不需要为了开始而全部配置。
+
+English: Start with one bounded task in a project you choose. Create a Goal with
+an objective, completion criteria, workspace and **Read only** permission; review
+the configuration before **Create Goal and start first run**. For example, ask
+for the project's documented start/test commands and their file references,
+without running tests or changing files. Inspect the returned references rather
+than treating a created card as a completed result. Reuse an existing Goal for
+the same work. Agent execution uses the selected host's allowance; recurring
+work adds wakeup/checking costs. Neither opening the page nor creating a Goal
+proves that its host is active or that its result passes acceptance.
 
 ---
 
@@ -619,10 +666,16 @@ replace channel notifications such as Lark. An optional reminder (a user action 
 
 ## 🛡️ 8. 安全与不可逆操作保护
 
-LoopX 控制台严格遵循 **Human-in-the-Loop（人类介入）安全模型**：
-1. **先预览，后确认**：任何会写入 Goal 状态、修改配置或执行外部变更的指令，都会先在界面弹出 **Typed Action 预览卡片**，明确展示影响范围与待填参数；
-2. **用户点击确认后才下发**：杜绝 Agent 自行执行未授权的高危操作；
-3. **操作回执（Receipt）**：每次操作执行完毕均会生成不可篡改的带时间戳回执，随时可溯源。
+需要你确认的操作使用各自的预览与确认流程。以创建 Goal 为例：
+
+1. **先检查范围：** 预览列出目标、目录、执行权限及预期影响；内容不对就返回修改。
+2. **再确认具体操作：** 创建 Goal 的确认会开始首轮推进。合并、发布、删除、支付等
+   受保护操作仍按各自授权流程处理；批准一项操作不会顺带批准另一项。
+3. **核对实际结果：** 查看操作回执和刷新后的状态。预览、请求被接收、执行完成、
+   产物通过验收是不同阶段；失败或结果未知时保留这个区别，不能只凭提示文字认定成功。
+
+Agent 在既有授权内推进普通任务，不等于每一步都要你重新点击确认。阅读页面、筛选任务、
+下载快照也不会增加执行权限。只读来源保留其限制，截图、导出和对外分享仍需检查是否含私有内容。
 
 
 ### 键盘快速导航 / Keyboard quick navigation
@@ -670,3 +723,16 @@ Saving reuses the existing readback without running an Agent, invoking validatio
 recording adoption or changing the Goal. The file is a local copy of that version,
 not a promise of continuing acceptance. If the reader becomes unavailable, use its
 existing refresh/retry before downloading again.
+
+---
+
+## 🎬 30 秒产品发布演示视频
+
+<video controls width="100%" poster="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/guide_manager_overview.png" style="border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12);">
+  <source src="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4" type="video/mp4">
+  您的浏览器暂不支持直接播放视频，可下载 <a href="https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4">MP4 视频文件</a> 进行查看。
+</video>
+
+视频展示总览、任务看板、对话托盘、飞书连接和主题切换。
+也可以直接[打开演示视频](https://loopx-project.github.io/loopx/docs/assets/personal-workspace/loopx-dashboard-launch.mp4)。
+具体按钮与状态以当前安装版本和上文操作说明为准。

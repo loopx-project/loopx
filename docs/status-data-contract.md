@@ -2772,3 +2772,37 @@ The public examples under `examples/` are sanitized and can be used for demos.
 - Consumers should handle missing `run_history` as unavailable.
 - Consumers should treat `contract.ok=false` as a stronger signal than an empty
   attention queue.
+## Explicit Todo queue overview
+
+`loopx todo list --goal-id <goal-id> --summary` selects the versioned
+`todo_list_summary_v0` overview. It leaves ordinary list output and the existing
+`--thin` view unchanged. The overview is available in JSON and Markdown and
+helps a reader choose which Todo to inspect; it is not execution admission.
+
+The view reuses the canonical Todo query's role, status, Agent scope and stable
+ordering. It shows at most eight records per role (sixteen for both roles).
+`--limit` may lower that per-role cap. Agent-scoped hot reads retain their
+existing omission of done records; explicit status/role reads retain their
+existing selection. Blocked/deferred work and Monitors do not become runnable
+merely because they appear in the overview.
+
+One `todos` array contains `todo_id`, `role`, `title`, `status`, `priority`,
+`claimed_by` and `title_truncated`. Titles are bounded to 180 Unicode code
+points; canonical identities are retained. Markdown marks truncated titles
+with `*`. `todo list --goal-id <goal-id> --todo-id <todo-id>` restores complete
+requirements through the existing exact-read owner. `--summary` is mutually
+exclusive with `--thin` and `--todo-id`.
+
+`todo_count` and `matched_todo_count` cover the complete query match before
+display limits, `returned_todo_count` is the number displayed, and
+`omitted_todo_count` is their difference. `todo_list_summary_projection`
+declares the version, per-role/text limits and full-detail routes. The compact
+`authority_read` retains provider identity/revision/cursor and the canonical
+read/fallback facts. The existing `projection_envelope` distinguishes complete
+source coverage from display truncation. An unavailable source remains an
+error, never a successful empty queue.
+
+The new `todo_list_summary` output-budget variant has separate JSON/Markdown
+ceilings. Existing default and thin budgets remain unchanged. App and Lark
+callers keep their current full/exact views; this opt-in CLI projection does
+not switch consumers, create writes, or replace quota/lease/acceptance checks.

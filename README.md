@@ -23,19 +23,24 @@ A local-first [semantic control plane](https://loopx-project.github.io/loopx/blo
 
 ## Start in two steps
 
-With Python 3.11+ and Node.js 22.22.3+ (24 LTS recommended), install once:
+**1. Install LoopX and its Agent skills.** Requires Python 3.11+ and
+Node.js 22.22.3+ (24 LTS recommended).
 
 ```bash
 python3 -m pip install --upgrade loopx && loopx workflow-skills --install
 ```
 
-Restart your Agent host, open your project, then give Codex a concrete task:
+[Install options and upgrades](docs/guides/installing-loopx.md)
+
+**2. Give your Agent a concrete task.** Restart your Agent host, open your
+project, then send this in Codex:
 
 ```text
 $loopx speed up this project's slowest workflow; compare approaches and verify the gains
 ```
 
-Claude Code uses `/loopx <complex task>`. [Other hosts, install options and upgrades ↓](#try-loopx)
+Claude Code uses `/loopx <complex task>`; see [host setup](#start-from-your-agent)
+for other runtimes. Prefer a guided first run? [Choose a task below](#try-loopx).
 
 ## 📰 News
 
@@ -80,7 +85,7 @@ protected actions.
 
 | What you want to do | Start here |
 | --- | --- |
-| Keep a coding or research agent working across sessions | [Install and start](#try-loopx) |
+| Keep a coding or research agent working across sessions | [Install and start](#quick-start) |
 | Manage personal projects, schedules and decisions in one place | [Personal Agent Workspace](#meet-the-personal-agent-workspace) |
 | Let agents collaborate and deliver verifiable results | [Agent collaboration guide](docs/product/use-cases/cross-runtime/README.md) |
 
@@ -204,35 +209,34 @@ from this reproducible workspace. [Scenarios and replay instructions](demo/works
 
 ## Try LoopX
 
-Install once:
+Choose a walkthrough with a result you can inspect:
 
-```bash
-python3 -m pip install --upgrade loopx && loopx workflow-skills --install
-```
+| Start with | What you'll do |
+| --- | --- |
+| [Your first bug-fixing loop](docs/guides/first-bugfix-loop.md) | Reproduce two bugs in a small Python project, let the Agent fix them, then check the tests and patch. |
+| [Long-running coding work](docs/guides/long-running-coding-agents.md) | Fix an issue or keep improving your own repository, with review, evidence and recovery across sessions. |
+| [Personal Agent Workspace (中文)](docs/guides/personal-workspace-user-guide.md) | Follow the illustrated guide to manage projects, conversations, tasks and delivered results in the App. |
 
 ### Start From Your Agent
 
-Restart your Agent host, then start from a session opened on your project:
+After the [two-step setup](#quick-start), use the entry for your host in a
+session opened on your project:
 
-| Host | Type |
+| Host | Start and confirm continuation |
 | --- | --- |
-| Codex App, Codex CLI | `$loopx <complex task>` |
-| Claude Code | `/loopx <complex task>` |
+| Codex App | `$loopx <complex task>`; confirm the [heartbeat automation is saved](docs/guides/first-bugfix-loop.md#confirm-that-it-actually-started). |
+| Codex CLI | `$loopx <complex task>`; activate the generated [native `/goal`](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md#current-user-path) in the same session. |
+| Claude Code | `/loopx <complex task>`; follow the [loop driver setup](docs/guides/newcomer-command-path.md#choose-the-loop-driver) for recurring work. |
 | DeepSeek Harness | Install the [native DSH plugin](packages/dsh-loopx-plugin/README.md), select the `loopx` skill, then describe the task |
 
-For example, give your Agent a concrete outcome:
-
-```text
-$loopx speed up this project's slowest workflow; compare approaches and verify the gains
-```
-
 LoopX reuses existing project state or connects the project, plans the work as
-Todos and sets up the host's loop. `loopx status` shows the goal, any decision
-waiting for you and the next Todo; `loopx doctor` diagnoses the install.
+Todos and guides host activation. Ask your Agent to confirm the active Goal,
+next Todo and continuation mechanism; a setup packet alone is not an active loop.
+Keep the host available for continued work. `loopx status` shows the Goal,
+decisions waiting for you and the next Todo; `loopx doctor` diagnoses the install.
 
-Requires Python 3.11+ and Node.js 22.22.3+ (24 LTS recommended).
-[Installing LoopX](docs/guides/installing-loopx.md) covers native Windows,
-`pipx`, upgrades, rollback and uninstall.
+[Installing LoopX](docs/guides/installing-loopx.md) covers native Windows, `pipx`,
+upgrades, rollback and uninstall.
 
 **Upgrading from 1.x?** Read the [2.0 migration and recovery guide](docs/product/releases/v2.0.0.md) before continuing existing Goals.
 

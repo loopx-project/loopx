@@ -1207,7 +1207,9 @@ export async function updateLocalCoordinationTodo(
     }
     const completionUpdate = input.schema_version === COORDINATION_TODO_COMPLETION_UPDATE_REQUEST_SCHEMA;
     const observationUpdate = input.schema_version === COORDINATION_TODO_OBSERVATION_UPDATE_REQUEST_SCHEMA;
-    const validationRevisionUpdate = input.schema_version === COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA;
+    const validationRevisionUpdate = input.schema_version === COORDINATION_TODO_VALIDATION_REVISION_REQUEST_SCHEMA ||
+      (input.schema_version === LOCAL_COORDINATION_TODO_EXECUTION_UPDATE_REQUEST_SCHEMA &&
+        Object.hasOwn(input, "completion_validation_revision"));
     if (!observationUpdate && Object.hasOwn(input, "monitor_observation")) {
       throw new TypeError("Monitor observation payload requires request v4");
     }
@@ -1217,7 +1219,7 @@ export async function updateLocalCoordinationTodo(
     }
     if (completionUpdate && input.completion == null) throw new TypeError("Todo completion update requires its completion payload");
     if (!validationRevisionUpdate && Object.hasOwn(input, "completion_validation_revision")) {
-      throw new TypeError("Completion validation revision payload requires request v5");
+      throw new TypeError("Completion validation revision payload requires request v5 or v6");
     }
     if (validationRevisionUpdate && input.completion_validation_revision == null) {
       throw new TypeError("Completion validation revision update requires its revision payload");

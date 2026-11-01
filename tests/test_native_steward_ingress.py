@@ -107,7 +107,8 @@ def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(stew
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.todos.mutation_api import add_goal_todo
     from loopx.extensions.lark.conversation_identity import identity_ref
-    from loopx.presentation.request_control_api import bound_steward_inventory_scope, manager_source_scope_resolver
+    from loopx.presentation.request_control_api import bound_steward_inventory_scope
+    from loopx.chat_lark_api import manager_source_scope_resolver
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     goal = "registered-work"
@@ -207,7 +208,7 @@ def test_manager_source_scope_keeps_source_and_executor_routes_distinct(monkeypa
     from types import SimpleNamespace
     from loopx import chat_lark_api
     from loopx.extensions.lark import manager_routing
-    from loopx.presentation.request_control_api import manager_source_scope_resolver
+    from loopx.chat_lark_api import manager_source_scope_resolver
 
     source, frozen_registry, executor = tmp_path / "source", tmp_path / "registry", tmp_path / "executor"
     server = SimpleNamespace(registry_path=source, runtime_root_override="current-source-override",

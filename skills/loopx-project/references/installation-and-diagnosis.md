@@ -39,6 +39,14 @@ for the same authorized task without asking again merely because the previous
 round finished or handed it back. Active user intervention, explicit pauses,
 reserved control and unverified spaces retain the installed Ego skill's stop
 rules. This is host guidance, not permission to bypass Ego's ownership checks.
+Before carrying an old STOP into a new control question, read the live inventory
+once. The same task already returned to Agent ownership resumes without a claim
+or another chat approval; an explicit pause or unresolved user step still holds.
+Normal handback and explicit return approval retain their existing recovery
+paths. The dynamic `ego-browser skill` guide owns native API usage and does not
+replace this installed continuation policy. The optional read-only source
+provider already checks live control on each call; UI automation through the
+CLI must apply the same distinction between a historical stop and current control.
 After an independently authorized Ego upgrade, run `loopx workflow-skills --install`
 and read `ego_browser`: it follows the current installed Ego source, preserves
 custom edits and reports recovery steps. It does not upgrade Ego. App-private

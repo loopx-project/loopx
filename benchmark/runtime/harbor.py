@@ -48,6 +48,7 @@ _AGENT_ID = "benchmark-agent"
 NATIVE_GOAL_SOURCE_PATHS = (
     "benchmark/runtime",
     "loopx/capabilities/benchmark_toolkit/native_codex_goal.py",
+    "loopx/capabilities/benchmark_toolkit/native_codex_process.py",
     "loopx/control_plane/turn_driver/codex_stdio.py",
 )
 

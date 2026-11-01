@@ -3,8 +3,10 @@
 Pass a public synthetic status file for whole-workspace visual review. Runtime
 availability is display-only fixture metadata; POSTs cannot execute it. Requests,
 decisions and return delivery below use the production owners in a temp runtime.
-Commands on stdin: inspect, fault, recover, deliver, source-unavailable,
-source-recover, history-corrupt/history-recover (--long-history only), stop.
+Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
+deliver, source-unavailable, source-recover, local-source-unavailable,
+local-source-recover, history-corrupt/history-recover (--long-history only), stop. Window faults/returns apply
+after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
 
@@ -29,7 +31,10 @@ def main():
     args.add_argument("--assets-dir", type=Path)
     args.add_argument("--long-history", action="store_true")
     args.add_argument("--canonical-storage", choices=("sqlite", "file"), default="sqlite")
+    args.add_argument("--requests", type=int, default=13)
     selected = args.parse_args()
+    if not 1 <= selected.requests <= 120:
+        args.error("--requests must be between 1 and 120")
     status = json.loads(selected.status_file.read_text())
     with TemporaryDirectory(prefix="loopx-steward-requests-") as directory, ExitStack() as cleanup:
         root = Path(directory).resolve()
@@ -76,8 +81,11 @@ def main():
             "整理迁移后的回滚步骤", "补齐取消导出时的错误提示", "核对欧洲地区的税额精度",
             "检查超时后的安全重试", "复核下载文件中的版本信息", "检查月底跨时区的账期边界",
             "整理旧接口的调用方清单", "核对缺失凭证时的处理方式", "检查手机上的导出入口", "复核迁移说明中的示例"]
-        last_receipt = None
-        for index, title in enumerate(titles):
+        first_receipt = last_receipt = None
+        for index in range(selected.requests):
+            title = titles[index % len(titles)]
+            if index >= len(titles):
+                title += f" · 记录 {index + 1}"
             target = {"goal_id": "billing-exports", "agent_id": "reviewer" if index % 3 == 2 else "builder"}
             body = (title + "\n\n" + "完整原始要求。Original evidence. " * 600 + "完整正文结束。"
                     if selected.long_history and index == 0 else title)
@@ -87,6 +95,8 @@ def main():
                 "constraints": ["只检查本次产物；不发布、不联系外部人员。"], "inputs": [],
                 "acceptance": ["给出可回看的核验结论与下一步。"], "return_requirement": "将实际结论返回原管家会话。"}
             receipt = deliver(runtime, registry, session=session, turn=turn, request={**target, "brief": brief}, source_store=store)
+            if first_receipt is None:
+                first_receipt = receipt
             store.append_message(session["session_id"], role="assistant", text="已交给负责的 Agent，等待它返回实际结论。",
                 turn_id=turn["turn_id"], origin="web")
             store.update_turn(session["session_id"], turn["turn_id"], status="completed", response={"context_handoff_receipt": receipt})
@@ -95,7 +105,10 @@ def main():
                 acknowledge(runtime, "billing-exports", target["agent_id"], receipt["request_id"], "adopt",
                     "已接到原工作，正在核对实际产物；尚未形成完成结论。", registry=registry, caller_goal_ref=receipt["goal_ref"])
             last_receipt = receipt
-        report(runtime, "billing-exports", "builder", last_receipt["request_id"], "conclusion",
+        if (selected.requests - 1) % 3 == 2:
+            acknowledge(runtime, "billing-exports", "reviewer", last_receipt["request_id"], "adopt",
+                "已接到原工作，正在核对实际产物；尚未形成完成结论。", registry=registry, caller_goal_ref=last_receipt["goal_ref"])
+        report(runtime, "billing-exports", target["agent_id"], last_receipt["request_id"], "conclusion",
             "已核对本次迁移说明与示例，版本一致，原始检查结果已保留。", registry=registry,
             caller_goal_ref=last_receipt["goal_ref"])
 
@@ -109,8 +122,12 @@ def main():
                 self._send_json({"ok": True, "schema_version": "loopx_chat_goal_contexts_v0", "goals": []})
             def _request_inventory_read(self):
                 self.server.inventory_reads += 1
-                if self.server.fault:
+                later_window = parse_qs(urlparse(self.path).query).get("offset", ["0"])[0] != "0"
+                if self.server.fault or (later_window and self.server.fault_window):
                     return self._send_error("Synthetic inventory read failure", status=503)
+                if later_window and self.server.deliver_window:
+                    self.server.deliver_window = False
+                    drain(runtime, registry, store, lambda *_: None)
                 return super()._request_inventory_read()
             def do_GET(self):
                 if urlparse(self.path).path == "/status.json":
@@ -141,6 +158,7 @@ def main():
         server.runtime_root_override, server.selected_goal_id, server.verbose = str(runtime), None, False
         server.assets_dir = selected.assets_dir or default_chat_assets_dir()
         server.fault, server.posts, server.inventory_reads = False, 0, 0
+        server.fault_window, server.deliver_window = False, False
         server.runtime_controller = ChatRuntimeController(store=store, registry_path=registry, codex_bin="unused-fixture-codex")
         server.runtime_controller.capabilities = lambda: [{"agent_id": "codex", "display_name": "Codex",
             "adapter_kind": "codex_app_server", "available": True, "streaming": True, "resume": True, "interrupt": True}]
@@ -148,6 +166,8 @@ def main():
             raise AssertionError("An unselected steward must not read an external provider")
         install_conversation_transports(server, factories=(), observe_default=reject_provider)
         bindings = server.runtime_controller.project_contexts.conversation_bindings
+        local_session_path = store._session_path(session["session_id"])
+        local_session_bytes = local_session_path.read_bytes()
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         def source_hashes():
@@ -164,8 +184,17 @@ def main():
                     break
                 if command == "fault":
                     server.fault = True
+                elif command == "fault-window":
+                    server.fault_window = True
+                elif command == "deliver-window":
+                    server.deliver_window = True
+                elif command == "report-window":
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "已核对字段映射，原请求和检查依据保留。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"])
+                    server.deliver_window = True
                 elif command == "recover":
-                    server.fault = False
+                    server.fault = server.fault_window = server.deliver_window = False
                 elif command == "deliver":
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "source-unavailable":
@@ -178,6 +207,10 @@ def main():
                     journal.write_bytes(b"".join(lines))
                 elif command == "history-recover" and selected.long_history:
                     journal.write_bytes(original_journal)
+                elif command == "local-source-unavailable":
+                    local_session_path.write_text("{invalid synthetic session", encoding="utf-8")
+                elif command == "local-source-recover":
+                    local_session_path.write_bytes(local_session_bytes)
                 elif command != "inspect":
                     raise ValueError("Unknown fixture command")
                 print(json.dumps({"event": command, "posts": server.posts, "inventory_reads": server.inventory_reads,

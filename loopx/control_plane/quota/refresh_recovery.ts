@@ -73,6 +73,7 @@ export function refreshRecovery(
   receiptPresent: boolean,
   workspaceRequirement: string | undefined,
   laterAgentVision: boolean,
+  missingBlockedReplanQualification = false,
 ): JsonObject {
   const wantsVision = request.vision !== null || Boolean(request.unchanged_reason);
   const digest = wantsVision ? createHash("sha256").update(canonical({
@@ -128,6 +129,20 @@ export function refreshRecovery(
   if (changedDelivery ||
       (changesMutation && mutationDigest !== jsonObject(prior.refresh_recovery)?.mutation_digest)) {
     return result("reject", "committed_writeback_payload_conflict");
+  }
+  // Older callers could commit a blocked replan without qualifying its exact
+  // admitted source. Re-run that owner through the existing additive checkpoint
+  // path, preserving the original payload/receipt and executing no mutations.
+  // The readback owner proves that this identity has no committed debit.
+  if (missingBlockedReplanQualification && wantsVision) {
+    const judgmentDigest = createHash("sha256").update(canonical({
+      vision: request.vision, unchanged_reason: request.unchanged_reason, merge_patch: request.merge_patch,
+    })).digest("hex");
+    if (judgmentDigest === priorDigest) {
+      if (laterAgentVision) return result("reject", "checkpoint_superseded_by_later_vision");
+      if (changesMutation) return result("reject", "checkpoint_supplement_must_not_repeat_mutations");
+      return result("supplement_checkpoint", "complete_missing_replan_qualification_on_original_turn");
+    }
   }
   if (wantsVision && digest !== priorDigest) {
     if (checkpoint?.decision !== "missing_required" || checkpoint.satisfied !== false) {
