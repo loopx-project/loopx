@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 from collections.abc import Mapping
 from typing import Any
@@ -56,9 +57,23 @@ __all__ = [
 ]
 
 
+_POSIX_TURN_REF = "${LOOPX_TURN:?}"
+_POWERSHELL_TURN_REF = "$LOOPX_TURN"
+
+
+def _is_windows_host() -> bool:
+    return os.name == "nt"
+
+
+def _default_turn_ref() -> str:
+    return _POWERSHELL_TURN_REF if _is_windows_host() else _POSIX_TURN_REF
+
+
 def _quoted_turn_ref(turn_instance_id_ref: str) -> str:
-    if turn_instance_id_ref == "${LOOPX_TURN:?}":
-        return '"${LOOPX_TURN:?}"'
+    if turn_instance_id_ref == _POSIX_TURN_REF:
+        return _default_turn_ref() if _is_windows_host() else f'"{_POSIX_TURN_REF}"'
+    if turn_instance_id_ref == _POWERSHELL_TURN_REF and _is_windows_host():
+        return turn_instance_id_ref
     return shlex.quote(turn_instance_id_ref)
 
 
@@ -120,7 +135,7 @@ def build_codex_app_settlement_plan(
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
         lifecycle_actor_args=lifecycle_actor_args,
-        turn_instance_id=turn_instance_id_ref or "${LOOPX_TURN:?}",
+        turn_instance_id=turn_instance_id_ref or _default_turn_ref(),
         writeback_path_args=writeback_path_args,
         delivery_boundary=delivery_boundary,
         quota_spend_source=quota_spend_source,
