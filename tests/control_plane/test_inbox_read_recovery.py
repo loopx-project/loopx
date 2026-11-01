@@ -102,7 +102,8 @@ def test_large_legal_inbox_page_keeps_complete_source_and_records_supplied_reads
     response = read_inbox(tmp_path, registry, "research", "worker", workspace=tmp_path)
 
     assert len(response["items"]) == 20
-    assert len(json.dumps(response, ensure_ascii=False).encode()) > MAX_RESPONSE_BYTES
+    # Keep the original legal page; it now fits the larger ordinary wire.
+    assert 2 * 1024 * 1024 < len(json.dumps(response, ensure_ascii=False).encode()) <= MAX_RESPONSE_BYTES
     assert all(item["message"] == message and item["brief"] == normalized["brief"] for item in response["items"])
     assert all(item["recorded_decision"] is None for item in response["items"])
     assert {p: p.read_bytes() for p in before} == before

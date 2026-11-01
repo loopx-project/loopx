@@ -11,7 +11,6 @@ from loopx.control_plane.effect_runtime import (
     MAX_RESPONSE_BYTES,
     EffectRuntimeRejected,
     EffectRuntimeRemoteError,
-    EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
 
@@ -38,11 +37,12 @@ def test_large_member_transport_with_explicit_rpc_budget_preserves_inventory(tmp
     witness = {"research": expected}
     # The expected inventory is independent of the production walker. A count
     # alone would miss dropped, reordered or substituted scientific members.
-    assert len(json.dumps(witness, separators=(",", ":")).encode()) > MAX_RESPONSE_BYTES
+    # Preserve this original inventory: it now also fits the ordinary wire.
+    assert 2 * 1024 * 1024 < len(json.dumps(witness, separators=(",", ":")).encode()) <= MAX_RESPONSE_BYTES
     components = [{"id": "research", "source_path": str(source)}]
     request = {"action": "probe", "components": components}
-    with pytest.raises(EffectRuntimeResponseAmbiguous):
-        effect_runtime_result("runtime.checkpoint_artifacts", request, timeout=LARGE_ARTIFACT_RPC_SECONDS)
+    inline = effect_runtime_result("runtime.checkpoint_artifacts", request, timeout=LARGE_ARTIFACT_RPC_SECONDS)
+    assert inline["source_witness"] == witness
     observed = effect_runtime_result("runtime.checkpoint_artifacts", request,
                                      timeout=LARGE_ARTIFACT_RPC_SECONDS, large_local_snapshot=True)
     assert observed["source_witness"] == witness

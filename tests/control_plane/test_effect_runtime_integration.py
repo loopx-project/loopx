@@ -1922,6 +1922,122 @@ def test_valid_idle_timeout_configuration_serves_requests(
             pass
 
 
+@pytest.mark.parametrize("text", [
+    "quotes: \"\\\n\r\t\x00; Unicode: 中文🙂\u2028\u2029",
+    "lone: \ud800; low: \udfff; paired: \ud83d\ude42; backslash: \\ud800",
+])
+def test_rpc_json_preserves_legacy_values_with_valid_utf8(text: str) -> None:
+    value = {"text": text, "nested": [None, True, 0, -1, 1.25]}
+    encoded = effect_runtime._encode_rpc_json(value)
+    assert json.loads(encoded.decode("utf-8")) == json.loads(json.dumps(value))
+    assert b"\n" not in encoded, "newlines inside values must not end the frame"
+    if "中文" in text:
+        assert "中文🙂".encode() in encoded
+    else:
+        assert b"\\ud800" in encoded and b"\\udfff" in encoded
+
+    ascii_value = {"text": "quote: \"; slash: \\; line: \n", "count": 17}
+    assert effect_runtime._encode_rpc_json(ascii_value) == json.dumps(
+        ascii_value, separators=(",", ":"),
+    ).encode("ascii")
+
+
+@pytest.mark.parametrize("repeats,snapshot", [(380_000, False), (900_000, True)])
+def test_complete_unicode_context_uses_actual_wire_bytes_and_snapshot_fallback(
+    tmp_path: Path, monkeypatch, repeats: int, snapshot: bool,
+) -> None:
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    # The smaller source fits 8 MiB in UTF-8 but exceeds it when ASCII-escaped.
+    text = "保留🙂" * repeats + "\nFinal constraint: retain the original Goal."
+    params = {
+        "required_reads": [{"source": "goal_state", "command": "read synthetic goal"}],
+        "source_results": [{"command": "read synthetic goal", "content": {
+            "text": text, "full_source": True, "state_file": "synthetic-goal.md",
+            "revision": "sha256:" + hashlib.sha256(text.encode()).hexdigest(),
+        }}],
+        "require_full_goal_source": True,
+    }
+    assert len(json.dumps(params).encode()) > 8 * 1024 * 1024
+    original_send = socket.socket.sendall
+    captured: list[dict[str, object]] = []
+    temporary_paths: list[Path] = []
+
+    def observe_send(connection, data, flags=0):
+        request = json.loads(data)
+        if request["method"] == "work_item.context.project":
+            captured.append(request)
+            assert len(data) <= 8 * 1024 * 1024
+            if "params_ref" in request:
+                ref = request["params_ref"]
+                path = Path(ref["path"])
+                body = path.read_bytes()
+                assert ref["byte_count"] == len(body)
+                assert ref["sha256"] == hashlib.sha256(body).hexdigest()
+                assert "保留🙂".encode() in body and json.loads(body) == params
+                temporary_paths.extend([path, Path(request["response_sink"])])
+            else:
+                assert "保留🙂".encode() in data and request["params"] == params
+        return original_send(connection, data, flags)
+
+    monkeypatch.setattr(socket.socket, "sendall", observe_send)
+    try:
+        result = effect_runtime.effect_runtime_result(
+            "work_item.context.project", params, large_local_snapshot=snapshot,
+        )
+        assert result["required_reads"] == []
+        assert result["work_context"]["sources"][0]["content"]["text"] == text
+        assert len(captured) == 1
+        assert ("params_ref" in captured[0]) is snapshot
+        assert all(not path.exists() for path in temporary_paths)
+        assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] > 0
+    finally:
+        effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+def test_fragmented_utf8_request_dispatches_only_the_first_complete_frame(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    ping = effect_runtime.effect_runtime_result("runtime.ping", {})
+    fingerprint = effect_runtime._runtime_fingerprint()
+    info = effect_runtime._read_info(
+        effect_runtime._runtime_info_path(fingerprint), fingerprint=fingerprint,
+    )
+    assert info is not None
+    first = json.dumps({
+        "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+        "token": info["token"], "request_id": "fragmented", "method": "runtime.ping",
+        "params": {"text": "界🙂\nmore"},
+    }, ensure_ascii=False).encode()
+    second = json.dumps({
+        "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+        "token": info["token"], "request_id": "ignored", "method": "runtime.shutdown",
+        "params": {},
+    }).encode() + b"\n"
+    split = first.index("界".encode())
+    try:
+        with socket.create_connection((info["host"], info["port"]), timeout=2) as connection:
+            connection.settimeout(.02)
+            # Split inside a UTF-8 code point and withhold the physical newline.
+            for piece in [first[:split + 1], first[split + 1:split + 2], first[split + 2:]]:
+                connection.sendall(piece)
+                with pytest.raises(socket.timeout):
+                    connection.recv(1)
+            connection.sendall(b"\n" + second)
+            connection.settimeout(2)
+            response = b""
+            while b"\n" not in response:
+                chunk = connection.recv(64 * 1024)
+                assert chunk
+                response += chunk
+        answer = json.loads(response)
+        assert answer["ok"] is True and answer["request_id"] == "fragmented"
+        assert answer["result"]["pid"] == ping["pid"]
+        assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] == ping["pid"]
+    finally:
+        effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
 def test_oversized_request_is_rejected_before_runtime_dispatch(
     tmp_path: Path,
     monkeypatch,
@@ -2051,7 +2167,7 @@ def test_oversized_raw_socket_request_returns_typed_error(
         "error": {
             "kind": "request_rejected",
             "code": "request_too_large",
-            "message": "Effect runtime request exceeds the 2 MiB limit",
+            "message": "Effect runtime request exceeds the 8 MiB limit",
         },
     }
     assert (
@@ -2059,6 +2175,32 @@ def test_oversized_raw_socket_request_returns_typed_error(
         == ping["pid"]
     )
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
+
+
+def test_raw_request_accepts_the_inclusive_eight_mib_wire_boundary(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    ping = effect_runtime.effect_runtime_result("runtime.ping", {})
+    fingerprint = effect_runtime._runtime_fingerprint()
+    info = effect_runtime._read_info(
+        effect_runtime._runtime_info_path(fingerprint), fingerprint=fingerprint,
+    )
+    assert info is not None
+    envelope = json.dumps({
+        "schema_version": effect_runtime.EFFECT_RUNTIME_REQUEST_SCHEMA_VERSION,
+        "token": info["token"], "request_id": "at-limit", "method": "runtime.ping",
+        "params": {},
+    }).encode()
+    # JSON trailing whitespace is legal; count the entire frame, including LF.
+    payload = envelope + b" " * (8 * 1024 * 1024 - len(envelope) - 1) + b"\n"
+    try:
+        answer = _raw_runtime_response(info, payload)
+        assert answer["ok"] is True and answer["request_id"] == "at-limit"
+        assert answer["result"]["pid"] == ping["pid"]
+        assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] == ping["pid"]
+    finally:
+        effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
 def test_non_object_json_request_is_rejected_at_the_socket_boundary(

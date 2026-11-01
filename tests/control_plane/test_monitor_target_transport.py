@@ -29,13 +29,13 @@ def _monitor(**fields):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("target_repetitions", [1, 40_000, 120_000])
+@pytest.mark.parametrize("target_repetitions", [1, 40_000, 120_000, 360_000])
 def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, provider, target_repetitions):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     registry, runtime, state = _write_fixture(tmp_path, canonical=False)
     goal_source = state.read_text(encoding="utf-8")
     note = "Measured evidence 演示 " * target_repetitions
-    if target_repetitions == 120_000:
+    if target_repetitions == 360_000:
         assert len(note.encode()) > MAX_REQUEST_BYTES
     target = _monitor(note=note, evidence="source:retained-result",
                       required_capabilities=["network"], resume_when="todo_done:todo_input",
@@ -48,13 +48,13 @@ def test_real_large_authority_returns_complete_target(tmp_path, monkeypatch, pro
         for i in range(320)
     ] + [target]
     items[0]["todo_id"] = "todo_input"
-    assert len(json.dumps(items, ensure_ascii=False).encode()) > MAX_REQUEST_BYTES
+    assert len(json.dumps(items, ensure_ascii=False).encode()) > 2 * 1024 * 1024
     projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=items,
                                                       handoff_mode="soft_claim")
     initialize_canonical_authority(runtime, GOAL_ID, projection, state_path=state, provider=provider)
     state.unlink()  # No legacy Markdown fallback can satisfy the lookup.
 
-    # A record beyond the inline 2 MiB request ceiling is still complete: the
+    # The largest record exceeds the current ordinary wire and is complete: the
     # canonical adapter reads through the opt-in private-file entrypoint
     # (62 MiB), which never truncates a record or substitutes display Markdown.
     # The wire-only page endpoint keeps its own per-page refusal.

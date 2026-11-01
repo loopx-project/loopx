@@ -13,7 +13,6 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.cli import main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
 from loopx.control_plane.testing.canary_harness import write_fixture_registry
 from loopx.control_plane.work_items import context_readback
 from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
@@ -109,7 +108,7 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     assert state.read_bytes() == initial
     large = initial + b"\n## Evidence\n" + b"Prior evidence remains available. " * 100_000
     large += "\n## Stop Conditions\n未经授权不得发布。\n".encode()
-    assert len(large) > MAX_REQUEST_BYTES
+    assert len(large) > 2 * 1024 * 1024  # Preserve the original source regression.
     state.write_bytes(large)
     large_channel = guard()
     large_request = requests[-1]

@@ -24,9 +24,9 @@ const REQUEST_SCHEMA = "loopx_effect_runtime_request_v0";
 const RESPONSE_SCHEMA = "loopx_effect_runtime_response_v1";
 const INFO_SCHEMA = "loopx_effect_runtime_info_v0";
 const STARTUP_ERROR_SCHEMA = "loopx_effect_runtime_startup_error_v0";
-const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
-const MAX_INLINE_RESPONSE_BYTES = 2 * 1024 * 1024;
-// Explicit opt-in: ordinary effects retain the 2 MiB request/response wire.
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_INLINE_RESPONSE_BYTES = 8 * 1024 * 1024;
+// Explicit opt-in: ordinary effects retain a bounded request/response wire.
 const LOCAL_SNAPSHOT_METHODS = new Set([
   "todo.read",
   "todo.quota_planning.project",
@@ -186,14 +186,16 @@ const server = createServer((socket) => {
         request_id: "unknown",
         ok: false,
         error: effectRuntimeErrorPayload(new EffectRuntimeRequestError(
-          "Effect runtime request exceeds the 2 MiB limit",
+          "Effect runtime request exceeds the 8 MiB limit",
           "request_too_large",
         )),
       })}\n`);
       return;
     }
     raw += chunk;
-    if (!raw.includes("\n")) return;
+    // Earlier chunks had no delimiter. Scanning the accumulated string on each
+    // chunk repeatedly flattens it; only the newly received chunk can finish it.
+    if (!chunk.includes("\n")) return;
     socket.pause();
     pendingRequests += 1;
     clearTimeout(idleTimer);
