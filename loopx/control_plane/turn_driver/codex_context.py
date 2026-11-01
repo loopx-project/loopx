@@ -80,8 +80,9 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
             # rejects them. Unknown/conflicting declarations never bypass this
             # adapter, and generic_cli still needs the benchmark declaration.
             if codex_machine_preference and context.host_surface in {
-                HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.CLAUDE_CODE,
-                HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI, HostSurface.LOCAL_SCHEDULER,
+                HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.ANTIGRAVITY_APP,
+                HostSurface.CLAUDE_CODE, HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI,
+                HostSurface.LOCAL_SCHEDULER,
             }:
                 return context_delivery_activation("off")
             if (context.host_surface is HostSurface.CODEX_APP

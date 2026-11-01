@@ -16,7 +16,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..agy_goal_mode import agy_activation_extras
+from ..agy_goal_mode import (
+    ANTIGRAVITY_APP_INSTALL_SURFACE,
+    ANTIGRAVITY_SKILLS_ROOT_LABEL,
+    agy_activation_extras,
+    antigravity_app_activation_extras,
+)
 from ..kiro_cli_goal_mode import (
     KIRO_CLI_INSTALL_SURFACE,
     SKILLS_ROOT_LABEL as KIRO_CLI_SKILLS_ROOT_LABEL,
@@ -156,6 +161,28 @@ def agy_cli_activation(commands: dict[str, str], cli_bin: str) -> dict[str, Any]
         install_surface="agy",
         skills_root="~/.gemini/antigravity-cli/skills",
         **agy_activation_extras(),
+    )
+
+
+def antigravity_app_activation(
+    commands: dict[str, str],
+    cli_bin: str,
+    *,
+    goal_id: str = "<goal-id>",
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    return skill_facade_cli_activation(
+        commands,
+        cli_bin,
+        host_label="Antigravity App",
+        host_surface="antigravity_app_loop",
+        install_surface=ANTIGRAVITY_APP_INSTALL_SURFACE,
+        skills_root=ANTIGRAVITY_SKILLS_ROOT_LABEL,
+        **antigravity_app_activation_extras(
+            goal_id=goal_id,
+            agent_id=agent_id,
+            cli_bin=cli_bin,
+        ),
     )
 
 

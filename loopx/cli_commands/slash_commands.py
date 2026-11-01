@@ -71,6 +71,7 @@ def register_slash_commands_command(
             "z-code",
             "agy",
             "antigravity",
+            "antigravity-app",
             "kiro",
             "kiro-cli",
             "pi",
@@ -117,6 +118,23 @@ def register_slash_commands_command(
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
+        "--agy-home",
+        help=(
+            "Antigravity config home for skill, MCP, and hooks installation. "
+            "Defaults to AGY_HOME or ~/.gemini/config (and ~/.gemini/antigravity-cli for legacy CLI)."
+        ),
+    )
+    parser.add_argument(
+        "--with-agy-mcp",
+        action="store_true",
+        help="Optionally register the LoopX MCP server in Antigravity mcp_config.json.",
+    )
+    parser.add_argument(
+        "--with-agy-hooks",
+        action="store_true",
+        help="Optionally register the LoopX continuation gate in Antigravity hooks.json.",
+    )
+    parser.add_argument(
         "--opencode-home",
         help="OpenCode config directory. Defaults to OPENCODE_CONFIG_DIR or ~/.config/opencode.",
     )
@@ -159,6 +177,8 @@ def handle_slash_commands_command(
             execute=bool((args.install or args.uninstall) and not args.dry_run),
             uninstall=bool(args.uninstall),
             with_goal_bridge=bool(args.with_goal_bridge),
+            with_agy_mcp=bool(getattr(args, "with_agy_mcp", False)),
+            with_agy_hooks=bool(getattr(args, "with_agy_hooks", False)),
             surfaces=args.surface,
             cli_bin=args.cli_bin,
             include_legacy_aliases=not bool(args.no_legacy_aliases),
@@ -168,6 +188,7 @@ def handle_slash_commands_command(
             gemini_home=args.gemini_home,
             cursor_home=args.cursor_home,
             zcode_home=getattr(args, "zcode_home", None),
+            agy_home=getattr(args, "agy_home", None),
             pi_project=args.pi_project,
             pi_scope=args.pi_scope,
         )
