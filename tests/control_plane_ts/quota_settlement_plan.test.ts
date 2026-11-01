@@ -11,6 +11,7 @@ const input = {
   identity: {goal_id: "goal", agent_id: "agent", todo_id: "todo", turn_instance_id: "turn"},
   delivery_batch_scale_choices: ["test_only", "single_surface", "multi_surface", "implementation"],
   command_templates: {
+    todo_claim: "ordinary claim",
     todo_completion: "ordinary completion", durable_writeback: "writeback",
     quota_spend: "spend", terminal_closeout: "terminal completion",
   },
@@ -62,9 +63,29 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.equal((wire.ordered_steps as Record<string, unknown>[])[0].command_condition,
     "todo_deliverable_complete");
   assert.deepEqual(input.command_templates, {
+    todo_claim: "ordinary claim",
     todo_completion: "ordinary completion", durable_writeback: "writeback",
     quota_spend: "spend", terminal_closeout: "terminal completion",
   });
+});
+
+test("canonical hard-lease guidance carries execution preparation without changing other modes", () => {
+  const original = turnScopedCliSettlementPlan(input);
+  for (const handoff_mode of [undefined, null, "soft_claim", "legacy"]) {
+    assert.deepEqual(turnScopedCliSettlementPlan({...input, handoff_mode}), original);
+  }
+  const hard = turnScopedCliSettlementPlan({...input, handoff_mode: "hard_lease"});
+  assert.match(hard.steps[0].precondition, /ordinary Todo claim: `ordinary claim`/);
+  assert.match(hard.steps[0].command_template!, /--claim-operation-id '<original claim_operation_id>'/);
+  assert.match(hard.steps[3].command_template!, /--claim-operation-id '<original claim_operation_id>'/);
+  assert.deepEqual(hard.identity, original.identity);
+  assert.deepEqual(hard.steps.slice(1, 3), original.steps.slice(1, 3));
+  const explicit = turnScopedCliSettlementPlan({...input, handoff_mode: "hard_lease",
+    completion_proof_supplied: true});
+  assert.equal(explicit.steps[0].command_template, original.steps[0].command_template);
+  assert.equal(explicit.steps[3].command_template, original.steps[3].command_template);
+  assert.throws(() => turnScopedCliSettlementPlan({...input, handoff_mode: "hard_lease",
+    command_templates: {...input.command_templates, todo_claim: ""}}), /must be a non-empty string/);
 });
 
 test("in-flight validation offers completion only after original deliverable acceptance", () => {

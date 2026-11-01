@@ -925,6 +925,7 @@ def build_quota_plan(
             "missing_gates",
             "next_handoff_condition",
             "handoff_readiness",
+            "handoff_mode",
             "user_todos",
             "agent_todos",
             "active_state_next_action",
