@@ -984,14 +984,17 @@ print('Current grow adopted: two complete candidates 9 and 10 validated; origina
                     goal,
                     "--agent-id",
                     agent,
-                    "--turn-instance-id",
-                    "joint-next-audit",
+                    # Readback is a scheduler observation, not another work
+                    # Turn whose unperformed closeout could block recapture.
+                    "--context-delivery",
+                    "off",
                     "--runtime-profile",
                     "generic_cli",
                     "--available-capability",
                     "shell",
                 )
                 assert final["interaction_contract"]["mode"] == "bounded_delivery"
+                assert not final.get("heartbeat_receipt", {}).get("closeout_required")
             # The next genuinely new decision boundary can capture changed
             # research/code/native history, after actual useful continuation.
             # This partial point deliberately makes no evaluator qualification.

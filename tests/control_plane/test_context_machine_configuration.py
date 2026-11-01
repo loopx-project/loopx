@@ -470,7 +470,7 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
     from argparse import Namespace
     from benchmark.runtime.worker import run_once
     from scripts.external_scheduler_worker import build_should_run_command, parse_tick
-    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider, native_process_continuation
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
     import sys
 
@@ -505,11 +505,14 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         capture_output=True, text=True, timeout=30, check=False)
     assert observed_guard.returncode == 0, observed_guard.stderr or observed_guard.stdout
     assert parse_tick(json.loads(observed_guard.stdout)).should_run
-    observed, errors = [], []
+    observed, errors, process_continuations = [], [], []
     saved = workspace / "original-guard.json"
 
     def response(request, number, message):
         try:
+            if continuation := native_process_continuation(request, f"context-default-{number}"):
+                process_continuations.append(number)
+                return continuation
             if number == 1:
                 body = _input_text(request)
                 command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
@@ -560,7 +563,7 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         original["OPENAI_BASE_URL"] = url
         result = run_once(env)
     assert result["ok"], result
-    assert not errors and len(requests) == 2, errors
+    assert not errors and len(requests) == 2 + len(process_continuations), errors
     assert env == original, "Resolved worker defaults must not mutate caller/frozen input"
     assert _heartbeat_receipt_count(runtime, observed[0]) == 1 and _spend_run_count(runtime) == 0
     if worker_mode == "off" or not transport_ready:
