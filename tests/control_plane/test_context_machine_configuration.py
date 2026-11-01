@@ -449,7 +449,9 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
                         break
                     command = page["next_command"]
                 decision = json.loads(content)
-            assert decision["ok"] and decision["should_run"], decision
+            assert decision.get("ok") is True and decision.get("should_run") is True, json.dumps({
+                key: decision.get(key) for key in ("ok", "should_run", "error", "error_code", "error_detail", "reason")
+            })
             assert decision["goal_id"] == GOAL_ID
             assert decision["heartbeat_receipt"]["turn_instance_id"] == observed[0]
             return message

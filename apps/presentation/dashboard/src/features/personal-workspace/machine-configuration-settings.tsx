@@ -538,8 +538,8 @@ export function MachineConfigurationSettings({ section, onChanged }: {
                 : locale === "zh-CN" ? "默认开启；原生初始化与实际使用尚未验证。" : "Default on; native setup and use unverified."
               : locale === "zh-CN" ? "Codex 已关闭。" : "Off for Codex."}</p>
             <ContextHelp label={locale === "zh-CN" ? "Codex 支持范围与生效条件" : "Codex support and activation requirements"}><p>{locale === "zh-CN"
-              ? "目前仅支持 Codex App 心跳和 benchmark 心跳，无法确认或不支持的跑法报错。保存偏好不代表当前会话已采用差分，也不会改变其他应用或显式关闭的实验。宿主准备就绪且旧上下文完整时才使用差分，否则保留完整上下文。私有存储与会话隔离自动管理；每轮回执显示实际传输方式。"
-              : "Currently supports only Codex App and benchmark heartbeats; unknown or unsupported declarations return an error. Saving a preference does not establish use in the current session or change other applications or explicitly disabled runs. Delta requires a ready host and complete retained context; otherwise full context is preserved. Private storage and session isolation are automatic; each delivery reports its actual mode."}</p></ContextHelp>
+              ? "受支持的 POSIX Codex App／SSH 和 benchmark 心跳默认开启；已保存的关闭继续生效，benchmark trial 可单独显式关闭。其他应用和平台保留完整交付；显式开启遇到未知或冲突跑法会报错。保存偏好不代表当前会话已采用差分。宿主就绪且旧上下文完整时才使用差分，否则完整恢复；私有存储与会话隔离自动管理。"
+              : "Defaults on for supported POSIX Codex App/SSH and benchmark heartbeats. Saved off is preserved; benchmark trials can explicitly disable it independently. Other applications and platforms retain full delivery. Explicit on rejects unknown or conflicting modes. Saving a preference does not establish current-session adoption. Delta needs a ready host and complete retained context; otherwise full context is restored. Private storage and session isolation are automatic."}</p></ContextHelp>
           </section> : null}
           {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">
