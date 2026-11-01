@@ -77,7 +77,8 @@ function run(command, args, options = {}) {
       ...process.env,
       PATH: ["/opt/homebrew/bin", "/usr/local/bin", process.env.PATH].filter(Boolean).join(":"),
     },
-    stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    input: options.input,
+    stdio: options.capture ? [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] : "inherit",
   });
   if (result.status !== 0) {
     const detail = options.capture ? `${result.stderr}\n${result.stdout}`.trim() : "";
@@ -415,6 +416,20 @@ function withoutPublicSourceHrefs(text) {
   );
 }
 
+function credentialAssignmentsAreReferences(text, pattern) {
+  const values = [...text.matchAll(new RegExp(pattern.source, "gi"))]
+    .map(match => text.slice(match.index + match[0].length));
+  // Reuse the existing credential-value owner. The public
+  // bundle may contain JS request fields bound to runtime input, never literals.
+  const script = `import json, sys
+from loopx.contract import _credential_value_is_reference
+print(json.dumps(all(_credential_value_is_reference(value) for value in json.load(sys.stdin))))
+`;
+  return JSON.parse(run(resolveTestPython(), ["-c", script], {
+    capture: true, input: JSON.stringify(values),
+  }));
+}
+
 export async function scanPublicBoundary(outDir) {
   const patterns = [
     { label: "macOS user path", pattern: /\/Users\// },
@@ -431,6 +446,8 @@ export async function scanPublicBoundary(outDir) {
     const text = await readFile(path, "utf8");
     for (const { label, pattern, publicSourceException } of patterns) {
       if (pattern.test(publicSourceException ? withoutPublicSourceHrefs(text) : text)) {
+        if (label === "token assignment" && /\.m?js$/i.test(path)
+            && credentialAssignmentsAreReferences(text, pattern)) continue;
         leaks.push(`${relative(outDir, path)}: ${label}`);
       }
     }
