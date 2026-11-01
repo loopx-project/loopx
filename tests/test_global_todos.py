@@ -620,3 +620,131 @@ def test_global_todos_error_markdown_stays_public_safe(tmp_path) -> None:
     assert "Global Todos Unavailable" in markdown
     assert str(tmp_path) not in markdown
     assert "<local-path-redacted>" in markdown
+
+
+def test_unscoped_peer_v1_goal_fans_out_across_registered_agents_and_matches_owner_actions(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    status = {
+        "ok": True,
+        "attention_queue": {
+            "items": [{"goal_id": "goal-peer"}],
+        },
+        "run_history": {
+            "goals": [
+                {
+                    "id": "goal-peer",
+                    "coordination": {
+                        "registered_agents": ["review-a", "product-engineer"],
+                    },
+                }
+            ]
+        },
+    }
+    deferred_item = {
+        "todo_id": "todo-deferred-product",
+        "status": "deferred",
+        "resume_ready": True,
+        "priority": "P1",
+        "text": "Deferred work for product-engineer",
+        "claimed_by": "product-engineer",
+        "action_kind": "implement",
+    }
+    unscoped_quota = {
+        "ok": True,
+        "goal_id": "goal-peer",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+        "reason": (
+            "coordination.registered_agents is configured for peer_v1, "
+            "but quota should-run was called without --agent-id"
+        ),
+        "recommended_action": (
+            "Regenerate each installed heartbeat with its registered --agent-id, "
+            "then rerun quota should-run with the same identity."
+        ),
+        "heartbeat_recommendation": {
+            "recommended_mode": "automation_prompt_upgrade",
+        },
+        "agent_todo_summary": {
+            "deferred_resume_candidates": [deferred_item],
+        },
+    }
+    review_quota = runnable_quota(
+        "goal-peer",
+        "todo-runnable-review",
+        priority="P1",
+        action_kind="review_pr",
+        agent_id="review-a",
+    )
+    review_quota["recommended_action"] = "Review exact PR heads."
+    review_quota["agent_todo_summary"] = {
+        "deferred_resume_candidates": [deferred_item],
+    }
+    product_quota = {
+        "ok": True,
+        "goal_id": "goal-peer",
+        "normal_delivery_allowed": False,
+        "agent_identity": {"agent_id": "product-engineer", "registered": True},
+        "recommended_action": "Resume product-engineer deferred slice.",
+        "agent_todo_summary": {
+            "deferred_resume_candidates": [deferred_item],
+        },
+    }
+
+    def build_quota(status_payload, *, goal_id, agent_id=None):
+        assert status_payload is status
+        assert goal_id == "goal-peer"
+        if agent_id is None:
+            return unscoped_quota
+        if agent_id == "review-a":
+            return review_quota
+        if agent_id == "product-engineer":
+            return product_quota
+        raise AssertionError(f"unexpected agent_id {agent_id}")
+
+    monkeypatch.setattr(global_todos, "collect_status", lambda **_: status)
+    monkeypatch.setattr(global_todos, "build_quota_should_run", build_quota)
+
+    payload = build_payload(tmp_path)
+
+    assert payload["summary"]["runnable_count"] == 1
+    assert payload["summary"]["deferred_ready_count"] == 1
+    by_id = {todo["todo_id"]: todo for todo in payload["todos"]}
+    assert by_id["todo-runnable-review"]["readiness"] == "runnable"
+    assert (
+        by_id["todo-runnable-review"]["next_safe_action"]
+        == "Review exact PR heads."
+    )
+    assert by_id["todo-deferred-product"]["readiness"] == "deferred_ready"
+    assert (
+        by_id["todo-deferred-product"]["next_safe_action"]
+        == "Resume product-engineer deferred slice."
+    )
+
+
+def test_agent_scope_skips_goals_where_agent_is_not_registered_without_warning(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    patch_manager_reads(
+        monkeypatch,
+        status=status_for("goal-unregistered", "goal-registered"),
+        quotas={
+            "goal-unregistered": {
+                "ok": False,
+                "error": "agent_id='product-engineer' is not registered in the selected registry goal",
+            },
+            "goal-registered": runnable_quota(
+                "goal-registered",
+                "todo-registered",
+                agent_id="product-engineer",
+            ),
+        },
+    )
+
+    payload = build_payload(tmp_path, agent_id="product-engineer")
+
+    assert [todo["todo_id"] for todo in payload["todos"]] == ["todo-registered"]
+    assert payload["source_warnings"] == []

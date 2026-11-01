@@ -114,13 +114,62 @@ def _warning(
     return warning
 
 
-def _quota_for_goal(
+def _is_unscoped_peer_v1_quota(payload: dict[str, Any]) -> bool:
+    heartbeat = as_dict(payload.get("heartbeat_recommendation"))
+    if heartbeat.get("recommended_mode") == "automation_prompt_upgrade":
+        return True
+    reason = str(payload.get("reason") or "")
+    return "configured for peer_v1" in reason and "without --agent-id" in reason
+
+
+def _is_unregistered_agent_scope_miss(
+    payload: dict[str, Any],
+    *,
+    agent_id: str | None,
+) -> bool:
+    if not agent_id or payload.get("ok") is not False:
+        return False
+    detail = str(payload.get("error") or payload.get("reason") or "")
+    return "is not registered in the selected registry goal" in detail
+
+
+def _registered_goal_agents(
+    status_payload: dict[str, Any],
+    goal_id: str,
+) -> list[str]:
+    agents: list[str] = []
+    seen: set[str] = set()
+
+    def add_agent(value: object) -> None:
+        candidate = str(value or "").strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            agents.append(candidate)
+
+    run_history = as_dict(status_payload.get("run_history"))
+    for goal in as_list(run_history.get("goals")):
+        if not isinstance(goal, dict) or str(goal.get("id") or "").strip() != goal_id:
+            continue
+        coordination = as_dict(goal.get("coordination"))
+        for registered in as_list(coordination.get("registered_agents")):
+            add_agent(registered)
+
+    queue = as_dict(status_payload.get("attention_queue"))
+    for item in as_list(queue.get("items")):
+        if not isinstance(item, dict) or str(item.get("goal_id") or "").strip() != goal_id:
+            continue
+        add_agent(as_dict(item.get("agent_lane_recommendation")).get("agent_id"))
+        add_agent(as_dict(as_dict(item.get("project_asset")).get("owner")).get("agent_id"))
+    return agents[:8]
+
+
+def _quotas_for_goal(
     status_payload: dict[str, Any],
     *,
     goal_id: str,
     agent_id: str | None,
     warnings: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+) -> tuple[list[dict[str, Any]], bool]:
     try:
         payload = build_quota_should_run(
             status_payload,
@@ -135,8 +184,10 @@ def _quota_for_goal(
                 detail=exc,
             )
         )
-        return None
+        return [], True
     if payload.get("ok") is False:
+        if _is_unregistered_agent_scope_miss(payload, agent_id=agent_id):
+            return [], False
         warnings.append(
             _warning(
                 "quota_unavailable",
@@ -144,8 +195,24 @@ def _quota_for_goal(
                 detail=payload.get("error") or payload.get("reason"),
             )
         )
-        return None
-    return payload
+        return [], True
+    if agent_id is None and _is_unscoped_peer_v1_quota(payload):
+        registered_agents = _registered_goal_agents(status_payload, goal_id)
+        scoped_payloads: list[dict[str, Any]] = []
+        for candidate_agent_id in registered_agents:
+            try:
+                scoped = build_quota_should_run(
+                    status_payload,
+                    goal_id=goal_id,
+                    agent_id=candidate_agent_id,
+                )
+            except Exception:
+                continue
+            if isinstance(scoped, dict) and scoped.get("ok") is True:
+                scoped_payloads.append(scoped)
+        if scoped_payloads:
+            return scoped_payloads, False
+    return [payload], False
 
 
 def _quota_matches_agent(payload: dict[str, Any], *, agent_id: str | None) -> bool:
@@ -560,25 +627,47 @@ def build_global_todos(
     quota_read_at = now_utc_iso()
     quota_unavailable = 0
     for goal_id in goal_ids:
-        quota_payload = _quota_for_goal(
+        quota_payloads, was_unavailable = _quotas_for_goal(
             status_payload,
             goal_id=goal_id,
             agent_id=agent_id,
             warnings=warnings,
         )
-        quota_unavailable += int(quota_payload is None)
-        if quota_payload is None or not _quota_matches_agent(
-            quota_payload,
-            agent_id=agent_id,
-        ):
+        quota_unavailable += int(was_unavailable)
+        if not quota_payloads:
             continue
-        classified.extend(
-            _classify_goal_todos(
-                quota_payload,
-                goal_id=goal_id,
-                warnings=warnings,
+        recommended_action_by_agent = {
+            str(as_dict(q.get("agent_identity")).get("agent_id") or "").strip(): q.get(
+                "recommended_action"
             )
-        )
+            for q in quota_payloads
+            if str(as_dict(q.get("agent_identity")).get("agent_id") or "").strip()
+        }
+        goal_classified: list[dict[str, Any]] = []
+        for quota_payload in quota_payloads:
+            if not _quota_matches_agent(
+                quota_payload,
+                agent_id=agent_id,
+            ):
+                continue
+            goal_classified.extend(
+                _classify_goal_todos(
+                    quota_payload,
+                    goal_id=goal_id,
+                    warnings=warnings,
+                )
+            )
+        if len(quota_payloads) > 1 and recommended_action_by_agent:
+            for todo in goal_classified:
+                owner = str(todo.get("claimed_by") or "").strip()
+                if (
+                    todo.get("readiness") != "runnable"
+                    and owner in recommended_action_by_agent
+                ):
+                    todo["next_safe_action"] = _redact_text(
+                        recommended_action_by_agent[owner]
+                    )
+        classified.extend(goal_classified)
 
     matched = _deduplicate_todos(classified, warnings=warnings)
     matched.sort(key=_todo_sort_key)

@@ -115,6 +115,44 @@ def _goal_agent_id(item: dict[str, Any], quota_payload: dict[str, Any]) -> str |
     return None
 
 
+def _candidate_goal_agents(
+    status_payload: dict[str, Any],
+    goal_id: str,
+) -> list[str]:
+    agents: list[str] = []
+    seen: set[str] = set()
+
+    def add_agent(value: object) -> None:
+        candidate = str(value or "").strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            agents.append(candidate)
+
+    queue = _as_dict(status_payload.get("attention_queue"))
+    for item in _as_list(queue.get("items")):
+        if not isinstance(item, dict) or str(item.get("goal_id") or "").strip() != goal_id:
+            continue
+        add_agent(_as_dict(item.get("agent_lane_recommendation")).get("agent_id"))
+        add_agent(_as_dict(_as_dict(item.get("project_asset")).get("owner")).get("agent_id"))
+
+    run_history = _as_dict(status_payload.get("run_history"))
+    for goal in _as_list(run_history.get("goals")):
+        if not isinstance(goal, dict) or str(goal.get("id") or "").strip() != goal_id:
+            continue
+        coordination = _as_dict(goal.get("coordination"))
+        for registered in _as_list(coordination.get("registered_agents")):
+            add_agent(registered)
+    return agents[:8]
+
+
+def _is_unscoped_peer_v1_quota(payload: dict[str, Any]) -> bool:
+    heartbeat = _as_dict(payload.get("heartbeat_recommendation"))
+    if heartbeat.get("recommended_mode") == "automation_prompt_upgrade":
+        return True
+    reason = str(payload.get("reason") or "")
+    return "configured for peer_v1" in reason and "without --agent-id" in reason
+
+
 def _build_goal_quota(
     status_payload: dict[str, Any],
     *,
@@ -122,7 +160,7 @@ def _build_goal_quota(
     agent_id: str | None,
 ) -> dict[str, Any]:
     try:
-        return build_quota_should_run(status_payload, goal_id=goal_id, agent_id=agent_id)
+        payload = build_quota_should_run(status_payload, goal_id=goal_id, agent_id=agent_id)
     except Exception as exc:
         return {
             "ok": False,
@@ -131,6 +169,26 @@ def _build_goal_quota(
             "decision": "quota_unavailable",
             "reason": _redact_text(exc),
         }
+    if agent_id is None and _is_unscoped_peer_v1_quota(payload):
+        first_ok: dict[str, Any] | None = None
+        for candidate_agent_id in _candidate_goal_agents(status_payload, goal_id):
+            try:
+                scoped = build_quota_should_run(
+                    status_payload,
+                    goal_id=goal_id,
+                    agent_id=candidate_agent_id,
+                )
+            except Exception:
+                continue
+            if not isinstance(scoped, dict) or scoped.get("ok") is False:
+                continue
+            if first_ok is None:
+                first_ok = scoped
+            if scoped.get("normal_delivery_allowed") is True or scoped.get("selected_todo"):
+                return scoped
+        if first_ok is not None:
+            return first_ok
+    return payload
 
 
 def _quota_unavailable(quota_payload: dict[str, Any]) -> bool:

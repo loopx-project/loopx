@@ -616,3 +616,96 @@ def test_global_gates_error_redacts_paths_and_renderer_stays_focused(tmp_path) -
     assert "Recent Progress" not in markdown
     assert "Risks" not in markdown
     assert "## Lanes" not in markdown
+
+
+def test_summary_all_resolves_registered_agent_for_unscoped_peer_v1_goal(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    status_payload = {
+        "ok": True,
+        "attention_queue": {
+            "items": [
+                {
+                    "goal_id": "peer-goal",
+                    "status": "eligible",
+                    "waiting_on": "codex",
+                    "agent_lane_recommendation": {
+                        "agent_id": "review-b",
+                        "recommended_action": "Continue review-b queue.",
+                    },
+                }
+            ]
+        },
+        "global_registry": {"findings": []},
+        "run_history": {
+            "goals": [
+                {
+                    "id": "peer-goal",
+                    "coordination": {
+                        "registered_agents": ["review-a", "review-b"],
+                    },
+                }
+            ],
+            "recent_runs": [],
+        },
+    }
+    unscoped_quota = {
+        "ok": True,
+        "goal_id": "peer-goal",
+        "state": "eligible",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+        "reason": (
+            "coordination.registered_agents is configured for peer_v1, "
+            "but quota should-run was called without --agent-id"
+        ),
+        "recommended_action": (
+            "Regenerate each installed heartbeat with its registered --agent-id, "
+            "then rerun quota should-run with the same identity."
+        ),
+        "heartbeat_recommendation": {
+            "recommended_mode": "automation_prompt_upgrade",
+        },
+    }
+    scoped_quota = {
+        "ok": True,
+        "goal_id": "peer-goal",
+        "state": "eligible",
+        "should_run": True,
+        "normal_delivery_allowed": True,
+        "agent_identity": {"agent_id": "review-b", "registered": True},
+        "selected_todo": {
+            "todo_id": "todo-review-b",
+            "status": "open",
+            "priority": "P1",
+            "text": "Review exact PR queue.",
+        },
+        "agent_lane_next_action": {
+            "todo_id": "todo-review-b",
+            "status": "open",
+            "agent_id": "review-b",
+            "text": "Review exact PR queue.",
+        },
+        "recommended_action": "Review exact PR queue.",
+    }
+
+    def build_quota(_status, *, goal_id, agent_id=None):
+        assert goal_id == "peer-goal"
+        return unscoped_quota if agent_id is None else scoped_quota
+
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", build_quota)
+
+    payload = summary_all.build_summary_all(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        agent_id=None,
+        time_range="24h",
+        limit=5,
+    )
+
+    assert len(payload["lanes"]) == 1
+    assert payload["lanes"][0]["agent_id"] == "review-b"
+    assert payload["lanes"][0]["top_todo_id"] == "todo-review-b"
+    assert payload["lanes"][0]["next_safe_action"] == "Review exact PR queue."
