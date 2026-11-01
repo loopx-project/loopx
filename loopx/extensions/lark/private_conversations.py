@@ -224,7 +224,21 @@ class LarkPrivateConversations:
         for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
             row = _read_json(path)
             entry = health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
-            if row["status"] != "delivered":
+            pending = row["status"] != "delivered"
+            if (not pending and path.parent == self.root
+                    and row.get("session_id") and row.get("turn_id")):
+                # Delivery of a quota-failure notice does not finish the user's
+                # request. Read only the existing Core correlation and Turn;
+                # recovery eligibility, allowance and effects still belong to
+                # the original worker's fresh admission checks.
+                native = self.core.read_request(row["request_ref"])
+                if (native.get("status") == "accepted" and native.get("command") is None
+                        and all(native.get(key) == row.get(key) for key in
+                            ("binding_id", "source", "session_id", "turn_id"))):
+                    turn = self.core.controller.store.load_turn(row["session_id"], row["turn_id"])
+                    pending = bool(turn and turn.get("status") == "failed"
+                                   and turn.get("error_code") == "usage_limit_exceeded")
+            if pending:
                 entry["pending_count"] += 1
                 entry["recovery_count"] += int(any(phase.get("started") and not phase.get("verified")
                                                    for phase in row["deliveries"].values()))

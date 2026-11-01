@@ -566,6 +566,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted recovery Turn"),
       session_id: current.session_id, native_thread_ids: []};
   }
+  // A later source stop vetoes new execution. Correlation repair for an
+  // already admitted Turn above remains read-only and keeps its exact identity.
+  if (recovery.stop_observed === true) return no;
   const routing = planRoutingRecovery(recovery, row, current, failed, previous, version);
   if (routing !== null) return routing;
   if (!steward) return no;

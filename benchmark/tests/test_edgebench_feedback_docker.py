@@ -325,7 +325,10 @@ def test_sforge_trial_deadline_requires_execution_entry(tmp_path, agent_image, m
                 assert backend.exec_run(handle, ["test", "-f", "/tmp/solver-entered"]).exit_code != 0
             trial = tmp_path / name
             trial.mkdir()
-            _write_native_final_result(trial, RunResult(runtime_seconds=observed.elapsed_seconds),
+            result = RunResult(runtime_seconds=observed.elapsed_seconds)
+            if hasattr(result, "grading_status"):
+                result.grading_status = "complete"
+            _write_native_final_result(trial, result,
                 status=status, agent="fixture", task="fixture", run_id=name, model="fixture", effort="xhigh")
             assert (trial / "final_result.json").exists() is (expected_status == "terminal")
     finally:

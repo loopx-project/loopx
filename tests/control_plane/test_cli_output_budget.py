@@ -689,6 +689,8 @@ def _mode_variant_commands(
         + ["todo", "list", "--goal-id", GOAL_ID, "--limit", "3"],
         "todo_list_thin": common
         + ["todo", "list", "--goal-id", GOAL_ID, "--thin"],
+        "todo_list_summary": common
+        + ["todo", "list", "--goal-id", GOAL_ID, "--summary"],
     }
 
 
@@ -747,6 +749,7 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_full",
         "todo_list_limited",
         "todo_list_thin",
+        "todo_list_summary",
     }
     assert set(CLI_OUTPUT_MODE_VARIANT_BY_ID) == expected_variants
     assert manifest["mode_variant_count"] == len(expected_variants)

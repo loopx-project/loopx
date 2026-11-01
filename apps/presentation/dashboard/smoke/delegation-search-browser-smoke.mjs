@@ -1,6 +1,7 @@
-// Packaged Chat and real SQLite/Inbox; synthetic data, no model or external effects.
+// Packaged Chat and real File/SQLite Inbox; synthetic data, no model or external effects.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {createInterface} from 'node:readline';
@@ -12,8 +13,10 @@ await mkdir(output, {recursive: true});
 const fixturePath = resolve(repo, 'examples/personal-workspace-browser/steward_requests_fixture.py');
 const command = testPythonCommand(`import runpy; runpy.run_path(${JSON.stringify(fixturePath)}, run_name="__main__")`, {repoRoot: repo});
 const child = spawn(command.command, [...command.args, '--status-file', resolve(repo, 'examples/status.example.json'),
+  '--long-history', '--canonical-storage', process.env.LOOPX_REQUEST_STORAGE ?? 'sqlite',
   ...(process.env.LOOPX_SEARCH_ASSETS ? ['--assets-dir', process.env.LOOPX_SEARCH_ASSETS] : [])],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: '0'}, stdio: ['pipe', 'pipe', 'pipe']});
+const exited = once(child, 'exit');
 let stderr = '';
 child.stderr.on('data', value => stderr += value);
 const queue = [], waiting = [];
@@ -62,9 +65,53 @@ try {
     await rows(1);
     assert.equal(await trigger.getAttribute('aria-label'), '委派，13 条待跟进');
     await dialog.locator('.conversation-request-row > summary').click();
-    await dialog.getByText('原对话', {exact: true}).click();
-    await dialog.locator('.conversation-request-detail article').first().waitFor();
+    const original = dialog.getByText('原对话', {exact: true});
+    const articles = dialog.locator('.conversation-request-detail article');
+    // Workspace startup may attempt Session admission with this synthetic
+    // executor. It is rejected by the fixture. The original reader must add
+    // no writes of its own; keep that boundary distinct from startup.
+    const beforeOriginal = await fixture('inspect'), originalWrites = writes.length;
+    await fixture('history-corrupt'); await original.click();
+    await dialog.getByRole('alert').waitFor();
+    assert.equal(await articles.count(), 0, 'A damaged original must not look like a complete conversation');
+    await page.screenshot({path: resolve(output, 'original-unavailable.png')});
+    await fixture('history-recover'); await original.click();
+    let releaseHistory, sawHistory;
+    let historyMode = 'hold';
+    const seenHistory = new Promise(resolve => sawHistory = resolve);
+    await page.route(`**/api/chat/sessions/${ready.session_id}?*`, async route => {
+      if (!new URL(route.request().url()).searchParams.has('message_cursor')) return route.continue();
+      if (historyMode === 'fault') return route.fulfill({status: 503, json: {ok: false}});
+      const response = await route.fetch();
+      if (historyMode === 'hold') {sawHistory(); await new Promise(resolve => releaseHistory = resolve);}
+      return route.fulfill({response}).catch(() => {});
+    });
+    await original.click(); await seenHistory;
+    assert.equal(await articles.count(), 0, 'Do not show the first-page question before reading its second-page answer');
+    releaseHistory(); historyMode = 'normal';
+    await articles.nth(1).waitFor();
+    const body = '核对账单导出的字段映射\n\n' + '完整原始要求。Original evidence. '.repeat(600) + '完整正文结束。';
+    assert.equal(await articles.first().locator(':scope > .personal-md').innerText(), body);
+    assert.equal(await articles.count(), 2, 'Both original messages appear once, without unrelated Turns');
     await page.screenshot({path: resolve(output, 'search-original.png')});
+    await page.setViewportSize({width: 390, height: 844});
+    await articles.nth(1).scrollIntoViewIfNeeded();
+    assert.ok(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    await page.screenshot({path: resolve(output, 'original-narrow-end.png')});
+    await page.setViewportSize({width: 1440, height: 1000});
+    await original.click(); historyMode = 'fault'; await original.click();
+    await dialog.getByRole('alert').waitFor(); assert.equal(await articles.count(), 0);
+    await original.click(); historyMode = 'normal'; await original.click(); await articles.nth(1).waitFor();
+    await original.click(); historyMode = 'hold';
+    const lateHistory = new Promise(resolve => sawHistory = resolve);
+    await original.click(); await lateHistory; await original.click();
+    releaseHistory(); historyMode = 'normal';
+    assert.equal(await articles.count(), 0, 'Closing cancels the full read, including its held later page');
+    await original.click(); await articles.nth(1).waitFor();
+    await page.unroute(`**/api/chat/sessions/${ready.session_id}?*`);
+    const afterOriginal = await fixture('inspect');
+    assert.equal(afterOriginal.posts, beforeOriginal.posts);
+    assert.deepEqual(writes.slice(originalWrites), [], 'Reading, retrying and closing originals cannot submit an operation');
     await search('no matching request'); await settled();
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();
     await dialog.getByRole('button', {name: '清空', exact: true}).click(); await settled();
@@ -86,6 +133,12 @@ try {
     await page.screenshot({path: resolve(output, 'read-failure.png')});
     await fixture('recover'); await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
     await rows(4);
+    const inspected = await fixture('inspect');
+    assert.equal(inspected.source_unchanged, true);
+    assert.equal(inspected.chat_unchanged, true);
+    assert.equal(inspected.posts, beforeOriginal.posts);
+    assert.equal(inspected.turn_count, 13, 'Reading original pages cannot execute another Turn');
+
     await fixture('local-source-unavailable');
     const denied = await fetch(`${ready.origin}/api/chat/request-inventory?session_id=${ready.session_id}`);
     assert.equal(denied.status, 400);
@@ -155,9 +208,19 @@ try {
     await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery, changed-snapshot More and read-only receipts.');
+    console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts; original-reader POST delta zero, Chat/receipt state unchanged and no new Turns.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}
   throw error;
-} finally {await browser?.close(); child.stdin.write('stop\n'); child.stdin.end();}
+} finally {
+  await page?.unrouteAll({behavior: 'ignoreErrors'});
+  await browser?.close(); child.stdin.end('stop\n');
+  let timer;
+  try {
+    const [code] = await Promise.race([exited, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error('Owned fixture did not stop')), 15000);
+    })]);
+    assert.equal(code, 0, stderr);
+  } finally {clearTimeout(timer);}
+}

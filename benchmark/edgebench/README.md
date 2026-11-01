@@ -308,9 +308,18 @@ do not publish `final_result.json`. Keep their captures and failure evidence;
 do not count an initial artifact's score as a solver outcome.
 For native Goals with positive runtime, `partial_result.json` preserves the full
 scoring result and its `runtime_status` / `native_goal_outcome` without making
-SForge's visualizer count the attempt as done. Handled terminal stops retain
-`final_result.json`; its presence does not independently qualify a score. Use
-new source pins for new attempts and leave frozen histories unchanged; see the
+SForge's visualizer count the attempt as done. A handled terminal stop records
+completed execution, not necessarily completed grading. When the native result
+includes `grading_status`, only `complete` permits `final_result.json`; explicit
+`pending`, `unknown` or other values remain in `partial_result.json`, preserving
+the native grading reason, scores and `runtime_status: terminal`. The report
+exporter also rejects explicit incomplete grading, including older attempts that
+already wrote a final marker. Sources predating `grading_status` retain their
+existing completion behavior; absence does not add a new grading attestation.
+Result publication does not rescore submissions, replace the current final
+archive with a historical best, or rewrite native history. A final marker still
+does not independently qualify a score. Use new source pins for new attempts and
+leave frozen histories unchanged; see the
 [native outcome contract](../runtime/RUNTIME.md) for rollback and classification.
 
 New native archive-submission trials default to **no periodic auto-evaluation**

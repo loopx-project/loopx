@@ -456,6 +456,12 @@ ceiling); if metadata cannot fit, recovery retains the current capture. Reader
 pages remain independently bounded. A complete raw tool log is not proof that
 the Host retained the same bytes in model history.
 
+File references carry the original path, digest and budgeted reader command;
+the outer view supplies navigation. The first bounded full-file page supplies
+the complete paging and truncation-recovery instructions, including when read
+directly by capture/hash in a fresh shell. Selected pages keep their scoped
+read instructions. Historical unbounded page responses retain their wire shape.
+
 The native codec's `captured_file` basis verifies the previous full file and
 compares exact versions, including unchanged control fields. It does not depend
 on a full read, page EOF, a model ACK or a retained-input claim. Goal, Agent,
@@ -748,6 +754,10 @@ SSH Goal 使用 `--runtime-profile codex_app_ssh_goal` 生成 context-config 和
 元数据仍放不下时保留当前捕获恢复入口。读取页另受输出预算约束。
 原始工具日志完整，不证明宿主保留给模型的字节也完整。
 
+文件引用保留原始路径、摘要和遵循预算的读取命令；外层视图提供导航。首个有界全文
+分页返回完整的分页与截断恢复说明，直接在新 shell 中按 capture/hash 读取也一样。
+选读页仍提供其作用域内的读取说明；历史无界分页响应保留原有 wire 结构。
+
 原生 `captured_file` 基线来自校验后的前一完整文件，可差分复用所有未变字段，包括
 控制字段；不依赖通读、EOF、模型 ACK 或保留输入声明。Goal、Agent、会话、surface、
 投影版本、配置 generation 和上下文 epoch 仍隔离；压缩后下一个新 Turn 建立完整
@@ -856,6 +866,12 @@ known pointer does not require another index round trip. Batch within the combin
 output budget, avoid overlapping parent/child selections, and inspect a missing
 pointer's parent before retrying the rejected batch. These are caller guidelines;
 selection validation, required reads and authority checks remain unchanged.
+When it fits the existing native-reference output ceiling, `field_index` supplies
+the complete top-level index of the current recovery capture. Its pointers,
+types, byte sizes and member counts match `context-read --list`; it contains no
+field bodies and never proves they were read. Select those pointers through
+`recovery.command`; a delta's `command` still addresses its patch. Oversized
+indexes are omitted whole, leaving `index_command` and full recovery available.
 Selection errors identify the original `--select` argument and, for a failed
 lookup, its token position (both 1-based). Sorting and duplicate elimination do
 not renumber arguments. Inspect the resolved prefix before that token in the
@@ -906,6 +922,10 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 发现多层字段。深度默认为 1，可选 1–8；需要更深时选择新的父节点继续。这只限制
 单次遍历深度，不限制 capture 容量或可读正文。优先展开相关子树，省略路径才从根开始。
 生成的读取指引会提示上述选择，不把查目录变成前置步骤，也不改变工作前的必读要求。
+在原生引用的现有输出上限允许时，`field_index` 直接提供当前 recovery capture 的完整
+顶层目录，其 pointer、类型、字节数和成员数与 `context-read --list` 一致。目录不含
+正文，也不证明已阅读；通过 `recovery.command` 选读这些路径，delta 的 `command`
+仍指向补丁。过大目录整体省略，保留 `index_command` 与完整恢复路径。
 普通 capture 回复、原生持久配置与压缩后恢复携带同一份选择指引。恢复命令直接指向
 `--select`，已知路径无须多查一轮目录。按合计输出预算分批，避免同时选择父节点和
 子节点；路径缺失时先查其父节点，再重试被拒绝的批次。这些是调用建议，不改变

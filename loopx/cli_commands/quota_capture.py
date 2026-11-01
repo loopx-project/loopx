@@ -59,7 +59,11 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
             result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
                 "Offsets and EOF describe only this selected view. Follow next_command to finish it; "
                 "keep both digests. Detail delivery does not establish a full-context baseline or grant authority.")
-        elif instruction:
+        elif instruction or (offset == 0 and output_limit is not None):
+            # A digest-bound native reference may be read in a fresh shell
+            # without its session lookup. Deliver paging obligations with the
+            # first bounded page rather than repeating them in file metadata.
+            # Historical unbounded readers retain their exact wire shape.
             result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
@@ -89,6 +93,24 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
     if best is None:
         raise ValueError("max-page-output-bytes cannot fit page metadata and one UTF-8 character; increase the limit for this same capture")
     return best
+
+
+def _context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize metadata for TS-verified addresses, preserving Python JSON values."""
+    fields = []
+    for child in children:
+        value: Any = payload
+        for key in child["path"]:
+            value = value[key]
+        field = {"pointer": child["pointer"], "type":
+            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
+            else "null" if value is None else "boolean" if isinstance(value, bool)
+            else "string" if isinstance(value, str) else "number",
+            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
+        if isinstance(value, (dict, list)):
+            field["count"] = len(value)
+        fields.append(field)
+    return fields
 
 
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
@@ -163,20 +185,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 for key in item["path"]:
                     selected = selected[key]
                 if list_fields:
-                    fields = []
-                    for child in item["children"]:
-                        value = payload
-                        for key in child["path"]:
-                            value = value[key]
-                        field = {"pointer": child["pointer"], "type":
-                            "object" if isinstance(value, dict) else "array" if isinstance(value, list)
-                            else "null" if value is None else "boolean" if isinstance(value, bool)
-                            else "string" if isinstance(value, str) else "number",
-                            "bytes": len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))}
-                        if isinstance(value, (dict, list)):
-                            field["count"] = len(value)
-                        fields.append(field)
-                    views.append({"pointer": item["pointer"], "fields": fields})
+                    views.append({"pointer": item["pointer"], "fields": _context_index_fields(payload, item["children"])})
                 else:
                     views.append({"pointer": item["pointer"], "value": selected})
             view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
@@ -213,6 +222,18 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         return result
 
 
+def _capture_read_reference(value: dict[str, Any], *, page_bytes: int,
+                            output_bytes: int) -> dict[str, str]:
+    """Keep file identity and the budgeted reader at the transport boundary.
+
+    Navigation lives on the outer view; complete paging obligations accompany
+    the actual reader response. Neither belongs in every nested file reference.
+    """
+    return {"path": value["path"], "sha256": value["sha256"],
+        "command": context_capture_read_command(Path(value["path"]), value["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
+
+
 def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
                                 context_directory: str | None = None,
                                 metadata: dict[str, Any] | None = None,
@@ -242,24 +263,20 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     if max_page_output_bytes is not None:
         output_bytes = min(output_bytes, max_page_output_bytes)
         page_bytes = min(page_bytes, output_bytes)
-    reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
-        page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+    reference = _capture_read_reference(reference, page_bytes=page_bytes, output_bytes=output_bytes)
     result = {"ok": True, **(metadata or {}), "mode": mode, **reference,
         **({"target": target} if target else {})}
-    if max_page_output_bytes is not None and isinstance(result.get("recovery"), dict):
-        recovery = result["recovery"]
-        result["recovery"] = {**recovery, "command": context_capture_read_command(
-            Path(recovery["path"]), recovery["sha256"], page_bytes=page_bytes,
-            max_page_output_bytes=output_bytes)}
+    if isinstance(result.get("recovery"), dict):
+        result["recovery"] = _capture_read_reference(result["recovery"],
+            page_bytes=page_bytes, output_bytes=output_bytes)
     # Persist first. A normal guard returns a small reference, never an eager
     # page that can be cut by an unrelated Host/history budget. The optional
     # delta remains readable in full; navigation always addresses current facts.
     current = projected.get("recovery") if projected.get("schema_version") == "context_delivery_v1" else reference
     current = current or reference
     current_path = Path(current["path"])
-    result.setdefault("recovery", {"path": str(current_path), "sha256": current["sha256"],
-        "command": context_capture_read_command(current_path, current["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes)})
+    result.setdefault("recovery", _capture_read_reference(current,
+        page_bytes=page_bytes, output_bytes=output_bytes))
     current_raw = current_path.read_bytes()
     current_document = json.loads(current_raw)
     if projected.get("continuity_basis") == "captured_file":
@@ -283,6 +300,24 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
     # The reference must fit even under an explicit small caller ceiling.
     def fits():
         return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
+    # The same complete top-level index as `context-read --list`, bound to
+    # recovery (current facts), not a delta's patch keys. This saves an index
+    # tool roundtrip when it fits; it neither supplies source contents nor
+    # acknowledges their delivery. Deeper navigation keeps its existing route.
+    from ..control_plane.quota.turn_envelope import _turn_envelope_result
+
+    # Depth-one addressing needs keys only, not another transport of every
+    # source body. Metadata bytes/types are read from the original JSON below.
+    try:
+        plan = _turn_envelope_result("context_select", context=dict.fromkeys(current_document), select=[""], list_fields=True)
+    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+        # An optional index cannot turn a valid immutable file reference into
+        # a failed delivery. Ordinary full recovery remains a file-only read.
+        pass
+    else:
+        result["field_index"] = _context_index_fields(current_document, plan["selections"][0]["children"])
+        if not fits():
+            result.pop("field_index")  # Optional metadata must never displace recovery or instructions.
     if not fits():
         result.pop("overview")
     if not fits():
@@ -350,14 +385,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             output_bytes = min(output_bytes, output_limit)
             page_bytes = min(page_bytes, output_bytes)
 
-        def recovery_reference(value: dict[str, Any]) -> dict[str, str]:
-            # Preserve the caller's read budget on success and failure without
-            # duplicating instructions already carried by the outer view.
-            return {"path": value["path"], "sha256": value["sha256"],
-                "command": context_capture_read_command(Path(value["path"]), value["sha256"],
-                    page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
-
-        full_reference = recovery_reference(full_reference)
+        full_reference = _capture_read_reference(full_reference,
+            page_bytes=page_bytes, output_bytes=output_bytes)
         reference = dict(full_reference)
         directory = codex_context_directory(directory=args.codex_context_dir,
             root=args.codex_context_root, create=True)
@@ -388,7 +417,8 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
             # Native publication owns the complete required view. Keep its
             # committed recovery even if optional wire/inline delivery fails;
             # the input capture digest below remains the original identity.
-            full_reference = recovery_reference(projected["recovery"])
+            full_reference = _capture_read_reference(projected["recovery"],
+                page_bytes=page_bytes, output_bytes=output_bytes)
             reference = dict(full_reference)
         native_view = native_context_capture_view(projected, cache, context_directory=directory,
             metadata={"recovery": full_reference, "capture_sha256": args.capture_sha256,

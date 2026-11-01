@@ -206,9 +206,13 @@ The EdgeBench adapter carries this outcome through artifact collection into
 `runtime_status` and `native_goal_outcome`. Failed, cancelled, usage-limited and
 unknown native outcomes do not publish `final_result.json`: existing SForge
 consumers use that file as a completion marker without interpreting the outcome
-labels. Handled terminal stops retain the existing final-result behavior;
-neither artifact grants result qualification. Ordinary non-native profile
-handling is unchanged. Adopt this behavior only for newly pinned attempts;
+labels. A handled terminal stop completes execution; explicit native grading
+must also be `complete` to publish a final result. Pending or unknown grading
+retains its scores and reason in a partial result, including for ordinary
+non-native profiles. Sources that omit `grading_status` retain the legacy
+publication behavior. Neither artifact grants result qualification; see the
+[EdgeBench result publication rules](../edgebench/README.md) for export behavior.
+Adopt this behavior only for newly pinned attempts;
 frozen histories retain their original receipts and require explicit post-run
 classification. Roll back by pinning the previous source for another new attempt,
 not by renaming artifacts in a frozen run.
@@ -414,6 +418,34 @@ Staging uses Harbor upload/exec methods, without Docker-label container discover
 Backend-specific networking stays in the benchmark's native launcher.
 
 ## Results, timeout and recovery
+
+### Live session observation
+
+Frequent capacity and liveness polls may use
+`benchmark.runtime.session_observation.observe_codex_session_tail`. It reads at
+most the final 16 MiB of a live rollout by default, keeps only complete JSONL
+records, and returns content-free event counts, the latest cumulative token
+snapshot, timestamps, and framing diagnostics. Structured terminal provider
+failures reuse the same record framing through `provider_failure.py`; free-text
+errors are not classified as rate limits. The observation does not return prompts,
+assistant messages, tool output, error text, session ids, model ids, or local
+paths.
+
+An external controller can call the same path without importing benchmark code:
+
+```sh
+python -m benchmark.runtime.session_observation /explicit/session/rollout.jsonl
+```
+
+The rollout path is selected by the isolated runner/controller and is never
+echoed into the observation. The module is not loaded or invoked by ordinary
+workers unless a controller explicitly runs this command.
+
+This bounded tail is an operational signal, not an accounting or integrity
+source. Exact usage booking continues to stream the complete explicitly bound
+rollout through `read_codex_session_usage`; trajectory conversion and benchmark
+integrity continue to use their existing complete artifacts. A missing usage
+event in the bounded tail remains unknown rather than becoming zero.
 
 Private per-wake receipts distinguish process success, Turn settlement and
 native benchmark results. Sessions are collected once per native filename;

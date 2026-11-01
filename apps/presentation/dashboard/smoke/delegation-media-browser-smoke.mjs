@@ -2,6 +2,7 @@
 // This checks the packaged reader, not multimodal execution or message delivery.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {createInterface} from 'node:readline';
@@ -17,6 +18,7 @@ const child = spawn(command.command, [...command.args, '--status-file', resolve(
   '--requests', '61',
   ...(process.env.LOOPX_MEDIA_ASSETS ? ['--assets-dir', process.env.LOOPX_MEDIA_ASSETS] : [])],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: '0'}, stdio: ['pipe', 'pipe', 'pipe']});
+const exited = once(child, 'exit');
 let stderr = '';
 child.stderr.on('data', value => stderr += value);
 const queue = [], waiting = [];
@@ -57,7 +59,7 @@ try {
   });
   let mode = 'images', release, observed;
   const body = '这是原请求的完整正文。Original request evidence. '.repeat(80) + '完整正文结束。';
-  await page.route(`**/api/chat/sessions/${ready.session_id}`, async route => {
+  await page.route(url => url.pathname === `/api/chat/sessions/${ready.session_id}`, async route => {
     assert.equal(route.request().method(), 'GET');
     if (mode === 'unavailable') return route.fulfill({status: 503, json: {ok: false}});
     const response = await route.fetch(), value = await response.json();
@@ -70,6 +72,7 @@ try {
     if (mode === 'broken') source.attachments = [image('broken', '不可读图片.png', 'data:image/png;base64,AA==')];
     value.messages.push({...source, message_id: 'other-turn', turn_id: 'other-turn', text: 'Other turn must stay hidden.',
       attachments: [image('foreign', 'Foreign turn image.png')]});
+    if (value.message_page) value.message_page.total += 1;
     if (mode === 'wrong-session') value.session.session_id = 'foreign-session';
     if (mode === 'delayed') {observed(); await new Promise(resolve => release = resolve);}
     await route.fulfill({response, json: value}).catch(() => {});
@@ -253,4 +256,13 @@ try {
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}
   throw error;
-} finally {await page?.unrouteAll({behavior: 'ignoreErrors'}); await browser?.close(); child.stdin.write('stop\n'); child.stdin.end();}
+} finally {
+  await page?.unrouteAll({behavior: 'ignoreErrors'}); await browser?.close(); child.stdin.end('stop\n');
+  let timer;
+  try {
+    const [code] = await Promise.race([exited, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error('Owned fixture did not stop')), 15000);
+    })]);
+    assert.equal(code, 0, stderr);
+  } finally {clearTimeout(timer);}
+}

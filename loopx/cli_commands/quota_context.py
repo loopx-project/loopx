@@ -314,6 +314,7 @@ def prepare_quota_command_context(
             max_age_seconds=projection_cache_ttl_seconds,
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
+            include_presentation_projections=False,
         )
         if (
             status_payload is not None
@@ -344,6 +345,7 @@ def prepare_quota_command_context(
             goal_id=status_goal_id,
             available_capabilities=args.available_capabilities,
             agent_lane_id=args.agent_id,
+            include_presentation_projections=False,
         )
         if bool(getattr(args, "write_projection_cache", False)):
             cache_metadata = write_status_projection_cache(
@@ -356,6 +358,7 @@ def prepare_quota_command_context(
                 max_age_seconds=projection_cache_ttl_seconds,
                 available_capabilities=args.available_capabilities,
                 agent_lane_id=args.agent_id,
+                include_presentation_projections=False,
             )
     elif isinstance(status_payload.get("projection_cache"), dict):
         cache_metadata = dict(status_payload["projection_cache"])

@@ -4,7 +4,7 @@ import math
 from datetime import timedelta
 from typing import Any, Callable
 
-from .ledger_readback import net_quota_slot_spend, quota_slot_contribution
+from .ledger_readback import net_quota_slot_spend, quota_slot_observation
 from .spend_sources import VISIBLE_GOAL_SLOT_SPEND_SOURCE
 from .usage_collector import UsageRowError, UsageSample, collect_usage_for_run
 from ..runtime.time import now_utc
@@ -182,7 +182,7 @@ def build_usage_summary(
             continue
         goal_id = str(run.get("goal_id") or "unknown-goal")
         goal = goals.setdefault(goal_id, blank_usage_goal(goal_id))
-        slot_contribution = quota_slot_contribution(run)
+        slot_contribution, unreadable_reason = quota_slot_observation(run)
         automation_event = is_automation_run(run)
         progress_signal = is_progress_signal_run(run)
         # Present-but-illegal usage fails closed inside collect_usage_for_run.
@@ -192,7 +192,13 @@ def build_usage_summary(
         if generated_at >= cutoff_7d:
             totals["runs_7d"] += 1
             goal["runs_7d"] += 1
-            if slot_contribution is not None:
+            if unreadable_reason is not None:
+                # The summary must not report a spend it cannot read back as a
+                # zero-spend run; the integrity failure is reported next to
+                # the slots that were readable.
+                totals["unreadable_event_count_7d"] = totals.get("unreadable_event_count_7d", 0) + 1
+                goal["unreadable_event_count_7d"] = goal.get("unreadable_event_count_7d", 0) + 1
+            elif slot_contribution is not None:
                 kind, run_key, slots = slot_contribution
                 slot_contributions_7d.append(((goal_id, run_key), kind, slots))
             if automation_event:
@@ -207,7 +213,10 @@ def build_usage_summary(
         if generated_at >= cutoff_24h:
             totals["runs_24h"] += 1
             goal["runs_24h"] += 1
-            if slot_contribution is not None:
+            if unreadable_reason is not None:
+                totals["unreadable_event_count_24h"] = totals.get("unreadable_event_count_24h", 0) + 1
+                goal["unreadable_event_count_24h"] = goal.get("unreadable_event_count_24h", 0) + 1
+            elif slot_contribution is not None:
                 kind, run_key, slots = slot_contribution
                 slot_contributions_24h.append(((goal_id, run_key), kind, slots))
             if automation_event:

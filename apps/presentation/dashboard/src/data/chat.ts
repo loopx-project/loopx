@@ -971,22 +971,31 @@ const chatMessagePageSchema = z.object({
 });
 
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
-async function fetchChatSessionHistory(session: ChatSessionSummary): Promise<ChatSessionSnapshot> {
+export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal): Promise<ChatSessionSnapshot> {
+  const sessionId = typeof session === "string" ? session : session.session_id;
+  // A delegation has the original Session ID; pin its first verified page's
+  // scope. History discovery callers keep validating against their own source.
+  let expectedSession = typeof session === "string" ? undefined : session;
   let first: ChatSessionSnapshot | undefined, cursor: string | null = null;
   let total: number | undefined, digest: string | undefined;
   const messages: ChatVisibleMessage[] = [], cursors = new Set<string>(), ids = new Set<string>();
   do {
+    signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
-      `/api/chat/sessions/${encodeURIComponent(session.session_id)}?${query}`, {signal: AbortSignal.timeout(5000)});
-    const sameSource = snapshot.session?.session_id === session.session_id &&
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)});
+    signal?.throwIfAborted();
+    const expected = expectedSession;
+    const sameSource = snapshot.session?.session_id === sessionId && (!expected || (
       (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
-        .every(key => (snapshot.session[key] ?? null) === (session[key] ?? null)) &&
-      (snapshot.session.session_mode ?? "managed_runtime") === (session.session_mode ?? "managed_runtime");
+        .every(key => (snapshot.session[key] ?? null) === (expected[key] ?? null)) &&
+      (snapshot.session.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime")));
     if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || !sameSource || !Array.isArray(snapshot.messages)) {
       throw new Error("The original Session scope changed during history read.");
     }
+    expectedSession ??= snapshot.session;
     // Older services return their complete v1 snapshot for this read. A later
     // page cannot silently lose the cursor contract and masquerade as complete.
     if (!Object.hasOwn(snapshot, "message_page")) {

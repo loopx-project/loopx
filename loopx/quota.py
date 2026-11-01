@@ -62,10 +62,12 @@ from .control_plane.quota.settlement import (
     settlement_result_payload,
 )
 from .control_plane.quota.ledger_readback import (
+    QUOTA_EVENT_UNREADABLE_REASONS,
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
     net_quota_slot_spend,
-    quota_slot_contribution,
+    quota_slot_contribution,  # noqa: F401
+    quota_slot_observation,
 )
 from .control_plane.quota.spend_sources import (
     DEFAULT_SLOT_SPEND_SOURCE,
@@ -113,6 +115,7 @@ _PUBLIC_COMPAT_REEXPORTS = {
     "render_quota_markdown": "loopx.presentation.renderers.quota_markdown",
     "render_quota_scheduler_ack_markdown": "loopx.presentation.renderers.quota_markdown",
     "render_quota_should_run_markdown": "loopx.presentation.renderers.quota_markdown",
+    "quota_slot_contribution": "loopx.control_plane.quota.ledger_readback",
     "build_quota_slot_void_event": "loopx.control_plane.quota.void_commit",
     "record_quota_slot_void_from_preview": "loopx.control_plane.quota.void_commit",
     "render_quota_slot_preview_markdown": "loopx.presentation.renderers.quota_event_markdown",
@@ -366,6 +369,20 @@ def goal_quota_config(goal: dict[str, Any] | None) -> dict[str, Any]:
     }
     if raw.get("next_eligible_at"):
         payload["next_eligible_at"] = str(raw.get("next_eligible_at"))
+    # An unreadable quota event is a ledger integrity failure, not a spend of
+    # zero: the projection that read it reports the count, and every consumer
+    # of that projection has to fail closed instead of treating the spend as
+    # absent.
+    unreadable_event_count = _int_number(raw.get("unreadable_event_count"), default=0)
+    if unreadable_event_count > 0:
+        payload["unreadable_event_count"] = unreadable_event_count
+        # The count says how many events broke; the reasons say why, so the
+        # read-back can tell an operator which artifact to repair.
+        reasons = raw.get("unreadable_event_reasons")
+        if isinstance(reasons, list):
+            validated = sorted({str(reason) for reason in reasons if str(reason)})
+            if validated:
+                payload["unreadable_event_reasons"] = validated
     return payload
 
 
@@ -384,6 +401,8 @@ def goal_quota_with_spend_ledger(
     contributions: list[tuple[str, str, int]] = []
     spend_event_count = 0
     void_event_count = 0
+    unreadable_event_count = 0
+    unreadable_reasons: set[str] = set()
 
     for run in runs:
         if not isinstance(run, dict):
@@ -416,7 +435,14 @@ def goal_quota_with_spend_ledger(
             or generated_at > current_time
         ):
             continue
-        contribution = quota_slot_contribution(run)
+        contribution, unreadable_reason = quota_slot_observation(run)
+        if unreadable_reason is not None:
+            # The index row claims a spend or a void that cannot be read back.
+            # Counting it as no spend would silently hand the Goal fresh quota,
+            # so the event is reported as an integrity failure instead.
+            unreadable_event_count += 1
+            unreadable_reasons.add(unreadable_reason)
+            continue
         if contribution is None:
             continue
         kind, run_key, slots = contribution
@@ -429,6 +455,9 @@ def goal_quota_with_spend_ledger(
     payload["spent_slots"] = sum(net_quota_slot_spend(contributions).values())
     payload["spend_source"] = "runtime_events"
     payload["spend_event_count"] = spend_event_count
+    if unreadable_event_count:
+        payload["unreadable_event_count"] = unreadable_event_count
+        payload["unreadable_event_reasons"] = sorted(unreadable_reasons)
     if void_event_count:
         payload["void_event_count"] = void_event_count
     return payload
@@ -468,6 +497,20 @@ def quota_status(
     elif severity == "high":
         state = "blocked_health"
         reason = "health or contract blocker must clear before compute is spent"
+    elif int(payload.get("unreadable_event_count") or 0) > 0:
+        # The spend ledger cannot read back an indexed quota event, so the
+        # remaining quota is unknown. Failing open here would hand the Goal
+        # back the spend it already used, so the Goal blocks until the
+        # artifact is readable again.
+        state = "blocked_health"
+        reason = (
+            f"{int(payload['unreadable_event_count'])} quota ledger event(s) could not "
+            "be read back; the remaining quota is unknown and cannot be spent"
+        )
+        payload["blocked_action_scope"] = "automatic_agent_turns"
+        reasons = payload.get("unreadable_event_reasons")
+        if isinstance(reasons, list) and reasons:
+            payload["unreadable_event_reasons"] = list(reasons)
     elif waiting_on in {"user_or_controller", "controller"}:
         state = "operator_gate"
         reason = (
@@ -609,6 +652,76 @@ def _todo_summary_claim_scope_agent_id(summary: dict[str, Any]) -> str | None:
     return projection_todo_summary_claim_scope_agent_id(summary)
 
 
+def _unreadable_event_reasons(
+    quota: dict[str, Any],
+    ledger_quota: dict[str, Any] | None,
+) -> list[str]:
+    """Collect the validated reasons of the unreadable quota events.
+
+    The projection that read the ledger owns the reasons; a projection that
+    was built before the artifact broke may only have the count, so the ledger
+    payload is the fallback. The result is validated against the known reason
+    vocabulary so an unreadable reason cannot become free-form text in the
+    public projection.
+    """
+
+    reasons: set[str] = set()
+    for source in (quota, ledger_quota):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("unreadable_event_reasons")
+        if not isinstance(raw, list):
+            continue
+        for reason in raw:
+            text = str(reason or "").strip()
+            if text in QUOTA_EVENT_UNREADABLE_REASONS:
+                reasons.add(text)
+    return sorted(reasons)
+
+
+def _apply_unreadable_ledger_fail_closed(
+    quota: dict[str, Any],
+    *,
+    ledger_quota: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Keep an unreadable ledger event from reading as a spendable quota.
+
+    The plan layer can reuse a quota projection that was built before the
+    ledger event became unreadable, or reuse the raw ledger payload without
+    re-deriving its state. Either way the unreadable count is the authority:
+    the remaining quota is unknown, so the Goal must not look eligible.
+    """
+
+    unreadable_event_count = _int_number(quota.get("unreadable_event_count"), default=0)
+    if unreadable_event_count <= 0 and isinstance(ledger_quota, dict):
+        unreadable_event_count = _int_number(
+            ledger_quota.get("unreadable_event_count"), default=0
+        )
+    if unreadable_event_count <= 0:
+        return quota
+    reasons = _unreadable_event_reasons(quota, ledger_quota)
+    if str(quota.get("state") or "") == "blocked_health":
+        # The Goal is already blocked, but the reasons still have to reach the
+        # public projection: the count alone cannot say what to repair.
+        if not reasons:
+            return quota
+        blocked = dict(quota)
+        blocked["unreadable_event_count"] = unreadable_event_count
+        blocked["unreadable_event_reasons"] = reasons
+        return blocked
+    blocked = dict(quota)
+    blocked["state"] = "blocked_health"
+    blocked["reason"] = (
+        f"{unreadable_event_count} quota ledger event(s) could not "
+        "be read back; the remaining quota is unknown and cannot be spent"
+    )
+    blocked["blocked_action_scope"] = "automatic_agent_turns"
+    blocked["unreadable_event_count"] = unreadable_event_count
+    if reasons:
+        blocked["unreadable_event_reasons"] = reasons
+    return blocked
+
+
 def _quota_plan_goal_quota(
     *,
     attention: dict[str, Any],
@@ -661,7 +774,7 @@ def _quota_plan_goal_quota(
             lifecycle_flags=lifecycle_flags,
             status=status,
         )
-    return quota_with_handoff_outcome_floor(
+    quota = quota_with_handoff_outcome_floor(
         quota,
         waiting_on=waiting_on,
         project_asset=project_asset,
@@ -669,6 +782,8 @@ def _quota_plan_goal_quota(
         if isinstance(attention.get("handoff_readiness"), dict)
         else None,
     )
+    ledger_quota = goal.get("quota") if isinstance(goal.get("quota"), dict) else None
+    return _apply_unreadable_ledger_fail_closed(quota, ledger_quota=ledger_quota)
 
 
 def build_quota_plan(

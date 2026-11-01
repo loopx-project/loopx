@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import shlex
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +50,56 @@ def fixture_capture(tmp_path):
 def args(path, raw):
     return argparse.Namespace(**dict(capture_file=str(path), capture_sha256=hashlib.sha256(raw).hexdigest(),
         offset=0, page_bytes=256, max_page_output_bytes=2000, format="json", select=["/rows/0"]))
+
+
+def test_native_reference_reuses_the_exact_index_before_selecting_details(tmp_path):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+
+    original = {"requirements": {"text": "Preserve acceptance and stop conditions. " * 100},
+        "a/b~": [None, True, 9007199254740993], "nullable": None}
+    reference = native_context_capture_view(original, tmp_path)
+    parser = build_parser()
+    indexed = read_context_capture(parser.parse_args(shlex.split(reference["index_command"])[1:]))
+    assert indexed["ok"] and indexed["eof"]
+    assert reference["field_index"] == json.loads(indexed["content"])["selections"][0]["fields"]
+    assert [item["pointer"] for item in reference["field_index"]] == ["/requirements", "/a~1b~0", "/nullable"]
+    assert "Preserve acceptance" not in json.dumps(reference)
+    assert "content" not in reference and "eof" not in reference
+    assert capture_page_range(reference, raw=b"", digest=reference["sha256"]) is None
+    # The inline index replaces only discovery, never the content read.
+    selected = read_context_capture(parser.parse_args(shlex.split(reference["recovery"]["command"])[1:]
+        + ["--select", "/a~1b~0"]))
+    assert selected["ok"]
+    assert json.loads(selected["content"])["selections"][0]["value"] == original["a/b~"]
+
+
+def test_large_inline_index_is_omitted_whole_without_displacing_navigation(tmp_path):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+
+    original = {"field-" + str(index): {"preserve": index} for index in range(300)}
+    reference = native_context_capture_view(original, tmp_path)
+    assert "field_index" not in reference
+    assert "recovery" in reference and "index_command" in reference and "select_command" in reference
+    assert len(json.dumps(reference, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 7900
+    assert json.loads(Path(reference["recovery"]["path"]).read_text()) == original
+
+
+def test_unavailable_optional_index_keeps_file_only_recovery(tmp_path, monkeypatch):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from loopx.control_plane.effect_runtime import EffectRuntimeStartupError
+    from loopx.control_plane.quota import turn_envelope
+
+    def unavailable(*args, **kwargs):
+        raise EffectRuntimeStartupError("Synthetic typed runtime unavailable", diagnostic_code="fixture_unavailable")
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    original = {"requirements": "Keep every requirement and stop condition."}
+    reference = native_context_capture_view(original, tmp_path)
+    assert reference["ok"] and "field_index" not in reference
+    page = read_context_capture(build_parser().parse_args(shlex.split(reference["recovery"]["command"])[1:]))
+    assert page["ok"] and json.loads(page["content"]) == original
 
 
 def test_native_reference_reader_uses_real_pages_before_recording_delivery(tmp_path):

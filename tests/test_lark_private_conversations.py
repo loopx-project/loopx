@@ -241,6 +241,35 @@ def connect_group(fixture):
     return store, runtime, provider, transport
 
 
+@pytest.mark.parametrize("info, pending", [("usageLimitExceeded", 1), ("cyberPolicy", 0), (None, 0)])
+def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(ordinary, info, pending):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        f'"codexErrorInfo": "{info}"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    try:
+        event = provider.event("notes-app", "quota-pending",
+            "typed terminal failure" if info else "A normal successful request")
+        transport.admit("notes-app", event)
+        row = transport.core.pending()[0]
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert failed["status"] == ("failed" if info else "completed")
+        assert (failed["error_code"] == "usage_limit_exceeded") == bool(pending)
+        transport.reconcile()
+        saved = json.loads((transport.root / f"{row['request_ref']}.json").read_text())
+        assert saved["status"] == "delivered" and saved["deliveries"]["terminal"]["verified"]
+        assert transport.health()[row["binding_id"]]["pending_count"] == pending
+        before = ordinary[4].read_bytes(), list(provider.writes)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        assert restarted.health()[row["binding_id"]] == {"pending_count": pending, "recovery_count": 0}
+        assert (ordinary[4].read_bytes(), provider.writes) == before
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("fault", [None, "changed-source", "revoked", "stop", "unknown-native",
     "background", "later-user", "reservation-crash", "post-enqueue-crash", "queued-newer", "queued-input", "private-path", "still-incomplete"])
 def test_original_worker_continues_explicit_unfinished_project_work_once_after_restart(ordinary, monkeypatch, fault):  # noqa: F811

@@ -1086,6 +1086,12 @@ in its durable-writeback step, the replan contract uses a same-response
 Different schemas remain separate, and progress-only replan does not acquire a
 Vision requirement. TurnEnvelope preserves the ordinary plan's guidance.
 
+`checkpoint_context_not_missing` is an inapplicable recovery, not a request to
+repeat that read. Its `reread_required` is false. Preserve the committed writeback
+and quota receipt; inspect later authorized work through the normal guard with
+a fresh Turn identity. A stale, missing or replaced read receipt still requires
+the original scoped reread. Neither rejection grants execution or completion.
+
 Shared `todo plan` and guided-start authoring steps also provide a routed exact
 readback command for each authored or reused Todo id. Inventory text is a bounded
 excerpt. Verify `todo_detail_projection.source_complete=true`, compare `.todo.text`
@@ -1102,6 +1108,11 @@ calls, but lower model cost or better outcomes still require live measurement.
 Turn 写回后的恢复。规划与接续指引提供逐条精确读回命令，用完整 `.todo.text` 核对
 需求和当前状态，不能拿列表摘要判断正文丢失。读取不授予执行权限；准入、租约、
 恢复和单次记账规则保持不变。包体增量与模型效率、效果收益须分别测量。
+
+`checkpoint_context_not_missing` 表示这条恢复路径不适用，`reread_required=false`，
+不应重复同一读取。保留已提交写回与记账回执；后续获授权的工作通过正常 guard 和新
+Turn 身份检查。陈旧、缺失或被替换的读取回执仍须按原范围重读。拒绝不授予执行或
+完成权限。
 
 A satisfied checkpoint is protocol-complete, but a material closeout also has
 to qualify its relationship to the final outcome. A patched checkpoint must
