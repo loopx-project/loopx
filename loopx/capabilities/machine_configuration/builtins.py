@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 from .contract import MachineConfigurationNamespace, MachineConfigurationRegistry
@@ -80,6 +81,16 @@ def build_builtin_machine_configuration_registry() -> MachineConfigurationRegist
     return registry
 
 
+def read_builtin_goal_machine_configuration(runtime_root: Path) -> dict[str, Any] | None:
+    """Read the owners composed by project_goal_with_builtin_machine_configuration."""
+    from .store import read_machine_configuration
+
+    return read_machine_configuration(
+        runtime_root, registry=build_builtin_machine_configuration_registry(),
+        namespace_ids=("explore_harness", "todo_replan_cadence", "change_quality_qualification"),
+    )
+
+
 def project_goal_with_builtin_machine_configuration(
     goal: Mapping[str, Any],
     machine_configuration: Mapping[str, Any] | None,
@@ -135,6 +146,7 @@ def builtin_machine_inheritable_goal_overrides(
 
 __all__ = [
     "build_builtin_machine_configuration_registry",
+    "read_builtin_goal_machine_configuration",
     "builtin_machine_inheritable_goal_overrides",
     "project_goal_with_builtin_machine_configuration",
 ]

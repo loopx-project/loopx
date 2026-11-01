@@ -99,7 +99,9 @@ def apply_context_machine_options(
         from ..capabilities.machine_configuration.store import read_machine_configuration
 
         machine_registry = build_builtin_machine_configuration_registry()
-        configuration = read_machine_configuration(runtime_root, registry=machine_registry)
+        configuration = read_machine_configuration(
+            runtime_root, registry=machine_registry, namespace_ids=("context_delivery",),
+        )
         value = (configuration or {}).get("namespaces", {}).get("context_delivery")
         using_default = value is None
         if using_default:

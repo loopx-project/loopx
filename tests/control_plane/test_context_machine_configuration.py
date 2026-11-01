@@ -82,6 +82,33 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert not (runtime / "context-delivery").exists()
 
 
+@pytest.mark.parametrize("mode", ["on", "off"])
+def test_context_mode_does_not_depend_on_an_unrelated_executor(tmp_path, mode):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    path = runtime / "machine/configuration.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "context_delivery": {"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": mode},
+        "steward_executor": {"schema_version": "steward_executor_machine_defaults_v1",
+                             "executor_endpoint": "future_executor"},
+    }}))
+    original = path.read_bytes()
+    code, result = _run_cli(registry, runtime, "quota", "context-config", "--codex-app",
+        "--goal-id", "fixture", "--agent-id", "worker")
+    if mode == "on" and os.name != "posix":
+        assert code != 0 and "unsupported" in result["reason"], result
+    else:
+        assert code == 0, result
+        assert result["context_delivery"]["enabled"] is (mode == "on"), result
+    assert path.read_bytes() == original
+    assert not registry.exists()
+    assert not (runtime / "goals").exists()
+    if mode == "off":
+        assert not (runtime / "context-delivery").exists()
+    elif os.name == "posix":
+        assert (runtime / "context-delivery").stat().st_mode & 0o077 == 0
+
+
 @pytest.mark.parametrize("invalid", [True, False, None, 1, "auto", "codex_app_heartbeat"])
 def test_invalid_machine_mode_never_writes(tmp_path, invalid):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"

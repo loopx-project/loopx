@@ -441,10 +441,9 @@ def build_agent_onboarding_packet(
         {},
     )
     from .capabilities.machine_configuration.builtins import (
-        build_builtin_machine_configuration_registry,
+        read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .capabilities.machine_configuration.store import read_machine_configuration
     from .paths import resolve_runtime_root
 
     runtime_root = resolve_runtime_root(
@@ -453,10 +452,7 @@ def build_agent_onboarding_packet(
     )
     goal = project_goal_with_builtin_machine_configuration(
         goal,
-        read_machine_configuration(
-            runtime_root,
-            registry=build_builtin_machine_configuration_registry(),
-        ),
+        read_builtin_goal_machine_configuration(runtime_root),
     )
     active_project_skill_ids = (
         [CHANGE_QUALITY_SKILL_ID]
