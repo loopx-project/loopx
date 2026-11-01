@@ -210,7 +210,7 @@ class CheckpointWake:
             stream.close()  # No buffered writes: all input used the raw pipe.
 
     def run(self, execution, body, wake, session_wake, stdout, stderr, timeout, *, phase_limited=False):
-        from .worker import child_process, heartbeat_launch_check, native_command
+        from .worker import native_child_process, native_command
         from .sessions import BenchmarkSessionWake
 
         deadline = time.monotonic() + timeout if timeout is not None else float("inf")
@@ -223,10 +223,10 @@ class CheckpointWake:
                 raise subprocess.TimeoutExpired("checkpoint source wake", timeout)
             command = native_command(launch_env, execution, "execute", wake, session_wake)
             continuation = None
-            with child_process(command, env=launch_env, stdout=stdout, stderr=stderr,
-                               goal_admission=session_wake.admission if session_wake is not None else None,
-                               check_current_launch=heartbeat_launch_check(
-                                   launch_env, session_wake, original_quota=original_quota)) as process:
+            with native_child_process(command, env=launch_env, stdout=stdout, stderr=stderr,
+                    session_wake=session_wake, receipt=self.receipt, wake=wake,
+                    timeout=remaining if timeout is not None else None,
+                    original_quota=original_quota) as process:
                 self.receipt["host_invoked"] = True
                 self._write_input(process, body, command, deadline, timeout,
                                   phase_limited=phase_limited)
