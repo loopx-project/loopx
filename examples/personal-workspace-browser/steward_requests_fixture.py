@@ -1,50 +1,62 @@
-"""Disposable SQLite/Chat/Inbox journey; no model or external message execution.
+"""Disposable File/SQLite Chat/Inbox journey; no model or external message execution.
 
 Pass a public synthetic status file for whole-workspace visual review. Runtime
 availability is display-only fixture metadata; POSTs cannot execute it. Requests,
 decisions and return delivery below use the production owners in a temp runtime.
 Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
 deliver, source-unavailable, source-recover, local-source-unavailable,
-local-source-recover, stop. Window faults/returns apply
+local-source-recover, history-corrupt/history-recover (--long-history only), stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
 
 import argparse
 import copy
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 import hashlib
 from io import StringIO
 import json
+import os
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+import tempfile
 import threading
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
-
-from loopx.capabilities.manager_context import acknowledge, deliver
-from loopx.capabilities.manager_context.roundtrip import drain, report
-from loopx.capabilities.native_chat.transports import install_conversation_transports
-from loopx.chat_runtime import ChatRuntimeController
-from loopx.chat_action_store import ChatActionStore
-from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
-from loopx.chat_store import ChatSessionStore
-from loopx.cli import main as cli
-from loopx.control_plane.collaboration.inbox import _root
-from loopx.extensions.lark.cli_resolution import LarkCliResolution
-
 
 def main():
     args = argparse.ArgumentParser()
     args.add_argument("--status-file", type=Path, required=True)
-    args.add_argument("--assets-dir", type=Path, default=default_chat_assets_dir())
+    args.add_argument("--assets-dir", type=Path)
+    args.add_argument("--long-history", action="store_true")
+    args.add_argument("--canonical-storage", choices=("sqlite", "file"), default="sqlite")
     args.add_argument("--requests", type=int, default=13)
     selected = args.parse_args()
     if not 1 <= selected.requests <= 120:
         args.error("--requests must be between 1 and 120")
     status = json.loads(selected.status_file.read_text())
-    with TemporaryDirectory(prefix="loopx-steward-requests-") as directory:
+    with TemporaryDirectory(prefix="loopx-steward-requests-") as directory, ExitStack() as cleanup:
         root = Path(directory).resolve()
+        temporary = root / "process-temporary"
+        temporary.mkdir()
+        cleanup.enter_context(patch.dict(os.environ, {key: str(temporary) for key in ("TMPDIR", "TEMP", "TMP")}))
+        cleanup.enter_context(patch.object(tempfile, "tempdir", str(temporary)))
+        # Resolve owners only after isolating the process namespace. Retire its
+        # authenticated children before the directory or patches disappear.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+        from managed_effect_runtime_fixture import stop_disposable_effect_runtimes
+        from loopx.capabilities.manager_context import acknowledge, deliver
+        from loopx.capabilities.manager_context.roundtrip import drain, report
+        from loopx.capabilities.native_chat.transports import install_conversation_transports
+        from loopx.chat_runtime import ChatRuntimeController
+        from loopx.chat_action_store import ChatActionStore
+        from loopx.chat_server import ChatHTTPServer, ChatRequestHandler, default_chat_assets_dir
+        from loopx.chat_store import ChatSessionStore
+        from loopx.cli import main as cli
+        from loopx.control_plane.collaboration.inbox import _root
+        from loopx.extensions.lark.cli_resolution import LarkCliResolution
+        cleanup.callback(stop_disposable_effect_runtimes, root)
         runtime, registry = root / "runtime", root / "project/.loopx/registry.json"
         with redirect_stdout(StringIO()):
             code = cli(["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime),
@@ -54,13 +66,17 @@ def main():
                 "--acceptance", "Reviewed artifacts retain the correct versions", "--next-effect", "Inspect the artifact",
                 "--stop-condition", "Stop before external execution", "--goal-instance-profile", "source_session_v1",
                 "--operation-id", "synthetic-request-inventory", "--registered-agent", "builder",
-                "--registered-agent", "reviewer", "--canonical-storage", "sqlite"])
+                "--registered-agent", "reviewer", "--canonical-storage", selected.canonical_storage])
         if code:
             raise RuntimeError("Could not create isolated fixture")
         store = ChatSessionStore(runtime)
         session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
             upstream_thread_id="synthetic-steward", channel_id="manager",
             agent_model_id="gpt-6.1-sol", agent_reasoning_effort="xhigh")
+        if selected.long_history:
+            # The first delegated question and its answer straddle a real page.
+            for index in range(199):
+                store.append_message(session["session_id"], role="user", text=f"Earlier original message {index}")
         titles = ["核对账单导出的字段映射", "检查重复导出是否会生成重复记录", "复核历史账单的金额差异",
             "整理迁移后的回滚步骤", "补齐取消导出时的错误提示", "核对欧洲地区的税额精度",
             "检查超时后的安全重试", "复核下载文件中的版本信息", "检查月底跨时区的账期边界",
@@ -71,7 +87,9 @@ def main():
             if index >= len(titles):
                 title += f" · 记录 {index + 1}"
             target = {"goal_id": "billing-exports", "agent_id": "reviewer" if index % 3 == 2 else "builder"}
-            turn, _ = store.create_turn(session["session_id"], client_turn_id=f"synthetic-{index}", message=title, origin="web")
+            body = (title + "\n\n" + "完整原始要求。Original evidence. " * 600 + "完整正文结束。"
+                    if selected.long_history and index == 0 else title)
+            turn, _ = store.create_turn(session["session_id"], client_turn_id=f"synthetic-{index}", message=body, origin="web")
             brief = {"schema_version": "collaboration_brief_v0", "purpose": title,
                 "context": "账单导出正在迁移到统一接口，请沿现有工作核对这项要求，并保留失败与未知。",
                 "constraints": ["只检查本次产物；不发布、不联系外部人员。"], "inputs": [],
@@ -79,7 +97,6 @@ def main():
             receipt = deliver(runtime, registry, session=session, turn=turn, request={**target, "brief": brief}, source_store=store)
             if first_receipt is None:
                 first_receipt = receipt
-            store.append_message(session["session_id"], role="user", text=title, turn_id=turn["turn_id"], origin="web")
             store.append_message(session["session_id"], role="assistant", text="已交给负责的 Agent，等待它返回实际结论。",
                 turn_id=turn["turn_id"], origin="web")
             store.update_turn(session["session_id"], turn["turn_id"], status="completed", response={"context_handoff_receipt": receipt})
@@ -99,7 +116,7 @@ def main():
             def do_POST(self):
                 self.server.posts += 1
                 self._send_error("Read-only visual fixture", status=405)
-            def _status(self):
+            def _status(self, **_options):
                 self._send_json(status)
             def _goal_contexts(self):
                 self._send_json({"ok": True, "schema_version": "loopx_chat_goal_contexts_v0", "goals": []})
@@ -134,11 +151,13 @@ def main():
                 return super().do_GET()
 
         server = ChatHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = False
         server.chat_store, server.registry_path, server.runtime_root = store, registry, runtime
         server.action_store = ChatActionStore(runtime / "chat/actions")
         server.lark_cli_resolution = LarkCliResolution(None, False, "synthetic", None, "lark_cli_not_installed")
         server.runtime_root_override, server.selected_goal_id, server.verbose = str(runtime), None, False
-        server.assets_dir, server.fault, server.posts, server.inventory_reads = selected.assets_dir, False, 0, 0
+        server.assets_dir = selected.assets_dir or default_chat_assets_dir()
+        server.fault, server.posts, server.inventory_reads = False, 0, 0
         server.fault_window, server.deliver_window = False, False
         server.runtime_controller = ChatRuntimeController(store=store, registry_path=registry, codex_bin="unused-fixture-codex")
         server.runtime_controller.capabilities = lambda: [{"agent_id": "codex", "display_name": "Codex",
@@ -155,6 +174,8 @@ def main():
             return {str(path.relative_to(_root(runtime))): hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in _root(runtime).rglob("*.json")}
         initial = source_hashes()
+        journal = store.sessions_root / session["session_id"] / "messages.jsonl"
+        original_journal = journal.read_bytes()
         print(json.dumps({"event": "ready", "origin": f"http://127.0.0.1:{server.server_port}", "session_id": session["session_id"]}), flush=True)
         try:
             for line in sys.stdin:
@@ -180,6 +201,12 @@ def main():
                     bindings.path.write_text("{", encoding="utf-8")
                 elif command == "source-recover":
                     bindings.path.unlink()
+                elif command == "history-corrupt" and selected.long_history:
+                    lines = original_journal.splitlines(keepends=True)
+                    lines[200] = b'{"synthetic":\n'
+                    journal.write_bytes(b"".join(lines))
+                elif command == "history-recover" and selected.long_history:
+                    journal.write_bytes(original_journal)
                 elif command == "local-source-unavailable":
                     local_session_path.write_text("{invalid synthetic session", encoding="utf-8")
                 elif command == "local-source-recover":
@@ -187,7 +214,9 @@ def main():
                 elif command != "inspect":
                     raise ValueError("Unknown fixture command")
                 print(json.dumps({"event": command, "posts": server.posts, "inventory_reads": server.inventory_reads,
-                    "source_unchanged": source_hashes() == initial}), flush=True)
+                    "source_unchanged": source_hashes() == initial,
+                    "chat_unchanged": journal.read_bytes() == original_journal,
+                    "turn_count": len(list(store.sessions_root.glob("*/turns/*.json")))}), flush=True)
         finally:
             server.shutdown()
             server.server_close()

@@ -155,6 +155,12 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
    The running row uses `status=running`, empty `metrics`, and
    `countability={integrity_qualified:false, official_result_present:false,
    score_countable:false}`. Keep the same stable `run_id` for every transition.
+   Upsert returns the normalized affected `row` and `write` receipt by default.
+   Check its identity and preview/write outcome directly. Read the board again
+   when the next comparison needs it, using the same route and relevant
+   `--benchmark-id`/`--study-id`; do not re-fetch a whole study merely to confirm
+   one update. `--include-board` restores the previous full-board response for
+   consumers that need it. A row receipt does not establish comparison eligibility.
 
 4. **Preview and upsert terminal score, countability, effort, and insight.**
    First run integrity qualification. An automated restricted-access match is a

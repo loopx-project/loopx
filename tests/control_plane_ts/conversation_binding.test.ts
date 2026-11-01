@@ -143,6 +143,8 @@ for (const kind of ["project", "steward"]) for (const retryKind of ["routing", "
       current_session: {...session, status: "busy", active_turn_id: "already-admitted"},
       context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}};
     assert.equal(planBoundConversationRequest(crash).admitted_turn_id, "already-admitted");
+    assert.equal(planBoundConversationRequest({...crash,
+      context_recovery: {...crash.context_recovery, stop_observed: true}}).admitted_turn_id, "already-admitted");
     for (const change of [{session_id: "foreign"}, {client_turn_id: "foreign"},
       {message: "another request"}, {attachments: [{type: "image"}]}]) {
       assert.equal(planBoundConversationRequest({...crash,
@@ -154,7 +156,7 @@ for (const kind of ["project", "steward"]) for (const retryKind of ["routing", "
     assert.equal(planBoundConversationRequest(next).not_before, "2026-01-01T00:02:00.000Z");
     assert.equal(planBoundConversationRequest({...next, request: {...next.request,
       context_recovery: {...reservation, [attemptKey]: 3}}}).recovery_candidate, false);
-    for (const change of [{source_verified: false}, {steering_observed: true},
+    for (const change of [{source_verified: false}, {steering_observed: true}, {stop_observed: true},
       {observed_at: "2026-01-01T00:00:59Z"}, {observed_at: "invalid"},
       {native_observation: {...observed, ...(retryKind === "quota"
         ? {only_original_user_item: false} : {only_pre_execution_items: false})}},

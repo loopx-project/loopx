@@ -75,10 +75,10 @@ class ChatExternalConversations:
                 or reservation.get("read_only_review") or reservation.get("work_attempt"))
             and reservation.get("failed_turn_id") == row["turn_id"] else None)
         events = store.events_after(session["session_id"], turn["turn_id"], None)
-        # Collect local control evidence only for the interrupted-effects path.
+        # A later source control also retires an unexecuted failed request.
         # The source fence makes this inventory consistent with admission.
         stop = any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
-        if turn.get("error_code") == "server_restarted" or turn.get("status") == "completed":
+        if turn.get("status") in {"failed", "completed"}:
             stop = stop or any(item.get("binding_id") == row["binding_id"]
                 and item.get("source") == row["source"] and item.get("command") in {"stop", "new"}
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])

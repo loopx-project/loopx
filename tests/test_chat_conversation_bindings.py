@@ -12,6 +12,46 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
+def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinary, monkeypatch):  # noqa: F811
+    from datetime import datetime, timedelta, timezone
+    from loopx.capabilities.native_chat import external_conversations
+    from test_lark_private_conversations import connect
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "usageLimitExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "quota-stop", "typed terminal failure"))
+        row = transport.core.pending()[0]
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert failed["error_code"] == "usage_limit_exceeded"
+        transport.reconcile()
+        clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        original = transport.core.read_request(row["request_ref"])
+        assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        transport.admit("steward-app", provider.event("steward-app", "unrelated-stop", "/stop"))
+        assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        transport.admit("notes-app", provider.event("notes-app", "later-stop", "/stop"))
+        calls = ordinary[4].read_bytes()
+        assert not transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
+        assert ordinary[4].read_bytes() == calls
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+        transport.admit("notes-app", provider.event("notes-app", "future-request", "A new independent request"))
+        newer = next(x for x in transport.core.pending() if x.get("message") == "A new independent request")
+        completed = runtime.wait_for_turn(session_id=newer["session_id"], turn_id=newer["turn_id"], timeout_sec=10)
+        assert completed["status"] == "completed"
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+    finally:
+        runtime.close()
+
+
 @pytest.fixture
 def recorded_return_continuation(private_return, monkeypatch):  # noqa: F811
     """Use the real admission/recovery owners; only model/provider IO is fake."""

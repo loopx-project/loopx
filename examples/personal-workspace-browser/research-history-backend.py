@@ -103,6 +103,9 @@ def main():
                 scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
                 registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
                                            config=analysis.get("config", fixture_config),
+                                           usage_jsonl=analysis.get("usage_jsonl"),
+                                           usage_session_id=analysis.get("usage_session_id"),
+                                           include_tool_context=analysis.get("include_tool_context", False),
                                            native_outcomes_json=analysis.get("native_outcomes_json"))
                 for language, output in analysis["outputs"].items():
                     provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",

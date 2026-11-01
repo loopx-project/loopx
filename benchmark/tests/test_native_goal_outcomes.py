@@ -197,7 +197,10 @@ def test_edgebench_cli_persists_native_outcome_even_when_transport_exits_zero(tm
     def completed_scoring(**kwargs):
         assert kwargs["disable_auto_resume"] is True
         (trial / "started_at").write_text("2024-01-01T00:00:00Z\n1704067200\n")
-        return RunResult(runtime_seconds=2, best_score=4, total_rounds=1)
+        result = RunResult(runtime_seconds=2, best_score=4, total_rounds=1)
+        if hasattr(result, "grading_status"):
+            result.grading_status = "complete"
+        return result
     monkeypatch.setattr(run, "run_agent", completed_scoring)
     (tmp_path / "fixture.json").write_text("{}")
     code = run.main(["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
@@ -295,7 +298,10 @@ def test_docker_collection_preserves_real_worker_outcome(tmp_path, goal, turn, e
                                 exit_code=backend.execution_receipt["exit_code"],
                                 native_goal_outcome=native["native_goal_outcome"])
         assert status == expected_status
-        _write_native_final_result(tmp_path, RunResult(runtime_seconds=observed.elapsed_seconds, best_score=7),
+        result = RunResult(runtime_seconds=observed.elapsed_seconds, best_score=7)
+        if hasattr(result, "grading_status"):
+            result.grading_status = "complete"
+        _write_native_final_result(tmp_path, result,
                                   status=status, agent="fixture", task="fixture", run_id="fixture",
                                   model="fixture", effort="high", native_goal_outcome=native["native_goal_outcome"])
         artifact = tmp_path / ("final_result.json" if expected_status == "terminal" else "partial_result.json")
