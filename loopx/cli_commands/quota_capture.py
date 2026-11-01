@@ -165,12 +165,17 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if list_depth is not None and (not list_fields or type(list_depth) is not int or not 1 <= list_depth <= 8):
             raise ValueError("list-depth requires --list and an integer from 1 to 8")
         selectors = getattr(args, "select", None)
+        initial_read = getattr(args, "initial_read", False)
+        if initial_read and (selectors is not None or list_fields or list_depth is not None):
+            raise ValueError("initial-read cannot be combined with select or list")
         if list_fields and selectors is None:
             selectors = [""]
         selection_digest = getattr(args, "selection_sha256", None)
-        if selectors is None and selection_digest is not None:
+        if initial_read and (offset != 0 or selection_digest is not None):
+            raise ValueError("initial-read starts at offset zero without selection-sha256; follow next_command afterwards")
+        if selectors is None and not initial_read and selection_digest is not None:
             raise ValueError("selection-sha256 requires --select")
-        if selectors is not None:
+        if selectors is not None or initial_read:
             if getattr(args, "format", None) != "json":
                 raise ValueError("selected context-read requires JSON output")
             if offset > 0 and selection_digest is None:
@@ -178,7 +183,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             from ..control_plane.quota.turn_envelope import _turn_envelope_result
 
             depth_options = {"list_depth": list_depth} if list_depth is not None else {}
-            plan = _turn_envelope_result("context_select", context=payload, select=selectors, list_fields=list_fields, **depth_options)
+            selection_options = {"initial_read": True} if initial_read else {"select": selectors}
+            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields, **selection_options, **depth_options)
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload
@@ -238,6 +244,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
                               mode: str, current: dict[str, Any], current_document: dict[str, Any],
                               total_bytes: int, metadata: dict[str, Any] | None,
                               field_index: list[dict[str, Any]] | None,
+                              initial_read_pointers: list[str] | None,
                               page_bytes: int, output_bytes: int) -> dict[str, Any]:
     """Build the bounded native reference without publishing or registering it."""
     target = projected.get("target") if projected.get("schema_version") == "context_delivery_v1" else None
@@ -271,11 +278,20 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     # The reference must fit even under an explicit small caller ceiling.
     def fits() -> bool:
         return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= min(output_bytes, 7900)
-    # The same complete top-level index as `context-read --list`, bound to
-    # recovery (current facts), not a delta's patch keys. This saves an index
-    # tool roundtrip when it fits; it neither supplies source contents nor
-    # acknowledges their delivery. Deeper navigation keeps its existing route.
-    if field_index is not None:
+    if initial_read_pointers and mode == "full":
+        overview = result.pop("overview")
+        instruction = result["instruction"]
+        result["instruction"] = "Start with first_read_command for current facts and source navigation. " + instruction
+        result["first_read_command"] = context_capture_read_command(current_path, current["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True)
+        if not fits():
+            result.pop("first_read_command")  # A complete optional selection or the existing generic recovery.
+            result["overview"] = overview
+            result["instruction"] = instruction
+    # Prefer the concrete initial read over a broad scalar preview/root index.
+    # Otherwise preserve the complete root index, bound to current recovery,
+    # never a delta's patch keys. All deeper discovery remains available.
+    if field_index is not None and "first_read_command" not in result:
         result["field_index"] = field_index
         if not fits():
             result.pop("field_index")  # Optional metadata must never displace recovery or instructions.
@@ -359,21 +375,24 @@ def native_context_capture_view(projected: dict[str, Any], directory: Path, *,
 
     from ..control_plane.quota.turn_envelope import _turn_envelope_result
 
-    # Plan the existing optional index once for current facts, not once per
-    # transport candidate. Depth-one addressing needs keys, not source bodies.
+    # The same pure TS selector plans initial navigation and the optional index
+    # once for current facts, not once per full/delta transport candidate.
     field_index = None
+    initial_read_pointers = None
     try:
-        plan = _turn_envelope_result("context_select", context=dict.fromkeys(current_document), select=[""], list_fields=True)
+        plan = _turn_envelope_result("context_select", context=current_document, select=[""], list_fields=True)
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
         # Optional discovery cannot invalidate the immutable file reference.
         pass
     else:
         field_index = _context_index_fields(current_document, plan["selections"][0]["children"])
+        initial_read_pointers = plan.get("initial_read_pointers")
 
     def view(kind: str, ref: dict[str, Any], body: bytes) -> dict[str, Any]:
         return _native_context_reference(projected, ref, mode=kind, current=current,
             current_document=current_document, total_bytes=len(body), metadata=metadata,
-            field_index=field_index, page_bytes=page_bytes, output_bytes=output_bytes)
+            field_index=field_index, initial_read_pointers=initial_read_pointers,
+            page_bytes=page_bytes, output_bytes=output_bytes)
 
     if typed and mode == "delta":
         result = None
@@ -737,6 +756,9 @@ def handoff_decision(directory: Path | None, socket_path: str | None,
 def handle_native_context_command(args: argparse.Namespace, *, print_payload: Callable[..., None],
                                   registry_path: Path | None = None, runtime_root_arg: str | None = None) -> int | None:
     """Dispatch native presentation/lifecycle IO before any quota authority read."""
+    if getattr(args, "initial_read", False) and args.quota_command != "context-read":
+        print_payload({"ok": False, "reason": "--initial-read is only supported by context-read"}, args.format, str)
+        return 1
     list_depth = getattr(args, "list_depth", None)
     if list_depth is not None and (args.quota_command != "context-read" or not getattr(args, "list_fields", False)
             or type(list_depth) is not int or not 1 <= list_depth <= 8):

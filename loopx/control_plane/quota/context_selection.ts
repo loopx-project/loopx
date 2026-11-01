@@ -3,9 +3,15 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 
-export function capturedContextSelection(request: JsonObject): JsonObject {
+export function capturedContextSelection(request: JsonObject, initialPointers: string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "captured context");
-  const selectors = request.select;
+  if (request.initial_read !== undefined && typeof request.initial_read !== "boolean")
+    throw new EffectRuntimeRequestError("initial-read must be boolean");
+  if (request.initial_read === true && (request.select !== undefined || request.list_fields === true || request.list_depth !== undefined))
+    throw new EffectRuntimeRequestError("initial-read cannot be combined with select or list");
+  const selectors = request.initial_read === true ? initialPointers : request.select;
+  if (request.initial_read === true && !(selectors as string[]).length)
+    throw new EffectRuntimeRequestError("initial-read is unavailable for this capture schema; use generic discovery");
   if (!Array.isArray(selectors) || !selectors.length || selectors.some(value => typeof value !== "string"))
     throw new EffectRuntimeRequestError("context selection requires a nonempty array of JSON pointers");
   const depth = request.list_depth === undefined ? 1 : request.list_depth;
@@ -58,5 +64,7 @@ export function capturedContextSelection(request: JsonObject): JsonObject {
     }
     return {pointer, path};
   });
-  return {selections};
+  const initial = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
+    ? initialPointers : [];
+  return {selections, ...(initial.length ? {initial_read_pointers: initial} : {})};
 }

@@ -211,7 +211,8 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  select: list[str] | None = None,
                                  selection_sha256: str | None = None,
                                  list_fields: bool = False,
-                                 list_depth: int | None = None) -> str:
+                                 list_depth: int | None = None,
+                                 initial_read: bool = False) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -221,6 +222,7 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
         "--capture-file", str(path), "--capture-sha256", digest,
         "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--initial-read"] if initial_read else []),
         *(["--list"] if list_fields else []),
         *(["--list-depth", str(list_depth)] if list_depth is not None else []),
         *(argument for pointer in select or [] for argument in ("--select", pointer)),

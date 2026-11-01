@@ -155,6 +155,29 @@ model retention. These separate boundaries prevent transport loss from becoming
 either a repeated full-input loop or permission to act on missing requirements.
 No token savings or accepted outcome gains follow from instruction delivery alone.
 
+An enabled native **full** reference for a recognized decision can include
+`first_read_command`. It batches current admission/stop facts, the selected task,
+whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
+history and optional authoring recipes remain expandable from the same capture.
+Its `context-read --initial-read` uses the same exact-address selector; paged
+continuations pin the resulting pointers and selection digest instead of
+recomputing an initial view. The option is read-only and exclusive with explicit
+selectors or discovery; unknown schemas use generic discovery.
+The concrete first read replaces the broad scalar preview and root index when it
+fits; unknown schemas or a tight reference budget keep generic discovery. Warm
+deltas keep their existing reader, and disabled native delivery is unchanged.
+This is a starting selection, not all required sources: read applicable criteria,
+evidence and the complete operation/settlement contract before depending on them.
+The original SHA-bound full recovery remains available; a selected page's EOF
+does not prove complete source delivery, model retention or fresh authority.
+
+中文：已启用原生传输的完整引用可给出 `first_read_command`，合并当前准入、停止条件、
+任务和完整 Goal/Todo 正文，以及来源状态、版本与读取入口；历史和可选格式说明仍在
+同一捕获中按需展开。它是起始选读，不代表已读全部必要来源；依赖具体验收、证据或
+执行/结算契约前仍须完整读取。未知 schema、过小引用预算和 warm delta 保留既有路线，
+关闭原生传输的输出不变；完整恢复和原 SHA 校验均保留。只读的 `--initial-read` 不与
+显式选读或索引混用；续页使用已固定的指针和选读摘要，不重新计算首读范围。
+
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
 same complete Goal source for admitted work-context reads and writes the ordinary
