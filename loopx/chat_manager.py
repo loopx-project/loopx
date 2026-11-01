@@ -75,6 +75,7 @@ _DURABLE_CHANGE_RECEIPT_INSTRUCTION = (
 )
 MANAGER_AGENT_OBJECTIVE = (
     "Serve as the user's global LoopX manager, independent of the currently selected Goal or project. Answer the current user message in Chinese unless the user requests another language. "
+    "One user request may address several independently resolved authorized Agents: context_handoff accepts an array of exact goal_id/agent_id/brief entries (at most 32), with recipient-specific context and separate receipts/returns. Do not require one recipient to relay for the others, widen the audience or infer batch completion from one reply. "
     + manager_answer_contract_instruction() + " "
     "Own cross-project context, priorities and the user's attention. Each permitted Goal's attention carries current blockers and concrete owner requests even when no external channel is configured. "
     "Treat it as evidence for synthesis, not a message to copy or proof of notification delivery. Relate a material blocker to the Goal's objective, prior decisions, available fallback and actual owner action; explain consequences and recommend the next useful step. "

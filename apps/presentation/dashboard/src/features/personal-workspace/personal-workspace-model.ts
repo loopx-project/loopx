@@ -399,6 +399,7 @@ export type WorkspaceMessage = {
   activity?: string[];
   steps?: TurnStep[];
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   agentLabel?: string;
   attachments?: WorkspaceImageAttachment[];
   id: string;

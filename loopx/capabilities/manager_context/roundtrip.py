@@ -136,10 +136,14 @@ def _route(root, row, *, scope=None):
                     # An unrelated damaged/oversized historical turn cannot
                     # prevent recovery of this exact request's return receipt.
                     continue
-                receipt = (turn.get("response") or {}).get(
-                    "context_handoff_receipt"
-                ) or {}
-                if receipt.get("request_id") == row["request_id"]:
+                response = turn.get("response") or {}
+                receipts = response.get("context_handoff_receipts")
+                if receipts is None:
+                    receipts = [response.get("context_handoff_receipt") or {}]
+                if isinstance(receipts, list) and sum(
+                    isinstance(receipt, dict) and receipt.get("request_id") == row["request_id"]
+                    for receipt in receipts
+                ) == 1:
                     matches.append((session, turn))
         if len(matches) != 1:
             raise ReturnResolutionBlocked(

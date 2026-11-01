@@ -8,6 +8,7 @@ type ConversationMessage = {
   role?: string;
   pending?: boolean;
   collaboration?: ChatVisibleMessage["collaboration"];
+  collaborations?: ChatVisibleMessage["collaborations"];
   returnDelivery?: ChatVisibleMessage["return_delivery"];
   replyContext?: ChatVisibleMessage["reply_context"];
   text?: string;
@@ -20,13 +21,20 @@ export function conversationReturnSessions(activeSessionId: string | undefined, 
   return [...sessions].sort();
 }
 
+/** Only the current brief's conclusion can settle its outstanding return. */
+export function currentCollaborationConclusion(request: NonNullable<ChatVisibleMessage["collaboration"]>) {
+  const replies = request.returns.filter(reply => reply.phase === "conclusion"
+    && (request.request_revision === undefined || (reply.request_revision ?? 1) === request.request_revision));
+  return replies.find(reply => reply.status === "delivered")
+    ?? replies.find(reply => reply.status !== "superseded") ?? replies[0];
+}
+
 /** Metadata can change before a new transcript row is appended. */
 export function conversationPendingReturnSessions(messages: ConversationMessage[]): string[] {
   const sessions = new Set<string>();
   for (const message of messages) {
-    const waitingForConclusion = message.collaboration && !message.collaboration.returns.some(
-      (reply) => reply.phase === "conclusion" && reply.status === "delivered",
-    );
+    const requests = message.collaborations ?? (message.collaboration ? [message.collaboration] : []);
+    const waitingForConclusion = requests.some(request => currentCollaborationConclusion(request)?.status !== "delivered");
     const delivery = message.returnDelivery;
     const waitingForDelivery = delivery && !["delivered", "superseded"].includes(delivery.status);
     const waitingForTranscript = message.sourceTurnId && !message.sourceMessageId;
@@ -61,6 +69,7 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     // its outstanding read obligation until a newer observation arrives.
     const returnDelivery = source.return_delivery ?? row.returnDelivery;
     const collaboration = source.collaboration ?? row.collaboration;
+    const collaborations = source.collaborations ?? row.collaborations;
     const sourceCreatedAt = source.created_at ?? row.sourceCreatedAt;
     const replyContext = source.reply_context ?? row.replyContext;
     // Only the exact canonical user body can switch to its source-backed view.
@@ -68,10 +77,11 @@ export function reconcileConversationReturns<T extends ConversationMessage>(
     const text = row.role === "user" && source.reply_context && row.text === source.text
       ? source.reply_context.source_text : row.text;
     if (row.sourceMessageId === source.message_id && JSON.stringify(row.returnDelivery) === JSON.stringify(returnDelivery)
-      && JSON.stringify(row.collaboration) === JSON.stringify(collaboration) && row.sourceCreatedAt === sourceCreatedAt
+      && JSON.stringify(row.collaboration) === JSON.stringify(collaboration)
+      && JSON.stringify(row.collaborations) === JSON.stringify(collaborations) && row.sourceCreatedAt === sourceCreatedAt
       && JSON.stringify(row.replyContext) === JSON.stringify(replyContext) && row.text === text) return row;
     changed = true;
-    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, replyContext, text };
+    return { ...row, sourceMessageId: source.message_id, sourceCreatedAt, returnDelivery, collaboration, collaborations, replyContext, text };
   });
   for (const message of messages) {
     if (message.origin !== "manager_followup" || seen.has(message.message_id)) continue;
