@@ -9,7 +9,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from collections.abc import Iterator
 from typing import Any
-import copy
 import json
 import os
 from pathlib import Path
@@ -17,7 +16,7 @@ import stat
 import uuid
 
 from .decision_capture import (
-    write_decision_capture, capture_context_projection, project_captured_context, CONTEXT_CAPTURE_PAGE_GUIDANCE,
+    write_decision_capture, capture_context_projection, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     CONTEXT_CAPTURE_SELECTION_GUIDANCE,
     context_capture_read_command, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
@@ -369,15 +368,16 @@ def _context_pages(value: object) -> list[dict[str, Any]]:
     Native output truncation that is not reported here remains an assumption gap.
     """
     if isinstance(value, str):
+        source_text = value
         try:
-            value = json.loads(value)
+            value = json.loads(source_text)
         except ValueError:
             # CLI stdout is one complete JSON record per line. Other commands
             # may precede/follow it in the same shell result; do not search for
             # embedded JSON substrings or accept an incomplete record. Capture
             # identity and every reported byte are still verified below.
             pages = []
-            for line in value.splitlines():
+            for line in source_text.splitlines():
                 try:
                     record = json.loads(line)
                 except ValueError:
@@ -444,26 +444,6 @@ def _discard_recovery(root: Path) -> None:
     path.unlink()
 
 
-def _file_codec_numbers_supported(value: Any) -> bool:
-    """Keep exact file values when the JSON/JavaScript bridge cannot encode them."""
-    if isinstance(value, dict):
-        return all(_file_codec_numbers_supported(item) for item in value.values())
-    if isinstance(value, list):
-        return all(_file_codec_numbers_supported(item) for item in value)
-    return not isinstance(value, int) or abs(value) <= 9007199254740991
-
-
-def _integral_float_sources(value: Any, path: tuple = ()) -> dict[tuple, str]:
-    """Identify source distinctions that the JSON/JavaScript bridge erases."""
-    if isinstance(value, dict):
-        return {key: token for name, item in value.items()
-            for key, token in _integral_float_sources(item, (*path, name)).items()}
-    if isinstance(value, list):
-        return {key: token for index, item in enumerate(value)
-            for key, token in _integral_float_sources(item, (*path, index)).items()}
-    return {path: repr(value)} if isinstance(value, float) and value.is_integer() else {}
-
-
 def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dict[str, Any]:
     """Compare verified durable versions independently of model retention.
 
@@ -477,8 +457,6 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any]) -> dic
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
-            if not _file_codec_numbers_supported(payload):
-                return request
             baseline = dict(schema_version="context_delivery_v1", mode="full",
                 target=previous["target"], ancestry=0, context=payload)
             request.update(baseline=baseline,
@@ -505,73 +483,6 @@ def register_native_context_view(directory: str | None, view: dict[str, Any]) ->
         _save(root, state)
 
 
-def _capture_required_context(
-    payload: dict[str, Any], *, directory: Path, surface: str, archive: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Publish the archive first, then the model view selected by the typed owner.
-
-    Only the required view may become a full/delta baseline. Detail pointers
-    always address the immutable archive, never a later canonical-state read.
-    """
-    from ..quota.turn_envelope import plan_progressive_context
-    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
-
-    if archive is None:
-        archive = capture_context_projection(payload, directory=directory,
-            read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
-    try:
-        plan = plan_progressive_context(payload, surface=surface)
-    except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
-        return payload, archive
-    if not plan["deferred"] and not plan.get("references"):
-        return payload, archive
-    projected = copy.deepcopy(payload)
-
-    def at(path):
-        row = projected
-        for key in path:
-            row = row[key]
-        return row
-
-    for edit in plan.get("references", []):
-        # Compare original Python values as well: the typed bridge must never
-        # equate distinct integers or change the source record's numeric types.
-        value, target = at(edit["path"]), at(edit["from"])
-        if json.dumps(value, sort_keys=True) != json.dumps(target, sort_keys=True):
-            return payload, archive
-        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
-    for edit in plan["deferred"]:
-        path, parent = edit["path"], edit["parent"]
-        del at(path[:-1])[path[-1]]
-        at(parent)[edit["index_key"]] = "/" + "/".join(
-            str(key).replace("~", "~0").replace("/", "~1") for key in parent)
-    for edit in plan["instructions"]:
-        at(edit["path"][:-1])[edit["path"][-1]] = edit["value"]
-    page_bytes, output_bytes = native_context_page_budget()
-    details = {
-        "path": archive["path"], "sha256": archive["sha256"],
-        "command_template": context_capture_read_command(Path(archive["path"]), archive["sha256"],
-            page_bytes=page_bytes, max_page_output_bytes=output_bytes) + " --select '<supporting_material_pointer>/sources'",
-        "instruction": "This view retains complete requirements and current review/check states. "
-            "Source history, review reasoning and evidence references are supporting material. "
-            "Read them from this same immutable capture when a decision, verification or review depends on them. "
-            "For source history use supporting_material_pointer plus /sources. For review detail append "
-            "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. "
-            "Repeat --select to batch needed fields without replaying the outcome's requirements. "
-            "Detail reads never establish a full baseline. "
-            "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance.",
-    }
-    if plan["deferred"]:
-        projected["context_details"] = details
-    # These are transport bytes, not a semantic relevance heuristic or a model
-    # token estimate. Small material is cheaper inline than an index plus IO.
-    required_bytes = len((json.dumps(projected, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8"))
-    if required_bytes >= Path(archive["path"]).stat().st_size:
-        return payload, archive
-    return projected, capture_context_projection(projected, directory=directory,
-        filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
-
-
 def project_codex_context(payload: dict[str, Any], *, directory: str | None, capture_directory: Path,
                           goal_id: str, agent_id: str, surface: str, capture_id: str,
                           continuity_generation: str | None = None) -> dict[str, Any]:
@@ -582,6 +493,8 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
     Saved-file comparison is independent of any complete model-read observation.
     """
     from ..quota.error_codes import QuotaDecisionTransportError
+    from ..quota.turn_envelope import prepare_context_delivery
+    from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 
     if directory is None:
         return payload
@@ -624,20 +537,24 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 # or encoding can be interrupted. Never recover its predecessor.
                 publish_recovery(recovery)
                 recovery_committed = True
-                required, planned_recovery = _capture_required_context(payload, directory=capture_directory,
-                    surface=surface, archive=recovery)
-                if planned_recovery is not recovery:
-                    recovery = planned_recovery
+                try:
+                    transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
+                        surface=surface, baseline=request.get("baseline"),
+                        retained=request.get("retained"), continuity=request.get("continuity"),
+                        native_projection={
+                            "path": recovery["path"], "sha256": recovery["sha256"],
+                            "command_template": context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
+                                page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                                + " --select '<supporting_material_pointer>/sources'",
+                        })
+                except (EffectRuntimeRemoteError, EffectRuntimeStartupError):
+                    return payload
+                if transaction["projected"]:
+                    recovery = capture_context_projection(transaction["context"], directory=capture_directory,
+                        filename="required-context.json", read_guidance=CONTEXT_CAPTURE_PAGE_GUIDANCE)
                     publish_recovery(recovery)
-
-                prior = request.get("baseline", {}).get("context")
-                if (not _file_codec_numbers_supported(required)
-                        or prior is not None and _integral_float_sources(prior) != _integral_float_sources(required)):
-                    request = {"scope": scope}
-
-                result = project_captured_context(required, directory=capture_directory,
-                    request=request, captured_recovery=recovery,
-                    goal_id=goal_id, agent_id=agent_id, surface=surface, capture_id=capture_id)
+                result: dict[str, Any] = transaction["delivery"]
+                result["recovery"] = recovery
                 if result.get("continuity_basis") == "captured_file" and result.get("mode") == "delta":
                     result["baseline_reference"] = request["baseline_reference"]
                 if result.get("schema_version") == "context_delivery_v1":
