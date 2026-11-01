@@ -843,11 +843,8 @@ def _merge_managed_mcp_json(
     """
     marker_path = config_path.parent / CURSOR_MCP_MARKER_NAME
     try:
-        raw = (
-            json.loads(config_path.read_text(encoding="utf-8"))
-            if config_path.exists()
-            else {}
-        )
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        raw = json.loads(text) if text.strip() else {}
     except (OSError, json.JSONDecodeError):
         return invalid_status
     if not isinstance(raw, dict):
@@ -924,11 +921,8 @@ def _merge_managed_hooks_json(
     """Add or remove the ``loopx`` continuation gate in Antigravity ``hooks.json``."""
     marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
     try:
-        raw = (
-            json.loads(config_path.read_text(encoding="utf-8"))
-            if config_path.exists()
-            else {}
-        )
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        raw = json.loads(text) if text.strip() else {}
     except (OSError, json.JSONDecodeError):
         return "blocked_invalid_antigravity_hooks_json"
     if not isinstance(raw, dict):
