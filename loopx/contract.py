@@ -229,6 +229,11 @@ CREDENTIAL_PLACEHOLDER_PATTERN = re.compile(
     r"<[^>]{1,64}>|\{\{|example|dummy|placeholder|changeme|redacted|your[-_]",
     re.I,
 )
+# A provider token has no keyword that separates its value from surrounding
+# text, so only the exact access-key id published in the AWS documentation may
+# be treated as an example. A placeholder word inside an opaque token body is
+# part of the value, not an external reference (Refs #7713 review).
+CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN = re.compile(r"AKIAIOSFODNN7EXAMPLE")
 CREDENTIAL_HIGH_ENTROPY_VALUE_PATTERN = re.compile(r"[A-Za-z0-9._-]{20,}")
 CREDENTIAL_VARIABLE_REFERENCE_PATTERN = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*[,)\]}]"
@@ -250,7 +255,7 @@ def _credential_match_is_reference(line: str, match: re.Match[str]) -> bool:
         last_keyword = keyword.group(0)
         value = value[keyword.end() :].lstrip(" \t\"'`")
     if last_keyword is None:
-        return bool(CREDENTIAL_PLACEHOLDER_PATTERN.search(match.group(0)))
+        return bool(CREDENTIAL_DOCUMENTED_EXAMPLE_PATTERN.fullmatch(match.group(0)))
     if not value:
         return True
     if CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN.match(value):

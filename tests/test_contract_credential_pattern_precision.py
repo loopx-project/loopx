@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +18,7 @@ TOKEN_ASSIGN = "tok" + "en="
 PASSWORD_ASSIGN = "pass" + "word="
 REAL_BEARER_VALUE = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
 PRIVATE_LARK_TENANT_HOST = "tenant.lark" + "office.com"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _scan_line(tmp_path: Path, line: str) -> dict[str, list[str]]:
@@ -76,7 +81,7 @@ def test_literal_credential_hits_stay_errors(tmp_path: Path, line: str) -> None:
 
 
 def test_a_literal_on_a_line_with_references_still_fails(tmp_path: Path) -> None:
-    line = f'{PASSWORD_ASSIGN}$SERVICE_SECRET {TOKEN_ASSIGN}{REAL_BEARER_VALUE}'
+    line = f"{PASSWORD_ASSIGN}$SERVICE_SECRET {TOKEN_ASSIGN}{REAL_BEARER_VALUE}"
 
     payload = _scan_line(tmp_path, line)
 
@@ -172,3 +177,65 @@ def test_a_short_provider_lookalike_stays_clean(tmp_path: Path) -> None:
 
     assert payload["hits"] == []
     assert payload["credential_reference_hits"] == []
+
+
+PROVIDER_TOKENS_WITH_PLACEHOLDER_BODY = [
+    "ghp_" + "dummy" + "1234567890abcdefghijklmnop",
+    "npm_" + "example" + "1234567890abcdefghij",
+]
+
+
+@pytest.mark.parametrize("token", PROVIDER_TOKENS_WITH_PLACEHOLDER_BODY)
+def test_provider_placeholder_words_inside_the_body_stay_literal_errors(
+    tmp_path: Path,
+    token: str,
+) -> None:
+    payload = _scan_line(tmp_path, f"token {token}")
+
+    assert payload["hits"] == ["sample.md:1: credential"]
+    assert payload["credential_reference_hits"] == []
+
+
+def _run_check_cli(tmp_path: Path, line: str) -> tuple[int, dict[str, object]]:
+    outgoing = tmp_path / "outgoing.md"
+    outgoing.write_text(f"{line}\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "--format",
+            "json",
+            "--registry",
+            str(tmp_path / "registry.json"),
+            "--runtime-root",
+            str(tmp_path / "runtime"),
+            "check",
+            "--scan-path",
+            str(outgoing),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        check=False,
+    )
+    assert result.stdout, result.stderr
+    return result.returncode, json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("token", PROVIDER_TOKENS_WITH_PLACEHOLDER_BODY)
+def test_real_check_cli_rejects_provider_placeholder_words_inside_the_body(
+    tmp_path: Path,
+    token: str,
+) -> None:
+    returncode, payload = _run_check_cli(tmp_path, f"token {token}")
+
+    assert returncode == 1
+    assert payload["ok"] is False
+    assert payload["public_boundary_scan"]["ok"] is False
+    assert any(
+        row["code"] == "public_boundary_violation"
+        for row in payload["error_diagnostics"]
+    )
