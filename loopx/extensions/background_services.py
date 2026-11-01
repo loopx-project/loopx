@@ -61,6 +61,17 @@ class BackgroundServices:
             self._started = True
         self._supervisor.start()
 
+    def supervise(self) -> None:
+        """Cheap process-pump hook; it cannot activate an unstarted host."""
+        with self._state_lock:
+            started = self._started
+        if started:
+            self._supervisor.start()
+
+    def recheck(self) -> None:
+        self.start()
+        self.reconcile()
+
     def _run(self) -> None:
         self._supervisor.repeat(self.reconcile, interval_seconds=15)
 

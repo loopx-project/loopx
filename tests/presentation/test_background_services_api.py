@@ -86,6 +86,7 @@ def test_http_recheck_starts_existing_owners_once_and_preserves_disabled_feature
         time.sleep(.02)
     assert tasks["manager-returns"]["state"] == "healthy"
     assert tasks["manager-executions"]["state"] == "healthy"
+    assert result["supervisor"]["state"] in {"healthy", "checking"}, "Recheck must restore the host as well"
     request(server, "POST", {"operation": "recheck"})
     assert server.manager_return_service.thread is first
     assert not provider.root.exists() and not server.lark_goal_topic_runtime._delivery_thread
@@ -150,3 +151,35 @@ def test_supervisor_restores_enabled_observer_without_a_status_poll_or_policy_ed
         time.sleep(.02)
     assert provider.observer_health(True)["state"] == "healthy"
     assert provider.path.read_bytes() == saved
+
+
+def test_http_pump_restores_an_unexpectedly_exited_supervisor_without_a_status_poll(host, monkeypatch):
+    server, _, _ = host
+    runtime = server.background_services
+    original_target, original_reconcile = runtime._supervisor.target, runtime.reconcile
+    exited, recovered = threading.Event(), threading.Event()
+    original_hook = threading.excepthook
+
+    def expected_exit(args):
+        if args.thread.name == "loopx-background-services" and args.exc_type is SystemExit:
+            exited.set()
+        else:
+            original_hook(args)
+
+    def target():
+        if not exited.is_set():
+            raise SystemExit("synthetic host exit")
+        original_target()
+
+    def reconcile():
+        original_reconcile()
+        recovered.set()
+
+    monkeypatch.setattr(threading, "excepthook", expected_exit)
+    monkeypatch.setattr(runtime._supervisor, "target", target)
+    monkeypatch.setattr(runtime, "reconcile", reconcile)
+    runtime.start()
+    assert exited.wait(2)
+    # Only the real server's service_actions pump restores this thread.
+    assert recovered.wait(3)
+    assert runtime._supervisor.thread.is_alive()

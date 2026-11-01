@@ -50,7 +50,9 @@ The Chat process registers these four loops with the process-scoped
 startup and every 15 seconds, isolates owner failures, and fences shutdown
 before closing registered services. There is no additional saved enable switch,
 job queue, system daemon or permission grant. The App/OS still supervises the
-Chat process. An enabled native observer that stopped is re-created from its
+Chat process; its existing HTTP pump restores an unexpectedly exited host
+thread with a cheap, idempotent liveness hook. Recheck also restores that host,
+and never activates it from a passive read. An enabled native observer that stopped is re-created from its
 current saved policy; a live scan or a normally completed one-shot is not replayed.
 
 Settings → **Background services** reads the same content-free projection as

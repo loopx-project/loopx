@@ -445,7 +445,7 @@ def resolve_lark_cli_for_runtime(
     )
 
 
-class ChatHTTPServer(ThreadingHTTPServer):
+class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
@@ -479,7 +479,6 @@ class ChatHTTPServer(ThreadingHTTPServer):
         self.runtime_identity = release_runtime_identity()
         super().__init__(*args, **kwargs)
         self.completed_todo_pages = CompletedTodoPages()
-        background_api.initialize_chat_background_services(self)
 
     def server_close(self) -> None:
         background_api.close_chat_background_services(self)

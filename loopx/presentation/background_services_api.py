@@ -6,9 +6,17 @@ from ..extensions.background_services import BackgroundService, BackgroundServic
 BACKGROUND_SERVICES_PATH = "/api/chat/background-services"
 
 
-def initialize_chat_background_services(server) -> None:
-    server.background_services = BackgroundServices()
-    server.background_service_owners = set()
+class BackgroundServicesServerMixin:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.background_services = BackgroundServices()
+        self.background_service_owners = set()
+
+    def service_actions(self):
+        # The existing HTTP pump can restore an unexpectedly exited host
+        # thread. No provider IO, scheduling or process restart runs here.
+        self.background_services.supervise()
+        super().service_actions()
 
 
 def register_chat_background_services(server) -> None:
@@ -51,5 +59,5 @@ class BackgroundServicesRequestMixin:
             valid = False
         if not valid:
             return self._send_json({"ok": False, "code": "invalid_request"}, status=400)
-        self.server.background_services.reconcile()
+        self.server.background_services.recheck()
         self._send_json(self.server.background_services.snapshot())
