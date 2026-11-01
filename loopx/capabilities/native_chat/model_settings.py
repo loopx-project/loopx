@@ -204,7 +204,11 @@ def observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str |
     from .codex_adapter import CodexAppServerAdapter
     from ...chat_agent import CodexChatAgentError
     settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) else {}
-    if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) and adapter.current_model_id != requested_model:
+    confirmed_model = requested_model
+    if isinstance(adapter, AntigravityAdapter) and requested_model:
+        from .antigravity_adapter import resolve_antigravity_model_placeholder
+        confirmed_model, _ = resolve_antigravity_model_placeholder(requested_model, requested_effort)
+    if confirmed_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) and adapter.current_model_id != confirmed_model:
         raise CodexChatAgentError("The Agent did not confirm the requested model; no message was sent.",
                                   error_code="unsupported_configuration", gate=None)
     if requested_effort and settings.get("agent_reasoning_effort") != requested_effort:

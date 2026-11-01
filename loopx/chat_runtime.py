@@ -375,6 +375,11 @@ class ChatRuntimeController:
             )
         if agent_id == "antigravity":
             from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+            if execution_mode or project_context is not None or read_only_review:
+                raise CodexChatAgentError(
+                    "Antigravity supports Chat and Steward; use Codex for governed workspace execution.",
+                    gate=None, error_code="unsupported_configuration",
+                )
             manager_profile = (
                 dict(manager_runtime or self.manager_runtime_profile())
                 if goal_id == MANAGER_AGENT_GOAL_ID
@@ -410,6 +415,7 @@ class ChatRuntimeController:
                     else "restricted"
                 ),
                 executor_model=model_config,
+                hard_timeout_sec=self.hard_timeout_sec or 300.0,
             )
         if agent_id == "codex":
             from .capabilities.manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
@@ -1042,7 +1048,7 @@ class ChatRuntimeController:
                 self.loopx_mode.commit_recovery(session_id, native_recovery)
                 with self.lock:
                     self.adapters[session_id] = adapter
-                if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)):
+                if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) or getattr(adapter, "adapter_kind", None) == "antigravity_ls":
                     self.store.update_session(session_id, agent_model_id=adapter.current_model_id,
                         **observed_settings)
                 if session.get("agent_id") == "codex" and session.get("codex_home") is None:

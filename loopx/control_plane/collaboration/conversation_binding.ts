@@ -156,7 +156,7 @@ function binding(value: unknown): JsonObject {
       throw new EffectRuntimeRequestError("ambiguous Agent target grant");
     }
   }
-  if (row.managed_actor !== undefined && (row.context_kind !== "steward" || group || !["codex", "antigravity"].includes(String(row.executor_endpoint_id)))) {
+  if (row.managed_actor !== undefined && (row.context_kind !== "steward" || group || row.executor_endpoint_id !== "codex")) {
     throw new EffectRuntimeRequestError("managed identity requires a private native steward");
   }
   return {

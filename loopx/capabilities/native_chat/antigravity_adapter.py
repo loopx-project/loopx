@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import threading
 import time
 from typing import Any, Callable, Mapping
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 import uuid
 
 from ...chat import (
@@ -30,58 +33,42 @@ ANTIGRAVITY_MODEL_PLACEHOLDERS: dict[str, str] = {
     "gemini-4-argon-low": "MODEL_PLACEHOLDER_M419",
 }
 
-ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = (
+ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
     {
-        "id": "gemini-4-argon-high",
-        "display_name": "Gemini 4 Argon (High)",
-        "description": "Antigravity Gemini 4 Argon with high reasoning effort",
-        "is_default": True,
-        "default_reasoning_effort": "high",
-        "supported_reasoning_efforts": [
-            {"reasoning_effort": "low", "description": "Fast lower-latency thinking"},
-            {"reasoning_effort": "medium", "description": "Balanced thinking"},
-            {"reasoning_effort": "high", "description": "Deep reasoning"},
-        ],
-    },
-    {
-        "id": "gemini-4-argon-medium",
-        "display_name": "Gemini 4 Argon (Medium)",
-        "description": "Antigravity Gemini 4 Argon with medium reasoning effort",
-        "is_default": False,
-        "default_reasoning_effort": "medium",
-        "supported_reasoning_efforts": [
-            {"reasoning_effort": "low", "description": "Fast lower-latency thinking"},
-            {"reasoning_effort": "medium", "description": "Balanced thinking"},
-            {"reasoning_effort": "high", "description": "Deep reasoning"},
-        ],
-    },
-    {
-        "id": "gemini-4-argon-low",
-        "display_name": "Gemini 4 Argon (Low)",
-        "description": "Antigravity Gemini 4 Argon with low reasoning effort",
-        "is_default": False,
-        "default_reasoning_effort": "low",
-        "supported_reasoning_efforts": [
-            {"reasoning_effort": "low", "description": "Fast lower-latency thinking"},
-            {"reasoning_effort": "medium", "description": "Balanced thinking"},
-            {"reasoning_effort": "high", "description": "Deep reasoning"},
-        ],
-    },
-    {
-        "id": "gemini-4-argon",
-        "display_name": "Gemini 4 Argon",
-        "description": "Antigravity Gemini 4 Argon (selects tier from reasoning effort)",
-        "is_default": False,
-        "default_reasoning_effort": "high",
-        "supported_reasoning_efforts": [
-            {"reasoning_effort": "low", "description": "Maps to Gemini 4 Argon (Low)"},
-            {"reasoning_effort": "medium", "description": "Maps to Gemini 4 Argon (Medium)"},
-            {"reasoning_effort": "high", "description": "Maps to Gemini 4 Argon (High)"},
-        ],
-    },
+        "id": f"gemini-4-argon-{effort}",
+        "display_name": f"Gemini 4 Argon ({effort.title()})",
+        "is_default": effort == "high",
+        "default_reasoning_effort": effort,
+        "supported_reasoning_efforts": [{"reasoning_effort": effort}],
+    }
+    for effort in ("high", "medium", "low")
 )
 
-_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
+                         headers: Any, newurl: str) -> None:
+        # A local endpoint's CSRF token must never follow an HTTP redirect.
+        return None
+
+
+_NO_PROXY_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), _LocalRedirectHandler(),
+)
+
+
+def _local_url(value: str) -> str:
+    parsed = urlsplit(value)
+    host = parsed.hostname or ""
+    try:
+        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if (parsed.scheme != "http" or not loopback or not parsed.port
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in {"", "/"}):
+        raise ValueError("Antigravity requires an HTTP loopback endpoint with a port")
+    return value.rstrip("/")
 
 
 def _rpc_post(
@@ -92,7 +79,7 @@ def _rpc_post(
     *,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
-    url = f"{base_url.rstrip('/')}/exa.language_server_pb.LanguageServerService/{method}"
+    url = f"{_local_url(base_url)}/exa.language_server_pb.LanguageServerService/{method}"
     req = urllib.request.Request(
         url,
         data=json.dumps(dict(payload)).encode("utf-8"),
@@ -109,15 +96,14 @@ def _rpc_post(
             data = json.loads(raw) if raw.strip() else {}
             return data if isinstance(data, dict) else {}
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:400]
         raise CodexChatAgentError(
-            f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}: {body}",
+            f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}",
             gate=None,
             error_code="antigravity_rpc_error",
         ) from exc
     except Exception as exc:
         raise CodexChatAgentError(
-            f"Antigravity LanguageServerService/{method} transport failed: {exc}",
+            f"Antigravity LanguageServerService/{method} transport failed ({type(exc).__name__})",
             gate=None,
             error_code="antigravity_transport_error",
         ) from exc
@@ -130,8 +116,11 @@ def discover_antigravity_language_server(
     source_env = os.environ if env is None else env
     explicit_url = str(source_env.get("ANTIGRAVITY_LS_URL") or "").strip()
     explicit_token = str(source_env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
-    if explicit_url and explicit_token:
+    if explicit_url or explicit_token:
+        if not explicit_url or not explicit_token:
+            return None
         try:
+            explicit_url = _local_url(explicit_url)
             _rpc_post(
                 explicit_url,
                 explicit_token,
@@ -145,12 +134,12 @@ def discover_antigravity_language_server(
                 "pid": None,
                 "source": "environment",
             }
-        except CodexChatAgentError:
-            pass
+        except (CodexChatAgentError, ValueError):
+            return None
 
     try:
         ps_out = subprocess.check_output(
-            ["ps", "-ax", "-o", "pid=,command="],
+            ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=3.0,
@@ -160,7 +149,8 @@ def discover_antigravity_language_server(
 
     candidates: list[tuple[int, str]] = []
     for line in ps_out.splitlines():
-        if "language_server" not in line or "--csrf_token" not in line:
+        if ("language_server" not in line or "antigravity" not in line.lower()
+                or "--csrf_token" not in line):
             continue
         match = re.match(r"^\s*(\d+)\s+(.*)$", line)
         if not match:
@@ -171,13 +161,16 @@ def discover_antigravity_language_server(
         if token_match:
             candidates.append((pid, token_match.group(1)))
 
+    deadline = time.monotonic() + 4.0
     for pid, token in candidates:
+        if time.monotonic() >= deadline:
+            break
         try:
             lsof_out = subprocess.check_output(
                 ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
                 text=True,
                 stderr=subprocess.DEVNULL,
-                timeout=3.0,
+                timeout=max(0.1, deadline - time.monotonic()),
             )
         except Exception:
             continue
@@ -187,9 +180,12 @@ def discover_antigravity_language_server(
             if port_match:
                 ports.append(int(port_match.group(1)))
         for port in ports:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             url = f"http://127.0.0.1:{port}"
             try:
-                _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=1.5)
+                _rpc_post(url, token, "GetCascadeModelConfigData", {}, timeout=min(1.5, remaining))
                 return {
                     "url": url,
                     "csrf_token": token,
@@ -212,7 +208,7 @@ def probe_antigravity_endpoint(
             "antigravity-ls",
             f"Antigravity Language Server ({discovered['url']}, default model {ANTIGRAVITY_DEFAULT_MODEL})",
         )
-    app_ls = Path("/Applications/Antigravity.app/Contents/Resources/bin/language_server_macos_arm")
+    app_ls = Path("/Applications/Antigravity.app/Contents/Resources/bin/language_server")
     agy_bin = shutil.which("agy")
     if app_ls.exists() or agy_bin:
         return (
@@ -234,43 +230,38 @@ def resolve_antigravity_model_placeholder(
     dynamic_configs: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     """Return `(canonical_model_id, model_placeholder)` for Antigravity."""
-    raw_model = str(model_id or "").strip()
+    raw_model = str(model_id or "").strip().lower()
     effort = str(reasoning_effort or "").strip().lower()
-    lowered = raw_model.lower()
-
-    if not lowered or lowered in {"argon", "gemini-4-argon"}:
-        if effort == "low":
-            return "gemini-4-argon-low", ANTIGRAVITY_MODEL_PLACEHOLDERS["gemini-4-argon-low"]
-        if effort == "medium":
-            return "gemini-4-argon-medium", ANTIGRAVITY_MODEL_PLACEHOLDERS["gemini-4-argon-medium"]
-        return "gemini-4-argon-high", ANTIGRAVITY_MODEL_PLACEHOLDERS["gemini-4-argon-high"]
-
-    if lowered in ANTIGRAVITY_MODEL_PLACEHOLDERS:
-        if lowered.startswith("gemini-4-argon-") and effort in {"low", "medium", "high"}:
-            candidate = f"gemini-4-argon-{effort}"
-            if candidate in ANTIGRAVITY_MODEL_PLACEHOLDERS and lowered == ANTIGRAVITY_DEFAULT_MODEL:
-                return candidate, ANTIGRAVITY_MODEL_PLACEHOLDERS[candidate]
-        return lowered, ANTIGRAVITY_MODEL_PLACEHOLDERS[lowered]
-
-    if raw_model.startswith("MODEL_PLACEHOLDER_"):
-        for canonical, placeholder in ANTIGRAVITY_MODEL_PLACEHOLDERS.items():
-            if placeholder == raw_model:
-                return canonical, placeholder
-        return raw_model, raw_model
-
-    for cfg in dynamic_configs or []:
-        label = str(cfg.get("label") or "").strip()
-        placeholder = str((cfg.get("modelOrAlias") or {}).get("model") or "").strip()
-        if not placeholder:
-            continue
-        if label.lower() == lowered or placeholder.lower() == lowered:
-            return raw_model, placeholder
-
-    return ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_MODEL_PLACEHOLDERS[ANTIGRAVITY_DEFAULT_MODEL]
+    if effort and effort not in {"low", "medium", "high"}:
+        raise CodexChatAgentError("Choose low, medium, or high for Antigravity.",
+                                  gate=None, error_code="unsupported_configuration")
+    if not raw_model or raw_model in {"argon", "gemini-4-argon"}:
+        canonical = f"gemini-4-argon-{effort or 'high'}"
+    else:
+        canonical = raw_model
+    if (canonical not in ANTIGRAVITY_MODEL_PLACEHOLDERS
+            or effort and canonical != f"gemini-4-argon-{effort}"):
+        raise CodexChatAgentError("Choose a supported Argon model and its matching reasoning effort.",
+                                  gate=None, error_code="unsupported_configuration")
+    placeholder = ANTIGRAVITY_MODEL_PLACEHOLDERS[canonical]
+    if dynamic_configs is not None:
+        match = next((row for row in dynamic_configs
+                      if row.get("modelId") == canonical
+                      or (row.get("modelOrAlias") or {}).get("model") == placeholder), None)
+        if match is None:
+            raise CodexChatAgentError("The local Antigravity account did not offer this Argon model.",
+                                      gate=None, error_code="unsupported_configuration")
+        placeholder = str((match.get("modelOrAlias") or {}).get("model") or placeholder)
+    return canonical, placeholder
 
 
 class AntigravityAdapter:
-    """Session adapter backed by Antigravity's local LanguageServerService."""
+    """Local text Chat and trusted-owner Steward over LanguageServerService.
+
+    Restricted Chat disables native tools. Trusted-owner uses Antigravity's
+    existing approvals; LoopX never accepts those approvals on the user's behalf.
+    Governed Tasks and workspace grants retain their existing executor owner.
+    """
 
     adapter_kind = "antigravity_ls"
 
@@ -289,6 +280,7 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         initial_history: list[dict[str, str]] | None = None,
         resumed: bool = False,
+        hard_timeout_sec: float = 300.0,
     ) -> None:
         self.work_dir = work_dir.resolve()
         self.objective = objective
@@ -304,8 +296,13 @@ class AntigravityAdapter:
         self._pending_history: list[dict[str, str]] = (
             list(initial_history) if initial_history and not resumed else []
         )
-        self._system_primed = resumed
+        self._system_primed = False
         self._closed = False
+        self.hard_timeout_sec = hard_timeout_sec
+        self._interrupted = threading.Event()
+        self._send_lock = threading.Lock()
+        self._active_turn_id: str | None = None
+        self._cancel_acknowledged = False
 
     @property
     def current_model_id(self) -> str:
@@ -330,7 +327,13 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         executor_model: Mapping[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
+        hard_timeout_sec: float = 300.0,
     ) -> "AntigravityAdapter":
+        if runtime_profile not in {"restricted", "trusted_owner"}:
+            raise ValueError("unsupported Antigravity Chat runtime profile")
+        # Validate user intent before creating an upstream cascade.
+        requested = dict(executor_model or {})
+        resolve_antigravity_model_placeholder(requested.get("model"), requested.get("reasoning_effort"))
         discovered = discover_antigravity_language_server(env=env)
         if discovered is None:
             raise CodexChatAgentError(
@@ -341,14 +344,9 @@ class AntigravityAdapter:
         ls_url = str(discovered["url"])
         csrf_token = str(discovered["csrf_token"])
 
-        dynamic_configs: list[dict[str, Any]] = []
-        try:
-            model_data = _rpc_post(ls_url, csrf_token, "GetCascadeModelConfigData", {}, timeout=3.0)
-            raw_configs = model_data.get("clientModelConfigs")
-            if isinstance(raw_configs, list):
-                dynamic_configs = [item for item in raw_configs if isinstance(item, dict)]
-        except CodexChatAgentError:
-            pass
+        model_data = _rpc_post(ls_url, csrf_token, "GetCascadeModelConfigData", {}, timeout=3.0)
+        raw_configs = model_data.get("clientModelConfigs")
+        dynamic_configs = [item for item in raw_configs if isinstance(item, dict)] if isinstance(raw_configs, list) else []
 
         requested_model = (
             str(executor_model.get("model") or "").strip()
@@ -382,6 +380,12 @@ class AntigravityAdapter:
             except CodexChatAgentError:
                 resumed = False
 
+        if cascade_id and not resumed:
+            raise CodexChatAgentError(
+                "The original Antigravity conversation is unavailable. Restore it in Antigravity or start a new Chat explicitly.",
+                gate=None, error_code="resume_failed",
+            )
+
         if not resumed:
             started = _rpc_post(
                 ls_url,
@@ -409,22 +413,13 @@ class AntigravityAdapter:
             csrf_token=csrf_token,
             model_id=model_id,
             model_placeholder=model_placeholder,
-            reasoning_effort=requested_effort or ANTIGRAVITY_DEFAULT_REASONING_EFFORT,
+            reasoning_effort=model_id.rsplit("-", 1)[-1],
             runtime_profile=runtime_profile,
             team_plan_context=team_plan_context,
             initial_history=history,
             resumed=resumed,
+            hard_timeout_sec=hard_timeout_sec,
         )
-
-    def _refresh_ls_connection_if_needed(self) -> None:
-        try:
-            _rpc_post(self.ls_url, self.csrf_token, "GetCascadeModelConfigData", {}, timeout=2.0)
-            return
-        except CodexChatAgentError:
-            discovered = discover_antigravity_language_server()
-            if discovered is not None:
-                self.ls_url = str(discovered["url"])
-                self.csrf_token = str(discovered["csrf_token"])
 
     def _build_turn_prompt(self, message: str) -> str:
         parts: list[str] = []
@@ -440,8 +435,6 @@ class AntigravityAdapter:
                         history_lines.append(f"{role}: {content}")
                 if len(history_lines) > 1:
                     parts.append("\n".join(history_lines))
-                self._pending_history.clear()
-            self._system_primed = True
         parts.append(
             _turn_prompt(
                 message,
@@ -450,44 +443,42 @@ class AntigravityAdapter:
         )
         return "\n\n".join(parts)
 
-    def _build_cascade_config(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        user_config: dict[str, Any] = {}
-        user_agent_spec: dict[str, Any] = {}
+    def _build_cascade_config(self) -> dict[str, Any]:
+        # Never inherit an old cascade's tool permissions or userAgentSpec.
+        # Restricted Chat is text-only; trusted_owner retains native host approval.
+        restricted = self.runtime_profile == "restricted"
+        return {"plannerConfig": {
+            "planModel": self.model_placeholder,
+            "requestedModel": {"model": self.model_placeholder},
+            "conversational": {
+                "plannerMode": ("CONVERSATIONAL_PLANNER_MODE_READ_ONLY" if restricted
+                                else "CONVERSATIONAL_PLANNER_MODE_DEFAULT"),
+                "agenticMode": not restricted,
+            },
+            **({"toolConfig": {"forceDisableToolCalling": True},
+                "customizationDiscoveryConfig": {"hooks": {"inheritUser": False}}}
+               if restricted else {}),
+        }}
+
+    def capabilities(self) -> dict[str, Any]:
+        return {"adapter_kind": self.adapter_kind, "streaming": True,
+                "resume": True, "interrupt": True, "steering": False}
+
+    def start_turn(self, message: str,
+                   event_sink: Callable[[str, dict[str, Any]], None] | None = None) -> dict[str, Any]:
+        self._interrupted.clear()
+        self._cancel_acknowledged = False
         try:
-            traj = _rpc_post(
-                self.ls_url,
-                self.csrf_token,
-                "GetCascadeTrajectory",
-                {"cascadeId": self.cascade_id},
-                timeout=4.0,
-            )
-            metadata = (traj.get("trajectory") or {}).get("generatorMetadata") or []
-            if isinstance(metadata, list):
-                for entry in reversed(metadata):
-                    if not isinstance(entry, dict):
-                        continue
-                    if not user_config and isinstance(entry.get("userConfig"), dict):
-                        user_config = json.loads(json.dumps(entry["userConfig"]))
-                    if not user_agent_spec and isinstance(entry.get("userAgentSpec"), dict):
-                        user_agent_spec = json.loads(json.dumps(entry["userAgentSpec"]))
-                    if user_config and user_agent_spec:
-                        break
-        except CodexChatAgentError:
-            pass
+            return self._run_turn(message, event_sink)
+        except BaseException:
+            # A timeout/transport or permission failure is not a successful turn.
+            # Retain an unconfirmed cancellation as an error for the caller fence.
+            self.interrupt_turn()
+            raise
+        finally:
+            self._active_turn_id = None
 
-        planner_cfg = user_config.setdefault("plannerConfig", {})
-        if not isinstance(planner_cfg, dict):
-            planner_cfg = {}
-            user_config["plannerConfig"] = planner_cfg
-        planner_cfg["planModel"] = self.model_placeholder
-        planner_cfg["requestedModel"] = {"model": self.model_placeholder}
-        conversational = planner_cfg.setdefault("conversational", {})
-        if isinstance(conversational, dict):
-            conversational.setdefault("plannerMode", "CONVERSATIONAL_PLANNER_MODE_DEFAULT")
-            conversational.setdefault("agenticMode", True)
-        return user_config, user_agent_spec
-
-    def start_turn(
+    def _run_turn(
         self,
         message: str,
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
@@ -499,14 +490,7 @@ class AntigravityAdapter:
                 error_code="session_closed",
             )
 
-        self._refresh_ls_connection_if_needed()
         turn_id = f"agy_turn_{uuid.uuid4().hex[:12]}"
-        if event_sink is not None:
-            event_sink(
-                "turn.started",
-                {"upstream_turn_id": turn_id, "threadId": self.cascade_id},
-            )
-
         before_traj = _rpc_post(
             self.ls_url,
             self.csrf_token,
@@ -514,8 +498,13 @@ class AntigravityAdapter:
             {"cascadeId": self.cascade_id},
             timeout=5.0,
         )
+        if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
+            raise CodexChatAgentError(
+                "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.",
+                gate=None, error_code="resume_failed",
+            )
         start_step_index = int(before_traj.get("numTotalSteps") or 0)
-        user_config, user_agent_spec = self._build_cascade_config()
+        user_config = self._build_cascade_config()
         full_prompt = self._build_turn_prompt(message)
 
         send_payload: dict[str, Any] = {
@@ -523,39 +512,33 @@ class AntigravityAdapter:
             "items": [{"text": full_prompt}],
             "cascadeConfig": user_config,
         }
-        if user_agent_spec:
-            send_payload["userAgentSpec"] = user_agent_spec
-
-        _rpc_post(
-            self.ls_url,
-            self.csrf_token,
-            "SendUserCascadeMessage",
-            send_payload,
-            timeout=15.0,
-        )
+        with self._send_lock:
+            self._check_interrupted()
+            self._active_turn_id = turn_id
+            if event_sink is not None:
+                event_sink("turn.started", {"upstream_turn_id": turn_id, "threadId": self.cascade_id})
+            _rpc_post(self.ls_url, self.csrf_token, "SendUserCascadeMessage", send_payload, timeout=15.0)
+            self._system_primed = True
+            self._pending_history.clear()
 
         stream_filter = VisibleResponseStreamFilter()
         emitted_visible_delta = False
         emitted_text_by_step: dict[int, str] = {}
         announced_phases: set[tuple[int, str]] = set()
         latest_response_text = ""
-        deadline = time.monotonic() + 300.0
+        deadline = time.monotonic() + self.hard_timeout_sec
         saw_running_or_new_step = False
 
         while time.monotonic() < deadline:
-            if self._closed:
-                raise CodexChatAgentError(
-                    "Antigravity turn was interrupted",
-                    gate=None,
-                    error_code="turn_interrupted",
-                )
-            time.sleep(0.25)
+            self._check_interrupted()
+            self._interrupted.wait(0.25)
+            self._check_interrupted()
             traj = _rpc_post(
                 self.ls_url,
                 self.csrf_token,
                 "GetCascadeTrajectory",
                 {"cascadeId": self.cascade_id},
-                timeout=6.0,
+                timeout=2.0,
             )
             status = str(traj.get("status") or "")
             total_steps = int(traj.get("numTotalSteps") or 0)
@@ -563,6 +546,7 @@ class AntigravityAdapter:
                 saw_running_or_new_step = True
 
             if total_steps > start_step_index:
+                self._check_interrupted()
                 steps_resp = _rpc_post(
                     self.ls_url,
                     self.csrf_token,
@@ -572,7 +556,7 @@ class AntigravityAdapter:
                         "startIndex": start_step_index,
                         "endIndex": total_steps,
                     },
-                    timeout=8.0,
+                    timeout=2.0,
                 )
                 steps = steps_resp.get("steps") or []
                 if isinstance(steps, list):
@@ -581,6 +565,14 @@ class AntigravityAdapter:
                             continue
                         step_idx = start_step_index + offset
                         step_type = str(step.get("type") or "")
+                        step_status = str(step.get("status") or "")
+                        if step_status == "CORTEX_STEP_STATUS_WAITING":
+                            raise CodexChatAgentError(
+                                "Antigravity needs your response in its application; resolve it there and retry.",
+                                gate={"kind": "host_tool_gate", "summary": "Antigravity is waiting for input.",
+                                      "next_action": "Open Antigravity and resolve the pending interaction."},
+                                error_code="host_tool_gate",
+                            )
                         if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
                             pr = step.get("plannerResponse") or {}
                             if not isinstance(pr, dict):
@@ -597,6 +589,9 @@ class AntigravityAdapter:
                                         },
                                     )
                             tool_calls = pr.get("toolCalls") or []
+                            if tool_calls and self.runtime_profile == "restricted":
+                                raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
+                                                          gate=None, error_code="unsupported_configuration")
                             if isinstance(tool_calls, list) and tool_calls and (step_idx, "tool") not in announced_phases:
                                 announced_phases.add((step_idx, "tool"))
                                 first_tool = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
@@ -636,8 +631,12 @@ class AntigravityAdapter:
                                 error_code="antigravity_step_error",
                             )
 
-            if saw_running_or_new_step and status != "CASCADE_RUN_STATUS_RUNNING" and latest_response_text.strip():
+            self._check_interrupted()
+            if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE":
                 break
+        else:
+            raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
+                                      gate=None, error_code="response_timeout")
 
         if event_sink is not None:
             tail = stream_filter.finish()
@@ -663,21 +662,37 @@ class AntigravityAdapter:
             event_sink("answer.final", {"response": parsed})
         return parsed
 
+    def _check_interrupted(self) -> None:
+        if self._closed or self._interrupted.is_set():
+            raise CodexChatAgentError("Antigravity turn was interrupted.",
+                                      gate=None, error_code="turn_interrupted")
+
     def interrupt_turn(self, turn_id: str | None = None) -> None:
-        del turn_id
-        try:
-            _rpc_post(
-                self.ls_url,
-                self.csrf_token,
-                "CancelCascadeInvocation",
-                {"cascadeId": self.cascade_id},
-                timeout=5.0,
-            )
-        except CodexChatAgentError:
-            pass
+        active = self._active_turn_id
+        if active is not None and turn_id is not None and turn_id != active:
+            raise ValueError("the active Antigravity Turn changed")
+        self._interrupted.set()
+        if active is None:
+            return
+        with self._send_lock:
+            if not self._cancel_acknowledged:
+                _rpc_post(self.ls_url, self.csrf_token, "CancelCascadeInvocation",
+                          {"cascadeId": self.cascade_id}, timeout=5.0)
+                deadline = time.monotonic() + 5.0
+                while True:
+                    trajectory = _rpc_post(self.ls_url, self.csrf_token, "GetCascadeTrajectory",
+                                           {"cascadeId": self.cascade_id}, timeout=2.0)
+                    if trajectory.get("status") == "CASCADE_RUN_STATUS_IDLE":
+                        break
+                    if time.monotonic() >= deadline:
+                        raise CodexChatAgentError("Antigravity has not confirmed stop; retry stopping it.",
+                                                  gate=None, error_code="response_timeout")
+                    time.sleep(0.05)
+                self._cancel_acknowledged = True
 
     def close_session(self) -> None:
         self._closed = True
+        self.interrupt_turn()
 
     def healthcheck(self) -> bool:
         if self._closed:

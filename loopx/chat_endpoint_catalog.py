@@ -96,7 +96,7 @@ def _antigravity_readiness() -> dict[str, Any]:
     return {
         "available": False,
         "executable": executable,
-        "unavailable_reason": "executable_not_found",
+        "unavailable_reason": "antigravity_unavailable",
         "detail": detail,
     }
 
