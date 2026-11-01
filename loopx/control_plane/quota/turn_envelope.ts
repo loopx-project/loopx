@@ -1449,6 +1449,13 @@ function initialReadPointers(context: JsonObject): string[] {
     include(...source, "content", "current", "revision");
     include(...source, "content", "current", "instruction");
     include(...source, "content", "outcome_context");
+    const requirements = object(object(object(_source)?.content)?.goal_acceptance_contract)?.outcome_requirements;
+    const outcomes = object(requirements)?.outcomes;
+    if (Array.isArray(outcomes)) outcomes.forEach((_outcome, outcomeIndex) => {
+      const outcome = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes", outcomeIndex];
+      include(...outcome, "id");
+      include(...outcome, "supporting_material_pointer");
+    });
     include(...source, "content", "todo", "text");
     include(...source, "content", "todo", "note");
     include(...source, "content", "graph", "guidance");
@@ -1457,8 +1464,29 @@ function initialReadPointers(context: JsonObject): string[] {
     include(...source, "content", "harness", "guidance");
     include(...source, "content", "harness", "orchestration_gate");
   });
-  for (const field of ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy", "delivery_workspace_causality"])
+  for (const field of ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+    "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
     include("interaction_contract", "cli_channel", field);
+  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const plan = object(object(interaction.cli_channel)?.settlement_plan);
+  if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {
+    for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
+    plan.ordered_steps.forEach((value, stepIndex) => {
+      const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
+      if (!step) { include(...stepPath); return; }
+      for (const field of Object.keys(step)) {
+        if (field !== "optional_attachments" || !Array.isArray(step[field])) { include(...stepPath, field); continue; }
+        step[field].forEach((attachment, attachmentIndex) => {
+          const path = [...stepPath, field, attachmentIndex];
+          if (object(attachment)?.required !== false) { include(...path); return; }
+          // Explicitly optional guidance is read before using that attachment.
+          // Keep its identity and actual read/authoring routes discoverable.
+          for (const key of ["capability_id", "required", "option", "inline_option", "inline_field", "attachment_schema"])
+            include(...path, key);
+        });
+      }
+    });
+  } else include(...planPath); // Unknown plan versions keep their complete obligations.
   return pointers;
 }
 

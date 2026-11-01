@@ -41,7 +41,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   select: list[str] | None = None,
                   selection_sha256: str | None = None,
                   list_fields: bool = False,
-                  list_depth: int | None = None) -> dict[str, Any]:
+                  list_depth: int | None = None,
+                  initial_read: bool = False) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -53,7 +54,12 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
             "offset": offset, "next_offset": cursor if cursor < len(raw) else None,
             "total_bytes": len(raw), "eof": cursor == len(raw), "content": text}
         if select is not None:
-            result.update(selection_sha256=selection_sha256, selected_pointers=select)
+            result["selection_sha256"] = selection_sha256
+            # The new initial view already names addresses in content; its
+            # short continuation pins that view's digest. Existing explicit
+            # selectors retain their original metadata and continuation.
+            if not initial_read:
+                result["selected_pointers"] = select
             if list_fields:
                 result["list_fields"] = True
             result["read_instruction"] = ("This is selected detail from the original capture, not a complete context read. "
@@ -68,7 +74,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
                 max_page_output_bytes=next_page_output_bytes or output_limit,
-                select=select, selection_sha256=selection_sha256, list_fields=list_fields, list_depth=list_depth)
+                select=None if initial_read else select, selection_sha256=selection_sha256,
+                list_fields=list_fields, list_depth=list_depth, initial_read=initial_read)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -171,8 +178,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
         if list_fields and selectors is None:
             selectors = [""]
         selection_digest = getattr(args, "selection_sha256", None)
-        if initial_read and (offset != 0 or selection_digest is not None):
-            raise ValueError("initial-read starts at offset zero without selection-sha256; follow next_command afterwards")
+        if initial_read and offset > 0 and selection_digest is None:
+            raise ValueError("initial-read continuation requires selection-sha256; follow next_command")
         if selectors is None and not initial_read and selection_digest is not None:
             raise ValueError("selection-sha256 requires --select")
         if selectors is not None or initial_read:
@@ -208,7 +215,7 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
             next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
-            list_fields=list_fields, list_depth=list_depth)
+            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read)
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -281,7 +288,8 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
     if initial_read_pointers and mode == "full":
         overview = result.pop("overview")
         instruction = result["instruction"]
-        result["instruction"] = "Start with first_read_command for current facts and source navigation. " + instruction
+        result["instruction"] = ("Start with first_read_command for current facts and source navigation. "
+            "Read complete optional attachment guidance from its captured step before using that attachment. " + instruction)
         result["first_read_command"] = context_capture_read_command(current_path, current["sha256"],
             page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True)
         if not fits():
