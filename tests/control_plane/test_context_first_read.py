@@ -50,7 +50,8 @@ def decision():
                 "settlement_plan": {"schema_version": "quota_settlement_plan_v1", "identity": {"turn_instance_id": "original"},
                     "ordered_steps": [{"kind": "durable_writeback", "precondition": "Validate first; preserve the original effect identity.",
                         "unknown_obligation": "This new obligation must remain visible.", "optional_attachments": [
-                            {"required": False, "capability_id": "example", "option": "--example-json <file>", "guidance": "optional recipe " * 3000},
+                            {"required": False, "capability_id": "example", "option": "--example-json <file>",
+                                "new_gate": "Preserve this future attachment constraint.", "guidance": "optional recipe " * 3000},
                             {"required": True, "guidance": "This attachment is required."},
                         ]}]},
             },
@@ -109,6 +110,7 @@ def test_initial_read_keeps_settlement_obligations_and_optional_routes(tmp_path,
     assert values[step + "unknown_obligation"] == "This new obligation must remain visible."
     assert values[step + "optional_attachments/0/required"] is False
     assert values[step + "optional_attachments/0/option"] == "--example-json <file>"
+    assert values[step + "optional_attachments/0/new_gate"] == "Preserve this future attachment constraint."
     assert values[step + "optional_attachments/1"]["guidance"] == "This attachment is required."
     assert "optional recipe" not in page["content"]
     # Existing explicit EOF selections retain their wire contract.

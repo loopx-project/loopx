@@ -1481,8 +1481,11 @@ function initialReadPointers(context: JsonObject): string[] {
           if (object(attachment)?.required !== false) { include(...path); return; }
           // Explicitly optional guidance is read before using that attachment.
           // Keep its identity and actual read/authoring routes discoverable.
-          for (const key of ["capability_id", "required", "option", "inline_option", "inline_field", "attachment_schema"])
-            include(...path, key);
+          for (const key of Object.keys(object(attachment)!)) {
+            if (["guidance", "attachment_template", "linked_question_attachment_template", "path_delta_attachment_template",
+              "optional_measurement_example", "optional_question_evolution_example"].includes(key)) continue;
+            include(...path, key); // Unknown attachment controls are never hidden.
+          }
         });
       }
     });

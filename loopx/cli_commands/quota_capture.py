@@ -289,7 +289,7 @@ def _native_context_reference(projected: dict[str, Any], reference: dict[str, An
         overview = result.pop("overview")
         instruction = result["instruction"]
         result["instruction"] = ("Start with first_read_command for current facts and source navigation. "
-            "Read complete optional attachment guidance from its captured step before using that attachment. " + instruction)
+            "Read each complete optional attachment from its captured step before using it. " + instruction)
         result["first_read_command"] = context_capture_read_command(current_path, current["sha256"],
             page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True)
         if not fits():
