@@ -400,19 +400,51 @@ or structured no-follow-up; the agent must not stop silently in monitor-only
 state.
 
 When a review or public maintainer comment contains a concrete correction, the
-host compacts it into `issue_fix_maintainer_correction_input_v0` and passes it
+host compacts it into `issue_fix_maintainer_correction_input_v1` and passes it
 to `pr-lifecycle`. The compact input keeps only the correction kind, a public
-source reference, a bounded summary, and one of: verification plus PR update
-path, a concrete ambiguity question, or missing authority scopes. It never
-copies the raw review/comment body.
+source reference, a bounded summary, one of: verification plus PR update
+path, a concrete ambiguity question, or missing authority scopes, and a
+`source_event` naming the provider event that carried the correction:
+`{kind: issue_comment|review|review_comment, id, html_url, author_login,
+author_association, created_at, updated_at}`. It never copies the raw
+review/comment body. The older `issue_fix_maintainer_correction_input_v0`
+shape without `source_event` is still accepted and recorded as
+`admission_basis: host_asserted`; a v1 input is `provider_verified` because
+LoopX matches the event id and `updated_at` against the PR's body-free
+comment and review metadata (from the same `--metadata-json` fixture keys
+`comments`, `reviews`, `reviewComments`, or fetched with `gh api` under
+`--fetch-metadata`; reviews use `submitted_at` as their revision).
 
-With `--execute-transition`, an `actionable_patch` creates exactly one
+Every correction passes deterministic admission gates before any Todo write,
+and every rejection is recorded in the ledger row as a `context_only` entry
+with its `reason` instead of being dropped: `source_event_not_observed`,
+`source_event_revision_mismatch`, `stale_revision` (an older `updated_at` for
+an already admitted event), `self_or_bot_author` (login ending in `[bot]`;
+no configured LoopX actor login exists yet), `author_not_maintainer`
+(association outside COLLABORATOR/MEMBER/OWNER) and `terminal_pr_state`.
+Immediately before the Todo write the gates run again against the ledger as it
+stands, and a stopped Goal refuses with `goal_not_active`.
+
+With `--execute-transition`, an accepted `actionable_patch` creates exactly one
 `issue_fix_maintainer_correction_patch` todo claimed by the registered agent.
 `semantic_ambiguity` and `missing_authority` create a concrete user gate that
-blocks that same agent. `unchanged` creates no todo. The normalized correction
-fingerprint and deterministic todo text make retries idempotent, while terminal
-merged/closed state still takes precedence over late feedback.
-
+blocks that same agent. `unchanged` creates no todo. The Todo is written under
+a stable operation id derived from the repository, PR, event id and
+`updated_at` (or the correction fingerprint for v0), so an exact replay yields
+`already_exists` even after the Todo is done, two different comments with the
+same wording yield two Todos, and a newer revision of the same comment yields a
+new Todo while the earlier entry is marked `superseded`. The ledger row keeps
+these entries in `maintainer_corrections`
+(`operation_id`, `source_event`, `correction_fingerprint`, `admission_basis`,
+`disposition`, `reason`, `todo_id`, `recorded_at`, `superseded_by`,
+`todo_intent`); the accepted entry is written with `todo_id: null` before the
+Todo write and filled afterwards, and any later run retries a still-pending
+accepted entry under its operation id. Setting
+`LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO=1` aborts between those two
+writes and exists only to exercise that recovery. The legacy
+`maintainer_correction` fields keep the latest accepted correction for older
+readers. Terminal merged/closed state still takes precedence over late
+feedback.
 When a connected lifecycle writeback observes `MERGED`, LoopX also appends one
 repository-qualified, public-safe, idempotent `pr_merge` rollout event. This is
 the event consumed by todo resume projection. A dependent todo such as
@@ -1129,7 +1161,8 @@ loopx issue-fix pr-lifecycle \
 The correction source is provider-neutral: any public HTTPS or repo-relative
 reference may be used, while the current PR monitor remains the authoritative
 lifecycle source. Exact retries neither add another successor nor rewrite the
-same lifecycle row.
+same lifecycle row; `maintainer_correction_admission` in the output names the
+operation id, admission basis, disposition and reason for this input.
 
 ## Status And Output View
 

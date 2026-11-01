@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ...agent_registry import load_goal_from_registry
 from ...boundary_authority import checkpointed_boundary_authority_summary
+from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.runtime.time import now_utc_iso
 from ...domain_packs.issue_fix import (
     default_issue_fix_candidate_preflight_ledger_path,
     default_issue_fix_domain_state_ledger_path,
     default_issue_fix_feasibility_ledger_path,
     default_issue_fix_repository_snapshot_ledger_path,
+    issue_fix_maintainer_correction_entries,
+    read_issue_fix_pr_lifecycle_ledger_row,
     retain_issue_fix_repository_snapshot_jsonl,
     upsert_issue_fix_candidate_preflight_ledger_jsonl,
     upsert_issue_fix_feasibility_ledger_jsonl,
@@ -60,6 +64,7 @@ from .metrics_supplement_cli import (
 from .metadata_preview import normalise_github_issue_reference
 from .pr_lifecycle import (
     build_issue_fix_pr_lifecycle_monitor_packet,
+    recheck_issue_fix_maintainer_correction_effect_gates,
     render_issue_fix_pr_lifecycle_monitor_markdown,
     validate_issue_fix_pr_lifecycle_monitor_packet,
 )
@@ -105,9 +110,210 @@ PrintPayload = Callable[
 FormatSelector = Callable[..., str]
 AddFormat = Callable[[argparse.ArgumentParser], None]
 
+# Set to "1" to abort between the accepted ledger entry write and its Todo
+# write. Exists only to prove the next run reconciles the pending entry.
+MAINTAINER_CORRECTION_FAULT_ENV = "LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO"
 
-def _comparable_delivery_evidence(
-    value: dict[str, Any] | None,
+
+def _goal_stopped_for_correction(registry_path: Path | None, goal_id: str | None) -> bool:
+    if registry_path is None or not goal_id:
+        return False
+    try:
+        return goal_is_stopped(load_goal_from_registry(registry_path, goal_id))
+    except ValueError:
+        # An unreadable activation record cannot prove the Goal is active.
+        return True
+
+
+def _write_maintainer_correction_todo(
+    *,
+    registry_path: Path,
+    goal_id: str,
+    claimed_by: str,
+    project: Path,
+    operation_id: str,
+    intent: dict[str, Any],
+) -> dict[str, Any]:
+    role = str(intent.get("role") or "agent")
+    return add_goal_todo(
+        registry_path=registry_path,
+        goal_id=goal_id,
+        role=role,
+        text=str(intent.get("text") or ""),
+        task_class=str(intent.get("task_class") or "advancement_task"),
+        action_kind=str(intent.get("action_kind") or ""),
+        required_write_scopes=(
+            list(intent.get("required_write_scopes") or []) if role == "agent" else None
+        ),
+        claimed_by=claimed_by if role == "agent" else None,
+        agent_id=claimed_by if role == "user" else None,
+        project=project,
+        operation_id=operation_id,
+    )
+
+
+def _maintainer_correction_todo_write_receipt(
+    todo_write: dict[str, Any], *, operation_id: str
+) -> dict[str, Any]:
+    todo_changed = bool(
+        todo_write.get("added")
+        or todo_write.get("metadata_updated")
+        or todo_write.get("status_changed")
+    )
+    created_todo = todo_write.get("todo")
+    created_todo = created_todo if isinstance(created_todo, dict) else {}
+    return {
+        "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
+        "write_performed": todo_changed,
+        "already_exists": bool(todo_write.get("already_exists")),
+        "todo_id": todo_write.get("todo_id"),
+        "operation_id": operation_id,
+        "role": todo_write.get("role"),
+        "claimed_by": created_todo.get("claimed_by"),
+        "blocks_agent": created_todo.get("blocks_agent"),
+        "path_recorded": False,
+    }
+
+
+def _settle_maintainer_correction_entries(
+    *,
+    payload: dict[str, Any],
+    ledger_path: Path,
+    registry_path: Path,
+    goal_id: str,
+    claimed_by: str,
+    project: Path,
+) -> dict[str, Any]:
+    """Write Todos for accepted ledger entries that still lack a todo_id.
+
+    Each accepted entry stores its own `todo_intent`, so an entry left pending
+    by an interrupted run is retried under its original operation id on any
+    later run. Every candidate is re-gated against the ledger as it stands
+    now, the same observation, and the Goal activation state.
+    """
+
+    observation = payload.get("observation")
+    observation = observation if isinstance(observation, dict) else {}
+    admission = payload.get("maintainer_correction_admission")
+    admission = admission if isinstance(admission, dict) else {}
+    current_operation_id = str(admission.get("operation_id") or "")
+    goal_stopped = _goal_stopped_for_correction(registry_path, goal_id)
+    repo = str(observation.get("repo") or "")
+    pr_ref = str(observation.get("pr_ref") or "")
+
+    row = read_issue_fix_pr_lifecycle_ledger_row(ledger_path, repo=repo, pr_ref=pr_ref)
+    ledger_entries = issue_fix_maintainer_correction_entries(row)
+    settlements: list[dict[str, Any]] = []
+    current_todo_write: dict[str, Any] | None = None
+    changed_entries: list[dict[str, Any]] = []
+    for entry in ledger_entries:
+        operation_id = str(entry.get("operation_id") or "")
+        is_current = operation_id == current_operation_id
+        intent = entry.get("todo_intent")
+        if (
+            entry.get("disposition") != "accepted"
+            or not isinstance(intent, dict)
+            or (entry.get("todo_id") and not is_current)
+        ):
+            continue
+        refusal = recheck_issue_fix_maintainer_correction_effect_gates(
+            entry,
+            observation=observation,
+            ledger_entries=ledger_entries,
+            goal_stopped=goal_stopped,
+        )
+        if refusal is not None and not entry.get("todo_id"):
+            changed_entries.append(
+                {**entry, "disposition": "context_only", "reason": refusal,
+                 "effect_recheck": "refused"}
+            )
+            settlements.append(
+                {"operation_id": operation_id, "status": "refused", "reason": refusal}
+            )
+            if is_current:
+                current_todo_write = {
+                    "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
+                    "write_performed": False,
+                    "already_exists": False,
+                    "skip_reason": refusal,
+                    "operation_id": operation_id,
+                    "path_recorded": False,
+                }
+            continue
+        if refusal is not None:
+            # The Todo already exists for this revision; a replay only reads it
+            # back and leaves its lifecycle to the Todo owner.
+            settlements.append(
+                {"operation_id": operation_id, "status": "settled_earlier", "reason": refusal}
+            )
+            if is_current:
+                current_todo_write = {
+                    "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
+                    "write_performed": False,
+                    "already_exists": True,
+                    "todo_id": entry.get("todo_id"),
+                    "operation_id": operation_id,
+                    "skip_reason": refusal,
+                    "path_recorded": False,
+                }
+            continue
+        if os.environ.get(MAINTAINER_CORRECTION_FAULT_ENV) == "1":
+            raise RuntimeError(
+                "maintainer correction Todo write aborted by "
+                f"{MAINTAINER_CORRECTION_FAULT_ENV}"
+            )
+        todo_write = _write_maintainer_correction_todo(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            claimed_by=claimed_by,
+            project=project,
+            operation_id=operation_id,
+            intent=intent,
+        )
+        receipt = _maintainer_correction_todo_write_receipt(
+            todo_write, operation_id=operation_id
+        )
+        if entry.get("todo_id") != receipt["todo_id"]:
+            changed_entries.append({**entry, "todo_id": receipt["todo_id"]})
+        settlements.append(
+            {
+                "operation_id": operation_id,
+                "status": "written" if receipt["write_performed"] else "already_exists",
+                "todo_id": receipt["todo_id"],
+            }
+        )
+        if is_current:
+            current_todo_write = receipt
+    if current_todo_write is None and current_operation_id:
+        current_todo_write = {
+            "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
+            "write_performed": False,
+            "already_exists": False,
+            "skip_reason": (
+                str(admission.get("reason") or admission.get("disposition") or "")
+                if admission.get("disposition") != "accepted"
+                else "unchanged_monitor_quiet"
+            ),
+            "operation_id": current_operation_id,
+            "path_recorded": False,
+        }
+    if changed_entries:
+        payload["maintainer_corrections"] = changed_entries
+        upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
+        row = read_issue_fix_pr_lifecycle_ledger_row(
+            ledger_path, repo=repo, pr_ref=pr_ref
+        )
+    payload["maintainer_corrections"] = issue_fix_maintainer_correction_entries(row)
+    return {
+        "schema_version": "issue_fix_maintainer_correction_settlement_v0",
+        "settlements": settlements,
+        "goal_stopped": goal_stopped,
+        "todo_write": current_todo_write,
+        "path_recorded": False,
+    }
+
+
+def _comparable_delivery_evidence(    value: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -1259,6 +1465,32 @@ def handle_issue_fix_command(
                 raise ValueError("--execute-transition requires --goal-id")
             if args.execute_transition and not args.claimed_by:
                 raise ValueError("--execute-transition requires --claimed-by")
+            should_write_domain_state = bool(
+                not args.no_write_domain_state and (args.goal_id or args.ledger_path)
+            )
+            ledger_path: Path | None = None
+            prior_maintainer_corrections = None
+            if should_write_domain_state:
+                ledger_path = (
+                    Path(args.ledger_path).expanduser()
+                    if args.ledger_path
+                    else default_issue_fix_domain_state_ledger_path(
+                        project=args.project,
+                        goal_id=args.goal_id,
+                    )
+                )
+                if args.maintainer_correction_json:
+                    prior_reference = normalise_github_issue_reference(
+                        repo=args.repo, issue_ref=args.pr_ref, url=args.url
+                    )
+                    prior_row = read_issue_fix_pr_lifecycle_ledger_row(
+                        ledger_path,
+                        repo=str(prior_reference["repo"]),
+                        pr_ref=str(prior_reference["issue_ref"]),
+                    )
+                    prior_maintainer_corrections = (
+                        issue_fix_maintainer_correction_entries(prior_row)
+                    )
             payload = build_issue_fix_pr_lifecycle_monitor_packet(
                 repo=args.repo,
                 pr_ref=args.pr_ref,
@@ -1274,20 +1506,10 @@ def handle_issue_fix_command(
                     if args.maintainer_correction_json
                     else None
                 ),
+                prior_maintainer_corrections=prior_maintainer_corrections,
                 generated_at=generated_at,
             )
-            should_write_domain_state = bool(
-                not args.no_write_domain_state and (args.goal_id or args.ledger_path)
-            )
-            if should_write_domain_state:
-                ledger_path = (
-                    Path(args.ledger_path).expanduser()
-                    if args.ledger_path
-                    else default_issue_fix_domain_state_ledger_path(
-                        project=args.project,
-                        goal_id=args.goal_id,
-                    )
-                )
+            if should_write_domain_state and ledger_path is not None:
                 upsert_issue_fix_pr_lifecycle_ledger_jsonl(
                     ledger_path,
                     payload,
@@ -1331,7 +1553,48 @@ def handle_issue_fix_command(
                         grouped_monitor_writeback.get("write_performed")
                     )
                 decision = str(transition.get("decision") or "")
-                if decision in {"runnable_successor", "user_gate"}:
+                correction_admission = payload.get("maintainer_correction_admission")
+                settlement: dict[str, Any] | None = None
+                if ledger_path is not None:
+                    settlement = _settle_maintainer_correction_entries(
+                        payload=payload,
+                        ledger_path=ledger_path,
+                        registry_path=registry_path,
+                        goal_id=args.goal_id,
+                        claimed_by=args.claimed_by,
+                        project=Path(args.project).expanduser(),
+                    )
+                    if settlement.get("settlements") or isinstance(
+                        correction_admission, dict
+                    ):
+                        payload["maintainer_correction_settlement"] = settlement
+                if isinstance(correction_admission, dict) and settlement is not None:
+                    settled_write = settlement.get("todo_write")
+                    todo_write_receipt = (
+                        settled_write if isinstance(settled_write, dict) else {}
+                    )
+                    todo_changed = bool(todo_write_receipt.get("write_performed"))
+                    if not todo_write_receipt:
+                        todo_write_receipt = {
+                            "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
+                            "write_performed": False,
+                            "already_exists": False,
+                            "skip_reason": "terminal_or_no_followup",
+                            "path_recorded": False,
+                        }
+                    if (
+                        not todo_changed
+                        and "skip_reason" in todo_write_receipt
+                        and decision == "monitor_continuation"
+                        and correction_admission.get("disposition") == "accepted"
+                    ):
+                        todo_write_receipt["skip_reason"] = "unchanged_monitor_quiet"
+                    payload["todo_write"] = todo_write_receipt
+                    payload["todo_write_performed"] = todo_changed
+                    writeback_contract = payload.get("writeback_contract")
+                    if isinstance(writeback_contract, dict):
+                        writeback_contract["todo_write_performed"] = bool(todo_changed)
+                elif decision in {"runnable_successor", "user_gate"}:
                     role = str(transition.get("role") or "agent")
                     todo_write = add_goal_todo(
                         registry_path=registry_path,
