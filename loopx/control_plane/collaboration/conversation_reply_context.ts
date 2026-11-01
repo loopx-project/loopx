@@ -3,6 +3,24 @@ import type {JsonObject} from "../effect_program.ts";
 type ReplyContextStatus = "unavailable" | "available" | "truncated" | "empty"
   | "message_mismatch" | "conversation_mismatch";
 
+/** Count the middle elision marker within the unchanged content budget. */
+function truncateContent(content: string, cap: number): string {
+  if (content.length <= cap) return content;
+  let omitted = content.length - cap;
+  while (true) {
+    const marker = `\n…[middle ${omitted} chars omitted]…\n`;
+    const available = cap - marker.length;
+    if (available < 2) return content.slice(0, cap);
+    const nextOmitted = content.length - available;
+    if (nextOmitted !== omitted) {
+      omitted = nextOmitted;
+      continue;
+    }
+    const head = Math.floor(available / 2), tail = available - head;
+    return content.slice(0, head) + marker + content.slice(-tail);
+  }
+}
+
 /** A quoted message is a scoped observation, never a turn or operation grant. */
 function projectParent(input: JsonObject): JsonObject {
   const parent = input.parent_id;
@@ -16,7 +34,7 @@ function projectParent(input: JsonObject): JsonObject {
       && observation.conversation_id === input.conversation_id) {
     if (observation.message_id === parent && parent !== input.message_id) {
       if (typeof observation.content === "string" && observation.content.trim()) {
-        content = observation.content.slice(0, 4000);
+        content = truncateContent(observation.content, 4000);
         status = observation.content.length > 4000 || observation.content_truncated === true
           ? "truncated" : "available";
       } else status = "empty";
@@ -80,7 +98,7 @@ function projectThread(input: JsonObject): JsonObject {
   let remaining = 12000;
   for (const m of preceding) {
     if (selected.length === 12 || remaining === 0) break;
-    const row = (length: number): ThreadMessage => ({...m, content: m.content.slice(0, length),
+    const row = (length: number): ThreadMessage => ({...m, content: truncateContent(m.content, length),
       content_truncated: m.content_truncated || length < m.content.length});
     if (JSON.stringify(row(0)).length + 1 > remaining) break;
     let low = 0, high = Math.min(4000, m.content.length);
