@@ -24,12 +24,14 @@ never repin an active or historical cohort.
 
 For a **new cohort with no explicit source options**, `source-default.json`
 selects the reviewed integration commit
-[`e278cda3f4d2da3cf06aabf2df4daa99b9749501`](https://github.com/huangruiteng/EdgeBench/commit/e278cda3f4d2da3cf06aabf2df4daa99b9749501)
+[`2f9f16cfe724aca6efe63d690ac77ca955395748`](https://github.com/huangruiteng/EdgeBench/commit/2f9f16cfe724aca6efe63d690ac77ca955395748)
 and the versioned
 [`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
 This LoopX-owned patch fixes the native checkpoint representation of nonfinite
 released scores and metrics. Native scoring, report values and selection remain
-unchanged. Preparation verifies the asset digest and each touched file's exact
+unchanged. The upstream revision fixes ordinary HTTP feedback serialization;
+checkpoint encoding is a separate boundary and still requires this patch.
+Preparation verifies the asset digest and each touched file's exact
 upstream blob and mode, applies the patch before provider import/installation,
 and creates a clean, reproducible Git commit with the fetched commit as its
 parent. The snapshot uses an explicit LoopX compatibility identity and the
