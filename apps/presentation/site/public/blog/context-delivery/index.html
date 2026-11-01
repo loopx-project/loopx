@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#fafafa">
+<title>An Agent needs a way to look things up, too · LoopX</title><meta name="description" content="Follow one voice task through progressive reads, JSON Pointers, exact sharing, compaction-cycle deltas, and complete recovery.">
+<link rel="canonical" href="https://loopx-project.github.io/loopx/blog/context-delivery/"><link rel="alternate" hreflang="en" href="https://loopx-project.github.io/loopx/blog/context-delivery/"><link rel="alternate" hreflang="zh-CN" href="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><link rel="alternate" hreflang="x-default" href="https://loopx-project.github.io/loopx/blog/context-delivery/">
+<meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="en_US"><meta property="og:title" content="An Agent needs a way to look things up, too"><meta property="og:description" content="Follow one voice task through progressive reads, JSON Pointers, exact sharing, compaction-cycle deltas, and complete recovery."><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../blog.css">
+</head><body><a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header"><a class="brand" href="../../"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="Main navigation"><a href="../">Blog</a><a href="../../docs/book/">Docs</a></nav><div class="header-actions"><a class="language" href="../zh/context-delivery/" lang="zh-CN" hreflang="zh-CN">中文</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
+<main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">Context delivery</p><h1>An Agent needs a way to look things up, too</h1><p class="lead">Follow one voice task through progressive reads, JSON Pointers, exact sharing, compaction-cycle deltas, and complete recovery.</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">November 1, 2026</time></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
+<p>LoopX's context delivery separates these jobs: <strong>preserve complete sources, read the facts needed for the current decision, expand supporting material around questions, and reuse unchanged structures exactly within a valid compaction cycle.</strong></p>
+<p>This article checks the native Codex path at <a href="https://github.com/loopx-project/loopx/tree/73cf83edd6d80275d0c8f44c5289837eebe8ab0d"><code>73cf83ed</code></a>, a 2.2 candidate source. Consult <a href="https://github.com/loopx-project/loopx/releases">Releases</a> for publication status. In that implementation, supported POSIX Codex App/SSH sessions and new benchmark heartbeat trials default to context delivery; saved off remains effective and explicit off is available. When enabled, complete content is saved first and the Agent receives an entrypoint for current facts.</p>
+<p>Think of a capture as a complete book. An index locates its chapters; a JSON Pointer addresses a place inside it. Progressive reading determines how deeply to open the material now. Differential delivery determines what can be reused on the next continuation.</p>
+<h2 id="example">Follow one task: give an assistant voice input</h2>
+<p>Suppose an assistant needs to understand a voice note and reply in its original chat. Its complete material contains the goal, provider constraints, privacy requirements, acceptance and a long discussion of alternatives. This is a teaching example; the example program below generates the complete data in an isolated directory.</p>
+<pre><code class="language-text">capture.json
+├── goal
+│   ├── objective: understand a voice note and reply in its original chat
+│   ├── constraints
+│   │   ├── provider: prefer the already configured speech service
+│   │   └── privacy: no public audio; external processing needs authorization
+│   └── acceptance: correct transcript, same-chat reply, explicit unavailability
+├── providers
+│   ├── configured
+│   │   ├── formats
+│   │   └── authorization
+│   └── alternative
+│       ├── formats
+│       └── authorization
+├── evidence: trial results, input formats and reply destinations
+└── history: 80 complete discussion entries
+</code></pre>
+<p>First, the Agent needs to understand the integration boundary. It must see both the preference for an existing service and the authorization requirement. A provider preference does not authorize sending audio. The historical discussions remain available when comparing alternatives or checking their basis.</p>
+<p>Complete sources are assembled from existing typed owners, with Goal material, full tasks, cumulative acceptance and revisions. Marked generated regions are supplied by canonical tasks; other original narrative, comments and stops remain complete. Headings do not determine which prose may be deleted. This example places its current integration requirements in <code>goal</code>; any additional source-owned mandatory reads still apply.</p>
+<p>The figures below are <strong>actual reader and codec measurements on this synthetic material</strong>. They make no model or speech-service calls. The <a href="example.py">example program</a> generates the complete sources; the <a href="measurements.json">original measurement record</a> preserves the reported figures.</p>
+<h2 id="known-paths">When you know the locations, read them together</h2>
+<p><code>/goal/constraints</code> is a JSON Pointer: enter <code>goal</code> from the JSON root, then <code>constraints</code>. It resembles a file path but addresses <strong>a value inside JSON</strong>.</p>
+<p>The file, Pointer and digest answer different questions. <code>capture.json</code> identifies the complete file; the Pointer identifies a location; SHA-256 pins its version. <code>/requirements/0</code> addresses the first array item. Reordering can change what that index addresses, so use a Pointer with its capture version.</p>
+<p>After running the example, <code>$CAPTURE</code> denotes the output directory’s <code>capture.json</code>; <code>$SHA</code> comes from its <code>manifest.json</code>. Select the three known locations in one request:</p>
+<pre><code class="language-sh">loopx --format json quota context-read \
+  --capture-file &quot;$CAPTURE&quot; --capture-sha256 &quot;$SHA&quot; \
+  --select /goal/objective \
+  --select /goal/constraints \
+  --select /goal/acceptance
+</code></pre>
+<p>This retrieves the objective, complete constraints and acceptance together, including both provider preference and privacy. Repeated <code>--select</code> arguments combine the read request; each value retains its own Pointer.</p>
+<p>The complete capture is <strong>51,547 bytes</strong>. Using the same file, 16,000-byte pages and a 20,000-byte CLI output limit:</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable data table"><table>
+<thead>
+<tr>
+<th>Read</th>
+<th style="text-align:right">CLI calls</th>
+<th style="text-align:right">Returned body</th>
+<th style="text-align:right">Complete CLI responses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Page through the complete capture</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">51,547 B</td>
+<td style="text-align:right">55,607 B</td>
+</tr>
+<tr>
+<td>Select the three locations separately</td>
+<td style="text-align:right">3</td>
+<td style="text-align:right">804 B</td>
+<td style="text-align:right">2,694 B</td>
+</tr>
+<tr>
+<td>Select all three in one batch</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">674 B</td>
+<td style="text-align:right">1,362 B</td>
+</tr>
+</tbody>
+</table></div>
+<p>The last two rows retrieve identical Pointer/value pairs; repeated requests and framing account for the difference. The first also retrieves the complete history, so its information scope is larger. This table compares the step of reading those three facts now. Capture generation, storage and the initial reference are shared prerequisites.</p>
+<h2 id="discover">When the structure is unfamiliar, index the relevant subtree</h2>
+<p>If the Agent does not know the provider record's fields, it can expand <code>/providers</code> locally. <code>--list</code> returns metadata: Pointers, types, sizes, and member counts for objects and arrays.</p>
+<pre><code class="language-sh">loopx --format json quota context-read \
+  --capture-file &quot;$CAPTURE&quot; --capture-sha256 &quot;$SHA&quot; \
+  --select /providers --list --list-depth 2
+</code></pre>
+<p>Depth two exposes the provider entries and their fields together:</p>
+<pre><code class="language-text">/providers/configured                 object
+/providers/configured/formats         array
+/providers/configured/authorization   string
+/providers/alternative                object
+/providers/alternative/formats        array
+/providers/alternative/authorization  string
+</code></pre>
+<p>Next, batch the format and authorization fields. The index locates them; their values must actually be read before dependent decisions.</p>
+<p>Listing <code>/providers</code> and each of its two children separately takes <strong>3 calls and 2,784 bytes of CLI responses</strong> here. Depth two returns the same set of field addresses in <strong>1 call and 1,283 bytes</strong>.</p>
+<p><strong>Read known addresses directly; index relevant structure when you need discovery.</strong> A small reference may already include the top-level index when it fits. Progressive reading follows the question rather than prescribing a fixed index–single-field–next-level sequence.</p>
+<h2 id="requirements">See requirements first, then open their evidence</h2>
+<p>A correct transcript alone does not establish successful integration. The result must return to the original chat.</p>
+<p>The two example records say:</p>
+<pre><code class="language-text">sample-1: correct transcript, returned to the original chat
+sample-2: correct transcript, replied in another chat
+</code></pre>
+<p>A summary saying “transcription succeeded” can hide the second failure. The implemented native acceptance projection preserves complete requirements and current review state so the Agent first sees the relevant fields:</p>
+<pre><code class="language-json">{
+  &quot;description&quot;: &quot;Return the transcript to its original chat, preserving source, order and audio reference.&quot;,
+  &quot;status&quot;: &quot;unverified&quot;,
+  &quot;agent_review&quot;: {
+    &quot;conclusion&quot;: &quot;unmet&quot;,
+    &quot;basis_current&quot;: false,
+    &quot;independently_verified&quot;: false
+  }
+}
+</code></pre>
+<p>Unmet acceptance and a stale basis stay in the decision layer. Follow the original-material entrypoint to inspect why it failed and which evidence supports the judgment. Agent review and independent verification remain separate facts.</p>
+<p>The implementation returns <code>supporting_material_pointer</code>, locating the outcome in the original capture. Call that returned prefix <code>$P</code>: append <code>/requirements/2/agent_review/note</code> for the explanation, or <code>/requirements/2/agent_review/evidence_refs</code> for evidence references. Use this capture's prefix rather than copying an array position from another file.</p>
+<p>After assembling the voice task into the existing typed acceptance structure, its complete original capture is <strong>57,014 bytes</strong> and necessary view <strong>5,107 bytes</strong>. <strong>All 10 requirement descriptions remain complete, together with unmet/stale/independent-verification facts. The original 57,014 bytes also remain intact.</strong> Supporting history and long explanations have exact expansion addresses.</p>
+<p>Relationship navigation can suggest which outcomes to inspect first using task dependencies, shared acceptance, sources and evidence. Incomplete relationships widen scope, and contrary evidence from other routes stays accessible. Navigation helps order reading; the Agent still determines what affects this decision.</p>
+<h2 id="sharing">Share exact records within one delivery</h2>
+<p>A task can appear in both current work and a queue summary. Repeating an identical complete record adds no fact.</p>
+<p>The native necessary view can retain one complete task and reference it elsewhere:</p>
+<pre><code class="language-json">{
+  &quot;todo_id&quot;: &quot;todo_voice&quot;,
+  &quot;context_ref&quot;: &quot;/agent_todo_summary/first_open_items/0&quot;
+}
+</code></pre>
+<p>The Pointer addresses the complete record in <strong>this same current view</strong>. Serialized separately with a trailing newline, the task record is <strong>1,052 bytes</strong>, versus <strong>80 bytes</strong> for its reference. Complete constraints remain at the original location, and every queue retains its membership and order.</p>
+<p>This is exact sharing. Different revisions, owners, evidence or constraints remain separate even when titles match. Unknown fields and unsupported structures retain their original content. Response-local sharing needs no old session baseline; cross-Turn deltas are a separate mechanism.</p>
+<h2 id="cycle">On the next continuation, deliver what changed</h2>
+<p>The voice task progresses: a third sample is added, work moves from checking the original-chat return to checking a repaired return, and the review basis changes. The objective and most requirements remain unchanged.</p>
+<p>This is where <strong>structured context deltas within a compaction cycle</strong> apply.</p>
+<p>Within a valid cycle, a verified saved baseline supports exact reuse of unchanged text, arrays and objects. Additions, edits, removals and array reordering are explicit. A relocated subtree can reference its original position with current edits overlaid. Reconstruction must match the complete current source.</p>
+<pre><code class="language-text">One valid cycle
+Previous: complete objective + all requirements + samples 1, 2 + old work state
+Current:  add sample 3; update work state and review basis
+Restore:  the complete current context
+</code></pre>
+<p>For the same synthetic task and scope, the codec produces:</p>
+<div class="table-scroll" role="region" tabindex="0" aria-label="Scrollable data table"><table>
+<thead>
+<tr>
+<th>Condition</th>
+<th>Result</th>
+<th>Size or readback</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Encode the complete current view</td>
+<td>full</td>
+<td>5,543 B</td>
+</tr>
+<tr>
+<td>Reuse a verified baseline within the cycle</td>
+<td>delta</td>
+<td>2,164 B; exact value-by-value reconstruction</td>
+</tr>
+<tr>
+<td>Change context epoch</td>
+<td>full</td>
+<td>No reuse of the old cycle's baseline</td>
+</tr>
+<tr>
+<td>Damage the delta</td>
+<td>Recover current full</td>
+<td>Exact match with the complete current view</td>
+</tr>
+<tr>
+<td>Change a tiny two-field input</td>
+<td>full</td>
+<td>Keep complete delivery when delta overhead is unsuitable</td>
+</tr>
+</tbody>
+</table></div>
+<p>This table measures codec output. The native adapter also compares actual delivery bytes including references, page framing and reading instructions, selecting full when preferable. Size comparisons serve efficient delivery without replacing completeness.</p>
+<h2 id="native-path">When enabled, the default output is a reading entrypoint</h2>
+<p>Connect these operations back to the currently supported native Codex quota path:</p>
+
+<figure class="diagram"><p class="diagram-label">The enabled delivery path</p><ol><li><strong>Complete source</strong>: projection.json preserves current facts.</li><li><strong>Necessary view</strong>: required-context.json keeps complete requirements and points back to supporting originals.</li><li><strong>Cycle delivery</strong>: verify baseline and scope; choose full or delta.</li><li><strong>Current reader</strong>: first read admission, stops, the original task and accumulated requirements; include an index and short overview when they fit. Follow Pointers for supporting detail.</li></ol><figcaption>Saved files are verifiable sources. Model input still depends on the reads actually completed.</figcaption></figure>
+<p>One useful property is that <strong>even with <code>mode: &quot;delta&quot;</code>, the Agent can select facts directly through current <code>recovery</code>.</strong> It does not first need to read an old baseline or replay every delta. Delta's <code>path</code> may address <code>delivery.json</code>; <code>recovery</code> and <code>select_command</code> address the complete current view. <code>context_details</code> then connects supporting material to the original capture.</p>
+<p>Native navigation also stores complete capture/selection digests in immutable private reader references. The Agent copies the returned reference; the CLI still verifies the complete digests, selection and cursor on every page. SHA256 itself is not shortened. A <code>first_read_command</code> starts a selection; it does not establish that all required sources were read.</p>
+<pre><code class="language-bash"># Copy the original recovery.reference_file from current returned navigation.
+loopx --format json quota context-read \
+  --reference-file &quot;$RECOVERY_READER_REFERENCE&quot; \
+  --select &quot;$POINTER_A&quot; --select &quot;$POINTER_B&quot;
+</code></pre>
+<p>A continuation reference pins its selection: follow its <code>next_command</code> to EOF and return to the original recovery reference to change Pointers. Very small budgets may retain the explicit file/digest interface. The teaching measurements above use that compatible interface and retain their original conditions.</p>
+<p>Saved-file continuity and what the model currently retains are separate facts. Verifiable files do not establish that the model remembers every original passage.</p>
+<h2 id="recovery">Recover missing context while preserving the original work</h2>
+<p>After host compaction, a subsequent work Turn builds a new complete baseline. Original goals, requirements and sources remain available for necessary reads.</p>
+<p>If compaction, missing pages or truncated output interrupt an unfinished Turn, recover missing facts from its original capture while retaining task, effect and settlement identity. If a voice result was already sent but its receipt was lost, recovering context must not become sending the result again.</p>
+<p>Reading has explicit failure boundaries:</p>
+<ul>
+<li><strong>Changed bytes with an unchanged digest:</strong> reject the read and verify the version.</li>
+<li><strong>A missing Pointer:</strong> reject the whole batch; index a known parent to recover. A present JSON <code>null</code> returns normally.</li>
+<li><strong>Paged content:</strong> follow <code>next_command</code> with capture digest, selection digest and byte cursor; combine contiguous content in order. Selection EOF covers only that selection.</li>
+<li><strong>Unknown or inapplicable structures:</strong> retain complete content and original read obligations rather than guessing which prose can be hidden.</li>
+</ul>
+<figure class="diagram"><p class="diagram-label">Continuity and recovery</p><p><strong>One valid cycle</strong>: complete baseline → changed facts and delta → exact reconstruction.</p><p><strong>New cycle or known continuity loss</strong>: complete current source → read necessary facts again.</p><figcaption>An unfinished Turn retains its original capture, work and settlement identity. Reading recovery does not repeat external effects.</figcaption></figure>
+<h2 id="evidence">What the measurements establish</h2>
+<p>The example separates three mechanisms: <strong>avoid repeatedly moving history not currently needed, combine reads that belong together, and avoid retransmitting unchanged verified structures.</strong> Complete sources, requirements and recovery connect them.</p>
+<p>Reader figures include actual CLI page metadata; local path length affects a small amount of framing. Projection figures compare capture bodies; the cycle table compares codec output. The reproduction script checks these distinct measurements and exact reconstruction.</p>
+<p>Real long-running tasks must also count necessary later reads, recovery, cache hits, model input/output, tool calls, waiting and human attention. Effectiveness depends on constraints understood, decisions made and accepted outcomes. This synthetic example measures the mechanical path; real model benefit still needs comparable-task evidence.</p>
+<p>Implemented scope includes complete sources, file entrypoints, batch selection, index depth, applicable acceptance layering, exact sharing, cycle deltas and recovery. Broader decision-stage candidate, preference and Explore delivery and C1's universal input convergence remain unfinished. Supported Codex sessions default on without a saved preference. Disable in Settings → This machine → Capabilities → Differential context → Codex; saved off survives upgrade. A command or new benchmark trial can use <code>--context-delivery off</code>. Trials do not inherit the machine switch, and existing frozen trials are not rewritten. Saving settings, exact hook/configuration setup and actual adoption remain separate checks; unavailable hooks retain full delivery. Ordinary CLI, unsupported hosts and non-heartbeat benchmarks retain their existing full paths. Final 2.2 release qualification follows the exact release version.</p>
+<h2 id="reproduce">Read the same material yourself</h2>
+<p><a href="example.py">example.py</a> generates this complete synthetic voice task and invokes the existing reader, progressive projection and delta owners. It checks selected values, directory addresses, all ten requirements, shared references and complete recovery. It registers no Goal, admits or settles no Turn, and calls no model or speech service.</p>
+<p>Prepare the original measurement checkout, <code>a4a0fad889d91cba0d945ce658788bdb76ba351e</code>, and its compatible dependencies. Run from that checkout’s root, substituting the downloaded program path. The output directory must be empty.</p>
+<pre><code class="language-sh">uv run --extra test python /path/to/example.py \
+  --loopx-root &quot;$PWD&quot; --output .local/context-delivery-example
+</code></pre>
+<p>Generated <code>capture.json</code> retains all 80 history entries. <code>projection.json</code> and <code>required-context.json</code> hold the complete/necessary views; <code>cycle-base.json</code> and <code>cycle-delta.json</code> hold cycle encodings; <code>manifest.json</code> pins files and digests. Production reads use currently returned paths, never copied teaching fields or another capture’s array indexes.</p>
+<p>The <a href="measurements.json">original measurement record</a> pins this article’s figures. Running on other source can check its mechanisms but cannot rewrite the original observation. Local path length also affects page framing bytes. Understanding this example requires no new research run.</p>
+<p>Sources: <a href="https://github.com/loopx-project/loopx/blob/0e78a19c277f4ca3d44313787162bc0444065172/docs/reference/required-work-context.md">complete-delivery contract</a>, <a href="https://github.com/loopx-project/loopx/blob/0e78a19c277f4ca3d44313787162bc0444065172/loopx/control_plane/quota/progressive_context.ts">progressive projection</a>, <a href="https://github.com/loopx-project/loopx/blob/0e78a19c277f4ca3d44313787162bc0444065172/loopx/control_plane/quota/context_selection.ts">selection/index</a>, <a href="https://github.com/loopx-project/loopx/blob/0e78a19c277f4ca3d44313787162bc0444065172/loopx/control_plane/quota/context_delivery.ts">delta/recovery</a>. The example ran on <code>a4a0fad</code>; those three core owners are byte-identical in <code>0e78a19</code>. Native final delivery also accounts for references and later reads, beyond codec output.</p>
+<nav class="article-route" aria-label="Continue reading"><p><a href="../typescript-control-plane-refactor/">TypeScript: repairing semantics</a> · <a href="../edgebench-feedback-and-memory/">EdgeBench: did mechanisms improve outcomes?</a></p></nav></article></div></main>
+<footer class="site-footer"><a class="brand" href="../../">LoopX</a><p>Keep work moving. Keep people in control.</p><a href="#main" aria-label="Back to top">↑</a></footer></body></html>
