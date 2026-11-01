@@ -53,6 +53,8 @@ select_loopx_python() {
     authoritative=1
   elif [ -f "${REPO_ROOT}/.loopx-python" ]; then
     IFS= read -r configured_python <"${REPO_ROOT}/.loopx-python"
+    # Installer records can use Windows CRLF; the CR is not part of the path.
+    configured_python="${configured_python%$'\r'}"
   fi
 
   if [ -n "${configured_python}" ]; then
