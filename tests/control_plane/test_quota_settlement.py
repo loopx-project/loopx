@@ -112,6 +112,23 @@ def test_command_plan_retains_one_matching_actor(arguments):
     assert sum(arg == "--agent-id" or arg.startswith("--agent-id=") for arg in argv) == 1
 
 
+@pytest.mark.parametrize("proof", [
+    "--claim-operation-id original-claim",
+    "--claim-operation-id=original-claim",
+    "--task-lease-idempotency-key original-lease --task-lease-expected-version 3",
+])
+def test_hard_lease_plan_preserves_supplied_proof_without_a_second_reference(proof):
+    plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args=proof,
+        handoff_mode="hard_lease",
+    ).as_dict()
+    for kind in (SettlementStepKind.VALIDATION, SettlementStepKind.TERMINAL_CLOSEOUT):
+        command = settlement_step_command(plan, kind)
+        assert proof in command
+        assert "<original claim_operation_id>" not in command
+
+
 def _receipt(step: SettlementStepKind, marker: str) -> SettlementReceipt:
     return SettlementReceipt(
         step_kind=step,

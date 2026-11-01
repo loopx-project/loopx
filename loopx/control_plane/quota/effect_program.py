@@ -110,6 +110,7 @@ def build_codex_app_settlement_plan(
     quota_spend_source: str = "heartbeat",
     goal_ref: Mapping[str, object] | None = None,
     autonomous_replan: bool = False,
+    handoff_mode: str | None = None,
 ) -> SettlementPlan:
     return build_turn_scoped_cli_settlement_plan(
         goal_id=goal_id,
@@ -125,6 +126,7 @@ def build_codex_app_settlement_plan(
         quota_spend_source=quota_spend_source,
         goal_ref=goal_ref,
         autonomous_replan=autonomous_replan,
+        handoff_mode=handoff_mode,
     )
 
 
@@ -144,6 +146,7 @@ def build_turn_scoped_cli_settlement_plan(
     quota_spend_source: str = "heartbeat",
     goal_ref: Mapping[str, object] | None = None,
     autonomous_replan: bool = False,
+    handoff_mode: str | None = None,
 ) -> SettlementPlan:
     if sum(bool(value) for value in (todo_id, replan_obligation_id, request_subject)) != 1:
         raise ValueError(
@@ -186,6 +189,17 @@ def build_turn_scoped_cli_settlement_plan(
     # Returned settlement commands are machine-readable without caller surgery.
     # Keep this global option before every subcommand, including quota spend-slot.
     cli_prefix = f"{command_prefix.strip() or 'loopx'} --format json"
+    task_claim = (
+        f"{cli_prefix} todo claim --goal-id {shlex.quote(goal_id)}{binding_arg}"
+        f" --agent-id {shlex.quote(agent_id)} --claimed-by {shlex.quote(agent_id)}"
+        f"{goal_ref_arg}"
+    )
+    # Preserve a caller's accepted execution reference or explicit lease proof.
+    # This only renders CLI syntax; the canonical lifecycle still checks it.
+    proof_options = {"--claim-operation-id", "--task-lease-idempotency-key", "--task-lease-expected-version"}
+    completion_proof_supplied = any(
+        token.partition("=")[0] in proof_options for token in shlex.split(lifecycle_actor_args)
+    )
     ordinary_completion = (
         f"{cli_prefix} todo complete --goal-id {shlex.quote(goal_id)}{binding_arg}"
         f"{lifecycle_actor_args}{turn_arg}{goal_ref_arg} --evidence '<validated evidence>'"
@@ -205,9 +219,12 @@ def build_turn_scoped_cli_settlement_plan(
     payload = effect_runtime_result("settlement.turn_scoped_cli_plan", {
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
         "autonomous_replan": autonomous_replan,
+        "handoff_mode": handoff_mode,
+        "completion_proof_supplied": completion_proof_supplied,
         "delivery_batch_scale_choices": list(DELIVERY_BATCH_SCALE_INPUT_CHOICES),
         **({"goal_ref": normalized_goal_ref} if normalized_goal_ref is not None else {}),
         "command_templates": {
+            **({"todo_claim": task_claim} if todo_id else {}),
             "todo_completion": ordinary_completion, "durable_writeback": writeback,
             "quota_spend": spend, "terminal_closeout": terminal_closeout,
         },
