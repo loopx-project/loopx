@@ -730,3 +730,44 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
     assert.equal(planBoundConversationRequest({...packet, request: changed}).pending, false);
   }
 });
+
+test("delivered partial results remain pending without authorizing another execution", () => {
+  const original = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "partial"};
+  const work = {remaining: "Finish the retained result", dependency: "Temporary source outage", effects_settled: true};
+  const response = {message: "Partial result", proposals: [], gate: null, protected_action: null, unfinished_work: work};
+  const turn = {session_id: "original", turn_id: "partial", status: "completed", response};
+  const packet = {request: original, current_session: {session_id: "original", status: "ready"},
+    pending_observation: {turn, stop_observed: false}};
+  assert.deepEqual(planBoundConversationRequest(packet), {pending: true});
+  for (const unfinished_work of [null, {...work, effects_settled: false}, {...work, remaining: ""}, {...work, extra: true}]) {
+    assert.equal(planBoundConversationRequest({...packet, pending_observation: {turn: {...turn,
+      response: {...response, unfinished_work}}, stop_observed: false}}).pending, false);
+  }
+  for (const changed of [{...turn, response: {...response, gate: {kind: "approval"}}},
+    {...turn, response: {...response, protected_action: {kind: "publish"}}},
+    {...turn, response: {...response, proposals: [{kind: "new-work"}]}},
+    {...turn, session_id: "foreign"}, {...turn, turn_id: "foreign"}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      pending_observation: {turn: changed, stop_observed: false}}).pending, false);
+  }
+  assert.equal(planBoundConversationRequest({...packet, pending_observation: {turn, stop_observed: true}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...packet.current_session, status: "closed"}}).pending, false);
+
+  const recovery = {quota_attempt: 1, failed_turn_id: "quota-failure", client_turn_id: "original-quota-continuation"};
+  const gated = {...turn, client_turn_id: recovery.client_turn_id,
+    response: {...response, unfinished_work: null, gate: {kind: "authorization", summary: "Verification remains blocked"}}};
+  const waiting = {...packet, request: {...original, context_recovery: recovery},
+    pending_observation: {turn: gated, stop_observed: false}};
+  assert.deepEqual(planBoundConversationRequest(waiting), {pending: true});
+  for (const context_recovery of [null, {...recovery, quota_attempt: 0}, {...recovery, quota_attempt: 4},
+    {...recovery, failed_turn_id: "partial"}, {...recovery, client_turn_id: "unrelated"}]) {
+    assert.equal(planBoundConversationRequest({...waiting,
+      request: {...original, context_recovery}}).pending, false);
+  }
+  assert.equal(planBoundConversationRequest({...waiting, pending_observation: {turn: {...gated,
+    response: {...gated.response, gate: null}}, stop_observed: false}}).pending, false);
+  assert.equal(planBoundConversationRequest({...waiting,
+    pending_observation: {turn: gated, stop_observed: true}}).pending, false);
+});

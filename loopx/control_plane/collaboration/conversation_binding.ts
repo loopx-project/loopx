@@ -442,10 +442,26 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     const turn = observation.turn == null ? null : requireJsonObject(observation.turn, "observed Turn");
     // Pending work is not current retry eligibility: backoff, disabled bindings,
     // exhausted attempts and unavailable providers do not retire the request.
-    // Only explicit lifecycle evidence removes a delivered quota failure.
+    // A delivered partial answer is not completion either. Keep explicit
+    // unfinished work and a correlated quota continuation's unresolved gate
+    // visible, without changing recovery eligibility or admitting execution.
+    const response = turn?.response && typeof turn.response === "object" && !Array.isArray(turn.response)
+      ? turn.response as JsonObject : null;
+    const reservation = row.context_recovery && typeof row.context_recovery === "object"
+      && !Array.isArray(row.context_recovery) ? row.context_recovery as JsonObject : null;
+    const gate = response?.gate;
+    const quotaGate = reservation !== null && Number.isSafeInteger(reservation.quota_attempt)
+      && Number(reservation.quota_attempt) >= 1 && Number(reservation.quota_attempt) <= 3
+      && typeof reservation.failed_turn_id === "string" && reservation.failed_turn_id !== row.turn_id
+      && typeof reservation.client_turn_id === "string" && reservation.client_turn_id.length > 0
+      && turn?.client_turn_id === reservation.client_turn_id
+      && gate !== null && typeof gate === "object" && !Array.isArray(gate)
+      && typeof (gate as JsonObject).kind === "string" && typeof (gate as JsonObject).summary === "string";
+    const unfinished = turn?.status === "completed" && response !== null
+      && (unfinishedProjectWork(response) !== null || quotaGate);
     return {pending: row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
-      && turn?.status === "failed" && turn.error_code === "usage_limit_exceeded"
+      && (unfinished || turn?.status === "failed" && turn.error_code === "usage_limit_exceeded")
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -624,25 +640,30 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
  * proposal alone grants nothing: only the original worker may reserve one
  * continuation after stable latest-native/source/grant/stop checks.
  */
-function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: JsonObject,
-  completed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
-  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
-  const response = completed.response;
-  if (!response || typeof response !== "object" || Array.isArray(response)) return no;
-  const result = response as JsonObject;
+function unfinishedProjectWork(result: JsonObject): JsonObject | null {
   const raw = result.unfinished_work;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return no;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const work = raw as JsonObject;
-  const matchesWork = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)
-    && Object.keys(value).sort().join(",") === "dependency,effects_settled,remaining"
-    && ["remaining", "dependency", "effects_settled"].every(key => (value as JsonObject)[key] === work[key]);
   if (Object.keys(work).sort().join(",") !== "dependency,effects_settled,remaining"
       || work.effects_settled !== true
       || [work.remaining, work.dependency].some(value => typeof value !== "string"
         || !value.trim() || value.length > 1000)
       || [result.gate, result.protected_action, result.context_handoff, result.goal_draft].some(value => value != null)
-      || !Array.isArray(result.proposals) || result.proposals.length
-      || completed.session_id !== current.session_id || completed.turn_id !== row.turn_id
+      || !Array.isArray(result.proposals) || result.proposals.length) return null;
+  return work;
+}
+
+function planUnfinishedWork(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  completed: JsonObject, previous: JsonObject | null, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const response = completed.response;
+  if (!response || typeof response !== "object" || Array.isArray(response)) return no;
+  const work = unfinishedProjectWork(response as JsonObject);
+  if (work === null) return no;
+  const matchesWork = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === "dependency,effects_settled,remaining"
+    && ["remaining", "dependency", "effects_settled"].every(key => (value as JsonObject)[key] === work[key]);
+  if (completed.session_id !== current.session_id || completed.turn_id !== row.turn_id
       || recovery.steering_observed !== false || recovery.stop_observed !== false
       || recovery.attachments_present !== false
       || typeof completed.upstream_turn_id !== "string" || !completed.upstream_turn_id) return no;

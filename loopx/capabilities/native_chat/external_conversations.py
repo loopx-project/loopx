@@ -112,7 +112,7 @@ class ChatExternalConversations:
 
     def quota_backlog_pending(self, row: dict[str, Any], *,
                               source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
-        """Project existing work without resolving providers or admitting recovery."""
+        """Retain quota and declared unfinished work without admitting recovery."""
         from ...control_plane.effect_runtime import effect_runtime_result
 
         store = self.controller.store
@@ -124,7 +124,7 @@ class ChatExternalConversations:
             "current_session": session,
             "pending_observation": observation,
         }
-        # The typed owner first excludes work that is not quota backlog even
+        # The typed owner first excludes work that has no retained obligation even
         # without a stop. Stop evidence can only remove a pending request;
         # never expose a positive result before reading those native facts.
         if effect_runtime_result("collaboration.conversation.request", params).get("pending") is not True:
