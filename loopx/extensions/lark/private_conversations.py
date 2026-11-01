@@ -29,7 +29,8 @@ from .goal_channel_transport import call, json_payload, lark_args, lark_provider
 from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
-from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
+from .inbox_reactions import (_reconcile_outbound_input_reactions,
+                             mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
 from .return_files import uploaded_chat_images, verify_chat_images
@@ -171,7 +172,7 @@ class LarkPrivateConversations:
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._web_projection_scan_at = 0.0
-        self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
+        self._web_projection_snapshots: dict[str, tuple[int, int, int]] = {}
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
@@ -1328,8 +1329,17 @@ class LarkPrivateConversations:
             for sid, source in sources.items():
                 try:
                     stat = (store.sessions_root / sid / "messages.jsonl").stat()
-                    snapshot = (stat.st_mtime_ns, stat.st_size)
-                    if self._web_projection_snapshots.get(sid) == snapshot:
+                    # A queued/running/terminal transition need not append a
+                    # message. These are discovery hints, never grant proofs.
+                    snapshot = (stat.st_mtime_ns, stat.st_size,
+                        (store.sessions_root / sid / "turns").stat().st_mtime_ns if self.reaction_feedback else 0)
+                    key = identity_ref(source["binding_id"], sid)
+                    path = root / f"{key}.json"
+                    previous = _read_json(path) if self.reaction_feedback and path.exists() else {}
+                    retry_feedback = self.reaction_feedback and any(
+                        isinstance(phase.get("feedback"), dict) and not phase["feedback"].get("ok")
+                        for phase in previous.get("deliveries", {}).values())
+                    if self._web_projection_snapshots.get(sid) == snapshot and not retry_feedback:
                         continue
                     messages = store.messages(sid)
                     web_turns = {message["turn_id"] for message in messages
@@ -1337,8 +1347,6 @@ class LarkPrivateConversations:
                     selected = [message for message in messages if message.get("turn_id") in web_turns
                                 and message.get("role") in {"user", "agent"}]
                     if selected:
-                        key = identity_ref(source["binding_id"], sid)
-                        path = root / f"{key}.json"
                         with exclusive_file_lock(path, operation="discover_web_conversation_projection"):
                             row = _read_json(path) if path.exists() else {
                                 "schema_version": "lark_private_web_projection_v0",
@@ -1346,8 +1354,21 @@ class LarkPrivateConversations:
                                 "binding_id": source["binding_id"], "profile": source["profile"],
                                 "source": source["source"], "event": source["event"],
                                 "session_id": sid, "deliveries": {}, "status": "pending"}
-                            if any(not row["deliveries"].get("web." + message["message_id"], {}).get("verified")
-                                   for message in selected):
+                            needs_feedback = False
+                            if self.reaction_feedback:
+                                for message in selected:
+                                    if message["role"] != "user":
+                                        continue
+                                    state = row["deliveries"].get("web." + message["message_id"], {})
+                                    turn = store.load_turn(sid, message["turn_id"]) or {}
+                                    feedback = state.get("feedback")
+                                    # Do not backfill reactions onto old,
+                                    # already-finished verified history.
+                                    needs_feedback |= (not feedback.get("ok") or
+                                        feedback.get("turn_status") != turn.get("status")) if isinstance(feedback, dict) else (
+                                            turn.get("status") not in TERMINAL_TURN_STATES)
+                            if needs_feedback or any(not row["deliveries"].get("web." + message["message_id"], {}).get("verified")
+                                                     for message in selected):
                                 row["status"] = "pending"
                                 _atomic_write_json(path, row)
                     self._web_projection_snapshots[sid] = snapshot
@@ -1387,6 +1408,73 @@ class LarkPrivateConversations:
                 selected.append(message)
             return selected
 
+    @staticmethod
+    def _web_projection_delivery_id(row: dict[str, Any], message: dict[str, Any]) -> str:
+        """The existing provider identity binds this exact canonical message."""
+        return hashlib.sha256(json.dumps([row["binding_id"], row["session_id"], message["message_id"]],
+            separators=(",", ":")).encode()).hexdigest()
+
+    def _web_projection_feedback(self, row: dict[str, Any], message: dict[str, Any]) -> None:
+        if not self.reaction_feedback or message["role"] != "user":
+            return
+        phase = row["deliveries"].get("web." + message["message_id"], {})
+        if not phase.get("verified"):
+            return
+        store = self.core.controller.store
+        turn = store.load_turn(row["session_id"], message["turn_id"]) or {}
+        status = turn.get("status")
+        if "feedback" not in phase and status in TERMINAL_TURN_STATES:
+            return  # Existing finished mirrors keep their frozen history.
+        prior = phase.setdefault("feedback", {})
+        if prior.get("ok") and prior.get("turn_status") == status:
+            return
+        try:
+            if message not in self._web_projection_messages(row):
+                raise ValueError("canonical App input changed")
+            expected_text = f"**你（App）**\n\n{message['text']}"
+            if phase.get("text") not in (expected_text, _presentation_text(expected_text)):
+                raise ValueError("App input no longer matches its frozen mirror")
+            source = _read_json(self.root / f"{row['request_ref']}.json")
+            if (source.get("context_recovery") or turn.get("context_recovery")
+                    or status not in {"queued", "starting", "running", *TERMINAL_TURN_STATES}):
+                raise ValueError("App feedback source/Turn unavailable")
+            config = self._inbox(row)
+            from .post_delivery import attachment_reply
+            _, target = attachment_reply(project=self.runtime_root, config_path=config,
+                attempt=phase["attempt"], text=phase["text"])
+
+            def authorized() -> bool:
+                try:
+                    if message not in self._web_projection_messages(row):
+                        return False
+                    verified = verify_lark_inbox_reply(project=self.runtime_root, config_path=config,
+                        message_id=row["event"]["message_id"], text=phase["text"], attempt=phase["attempt"],
+                        reply_placement="chat_root", delivery_id=self._web_projection_delivery_id(row, message),
+                        image_keys=tuple(phase.get("image_keys", [])), runner=self._reply_runner,
+                        finalize_reactions=False, source_authority_verifier=lambda profile, chat, ref:
+                            self._source_authority(row, profile, chat, ref))
+                    # Provider IO can outlast a grant or a Turn. Re-read both
+                    # before this exact mirror's reaction, including cleanup.
+                    if (verified.get("ok") is not True or verified.get("reply_verified") is not True
+                            or message not in self._web_projection_messages(row)):
+                        return False
+                    current_source = _read_json(self.root / f"{row['request_ref']}.json")
+                    current = store.load_turn(row["session_id"], message["turn_id"]) or {}
+                    return (current.get("status") == status
+                        and current.get("origin") == "web" and not current.get("context_recovery")
+                        and not current_source.get("context_recovery"))
+                except (OSError, ValueError, KeyError):
+                    return False
+
+            result = _reconcile_outbound_input_reactions(project=self.runtime_root, config_path=config,
+                message_id=target["message_ref"], processing=status in {"starting", "running"},
+                complete=status in TERMINAL_TURN_STATES, before_write=authorized, runner=self._reply_runner)
+            phase["feedback"] = {"ok": result.get("ok") is True, "turn_status": status,
+                "message_ref": target["message_ref"], "result": result}
+        except (OSError, ValueError, KeyError):
+            phase["feedback"] = {"ok": False, "turn_status": status,
+                "blocker": "original_web_projection_unavailable"}
+
     def _reconcile_web_projection(self, path: Path) -> int:
         # The existing worker pool serializes this outbox with a durable fence.
         # Recovery reads the same provider attempt; it never starts a Core Turn.
@@ -1397,6 +1485,8 @@ class LarkPrivateConversations:
                 pending = next((message for message in messages
                     if not row["deliveries"].get("web." + message["message_id"], {}).get("verified")), None)
                 if pending is None:
+                    for message in messages:
+                        self._web_projection_feedback(row, message)
                     # Older verified placeholders retain their exact attempts.
                     # They cannot be relabelled as media delivery or resent.
                     row["status"] = "partial" if any(message.get("attachments") and not
@@ -1411,15 +1501,18 @@ class LarkPrivateConversations:
                         return False
                 who = "你" if pending["role"] == "user" else "LoopX"
                 text = f"**{who}（App）**\n\n{pending['text']}"
-                delivery_id = hashlib.sha256(json.dumps(
-                    [row["binding_id"], row["session_id"], pending["message_id"]],
-                    separators=(",", ":")).encode()).hexdigest()
+                if self.reaction_feedback and pending["role"] == "user":
+                    # Persist feedback intent before a mirror write/recovery;
+                    # old completed mirrors without it are not backfilled.
+                    row["deliveries"].setdefault("web." + pending["message_id"], {}).setdefault("feedback", {})
+                    _atomic_write_json(path, row)
                 delivered = self._deliver(path, row, "web." + pending["message_id"], text,
                     inbox=lambda: self._inbox(row), authorization_check=authorized,
-                    reply_placement="chat_root", delivery_id=delivery_id, finalize_source=False,
+                    reply_placement="chat_root", delivery_id=self._web_projection_delivery_id(row, pending), finalize_source=False,
                     image_attachments=pending.get("attachments"))
                 if delivered:
                     row.pop("blocker", None)
+                    self._web_projection_feedback(row, pending)
                 _atomic_write_json(path, row)
                 return int(delivered)
             except (OSError, ValueError, KeyError):
