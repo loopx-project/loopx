@@ -444,7 +444,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     const turn = observation.turn == null ? null : requireJsonObject(observation.turn, "observed Turn");
     // Pending work is not current retry eligibility: backoff, disabled bindings,
     // exhausted attempts and unavailable providers do not retire the request.
-    // A delivered timeout notice is not a business result. Its effects can
+    // A delivered transport failure is not a business result. Its effects can
     // remain unknown, so visibility must not grant another execution.
     // A delivered partial answer is not completion either. Keep explicit
     // unfinished work and a correlated quota continuation's unresolved gate
@@ -466,7 +466,8 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {pending: row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (unfinished || turn?.status === "failed"
-        && (turn.error_code === "usage_limit_exceeded" || turn.error_code === "response_timeout"))
+        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
+          "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }

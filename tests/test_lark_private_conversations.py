@@ -276,7 +276,8 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
 
 
 @pytest.mark.parametrize("command", ["stop", "new"])
-def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordinary, monkeypatch, command):  # noqa: F811
+@pytest.mark.parametrize("error_code", ["response_timeout", "upstream_transport_failure"])
+def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordinary, monkeypatch, command, error_code):  # noqa: F811
     from loopx.chat_agent import CodexChatAgentError
     from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
 
@@ -285,7 +286,7 @@ def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordin
     def timeout_after_start(_adapter, message, event_sink):
         starts.append(message)
         event_sink("turn.started", {"upstream_turn_id": "synthetic-timeout"})
-        raise CodexChatAgentError("Synthetic upstream timeout", gate=None, error_code="response_timeout")
+        raise CodexChatAgentError("Synthetic upstream failure", gate=None, error_code=error_code)
 
     monkeypatch.setattr(CodexAppServerAdapter, "start_turn", timeout_after_start)
     store, runtime, provider, transport = connect(ordinary)
@@ -293,7 +294,7 @@ def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordin
         transport.admit("notes-app", provider.event("notes-app", "timeout-pending", "Complete this request."))
         row = transport.core.pending()[0]
         failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
-        assert failed["status"] == "failed" and failed["error_code"] == "response_timeout"
+        assert failed["status"] == "failed" and failed["error_code"] == error_code
         transport.reconcile()
         saved = json.loads((transport.root / f"{row['request_ref']}.json").read_text())
         assert saved["status"] == "delivered" and saved["deliveries"]["terminal"]["verified"]
