@@ -188,7 +188,7 @@ try {
     await english.getByRole('button', {name: 'Clear', exact: true}).click(); await rows(12);
     await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(12);
     for (const count of [24, 36, 48, 60, 61]) {
-      await english.getByRole('button', {name: 'More records', exact: true}).click(); await rows(count);
+      await english.getByRole('button', {name: 'Load next page', exact: true}).click(); await rows(count);
     }
     const secondPage = originalRow(english);
     await secondPage.locator(':scope > summary').click();

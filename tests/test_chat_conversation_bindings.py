@@ -12,7 +12,8 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.extensions.lark.conversation_identity import identity_ref
 
 
-def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinary, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize("command", ["stop", "new"])
+def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinary, monkeypatch, command):  # noqa: F811
     from datetime import datetime, timedelta, timezone
     from loopx.capabilities.native_chat import external_conversations
     from test_lark_private_conversations import connect
@@ -38,7 +39,10 @@ def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinar
         assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
         transport.admit("steward-app", provider.event("steward-app", "unrelated-stop", "/stop"))
         assert transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
-        transport.admit("notes-app", provider.event("notes-app", "later-stop", "/stop"))
+        assert transport.health()[row["binding_id"]]["pending_count"] == 1
+        transport.admit("notes-app", provider.event("notes-app", "later-stop", f"/{command}"))
+        transport.reconcile()
+        assert transport.health()[row["binding_id"]]["pending_count"] == 0
         calls = ordinary[4].read_bytes()
         assert not transport.core._context_recovery_plan(original, discovery_only=True)["recovery_candidate"]
         assert ordinary[4].read_bytes() == calls
@@ -47,6 +51,13 @@ def test_quota_backlog_observes_a_later_source_stop_before_new_admission(ordinar
         newer = next(x for x in transport.core.pending() if x.get("message") == "A new independent request")
         completed = runtime.wait_for_turn(session_id=newer["session_id"], turn_id=newer["turn_id"], timeout_sec=10)
         assert completed["status"] == "completed"
+        transport.reconcile()
+        from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        before = ordinary[4].read_bytes(), list(provider.calls)
+        assert restarted.health()[row["binding_id"]]["pending_count"] == 0
+        assert (ordinary[4].read_bytes(), provider.calls) == before
         assert store.load_turn(row["session_id"], row["turn_id"]) == failed
     finally:
         runtime.close()

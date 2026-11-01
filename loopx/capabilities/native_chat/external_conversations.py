@@ -75,14 +75,6 @@ class ChatExternalConversations:
                 or reservation.get("read_only_review") or reservation.get("work_attempt"))
             and reservation.get("failed_turn_id") == row["turn_id"] else None)
         events = store.events_after(session["session_id"], turn["turn_id"], None)
-        # A later source control also retires an unexecuted failed request.
-        # The source fence makes this inventory consistent with admission.
-        stop = any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
-        if turn.get("status") in {"failed", "completed"}:
-            stop = stop or any(item.get("binding_id") == row["binding_id"]
-                and item.get("source") == row["source"] and item.get("command") in {"stop", "new"}
-                and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
-                for item in self.pending())
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
@@ -91,9 +83,34 @@ class ChatExternalConversations:
                 "admitted_turn": admitted,
                 "attachments_present": bool(row.get("attachments")),
                 "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
-                "stop_observed": stop,
+                "stop_observed": self._source_stop_observed(row, turn, events),
                 "native_observation": observation, "source_verified": source_verified},
         })
+
+    def _source_stop_observed(self, row: dict[str, Any], turn: dict[str, Any],
+                              events: list[dict[str, Any]]) -> bool:
+        """Read the same durable source controls for recovery and display."""
+        return (any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
+            or (turn.get("status") in {"failed", "completed"} and any(
+                item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]
+                and item.get("command") in {"stop", "new"}
+                and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
+                for item in self.pending())))
+
+    def quota_backlog_pending(self, row: dict[str, Any]) -> bool:
+        """Project existing work without resolving providers or admitting recovery."""
+        from ...control_plane.effect_runtime import effect_runtime_result
+
+        store = self.controller.store
+        session = store.load_session(row["session_id"])
+        turn = store.load_turn(row["session_id"], row["turn_id"])
+        events = store.events_after(row["session_id"], row["turn_id"], None) if turn else []
+        return effect_runtime_result("collaboration.conversation.request", {
+            "request": {key: value for key, value in row.items() if key != "attachments"},
+            "current_session": session,
+            "pending_observation": {"turn": turn,
+                "stop_observed": self._source_stop_observed(row, turn, events) if turn else False},
+        }).get("pending") is True
 
     def context_recovery_candidate(self, request_ref: str) -> bool:
         """Discovery only; every authority and native fact is re-read at admission."""

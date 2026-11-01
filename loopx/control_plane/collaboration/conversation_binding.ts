@@ -437,6 +437,18 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     throw new EffectRuntimeRequestError("unsupported external conversation command");
   }
   const current = params.current_session === null ? null : requireJsonObject(params.current_session, "current Session");
+  if (params.pending_observation !== undefined) {
+    const observation = requireJsonObject(params.pending_observation, "pending work observation");
+    const turn = observation.turn == null ? null : requireJsonObject(observation.turn, "observed Turn");
+    // Pending work is not current retry eligibility: backoff, disabled bindings,
+    // exhausted attempts and unavailable providers do not retire the request.
+    // Only explicit lifecycle evidence removes a delivered quota failure.
+    return {pending: row.command === null && row.status === "accepted"
+      && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
+      && turn?.status === "failed" && turn.error_code === "usage_limit_exceeded"
+      && !(current?.session_id === row.session_id && current?.status === "closed")
+      && observation.stop_observed !== true};
+  }
   if (params.context_recovery !== undefined) {
     return planContextRecovery(params, row, current);
   }

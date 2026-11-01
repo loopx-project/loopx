@@ -1405,11 +1405,107 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
   return action.quiet_noop_allowed === true ? "wait" : "blocked";
 }
 
+/** Navigation over captured facts, never a summary or a source-read receipt. */
+function initialReadPointers(context: JsonObject): string[] {
+  const object = (value: unknown): JsonObject | undefined =>
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
+  const interaction = object(context.interaction_contract);
+  // Unknown envelopes retain generic discovery instead of guessing their policy.
+  if (interaction?.schema_version !== "loopx_interaction_contract_v0") return [];
+  const pointers: string[] = [];
+  const include = (...path: (string | number)[]): void => {
+    let value: unknown = context;
+    for (const key of path) {
+      if (value === null || typeof value !== "object" || !Object.hasOwn(value, key)) return;
+      value = (value as Record<string | number, unknown>)[key];
+    }
+    pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
+  };
+  for (const field of ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
+    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
+    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
+    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"])
+    include(field);
+  include("agent_lane_next_action", "next_step");
+  include("agent_lane_next_action", "next_action_basis");
+  include("interaction_contract", "user_channel");
+  include("interaction_contract", "agent_channel", "required_reads");
+  const work = ["interaction_contract", "agent_channel", "work_context"];
+  include(...work, "instruction");
+  include(...work, "user_todos");
+  const channel = object(interaction.agent_channel);
+  const sources = object(channel?.work_context)?.sources;
+  if (Array.isArray(sources)) sources.forEach((_source, index) => {
+    const source = [...work, "sources", index];
+    for (const field of ["source", "kind", "reason", "ordering", "command"])
+      include(...source, field);
+    // Current Goal/Todo text and source obligations stay whole. Expansive
+    // evidence pages, example recipes and historical bodies remain on demand.
+    include(...source, "content", "text");
+    include(...source, "content", "instruction");
+    for (const field of ["ok", "status", "reason", "error", "recovery", "revision", "provider_revision", "source_authority",
+      "decision_read_from_provider", "legacy_fallback_used", "graph_enabled", "harness_enabled", "boundary", "authority_read"])
+      include(...source, "content", field);
+    include(...source, "content", "current", "revision");
+    include(...source, "content", "current", "instruction");
+    include(...source, "content", "outcome_context");
+    const requirements = object(object(object(_source)?.content)?.goal_acceptance_contract)?.outcome_requirements;
+    const outcomes = object(requirements)?.outcomes;
+    if (Array.isArray(outcomes)) outcomes.forEach((_outcome, outcomeIndex) => {
+      const outcome = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes", outcomeIndex];
+      include(...outcome, "id");
+      include(...outcome, "supporting_material_pointer");
+    });
+    include(...source, "content", "todo", "text");
+    include(...source, "content", "todo", "note");
+    include(...source, "content", "graph", "guidance");
+    include(...source, "content", "graph", "recent_findings");
+    include(...source, "content", "graph", "result_page");
+    include(...source, "content", "harness", "guidance");
+    include(...source, "content", "harness", "orchestration_gate");
+  });
+  for (const field of ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy",
+    "quota_spend_source", "delivery_workspace_causality", "vision_continuation_audit"])
+    include("interaction_contract", "cli_channel", field);
+  const planPath = ["interaction_contract", "cli_channel", "settlement_plan"];
+  const plan = object(object(interaction.cli_channel)?.settlement_plan);
+  if (plan?.schema_version === "quota_settlement_plan_v1" && Array.isArray(plan.ordered_steps)) {
+    for (const field of Object.keys(plan)) if (field !== "ordered_steps") include(...planPath, field);
+    plan.ordered_steps.forEach((value, stepIndex) => {
+      const step = object(value), stepPath = [...planPath, "ordered_steps", stepIndex];
+      if (!step) { include(...stepPath); return; }
+      for (const field of Object.keys(step)) {
+        if (field !== "optional_attachments" || !Array.isArray(step[field])) { include(...stepPath, field); continue; }
+        step[field].forEach((attachment, attachmentIndex) => {
+          const path = [...stepPath, field, attachmentIndex];
+          if (object(attachment)?.required !== false) { include(...path); return; }
+          // Explicitly optional guidance is read before using that attachment.
+          // Keep its identity and actual read/authoring routes discoverable.
+          for (const key of Object.keys(object(attachment)!)) {
+            if (["guidance", "attachment_template", "linked_question_attachment_template", "path_delta_attachment_template",
+              "optional_measurement_example", "optional_question_evolution_example"].includes(key)) continue;
+            include(...path, key); // Unknown attachment controls are never hidden.
+          }
+        });
+      }
+    });
+  } else include(...planPath); // Unknown plan versions keep their complete obligations.
+  return pointers;
+}
+
+// Quota field vocabulary stays with its decision owner; the RFC 6901 reader
+// receives addresses and remains independent of Goal/permission policy.
+function capturedDecisionSelection(request: JsonObject): JsonObject {
+  const initial = request.initial_read === true || request.list_fields === true
+    && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
+  return capturedContextSelection(request, initial ? initialReadPointers(requireJsonObject(request.context, "captured context")) : []);
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
   if (operation === "replan_view") return replanView(request);
-  if (operation === "context_select") return capturedContextSelection(request);
+  if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
     const reads = replanReadCommands(payload);

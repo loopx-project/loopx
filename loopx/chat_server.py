@@ -921,6 +921,7 @@ class ChatRequestHandler(
             }
         )
 
+    @effect_runtime_request_scope()
     def _session_snapshot(self, session_id: str) -> None:
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)

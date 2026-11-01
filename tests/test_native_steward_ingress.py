@@ -105,7 +105,7 @@ def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(stew
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.control_plane.collaboration.links import link
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.todos.mutation_api import add_goal_todo
+    from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
     from loopx.extensions.lark.conversation_identity import identity_ref
     from loopx.presentation.request_control_api import bound_steward_inventory_scope
     from loopx.chat_lark_api import manager_source_scope_resolver
@@ -174,7 +174,7 @@ def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(stew
         connection.close()
         return response.status, body, len(observations) - before
     try:
-        offset, ids, snapshot, linked = 0, [], None, []
+        offset, ids, snapshot, linked, worker_page = 0, [], None, [], None
         while offset is not None:
             code, page, checks = read(view="history", offset=offset)
             assert code == 200 and checks == 2 and page["matched"] == page["pending_count"] == 43
@@ -184,15 +184,29 @@ def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(stew
             assert page["snapshot_digest"] == snapshot
             ids.extend(row["request_id"] for row in page["rows"])
             linked.extend(todo for row in page["rows"] for todo in row["linked_todos"])
+            if any(todo["todo_id"] == tasks["worker"] for row in page["rows"] for todo in row["linked_todos"]):
+                worker_page = offset
             offset = page["next_offset"]
         assert len(ids) == len(set(ids)) == 43
         assert {todo["todo_id"] for todo in linked} == set(tasks.values())
         assert all(todo["status"] == "open" and "Inspect the retained artifact" in todo["title"] for todo in linked)
         assert {row["agent_id"] for row in page["rows"]} <= {"worker", "reviewer"}
+        changed = update_goal_todo(registry_path=runtime.registry_path, runtime_root_arg=str(root), goal_id=goal,
+            todo_id=tasks["worker"], text="Inspect the corrected artifact for worker", agent_id="worker")
+        assert changed["ok"] is True, changed
+        assert worker_page is not None
+        code, updated, checks = read(view="history", offset=worker_page)
+        assert code == 200 and checks == 2 and updated["snapshot_digest"] == snapshot
+        assert any(todo["todo_id"] == tasks["worker"] and "Inspect the corrected artifact for worker" in (todo.get("title") or "")
+                   for row in updated["rows"] for todo in row["linked_todos"])
         code, searched, checks = read(view="history", search=ids[-1])
         assert code == 200 and checks == 2 and searched["matched"] == 1
+        code, light, checks = read(view="history", include_work="false")
+        assert code == 200 and checks == 2 and light["matched"] == 43
+        assert light["snapshot_digest"] == snapshot
+        assert all(row["linked_todos"] == [] and row["evidence_refs"] == [] for row in light["rows"])
         provider.owner_ready = False
-        code, refused, _ = read(view="history")
+        code, refused, _ = read(view="history", include_work="false")
         assert code == 400 and "rows" not in refused and "保留来源身份" not in str(refused)
         provider.owner_ready = True
         assert read(view="history")[1]["matched"] == 43

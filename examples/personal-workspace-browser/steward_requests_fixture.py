@@ -222,6 +222,8 @@ def main():
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "deliver":
                     drain(runtime, registry, store, lambda *_: None)
+                elif command == "conversation-arrival":
+                    store.append_message(session["session_id"], role="assistant", text="新的委派阅读测试消息。", origin="manager_followup")
                 elif command == "source-unavailable":
                     bindings.path.write_text("{", encoding="utf-8")
                 elif command == "source-recover":
