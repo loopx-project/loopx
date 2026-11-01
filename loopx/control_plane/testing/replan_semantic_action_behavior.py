@@ -47,9 +47,12 @@ REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
     "replan_semantic_action_behavior_receipt_v0"
 )
 # Native progressive delivery adds three bounded reads (capture, review, and
-# writeback) to the same semantic action path. Preserve the prior seven-call
-# behavior budget while allowing those mandatory reads to complete.
-REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 10
+# writeback) to the same semantic action path. Keep the original seven-call
+# behavior budget for ordinary work and grant a separate allowance only after
+# the quota result identifies a native capture.
+REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 7
+REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS = 3
+_NATIVE_CONTEXT_READ_KINDS = frozenset({"context_read", "replan_context_read"})
 
 
 class _HostToolError(RuntimeError):
@@ -117,8 +120,23 @@ class _QualificationState:
 
     @property
     def tool_call_limit(self) -> int:
-        return (REQUIRED_VISION_CLOSEOUT_MAX_CALLS if self.fixture.required_vision
-                else REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS)
+        if self.fixture.required_vision:
+            return REQUIRED_VISION_CLOSEOUT_MAX_CALLS
+        return REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS + (
+            REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS
+            if self.quota_context is not None
+            and self.quota_context.capture_path is not None
+            else 0
+        )
+
+    @property
+    def maximum_tool_call_limit(self) -> int:
+        if self.fixture.required_vision:
+            return REQUIRED_VISION_CLOSEOUT_MAX_CALLS
+        return (
+            REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS
+            + REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS
+        )
 
 
 def _digest(value: str) -> str:
@@ -1024,6 +1042,15 @@ def _qualification_receipt(
         "required_vision_closeout" if state.fixture.required_vision else "semantic_action"
     )
     receipt["tool_call_limit"] = state.tool_call_limit
+    if not state.fixture.required_vision:
+        receipt["ordinary_tool_call_limit"] = (
+            REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS
+        )
+        receipt["native_context_read_call_limit"] = (
+            REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS
+            if state.tool_call_limit > REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS
+            else 0
+        )
     if state.fixture.required_vision:
         receipt["execution_host"] = "os_isolated_shell"
         receipt["boundary"]["shell_commands_executed"] = bool(state.steps)
@@ -1540,6 +1567,19 @@ def _append_tool_response(
     )
 
 
+def _tool_call_budget_exhausted(state: _QualificationState) -> bool:
+    if state.fixture.required_vision:
+        return len(state.steps) >= REQUIRED_VISION_CLOSEOUT_MAX_CALLS
+    ordinary_calls = sum(
+        step.get("kind") not in _NATIVE_CONTEXT_READ_KINDS
+        for step in state.steps
+    )
+    return (
+        ordinary_calls >= REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS
+        or len(state.steps) >= state.maximum_tool_call_limit
+    )
+
+
 def _run_qualification_loop(
     client: DoubaoExecToolClient,
     state: _QualificationState,
@@ -1547,7 +1587,9 @@ def _run_qualification_loop(
     qualification_id: str,
     shell: VisionShellHost | None = None,
 ) -> dict[str, Any]:
-    for _ in range(state.tool_call_limit):
+    for _ in range(state.maximum_tool_call_limit):
+        if _tool_call_budget_exhausted(state):
+            break
         tool_call = client.next_tool_call(
             state.messages,
             tool_description=VISION_EXEC_TOOL_DESCRIPTION if state.fixture.required_vision else None,
