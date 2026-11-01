@@ -17,6 +17,7 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope, prepare_context_delivery, restore_context_delivery,
 )
@@ -495,12 +496,13 @@ def test_native_context_cli_without_retention_exposes_files_and_preserves_receip
         args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
         assert args.max_page_output_bytes == limit
         observed = consume(read_context_capture(args))
-        assert hashlib.sha256(observed).hexdigest() == wire["recovery"]["sha256"]
+        recovery = read_context_read_reference(wire["recovery"]["reference_file"])[1]
+        assert hashlib.sha256(observed).hexdigest() == recovery["sha256"]
         assert json.loads(observed)["heartbeat_receipt"]["turn_instance_id"] == "native-full"
         if output_limit is not None:
             rc, projected = _run_cli(registry, runtime, "quota", "context-project", "--codex-app",
                 "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "native-full",
-                "--capture-file", wire["recovery"]["path"], "--capture-sha256", wire["recovery"]["sha256"],
+                "--capture-file", recovery["path"], "--capture-sha256", recovery["sha256"],
                 "--decision-output-root", str(projection_root), "--context-delivery", "on",
                 "--codex-context-dir", str(root), "--max-page-output-bytes", str(limit), cwd=project)
             assert rc == 0 and projected["ok"], projected
@@ -552,7 +554,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
             if page["eof"]:
                 break
             page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
-        assert hashlib.sha256(observed).hexdigest() == view["recovery"]["sha256"]
+        recovery = read_context_read_reference(view["recovery"]["reference_file"])[1]
+        assert hashlib.sha256(observed).hexdigest() == recovery["sha256"]
         return json.loads(observed)
 
     first = guard("native-work-first")
@@ -571,7 +574,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-work-first",
         "--source", "heartbeat", "--execute", cwd=project)
     assert rc == 0 and spent["ok"], spent
-    original = Path(first["recovery"]["path"]).read_bytes()
+    original_reference = read_context_read_reference(first["recovery"]["reference_file"])[1]
+    original = Path(original_reference["path"]).read_bytes()
     context.codex_context_hook(str(root), {**event, "hook_event_name": "PreCompact"})
     context.codex_context_hook(str(root), {**event, "source": "compact"})
     assert "candidate" not in context._state(root)
@@ -580,12 +584,14 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
     assert current["mode"] == "full" and "candidate" not in context._state(root)
     body = consume(current)
     assert body["heartbeat_receipt"]["turn_instance_id"] == "native-work-next"
-    assert context._state(root)["candidate"]["target"] == current["target"]
-    assert Path(first["recovery"]["path"]).read_bytes() == original
+    current_machine = read_context_read_reference(current["reference_file"])[1]["navigation"]
+    assert context._state(root)["candidate"]["target"] == current_machine["target"]
+    assert Path(original_reference["path"]).read_bytes() == original
     command_workspace = tmp_path / "independent-checkout"
     command_workspace.mkdir()
     warm = guard("native-work-next", cwd=command_workspace)
-    assert warm["mode"] == "delta" and warm["target"] != current["target"]
+    warm_machine = read_context_read_reference(warm["reference_file"])[1]["navigation"]
+    assert warm["mode"] == "delta" and warm_machine["target"] != current_machine["target"]
     assert context._state(root)["cwd"] == str(project)
     assert _heartbeat_receipt_count(runtime, "native-work-first") == 1
     assert _heartbeat_receipt_count(runtime, "native-work-next") == 1
@@ -634,7 +640,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
     else:
         assert len(printed) == 1 and "content" not in printed[0]
-        assert json.loads(Path(printed[0]["path"]).read_text()) == {"native_projection": original}
+        reference = read_context_read_reference(printed[0]["reference_file"])[1]
+        assert json.loads(Path(reference["path"]).read_text()) == {"native_projection": original}
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 

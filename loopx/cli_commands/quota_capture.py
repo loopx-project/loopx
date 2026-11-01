@@ -21,6 +21,7 @@ from ..control_plane.turn_driver.decision_capture import (
     NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     native_context_page_budget,
     read_context_capture_file as _read_capture,
+    read_context_read_reference, write_context_read_reference,
 )
 
 
@@ -42,7 +43,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   selection_sha256: str | None = None,
                   list_fields: bool = False,
                   list_depth: int | None = None,
-                  initial_read: bool = False) -> dict[str, Any]:
+                  initial_read: bool = False,
+                  reference_file: Path | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -71,11 +73,26 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
             # first bounded page rather than repeating them in file metadata.
             # Historical unbounded readers retain their exact wire shape.
             result["read_instruction"] = CONTEXT_CAPTURE_PAGE_GUIDANCE
+        if reference_file is not None and select is not None:
+            # Selected pages have never been full-input receipts. Give this
+            # compact transport a distinct schema so old observers cannot
+            # mistake an omitted digest for a full capture observation.
+            result["schema_version"] = "context_capture_selection_page_v1"
+            for key in ("sha256", "selection_sha256", "selected_pointers"):
+                result.pop(key, None)
+            result["reference_file"] = str(reference_file)
+            result["read_instruction"] = ("Selected detail only. Follow next_command for contiguous bytes; "
+                "the immutable reference pins both complete digests, which the CLI verifies on every page. "
+                "Offsets and EOF describe only this selected view. "
+                "EOF is not full-context retention, authority or freshness.")
         if cursor < len(raw):
             result["next_command"] = context_capture_read_command(path, digest, offset=cursor, page_bytes=next_page_bytes or size,
                 max_page_output_bytes=next_page_output_bytes or output_limit,
-                select=None if initial_read else select, selection_sha256=selection_sha256,
-                list_fields=list_fields, list_depth=list_depth, initial_read=initial_read)
+                select=None if initial_read or reference_file is not None else select,
+                selection_sha256=selection_sha256 if reference_file is None else None,
+                list_fields=list_fields if reference_file is None else False,
+                list_depth=list_depth if reference_file is None else None,
+                initial_read=initial_read if reference_file is None else False, reference_file=reference_file)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -133,6 +150,16 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
     try:
         digest = getattr(args, "capture_sha256", None)
         value = getattr(args, "capture_file", None)
+        reference_file = getattr(args, "reference_file", None)
+        pinned_selection = None
+        if reference_file:
+            if value or digest or getattr(args, "codex_context_dir", None) or getattr(args, "codex_context_root", None):
+                raise ValueError("reference-file cannot be combined with capture or native session lookup")
+            if args.format != "json":
+                raise ValueError("reference-file requires JSON output")
+            reference_file, reference = read_context_read_reference(reference_file)
+            value, digest = reference["path"], reference["sha256"]
+            pinned_selection = reference.get("selection")
         offset, size = args.offset, args.page_bytes
         output_limit = getattr(args, "max_page_output_bytes", None)
         if output_limit is not None and (type(output_limit) is not int or output_limit <= 0
@@ -173,11 +200,24 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             raise ValueError("list-depth requires --list and an integer from 1 to 8")
         selectors = getattr(args, "select", None)
         initial_read = getattr(args, "initial_read", False)
+        selection_digest = getattr(args, "selection_sha256", None)
+        if pinned_selection is not None:
+            if selectors is not None or initial_read or list_fields or list_depth is not None or selection_digest is not None:
+                raise ValueError("a pinned selection reference cannot change selectors; use the original capture reference")
+            if (set(pinned_selection) != {"select", "initial_read", "list_fields", "list_depth", "sha256"}
+                    or type(pinned_selection["initial_read"]) is not bool or type(pinned_selection["list_fields"]) is not bool
+                    or not isinstance(pinned_selection["sha256"], str)
+                    or BARE_SHA256_PATTERN.fullmatch(pinned_selection["sha256"]) is None):
+                raise ValueError("reader selection reference is incomplete or unsupported")
+            selectors, initial_read = pinned_selection["select"], pinned_selection["initial_read"]
+            list_fields, list_depth = pinned_selection["list_fields"], pinned_selection["list_depth"]
+            selection_digest = pinned_selection["sha256"]
+            if list_depth is not None and (not list_fields or type(list_depth) is not int or not 1 <= list_depth <= 8):
+                raise ValueError("reader selection list-depth must be between 1 and 8 and requires list")
         if initial_read and (selectors is not None or list_fields or list_depth is not None):
             raise ValueError("initial-read cannot be combined with select or list")
         if list_fields and selectors is None:
             selectors = [""]
-        selection_digest = getattr(args, "selection_sha256", None)
         if initial_read and offset > 0 and selection_digest is None:
             raise ValueError("initial-read continuation requires selection-sha256; follow next_command")
         if selectors is None and not initial_read and selection_digest is not None:
@@ -209,13 +249,17 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 raise ValueError("selected view digest changed; restore the original selection and reader")
             selection_digest = expected
             selectors = [item["pointer"] for item in views]
+            if reference_file is not None and pinned_selection is None:
+                reference_file = write_context_read_reference(path, digest, selection={
+                    "select": None if initial_read else selectors, "initial_read": initial_read,
+                    "list_fields": list_fields, "list_depth": list_depth, "sha256": expected})
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
             next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
-            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read)
+            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file)
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -245,6 +289,49 @@ def _capture_read_reference(value: dict[str, Any], *, page_bytes: int,
     return {"path": value["path"], "sha256": value["sha256"],
         "command": context_capture_read_command(Path(value["path"]), value["sha256"],
             page_bytes=page_bytes, max_page_output_bytes=output_bytes)}
+
+
+def model_context_reference(view: dict[str, Any]) -> dict[str, Any]:
+    """Present native navigation; machine references and journal bindings stay full.
+
+    The descriptor holds complete digests locally. Legacy explicit readers and
+    full-page observation receipts retain their original transport shape.
+    """
+    page_bytes, output_bytes = native_context_page_budget()
+    # Retain an explicitly smaller caller budget from the generated command.
+    words = shlex.split(view["command"])
+    for option in ("--page-bytes", "--max-page-output-bytes"):
+        if option in words:
+            if option == "--page-bytes":
+                page_bytes = int(words[words.index(option) + 1])
+            else:
+                output_bytes = int(words[words.index(option) + 1])
+
+    def reference(value: dict[str, Any], *, navigation: bool = False) -> dict[str, str]:
+        path = Path(value["path"])
+        reader = write_context_read_reference(path, value["sha256"], navigation=value if navigation else None)
+        return {"reference_file": str(reader), "command": context_capture_read_command(path, value["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes, reference_file=reader)}
+
+    result = {"ok": True, "schema_version": "context_capture_navigation_v1", "mode": view["mode"],
+        **reference(view, navigation=True), "total_bytes": view["total_bytes"], "recovery": reference(view["recovery"]),
+        "instruction": view["instruction"]}
+    if "context_delivery" in view:
+        result["context_delivery"] = view["context_delivery"]
+    if "baseline_reference" in view:
+        result["baseline_reference"] = reference(view["baseline_reference"])
+        result["continuity_basis"] = view["continuity_basis"]
+    if "first_read_command" in view:
+        recovery = view["recovery"]
+        result["first_read_command"] = context_capture_read_command(Path(recovery["path"]), recovery["sha256"],
+            page_bytes=page_bytes, max_page_output_bytes=output_bytes, initial_read=True,
+            reference_file=Path(result["recovery"]["reference_file"]))
+    result["instruction"] += (" Append --select '<pointer>' or --list to recovery.command for current fields. "
+        "Reader references keep complete digests locally; the CLI checks them on every page. "
+        "A reference or digest grants no authority or freshness.")
+    if len(_native_output_bytes(result)) > min(output_bytes, 7900):
+        return view  # Preserve usable legacy recovery under a very small ceiling.
+    return result
 
 
 def _native_context_reference(projected: dict[str, Any], reference: dict[str, Any], *,
@@ -563,7 +650,7 @@ def project_saved_context_capture(args: argparse.Namespace) -> dict[str, Any]:
         "instruction": "Presentation of the original decision only; authority and freshness are unchanged. "
             + (CONTEXT_CAPTURE_NAVIGATION_GUIDANCE if activation["enabled"] else CONTEXT_CAPTURE_READ_GUIDANCE)}
     if native_view is not None:
-        result.update(native_view)
+        return model_context_reference(native_view)
     return result
 
 
