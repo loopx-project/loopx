@@ -152,6 +152,8 @@ sys.stdin.read()
     binary.chmod(0o755)
     return dict(os.environ) | {
         "LOOPX_EXECUTION_MODE": "plain",
+        # This executable models legacy sessions, not native hook discovery.
+        "LOOPX_CONTEXT_DELIVERY": "off",
         "LOOPX_PROJECT": str(tmp_path),
         "LOOPX_TASK_DOC": str(task),
         "LOOPX_CODEX_HOME": str(tmp_path / "home"),
@@ -316,6 +318,8 @@ def test_native_heartbeat_retry_uses_real_session_owner(tmp_path, monkeypatch, c
 
     env, _project, _runtime, _source, _state = _environment(tmp_path, monkeypatch, "sqlite")
     env["LOOPX_ITERATION_CONTEXT"] = context
+    # This fake executable models session retries, not native hook discovery.
+    env["LOOPX_CONTEXT_DELIVERY"] = "off"
     monkeypatch.setattr(worker, "heartbeat_body", lambda *a, **kw: "synthetic work")
     arguments = tmp_path / "native-calls.jsonl"
     Path(env["CODEX_BIN"]).write_text(f"#!{sys.executable}\n" + f"""

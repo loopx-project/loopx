@@ -271,11 +271,17 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     code, warm = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and warm["mode"] == "delta", warm
     complete_reader(warm)
-    old_generation = warm["target"]["continuity_generation"]
-    old_configuration = (runtime / "machine/configuration.json").read_bytes()
+    old_generation = warm["target"].get("continuity_generation")
+    configuration_file = runtime / "machine/configuration.json"
+    old_configuration = configuration_file.read_bytes() if configuration_file.exists() else None
+    assert (old_generation is None) is (stored_mode is None)
+    assert (old_configuration is None) is (stored_mode is None)
     assert configure(registry, runtime, tmp_path, "off")[0] == 0
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
-    assert (runtime / "machine/configuration.json").read_bytes() == old_configuration
+    if old_configuration is not None:
+        assert configuration_file.read_bytes() == old_configuration
+    else:
+        assert json.loads(configuration_file.read_text())["namespaces"]["context_delivery"]["mode"] == "on"
     code, fresh = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and fresh["mode"] == "full", fresh
     assert fresh["target"]["continuity_generation"] != old_generation
@@ -374,8 +380,9 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
 @pytest.mark.parametrize("provider,worker_mode,machine_on", [
     ("file", "off", False), ("file", "off", True),
     ("sqlite", "off", False), ("sqlite", "off", True),
+    ("file", None, False), ("sqlite", None, False),
 ])
-def test_native_worker_explicit_off_isolates_machine_on(tmp_path, monkeypatch, provider, worker_mode, machine_on):
+def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypatch, provider, worker_mode, machine_on):
     from benchmark.runtime.worker import run_once
     from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
@@ -405,15 +412,36 @@ def test_native_worker_explicit_off_isolates_machine_on(tmp_path, monkeypatch, p
         try:
             if number == 1:
                 body = _input_text(request)
-                assert "context-project" not in body
-                command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
-                turn_assignment = next(line.strip() for line in body.splitlines() if line.startswith("LOOPX_TURN="))
-                observed.append(shlex.split(turn_assignment)[0].split("=", 1)[1])
+                if worker_mode == "off":
+                    assert "context-project" not in body
+                    command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
+                    turn_assignment = next(line.strip() for line in body.splitlines() if line.startswith("LOOPX_TURN="))
+                    observed.append(shlex.split(turn_assignment)[0].split("=", 1)[1])
+                else:
+                    # The actual default worker stages native hooks and presents
+                    # the original preflight; no external provider is contacted.
+                    command = next(line.strip() for line in body.splitlines() if " quota context-project " in line)
+                    words = shlex.split(command)
+                    observed.append(words[words.index("--turn-instance-id") + 1])
+                    turn_assignment = ""
                 return {"type": "function_call", "id": "guard-call", "call_id": "guard-call",
                     "name": "exec_command", "arguments": json.dumps({
                         "cmd": turn_assignment + "\n" + command + " > " + shlex.quote(str(saved)),
                         "max_output_tokens": 1000})}
             decision = json.loads(saved.read_text())
+            if worker_mode is None:
+                assert decision["mode"] == "full", decision
+                # Independent byte readback checks the current capture. This
+                # is not evidence that the model retained its whole input.
+                command = decision["recovery"]["command"]
+                content = ""
+                while command:
+                    page = json.loads(subprocess.check_output(shlex.split(command), text=True, cwd=project))
+                    content += page["content"]
+                    if page["eof"]:
+                        break
+                    command = page["next_command"]
+                decision = json.loads(content)
             assert decision["ok"] and decision["should_run"], decision
             assert decision["goal_id"] == GOAL_ID
             assert decision["heartbeat_receipt"]["turn_instance_id"] == observed[0]
@@ -431,6 +459,10 @@ def test_native_worker_explicit_off_isolates_machine_on(tmp_path, monkeypatch, p
     assert not errors and len(requests) == 2, errors
     assert env == original, "Resolved worker defaults must not mutate caller/frozen input"
     assert _heartbeat_receipt_count(runtime, observed[0]) == 1 and _spend_run_count(runtime) == 0
-    assert "context_transport" not in result
-    assert not (runtime / "context-delivery").exists() and not (home / "loopx-context").exists()
-    assert not (home / "hooks.json").exists()
+    if worker_mode == "off":
+        assert "context_transport" not in result
+        assert not (runtime / "context-delivery").exists() and not (home / "loopx-context").exists()
+        assert not (home / "hooks.json").exists()
+    else:
+        assert result["context_delivery"] == "on" and result["context_transport"]["available"]
+        assert (home / "hooks.json").is_file()

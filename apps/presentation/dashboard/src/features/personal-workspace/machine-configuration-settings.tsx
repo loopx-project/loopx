@@ -529,10 +529,10 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             <div className="personal-capability-fields"><label className="is-boolean">
               <span>Codex</span>
               <input aria-label={locale === "zh-CN" ? "在 Codex 中使用差分上下文" : "Use differential context in Codex"}
-                type="checkbox" role="switch" checked={(selectedCurrent?.mode ?? selected.default.mode) === "on"} disabled={Boolean(busy) || !editorAvailable}
+                type="checkbox" role="switch" checked={(selectedCurrent?.mode ?? selected.default?.mode) === "on"} disabled={Boolean(busy) || !editorAvailable}
                 onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off")} />
             </label></div>
-            <p role="status">{(selectedCurrent?.mode ?? selected.default.mode) === "on"
+            <p role="status">{(selectedCurrent?.mode ?? selected.default?.mode) === "on"
               ? selectedCurrent
                 ? locale === "zh-CN" ? "已为 Codex 保存开启偏好；宿主就绪与实际使用尚未验证。" : "Codex preference is on; host readiness and actual use are not verified."
                 : locale === "zh-CN" ? "Codex 默认开启；宿主就绪与实际使用尚未验证。" : "On by default for Codex; host readiness and actual use are not verified."
