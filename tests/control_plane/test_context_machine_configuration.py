@@ -467,7 +467,9 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
     ("file", None, False, False), ("sqlite", None, False, False),
 ])
 def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypatch, provider, worker_mode, machine_on, transport_ready):
+    from argparse import Namespace
     from benchmark.runtime.worker import run_once
+    from scripts.external_scheduler_worker import build_should_run_command, parse_tick
     from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
     import sys
@@ -493,6 +495,16 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         def unavailable(*_args):
             raise ValueError("Fixture native hooks unavailable")
         monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unavailable)
+    # The real outer scheduler observes before the native worker prepares its
+    # session. It inherits the treatment, but must consume an inline decision.
+    observer_env = {**env, "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        "LOOPX_CONTEXT_DELIVERY": "off" if worker_mode == "off" or not transport_ready else "on"}
+    observer = build_should_run_command(Namespace(cli_bin=program, registry=str(registry),
+        runtime_root=str(runtime), goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli"))
+    observed_guard = subprocess.run(observer, cwd=project, env=observer_env,
+        capture_output=True, text=True, timeout=30, check=False)
+    assert observed_guard.returncode == 0, observed_guard.stderr or observed_guard.stdout
+    assert parse_tick(json.loads(observed_guard.stdout)).should_run
     observed, errors = [], []
     saved = workspace / "original-guard.json"
 
