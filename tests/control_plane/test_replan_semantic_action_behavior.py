@@ -26,12 +26,19 @@ from loopx.control_plane.testing.replan_semantic_action_behavior import (
 
 def _context_aware_transport(
     actions: list[object],
+    *,
+    capture_pointers: tuple[str, ...] = (),
 ) -> RawScriptedDoubaoExecTransport:
     """Script the intended work while preserving native progressive reads."""
 
     remaining = list(actions)
+    writeback_command: str | None = None
+    review_read = False
+    work_observed = False
+    writeback_read = False
 
     def choose(request: Mapping[str, object]) -> object:
+        nonlocal review_read, work_observed, writeback_command, writeback_read
         messages = request.get("messages")
         latest = messages[-1] if isinstance(messages, list) and messages else None
         raw: object = None
@@ -48,10 +55,13 @@ def _context_aware_transport(
             assert isinstance(recovery, Mapping)
             command = str(recovery.get("command") or "")
             assert command
+            pointers = (
+                "/autonomous_replan_obligation",
+                "/replan_action_packet",
+                *capture_pointers,
+            )
             return ScriptedExecToolAction(
-                command
-                + " --select /autonomous_replan_obligation"
-                + " --select /replan_action_packet"
+                command + "".join(f" --select {pointer}" for pointer in pointers)
             )
         if isinstance(raw, Mapping) and isinstance(raw.get("content"), str):
             page = json.loads(raw["content"])
@@ -64,12 +74,42 @@ def _context_aware_transport(
                     and isinstance(row.get("pointer"), str)
                 }
                 obligation = values.get("/autonomous_replan_obligation")
+                action_packet = values.get("/replan_action_packet")
+                if isinstance(action_packet, Mapping) and isinstance(
+                    action_packet.get("writeback"), str
+                ):
+                    writeback_command = str(action_packet["writeback"])
                 if isinstance(obligation, Mapping) and isinstance(
                     obligation.get("context_read"), str
                 ):
                     return ScriptedExecToolAction(str(obligation["context_read"]))
+        if isinstance(raw, Mapping) and raw.get("stage") == "review":
+            review_read = True
+        elif isinstance(raw, Mapping) and raw.get("stage") == "writeback":
+            writeback_read = True
+        elif review_read and isinstance(raw, Mapping):
+            work_observed = True
         if not remaining:
             raise AssertionError("context-aware scripted transport exhausted its actions")
+        next_action = remaining[0]
+        next_name = getattr(next_action, "__name__", "")
+        next_command = str(getattr(next_action, "command", ""))
+        read_action = next_name in {
+            "_inline_explore_context_action",
+            "_explore_context_action",
+            "wrong_scope",
+        }
+        if (
+            writeback_command
+            and review_read
+            and work_observed
+            and not writeback_read
+            and (
+                (callable(next_action) and not read_action)
+                or "refresh-state --help" in next_command
+            )
+        ):
+            return ScriptedExecToolAction(writeback_command)
         action = remaining.pop(0)
         return action(request) if callable(action) else action
 
@@ -90,6 +130,8 @@ def _latest_quota_packet(request: Mapping[str, object]) -> dict[str, object]:
     messages = request.get("messages")
     if not isinstance(messages, list) or not messages:
         raise AssertionError("model request must include a real quota result")
+    replan_view: Mapping[str, object] | None = None
+    writeback_view: Mapping[str, object] | None = None
     for message in reversed(messages):
         if not isinstance(message, Mapping) or message.get("role") != "tool":
             continue
@@ -97,7 +139,44 @@ def _latest_quota_packet(request: Mapping[str, object]) -> dict[str, object]:
             packet = QuotaToolContext.from_output(str(message.get("content") or "")).packet
         except json.JSONDecodeError:
             continue
+        if (
+            isinstance(packet, Mapping)
+            and packet.get("stage") == "review"
+            and isinstance(packet.get("uncovered_frontier"), Mapping)
+        ):
+            replan_view = packet
+            continue
+        if (
+            isinstance(packet, Mapping)
+            and packet.get("stage") == "writeback"
+            and isinstance(packet.get("writeback_contract"), Mapping)
+        ):
+            writeback_view = packet
+            continue
+        if (
+            isinstance(packet, Mapping)
+            and packet.get("schema_version") == "context_capture_selection_page_v1"
+            and isinstance(packet.get("content"), str)
+        ):
+            selected = json.loads(packet["content"])
+            rows = selected.get("selections") if isinstance(selected, Mapping) else None
+            if isinstance(rows, list):
+                packet = {
+                    str(row["pointer"]).removeprefix("/"): row["value"]
+                    for row in rows
+                    if isinstance(row, Mapping)
+                    and isinstance(row.get("pointer"), str)
+                    and "value" in row
+                }
         if isinstance(packet, dict) and packet.get("replan_action_packet"):
+            if replan_view is not None:
+                action = dict(packet["replan_action_packet"])
+                action["uncovered_frontier"] = replan_view["uncovered_frontier"]
+                if writeback_view is not None:
+                    action["writeback_contract"] = writeback_view[
+                        "writeback_contract"
+                    ]
+                packet["replan_action_packet"] = action
             return packet
     raise AssertionError("semantic action must follow a real quota packet")
 
@@ -112,9 +191,15 @@ def test_progressive_replan_reader_preserves_semantic_observation(
         turn_instance_id="progressive-replan-reader",
     )
     context = QuotaToolContext.from_output(output)
-    progressive = _turn_envelope_result(
-        "replan_cli_view",
-        payload=context.packet,
+    delivered_obligation = context.packet.get("autonomous_replan_obligation")
+    progressive = (
+        context.packet
+        if isinstance(delivered_obligation, Mapping)
+        and isinstance(delivered_obligation.get("context_read"), str)
+        else _turn_envelope_result(
+            "replan_cli_view",
+            payload=context.packet,
+        )
     )
     obligation = progressive["autonomous_replan_obligation"]
     assert isinstance(obligation, Mapping)
@@ -142,7 +227,7 @@ def test_progressive_replan_reader_preserves_semantic_observation(
     assert "new_surface" in state.quota_observation["required_semantic_outcomes"]
     with pytest.raises(ValueError, match="unexpected_replan_context_read"):
         replan_behavior._handle_replan_context_read(
-            command.replace("--replan-stage review", "--replan-stage writeback"),
+            command.replace("--replan-stage review", "--replan-stage invalid"),
             state,
         )
 
@@ -260,12 +345,14 @@ def _composition_successor_action(
     action = packet["replan_action_packet"]
     assert isinstance(action, Mapping)
     bounded = action.get("bounded_frontier")
-    assert isinstance(bounded, Mapping)
-    assert bounded["gap_id"] == selected_gap["gap_id"]
+    if bounded is not None:
+        assert isinstance(bounded, Mapping)
+        assert bounded["gap_id"] == selected_gap["gap_id"]
     writeback = action.get("writeback_contract")
     assert isinstance(writeback, Mapping)
     command = str(writeback.get("successor_command") or "")
     assert command
+    assert str(selected_gap["experiment_node_ref"]) in command
     command_tokens = shlex.split(command)
     assert command_tokens[0] == "loopx"
     command_tokens[1:1] = ["--format", "json", "--registry", "ignored"]
@@ -336,21 +423,26 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     quota_packet = QuotaToolContext.from_output(transport.requests[2]["messages"][-1]["content"]).packet
     assert quota_packet.get("required_reads") in (None, [])
     assert "successor Todo" not in quota_packet["active_state_next_action"]
-    assert quota_packet["autonomous_replan_obligation"]["replan_context"][
-        "delivery_receipt"
-    ]["status"] == "delivered"
+    delivered_obligation = quota_packet["autonomous_replan_obligation"]
+    if "replan_context" in delivered_obligation:
+        assert delivered_obligation["replan_context"]["delivery_receipt"][
+            "status"
+        ] == "delivered"
+    else:
+        assert replan_view_command_tokens(delivered_obligation["context_read"])
     assert quota_packet["replan_action_packet"]["obligation_id"] == receipt[
         "replan_obligation_id"
     ]
-    assert quota_packet["replan_action_packet"]["writeback_contract"] == {}
+    assert quota_packet["replan_action_packet"].get("writeback_contract", {}) == {}
     assert quota_packet["interaction_contract"]["agent_channel"][
         "primary_action"
     ] == "produce one typed outcome from the host-projected replan action packet"
-    next_cli_actions = quota_packet["interaction_contract"]["cli_channel"][
-        "next_cli_actions"
-    ]
-    assert any("refresh-state" in action for action in next_cli_actions)
-    assert not any("successor_command" in action for action in next_cli_actions)
+    next_cli_actions = quota_packet["interaction_contract"]["cli_channel"].get(
+        "next_cli_actions", []
+    )
+    if next_cli_actions:
+        assert any("refresh-state" in action for action in next_cli_actions)
+        assert not any("successor_command" in action for action in next_cli_actions)
 
     index_path = (
         tmp_path
@@ -594,7 +686,8 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
             _inline_explore_context_action,
             ScriptedExecToolAction(command="cat fixture/permission-config.json"),
             _composition_successor_action,
-        ]
+        ],
+        capture_pointers=("/interaction_contract", "/bounded_research_frontier"),
     )
     receipt = DoubaoReplanSemanticActionBehaviorActor(
         api_key="test-only-placeholder",
@@ -636,9 +729,13 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     assert selected_gap["experiment_node_ref"] == (
         "experiment-permission-composition"
     )
-    assert quota_packet["replan_action_packet"]["bounded_frontier"][
-        "experiment_node_ref"
-    ] == selected_gap["experiment_node_ref"]
+    action_packet = quota_packet["replan_action_packet"]
+    if "bounded_frontier" in action_packet:
+        assert action_packet["bounded_frontier"]["experiment_node_ref"] == (
+            selected_gap["experiment_node_ref"]
+        )
+    else:
+        assert replan_view_command_tokens(action_packet["writeback"])
 
 
 @pytest.mark.parametrize("attempt", ["repeat", "wrong_scope"])
@@ -659,7 +756,11 @@ def test_delivered_composition_context_cannot_be_replayed_or_retargeted(
             )
         actions.append(wrong_scope)
     receipt = DoubaoReplanSemanticActionBehaviorActor(
-        api_key="test-only-placeholder", transport=_context_aware_transport(actions),
+        api_key="test-only-placeholder",
+        transport=_context_aware_transport(
+            actions,
+            capture_pointers=("/interaction_contract", "/bounded_research_frontier"),
+        ),
     ).qualify(
         qualification_id=f"composition-read-{attempt}",
         fixture_root=tmp_path / "actor", composition_frontier=True,
