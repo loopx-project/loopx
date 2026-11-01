@@ -443,6 +443,16 @@ disable. Other benchmark modes remain off. Workers pin the resolved trial choice
 in preflight and solver subprocesses; existing saved/frozen trials must not be
 rewritten or reused to qualify the new default.
 
+If a supported declared Codex caller has not initialized native continuity yet
+(including a missing native session id),
+the guard still delivers its complete current capture through the file reader.
+It does not create a substitute session, journal, epoch or retained baseline;
+progressive selections remain available from that same current source. Native
+reuse starts only through the existing session/lifecycle contract. Missing
+session identity does not excuse unsafe context directories: their private-file
+checks still fail, preserving the original decision and receipt for recovery
+without another admission. Explicit off retains ordinary inline delivery.
+
 Machine consumers that parse `should_run`, selected work or settlement identities
 must explicitly request raw output on internal `quota should-run` calls using
 `--context-delivery off` or the subprocess `LOOPX_CONTEXT_DELIVERY=off` override,
@@ -788,6 +798,12 @@ Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Co
 继续完整投递，对这些宿主显式指定 `--context-delivery on` 仍报错。声明只选择 adapter，
 不证明宿主身份或上下文保留。
 当前原生连续性依赖 POSIX；其他平台显式拒绝开启。
+
+受支持的 Codex 声明尚未完成原生连续性初始化时（包括尚未提供会话 id），
+guard 仍通过文件 reader 交付本次完整捕获，
+可以从同一当前来源渐进选读；不会制造替代会话、journal、epoch 或已保留基线。
+原生复用仍须由既有会话与生命周期契约建立。缺少会话标识不豁免私有目录检查：
+不安全目录仍失败，保留原决策与回执用于恢复，不重新准入。显式关闭仍完整内联交付。
 
 机器继承与显式开启的入口共用已解析 machine runtime 下的私有 `context-delivery` 目录，并按原生
 会话隔离 journal。缺失末级目录以 `0700` 创建；不跟随末级符号链接、不修改不安全目录
