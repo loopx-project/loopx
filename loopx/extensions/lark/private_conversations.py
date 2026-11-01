@@ -18,6 +18,7 @@ from typing import Any
 from ...capabilities.native_chat.external_conversations import ChatExternalConversations
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json, _read_json
 from ...control_plane.collaboration import conversation_reply_context
+from ...control_plane.effect_runtime import effect_runtime_request_scope
 from ...file_lock import exclusive_file_lock
 from ...presentation.markdown import markdown_scalar
 from ...presentation.renderers.conversation_status_markdown import render_conversation_status
@@ -219,8 +220,10 @@ class LarkPrivateConversations:
                 "binding_id": row["binding_id"], "consumer_ref": hashlib.sha256(app_id.encode("utf-8")).hexdigest()[:32]}
         return profiles
 
+    @effect_runtime_request_scope()
     def health(self) -> dict[str, dict[str, int]]:
         health: dict[str, dict[str, int]] = {}
+        quota_pending = self.core.quota_backlog_observer()
         for path in [*self.root.glob("*.json"), *self.root.glob("web-projections/*.json")]:
             row = _read_json(path)
             entry = health.setdefault(row["binding_id"], {"pending_count": 0, "recovery_count": 0})
@@ -235,7 +238,7 @@ class LarkPrivateConversations:
                 if (native.get("status") == "accepted" and native.get("command") is None
                         and all(native.get(key) == row.get(key) for key in
                             ("binding_id", "source", "session_id", "turn_id"))):
-                    pending = self.core.quota_backlog_pending(native)
+                    pending = quota_pending(native)
             if pending:
                 entry["pending_count"] += 1
                 entry["recovery_count"] += int(any(phase.get("started") and not phase.get("verified")
