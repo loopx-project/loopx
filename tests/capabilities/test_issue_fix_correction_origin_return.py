@@ -15,6 +15,7 @@ from loopx.domain_packs.issue_fix import default_issue_fix_domain_state_ledger_p
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import request as peer_request
 from loopx.control_plane.collaboration.request_control_source import execute_request_control
+from loopx.capabilities.issue_fix.cli import _settle_maintainer_correction_entries
 
 
 ORIGIN_GOAL_ID = "steward-goal"
@@ -100,6 +101,75 @@ def h(tmp_path, request):
 
 def observation(events, head="a" * 40):
     return {**_metadata(events), "headRefOid": head}
+
+
+def settle(h, packet):
+    return _settle_maintainer_correction_entries(payload=packet,
+        ledger_path=default_issue_fix_domain_state_ledger_path(project=h.project, goal_id=GOAL_ID),
+        registry_path=h.registry, goal_id=GOAL_ID, claimed_by=AGENT_ID, project=h.project)
+
+
+def test_return_head_prefix_collision(h):
+    event = _event("309")
+    h.run_json(metadata=observation([event]), correction=_correction_v1(event), origin=h.request_id)
+    h.mark_done(h.entries()[0]["todo_id"])
+    for suffix in "123":
+        h.run_json(metadata=observation([event], "b" * 12 + suffix * 28), correction=None)
+    returns = h.entries()[0]["returns"]
+    assert len(h.replies()) == len(returns) == 3
+    assert len({r["update_id"] for r in returns}) == 3
+    replies = [json.loads(path.read_text()) for path in h.replies()]
+    assert len({r.get("update_id") for r in replies}) == 3
+
+
+def test_stored_goal_ref_mismatch(h):
+    event = _event("310")
+    h.run_json(metadata=observation([event]), correction=None, origin=h.request_id)
+    row = h.ledger_row()
+    row["origin_request"]["goal_ref"]["goal_instance_id"] = "other-instance"
+    ledger = default_issue_fix_domain_state_ledger_path(project=h.project, goal_id=GOAL_ID)
+    ledger.write_text(json.dumps(row) + "\n")
+    packet = h.run_json(metadata=observation([event]), correction=_correction_v1(event))
+    assert packet["maintainer_correction_admission"]["reason"] == "origin_request_unreadable"
+    assert not h.correction_todos()
+    assert not h.replies()
+
+
+@pytest.mark.parametrize("owner,name", [
+    ("loopx.capabilities.issue_fix.cli", "_resolve_origin_request_identity"),
+    ("loopx.control_plane.collaboration.request_control_source", "execute_request_control"),
+])
+def test_programming_error_propagates(h, monkeypatch, owner, name):
+    event = _event("311")
+    packet = h.run_json(metadata=observation([event]), correction=None, origin=h.request_id)
+
+    def broken(*args, **kwargs):
+        raise TypeError("programming error")
+
+    monkeypatch.setattr(f"{owner}.{name}", broken)
+    with pytest.raises(TypeError, match="programming error"):
+        settle(h, packet)
+
+
+def test_report_receives_goal_ref(h, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+
+    event = _event("312")
+    packet = h.run_json(metadata=observation([event]), correction=_correction_v1(event), origin=h.request_id)
+    h.mark_done(h.entries()[0]["todo_id"])
+    packet["observation"]["head_commit_ref"] = "b" * 40
+    received = []
+    original = roundtrip.report
+
+    def report(*args, **kwargs):
+        if kwargs.get("registry") is not None:
+            received.append(kwargs["caller_goal_ref"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(roundtrip, "report", report)
+    settle(h, packet)
+    assert received == [h.ref]
+    assert len(h.replies()) == 1
 
 
 def test_binding_conflict_and_unreadable(legacy):

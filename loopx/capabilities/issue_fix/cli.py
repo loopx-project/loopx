@@ -262,6 +262,8 @@ def _settle_maintainer_correction_entries(
             with collaboration_goal_scope(Path(origin["registry_path"]), goal_id=identity["goal_id"],
                     agents=(), require_active=False) as scope:
                 goal_ref = identity.get("goal_ref") or scope.current_goal_ref or {"goal_id": identity["goal_id"]}
+            if origin.get("goal_ref") and goal_ref != origin["goal_ref"]:
+                raise ValueError("origin request identity changed")
             result = execute_request_control(registry_path=Path(origin["registry_path"]),
                 runtime_root=Path(origin["runtime_root"]), goal_ref=goal_ref,
                 receiver_agent_id=identity["agent_id"], request_id=origin["request_id"],
@@ -273,7 +275,7 @@ def _settle_maintainer_correction_entries(
                 raise ValueError("request control state unavailable")
             if view["control_state"] in {"cancelled", "cancellation_pending"}:
                 origin_refusal = "origin_request_cancelled"
-        except Exception:
+        except (OSError, ValueError, KeyError):
             origin_refusal = "origin_request_unreadable"
     settlements: list[dict[str, Any]] = []
     current_todo_write: dict[str, Any] | None = None
@@ -387,7 +389,7 @@ def _settle_maintainer_correction_entries(
             if any(r["head_sha"] == head for r in returns):
                 continue
             operation_id = entry["operation_id"]
-            update_id = f"issue-fix-correction:{operation_id}:{head[:12]}"
+            update_id = f"issue-fix-correction:{operation_id}:{head}"
             event = entry.get("source_event") or {}
             checks = observation.get("checks") or {}
             text = (f"Maintainer correction {entry.get('correction_kind')} "
@@ -402,7 +404,8 @@ def _settle_maintainer_correction_entries(
                 origin["request_id"], "conclusion", text, registry=Path(origin["registry_path"]),
                 update_id=(update_id if any(
                     r["phase"] == "conclusion" for r in reply_status(origin_root, origin)
-                ) else None), workspace=project, request_revision=view["revision"])
+                ) else None), workspace=project, request_revision=view["revision"],
+                caller_goal_ref=goal_ref)
             returns.append({"update_id": update_id, "result_key": result.get("result_key", "conclusion"),
                 "enqueued_at": now_utc_iso(), "head_sha": head})
             upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)

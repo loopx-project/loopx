@@ -441,6 +441,9 @@ existing Todos retain readback-only behavior. A completed Todo observed at a
 new head queues a body-free conclusion through the origin runtime, deduplicated
 by operation/head in `returns`, with `return_delivery` readback; cancellation
 or unreadability prevents enqueue. The return service owns actual delivery.
+Once the origin request is cancelled, no further result is returned even if an
+accepted correction completes later; the request's cancellation record is the
+accountability trail.
 
 With `--execute-transition`, an accepted `actionable_patch` creates exactly one
 `issue_fix_maintainer_correction_patch` todo claimed by the registered agent.
