@@ -9,6 +9,9 @@ from unittest.mock import Mock
 
 import pytest
 
+if os.name != "posix":
+    pytest.skip("Native account IO requires POSIX locks", allow_module_level=True)
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "packages/loopx-codex-provider-routing/src"))
 app = importlib.import_module("loopx_codex_provider_routing.native_app")
