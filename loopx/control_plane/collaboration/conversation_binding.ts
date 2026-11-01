@@ -156,8 +156,10 @@ function binding(value: unknown): JsonObject {
       throw new EffectRuntimeRequestError("ambiguous Agent target grant");
     }
   }
-  if (row.managed_actor !== undefined && (row.context_kind !== "steward" || group || row.executor_endpoint_id !== "codex")) {
-    throw new EffectRuntimeRequestError("managed identity requires a private native steward");
+  // The prepared identity survives executor changes. Native execution still
+  // requires the Codex binding at stewardManagedBasis, not at storage read.
+  if (row.managed_actor !== undefined && (row.context_kind !== "steward" || group)) {
+    throw new EffectRuntimeRequestError("managed identity requires a private steward");
   }
   return {
     schema_version: BINDING_SCHEMA, binding_id: ref(row.binding_id, "binding identity"),
