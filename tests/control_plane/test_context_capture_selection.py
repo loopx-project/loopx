@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, last_context_page
+from tests.control_plane.codex_checkpoint_fixture import (
+    NativeContextReader, last_context_page, native_process_continuation,
+)
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
 from loopx.control_plane.turn_driver.decision_capture import capture_page_range
@@ -45,6 +47,25 @@ def fixture_capture(tmp_path):
     path = tmp_path / "capture with ' quote.json"
     path.write_bytes(raw)
     return path, raw, original
+
+
+@pytest.mark.parametrize("code_mode", [False, True])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_native_process_continuation_uses_only_the_latest_tool_result(code_mode, wrapped):
+    # Literal native output from a slow command; completion must not be
+    # inferred from an earlier page, an EOF, or the command's mere dispatch.
+    output = "Wall time: 10.0832 seconds\nProcess running with session ID 92241\nOutput:\n"
+    if wrapped:
+        output = [{"type": "input_text", "text": json.dumps({"output": output})}]
+    request = {"input": [{"type": "function_call_output", "output": output}]}
+    call = native_process_continuation(request, "fixture", code_mode=code_mode)
+    assert call and call["name"] == ("exec" if code_mode else "write_stdin")
+    if code_mode:
+        assert "tools.write_stdin" in call["input"] and '"session_id": 92241' in call["input"]
+    else:
+        assert json.loads(call["arguments"])["session_id"] == 92241
+    request["input"].append({"type": "function_call_output", "output": "Process exited with code 0"})
+    assert native_process_continuation(request, "complete", code_mode=code_mode) is None
 
 
 def args(path, raw):
@@ -121,6 +142,10 @@ def test_native_reference_reader_uses_real_pages_before_recording_delivery(tmp_p
     reader = NativeContextReader()
     reader.begin("admit current Turn", "source")
     reader.follow(request)
+    assert not reader.deliveries and not reader.retained
+    request["input"].append({"type": "function_call_output", "output": "Process running with session ID 92241\n"})
+    call = reader.follow(request)
+    assert call["name"] == "write_stdin" and json.loads(call["arguments"])["session_id"] == 92241
     assert not reader.deliveries and not reader.retained
     page_count = 0
     while True:

@@ -500,7 +500,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
-    from tests.control_plane.codex_checkpoint_fixture import last_context_page, local_inference_provider
+    from tests.control_plane.codex_checkpoint_fixture import (
+        last_context_page, local_inference_provider, native_process_continuation,
+    )
     from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _native_fixture, _input_text
     from tests.control_plane.test_codex_context_capture import _delivered
     from tests.control_plane.test_quota_settlement_cli import (
@@ -556,6 +558,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     def response(request, number, message):
         nonlocal phase, queue, actual_turn, receipts
         try:
+            if continuation := native_process_continuation(request, f"projection_{number}",
+                    code_mode=host == "app_code_mode"):
+                return continuation
             if queue:
                 command = queue.pop(0)
             elif phase in ("cold", "warm"):

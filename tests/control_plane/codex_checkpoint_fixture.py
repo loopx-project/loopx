@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import threading
 import time
@@ -74,6 +75,36 @@ def last_context_page(request, *, allow_reference=False, allow_selection=False):
     return None
 
 
+def native_process_continuation(request, identity, *, code_mode=False):
+    """Follow a yielded native command, using only its latest visible output."""
+    for item in reversed(request["input"]):
+        if (output := item.get("output")) is None:
+            continue
+        parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
+        for part in reversed(parts):
+            if not isinstance(part, str):
+                continue
+            try:
+                wrapper = json.loads(part)
+                if isinstance(wrapper, dict) and isinstance(wrapper.get("output"), str):
+                    part = wrapper["output"]
+            except ValueError:
+                pass
+            match = re.search(r"(?m)^Process running with session ID (\d+)\s*$", part)
+            if match:
+                options = {"session_id": int(match[1]), "chars": "", "yield_time_ms": 1000,
+                           "max_output_tokens": 30000}
+                base = {"id": f"fc_process_{identity}", "call_id": f"call_process_{identity}"}
+                if code_mode:
+                    options["max_output_tokens"] = 22000
+                    return {**base, "type": "custom_tool_call", "name": "exec",
+                            "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.write_stdin('
+                                + json.dumps(options) + ')).output);'}
+                return {**base, "type": "function_call", "name": "write_stdin", "arguments": json.dumps(options)}
+        return None  # Never borrow a session from an older result.
+    return None
+
+
 class NativeContextReader:
     """Static inference which follows only model-visible native reader cursors.
 
@@ -103,6 +134,9 @@ class NativeContextReader:
     def follow(self, request):
         if self.pending is None:
             return None
+        if continuation := native_process_continuation(request, f"{self.identity}_{self.calls + 1}"):
+            self.calls += 1
+            return continuation
         page = last_context_page(request, allow_reference=True)
         assert page and page["ok"], "Native reader output must reach the model intact"
         if page.get("schema_version") != "context_capture_page_v1":
