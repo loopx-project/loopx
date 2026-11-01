@@ -31,6 +31,10 @@ CONTEXT_DELIVERY_SCENARIOS = ("codex_benchmark_heartbeat", "codex_app_heartbeat"
 CONTEXT_LIFECYCLE_HOOKS = ("SessionStart", "PreCompact", "PostCompact", "PostToolUse", "Interrupt")
 
 
+class NativeContextSessionUnavailable(ValueError):
+    """No native identity for a session journal; explicit file reads still work."""
+
+
 def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool = False) -> dict[str, Any]:
     """One declaration adapter for explicit CLI and inherited machine opt-ins."""
     fields = {key: getattr(args, key, None) for key in ("host_surface", "scheduler_owner", "execution_mode")}
@@ -149,7 +153,7 @@ def codex_context_directory(*, directory: str | None = None, root: str | None = 
     parent = _private_root(root)
     session = session if session is not None else os.environ.get("CODEX_THREAD_ID")
     if not isinstance(session, str) or not session:
-        raise ValueError("native session context requires CODEX_THREAD_ID or a native hook session")
+        raise NativeContextSessionUnavailable("native session context requires CODEX_THREAD_ID or a native hook session")
     child = parent / hashlib.sha256(session.encode()).hexdigest()
     if create:
         child.mkdir(mode=0o700, exist_ok=True)
