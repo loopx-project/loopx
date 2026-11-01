@@ -235,9 +235,7 @@ class LarkPrivateConversations:
                 if (native.get("status") == "accepted" and native.get("command") is None
                         and all(native.get(key) == row.get(key) for key in
                             ("binding_id", "source", "session_id", "turn_id"))):
-                    turn = self.core.controller.store.load_turn(row["session_id"], row["turn_id"])
-                    pending = bool(turn and turn.get("status") == "failed"
-                                   and turn.get("error_code") == "usage_limit_exceeded")
+                    pending = self.core.quota_backlog_pending(native)
             if pending:
                 entry["pending_count"] += 1
                 entry["recovery_count"] += int(any(phase.get("started") and not phase.get("verified")

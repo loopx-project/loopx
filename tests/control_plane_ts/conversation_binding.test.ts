@@ -702,3 +702,31 @@ test("local input cannot impersonate a group participant or inherit its workspac
   assert.equal(resolveConversationScope({goal_id: null, channel_id: selected.channel_id,
     project_context: selected.context, origin: "web"}).kind, "unavailable");
 });
+
+test("quota backlog projection retires explicit lifecycle stops, not unavailable recovery", () => {
+  const original = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "failed"};
+  const turn = {session_id: "original", turn_id: "failed", status: "failed", error_code: "usage_limit_exceeded"};
+  const packet = {request: original, current_session: {session_id: "original", status: "ready"},
+    pending_observation: {turn, stop_observed: false}};
+  assert.equal(planBoundConversationRequest(packet).pending, true);
+  // No binding/provider/native allowance input is necessary for this read.
+  assert.equal(planBoundConversationRequest({...packet, request: {...original,
+    context_recovery: {quota_attempt: 3, not_before: "2099-01-01T00:00:00Z"}}}).pending, true);
+  assert.equal(planBoundConversationRequest({...packet, current_session: null}).pending, true,
+    "missing session evidence must not silently retire known quota work");
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {session_id: "foreign", status: "closed"}}).pending, true);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...packet.current_session, status: "closed"}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    pending_observation: {...packet.pending_observation, stop_observed: true}}).pending, false);
+  for (const changed of [null, {...turn, error_code: "policy"}, {...turn, status: "completed"},
+    {...turn, session_id: "foreign"}, {...turn, turn_id: "foreign"}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      pending_observation: {turn: changed, stop_observed: false}}).pending, false);
+  }
+  for (const changed of [{...original, command: "stop"}, {...original, status: "rejected"}]) {
+    assert.equal(planBoundConversationRequest({...packet, request: changed}).pending, false);
+  }
+});
