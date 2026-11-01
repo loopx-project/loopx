@@ -47,6 +47,7 @@ from ..machine_configuration.contract import (
 # ``loopx.chat_manager`` re-exports every name unchanged.
 MANAGER_ENDPOINT_MANAGED = MANAGED_TURN_HOST
 MANAGER_ENDPOINT_INDIVIDUAL = "codex"
+MANAGER_ENDPOINT_ANTIGRAVITY = "antigravity"
 # Executor kinds name where this channel's model work is billed and bounded
 # rather than which adapter is launched, and they use the same vocabulary as the
 # governed Turn surface: an individual executor runs on one person's own CLI
@@ -57,6 +58,7 @@ MANAGER_EXECUTOR_KIND_INDIVIDUAL = "individual"
 MANAGER_EXECUTOR_KIND_MANAGED = EXECUTOR_KIND_MANAGED
 MANAGER_ENDPOINT_KINDS = {
     MANAGER_ENDPOINT_INDIVIDUAL: MANAGER_EXECUTOR_KIND_INDIVIDUAL,
+    MANAGER_ENDPOINT_ANTIGRAVITY: MANAGER_EXECUTOR_KIND_INDIVIDUAL,
     # The managed host is billed to the operator's own endpoint, not to one
     # person's CLI login, so it is reached only by selecting it.
     MANAGER_ENDPOINT_MANAGED: MANAGER_EXECUTOR_KIND_MANAGED,

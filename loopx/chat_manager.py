@@ -869,6 +869,8 @@ def manager_model_resolution(
     if MANAGER_ENDPOINT_KINDS.get(resolved_endpoint) == MANAGER_EXECUTOR_KIND_MANAGED:
         profile = managed_execution_profile(environ)
         return str(profile["model"]), MANAGER_MODEL_SOURCE_MANAGED_PROFILE
+    if resolved_endpoint == "antigravity":
+        return "gemini-4-argon-high", MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
     return MANAGER_MODEL_DEFAULT, MANAGER_MODEL_SOURCE_VENDOR_DEFAULT
 
 

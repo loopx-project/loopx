@@ -357,10 +357,10 @@ class ChatRuntimeController:
         if (
             manager_runtime is not None
             and manager_runtime.get("runtime_profile") == "trusted_owner"
-            and agent_id != "codex"
+            and agent_id not in {"codex", "antigravity"}
         ):
             raise CodexChatAgentError(
-                "The trusted owner manager profile requires the Codex endpoint.",
+                "The trusted owner manager profile requires the Codex or Antigravity endpoint.",
                 error_code="manager_runtime_endpoint_unsupported",
                 gate={
                     "kind": "host_tool_gate",
@@ -369,9 +369,47 @@ class ChatRuntimeController:
                         "runtime profile."
                     ),
                     "next_action": (
-                        "Select the Codex Agent or change Manager runtime to restricted."
+                        "Select the Codex or Antigravity Agent or change Manager runtime to restricted."
                     ),
                 },
+            )
+        if agent_id == "antigravity":
+            from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+            manager_profile = (
+                dict(manager_runtime or self.manager_runtime_profile())
+                if goal_id == MANAGER_AGENT_GOAL_ID
+                else None
+            )
+            if manager_profile is not None:
+                objective = manager_agent_objective(
+                    str(manager_profile["runtime_profile"])
+                )
+            model_config = (
+                executor_model or manager_model_config(
+                    endpoint=agent_id,
+                    machine_defaults=self.steward_executor_defaults(),
+                )
+                if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
+                else executor_model or {}
+            )
+            if agent_config and agent_config.get("model"):
+                model_config = {**model_config, "model": agent_config["model"]}
+            if agent_config and agent_config.get("reasoning_effort"):
+                model_config = {**model_config, "reasoning_effort": agent_config["reasoning_effort"]}
+            return AntigravityAdapter.start(
+                work_dir=work_dir,
+                objective=self._session_objective(
+                    goal_id=goal_id, objective=objective,
+                    project_coordination=project_coordination and not execution_mode,
+                ),
+                resume_thread_id=resume_thread_id,
+                history=history,
+                runtime_profile=(
+                    str(manager_profile["runtime_profile"])
+                    if manager_profile is not None
+                    else "restricted"
+                ),
+                executor_model=model_config,
             )
         if agent_id == "codex":
             from .capabilities.manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
@@ -526,12 +564,12 @@ class ChatRuntimeController:
         if agent_model_id:
             agent_model_id = normalize_agent_model_id(agent_model_id)
         capability = next((item for item in self.capabilities() if item["agent_id"] == agent_id), None)
-        if capability and capability.get("available") and agent_model_id and agent_id not in {"codex", "claude-code"} and capability.get("adapter_kind") != "acp":
+        if capability and capability.get("available") and agent_model_id and agent_id not in {"codex", "antigravity", "claude-code"} and capability.get("adapter_kind") != "acp":
             raise CodexChatAgentError("This Agent does not offer model selection.",
                                       error_code="unsupported_configuration", gate=None)
         if agent_reasoning_effort is not None:
             agent_reasoning_effort = normalize_agent_reasoning_effort(agent_reasoning_effort)
-            if capability and capability.get("available") and agent_id != "codex" and capability.get("adapter_kind") != "acp":
+            if capability and capability.get("available") and agent_id not in {"codex", "antigravity"} and capability.get("adapter_kind") != "acp":
                 raise CodexChatAgentError("This Agent does not offer reasoning choices.",
                                           error_code="unsupported_configuration", gate=None)
         if mode not in {"resume_latest", "new"}:
@@ -693,7 +731,7 @@ class ChatRuntimeController:
                     codex_home=str(codex_context.home_for_project(selected_codex_home, project_context)) if agent_id == "codex" else None,
                     project_context=project_context,
                     steward_context=steward_context,
-                    agent_model_id=adapter.current_model_id if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else None,
+                    agent_model_id=getattr(adapter, "current_model_id", None) if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) or getattr(adapter, "adapter_kind", None) == "antigravity_ls" else None,
                     requested_agent_model_id=agent_model_id,
                     requested_agent_reasoning_effort=agent_reasoning_effort,
                     codex_chat_configuration=codex_defaults or None,

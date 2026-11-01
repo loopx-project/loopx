@@ -114,6 +114,32 @@ def inspect_agent_model_options(controller: ChatRuntimeController, agent_id: str
                 ],
             },
         }
+    if agent_id == "antigravity":
+        from .antigravity_adapter import ANTIGRAVITY_DEFAULT_MODEL, ANTIGRAVITY_MODEL_OPTIONS
+        return {
+            "agent_id": agent_id,
+            "supported": True,
+            "model": {
+                "id": "model",
+                "label": "Model",
+                "selected": ANTIGRAVITY_DEFAULT_MODEL,
+                "options": [
+                    {
+                        "value": str(item["id"]),
+                        "label": str(item["display_name"]),
+                        "description": str(item.get("description") or ""),
+                        "is_default": bool(item.get("is_default")),
+                        "default_reasoning_effort": str(item.get("default_reasoning_effort") or "high"),
+                        "reasoning_efforts": [
+                            str(effort["reasoning_effort"])
+                            for effort in (item.get("supported_reasoning_efforts") or [])
+                            if isinstance(effort, dict) and effort.get("reasoning_effort")
+                        ],
+                    }
+                    for item in ANTIGRAVITY_MODEL_OPTIONS
+                ],
+            },
+        }
     if str(capability.get("adapter_kind")) != "acp":
         return {"agent_id": agent_id, "model": None, "supported": False}
     adapter = controller._start_adapter(
@@ -174,10 +200,11 @@ def configure_session_model(controller: ChatRuntimeController, session_id: str, 
 def observed_model_settings(adapter: ChatRuntimeAdapter, requested_effort: str | None = None,
                              requested_model: str | None = None) -> dict[str, Any]:
     from ...chat_acp import ACPStdioAdapter
+    from .antigravity_adapter import AntigravityAdapter
     from .codex_adapter import CodexAppServerAdapter
     from ...chat_agent import CodexChatAgentError
-    settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) else {}
-    if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter)) and adapter.current_model_id != requested_model:
+    settings = adapter.model_settings if isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) else {}
+    if requested_model and isinstance(adapter, (ACPStdioAdapter, CodexAppServerAdapter, AntigravityAdapter)) and adapter.current_model_id != requested_model:
         raise CodexChatAgentError("The Agent did not confirm the requested model; no message was sent.",
                                   error_code="unsupported_configuration", gate=None)
     if requested_effort and settings.get("agent_reasoning_effort") != requested_effort:
