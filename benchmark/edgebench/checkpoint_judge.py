@@ -15,7 +15,8 @@ import time
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from benchmark.runtime.sforge_checkpoint import ARCHIVE_ROUTE, ROUTE, SCHEMA
+from benchmark.runtime import sforge_json
+from benchmark.runtime.sforge_checkpoint import ARCHIVE_ROUTE, ROUTE, SCHEMA, RELEASED_FIELDS
 
 
 def _read_archive(root, run, task, round_id):
@@ -142,8 +143,10 @@ def create_app(config, *, checkpoint_capture=False):
         binding = {key: value for key, value in packet.items()
                    if key not in {"observed_at_epoch", "remaining_cooldown_seconds"}}
         packet["capture_binding_sha256"] = hashlib.sha256(
-            json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return json.loads(json.dumps(packet)), raw  # No live references or tokens leave the lock.
+            sforge_json.dumps(binding, fields=RELEASED_FIELDS,
+                              sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        # The wire object contains no non-JSON constants or live references.
+        return json.loads(sforge_json.dumps(packet, fields=RELEASED_FIELDS)), raw
 
     def capture(request):
         with state._admission_lock, state._tokens_lock, state._history_lock:
@@ -152,6 +155,7 @@ def create_app(config, *, checkpoint_capture=False):
     def archive(request):
         with state._admission_lock, state._tokens_lock, state._history_lock:
             packet, raw = snapshot_locked(request.token)
+            packet = sforge_json.decode_document(packet, fields=RELEASED_FIELDS)
             incumbent = packet["native_incumbent"]
             if packet["capture_binding_sha256"] != request.capture_binding_sha256 or incumbent is None:
                 raise HTTPException(409, "Native checkpoint basis moved or has no selected incumbent")

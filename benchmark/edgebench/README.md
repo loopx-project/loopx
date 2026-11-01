@@ -511,6 +511,17 @@ covers online submissions only; use the complete offline result for post-run
 qualification. Neither report by itself certifies integrity or score countability.
 No offline result is routed to the worker.
 
+Offline score files, the combined result and the command's summary retain native
+non-finite scores and nested metrics. Finite documents keep their existing JSON.
+Other documents use the local `sforge_nonfinite_json: 1` transport envelope:
+`value` contains JSON data with each non-finite number replaced by `null`, and
+`nonfinite_values` records its path and `positive_infinity`, `negative_infinity`
+or `nan` kind. Use `benchmark.runtime.sforge_json.loads` to read either form.
+Restart decodes saved scores before calling the unchanged native selector;
+it does not turn these results into zero, missing feedback or grading errors.
+Literal marker-shaped metrics remain data, including an escaped root marker.
+Malformed paths, duplicate keys and unmarked non-finite constants are rejected.
+
 The first completed valid finite score establishes a silent baseline. The task's
 native selection policy is the sole improvement criterion among valid scored
 snapshots. Only a strictly better native rank updates `/opt/edgebench-feedback/latest.json`; ties,

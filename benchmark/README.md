@@ -508,6 +508,18 @@ The local `sforge_checkpoint_opportunity_v0`
 artifact records these facts; it grants no restored admission. Disabling capture
 means omitting both the judge flag and worker declaration option on a new run.
 
+Finite opportunity responses and saved participants keep that existing JSON
+shape. Released history/results containing non-finite numbers use the explicit
+[`sforge_nonfinite_json: 1` envelope](edgebench/README.md#feedback-protocol-new-run-default-native)
+over the same logical artifact. The client decodes it before checking the
+incumbent; checkpoint capture saves it through the same lossless codec.
+Only released result fields may contain encoded numbers: opportunity clocks,
+round counters and authority fields retain their original strict representation.
+The archive binding covers the canonical encoded state, including numeric kinds,
+so repeated NaN reads retain a binding and changed released data invalidates it.
+Use `benchmark.runtime.sforge_json.loads` for saved participant readback. This
+transport neither changes native selection nor qualifies continued execution.
+
 For an isolated single-Goal trial, `"loopx_state": true` adds the existing
 state-backup owner's inventory: registered active state, project research state,
 runtime authority/effect/quota journals and registry. The declared worker and

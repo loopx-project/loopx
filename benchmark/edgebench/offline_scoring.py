@@ -18,6 +18,7 @@ from sforge.harness.config import load_config, create_backend_from_config
 from sforge.harness.run_evaluation import judge_submission
 from sforge.harness.selection import select_best
 from sforge.harness.task_spec import make_task_spec
+from benchmark.runtime import sforge_json
 from .online_judge import cohort_lock, resource_preflight
 
 
@@ -51,7 +52,7 @@ def score_captures(trial, task, config, backend):
         directory.mkdir(exist_ok=True)
         result_path = directory / "score.json"
         if result_path.is_file():
-            entry = json.loads(result_path.read_text())
+            entry = sforge_json.loads(result_path.read_text())
             if (entry["source_sha256"] != digest or entry["task_sha256"] != receipt["task_sha256"]
                     or entry.get("evaluator_sha256") != evaluator_digest):
                 raise ValueError("Offline score provenance differs from the trial")
@@ -67,7 +68,7 @@ def score_captures(trial, task, config, backend):
             except Exception as error:
                 entry.update(status="error", error_kind=type(error).__name__)
             pending = result_path.with_suffix(".tmp")
-            pending.write_text(json.dumps(entry, allow_nan=False))
+            pending.write_text(sforge_json.dumps(entry))
             pending.replace(result_path)
         entries.append(entry)
     result = dict(run_id=receipt["run_id"], task=task.task_id,
@@ -76,7 +77,7 @@ def score_captures(trial, task, config, backend):
                   **select_best(entries, task.judge.score_direction, task.judge.selection), entries=entries)
     path = destination / "result.json"
     pending = path.with_suffix(".tmp")
-    pending.write_text(json.dumps(result, allow_nan=False))
+    pending.write_text(sforge_json.dumps(result))
     pending.replace(path)
     return result
 
@@ -105,7 +106,7 @@ def main():
             result = score_captures(trial, task, config, create_backend_from_config(config))
     except BlockingIOError:
         parser.error("Online cohort still owns resources; defer offline scoring")
-    print(json.dumps({k: v for k, v in result.items() if k != "entries"}))
+    print(sforge_json.dumps({k: v for k, v in result.items() if k != "entries"}))
     return 0 if result["offline_scoring_complete"] else 1
 
 
