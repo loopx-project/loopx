@@ -645,6 +645,23 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
 抵消 C1 回归。
 
+### 默认采用与退役资格
+
+[上下文交付指南](../../guides/context-delivery.zh-CN.md#默认化与退役的验收) 把此比较落实为
+操作方案。文档可先交付；未来扩大默认采用范围需要明确版本的 DeepSeek 与强模型分别支持
+所声明的效果和完整成本范围。reference 已有的 Codex 范围默认仍是当前行为，不证明
+这些模型对照已通过。记录精确 model/provider/version/effort，固定 task、source、host、
+tools、反馈、evaluator、预算与停止条件。除原生任务成果、约束遗漏、错误动作和
+一次性恢复外，计入实际最终 input/output、cached/uncached tokens、请求、详情／恢复
+补读、墙钟／IO／搭建成本与人工注意力。未知成本不记零，保留重复波动、失败与负例。
+历史最佳优化保持原生排名，终态保留事实另列。仅 Codex adapter 不资格化 DeepSeek 宿主。
+
+顺序留在 C1/C2/C9：解释 → 双模型比较 → 受支持 profile 的可回退采用／发布 → 范围化
+默认 → 点名旧路径退役。结果混合或退步时保留 opt-in 或明确限制。退役须核实际 caller
+替换、历史解码／readback、支持版本与回退覆盖；完整快照、摘要校验、权限／身份／停止
+和恢复继续保留。不长期保留两个同义决策 owner，也不因新路径存在就删除仍受支持的
+reader。这是资格方案，不授予新实验权限，不宣称已交付收益，也不阻塞其他独立获授权工作。
+
 [打包来源对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
 固定 mainline quota 与 C1 候选版本，经真实 File/SQLite CLI 验证交付、文件差分、
 capture 拒绝/恢复及一次结算。本负载来源保真改善，冷态和观察器累计输出字节增加。

@@ -861,6 +861,33 @@ full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
 
+### Default adoption and retirement qualification
+
+The [context-delivery guide](../../guides/context-delivery.md#qualify-default-adoption-and-retirement)
+turns this comparison into an operator plan. Documentation may ship first;
+future broader default adoption needs both a declared DeepSeek model and a declared
+strong model to support the claimed effectiveness and complete-cost scope.
+The reference's existing Codex-scoped default remains current behavior, not proof
+that these model comparisons have passed.
+Record exact model/provider/version/effort and fixed task, source, host, tools,
+feedback, evaluator, budget and stops. Include actual final input/output,
+cached/uncached tokens, requests, detail/recovery reads, wall/IO/setup costs and
+human attention, alongside task-native outcomes, constraint misses, wrong
+actions and once-only recovery. Unknown cost is not zero; preserve repeated-run
+variation, failures and negative cases. Historical-best optimization keeps that
+native ranking, with final-retention facts separate. A Codex-scoped adapter
+cannot qualify a DeepSeek host.
+
+Keep this sequence in C1/C2/C9: explanation → both-model comparison → supported
+profile's reversible adoption/release → scoped default → named old-path
+retirement. Mixed or regressed results retain opt-in or explicit limitations.
+Retirement requires actual caller replacement, historical decoding/readback,
+supported-version and rollback coverage; full snapshots, digest checks,
+authority/identity/stops and recovery remain. Do not preserve two permanent
+semantic owners or delete a still-supported reader based on new-path existence.
+This is a qualification plan, not new experiment authority, a claim of shipped
+benefit, or a gate on other independent authorized work.
+
 The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
 pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
 file deltas, capture refusal/recovery and once-only settlement. Source fidelity
