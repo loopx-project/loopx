@@ -24,7 +24,6 @@ from ..coordination.local_authority import (
     local_authority_is_promoted,
 )
 from .machine_section_projection import (
-    DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT,
     TodoSectionProjectionError,
     render_canonical_todo_sections,
 )

@@ -136,6 +136,7 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly goal_acceptance_validation_receipts?: unknown;
   readonly completion_result?: JsonObject | null;
   readonly completion_policy_request: JsonObject | null;
+  readonly auto_archive_completed?: boolean;
   readonly dry_run: boolean;
   readonly now: Date;
 }
@@ -1945,7 +1946,8 @@ export async function executeCoordinationTodoTerminalLifecycle(
   const activeDoneCount = postTerminalTodos.filter(
     (item) => item.role === targetRole && item.archive_state === "active" && item.status === "done",
   ).length;
-  const autoArchiveSelection = activeDoneCount > DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
+  const autoArchiveSelection = input.auto_archive_completed === true &&
+    activeDoneCount > DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
     ? selectCoordinationTodoArchive({
         role: targetRole,
         max_active_done: ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
