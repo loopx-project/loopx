@@ -114,4 +114,3 @@ class BackgroundServices:
                 except Exception:
                     with self._state_lock:
                         self._errors.add(service.service_id)
-

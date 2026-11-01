@@ -1,9 +1,14 @@
 """Chat composition and loopback read/recheck for the common background host."""
 from __future__ import annotations
 
-from ..extensions.background_services import BackgroundService, BackgroundTask, worker_observation
+from ..extensions.background_services import BackgroundService, BackgroundServices, BackgroundTask, worker_observation
 
 BACKGROUND_SERVICES_PATH = "/api/chat/background-services"
+
+
+def initialize_chat_background_services(server) -> None:
+    server.background_services = BackgroundServices()
+    server.background_service_owners = set()
 
 
 def register_chat_background_services(server) -> None:
@@ -23,6 +28,16 @@ def register_chat_background_services(server) -> None:
             enabled=lark.private_conversations is not None)),
     ), lark.start, lark.close))
     server.background_service_owners = {"codex_account_service", "manager_return_service", "lark_goal_topic_runtime"}
+
+
+def close_chat_background_services(server) -> None:
+    server.background_services.close()
+    # Directly constructed HTTP fixtures/embedders can still supply old owner
+    # attributes without registering. Close them once through the same adapter.
+    for attribute in ("codex_account_service", "manager_return_service", "lark_goal_topic_runtime"):
+        owner = getattr(server, attribute, None)
+        if owner is not None and attribute not in server.background_service_owners:
+            owner.close()
 
 
 class BackgroundServicesRequestMixin:

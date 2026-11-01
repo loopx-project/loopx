@@ -150,4 +150,3 @@ def test_supervisor_restores_enabled_observer_without_a_status_poll_or_policy_ed
         time.sleep(.02)
     assert provider.observer_health(True)["state"] == "healthy"
     assert provider.path.read_bytes() == saved
-
