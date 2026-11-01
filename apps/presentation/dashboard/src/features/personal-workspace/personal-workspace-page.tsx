@@ -13,7 +13,7 @@ import { composerKeyAction } from "./composer-keyboard";
 import type { ConversationHistoryStatus } from "../../data/use-conversation-history";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
-import { CollaborationCard } from "./collaboration-card";
+import { CollaborationCards } from "./collaboration-card";
 import {ConversationRequests, ConversationReplyContext, OriginalProjectRequests} from "./conversation-requests";
 import {
   compileActionReviewPlan,
@@ -484,7 +484,7 @@ function ManagerConversationTray({
               <ConversationReplyContext context={message.replyContext} zh={locale === "zh-CN"}/>
               {message.role === "assistant" ? <MessageActivity message={message} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn} onCancelPreparation={onCancelPreparation} /> : null}
               {message.role === "assistant" && !message.pending && message.goalDraft ? <GoalDraftCard draftId={`${message.sourceSessionId ?? ""}:${message.id}`} draft={message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
-              <CollaborationCard request={message.collaboration} />
+              <CollaborationCards request={message.collaboration} requests={message.collaborations} />
               <ReturnDeliveryStatus delivery={message.returnDelivery} />
             </div>
           </article>

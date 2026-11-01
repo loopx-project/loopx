@@ -683,6 +683,7 @@ export function createEffectRuntimeHandlers(
       "collaboration.request.normalize",
       lazyHandler(() => import("./collaboration/semantic_request.ts"), ({normalizeCollaborationRequest}) => (params) => normalizeCollaborationRequest(params.request)),
     ],
+    ["collaboration.handoff.normalize", lazyHandler(() => import("./collaboration/semantic_request.ts"), ({normalizeCollaborationHandoff}) => (params) => normalizeCollaborationHandoff(params.handoff))],
     ["collaboration.source_context.normalize", lazyHandler(() => import("./collaboration/semantic_request.ts"), ({normalizeCollaborationSourceContext}) => normalizeCollaborationSourceContext)],
     ["collaboration.request.plan_publication", lazyHandler(() => import("./collaboration/request_control.ts"), ({planControlledRequestPublication}) => planControlledRequestPublication)],
     ["collaboration.request.control", lazyHandler(() => import("./collaboration/request_control.ts"), ({planRequestControl}) => planRequestControl)],

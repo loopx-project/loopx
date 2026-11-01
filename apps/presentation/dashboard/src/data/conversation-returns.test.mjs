@@ -112,3 +112,32 @@ assert.equal(queueReadback.length, 1, "Queue admission/history races retain exac
 assert.equal(queueReadback[0].sourceMessageId, "user-message");
 const crossSession = [...queueReadback, {...queueReadback[0], sourceSessionId: "different"}];
 assert.equal(reconcileConversationHistory(crossSession, [storedRoles[0]], createHistory).length, 2, "Message ids are scoped to their original Session");
+
+// One recipient's delivered result must not hide another outstanding answer.
+const multiple = [{sourceSessionId: "original", text: "Ask both", collaborations: [
+  {request_id: "a", returns: [{phase: "conclusion", status: "delivered"}]},
+  {request_id: "b", returns: []},
+]}];
+assert.deepEqual(conversationPendingReturnSessions(multiple), ["original"]);
+const both = multiple[0].collaborations.map(row => ({...row, returns: [{phase: "conclusion", status: "delivered"}]}));
+const identified = [{...multiple[0], sourceMessageId: "multi"}];
+const observedBoth = reconcileConversationReturns(identified, "original", [
+  {message_id: "multi", collaborations: both},
+], createReply);
+assert.equal(observedBoth[0].text, "Ask both");
+assert.deepEqual(conversationPendingReturnSessions(observedBoth), []);
+assert.equal(reconcileConversationReturns(observedBoth, "original", [{message_id: "multi"}], createReply), observedBoth);
+
+// A revised brief keeps its return obligation despite a delivered old conclusion.
+const revised = [{sourceSessionId: "original", collaborations: [
+  {request_id: "a", request_revision: 2, returns: [{phase: "conclusion", status: "delivered", request_revision: 1}]},
+  {request_id: "b", returns: [{phase: "conclusion", status: "delivered"}]},
+]}];
+assert.deepEqual(conversationPendingReturnSessions(revised), ["original"]);
+revised[0].collaborations[0].returns.push({phase: "conclusion", status: "queued", request_revision: 2});
+assert.deepEqual(conversationPendingReturnSessions(revised), ["original"]);
+revised[0].collaborations[0].returns[1].status = "delivered";
+assert.deepEqual(conversationPendingReturnSessions(revised), []);
+
+revised[0].collaborations[0].returns.unshift({phase: "conclusion", status: "superseded", request_revision: 2});
+assert.deepEqual(conversationPendingReturnSessions(revised), [], "A superseded result cannot hide the delivered current conclusion");

@@ -550,6 +550,7 @@ type PersonalManagerMessage = {
   endedAt?: number;
   returnDelivery?: ChatVisibleMessage["return_delivery"];
   collaboration?: ChatVisibleMessage["collaboration"];
+  collaborations?: ChatVisibleMessage["collaborations"];
   reconnect?: boolean;
   role: "assistant" | "user";
   sourceLabel?: string;
@@ -1629,7 +1630,7 @@ function PersonalGoalHome({
                   sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
                   role: "assistant" as const,
                   agentLabel: "协作回执", sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-                  returnDelivery: row.return_delivery, collaboration: row.collaboration,
+                  returnDelivery: row.return_delivery, collaboration: row.collaboration, collaborations: row.collaborations,
                 }));
                 if (updated !== previous) next = { ...next, [targetContextId]: updated };
               }
@@ -1752,7 +1753,7 @@ function PersonalGoalHome({
         attachments: workspaceImageAttachments(message.attachments),
         id: managerMessageId.current++, lines: [],
         role: message.role === "user" ? "user" : "assistant",
-        returnDelivery: message.return_delivery, collaboration: message.collaboration,
+        returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
         replyContext: message.reply_context,
         sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
           : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
@@ -2504,7 +2505,7 @@ function PersonalGoalHome({
         if (answer) updateConversationMessage(targetContextId, completedMessageId, {
           sourceMessageId: answer.message_id, sourceSessionId: sessionId,
           sourceCreatedAt: answer.created_at,
-          collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
+          collaboration: answer.collaboration, collaborations: answer.collaborations, returnDelivery: answer.return_delivery,
         });
         if (targetContextId === contextId) void conversationHistory.refresh().catch(() => {});
       }).catch(() => { /* The original conversation remains readable. */ });
@@ -2909,7 +2910,7 @@ function PersonalGoalHome({
         updatedAt: message.updatedAt,
         endedAt: message.endedAt,
         returnDelivery: message.returnDelivery,
-        collaboration: message.collaboration,
+        collaboration: message.collaboration, collaborations: message.collaborations,
         replyContext: message.replyContext,
         goalDraft: message.goalDraft,
         role: message.role,

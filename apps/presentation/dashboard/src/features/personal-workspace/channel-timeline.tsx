@@ -3,7 +3,7 @@ import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import {Fragment, useLayoutEffect, useRef, useState} from "react";
-import { CollaborationCard } from "./collaboration-card";
+import { CollaborationCards } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
 
@@ -210,7 +210,7 @@ export function ChannelTimeline({
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
             ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
-          <CollaborationCard request={item.message.collaboration} />
+          <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
               <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
         </div>
       </article>

@@ -261,6 +261,33 @@ def _begin_host_process_record(record_path: Path | None, *, record_value: str,
     return record
 
 
+def _host_process_request(
+    argv: Sequence[str],
+    *,
+    project: Path,
+    input_text: str,
+    timeout_seconds: float | None,
+    stdout_limit_bytes: int | None,
+    drain_timeout_seconds: float,
+    delegated_lease: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Encode the existing bridge request before any Host can launch."""
+    command = list(argv)
+    if sys.platform == "win32":
+        command = [sys.executable, "-c", _WINDOWS_COMMAND_RELAY, *command]
+    request: dict[str, Any] = {
+        "argv": command,
+        "cwd": str(project),
+        "input": input_text,
+        "timeout_ms": None if timeout_seconds is None else max(1.0, timeout_seconds) * 1000,
+        "drain_timeout_ms": drain_timeout_seconds * 1000,
+        "stdout_limit_bytes": stdout_limit_bytes,
+    }
+    if delegated_lease is not None:
+        request["delegated_lease"] = delegated_lease
+    return request
+
+
 def run_host_process(
     argv: Sequence[str],
     *,
@@ -282,19 +309,15 @@ def run_host_process(
     An owning admission guard covers request delivery through spawn observation,
     then releases before Host output; it must never lock the entire Host run.
     """
-    command = list(argv)
-    if sys.platform == "win32":
-        command = [sys.executable, "-c", _WINDOWS_COMMAND_RELAY, *command]
-    request: dict[str, Any] = {
-        "argv": command,
-        "cwd": str(project),
-        "input": input_text,
-        "timeout_ms": None if timeout_seconds is None else max(1.0, timeout_seconds) * 1000,
-        "drain_timeout_ms": drain_timeout_seconds * 1000,
-        "stdout_limit_bytes": stdout_limit_bytes,
-    }
-    if delegated_lease is not None:
-        request["delegated_lease"] = delegated_lease
+    request = _host_process_request(
+        argv,
+        project=project,
+        input_text=input_text,
+        timeout_seconds=timeout_seconds,
+        stdout_limit_bytes=stdout_limit_bytes,
+        drain_timeout_seconds=drain_timeout_seconds,
+        delegated_lease=delegated_lease,
+    )
     bridge = Path(__file__).with_name("host_process_bridge.ts")
     bridge_environment, record_value, record_path, supervision, supervises = _bridge_record_scope(environment, delegated_lease)
     launch_budget = max(1.0, timeout_seconds) if timeout_seconds is not None else 30.0
