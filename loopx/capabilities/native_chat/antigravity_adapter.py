@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -26,6 +27,7 @@ from ...chat_agent import CodexChatAgentError, _turn_prompt
 
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-argon-high"
 ANTIGRAVITY_DEFAULT_REASONING_EFFORT = "high"
+ANTIGRAVITY_IDLE_TIMEOUT_SEC = 300.0
 
 ANTIGRAVITY_MODEL_PLACEHOLDERS: dict[str, str] = {
     "gemini-4-argon-high": "MODEL_PLACEHOLDER_M417",
@@ -43,6 +45,38 @@ ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
     }
     for effort in ("high", "medium", "low")
 )
+
+
+def _observed_turn_steps(steps: list[Any], start: int, total: int) -> tuple[list[tuple[int, dict[str, Any]]], int]:
+    """Read absolute native indices; some LS versions ignore range arguments."""
+    bases: set[int] = set()
+    for offset, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise ValueError("Antigravity returned an invalid trajectory step")
+        metadata = step.get("metadata") or {}
+        source = metadata.get("sourceTrajectoryStepInfo") or {}
+        index = source.get("stepIndex")
+        if index is not None:
+            if type(index) is not int or index < 0:
+                raise ValueError("Antigravity returned an invalid trajectory index")
+            bases.add(index - offset)
+    if len(bases) == 1:
+        base = bases.pop()
+    elif not bases and len(steps) == total - start:
+        base = start  # Older servers honor the requested range without metadata.
+    elif not bases and len(steps) == total:
+        base = 0
+    else:
+        raise ValueError("Antigravity trajectory coverage is unknown")
+    current = [(base + offset, step) for offset, step in enumerate(steps) if start <= base + offset < total]
+    if base < 0 or [index for index, _ in current] != list(range(start, total)):
+        raise ValueError("Antigravity trajectory coverage is incomplete")
+    return current, base + len(steps)
+
+
+def _check_hard_timeout(value: float | None) -> None:
+    if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
+        raise ValueError("Antigravity hard timeout must be finite and positive")
 
 
 class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -261,6 +295,8 @@ class AntigravityAdapter:
     Restricted Chat disables native tools. Trusted-owner uses Antigravity's
     existing approvals; LoopX never accepts those approvals on the user's behalf.
     Governed Tasks and workspace grants retain their existing executor owner.
+    By default, five minutes without native progress stops an invocation; an
+    explicit hard_timeout_sec also bounds wall time even while it progresses.
     """
 
     adapter_kind = "antigravity_ls"
@@ -280,9 +316,10 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         initial_history: list[dict[str, str]] | None = None,
         resumed: bool = False,
-        hard_timeout_sec: float = 300.0,
+        hard_timeout_sec: float | None = None,
     ) -> None:
         self.work_dir = work_dir.resolve()
+        _check_hard_timeout(hard_timeout_sec)
         self.objective = objective
         self.cascade_id = cascade_id
         self.upstream_thread_id = cascade_id
@@ -327,10 +364,11 @@ class AntigravityAdapter:
         team_plan_context: dict[str, Any] | None = None,
         executor_model: Mapping[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
-        hard_timeout_sec: float = 300.0,
+        hard_timeout_sec: float | None = None,
     ) -> "AntigravityAdapter":
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Antigravity Chat runtime profile")
+        _check_hard_timeout(hard_timeout_sec)
         # Validate user intent before creating an upstream cascade.
         requested = dict(executor_model or {})
         resolve_antigravity_model_placeholder(requested.get("model"), requested.get("reasoning_effort"))
@@ -526,10 +564,16 @@ class AntigravityAdapter:
         emitted_text_by_step: dict[int, str] = {}
         announced_phases: set[tuple[int, str]] = set()
         latest_response_text = ""
-        deadline = time.monotonic() + self.hard_timeout_sec
+        last_progress_at = time.monotonic()
+        deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
+        previous_progress: Any = None
         saw_running_or_new_step = False
 
-        while time.monotonic() < deadline:
+        while True:
+            now = time.monotonic()
+            if (deadline is not None and now >= deadline) or now - last_progress_at >= ANTIGRAVITY_IDLE_TIMEOUT_SEC:
+                raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
+                                          gate=None, error_code="response_timeout")
             self._check_interrupted()
             self._interrupted.wait(0.25)
             self._check_interrupted()
@@ -545,6 +589,8 @@ class AntigravityAdapter:
             if status == "CASCADE_RUN_STATUS_RUNNING" or total_steps > start_step_index:
                 saw_running_or_new_step = True
 
+            current_steps: list[tuple[int, dict[str, Any]]] = []
+            observed_total = total_steps
             if total_steps > start_step_index:
                 self._check_interrupted()
                 steps_resp = _rpc_post(
@@ -558,12 +604,21 @@ class AntigravityAdapter:
                     },
                     timeout=2.0,
                 )
-                steps = steps_resp.get("steps") or []
-                if isinstance(steps, list):
-                    for offset, step in enumerate(steps):
-                        if not isinstance(step, dict):
-                            continue
-                        step_idx = start_step_index + offset
+                steps = steps_resp.get("steps")
+                try:
+                    if not isinstance(steps, list):
+                        raise ValueError("Antigravity returned no trajectory coverage")
+                    current_steps, observed_total = _observed_turn_steps(steps, start_step_index, total_steps)
+                except (AttributeError, TypeError, ValueError) as exc:
+                    raise CodexChatAgentError(str(exc), gate=None, error_code="antigravity_rpc_error") from exc
+                if current_steps:
+                    if sum(step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT" for _, step in current_steps) > 1:
+                        # Another native input is not this invocation's result or
+                        # cancellation target. Preserve it for its current owner.
+                        self._active_turn_id = None
+                        raise CodexChatAgentError("The native Antigravity input changed; no result was adopted or invocation cancelled.",
+                                                  gate=None, error_code="upstream_transport_failure")
+                    for step_idx, step in current_steps:
                         step_type = str(step.get("type") or "")
                         step_status = str(step.get("status") or "")
                         if step_status == "CORTEX_STEP_STATUS_WAITING":
@@ -631,12 +686,33 @@ class AntigravityAdapter:
                                 error_code="antigravity_step_error",
                             )
 
+            # A running status alone is not progress. Observe only this input's
+            # steps, including streamed text and command output; old history or
+            # a stuck RUNNING flag cannot keep an invocation alive indefinitely.
+            progress = [(index, step.get("status"),
+                         (step.get("plannerResponse") or {}).get("modifiedResponse")
+                         or (step.get("plannerResponse") or {}).get("response"),
+                         (step.get("plannerResponse") or {}).get("thinking"),
+                         (step.get("runCommand") or {}).get("combinedOutput"),
+                         (step.get("runCommand") or {}).get("exitCode")) for index, step in current_steps]
+            now = time.monotonic()
+            if progress and progress != previous_progress:
+                previous_progress = progress
+                last_progress_at = now
             self._check_interrupted()
-            if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE":
+            if deadline is not None and now >= deadline:
+                raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
+                                          gate=None, error_code="response_timeout")
+            if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
+                final = current_steps[-1][1] if current_steps else {}
+                planner = final.get("plannerResponse") or {}
+                if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                        or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
+                        or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
+                        or planner.get("stopReason") not in {None, "STOP_REASON_STOP_PATTERN"}):
+                    raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",
+                                              gate=None, error_code="upstream_transport_failure")
                 break
-        else:
-            raise CodexChatAgentError("Antigravity did not finish before the turn deadline.",
-                                      gate=None, error_code="response_timeout")
 
         if event_sink is not None:
             tail = stream_filter.finish()

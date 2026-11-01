@@ -5,6 +5,8 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 from typing import Any
@@ -115,10 +117,21 @@ def language_server(monkeypatch):
             elif method == "StartCascade":
                 response = {"cascadeId": "synthetic-cascade"}
             elif method == "GetCascadeTrajectory":
-                response = {"trajectory": {"cascadeId": "synthetic-cascade"},
-                    "numTotalSteps": state["sent_count"] * 2,
-                    "status": ("CASCADE_RUN_STATUS_RUNNING" if state["mode"] in {"running", "waiting"}
-                               and state["active"] else "CASCADE_RUN_STATUS_IDLE")}
+                if state.get("frames") is not None:
+                    if state["active"]:
+                        if state["frames"]:
+                            state["frame"] = state["frames"].pop(0)
+                        frame = state["frame"]
+                        state["now"] = frame["at"]
+                    else:
+                        frame = {"steps": [], "status": "CASCADE_RUN_STATUS_IDLE"}
+                    response = {"trajectory": {"cascadeId": "synthetic-cascade"},
+                                "numTotalSteps": frame.get("total", len(frame["steps"])), "status": frame["status"]}
+                else:
+                    response = {"trajectory": {"cascadeId": "synthetic-cascade"},
+                        "numTotalSteps": state["sent_count"] * 2,
+                        "status": ("CASCADE_RUN_STATUS_RUNNING" if state["mode"] in {"running", "waiting"}
+                                   and state["active"] else "CASCADE_RUN_STATUS_IDLE")}
                 if state.get("missing_resume"):
                     response.pop("trajectory")
             elif method == "SendUserCascadeMessage":
@@ -132,15 +145,21 @@ def language_server(monkeypatch):
                 state["sent"].set()
                 response = {}
             elif method == "GetCascadeTrajectorySteps":
-                response = {"steps": []}
-                for index in range(body["startIndex"] // 2, state["sent_count"]):
+                response = {"steps": state["frame"]["steps"] if state.get("frames") is not None else []}
+                start = 0 if state.get("ignore_step_range") else body["startIndex"] // 2
+                for index in (() if state.get("frames") is not None else range(start, state["sent_count"])):
+                    answer = f"Argon answer {index + 1}"
+                    if not state.get("plain_text"):
+                        answer = '<loopx-review-json>' + json.dumps({"message": answer,
+                            "proposals": [], "context_handoff": [], "gate": None}) + '</loopx-review-json>'
                     response["steps"].extend([
                         {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"},
                         {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
                          "status": "CORTEX_STEP_STATUS_WAITING" if state["mode"] == "waiting" else "CORTEX_STEP_STATUS_DONE",
-                         "plannerResponse": {"thinking": "synthetic status",
-                             "response": '<loopx-review-json>' + json.dumps({"message": f"Argon answer {index + 1}",
-                                 "proposals": [], "context_handoff": [], "gate": None}) + '</loopx-review-json>'}}])
+                         "plannerResponse": {"thinking": "synthetic status", "response": answer}}])
+                if state.get("native_indices"):
+                    for offset, step in enumerate(response["steps"]):
+                        step["metadata"] = {"sourceTrajectoryStepInfo": {"stepIndex": offset}}
             elif method == "CancelCascadeInvocation":
                 state["active"] = False
                 state["cancelled"].set()
@@ -237,6 +256,7 @@ def test_timeout_with_partial_response_never_reports_success(tmp_path, language_
     assert error.value.error_code == "response_timeout"
     assert language_server["cancelled"].is_set()
     assert not any(kind == "answer.final" for kind, _ in events)
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
 
 
 def test_pending_native_approval_is_actionable_and_not_auto_accepted(tmp_path, language_server):
@@ -308,7 +328,7 @@ def test_deadline_expiry_after_partial_text_fails_closed(tmp_path, language_serv
     from loopx.capabilities.native_chat import antigravity_adapter as provider
     from loopx.chat_agent import CodexChatAgentError
     language_server["mode"] = "running"
-    adapter = adapter_for(tmp_path)
+    adapter = adapter_for(tmp_path, hard_timeout_sec=300.0)
     ticks = iter([0.0, 0.0, 301.0])
     monkeypatch.setattr(provider.time, "monotonic", lambda: next(ticks, 301.0))
     with pytest.raises(CodexChatAgentError) as error:
@@ -326,3 +346,127 @@ def test_busy_native_conversation_is_not_sent_to_or_cancelled(tmp_path, language
     assert error.value.error_code == "resume_failed"
     assert not any(method in {"SendUserCascadeMessage", "CancelCascadeInvocation"}
                    for method, _ in language_server["calls"])
+
+
+@pytest.mark.parametrize("native_indices", [False, True])
+def test_native_full_history_is_not_streamed_as_the_current_answer(tmp_path, language_server, native_indices):
+    language_server["plain_text"] = True
+    adapter = adapter_for(tmp_path)
+    assert adapter.start_turn("first")["message"] == "Argon answer 1"
+    language_server["ignore_step_range"] = True
+    language_server["native_indices"] = native_indices
+    events = []
+    result = adapter.start_turn("second", lambda kind, data: events.append((kind, data)))
+    assert result["message"] == "Argon answer 2"
+    assert "Argon answer 1" not in "".join(data.get("text", "") for kind, data in events if kind == "answer.delta")
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 2
+
+
+def _native_frames(*, stopped: str = "STOP_REASON_STOP_PATTERN", stagnant: bool = False):
+    frames = []
+    for index in range(5):
+        final = index == 4 and not stagnant
+        steps = [
+            {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+             "metadata": {"sourceTrajectoryStepInfo": {}}},
+            {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+             "status": "CORTEX_STEP_STATUS_DONE" if final else "CORTEX_STEP_STATUS_GENERATING",
+             "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+             "plannerResponse": {"response": "native final" if final else ("same partial" if stagnant else f"progress {index}"),
+                                 "thinkingDuration": index, **({"stopReason": stopped} if final else {})}},
+        ]
+        frames.append({"at": 80.0 * (index + 1), "steps": steps,
+                       "status": "CASCADE_RUN_STATUS_IDLE" if final else "CASCADE_RUN_STATUS_RUNNING"})
+    return frames
+
+
+def _native_clock(monkeypatch, language_server, frames):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+    language_server.update(frames=frames, now=0.0)
+    # Keep HTTP/socket/thread clocks real. Only the provider's invocation clock
+    # advances, in response to completed synthetic native HTTP observations.
+    monkeypatch.setattr(provider, "time", SimpleNamespace(monotonic=lambda: language_server["now"], sleep=time.sleep))
+
+
+def test_default_core_keeps_an_original_progressing_invocation_past_five_minutes(tmp_path, language_server, monkeypatch):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    _native_clock(monkeypatch, language_server, _native_frames())
+    store = ChatSessionStore(tmp_path / "runtime" / "chat")
+    controller = ChatRuntimeController(store=store, codex_bin="unused-codex")
+    session, _ = controller.open_session(goal_id="synthetic-goal", agent_id="antigravity", work_dir=tmp_path,
+        objective="Synthetic conversation", mode="new", channel_id="synthetic-argon-chat")
+    sid = session["session_id"]
+    try:
+        turn, _ = controller.submit_turn(session_id=sid, client_turn_id="one-original-input", message="long task",
+                                         work_dir=tmp_path, objective="Synthetic conversation")
+        result = controller.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=8)
+        assert result["status"] == "completed"
+        assert result["response"]["message"] == "native final"
+        assert language_server["now"] == 400.0
+        assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+        assert not language_server["cancelled"].is_set()
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["native final"]
+    finally:
+        controller.close_session(sid)
+
+
+@pytest.mark.parametrize("hard_limit,stagnant", [(300.0, False), (None, True)])
+def test_explicit_deadline_and_default_no_progress_timeout_still_stop(tmp_path, language_server, monkeypatch, hard_limit, stagnant):
+    from loopx.chat_agent import CodexChatAgentError
+    _native_clock(monkeypatch, language_server, _native_frames(stagnant=stagnant))
+    events = []
+    with pytest.raises(CodexChatAgentError) as error:
+        options = {"hard_timeout_sec": hard_limit} if hard_limit is not None else {}
+        adapter_for(tmp_path, **options).start_turn("long task", lambda kind, data: events.append((kind, data)))
+    assert error.value.error_code == "response_timeout"
+    assert language_server["cancelled"].is_set()
+    assert not any(kind == "answer.final" for kind, _ in events)
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True])
+def test_invalid_hard_timeout_creates_no_native_invocation(tmp_path, language_server, value):
+    with pytest.raises(ValueError, match="finite and positive"):
+        adapter_for(tmp_path, hard_timeout_sec=value)
+    assert language_server["calls"] == []
+
+
+@pytest.mark.parametrize("reason", ["STOP_REASON_CLIENT_STREAM_ERROR", "unrecognized-native-stop"])
+def test_idle_done_with_an_unverified_native_stop_never_becomes_success(tmp_path, language_server, monkeypatch, reason):
+    from loopx.chat_agent import CodexChatAgentError
+    frames = _native_frames(stopped=reason)
+    frames[-1]["at"] = 1.0
+    _native_clock(monkeypatch, language_server, [frames[-1]])
+    events = []
+    with pytest.raises(CodexChatAgentError) as error:
+        adapter_for(tmp_path).start_turn("task", lambda kind, data: events.append((kind, data)))
+    assert error.value.error_code == "upstream_transport_failure"
+    assert not any(kind == "answer.final" for kind, _ in events)
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+
+
+def test_partial_native_inventory_is_not_a_complete_response(tmp_path, language_server, monkeypatch):
+    from loopx.chat_agent import CodexChatAgentError
+    frame = _native_frames()[-1]
+    frame.update(at=1.0, total=4)
+    _native_clock(monkeypatch, language_server, [frame])
+    with pytest.raises(CodexChatAgentError) as error:
+        adapter_for(tmp_path).start_turn("task")
+    assert error.value.error_code == "antigravity_rpc_error"
+    assert language_server["cancelled"].is_set()
+
+
+def test_another_native_input_is_neither_adopted_nor_cancelled(tmp_path, language_server, monkeypatch):
+    from loopx.chat_agent import CodexChatAgentError
+    frame = _native_frames()[-1]
+    frame["at"] = 1.0
+    frame["steps"].insert(1, {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                              "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}}})
+    frame["steps"][-1]["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 2
+    _native_clock(monkeypatch, language_server, [frame])
+    with pytest.raises(CodexChatAgentError) as error:
+        adapter_for(tmp_path).start_turn("original task")
+    assert error.value.error_code == "upstream_transport_failure"
+    assert not language_server["cancelled"].is_set()
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1

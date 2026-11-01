@@ -398,7 +398,7 @@ class ChatRuntimeController:
                 resume_thread_id=resume_thread_id,
                 history=history,
                 executor_model=model_config,
-                hard_timeout_sec=self.hard_timeout_sec or 300.0,
+                hard_timeout_sec=self.hard_timeout_sec,
             )
         if agent_id == "codex":
             from .capabilities.manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
