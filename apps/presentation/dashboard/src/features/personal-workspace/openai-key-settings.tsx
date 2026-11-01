@@ -22,7 +22,7 @@ const copy = {
   "zh-CN": {
     title: "OpenAI API Key", configured: "已保存", boundary: "订阅账号优先，全部耗尽后使用 API",
     help: "API Key 与额度", detail: "密钥只保存在本机，不回显完整值。启用 API 接续后，只有订阅账号均被确认耗尽才使用 API；订阅恢复后在安全边界回到订阅。API 额度或权限错误会在输出前尝试下一把 Key，保留当前模型，不重放已开始输出的请求。检查连接只读取模型列表，不能证明可消费额度。项目 Key 无法查询账单余额，费用查询需另有 Admin Key。",
-    auto: "订阅耗尽后使用 API（按用量计费）", autoOff: "需先启用下方的订阅自动切换", ownerMissing: "原生槽位管理器需要更新，暂不能启用 API 接续",
+    auto: "订阅耗尽后使用 API（按用量计费）", autoOff: "需先启用下方的订阅自动切换", ownerMissing: "LoopX 账号扩展需要更新，暂不能启用 API 接续",
     lastRequest: "上次响应", accepted: "API 已接受请求", quota_exhausted: "API 额度不足", failed: "API 请求失败", tokens: "限流窗口 Token 余量", requests: "限流窗口请求余量",
     apiPermission: "API 模型权限不足", apiLimited: "API 请求限流",
     balance: "API 余额不可读取", billing: "查看 OpenAI 用量", add: "添加 Key", save: "保存 Key", cancel: "取消",
@@ -39,7 +39,7 @@ const copy = {
   en: {
     title: "OpenAI API keys", configured: "saved", boundary: "Subscriptions first; API only after all subscriptions are exhausted",
     help: "API keys and quota", detail: "Keys stay on this machine and are never returned in full. API fallback is admitted only after every subscription is confirmed exhausted. Recovered subscriptions take priority at a safe handoff boundary. API quota or permission errors can try the next key before output, preserving the model. Requests that started output are never replayed. Connection checks only read the model list and do not establish spendable quota. Project keys cannot query billing balance; the Costs API requires a separate Admin key.",
-    auto: "Use API after subscription exhaustion (usage based billing)", autoOff: "Enable subscription automatic handoff below first", ownerMissing: "The native slot manager needs an update before API fallback can be enabled",
+    auto: "Use API after subscription exhaustion (usage based billing)", autoOff: "Enable subscription automatic handoff below first", ownerMissing: "Update the LoopX accounts extension before enabling API fallback",
     lastRequest: "Last response", accepted: "API accepted the request", quota_exhausted: "API quota exhausted", failed: "API request failed", tokens: "Rate-window tokens left", requests: "Rate-window requests left",
     apiPermission: "API model permission denied", apiLimited: "API request rate limited",
     balance: "API balance unavailable", billing: "View OpenAI usage", add: "Add key", save: "Save key", cancel: "Cancel",

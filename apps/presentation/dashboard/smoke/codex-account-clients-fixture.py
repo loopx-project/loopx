@@ -38,17 +38,24 @@ def main() -> None:
     mode, calls = "many", []
     api_fixture = os.environ.get("LOOPX_API_FALLBACK_FIXTURE") == "1"
     active, selection, api_slot, recovered, now = "a", "synthetic", None, False, time.time()
+    slots, registration_busy = ["a", "b", "c"], False
     if api_fixture:
         relay_module = importlib.import_module("loopx_codex_provider_routing.openai_relay")
         relay_module.ensure = lambda _: {"slot": "openai-api", "api_key": "synthetic-relay-token", "base_url": "http://127.0.0.1:32100/v1"}
 
     def transport(adapter, operation, **parameters):
-        nonlocal active, selection, api_slot
+        nonlocal active, selection, api_slot, slots
         calls.append(operation)
         if operation == "status":
-            return {"slots": ["a", "b", "c"], "active_slot": active, "selection_revision": selection,
+            return {"slots": slots, "active_slot": active, "selection_revision": selection,
                     "current_login_matches": True, "recovery_required": False,
                     "api_fallback_supported": api_fixture, "api_slot": api_slot}
+        if operation == "enroll_current":
+            assert parameters["expected_revision"] == selection and slots == []
+            if registration_busy:
+                raise native.HostError("waiting_for_idle")
+            slots, active, selection = ["primary"], "primary", selection + "-registered"
+            return transport(adapter, "status")
         if api_fixture and operation == "enroll_api":
             api_slot = "openai-api"
             return transport(adapter, "status")
@@ -95,6 +102,15 @@ def main() -> None:
                 elif command == "subscription-recovered" and api_fixture:
                     recovered, now = True, now + 301
                     print(json.dumps({"subscription_recovered": True}), flush=True)
+                elif command == "unregistered":
+                    slots, active, selection, registration_busy = [], None, "unregistered", True
+                    result = service.call("configure", {"expected_revision": provider.status()["revision"],
+                                          "enabled": False, "slots": [], "api_fallback": False})
+                    assert result["ok"]
+                    print(json.dumps({"unregistered": True}), flush=True)
+                elif command == "registration-ready":
+                    registration_busy = False
+                    print(json.dumps({"registration_ready": True}), flush=True)
                 else:
                     raise ValueError("Unknown fixture command")
         finally:

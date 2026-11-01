@@ -184,6 +184,18 @@ class NativeAccounts:
         state = self._load()
         return self.transport(state.get("adapter") or discover(), "clients")
 
+    def enroll_current(self, *, expected_revision: int, expected_selection: str) -> dict:
+        with self._lock():
+            state = self._load()
+            if state["revision"] != expected_revision:
+                raise HostError("configuration_changed")
+            adapter = state.get("adapter") or discover()
+            native = self.transport(adapter, "enroll_current", expected_revision=expected_selection)
+            state.update(adapter=adapter, native=native, revision=state["revision"] + 1,
+                         policy={**state["policy"], "slots": native["slots"], "enabled": False}, action="disabled")
+            atomic(self.path, state)
+            return self._projection(state)
+
     def configure(self, *, expected_revision: int, enabled: bool, slots: list[str], reconnect: bool = False,
                   restart_clients: bool | None = None, force_quit_clients: bool | None = None,
                   api_fallback: bool | None = None) -> dict:
@@ -488,7 +500,7 @@ class Watcher:
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="loopx-codex-accounts")
-    parser.add_argument("operation", choices=("status", "clients", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch",
+    parser.add_argument("operation", choices=("status", "clients", "configure", "refresh", "switch", "recover", "rollback", "reopen", "watch", "enroll-current",
                                                "keys-status", "keys-add", "keys-remove", "keys-check"))
     parser.add_argument("--runtime-root", type=Path, default=Path.home() / ".loopx")
     args = parser.parse_args()
@@ -509,6 +521,8 @@ def main() -> int:
             result = provider.status()
         elif args.operation == "clients":
             result = provider.clients()
+        elif args.operation == "enroll-current":
+            result = provider.enroll_current(**request)
         elif args.operation == "configure":
             result = provider.configure(**request)
         elif args.operation in ("refresh", "switch"):

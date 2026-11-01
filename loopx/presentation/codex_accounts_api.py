@@ -46,6 +46,8 @@ class CodexAccountService:
                 value = self.provider.status()
             elif operation == "clients":
                 value = self.provider.clients()
+            elif operation == "enroll-current":
+                value = self.provider.enroll_current(**parameters)
             elif operation == "configure":
                 with self.mutex:
                     if parameters.get("enabled") is False:
@@ -129,6 +131,7 @@ class CodexAccountsRequestMixin:
                 raise ValueError("Invalid account operation")
             operation, parameters = body["operation"], body["parameters"]
             fields = {"configure": {"expected_revision", "enabled", "slots", "reconnect", "restart_clients", "force_quit_clients", "api_fallback"},
+                      "enroll-current": {"expected_revision", "expected_selection"},
                       "switch": {"manual_slot", "expected_selection", "operation_id"},
                       "recover": {"expected_revision", "expected_selection"}, "rollback": {"expected_revision", "expected_selection"},
                       "reopen": {"expected_selection"}, "refresh": set()}

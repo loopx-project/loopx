@@ -116,9 +116,20 @@ try {
   assert.equal(state.watcher_started, true);
   assert.equal(state.calls.filter(operation => operation === "switch").length, 2, "API fallback then recovered subscription return");
   assert.equal(api.turnRequests.length, 0);
-  // Deliberate lost-response network error is the only expected console error.
-  assert.ok(workspace.errors.every(error => error.includes("net::ERR_FAILED")), workspace.errors.join("\n"));
-  console.log(JSON.stringify({ok: true, boundary: "packaged UI / real HTTP, native policy and private store / synthetic process and OpenAI IO", added: 3, removed: 1, lostWriteReplayed: false, automaticSwitches: 2}));
+  await command("unregistered");
+  const register = native.getByRole("button", {name: "Register current Codex login", exact: true});
+  await register.waitFor();
+  await register.click();
+  await native.getByRole("alert").waitFor();
+  await command("registration-ready");
+  await register.click();
+  await native.locator("header").getByText(/Current PRIMARY/).waitFor();
+  assert.equal(await native.getByRole("checkbox", {name: "Switch automatically when quota runs out", exact: true}).isChecked(), false);
+  assert.equal(await panel.getByRole("checkbox", {name: "Use API after subscription exhaustion (usage based billing)", exact: true}).isChecked(), false);
+  // The lost write response and occupied-login registration are deliberate failures.
+  assert.equal(workspace.errors.filter(error => error.includes("status of 409")).length, 1);
+  assert.ok(workspace.errors.every(error => error.includes("net::ERR_FAILED") || error.includes("status of 409")), workspace.errors.join("\n"));
+  console.log(JSON.stringify({ok: true, boundary: "packaged UI / real HTTP, native policy and private store / synthetic process and OpenAI IO", added: 3, removed: 1, lostWriteReplayed: false, automaticSwitches: 2, registrationRecovery: true}));
 } finally {
   await workspace?.close();
   await browser?.close();

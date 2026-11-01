@@ -1,15 +1,13 @@
-"""IO adapter to the installed Personal Apps native account owner.
+"""Native Codex IO using the account and App owners shipped in this package.
 
-No copied account writer: the installed owner's locks, idle check, transaction,
-readback and recovery remain authoritative. Paths/pins and credentials stay here,
-outside policy input and browser projections. Run only through the opt-in host.
+Private profiles/pins and credentials stay outside policy input and browser
+projections. Existing vaults retain their original locks and recovery contract.
 """
 from __future__ import annotations
 
 import hashlib
 from contextlib import ExitStack, contextmanager
 import ctypes
-import importlib
 import json
 import math
 import os
@@ -28,6 +26,10 @@ import urllib.request
 import urllib.parse
 
 from .native_processes import codex_home, lima_pidfile, responsible_pid
+from . import native_account_store, native_app
+
+OWNER = "loopx_native_codex_accounts_v1"
+OWNER_FILES = ("native_account_store.py", "native_app.py")
 
 
 class HostError(Exception):
@@ -115,31 +117,33 @@ def trusted_file(path: Path) -> Path:
     return path
 
 
-def discover() -> dict:
-    command = shutil.which("personal-apps")
+def discover(*, user_home: Path | None = None) -> dict:
     codex = shutil.which("codex")
-    if not command or not codex:
+    if not codex:
         raise HostError("adapter_unavailable")
-    source = trusted_file(Path(command)).parent
+    source = Path(__file__).parent
     pins = {name: hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest()
-            for name in ("personal_apps.py", "personal_accounts.py")}
-    return {"source": str(source), "pins": pins, "codex": str(trusted_file(Path(codex)))}
+            for name in OWNER_FILES}
+    profile = native_app.route(user_home or Path.home(), "gpt")
+    return {"owner": OWNER, "pins": pins, "codex": str(trusted_file(Path(codex))),
+            "profile": {key: str(value) for key, value in profile.items()}}
 
 
 class NativeHost:
     def __init__(self, adapter: dict, *, user_home: Path | None = None, reconcile_services: bool = True):
-        source = Path(adapter["source"])
-        for name in ("personal_apps.py", "personal_accounts.py"):
+        if adapter.get("owner") != OWNER:
+            raise HostError("adapter_changed")
+        source = Path(__file__).parent
+        for name in OWNER_FILES:
             if hashlib.sha256(trusted_file(source / name).read_bytes()).hexdigest() != adapter["pins"][name]:
                 raise HostError("adapter_changed")
         self.codex = trusted_file(Path(adapter["codex"]))
-        # This adapter runs in its own process; module names cannot collide with
-        # an earlier owner version loaded by another request.
-        sys.path.insert(0, str(source))
-        self.apps = importlib.import_module("personal_apps")
-        self.accounts = importlib.import_module("personal_accounts")
+        self.apps = native_app
+        self.accounts = native_account_store
         self.home = user_home or Path.home()
         self.spec = self.apps.route(self.home, "gpt")
+        if {key: str(value) for key, value in self.spec.items()} != adapter.get("profile"):
+            raise HostError("adapter_changed")
         self.expected = None
         self.not_after = None
 
@@ -194,6 +198,15 @@ class NativeHost:
         if slot != "openai-api" or getattr(self.accounts, "API_KEY_SLOTS_VERSION", 0) != 1:
             raise HostError("api_owner_upgrade_required")
         self.manager.enroll_api(slot, api_key=api_key, base_url=base_url)
+        return self.status()
+
+    def enroll_current(self, expected: str) -> dict:
+        if self.revision() != expected or self.manager.status()["active_slot"] is not None:
+            raise HostError("selection_changed")
+        if not self.manager.auth.exists():
+            raise HostError("native_login_required")
+        self.expected = expected
+        self.manager.enroll("primary", current=True)
         return self.status()
 
     def close_client(self, expected: str, *, timeout: float = 25, force: bool = False,
@@ -304,7 +317,7 @@ class NativeHost:
         value = self.status()
         if value["selection_revision"] != expected or value["recovery_required"] or value["current_login_matches"] is not True:
             raise HostError("selection_changed")
-        self.apps.open_app(self.home, "gpt", [])
+        self.apps.open_app(self.home, "gpt", [], spec=self.spec)
         return self.status()
 
     def _home_owners(self) -> list[int]:
@@ -834,7 +847,7 @@ class NativeHost:
             launch_failed = False
             if reopen:
                 try:
-                    self.apps.open_app(self.home, "gpt", [])
+                    self.apps.open_app(self.home, "gpt", [], spec=self.spec)
                 except (OSError, ValueError, subprocess.SubprocessError):
                     launch_failed = True
             after = self.status()
@@ -1084,6 +1097,8 @@ def main() -> int:
             value = host.observe(request["slots"], request["expected_revision"], request.get("auth_failures"))
         elif operation == "enroll_api":
             value = host.enroll_api(request["slot"], request["api_key"], request["base_url"])
+        elif operation == "enroll_current":
+            value = host.enroll_current(request["expected_revision"])
         elif operation == "switch":
             value = host.switch(request["slot"], request["expected_revision"], reopen=request["reopen"],
                                 restart_clients=request.get("restart_clients", False),
