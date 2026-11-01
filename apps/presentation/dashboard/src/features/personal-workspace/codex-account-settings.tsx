@@ -12,6 +12,7 @@ type AccountStatus = {
   active_slot?: string | null; selection_revision?: string; action?: string;
   target?: string | null; recovery_required?: boolean; launch_failed?: boolean;
   api_fallback_supported?: boolean; api_active?: boolean;
+  observer?: { state: string; checked_at: number | null; next_check_at: number | null };
   policy?: { enabled: boolean; slots: string[]; cooldown_seconds: number; restart_clients?: boolean;
     force_quit_clients?: boolean; api_fallback?: boolean };
   slots?: string[]; last_checked_at?: number | null; last_switch_at?: number | null;
@@ -71,6 +72,9 @@ const copy = {
     manager_unverified: "尚未核实管理器，保留占用等待",
     api_active: "正在使用 OpenAI API，订阅恢复后优先返回", api_disabled_active: "API 接续已关闭，等待可用订阅",
     api_owner_upgrade_required: "请更新 LoopX 账号扩展以支持 API 接续", api_keys_missing: "请先添加 OpenAI API Key", api_relay_unavailable: "API 接续服务暂不可用，请重新检查",
+    observer_healthy: "后台观测正常", observer_retrying: "后台观测正在重试", observer_stopped: "后台观测已停止",
+    observer_overdue: "后台观测心跳已过期", observer_unverified: "后台观测尚未确认", observer_unavailable: "无法检查后台观测",
+    observer_upgrade_required: "后台观测需要升级后重启", observerCheck: "重新检查", heartbeat: "最近心跳",
     external_workload_unverified: "外部工作负载的空闲与恢复条件尚未核实",
   },
   en: {
@@ -109,6 +113,9 @@ const copy = {
     manager_unverified: "Manager not verified; the holder remains a hold",
     api_active: "Using OpenAI API; recovered subscriptions take priority", api_disabled_active: "API fallback is off; waiting for a subscription",
     api_owner_upgrade_required: "Update the LoopX accounts extension for API fallback", api_keys_missing: "Add an OpenAI API key first", api_relay_unavailable: "API fallback transport unavailable; recheck",
+    observer_healthy: "Background observation healthy", observer_retrying: "Background observation retrying", observer_stopped: "Background observation stopped",
+    observer_overdue: "Background observation heartbeat overdue", observer_unverified: "Background observation unverified", observer_unavailable: "Background observation unavailable",
+    observer_upgrade_required: "Upgrade and restart background observation", observerCheck: "Recheck", heartbeat: "Last heartbeat",
     external_workload_unverified: "External workload idle and recovery conditions are unverified",
   },
 };
@@ -206,10 +213,16 @@ export function CodexAccountSettings() {
         onChange={event => void act("configure", { expected_revision: status.revision, enabled,
           restart_clients: true, force_quit_clients: event.target.checked, slots: authorizedSlots })} /><span>{c.forceQuit}</span></label> : null}
       <div className="codex-account-state" role="status" aria-live="polite">
-        {status.action === "ready" || status.action === "selected" ? <CheckCircle2 size={17} aria-hidden />
+        {(status.action === "ready" || status.action === "selected") && (!enabled || status.observer?.state === "healthy") ? <CheckCircle2 size={17} aria-hidden />
           : <Circle size={17} aria-hidden />}
         <span>{label(status.recovery_required ? "recovery_required" : status.action)}</span>
       </div>
+      {enabled ? <div className="codex-account-actions" data-testid="codex-observer-health"
+        role={status.observer?.state === "healthy" ? "status" : "alert"}>
+        <strong>{label(`observer_${status.observer?.state ?? "unverified"}`)}</strong>
+        {status.observer?.checked_at ? <span>{c.heartbeat} {new Date(status.observer.checked_at * 1000).toLocaleTimeString(locale)}</span> : null}
+        {status.observer?.state !== "healthy" ? <button type="button" disabled={busy} onClick={() => void read()}>{c.observerCheck}</button> : null}
+      </div> : null}
       <details className="codex-account-holders" data-testid="codex-account-holders">
         <summary aria-live="polite">{c.clients} · {inventoryBusy ? c.clientsChecking : inventory
           ? holders.length ? `${holders.length} ${c.clientsCount}${held ? ` · ${held} ${c.clientsHeld}` : ""}` : c.clientsEmpty

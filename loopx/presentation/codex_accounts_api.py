@@ -18,6 +18,7 @@ class CodexAccountService:
         self.provider: Any = None
         self.watcher: Any = None
         self.mutex = threading.Lock()
+        self.closed = False
         self.error: str | None = "extension_uninstalled"
         try:
             provider_module = importlib.import_module("loopx_codex_provider_routing.native")
@@ -29,10 +30,20 @@ class CodexAccountService:
         # Rehydrate an explicitly enabled observer after an App restart. The
         # absent/default-off path neither creates state nor reads native auth.
         try:
-            if self.provider.path.exists() and self.provider._load()["policy"]["enabled"]:
-                self.watcher.start()
+            self._reconcile_observer()
         except Exception:
             self.error = "state_unavailable"
+
+    def _reconcile_observer(self) -> None:
+        if self.closed:
+            return
+        if self.provider.path.exists() and self.provider._load()["policy"]["enabled"]:
+            if self.watcher.stop.is_set():
+                module = importlib.import_module("loopx_codex_provider_routing.native")
+                self.watcher = module.Watcher(self.provider)
+            self.watcher.start()
+        else:
+            self.watcher.close()
 
     def call(self, operation: str, parameters: dict[str, Any]) -> dict[str, Any]:
         if self.provider is None:
@@ -43,6 +54,8 @@ class CodexAccountService:
                     raise ValueError("Unsupported key operation")
                 value = getattr(self.provider.api_keys(), operation.removeprefix("keys-"))(**parameters)
             elif operation == "status":
+                with self.mutex:
+                    self._reconcile_observer()
                 value = self.provider.status()
             elif operation == "clients":
                 value = self.provider.clients()
@@ -52,14 +65,13 @@ class CodexAccountService:
                 with self.mutex:
                     if parameters.get("enabled") is False:
                         self.watcher.stop.set()
-                    value = self.provider.configure(**parameters)
-                    if value["policy"]["enabled"]:
-                        if self.watcher.stop.is_set():
-                            module = importlib.import_module("loopx_codex_provider_routing.native")
-                            self.watcher = module.Watcher(self.provider)
-                        self.watcher.start()
-                    else:
-                        self.watcher.close()
+                    try:
+                        value = self.provider.configure(**parameters)
+                    finally:
+                        # A stale/failed disable did not revoke the saved opt-in.
+                        # Restore that policy's observer rather than leaving a
+                        # stopped worker behind an enabled switch.
+                        self._reconcile_observer()
             elif operation == "refresh":
                 value = self.provider.tick(refresh=True)
             elif operation == "switch":
@@ -85,6 +97,7 @@ class CodexAccountService:
             return {**cached, "ok": False, "available": True, "code": code, "error_code": code}
 
     def close(self) -> None:
+        self.closed = True
         if self.watcher:
             self.watcher.close()
 

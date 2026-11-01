@@ -88,6 +88,7 @@ def main() -> None:
         server.codex_account_service = service
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        observer_hold = None
         print(json.dumps({"origin": f"http://127.0.0.1:{server.server_port}"}), flush=True)
         try:
             for line in sys.stdin:
@@ -101,6 +102,18 @@ def main() -> None:
                                           "enabled": True, "slots": ["a"], "api_fallback": False})
                     assert result["ok"]
                     print(json.dumps({"policy": result["policy"]}), flush=True)
+                elif command == "observer-stale" and api_fixture:
+                    service.watcher.close()
+                    observer_hold = provider._lock(name="observer.lock")
+                    observer_hold.__enter__()
+                    native.atomic(provider.root / "observer.json", {"schema_version": native.OBSERVER_SCHEMA,
+                                  "build": native.OBSERVER_BUILD, "checked_at": time.time() - 100,
+                                  "deadline_at": time.time() - 1, "phase": "waiting"})
+                    print(json.dumps({"observer_stale": True, "revision": provider._load()["revision"]}), flush=True)
+                elif command == "observer-resume" and api_fixture:
+                    observer_hold.__exit__(None, None, None)
+                    observer_hold = None
+                    print(json.dumps({"observer_resumed": True}), flush=True)
                 elif command in {"many", "sparse", "empty", "partial", "unavailable"}:
                     mode = command
                     print(json.dumps({"mode": mode}), flush=True)
@@ -128,6 +141,8 @@ def main() -> None:
                 else:
                     raise ValueError("Unknown fixture command")
         finally:
+            if observer_hold:
+                observer_hold.__exit__(None, None, None)
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)

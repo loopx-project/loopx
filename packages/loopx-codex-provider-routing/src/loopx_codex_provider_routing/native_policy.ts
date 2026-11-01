@@ -20,6 +20,30 @@ export type Account = {
 export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
   restart_clients?: boolean; force_quit_clients?: boolean; api_fallback?: boolean };
 
+/** Diagnostic liveness only; this never grants switching or process authority. */
+export type ObserverHealthState = "unavailable" | "stopped" | "unverified" | "upgrade_required"
+  | "overdue" | "retrying" | "healthy";
+export function observerHealth(input: {
+  now: number; owner_locked: boolean | null; build: string;
+  heartbeat: { checked_at?: number; deadline_at?: number; next_check_at?: number;
+    build?: string; phase?: string } | null;
+}) {
+  const row = input.heartbeat;
+  const result = (state: ObserverHealthState) => ({state,
+    checked_at: Number.isFinite(row?.checked_at) ? row!.checked_at : null,
+    next_check_at: Number.isFinite(row?.next_check_at) ? row!.next_check_at : null});
+  if (input.owner_locked === null) return result("unavailable");
+  if (!input.owner_locked) return result("stopped");
+  if (!row || !Number.isFinite(row.checked_at) || !Number.isFinite(row.deadline_at)
+      || row.checked_at! > input.now + 5 || row.deadline_at! <= row.checked_at!
+      || row.deadline_at! > row.checked_at! + 600
+      || typeof row.build !== "string"
+      || !["checking", "waiting", "retrying"].includes(row.phase ?? "")) return result("unverified");
+  if (row.build !== input.build) return result("upgrade_required");
+  if (row.deadline_at! < input.now) return result("overdue");
+  return result(row.phase === "retrying" ? "retrying" : "healthy");
+}
+
 const number = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const percent = (v: unknown): number | null => number(v) && v >= 0 && v <= 100 ? v : null;
 const epoch = (v: unknown): number | null => number(v) && v > 0 ? v : null;

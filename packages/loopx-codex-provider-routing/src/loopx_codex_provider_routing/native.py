@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,11 @@ import uuid
 from .native_host import HostError, discover
 
 SCHEMA = "codex_native_accounts_v1"
+OBSERVER_SCHEMA = "codex_native_observer_v1"
+# Capture the loaded build once: replacing files cannot make an older process
+# claim the new observer implementation without actually restarting it.
+OBSERVER_BUILD = hashlib.sha256(b"".join(Path(__file__).with_name(name).read_bytes()
+                                       for name in ("native.py", "native_policy.ts", "native_policy_bridge.ts"))).hexdigest()
 
 
 def private_read(path: Path, *, schema: str = SCHEMA) -> dict:
@@ -160,6 +167,7 @@ class NativeAccounts:
         native = native or state.get("native", {})
         return {"schema_version": SCHEMA, "available": True, "revision": state["revision"],
                 "policy": state["policy"], "slots": native.get("slots", []),
+                "observer": self.observer_health(state["policy"]["enabled"]),
                 "active_slot": native.get("active_slot"),
                 "api_fallback_supported": native.get("api_fallback_supported", False),
                 "api_active": native.get("api_slot") is not None and native.get("active_slot") == native.get("api_slot"),
@@ -173,6 +181,35 @@ class NativeAccounts:
                 "launch_failed": state.get("launch_failed", False) and native.get("client_running") is not True,
                 "client_running": native.get("client_running"),
                 "automatic_hot_swap": False}
+
+    def observer_health(self, enabled: bool) -> dict:
+        if not enabled:
+            return {"state": "disabled", "checked_at": None, "next_check_at": None}
+        locked = None
+        heartbeat = None
+        try:
+            import fcntl
+            path = self.root / "observer.lock"
+            if any(p.is_symlink() for p in (path, *path.parents)):
+                raise HostError("state_untrusted")
+            if not path.exists():
+                locked = False
+            else:
+                with open(path, "rb", opener=lambda p, flags: os.open(p, flags | os.O_NOFOLLOW | os.O_NONBLOCK)) as stream:
+                    info = os.fstat(stream.fileno())
+                    if info.st_uid != os.getuid() or info.st_mode & 0o077 or not stat.S_ISREG(info.st_mode):
+                        raise HostError("state_untrusted")
+                    try:
+                        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        locked = False
+                    except BlockingIOError:
+                        locked = True
+                if (self.root / "observer.json").exists():
+                    heartbeat = private_read(self.root / "observer.json", schema=OBSERVER_SCHEMA)
+            return policy({"operation": "observer-health", "now": time.time(),
+                           "owner_locked": locked, "heartbeat": heartbeat, "build": OBSERVER_BUILD})
+        except (HostError, OSError, ValueError, TypeError, AttributeError, ImportError, subprocess.SubprocessError):
+            return {"state": "unavailable", "checked_at": None, "next_check_at": None}
 
     def status(self) -> dict:
         state = self._load()
@@ -459,12 +496,14 @@ class Watcher:
         self.provider = provider
         self.stop = threading.Event()
         self.thread: threading.Thread | None = None
+        self.start_lock = threading.Lock()
         self.provider.switch_allowed = lambda: not self.stop.is_set()
 
     def start(self):
-        if self.thread is None:
-            self.thread = threading.Thread(target=self.run, daemon=True, name="codex-account-observer")
-            self.thread.start()
+        with self.start_lock:
+            if not self.stop.is_set() and (self.thread is None or not self.thread.is_alive()):
+                self.thread = threading.Thread(target=self.run, daemon=True, name="codex-account-observer")
+                self.thread.start()
         return self
 
     def run(self):
@@ -478,19 +517,34 @@ class Watcher:
                     self._observe()
             except BlockingIOError:
                 self.stop.wait(5)
-            except (HostError, OSError, ValueError):
+            except Exception:
+                # Supervise the observer itself as well as individual ticks.
+                # A held owner remains authoritative; contenders never publish
+                # a heartbeat or replace another observer's credentials.
                 self.stop.wait(60)
 
     def _observe(self):
         while not self.stop.is_set():
             delay = 60.0
             try:
+                self._heartbeat("checking", deadline=480)
                 value = self.provider.tick()
                 due = value.get("retry_at")
                 delay = max(5, min(300, due - time.time())) if due else 60
-            except (HostError, OSError, ValueError, subprocess.SubprocessError):
+                self._heartbeat("waiting", deadline=delay + 15, next_check=time.time() + delay)
+            except Exception:
+                # A provider/programming failure must not silently kill the
+                # thread while the durable policy still promises observation.
+                # Keep exceptions private and retry under the same owner lock.
+                self._heartbeat("retrying", deadline=75, next_check=time.time() + 60)
                 delay = 60
             self.stop.wait(delay)
+
+    def _heartbeat(self, phase: str, *, deadline: float, next_check: float | None = None):
+        now = time.time()
+        atomic(self.provider.root / "observer.json", {"schema_version": OBSERVER_SCHEMA,
+               "build": OBSERVER_BUILD, "checked_at": now, "deadline_at": now + deadline,
+               "next_check_at": next_check, "phase": phase})
 
     def close(self):
         self.stop.set()

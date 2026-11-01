@@ -122,6 +122,29 @@ try {
   assert.equal(state.watcher_started, true);
   assert.equal(state.calls.filter(operation => operation === "switch").length, 2, "API fallback then recovered subscription return");
   assert.equal(api.turnRequests.length, 0);
+  const observer = native.getByTestId("codex-observer-health");
+  await observer.getByText("Background observation healthy", {exact: true}).waitFor();
+  const held = await command("observer-stale");
+  await observer.getByText("Background observation heartbeat overdue", {exact: true}).waitFor();
+  assert.equal(await observer.getAttribute("role"), "alert");
+  await observer.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "openai-observer-overdue-desktop.png"), animations: "disabled"});
+  await page.setViewportSize({width: 390, height: 844});
+  await observer.scrollIntoViewIfNeeded();
+  await page.screenshot({path: resolve(outputDir, "openai-observer-overdue-narrow.png"), animations: "disabled"});
+  await command("observer-resume");
+  await observer.getByRole("button", {name: "Recheck", exact: true}).click();
+  await observer.getByText("Background observation healthy", {exact: true}).waitFor();
+  assert.equal((await command("inspect")).policy.enabled, true);
+  const healthStatus = await (await fetch(`${origin}/api/chat/codex-accounts`)).json();
+  assert.equal(healthStatus.revision, held.revision, "Recovery must not rewrite the policy or its permissions");
+  await page.setViewportSize({width: 1512, height: 982});
+  await observer.evaluate(node => node.scrollIntoView({block: "center", behavior: "instant"}));
+  await page.waitForFunction(() => {
+    const rect = document.querySelector('[data-testid="codex-observer-health"]')?.getBoundingClientRect();
+    return rect && rect.top >= 140 && rect.bottom < innerHeight;
+  });
+  await page.screenshot({path: resolve(outputDir, "openai-observer-healthy-desktop.png"), animations: "disabled"});
   const automatic = native.getByRole("checkbox", {name: "Switch automatically when quota runs out", exact: true});
   const fallback = panel.getByRole("checkbox", {name: "Use API after subscription exhaustion (usage based billing)", exact: true});
   async function configure(control) {

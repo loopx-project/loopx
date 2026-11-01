@@ -233,6 +233,27 @@ directory to rediscover that owner.
 Prefer the serving App/Chat observer so normal LoopX updates also refresh it;
 retire any separately installed legacy watcher through its original manager.
 
+The enabled switch is durable intent, not a health claim. The settings page and
+native status report the active observer's private, content-free heartbeat,
+ownership lock and loaded provider build. A missing, overdue or older-build
+heartbeat stays visible even when the last quota read succeeded. Quota readiness
+and observer health are separate. Status reads never refresh their own heartbeat.
+Only the lock holder writes it; another App or CLI observer remains a contender.
+
+The existing supervised Chat service owns persistence; no second account daemon
+or duplicate policy is installed. It rehydrates enabled observation on restart
+and upgrade. Tick failures retry in the owner loop, dead threads can restart,
+and a rejected configuration edit reconciles the observer with the persisted
+policy. A stale disable cannot leave `enabled=true` with observation stopped.
+Disabling and service shutdown still fence new effects; an already dispatched
+transaction keeps its normal completion/recovery contract. An unresponsive
+owner remains a visible hold, never permission to steal its lock or replay work.
+
+开关表示持久授权，不等于服务健康。设置页分别展示额度状态和后台观测心跳；缺失、
+过期及旧版本观测保持可见，读取状态不会给自己刷新心跳。复用既有受监督的 Chat 服务，
+重启或升级后恢复已授权观测；检查失败自动重试，线程退出可恢复。配置冲突等失败不会
+让「仍开启」的策略静默停掉观测。关闭或服务退出仍阻止新效果，不抢占未释放的 owner。
+
 0.12.11 在退出 GPT App 前检查无法受控恢复的占用；原 `other_clients_busy` 暂停会
 自动重新检查，阻塞解除后无需手动换号。仅有数字 FD、只读且类型明确为目录的句柄
 不视为认证消费者；认证文件、写句柄、未知类型及缓存登录的 Codex 进程仍阻塞。
