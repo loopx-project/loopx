@@ -34,10 +34,12 @@ authorized: a diff read, green CI, or pull-request metadata is not a substitute.
    remote reviewed head. The source-checkout `loopx canary premerge` includes
    the same direct blocking check. A failed check holds merge regardless of CI
    waiting or authorized admin bypass. Working-tree changes cannot satisfy it.
-4. Immediately before the merge, run `loopx --format json pr-review --goal-id
-   GOAL --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only
-   when it returns `ready=true` for that unchanged head; this records the
-   compact Goal readiness observation consumed by future review queues.
+4. Immediately before the merge, run `loopx --format json pr-review --repo
+   OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only when it
+   returns `ready=true` for that unchanged head. For work already managed by a
+   Goal, pass `--goal-id GOAL` to retain its configured CI policy and record the
+   compact readiness observation. Standalone work needs no Goal, registration
+   or binding; its readiness check performs no Goal write.
 
 A rebase or head update restarts review, and admin bypass never overrides this
 gate: it needs explicit owner authorization and never substitutes for the
