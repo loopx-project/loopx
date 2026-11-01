@@ -188,7 +188,7 @@ The recommended path is `setup`, using user identity by default. It preflights
 python3 -m loopx.cli lark-kanban doctor
 lark-cli auth login --domain base --recommend
 python3 -m loopx.cli lark-kanban setup --base-name "LoopX Kanban POC" --execute
-python3 -m loopx.cli lark-kanban sync-loopx-todos --goal-id <goal-id> --execute
+python3 -m loopx.cli lark-kanban sync-loopx-todos --goal-id <goal-id> --sink-visibility shared --execute
 ```
 
 The local config stores the reusable Base token, table id, view ids, identity,
@@ -206,7 +206,7 @@ To use someone else's shared board, store its URL or IDs:
 ```bash
 python3 -m loopx.cli lark-kanban use --base-url "<shared-base-url>"
 python3 -m loopx.cli lark-kanban config
-python3 -m loopx.cli lark-kanban heartbeat --execute-lark
+python3 -m loopx.cli lark-kanban heartbeat --execute-lark --sink-visibility shared
 ```
 
 `sync-loopx-todos` reads the goal active state from the LoopX registry and
@@ -217,6 +217,27 @@ cards; claimed agent todos become `Claimed`; blocked/done todos map to
 `Worker Command` and `Workdir` empty unless a task row was explicitly authored
 as a worker-launch row; the shared board must not receive raw local checkout or
 active-state paths.
+
+`sync-loopx-todos` and `heartbeat` default to `--sink-visibility shared`. Every
+record writer removes canonical provider-credential shapes before serialization,
+including on an `owner-only` board. Shared visibility additionally applies the
+local-path, private-link, and private-reference redaction boundary recursively to
+nested record keys and values while preserving only structurally valid
+record-link IDs. It recognizes Unix, drive-letter, UNC, and extended Windows
+paths, plus credential assignments that use compound environment-variable names,
+credential-bearing URL userinfo, and terminal control sequences around a token.
+Configured Explore whiteboards use the same visibility boundary on the final
+rendered source, and shared Explore stage documents sanitize lane labels before
+their `docs +update` content is built. Private-key blocks are removed in full
+rather than leaving their body behind. The automatic issue-fix Explore
+synchronization uses the same shared boundary.
+
+`sink_visibility` is a caller declaration; the adapter cannot verify the remote
+Base's effective access control. Redaction is shape-based, not a complete
+data-loss-prevention system: it does not classify every arbitrary high-entropy
+value without a provider prefix or credential label. Never paste credentials
+into board fields, and rotate any credential that may already have reached shared
+storage rather than relying on later clean-up.
 
 Issue outcomes are derived, not persisted separately. Every feasibility row is
 projected; a PR lifecycle row enriches it only through an explicit matching
@@ -261,19 +282,24 @@ python3 -m loopx.cli lark-kanban doctor
 python3 -m loopx.cli lark-kanban setup --base-name "LoopX Kanban POC" --execute
 python3 -m loopx.cli lark-kanban use --base-url "<shared-base-url>"
 python3 -m loopx.cli lark-kanban config
-python3 -m loopx.cli lark-kanban sync-loopx-todos --goal-id <goal-id> --execute
+python3 -m loopx.cli lark-kanban sync-loopx-todos --goal-id <goal-id> --sink-visibility shared --execute
 python3 -m loopx.cli lark-kanban sync-projection --projection-file <complete.json> --include-done --reconcile-source --source-snapshot-complete
 python3 -m loopx.cli lark-kanban plan-create --base-name "LoopX Kanban POC"
 python3 -m loopx.cli lark-kanban create-board --base-name "LoopX Kanban POC" --execute
-python3 -m loopx.cli lark-kanban seed-task --base-token <base> --table-id <table> --execute
-python3 -m loopx.cli lark-kanban seed-cases --base-token <base> --table-id <table> --execute
-python3 -m loopx.cli lark-kanban heartbeat --base-token <base> --table-id <table> --execute-lark
+python3 -m loopx.cli lark-kanban seed-task --base-token <base> --table-id <table> --sink-visibility shared --execute
+python3 -m loopx.cli lark-kanban seed-cases --base-token <base> --table-id <table> --sink-visibility shared --execute
+python3 -m loopx.cli lark-kanban heartbeat --base-token <base> --table-id <table> --execute-lark --sink-visibility shared
 ```
 
 `setup`, `create-board`, `seed-task`, `seed-cases`, `sync-loopx-todos`, and
 `heartbeat` are dry-run unless their explicit execute flags are set. Worker
 execution has its own gate, `--execute-worker`, and an allowlist gate,
 `--allow-command-prefix`.
+
+`seed-task` and `seed-cases` default to `--sink-visibility shared`, like the
+operator sync and heartbeat paths. They apply the same recursive credential and
+local-path boundary before the first row is written; pass `--sink-visibility
+owner-only` only when the target board's ACL is independently verified.
 
 `seed-cases` creates one UX optimization task plus four feasibility cases:
 
@@ -287,10 +313,14 @@ execution has its own gate, `--execute-worker`, and an allowlist gate,
 The prototype deliberately keeps raw agent transcripts, credentials, local
 private paths, and hidden benchmark material out of Lark rows. `Evidence` and
 `Run History` should contain compact public-safe summaries or artifact
-pointers. `sync-loopx-todos` must not populate `Workdir` from the local active
-state path. If a real worker needs to store detailed logs or local launch
-context, store them in the worker's normal trace surface and write only a
-compact pointer back to Base.
+pointers. Every record writer, including `seed-task`, `seed-cases`,
+`sync-loopx-todos`, projection sync, and heartbeat writeback, applies
+credential-shape redaction before serialization; shared visibility additionally
+redacts local paths and private references from nested keys and values.
+`sync-loopx-todos` must not populate `Workdir` from the local active state path.
+If a real worker needs to store detailed logs or local launch context, store
+them in the worker's normal trace surface and write only a compact pointer back
+to Base.
 
 ## Validation
 
