@@ -567,3 +567,60 @@ def test_v1_input_rejects_body_fields_and_v0_rejects_source_event() -> None:
             _correction_v0(source_kind="maintainer_comment", source_ref=event["html_url"])
         )["correction_fingerprint"]
     )
+
+
+def test_superseded_revision_replay_preserves_entry(harness: Harness) -> None:
+    old = _event("3101", updated_at="2026-06-20T10:00:00Z")
+    new = _event("3101", updated_at="2026-06-20T12:00:00Z")
+    first = harness.run_json(metadata=_metadata([old]), correction=_correction_v1(old))
+    operation = first["maintainer_correction_admission"]["operation_id"]
+    todo = _correction_write(first)["todo_id"]
+    second = harness.run_json(metadata=_metadata([new]), correction=_correction_v1(new))
+    before = harness.entries()
+    replay = harness.run_json(metadata=_metadata([old]), correction=_correction_v1(old))
+    assert replay["maintainer_correction_admission"]["reason"] == "stale_revision"
+    assert harness.entries() == before
+    entry = next(e for e in before if e["operation_id"] == operation)
+    assert entry["disposition"] == "superseded"
+    assert entry["superseded_by"] == second["maintainer_correction_admission"]["operation_id"]
+    assert entry["todo_id"] == todo
+    assert len(harness.correction_todos()) == 2
+
+
+def test_equivalent_timestamp_replay(harness: Harness) -> None:
+    event = _event("3201")
+    first = harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+    equivalent = {**event, "created_at": "2026-06-20T10:00:00+00:00",
+                  "updated_at": "2026-06-20T10:00:00+00:00"}
+    replay = harness.run_json(metadata=_metadata([equivalent]), correction=_correction_v1(equivalent))
+    assert first["maintainer_correction_admission"]["operation_id"] == replay["maintainer_correction_admission"]["operation_id"]
+    assert _correction_write(replay)["already_exists"] is True
+    assert len(harness.entries()) == len(harness.correction_todos()) == 1
+
+
+def test_replay_summary_uses_stored_intent_and_ignores_fault(harness: Harness) -> None:
+    event = _event("3301")
+    harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+    before = harness.entries()
+    replay = harness.run_json(
+        metadata=_metadata([event]),
+        correction=_correction_v1(event, summary="Add a different regression assertion."),
+        env={"LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO": "1"},
+    )
+    assert replay["maintainer_correction_admission"]["host_summary_mismatch"] is True
+    assert _correction_write(replay)["already_exists"] is True
+    assert harness.entries() == before
+    assert len(harness.correction_todos()) == 1
+
+
+def test_missing_goal_does_not_write_ledger(harness: Harness) -> None:
+    registry = json.loads(harness.registry.read_text())
+    registry["goals"] = []
+    harness.registry.write_text(json.dumps(registry))
+    event = _event("3401")
+    ledger = default_issue_fix_domain_state_ledger_path(project=harness.project, goal_id=GOAL_ID)
+    before = ledger.read_bytes() if ledger.exists() else None
+    result = harness.run(metadata=_metadata([event]), correction=_correction_v1(event), check=False)
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["ok"] is False
+    assert (ledger.read_bytes() if ledger.exists() else None) == before

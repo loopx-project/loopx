@@ -6,12 +6,13 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 from ...control_plane.runtime.public_safety import public_safe_compact_text
+from ...domain_packs.issue_fix import issue_fix_maintainer_correction_entries
 
 from .github_public import (
     MAINTAINER_ASSOCIATIONS,
@@ -296,11 +297,12 @@ def _normalise_author_login(value: Any, *, field: str) -> str:
 
 def _normalise_event_timestamp(value: Any, *, field: str) -> str:
     text = str(value or "").strip()
-    if _timestamp(text) is None:
+    parsed = _timestamp(text)
+    if parsed is None:
         raise ValueError(
             f"maintainer correction {field} must be a timezone-aware ISO timestamp"
         )
-    return text[:40]
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def normalise_issue_fix_maintainer_correction_source_event(
@@ -516,6 +518,7 @@ def normalise_issue_fix_pr_source_events(
                 or item.get("submitted_at")
                 or item.get("submittedAt")
             )
+            created_at = item.get("created_at") or item.get("createdAt")
             events.append(
                 {
                     "kind": kind,
@@ -526,11 +529,14 @@ def normalise_issue_fix_pr_source_events(
                         or item.get("authorAssociation"),
                         "NONE",
                     ),
-                    "created_at": str(
-                        item.get("created_at") or item.get("createdAt") or ""
-                    )[:40]
-                    or None,
-                    "updated_at": str(updated_at or "")[:40] or None,
+                    "created_at": (
+                        _normalise_event_timestamp(created_at, field="created_at")
+                        if _timestamp(created_at) else None
+                    ),
+                    "updated_at": (
+                        _normalise_event_timestamp(updated_at, field="updated_at")
+                        if _timestamp(updated_at) else None
+                    ),
                     "body_captured": False,
                 }
             )
@@ -550,12 +556,6 @@ def _same_instant(left: Any, right: Any) -> bool:
 def _is_bot_or_self_login(login: Any) -> bool:
     text = str(login or "").strip().lower()
     return text.endswith(BOT_LOGIN_SUFFIX)
-
-
-def _prior_entries(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        return []
-    return [dict(item) for item in value if isinstance(item, Mapping)]
 
 
 def _latest_accepted_revision(
@@ -605,7 +605,9 @@ def evaluate_issue_fix_maintainer_correction_admission(
     )
     source_event = correction.get("source_event")
     admission_basis = str(correction.get("admission_basis") or "host_asserted")
-    prior = _prior_entries(prior_entries)
+    prior = issue_fix_maintainer_correction_entries(
+        {"maintainer_corrections": prior_entries}
+    )
     existing_entry = next(
         (entry for entry in prior if entry.get("operation_id") == operation_id), None
     )
@@ -653,8 +655,9 @@ def evaluate_issue_fix_maintainer_correction_admission(
                     provider_event.get("author_association"),
                     str(source_event.get("author_association") or "NONE"),
                 ),
-                "created_at": str(
-                    provider_event.get("created_at") or source_event.get("created_at")
+                "created_at": _normalise_event_timestamp(
+                    provider_event.get("created_at") or source_event.get("created_at"),
+                    field="source_event created_at",
                 ),
             }
         effective_event = verified_event or dict(source_event)
@@ -696,23 +699,10 @@ def evaluate_issue_fix_maintainer_correction_admission(
     )
 
     accepted = reason is None
-    same_revision = existing_entry is not None and revision_relation == "replay"
-    replay = bool(
-        same_revision
-        and existing_entry is not None
-        and existing_entry.get("disposition") in {"accepted", "superseded"}
-    )
-    if replay and existing_entry is not None:
+    replay = existing_entry is not None
+    if existing_entry is not None:
         entry = dict(existing_entry)
-        if entry.get("disposition") == "accepted" and not accepted:
-            # A later poll can still see terminal PR state for an earlier
-            # accepted revision; keep the record and mark why it may no longer
-            # produce work. Its Todo, if any, is left to the Todo lifecycle.
-            entry["effect_recheck_reason"] = reason
     else:
-        # A previously rejected revision may be re-admitted once its gate
-        # input changes (for example provider events became observable);
-        # an unchanged rejection keeps its original recording time.
         entry = {
             "schema_version": ISSUE_FIX_MAINTAINER_CORRECTION_LEDGER_ENTRY_SCHEMA_VERSION,
             "operation_id": operation_id,
@@ -723,11 +713,7 @@ def evaluate_issue_fix_maintainer_correction_admission(
             "disposition": "accepted" if accepted else "context_only",
             "reason": reason,
             "todo_id": None,
-            "recorded_at": (
-                existing_entry.get("recorded_at") or recorded_at
-                if same_revision and existing_entry is not None and not accepted
-                else recorded_at
-            ),
+            "recorded_at": recorded_at,
             "superseded_by": None,
             "body_captured": False,
         }
@@ -751,8 +737,13 @@ def evaluate_issue_fix_maintainer_correction_admission(
         "schema_version": ISSUE_FIX_MAINTAINER_CORRECTION_ADMISSION_SCHEMA_VERSION,
         "operation_id": operation_id,
         "admission_basis": admission_basis,
-        "disposition": entry.get("disposition"),
-        "reason": entry.get("reason") if not accepted else None,
+        "disposition": "accepted" if accepted else "context_only",
+        "reason": reason,
+        "host_summary_mismatch": bool(
+            existing_entry is not None
+            and correction.get("correction_fingerprint")
+            != existing_entry.get("correction_fingerprint")
+        ),
         "gates": gates,
         "revision_relation": revision_relation,
         "replay": replay,
@@ -777,7 +768,10 @@ def recheck_issue_fix_maintainer_correction_effect_gates(
     source_event = entry.get("source_event")
     if isinstance(source_event, Mapping):
         latest = _latest_accepted_revision(
-            _prior_entries(ledger_entries), source_event=source_event
+            issue_fix_maintainer_correction_entries(
+                {"maintainer_corrections": ledger_entries}
+            ),
+            source_event=source_event,
         )
         if latest is not None and latest.get("operation_id") != entry.get("operation_id"):
             latest_time = _timestamp(latest["source_event"].get("updated_at"))
@@ -1600,7 +1594,10 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
                     or observation["pr_ref"]
                 ),
             )
-            if transition["decision"] in {"runnable_successor", "user_gate"}:
+            if (
+                transition["decision"] in {"runnable_successor", "user_gate"}
+                and not maintainer_correction_admission["replay"]
+            ):
                 # The entry carries its own Todo intent so a later run can
                 # finish an interrupted write without the original input.
                 maintainer_correction_admission["entries"][0]["todo_intent"] = {
@@ -1627,7 +1624,8 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
             if maintainer_correction is not None
             else None
         ),
-        "transition": transition,        "grouped_monitor_projection": _grouped_monitor_projection(
+        "transition": transition,
+        "grouped_monitor_projection": _grouped_monitor_projection(
             observation, transition
         ),
         "first_screen": {

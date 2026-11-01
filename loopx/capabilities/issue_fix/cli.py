@@ -119,7 +119,10 @@ def _goal_stopped_for_correction(registry_path: Path | None, goal_id: str | None
     if registry_path is None or not goal_id:
         return False
     try:
-        return goal_is_stopped(load_goal_from_registry(registry_path, goal_id))
+        goal = load_goal_from_registry(registry_path, goal_id)
+        if goal is None:
+            return True
+        return goal_is_stopped(goal)
     except ValueError:
         # An unreadable activation record cannot prove the Goal is active.
         return True
@@ -173,6 +176,23 @@ def _maintainer_correction_todo_write_receipt(
         "blocks_agent": created_todo.get("blocks_agent"),
         "path_recorded": False,
     }
+
+
+def _correction_todo_readback_receipt(
+    *, skip_reason: str, operation_id: str | None = None, todo_id: str | None = None,
+) -> dict[str, Any]:
+    receipt = {
+        "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
+        "write_performed": False,
+        "already_exists": bool(todo_id),
+        "skip_reason": skip_reason,
+        "path_recorded": False,
+    }
+    if operation_id is not None:
+        receipt["operation_id"] = operation_id
+    if todo_id is not None:
+        receipt["todo_id"] = todo_id
+    return receipt
 
 
 def _settle_maintainer_correction_entries(
@@ -231,14 +251,9 @@ def _settle_maintainer_correction_entries(
                 {"operation_id": operation_id, "status": "refused", "reason": refusal}
             )
             if is_current:
-                current_todo_write = {
-                    "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
-                    "write_performed": False,
-                    "already_exists": False,
-                    "skip_reason": refusal,
-                    "operation_id": operation_id,
-                    "path_recorded": False,
-                }
+                current_todo_write = _correction_todo_readback_receipt(
+                    skip_reason=refusal, operation_id=operation_id,
+                )
             continue
         if refusal is not None:
             # The Todo already exists for this revision; a replay only reads it
@@ -247,17 +262,12 @@ def _settle_maintainer_correction_entries(
                 {"operation_id": operation_id, "status": "settled_earlier", "reason": refusal}
             )
             if is_current:
-                current_todo_write = {
-                    "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
-                    "write_performed": False,
-                    "already_exists": True,
-                    "todo_id": entry.get("todo_id"),
-                    "operation_id": operation_id,
-                    "skip_reason": refusal,
-                    "path_recorded": False,
-                }
+                current_todo_write = _correction_todo_readback_receipt(
+                    skip_reason=refusal, operation_id=operation_id,
+                    todo_id=entry.get("todo_id"),
+                )
             continue
-        if os.environ.get(MAINTAINER_CORRECTION_FAULT_ENV) == "1":
+        if not entry.get("todo_id") and os.environ.get(MAINTAINER_CORRECTION_FAULT_ENV) == "1":
             raise RuntimeError(
                 "maintainer correction Todo write aborted by "
                 f"{MAINTAINER_CORRECTION_FAULT_ENV}"
@@ -285,18 +295,14 @@ def _settle_maintainer_correction_entries(
         if is_current:
             current_todo_write = receipt
     if current_todo_write is None and current_operation_id:
-        current_todo_write = {
-            "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
-            "write_performed": False,
-            "already_exists": False,
-            "skip_reason": (
+        current_todo_write = _correction_todo_readback_receipt(
+            skip_reason=(
                 str(admission.get("reason") or admission.get("disposition") or "")
                 if admission.get("disposition") != "accepted"
                 else "unchanged_monitor_quiet"
             ),
-            "operation_id": current_operation_id,
-            "path_recorded": False,
-        }
+            operation_id=current_operation_id,
+        )
     if changed_entries:
         payload["maintainer_corrections"] = changed_entries
         upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
@@ -1465,6 +1471,13 @@ def handle_issue_fix_command(
                 raise ValueError("--execute-transition requires --goal-id")
             if args.execute_transition and not args.claimed_by:
                 raise ValueError("--execute-transition requires --claimed-by")
+            if args.maintainer_correction_json and args.execute_transition:
+                # Resolve the Goal before any ledger write so a missing Goal
+                # cannot leave a pending correction entry behind.
+                if load_goal_from_registry(registry_path, args.goal_id) is None:
+                    raise ValueError(
+                        f"goal {args.goal_id} is not resolvable from registry {registry_path}"
+                    )
             should_write_domain_state = bool(
                 not args.no_write_domain_state and (args.goal_id or args.ledger_path)
             )
@@ -1575,13 +1588,9 @@ def handle_issue_fix_command(
                     )
                     todo_changed = bool(todo_write_receipt.get("write_performed"))
                     if not todo_write_receipt:
-                        todo_write_receipt = {
-                            "schema_version": "issue_fix_maintainer_correction_todo_write_v0",
-                            "write_performed": False,
-                            "already_exists": False,
-                            "skip_reason": "terminal_or_no_followup",
-                            "path_recorded": False,
-                        }
+                        todo_write_receipt = _correction_todo_readback_receipt(
+                            skip_reason="terminal_or_no_followup",
+                        )
                     if (
                         not todo_changed
                         and "skip_reason" in todo_write_receipt
