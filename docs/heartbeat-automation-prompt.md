@@ -64,6 +64,29 @@ automation contract.
 
 ### Native Goal bootstrap and live execution instructions
 
+For an already connected local Codex App conversation whose user requests native
+Goal continuation, select `codex_app_goal` explicitly:
+
+```bash
+loopx --format json --registry <GLOBAL_REGISTRY> heartbeat-prompt \
+  --bootstrap --thin --runtime-profile codex_app_goal \
+  --goal-id <STABLE_GOAL_ID> --agent-id <REGISTERED_AGENT_ID>
+```
+
+Use the successful returned `task_body` with the current App's native Goal
+controls, preserving the existing objective and registered identity. The App
+owns continuation; this route neither starts another Codex process nor creates
+an automation. Existing blocked Goals require explicit host resume rather than
+replacement. The runtime context is `codex_app` / `goal_runtime` / `interactive`;
+quota settlement uses `visible-goal`. Follow the live guard's `--begin-turn`
+re-entry when requested instead of assigning a synthetic native turn ID.
+
+This is opt-in: `--codex-app` still means `codex_app_heartbeat`, and ordinary
+`codex-app` onboarding keeps its existing automation behavior. A committed
+LoopX receipt is not evidence of a native Goal trigger. Qualification must pair
+the actual host turn with admitted work, writeback and settlement, then observe
+native continuation in the same conversation.
+
 Full, compact and brief automation use the same fully qualified notification/execution rule
 as thin, including `heartbeat_recommendation.agent_must_attempt` and
 `execution_obligation.must_attempt_work`. None embeds a second

@@ -2,6 +2,37 @@
 
 Read before creating, repairing or changing a recurring host loop. Save only the stable loader and read its fresh result on every wake; the current body owns execution, runtime turn identity and settlement.
 
+## Codex App Native Goal
+
+When the user chooses native Goal continuation in an existing local Codex App
+conversation, including Windows, load the bound Goal with this explicit profile:
+
+```bash
+loopx --format json --registry <GLOBAL_REGISTRY> heartbeat-prompt \
+  --bootstrap --thin --runtime-profile codex_app_goal \
+  --goal-id <STABLE_GOAL_ID> --agent-id <REGISTERED_AGENT_ID>
+```
+
+Require `ok=true` and use the returned `task_body` through the current App's
+native Goal controls. Preserve the existing objective, identity and permissions;
+do not clear or recreate an unfinished Goal merely to change its LoopX entry.
+An already active Goal continues in the same conversation. A blocked Goal needs
+the host's explicit user resume action; if that control is unavailable, report
+the exact host limitation rather than starting another executor.
+
+`codex_app_goal` means `codex_app` / `goal_runtime` / `interactive` and uses
+`visible-goal` settlement. Each iteration follows the fresh interaction contract,
+including `--begin-turn` when requested, and reuses its returned identity for
+writeback and settlement. Do not invent a native turn ID or persist a batch ID
+in the loader. Do not create a heartbeat automation, apply RRULE changes, or
+switch to a separate Codex CLI session for this profile.
+
+The existing `--codex-app` alias and `codex-app` onboarding remain heartbeat
+defaults. They do not prove native Goal continuation. Verify the App's actual
+Goal-triggered turn, admitted work, `visible-goal` settlement and subsequent
+native continuation separately; a LoopX receipt alone does not establish the
+host trigger.
+
 ## Set Up Recurring Heartbeats
 
 When the exact host is Codex App connected to a remote workspace over SSH and

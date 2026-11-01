@@ -103,7 +103,7 @@ def test_machine_on_preserves_existing_worker_environment_off(tmp_path, monkeypa
 
 @pytest.mark.parametrize("host", [
     ["--runtime-profile", profile] for profile in
-    ("trae_app", "claude_code", "kunluncode", "kiro_cli", "ark_managed_agent_goal")
+    ("trae_app", "claude_code", "kunluncode", "kiro_cli", "ark_managed_agent_goal", "codex_app_goal")
 ] + [["--host-surface", "claude_code", "--scheduler-owner", "agent_cli_loop",
       "--execution-mode", "interactive"]])
 def test_codex_machine_preference_preserves_other_declared_hosts(tmp_path, monkeypatch, host):

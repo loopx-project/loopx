@@ -107,6 +107,12 @@ test("closed contract rejects identifiers, timestamps and extra fields; long dur
   assert.equal(goalDuration(30 * day), "gte_30d");
 });
 
+test("Codex App native Goal and heartbeat share the desktop usage label", () => {
+  assert.equal(hostCategory("codex_app_goal"), "codex_app");
+  assert.equal(hostCategory("codex_app_heartbeat"), "codex_app");
+  assert.equal(hostCategory("codex_cli"), "codex_cli");
+});
+
 test("Kiro CLI has its own fixed Host label instead of other/unknown", () => {
   // Quota observations pass the runtime profile; activation and turns pass the
   // agent type. Both spellings must land on the same closed label.

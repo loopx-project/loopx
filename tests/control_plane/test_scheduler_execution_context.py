@@ -41,6 +41,7 @@ VALID_COMBINATIONS = {
     ("codex_app_server", "outer_controller", "isolated_headless"),
     ("ark_managed_agent", "goal_runtime", "interactive"),
     ("codex_app", "host_automation", "hosted_automation"),
+    ("codex_app", "goal_runtime", "interactive"),
     ("trae_app", "host_automation", "hosted_automation"),
     ("codex_app_ssh", "agent_cli_loop", "interactive"),
     ("local_scheduler", "host_automation", "hosted_automation"),
@@ -73,6 +74,11 @@ FIRST_CLASS_RUNTIME_PROFILES = (
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         ("codex_app", "host_automation", "hosted_automation"),
         " --codex-app",
+    ),
+    (
+        SchedulerRuntimeProfile.CODEX_APP_NATIVE_GOAL,
+        ("codex_app", "goal_runtime", "interactive"),
+        " --runtime-profile codex_app_goal",
     ),
     (
         SchedulerRuntimeProfile.TRAE_APP,
@@ -224,6 +230,7 @@ def test_scheduler_execution_context_decision_table(
         assert context_projection["codex_app_applicability"] == (
             "applicable"
             if resolution.ok and host_surface is HostSurface.CODEX_APP
+            and scheduler_owner is SchedulerOwner.HOST_AUTOMATION
             else "not_applicable" if resolution.ok else "blocked_invalid_context"
         )
     if values not in VALID_COMBINATIONS:
@@ -1138,6 +1145,7 @@ def test_goal_runtime_terminal_stop_projects_complete() -> None:
     ("profile", "runtime_key"),
     (
         (SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE, "codex_app_ssh_goal"),
+        (SchedulerRuntimeProfile.CODEX_APP_NATIVE_GOAL, "codex_cli_tui"),
         (SchedulerRuntimeProfile.CODEX_CLI_VISIBLE, "codex_cli_tui"),
     ),
 )

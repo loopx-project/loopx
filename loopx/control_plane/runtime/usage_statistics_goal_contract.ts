@@ -10,7 +10,7 @@ export type Measurement = typeof MEASUREMENTS[number];
 export type Host = typeof HOSTS[number];
 export function hostCategory(value: unknown): Host {
   if ((HOSTS as readonly unknown[]).includes(value)) return value as Host;
-  const aliases: Record<string, Host> = { "codex-app": "codex_app", "codex-app-ssh": "codex_app", codex_app: "codex_app", codex_app_heartbeat: "codex_app", codex_app_ssh_goal: "codex_app", "codex-cli": "codex_cli", "codex-cli-tui": "codex_cli", codex_cli: "codex_cli", codex: "codex_cli", "codex-ide-plugin": "codex_cli", "deepseek-harness-native": "dsh", "claude-code": "claude_code", claude_code: "claude_code", dsh: "dsh", opencode: "opencode", trae_app: "trae", "kiro-cli": "kiro_cli", "generic-cli": "other", generic_cli: "other" };
+  const aliases: Record<string, Host> = { "codex-app": "codex_app", "codex-app-ssh": "codex_app", codex_app: "codex_app", codex_app_heartbeat: "codex_app", codex_app_goal: "codex_app", codex_app_ssh_goal: "codex_app", "codex-cli": "codex_cli", "codex-cli-tui": "codex_cli", codex_cli: "codex_cli", codex: "codex_cli", "codex-ide-plugin": "codex_cli", "deepseek-harness-native": "dsh", "claude-code": "claude_code", claude_code: "claude_code", dsh: "dsh", opencode: "opencode", trae_app: "trae", "kiro-cli": "kiro_cli", "generic-cli": "other", generic_cli: "other" };
   return typeof value === "string" && Object.hasOwn(aliases, value) ? aliases[value] : "unknown";
 }
 export type GoalCount = { measurement: Measurement; host: Host; span: GoalDuration; duration: GoalDuration; count: number };

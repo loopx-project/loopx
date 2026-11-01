@@ -76,7 +76,10 @@ def host_goal_turn_reentry_action(
         and settlement_plan is None
         and turn_instance_id is None
     ):
-        if profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE:
+        if profile in {
+            SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE,
+            SchedulerRuntimeProfile.CODEX_APP_NATIVE_GOAL,
+        }:
             return f"{typed_quota_guard} --begin-turn"
         # CLI/managed Goal hosts own their iteration identity, not an App
         # heartbeat receipt. Re-enter before exposing any unbound settlement.

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import pytest
+
 from loopx.heartbeat_prompt import build_heartbeat_prompt
 
 
-def test_visible_goal_delegates_settlement_then_checks_terminal_readback() -> None:
+@pytest.mark.parametrize("runtime_profile", ["codex_app_ssh_goal", "codex_app_goal"])
+def test_visible_goal_delegates_settlement_then_checks_terminal_readback(runtime_profile: str) -> None:
     payload = build_heartbeat_prompt(
         goal_id="terminal-settlement-fixture",
         thin=True,
-        runtime_profile="codex_app_ssh_goal",
+        runtime_profile=runtime_profile,
     )
     task_body = " ".join(payload["task_body"].split())
 

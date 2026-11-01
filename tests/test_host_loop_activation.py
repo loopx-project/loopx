@@ -200,6 +200,7 @@ def test_first_class_hosts_bind_one_runtime_profile(
     ("runtime_profile", "expected"),
     (
         ("ark_managed_agent_goal", True),
+        ("codex_app_goal", True),
         ("codex_app_ssh_goal", True),
         ("codex_cli", True),
         ("codex_app_heartbeat", False),
@@ -328,7 +329,7 @@ def test_deepseek_harness_native_is_distinct_same_session_host() -> None:
 
 @pytest.mark.parametrize(
     "runtime_profile",
-    ("ark_managed_agent_goal", "codex_app_ssh_goal"),
+    ("ark_managed_agent_goal", "codex_app_ssh_goal", "codex_app_goal"),
 )
 def test_goal_hosts_delegate_spend_to_live_settlement_not_static_templates(
     runtime_profile: str,
@@ -393,7 +394,7 @@ def test_heartbeat_prompt_commands_keep_explicit_runtime_root() -> None:
 
 @pytest.mark.parametrize(
     "runtime_profile",
-    ("ark_managed_agent_goal", "codex_app_ssh_goal"),
+    ("ark_managed_agent_goal", "codex_app_ssh_goal", "codex_app_goal"),
 )
 def test_goal_hosts_enter_live_contract_without_a_mandatory_skill_detour(
     runtime_profile: str,
@@ -429,6 +430,7 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
         runtime_profile="codex_app_heartbeat",
     )
     goal_hosts = [
+        build_heartbeat_prompt(**common, runtime_profile="codex_app_goal"),
         build_heartbeat_prompt(**common, runtime_profile="codex_app_ssh_goal"),
         build_heartbeat_prompt(**common, runtime_profile="codex_cli"),
         build_heartbeat_prompt(**common, runtime_profile="ark_managed_agent_goal"),
@@ -487,6 +489,7 @@ def test_native_codex_goal_wait_rule_matches_blocked_resume_contract() -> None:
     ("runtime_profile", "expected_host"),
     (
         ("ark_managed_agent_goal", "Ark Managed Agent goal prompt"),
+        ("codex_app_goal", "visible Codex /goal task body"),
         ("codex_app_ssh_goal", "visible Codex /goal task body"),
         ("codex_cli", "visible Codex /goal task body"),
     ),
