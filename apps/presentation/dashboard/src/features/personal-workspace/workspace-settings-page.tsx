@@ -181,7 +181,7 @@ export function WorkspaceSettingsPage({
         </fieldset>
         <label className="personal-settings-mobile-category">
           <span>{t("settings.categories")}</span>
-          <select value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
+          <select aria-label={t("settings.categories")} value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
             {tabs.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
           </select>
         </label>
