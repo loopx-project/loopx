@@ -27,6 +27,10 @@ from ..effect_runtime import (
     effect_runtime_result,
 )
 from .completion_policy import build_completion_policy_request
+from .completed_archive import (
+    ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+    DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE,
+)
 from .completion_transaction import require_completion_successor_todo_ids
 from .completion_validation import (
     resolve_private_completion_validation_declaration,
@@ -517,7 +521,7 @@ def terminal_canonical_todo_if_promoted(
         "mutation_authority": terminal_decision,
         "task_lease_fence": terminal_decision,
     }
-    return _projection_payload(
+    settled = _projection_payload(
         settle_canonical_todo_projection(
             response,
             registry_path=registry_path,
@@ -527,6 +531,62 @@ def terminal_canonical_todo_if_promoted(
             state_file=state_file,
         )
     )
+    target_role = str(target.get("role") or role or "agent")
+    if (
+        not dry_run
+        and command == "complete"
+        and payload.get("changed") is True
+        and target_role in {"user", "agent"}
+    ):
+        active_done_before = sum(
+            1
+            for item in canonical.get("todos", [])
+            if isinstance(item, Mapping)
+            and str(item.get("role") or "agent") == target_role
+            and item.get("archive_state") != "archive"
+            and (
+                item.get("status") == "done"
+                or (item.get("done") is True and item.get("status") != "deferred")
+            )
+        )
+        active_done_after = active_done_before + (
+            0
+            if target.get("status") == "done"
+            or (target.get("done") is True and target.get("status") != "deferred")
+            else 1
+        )
+        if active_done_after > DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE:
+            try:
+                archived = archive_canonical_todos_if_promoted(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    role=target_role,
+                    max_active_done=ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+                    dry_run=False,
+                    project=project,
+                    state_file=state_file,
+                )
+                if isinstance(archived, Mapping):
+                    settled["auto_archive"] = {
+                        "status": archived.get("status"),
+                        "role": target_role,
+                        "moved_count": archived.get("moved_count", 0),
+                        "moved_todo_ids": archived.get("moved_todo_ids", []),
+                        "active_done_before": archived.get("active_done_before"),
+                        "active_done_after": archived.get("active_done_after"),
+                        "max_active_done": ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+                        "provider_revision": archived.get("provider_revision"),
+                    }
+            except Exception as error:  # noqa: BLE001 - completion already committed
+                settled["auto_archive"] = {
+                    "status": "pending",
+                    "role": target_role,
+                    "reason_code": "auto_archive_unavailable",
+                    "error_class": error.__class__.__name__,
+                    "retryable": True,
+                }
+    return settled
 
 
 def archive_canonical_todos_if_promoted(

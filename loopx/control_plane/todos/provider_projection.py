@@ -24,6 +24,7 @@ from ..coordination.local_authority import (
     local_authority_is_promoted,
 )
 from .machine_section_projection import (
+    DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT,
     TodoSectionProjectionError,
     render_canonical_todo_sections,
 )
@@ -140,6 +141,11 @@ def project_current_canonical_todos(
                     runtime_root=runtime_root,
                     goal_id=goal_id,
                     todos=authority_read["todos"],
+                ),
+                max_projected_archive_records=(
+                    DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT
+                    if authority_read.get("source_authority") == "sqlite_v0"
+                    else None
                 ),
             )
             if execute and projection.changed:

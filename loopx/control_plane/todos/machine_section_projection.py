@@ -56,6 +56,7 @@ from ..content_digest import BARE_SHA256_PATTERN
 
 
 TODO_SECTION_PROJECTION_SCHEMA_VERSION = "loopx_todo_section_projection_v0"
+DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT = 20
 _MARKER_PATTERN = re.compile(
     r"(?m)^<!-- loopx:todo-section-projection-v0 "
     r"role=(?P<role>user|agent|archive) "
@@ -407,12 +408,62 @@ def _parity_records(records: Sequence[Mapping[str, object]]) -> list[dict[str, o
     ]
 
 
+def _active_referenced_todo_ids(
+    active_records: Sequence[Mapping[str, object]],
+) -> set[str]:
+    referenced: set[str] = set()
+    for record in active_records:
+        raw_resume = record.get("resume_when")
+        if not isinstance(raw_resume, str):
+            continue
+        for clause in re.split(r"[,;]", raw_resume):
+            token = clause.strip()
+            if token.startswith("todo_done:"):
+                target_id = token.partition(":")[2].strip()
+                if target_id:
+                    referenced.add(target_id)
+    return referenced
+
+
+def _select_projected_archive_records(
+    archived: list[dict[str, object]],
+    *,
+    active_records: Sequence[Mapping[str, object]],
+    max_projected_archive_records: int | None,
+) -> list[dict[str, object]]:
+    if max_projected_archive_records is None:
+        return archived
+    if isinstance(max_projected_archive_records, bool) or not isinstance(
+        max_projected_archive_records, int
+    ) or max_projected_archive_records < 0:
+        raise TodoSectionProjectionError(
+            "max_projected_archive_records must be a non-negative integer or None"
+        )
+    if len(archived) <= max_projected_archive_records:
+        return archived
+    referenced_ids = _active_referenced_todo_ids(active_records)
+    tail_records = (
+        archived[-max_projected_archive_records:]
+        if max_projected_archive_records > 0
+        else []
+    )
+    retained_ids = referenced_ids | {
+        str(record.get("todo_id") or "") for record in tail_records
+    }
+    return [
+        record
+        for record in archived
+        if str(record.get("todo_id") or "") in retained_ids
+    ]
+
+
 def render_canonical_todo_sections(
     markdown: str,
     records: Sequence[Mapping[str, object]],
     *,
     provider_revision: str,
     private_validation_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+    max_projected_archive_records: int | None = None,
 ) -> TodoSectionProjectionResult:
     """Replace only Todo sections and verify deterministic parse/render parity."""
 
@@ -483,9 +534,14 @@ def render_canonical_todo_sections(
         )
         for role in TODO_SECTION_HEADINGS
     }
-    archived = sorted(
-        [record for record in canonical if record.get("archive_state") == "archive"],
-        key=_record_sort_key,
+    all_active = [*by_role["user"], *by_role["agent"]]
+    archived = _select_projected_archive_records(
+        sorted(
+            [record for record in canonical if record.get("archive_state") == "archive"],
+            key=_record_sort_key,
+        ),
+        active_records=all_active,
+        max_projected_archive_records=max_projected_archive_records,
     )
     newline = "\r\n" if "\r\n" in markdown else "\n"
     rendered_sections: dict[str, str] = {}
@@ -567,6 +623,7 @@ def inspect_todo_section_projection(markdown: str) -> dict[str, object]:
 
 
 __all__ = [
+    "DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT",
     "TODO_SECTION_PROJECTION_SCHEMA_VERSION",
     "TodoSectionProjectionError",
     "TodoSectionProjectionResult",
