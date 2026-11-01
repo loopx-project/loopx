@@ -4181,14 +4181,13 @@ def test_visible_goal_capability_reentry_preserves_turn_through_selection(
 
     assert first_rc == 0, first
     turn_instance_id = first["heartbeat_receipt"]["turn_instance_id"]
+    reentry_packet = first["interaction_contract"]["cli_channel"]["runtime_capability_reentry"]
     if fallback_available:
         assert first["interaction_contract"]["cli_channel"]["selection_required"] is True
         assert first["selected_todo"]["todo_id"] == TODO_ID
         assert first["interaction_contract"]["agent_channel"]["next_task_action"]["kind"] == "capability_verification"
-        assert first["interaction_contract"]["cli_channel"]["next_cli_actions"][0] == first["runtime_capability_reentry"]["candidates"][0]["command"]
-    reentry_command = first["runtime_capability_reentry"]["candidates"][0][
-        "command"
-    ]
+        assert first["interaction_contract"]["cli_channel"]["next_cli_actions"][0] == reentry_packet["candidates"][0]["command"]
+    reentry_command = reentry_packet["candidates"][0]["command"]
     assert f"--turn-instance-id {turn_instance_id}" in reentry_command
 
     reentry_rc, reentry = _run_generated_cli(

@@ -273,7 +273,9 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     code, warm = _run_cli(registry, runtime, *args, cwd=project, raw_guard=False)
     assert code == 0 and warm["mode"] == "delta", warm
     complete_reader(warm)
-    old_generation = read_context_read_reference(warm["reference_file"])[1]["navigation"]["target"].get("continuity_generation")
+    old_generation = read_context_read_reference(
+        warm["reference_file"]
+    )[1]["navigation"]["target"].get("continuity_generation")
     configuration_file = runtime / "machine/configuration.json"
     old_configuration = configuration_file.read_bytes() if configuration_file.exists() else None
     assert (old_generation is None) is (stored_mode is None)
