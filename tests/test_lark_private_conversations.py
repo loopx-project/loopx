@@ -242,7 +242,7 @@ def connect_group(fixture):
 
 
 @pytest.mark.parametrize("info, pending", [("usageLimitExceeded", 1), ("cyberPolicy", 0), (None, 0)])
-def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(ordinary, info, pending):  # noqa: F811
+def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(ordinary, monkeypatch, info, pending):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     fake = ordinary[-2]
     fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
@@ -259,6 +259,11 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
         transport.reconcile()
         saved = json.loads((transport.root / f"{row['request_ref']}.json").read_text())
         assert saved["status"] == "delivered" and saved["deliveries"]["terminal"]["verified"]
+        if not pending:
+            # The typed owner can exclude completed/non-quota work without
+            # scanning unrelated events or source-control journals.
+            monkeypatch.setattr(store, "events_after", lambda *_: pytest.fail("not quota backlog"))
+            monkeypatch.setattr(transport.core, "pending", lambda: pytest.fail("not quota backlog"))
         assert transport.health()[row["binding_id"]]["pending_count"] == pending
         before = ordinary[4].read_bytes(), list(provider.writes)
         restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
@@ -266,6 +271,87 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
         assert restarted.health()[row["binding_id"]] == {"pending_count": pending, "recovery_count": 0}
         assert (ordinary[4].read_bytes(), provider.writes) == before
         assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["stop", "new"])
+def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, monkeypatch, command):  # noqa: F811
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.control_plane import effect_runtime
+
+    store, runtime, provider, transport = connect(ordinary)
+    fake = ordinary[-2]
+    fake.write_text(fake.read_text().replace('"codexErrorInfo": "cyberPolicy"',
+        '"codexErrorInfo": "usageLimitExceeded"').replace(
+        '            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', ''))
+    try:
+        binding = transport._binding("notes-app")
+        rows = []
+        for index in range(8):
+            event = provider.event("notes-app", f"health-quota-{index}", "typed terminal failure")
+            transport.admit("notes-app", event)
+            row = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+            turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+            assert turn["status"] == "failed" and turn["error_code"] == "usage_limit_exceeded"
+            transport.reconcile()
+            rows.append(row)
+
+        def durable_state():
+            paths = {path for root in (transport.root, transport.core.root) for path in root.glob("*.json")}
+            paths.update(path for path in store.sessions_root.rglob("*") if path.suffix in {".json", ".jsonl"})
+            return {path: path.read_bytes() for path in paths}
+
+        before = durable_state()
+        effects = ordinary[4].read_bytes(), list(provider.writes)
+        reads = []
+        revisions = []
+        read_json = external_conversations._read_json
+        fingerprint = effect_runtime._runtime_fingerprint
+
+        def counted_read(path):
+            if path.parent == transport.core.root and re.fullmatch(r"[a-f0-9]{24}", path.stem):
+                reads.append(path)
+            return read_json(path)
+
+        monkeypatch.setattr(external_conversations, "_read_json", counted_read)
+        def counted_revision():
+            revisions.append(True)
+            return fingerprint()
+
+        monkeypatch.setattr(effect_runtime, "_runtime_fingerprint", counted_revision)
+        expected = {"pending_count": len(rows), "recovery_count": 0}
+        assert transport.health()[binding["binding_id"]] == expected
+        # Correlation reads plus one complete control observation, rather than
+        # a complete journal scan for each historical terminal request.
+        assert len(reads) <= 3 * len(rows)
+        assert len(revisions) <= 1  # One managed runtime revision for the health request.
+        assert durable_state() == before
+        assert (ordinary[4].read_bytes(), provider.writes) == effects
+
+        # Durable control observations must keep all three existing fences.
+        # These synthetic journal records are inputs, not new admissions.
+        for index, change in enumerate([
+            {"binding_id": "f" * 24},
+            {"source": dict(rows[0]["source"], source_ref="e" * 24)},
+            {"created_at": "2000-01-01T00:00:00+00:00"},
+        ]):
+            control_row = dict(rows[0], command=command, **change)
+            (transport.core.root / f"{index + 1:024x}.json").write_text(json.dumps(control_row))
+        # The journal reader already tolerates damaged JSON and ignores
+        # non-request metadata; observation reuse must retain that behavior.
+        (transport.core.root / ("d" * 24 + ".json")).write_text("{")
+        (transport.core.root / "metadata.json").write_text(json.dumps(dict(rows[0], command=command)))
+        assert transport.health()[binding["binding_id"]] == expected
+        assert all(transport.core.quota_backlog_pending(row) for row in rows)
+
+        # An actual later control must reach both a new health observation and
+        # the default recovery check, independently of the previous snapshot.
+        control = provider.event("notes-app", "health-control", f"/{command}")
+        transport.admit("notes-app", control)
+        assert transport.health()[binding["binding_id"]]["pending_count"] == 1  # undelivered control
+        assert all(not transport.core.quota_backlog_pending(row) for row in rows)
+        assert all(not transport.core.context_recovery_candidate(row["request_ref"]) for row in rows)
     finally:
         runtime.close()
 
@@ -3029,6 +3115,57 @@ def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_
         release.set()
         worker.join(10)
 
+
+
+def test_private_scanner_recovers_inside_its_live_pool_without_restarting_requests(tmp_path, monkeypatch, caplog):
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    release, full, recovered = threading.Event(), threading.Event(), threading.Event()
+    calls, pools, scans = [], [], []
+    pool_factory = module.ThreadPoolExecutor
+
+    def make_pool(*args, **kwargs):
+        pool = pool_factory(*args, **kwargs)
+        pools.append(pool)
+        return pool
+
+    class Pending:
+        def pending_delivery_paths(self):
+            return [tmp_path / str(index) for index in range(9)]
+
+        def reconcile_request(self, path):
+            calls.append(path)
+            if len(calls) == 4:
+                full.set()
+            assert release.wait(10)
+            return 0
+
+    monkeypatch.setattr(module, "ThreadPoolExecutor", make_pool)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=Pending())
+    clear = service._delivery_wakeup.clear
+
+    def fail_once():
+        scans.append(True)
+        if len(scans) == 2:
+            raise AssertionError("private synthetic scanner detail")
+        clear()
+        if len(scans) > 2:
+            recovered.set()
+
+    monkeypatch.setattr(service._delivery_wakeup, "clear", fail_once)
+    service.start()
+    service._delivery_worker.retry_seconds = .01  # Only this disposable scanner's failure wait.
+    try:
+        assert full.wait(3)
+        assert recovered.wait(4), "Scanner recovery must not wait for unrelated in-flight writes to drain"
+        assert len(pools) == 1 and len(calls) == 4 and len(set(calls)) == 4
+        assert "private synthetic scanner detail" not in caplog.text
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
+    assert not service._delivery_thread.is_alive() and len(calls) == 4
 
 
 def test_completed_command_recovery_defers_app_probe_and_revocation_blocks_reply(ordinary):  # noqa: F811

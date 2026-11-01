@@ -64,6 +64,30 @@ test("refinement retains original intent, accumulates requirements and cannot in
     {...goalRef, goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, "author", patch()), /lifetime/);
 });
 
+for (const outcomeId of ["tour", "middle", "last"]) test(`refining ${outcomeId} preserves unrelated outcome positions and content`, () => {
+  const head = fixture();
+  for (const id of ["tour", "middle", "last"])
+    head.goal_outcomes = refineGoalOutcome(head, goal, null, "author", patch({outcome_id: id}));
+  const before = structuredClone(head);
+  const next = refineGoalOutcome(head, goal, null, "author", {outcome_id: outcomeId,
+    review: [{id: "opening", conclusion: "unmet", note: "The opening still needs correction.", evidence_refs: ["artifact:check"]}]});
+  assert.deepEqual(head, before, "refinement cannot mutate its source snapshot");
+  assert.deepEqual(next.outcomes.map(row => row.id), ["tour", "middle", "last"]);
+  for (const row of next.outcomes) {
+    const prior = before.goal_outcomes.outcomes.find((item: JsonObject) => item.id === row.id);
+    if (row.id !== outcomeId) assert.deepEqual(row, prior);
+    else {
+      assert.equal(row.revision, prior.revision + 1);
+      assert.deepEqual(row.requirements, prior.requirements);
+      assert.deepEqual(row.sources, prior.sources);
+      assert.equal(row.review!.items[0].conclusion, "unmet");
+    }
+  }
+  const appended = refineGoalOutcome({...head, goal_outcomes: next}, goal, null, "author", patch({outcome_id: "new"}));
+  assert.deepEqual(appended.outcomes.map(row => row.id), ["tour", "middle", "last", "new"]);
+  assert.deepEqual(appended.outcomes.slice(0, 3), next.outcomes, "a new outcome cannot rewrite existing ones");
+});
+
 test("only matching current acceptance and work coverage can qualify requirements", () => {
   const head = fixture(); head.goal_outcomes = refineGoalOutcome(head, goal, null, "author", patch());
   const accepted = {enabled: true, status: "accepted", criteria: [{id: "opening", description: "Keep the opening"}],

@@ -500,7 +500,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive", "app_progressive_large"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -517,7 +517,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     benchmark = host in ("benchmark", "benchmark_progressive")
-    progressive = host in ("app_progressive", "benchmark_progressive")
+    progressive = host in ("app_progressive", "benchmark_progressive", "app_progressive_large")
+    large_capture = host == "app_progressive_large"
+    unicode_requirement = "保留原始目标、范围与停止条件🙂\n" * 120
+    supporting_material = "资料🙂" * 390_000 if large_capture else ""
     binary, env, workspace, home = _native_fixture(tmp_path)
     env.update(NODE_OPTIONS="--experimental-sqlite", LOOPX_USAGE_PING="0")
     env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
@@ -535,8 +538,16 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         code, decision = _run_cli(registry, runtime, "quota", "should-run", "--goal-id", GOAL_ID,
             "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "saved-native-turn", "--codex-app", cwd=project)
         assert code == 0, decision
+        if large_capture:
+            # Unknown supporting fields are part of the saved capture's
+            # forward-compatible lossless contract. Only the requested field
+            # should enter model input; the full material must remain recoverable.
+            decision["retained_material"] = {
+                "requirement": unicode_requirement, "supporting": supporting_material}
         source = workspace / (name + "-source.json")
         source.write_text(json.dumps(decision, ensure_ascii=False))
+        if large_capture:
+            assert 2 * 1024 * 1024 < source.stat().st_size < 8 * 1024 * 1024
         sources.append((source, source.read_bytes()))
     receipts = _heartbeat_receipt_count(runtime, "saved-native-turn")
     context, cache = workspace / "context", workspace / "cache"
@@ -559,13 +570,21 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     phase, queue, observed, errors = "cold", [], {}, []
     read_offsets = {}
     actual_turn = None
+    rejected_read = False
 
     def response(request, number, message):
-        nonlocal phase, queue, actual_turn, receipts
+        nonlocal phase, queue, actual_turn, receipts, rejected_read
         try:
             if continuation := native_process_continuation(request, f"projection_{number}",
                     code_mode=host == "app_code_mode"):
                 return continuation
+            if rejected_read:
+                output = [item["output"] for item in request["input"]
+                    if item.get("type") in ("function_call_output", "custom_tool_call_output")][-1]
+                rejected = json.loads(output.split("\nOutput:\n", 1)[-1])
+                assert rejected["ok"] is False and "content" not in rejected
+                assert "digest" in rejected["reason"]
+                rejected_read = False
             if queue:
                 command = queue.pop(0)
             elif phase in ("cold", "warm"):
@@ -596,7 +615,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
                 navigation = json.loads(output.split("\nOutput:\n", 1)[-1])
                 descriptor = machine_reference_oracle(navigation)
-                assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
+                # A selectively read large capture cannot become a retained
+                # full baseline; its next projection must remain full.
+                assert descriptor["ok"] and descriptor["mode"] == (
+                    "full" if name == "cold" or large_capture else "delta")
                 if benchmark:
                     assert len(json.dumps(navigation, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
                 data = Path(descriptor["path"]).read_bytes()
@@ -615,7 +637,21 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     # reader in native model input; never consume either file in full.
                     assert "content" not in descriptor
                     queue = [navigation["recovery"]["command"] + " --list", navigation["recovery"]["command"]
-                        + " --select /goal_id --select /heartbeat_receipt"]
+                        + " --select /goal_id --select /heartbeat_receipt"
+                        + (" --select /retained_material/requirement" if large_capture else "")]
+                    if large_capture:
+                        # Reject a different digest through the real native CLI,
+                        # then continue with the unchanged original reference.
+                        argv = shlex.split(navigation["recovery"]["command"])
+                        index = argv.index("--reference-file") + 1
+                        reference = json.loads(Path(argv[index]).read_text())
+                        reference["sha256"] = "0" * 64
+                        damaged = workspace / (name + "-damaged.reader.json")
+                        damaged.write_text(json.dumps(reference))
+                        damaged.chmod(0o600)
+                        argv[index] = str(damaged)
+                        queue.insert(0, shlex.join(argv))
+                        rejected_read = True
                 phase = name + "_read"
                 if not queue:
                     return response(request, number, message)
@@ -630,6 +666,11 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     assert values["/goal_id"] == GOAL_ID
                     assert values["/heartbeat_receipt"]["turn_instance_id"] == (
                         actual_turn if benchmark else "saved-native-turn")
+                    if large_capture:
+                        assert page["offset"] == 0 and page["eof"]
+                        assert len(page["content"].encode()) == page["total_bytes"]
+                        assert values["/retained_material/requirement"] == unicode_requirement
+                        assert "资料🙂" not in _input_text(request)
                     native_context = home / "loopx-context" if benchmark else context
                     assert "candidate" not in json.loads((native_context / "session.json").read_bytes())
                 else:
@@ -744,6 +785,9 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
         assert current["target"] == descriptor["target"]
         restored = restore_context_delivery(wire, baseline=baseline, current=current)
         assert restored["context"] == projected
+        if large_capture:
+            assert restored["context"]["retained_material"] == {
+                "requirement": unicode_requirement, "supporting": supporting_material}
         if wire["mode"] == "delta":
             assert restored["mode"] == "delta"  # A fallback would hide a broken baseline chain.
         # Match the native journal's exact prior full capture and depth. The

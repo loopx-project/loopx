@@ -89,6 +89,10 @@ def test_colon_prefixed_unix_paths_keep_the_existing_boundary() -> None:
         "sk_live_51H8" + "aBcDeFgHiJkL",
         "npm_" + "a1B2c3D4e5F6g7H8i9J0",
         "pypi-AgEIcHlwaS5vcmc" + "AAAAAAAAAA",
+        "sk-proj-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+        "sk-svcacct-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+        "sk-admin-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
+        "sk-ant-api03-" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0",
         "eyJhbGciOiJIUzI1NiJ9" + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0" + ".SflKxwRJSMeKKF2QT4f",
     ],
 )
@@ -109,9 +113,13 @@ def test_unlabeled_provider_tokens_fail_the_boundary_scan(token: str) -> None:
         "AWS key ids start AKIA and ASIA, then sixteen more characters",
         "pypi- prefix alone is not a token",
         "sk-proj-abcdefghijklmnop is an OpenAI project key shape",
+        "sk-svcacct-abcdefghijklmnop is a short example",
+        "sk-admin-abcdefghijklmnop is a short example",
+        "sk-ant-abcdefghijklmnop is a short example",
+        "sk-custom-" + "abcdefghijklmnopqrstuvwx",
     ],
 )
-def test_ordinary_prose_and_unclaimed_shapes_stay_public(text: str) -> None:
+def test_ordinary_prose_and_short_provider_lookalikes_stay_public(text: str) -> None:
     assert public_safety.scan_public_boundary_text(text) == {
         "ok": True,
         "warnings": [],

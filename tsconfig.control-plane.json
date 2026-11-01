@@ -15,6 +15,7 @@
   "include": [
     "loopx/control_plane/**/*.ts",
     "loopx/zcode_goal_mode/**/*.ts",
+    "tests/control_plane_ts/background_services.test.ts",
     "tests/control_plane_ts/explore_research.test.ts",
     "tests/control_plane_ts/explore_research_execution.test.ts",
     "tests/control_plane_ts/usage_statistics.test.ts",

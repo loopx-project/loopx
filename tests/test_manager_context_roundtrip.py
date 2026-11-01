@@ -1266,6 +1266,12 @@ def test_host_recovery_returns_the_original_result_once(flow, monkeypatch):
     report(root, "research", "worker", rid, "conclusion", "Original result after host recovery.")
     original, attempts, sends = roundtrip.drain, [], []
     sent = threading.Event()
+    provenance = roundtrip.recover_source_chat_provenance
+    starts = []
+
+    def discover(*args, **kwargs):
+        starts.append(True)
+        return provenance(*args, **kwargs)
 
     def failed_once(*args, **kwargs):
         attempts.append(True)
@@ -1279,6 +1285,7 @@ def test_host_recovery_returns_the_original_result_once(flow, monkeypatch):
         return {"reply_verified": True, "idempotency_key": "sha256:synthetic-proof"}
 
     monkeypatch.setattr(roundtrip, "drain", failed_once)
+    monkeypatch.setattr(roundtrip, "recover_source_chat_provenance", discover)
     service = ReturnService(root, registry, store, transport)
     service.start()
     service.start()
@@ -1288,6 +1295,7 @@ def test_host_recovery_returns_the_original_result_once(flow, monkeypatch):
         service.close()
     drain(root, registry, store, transport)
     assert sends == [True]
+    assert starts == [True], "Step recovery must retain its scope instead of replaying startup discovery"
     state = json.loads((_root(root) / "replies" / rid / "conclusion.delivery.json").read_text())
     assert state["status"] == "delivered"
 

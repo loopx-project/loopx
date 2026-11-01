@@ -75,3 +75,80 @@ def test_completed_work_is_not_replayed_by_another_start():
     worker.start()
     assert calls == [True]
     worker.close()
+
+
+def test_periodic_steps_share_wait_retry_and_keep_their_live_scope(caplog, monkeypatch):
+    stop = threading.Event()
+    calls, waits, failures = [], [], []
+    scope = object()
+
+    def step():
+        calls.append(scope)
+        if len(calls) == 2:
+            raise RuntimeError("private synthetic detail")
+        return 2 if len(calls) == 1 else None
+
+    def wait(delay):
+        waits.append(delay)
+        if len(waits) == 3:
+            stop.set()
+
+    monkeypatch.setattr(stop, "wait", wait)
+    worker = HostedWorker(name="synthetic-periodic", stop=stop, retry_seconds=.25,
+        target=lambda: worker.repeat(step, interval_seconds=4, wait=wait,
+                                     on_error=lambda: failures.append(True)))
+    worker.start()
+    worker.thread.join(2)
+    assert not worker.thread.is_alive()
+    assert calls == [scope, scope, scope] and waits == [2, .25, 4]
+    assert failures == [True] and "private synthetic detail" not in caplog.text
+
+
+def test_periodic_step_failure_is_terminal_without_explicit_retry():
+    calls = []
+
+    def step():
+        calls.append(True)
+        raise RuntimeError("synthetic stop")
+
+    worker = HostedWorker(name="synthetic-periodic-once", stop=threading.Event(),
+        target=lambda: worker.repeat(step, interval_seconds=1))
+    worker.start()
+    worker.thread.join(2)
+    worker.start()
+    assert not worker.thread.is_alive() and calls == [True]
+
+
+def test_invalid_step_delay_uses_failure_backoff_instead_of_spinning(monkeypatch):
+    stop, waits, failures = threading.Event(), [], []
+
+    def wait(delay):
+        waits.append(delay)
+        stop.set()
+
+    monkeypatch.setattr(stop, "wait", wait)
+    worker = HostedWorker(name="synthetic-invalid-delay", stop=stop, retry_seconds=3,
+        target=lambda: worker.repeat(lambda: float("nan"), interval_seconds=1,
+                                     wait=wait, on_error=lambda: failures.append(True)))
+    worker.start()
+    worker.thread.join(2)
+    assert waits == [3] and failures == [True]
+
+
+def test_wakeup_hint_cannot_bypass_failure_backoff(monkeypatch):
+    stop, waits, hints = threading.Event(), [], []
+
+    def step():
+        raise OSError("synthetic scanner failure")
+
+    def backoff(delay):
+        waits.append(delay)
+        stop.set()
+
+    monkeypatch.setattr(stop, "wait", backoff)
+    worker = HostedWorker(name="synthetic-hint", stop=stop, retry_seconds=3,
+        target=lambda: worker.repeat(step, interval_seconds=1,
+                                     wait=lambda delay: hints.append(delay)))
+    worker.start()
+    worker.thread.join(2)
+    assert waits == [3] and hints == []

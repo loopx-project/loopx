@@ -88,29 +88,53 @@ class ChatExternalConversations:
         })
 
     def _source_stop_observed(self, row: dict[str, Any], turn: dict[str, Any],
-                              events: list[dict[str, Any]]) -> bool:
+                              events: list[dict[str, Any]], *,
+                              source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Read the same durable source controls for recovery and display."""
         return (any(event.get("kind") in {"turn.interrupt_requested", "turn.interrupted"} for event in events)
             or (turn.get("status") in {"failed", "completed"} and any(
                 item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"]
                 and item.get("command") in {"stop", "new"}
                 and datetime.fromisoformat(item["created_at"]) >= datetime.fromisoformat(row["created_at"])
-                for item in self.pending())))
+                for item in (source_controls or self.pending)())))
 
-    def quota_backlog_pending(self, row: dict[str, Any]) -> bool:
+    def quota_backlog_observer(self) -> Callable[[dict[str, Any]], bool]:
+        """Share lazy journal IO within one read-only observation, never admission."""
+        controls: list[dict[str, Any]] | None = None
+
+        def read_controls() -> list[dict[str, Any]]:
+            nonlocal controls
+            if controls is None:
+                controls = self.pending()
+            return controls
+
+        return lambda row: self.quota_backlog_pending(row, source_controls=read_controls)
+
+    def quota_backlog_pending(self, row: dict[str, Any], *,
+                              source_controls: Callable[[], list[dict[str, Any]]] | None = None) -> bool:
         """Project existing work without resolving providers or admitting recovery."""
         from ...control_plane.effect_runtime import effect_runtime_result
 
         store = self.controller.store
         session = store.load_session(row["session_id"])
         turn = store.load_turn(row["session_id"], row["turn_id"])
-        events = store.events_after(row["session_id"], row["turn_id"], None) if turn else []
-        return effect_runtime_result("collaboration.conversation.request", {
+        observation = {"turn": turn, "stop_observed": False}
+        params = {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session,
-            "pending_observation": {"turn": turn,
-                "stop_observed": self._source_stop_observed(row, turn, events) if turn else False},
-        }).get("pending") is True
+            "pending_observation": observation,
+        }
+        # The typed owner first excludes work that is not quota backlog even
+        # without a stop. Stop evidence can only remove a pending request;
+        # never expose a positive result before reading those native facts.
+        if effect_runtime_result("collaboration.conversation.request", params).get("pending") is not True:
+            return False
+        assert turn is not None  # Required by the typed pending projection.
+        events = store.events_after(row["session_id"], row["turn_id"], None)
+        if self._source_stop_observed(row, turn, events, source_controls=source_controls):
+            observation["stop_observed"] = True
+            return effect_runtime_result("collaboration.conversation.request", params).get("pending") is True
+        return True
 
     def context_recovery_candidate(self, request_ref: str) -> bool:
         """Discovery only; every authority and native fact is re-read at admission."""

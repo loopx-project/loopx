@@ -1025,6 +1025,7 @@ jobs:
           tests/control_plane_ts/quota_void_commit.test.ts
           tests/control_plane_ts/shadow_entry_delivery.test.ts
           tests/control_plane_ts/sqlite_backup.test.ts
+          tests/control_plane_ts/task_lease_workspace.test.ts
 
       - name: Install the frontend dependencies for a source rebuild
         working-directory: apps/presentation/dashboard
