@@ -4,6 +4,7 @@ import {planConversationBinding, resolveBoundConversation, planBoundConversation
   stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget,
   listLocalBoundSessions} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {stewardManagedBasis} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
   audience: "local_owner", grant: "workspace_read"};
@@ -16,6 +17,38 @@ const observation = {transport_ref: row.transport_ref, provider_ref: row.provide
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
+
+for (const endpoint of ["codex", "antigravity", "kiro-cli"]) {
+  test(`retained steward identity permits bound reads after selecting ${endpoint}`, () => {
+    const actor = {schema_version: "loopx_steward_managed_actor_v0",
+      goal_id: `steward-agent-${"8".repeat(24)}`, goal_instance_id: null, agent_id: "steward",
+      session_id: "7".repeat(32), source_ref: "6".repeat(24), creation_operation_id: "original-creation"};
+    const steward = {...row, binding_id: "8".repeat(24), transport_ref: "owner-steward",
+      provider_ref: "9".repeat(24), context_kind: "steward", grant: "portfolio_read", goal_ids: [],
+      executor_endpoint_id: endpoint, managed_actor: actor};
+    const configured = {...planConversationBinding(request).state, bindings: [row, steward]};
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const notes = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: [project], ...source});
+    assert.deepEqual(notes.binding, row, "An unrelated steward cannot block project admission");
+    const selected = resolveBoundConversation({current: configured, binding_id: steward.binding_id,
+      observation: {...observation, transport_ref: steward.transport_ref, provider_ref: steward.provider_ref},
+      available_projects: [project], ...source});
+    assert.deepEqual(selected.binding.managed_actor, actor);
+    assert.equal(selected.binding.executor_endpoint_id, endpoint);
+    for (const invalid of [{...steward, context_kind: "project", grant: "workspace_read"},
+      {...steward, audience: "group", group_refs: ["5".repeat(24)]},
+      {...steward, managed_actor: {...actor, agent_id: "another-agent"}}]) {
+      assert.throws(() => resolveBoundConversation({current: {...configured, bindings: [row, invalid]},
+        binding_id: row.binding_id, observation, available_projects: [project], ...source}));
+    }
+    if (endpoint !== "codex") {
+      assert.throws(() => stewardManagedBasis({binding: steward,
+        session: {steward_context: selected.context}, observation}), /original idle private steward/,
+      "Retaining an identity cannot authorize unsupported native execution");
+    }
+  });
+}
 
 test("unfinished completed work requires typed intent and latest settled native/source proof, once", () => {
   const configured = planConversationBinding(request).state;
