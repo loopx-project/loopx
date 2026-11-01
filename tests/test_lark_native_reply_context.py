@@ -113,7 +113,10 @@ def test_reference_read_is_bounded_and_unavailable_is_explicit(ordinary, parent_
             assert "Review layout only." in message
             assert "HIDDEN CALLBACK PAYLOAD" not in message
         elif parent_kind == "long":
-            assert "OUTSIDE CONTEXT BUDGET" not in message
+            # Bounded head+tail excerpt: the tail survives with the middle
+            # explicitly elided, and the encoded budget still holds.
+            assert "OUTSIDE CONTEXT BUDGET" in message
+            assert "chars omitted" in message
             assert '"complete":false' in message and len(message) < 4500
         else:
             assert "Referenced message context could not be read" in message
