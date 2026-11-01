@@ -6,6 +6,14 @@ validation only; resolving a source merge followed by a build produces one
 coherent HTML/JavaScript/CSS set. Do not concatenate competing HTML entrypoints or
 asset-retention manifests when resolving an older PR.
 
+The source launcher (`bash scripts/dashboard-dev.sh`, also used by source-mode
+`loopx dashboard`) needs Node.js 22.22.3 or newer for the control plane, even
+when an older Node can run Vite. It uses the runtime's existing version rule,
+tries compatible installed NVM candidates, and rejects unsupported runtimes
+before installing frontend dependencies. For a UI-only preview, run
+`npm run dev:web` in `apps/presentation/dashboard`; that command does not start
+the control plane or change the installed runtime.
+
 For owner-authorized reads of existing runtimes, shared access lives in
 `loopx.control_plane.status.goal_source`. Native status and Explore owners retain
 their semantics; this Python IO provider adds neither decisions nor lifecycle
