@@ -265,3 +265,60 @@ def test_case_folded_negated_glob_class_excludes_unicode_alias(scope_goal, scope
     allowed = cli("task-lease", "acquire", "--todo-id", "todo_scope_b", "--owner", "agent-b",
         "--idempotency-key", "unicode-negated-b", "--write-scope", target, "--expected-version", "0")
     assert allowed["acquired"]
+
+
+@pytest.mark.parametrize("first_scope,second_scope,conflict", [
+    ("src/", "src/components/*.ts", True),
+    ("src/", "src/main.*", True),
+    ("src/", "**/*.ts", True),
+    ("src/components/", "src/*/*.ts", True),
+    ("src/", "src/components/?.ts", True),
+    ("src/SS/", "src/[ß]/*.ts", True),
+    ("src/z/", "src/[ab]/*.ts", False),
+    ("src/z/", "src/[!z]/*.ts", False),
+    ("src/long/", "src/?/main.ts", False),
+    ("src/a/", "src/ab/*.ts", False),
+    ("src/", "src/generated/[z-a].ts", False),
+])
+@pytest.mark.parametrize("reverse", [False, True], ids=["forward", "reverse"])
+@pytest.mark.parametrize("entrypoint", ["acquire", "claim"])
+def test_directory_glob_scopes_at_real_entrypoints(
+    scope_goal, first_scope, second_scope, conflict, reverse, entrypoint,
+):
+    cli, current = scope_goal
+    if reverse:
+        first_scope, second_scope = second_scope, first_scope
+
+    def add_todo(label, scope):
+        return cli("todo", "add", "--role", "agent", "--priority", "P1",
+            "--text", f"Directory scope work {label}",
+            "--task-repository", "git:github.com/example/project",
+            "--required-write-scope", scope,
+            "--operation-id", f"directory-add-{label}")["todo_id"]
+
+    def acquire(todo_id, label, scope, expected_exit=0):
+        if entrypoint == "acquire":
+            return cli("task-lease", "acquire", "--todo-id", todo_id,
+                "--owner", f"agent-{label}", "--idempotency-key", f"directory-{label}",
+                "--expected-version", "0", "--write-scope", scope, expected_exit=expected_exit)
+        return cli("todo", "claim", "--todo-id", todo_id,
+            "--claimed-by", f"agent-{label}", "--agent-id", f"agent-{label}",
+            "--claim-operation-id", f"directory-claim-{label}",
+            "--task-lease-idempotency-key", f"directory-{label}",
+            "--task-lease-expected-version", "0", expected_exit=expected_exit)
+
+    first, second = add_todo("a", first_scope), add_todo("b", second_scope)
+    acquire(first, "a", first_scope)
+    # Exact retries retain the original scope spelling and receipt, including
+    # a literal trailing slash; conflict comparison must not rewrite identity.
+    before_retry = current()
+    acquire(first, "a", first_scope)
+    assert current() == before_retry
+    assert cli("task-lease", "inspect", "--todo-id", first)["lease"]["write_scopes"] == [first_scope]
+    before = current()
+    result = acquire(second, "b", second_scope, expected_exit=1 if conflict else 0)
+    if conflict:
+        assert result["error_code"] == "write_scope_conflict"
+        assert current() == before
+    else:
+        assert cli("task-lease", "inspect", "--todo-id", second)["lease"]["write_scopes"] == [second_scope]
