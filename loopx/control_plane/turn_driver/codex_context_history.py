@@ -63,7 +63,9 @@ def _snapshot(event: dict[str, Any]) -> Iterator[tuple[dict[str, Any], BinaryIO]
         if (first.get("type") != "session_meta" or meta.get("id") != event.get("session_id")
                 or meta.get("cwd") != event.get("cwd") or meta.get("forked_from_id")
                 or meta.get("history_mode") != "paginated"
-                or meta.get("cli_version") not in ("0.153.4", "0.162.1", "0.163.0-alpha.11.1")
+                or meta.get("cli_version") not in (
+                    "0.153.4", "0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2",
+                    "0.166.0-alpha.5.1")
                 or not event.get("model") or not event.get("permission_mode")):
             raise ValueError("unqualified native replay metadata")
         stream.seek(info.st_size - 1)

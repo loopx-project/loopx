@@ -82,7 +82,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
 
 
 @pytest.mark.parametrize("shell_wrapper", [False, True])
-@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])
+@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2", "0.166.0-alpha.5.1"])
 def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_path, monkeypatch, shell_wrapper, version):
     event, history, payload = observed_read(tmp_path, monkeypatch, shell_wrapper=shell_wrapper, version=version)
     before = context._state(tmp_path)
@@ -160,7 +160,7 @@ def test_compact_recovery_preserves_turn_but_next_turn_starts_new_file_baseline(
 
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
     "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable", "malformed"])
-@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])
+@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2", "0.166.0-alpha.5.1"])
 def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, monkeypatch, change, version):
     event, history, payload = observed_read(tmp_path, monkeypatch, version=version)
     before = context._state(tmp_path)
@@ -201,7 +201,7 @@ def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, 
         assert wire["mode"] == "full" and wire["context"] == payload
 
 
-@pytest.mark.parametrize("version", ["0.163.0", "0.163.0-alpha.11.2", "unknown"])
+@pytest.mark.parametrize("version", ["0.163.0", "0.163.0-alpha.11.3", "0.166.0-alpha.5.2", "unknown"])
 def test_unqualified_native_version_cannot_retain_resume_baseline(tmp_path, monkeypatch, version):
     event, _, payload = observed_read(tmp_path, monkeypatch, version=version)
     before = context._state(tmp_path)
