@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("sforge")
-pytest.importorskip("httpx")
 from fastapi.testclient import TestClient
-from httpx import HTTPStatusError
+from requests import Response
+from requests.exceptions import HTTPError
 from sforge.harness import judge_server
 from sforge.harness.config import SForgeConfig
 from sforge.harness.grading import EvalReport
@@ -73,7 +73,14 @@ def test_native_result_authorization_controls_improvement_delivery(tmp_path, mon
         def native_get(url, *, params=None, timeout):
             # Adapt requests' timeout to the in-process client; route, query
             # parameters, auth enforcement and result serialization stay real.
-            return client.get(url, params=params)
+            # Convert the TestClient response to the production requests contract;
+            # Starlette may use httpx2 rather than httpx under the hood.
+            native = client.get(url, params=params)
+            response = Response()
+            response.status_code = native.status_code
+            response.url = str(native.url)
+            response._content = native.content
+            return response
 
         monkeypatch.setattr(publisher.session, "get", native_get)
         transport = Transport()
@@ -85,7 +92,7 @@ def test_native_result_authorization_controls_improvement_delivery(tmp_path, mon
         values = response.json()
         try:
             if status != 200:
-                with pytest.raises(HTTPStatusError) as failure:
+                with pytest.raises(HTTPError) as failure:
                     publisher.update(values, transport, None)
                 assert failure.value.response.status_code == status
                 assert not transport.files
