@@ -159,6 +159,12 @@ An enabled native **full** reference for a recognized decision can include
 `first_read_command`. It batches current admission/stop facts, the selected task,
 whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
 history and optional authoring recipes remain expandable from the same capture.
+The existing bounded `unfinished_delegations` projection and `read_complete`
+flag also remain visible. Adoption or a queued return does not establish
+completion. Pending peer results, counts, omitted items and unavailable
+observations retain their source semantics. Full request bodies stay on demand and must be
+read before assessing, executing or returning a request; the initial view does
+not consume a result or grant authority.
 It also exposes existing outcome material addresses and the current settlement
 plan's obligations, including unknown step fields. Only attachments explicitly
 marked `required=false` defer their guidance/templates; their routes stay visible
@@ -186,6 +192,9 @@ does not prove complete source delivery, model retention or fresh authority.
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
+已有的有界 `unfinished_delegations` 投影和 `read_complete` 标记也直接呈现；采纳和
+回传入队不等于完成。待对端结果、计数、遗漏和不可用观测保留原来源语义。
+完整请求按需读取，评估、执行或回传前仍须读其全文；首读不消费结果，也不授予权限。
 
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
