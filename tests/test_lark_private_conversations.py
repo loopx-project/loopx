@@ -3031,6 +3031,57 @@ def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_
 
 
 
+def test_private_scanner_recovers_inside_its_live_pool_without_restarting_requests(tmp_path, monkeypatch, caplog):
+    from loopx.extensions.lark import goal_topic_runtime_service as module
+
+    release, full, recovered = threading.Event(), threading.Event(), threading.Event()
+    calls, pools, scans = [], [], []
+    pool_factory = module.ThreadPoolExecutor
+
+    def make_pool(*args, **kwargs):
+        pool = pool_factory(*args, **kwargs)
+        pools.append(pool)
+        return pool
+
+    class Pending:
+        def pending_delivery_paths(self):
+            return [tmp_path / str(index) for index in range(9)]
+
+        def reconcile_request(self, path):
+            calls.append(path)
+            if len(calls) == 4:
+                full.set()
+            assert release.wait(10)
+            return 0
+
+    monkeypatch.setattr(module, "ThreadPoolExecutor", make_pool)
+    service = module.LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=tmp_path,
+        runtime_controller=None, private_conversations=Pending())
+    clear = service._delivery_wakeup.clear
+
+    def fail_once():
+        scans.append(True)
+        if len(scans) == 2:
+            raise AssertionError("private synthetic scanner detail")
+        clear()
+        if len(scans) > 2:
+            recovered.set()
+
+    monkeypatch.setattr(service._delivery_wakeup, "clear", fail_once)
+    service.start()
+    service._delivery_worker.retry_seconds = .01  # Only this disposable scanner's failure wait.
+    try:
+        assert full.wait(3)
+        assert recovered.wait(4), "Scanner recovery must not wait for unrelated in-flight writes to drain"
+        assert len(pools) == 1 and len(calls) == 4 and len(set(calls)) == 4
+        assert "private synthetic scanner detail" not in caplog.text
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(5)
+    assert not service._delivery_thread.is_alive() and len(calls) == 4
+
+
 def test_completed_command_recovery_defers_app_probe_and_revocation_blocks_reply(ordinary):  # noqa: F811
     store, runtime, provider, transport = connect(ordinary)
     try:

@@ -95,6 +95,7 @@ from .extensions.lark.goal_channel import (
 )
 from .extensions.lark.goal_topic_connections import list_lark_apps
 from .extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+from .presentation import background_services_api as background_api
 from .extensions.lark.cli_transport import CommandRunner
 from .extensions.runtime import (
     default_extension_state_file,
@@ -444,7 +445,7 @@ def resolve_lark_cli_for_runtime(
     )
 
 
-class ChatHTTPServer(ThreadingHTTPServer):
+class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
@@ -480,24 +481,20 @@ class ChatHTTPServer(ThreadingHTTPServer):
         self.completed_todo_pages = CompletedTodoPages()
 
     def server_close(self) -> None:
-        if hasattr(self, "codex_account_service"):
-            self.codex_account_service.close()
+        background_api.close_chat_background_services(self)
         if hasattr(self, "lark_app_setup_manager"):
             self.lark_app_setup_manager.close()
-        if hasattr(self, "manager_return_service"):
-            self.manager_return_service.close()
         if hasattr(self, "conversation_transports"):
             self.conversation_transports.close()
         if hasattr(self, "delegation_wake_service"):
             self.delegation_wake_service.close()
-        if hasattr(self, "lark_goal_topic_runtime"):
-            self.lark_goal_topic_runtime.close()
         if hasattr(self, "runtime_controller"):
             self.runtime_controller.close()
         super().server_close()
 
 
 class ChatRequestHandler(
+    background_api.BackgroundServicesRequestMixin,
     ChatModelSettingsRequestMixin,
     GoalSourceRequestMixin,
     GoalAcceptanceRequestMixin,
@@ -1699,6 +1696,7 @@ class ChatRequestHandler(
                 }
             )
         get_dispatch: dict[str, Callable[[], None]] = {
+            background_api.BACKGROUND_SERVICES_PATH: self._background_services_read,
             "/api/chat/request-inventory": self._request_inventory_read,
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             "/api/chat/todo/detail": self._todo_detail,
@@ -1763,6 +1761,7 @@ class ChatRequestHandler(
         if self._dispatch_zcode_goal(path, apply=True):
             return
         post_dispatch: dict[str, Callable[[], None]] = {
+            background_api.BACKGROUND_SERVICES_PATH: self._background_services_recheck,
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             RESEARCH_ANALYSIS_PATH: self._research_analysis_write,
             RESEARCH_ANALYSIS_PATH + "/cancel": self._research_analysis_write,
@@ -1904,7 +1903,7 @@ def serve_chat(
         resolve_runtime_root(registry, registry_path=resolved_registry_path)
         if registry.get("common_runtime_root") else runtime_root
     )
-    server.codex_account_service = CodexAccountService(account_runtime_root)
+    server.codex_account_service = CodexAccountService(account_runtime_root, start_observer=False)
     server.runtime_root_override = resolved_runtime_root_override
     server.scan_roots = resolved_scan_roots
     server.limit = limit
@@ -1997,7 +1996,6 @@ def serve_chat(
             runtime_controller=server.runtime_controller,
         ),
     )
-    server.lark_goal_topic_runtime.start()
     from .extensions.lark.manager_returns import start_return_service
     server.manager_return_service = start_return_service(
         server, server.runtime_controller.coordination_runtime_root, start_service=False
@@ -2027,7 +2025,8 @@ def serve_chat(
     try:
         if external_conversation_factories:
             server.conversation_transports.start(server)
-        server.manager_return_service.start()
+        background_api.register_chat_background_services(server)
+        server.background_services.start()
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)

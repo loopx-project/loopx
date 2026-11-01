@@ -537,21 +537,30 @@ class Watcher:
                 self.stop.wait(60)
 
     def _observe(self):
+        repeat = getattr(self._hosted, "repeat", None)
+        if callable(repeat):
+            repeat(self._observe_once, interval_seconds=60, on_error=self._observe_failed)
+            return
+        # The standalone wheel has no Core dependency. Its process entrypoint
+        # drives the same observation/health callbacks as the injected host.
         while not self.stop.is_set():
-            delay = 60.0
             try:
-                self._heartbeat("checking", deadline=480)
-                value = self.provider.tick()
-                due = value.get("retry_at")
-                delay = max(5, min(300, due - time.time())) if due else 60
-                self._heartbeat("waiting", deadline=delay + 15, next_check=time.time() + delay)
+                delay = self._observe_once()
             except Exception:
-                # A provider/programming failure must not silently kill the
-                # thread while the durable policy still promises observation.
-                # Keep exceptions private and retry under the same owner lock.
-                self._heartbeat("retrying", deadline=75, next_check=time.time() + 60)
+                self._observe_failed()
                 delay = 60
             self.stop.wait(delay)
+
+    def _observe_once(self):
+        self._heartbeat("checking", deadline=480)
+        value = self.provider.tick()
+        due = value.get("retry_at")
+        delay = max(5, min(300, due - time.time())) if due else 60
+        self._heartbeat("waiting", deadline=delay + 15, next_check=time.time() + delay)
+        return delay
+
+    def _observe_failed(self):
+        self._heartbeat("retrying", deadline=75, next_check=time.time() + 60)
 
     def _heartbeat(self, phase: str, *, deadline: float, next_check: float | None = None):
         now = time.time()
