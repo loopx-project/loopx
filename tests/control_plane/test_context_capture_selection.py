@@ -102,17 +102,26 @@ def test_unavailable_optional_index_keeps_file_only_recovery(tmp_path, monkeypat
     assert page["ok"] and json.loads(page["content"]) == original
 
 
-def test_native_reference_reader_uses_real_pages_before_recording_delivery(tmp_path):
+@pytest.mark.parametrize("compact_reference", [False, True])
+def test_native_reference_reader_uses_real_pages_before_recording_delivery(tmp_path, compact_reference):
     path, raw, _ = fixture_capture(tmp_path)
     options = args(path, raw)
     options.select = None
     reference = {"ok": True, "mode": "full", "path": str(path),
         "sha256": options.capture_sha256, "command": "read saved capture",
-        "target": {"capture_id": "synthetic-source"}, "recovery": {"path": str(path)}}
+        "target": {"capture_id": "synthetic-source"},
+        "total_bytes": len(raw), "instruction": "Read the current saved input.",
+        "recovery": {"path": str(path), "sha256": options.capture_sha256}}
+    if compact_reference:
+        from loopx.cli_commands.quota_capture import model_context_reference
+
+        reference = model_context_reference(reference)
+        assert "sha256" not in reference and "target" not in reference
     request = {"input": [{"type": "function_call_output", "output": json.dumps(reference)}]}
     reader = NativeContextReader()
     reader.begin("admit current Turn", "source")
     reader.follow(request)
+    assert not reader.deliveries and not reader.retained
     page_count = 0
     while True:
         page = read_context_capture(options)

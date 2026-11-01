@@ -45,7 +45,7 @@ def delivered_context(request, digest):
     return raw.decode().rstrip("\n")
 
 
-def last_context_page(request, *, allow_reference=False):
+def last_context_page(request, *, allow_reference=False, allow_selection=False):
     """Observe the latest tool result; a saved-file reference is not a page."""
     for item in reversed(request["input"]):
         output = item.get("output")
@@ -59,6 +59,8 @@ def last_context_page(request, *, allow_reference=False):
                     value = json.loads(value["output"])
                 if isinstance(value, dict) and (
                     value.get("schema_version") == "context_capture_page_v1"
+                    or (allow_selection and value.get("schema_version") == "context_capture_selection_page_v1")
+                    or (allow_reference and value.get("schema_version") == "context_capture_navigation_v1")
                     or (allow_reference and value.get("mode") in {"full", "delta"}
                         and all(key in value for key in ("path", "sha256", "command", "target", "recovery")))
                 ):
@@ -113,7 +115,8 @@ class NativeContextReader:
         if self.pending["descriptor"] is None:
             assert page["offset"] == 0
             if reference := self.pending.get("reference"):
-                assert page["sha256"] == reference["sha256"]
+                if "sha256" in reference:
+                    assert page["sha256"] == reference["sha256"]
                 # The generic saved-file reader returns bytes and cursors;
                 # delivery identity stays in the original visible reference.
                 self.pending["descriptor"] = {**reference, **page}
@@ -126,6 +129,15 @@ class NativeContextReader:
             return self.tool(page["next_command"])
         raw = delivered_context(request, first["sha256"])
         assert len(raw.encode()) in {page["total_bytes"], page["total_bytes"] - 1}
+        if self.pending.get("reference", {}).get("schema_version") == "context_capture_navigation_v1":
+            # Resolve oracle metadata only after complete model-visible byte
+            # coverage; a reference never seeds the retained-input baseline.
+            from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+            _, descriptor = read_context_read_reference(first["reference_file"])
+            navigation = descriptor["navigation"]
+            assert navigation["sha256"] == first["sha256"]
+            first = {**first, **navigation}
         # The original reader owns digest verification. This separate oracle
         # checks the actual complete model input against its declared source.
         assert raw == Path(first["path"]).read_text().rstrip("\n")

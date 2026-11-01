@@ -11,6 +11,15 @@ import pytest
 from tests.control_plane.test_quota_settlement_cli import _run_cli
 
 
+def machine_reference_oracle(view):
+    """Inspect complete metadata as an oracle, never as a model read receipt."""
+    if view.get("schema_version") == "context_capture_navigation_v1":
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+        return read_context_read_reference(view["reference_file"])[1]["navigation"]
+    return view
+
+
 @pytest.mark.parametrize("failure", [None, "digest", "goal", "agent", "turn", "symlink", "object"])
 def test_saved_projection_checks_original_before_any_publication(tmp_path, failure):
     original = {"ok": True, "goal_id": "saved-goal", "agent_identity": {"agent_id": "saved-agent"},
@@ -116,8 +125,9 @@ def test_saved_projection_manages_private_cache_without_authority_io(tmp_path, m
     assert path.read_bytes() == raw and not registry.exists() and not runtime.exists()
     if enabled:
         assert "content" not in result and "offset" not in result
-        assert "index_command" in result and "select_command" in result
-        assert json.loads(Path(result["path"]).read_bytes()) == original
+        machine = machine_reference_oracle(result)
+        assert "index_command" in machine and "select_command" in machine
+        assert json.loads(Path(machine["path"]).read_bytes()) == original
         actual_root = context if cache_location == "default" else root
         assert actual_root.stat().st_mode & 0o077 == 0
         assert list(actual_root.glob("context-*"))
@@ -171,9 +181,10 @@ def test_saved_projection_reference_allows_optional_exact_read_and_restart(tmp_p
     # read remains lossless and paginated, without changing the saved decision.
     assert "content" not in result and "offset" not in result
     assert len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 8192
-    delivered = Path(result["path"]).read_bytes()
+    machine = machine_reference_oracle(result)
+    delivered = Path(machine["path"]).read_bytes()
     delivered_digest = hashlib.sha256(delivered).hexdigest()
-    assert result["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
+    assert machine["sha256"] == delivered_digest and json.loads(delivered) == json.loads(raw)
     combined = b""
     command = result["command"]
     while True:
@@ -228,7 +239,8 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
         "--capture-file", str(path), "--capture-sha256", digest, "--goal-id", "saved-goal",
         "--agent-id", "saved-agent", "--turn-instance-id", "saved-turn", "--context-delivery", "on",
         "--codex-app", "--codex-context-dir", str(context), "--decision-output-root", str(root)])
-    result = project_saved_context_capture(args)
+    wire = project_saved_context_capture(args)
+    result = machine_reference_oracle(wire)
     assert result["ok"] and result["mode"] == "full"
     recovered_path, recovered_digest = codex_context.read_codex_context_reference(str(context),
         goal_id="saved-goal", agent_id="saved-agent")
@@ -237,7 +249,7 @@ def test_saved_projection_wire_failure_keeps_committed_current_recovery(tmp_path
         assert result["path"] == recovered_path and result["sha256"] == recovered_digest
     else:
         assert "content" not in result and result["recovery"]["sha256"] == recovered_digest
-        argv = shlex.split(result["command"])
+        argv = shlex.split(wire["command"])
         code, page = _run_cli(tmp_path / "absent.json", tmp_path / "absent-runtime",
             *argv[argv.index("quota"):], cwd=tmp_path)
         assert code == 0 and page["offset"] == 0 and json.loads(page["content"]) == original
@@ -442,7 +454,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
             data.extend(page["content"].encode())
             codex_context_hook(str(native), {**event, "hook_event_name": "PostToolUse", "tool_response": json.dumps(page)})
             if page["eof"]:
-                assert hashlib.sha256(data).hexdigest() == wire["sha256"]
+                assert hashlib.sha256(data).hexdigest() == machine_reference_oracle(wire)["sha256"]
                 return json.loads(data)
             argv = shlex.split(page["next_command"])
             rc, page = _run_cli(registry, runtime, *argv[argv.index("quota"):], cwd=project)
@@ -474,7 +486,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
         assert len(json.dumps(bound, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
         delivered = consume(bound)
         if not compacted:
-            assert delivered["base"]["capture_id"] == cold["target"]["capture_id"]
+            assert delivered["base"]["capture_id"] == machine_reference_oracle(cold)["target"]["capture_id"]
     else:
         assert bound["mode"] == "should-run" and not list(native.iterdir())
     assert _heartbeat_receipt_count(runtime, turn) == 2 and _spend_run_count(runtime) == 0
@@ -572,10 +584,11 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     if item.get("type") in ("function_call_output", "custom_tool_call_output")][-1]
                 if isinstance(output, list):
                     output = [part["text"] for part in output if part.get("type") == "input_text"][-1]
-                descriptor = json.loads(output.split("\nOutput:\n", 1)[-1])
+                navigation = json.loads(output.split("\nOutput:\n", 1)[-1])
+                descriptor = machine_reference_oracle(navigation)
                 assert descriptor["ok"] and descriptor["mode"] == ("full" if name == "cold" else "delta")
                 if benchmark:
-                    assert len(json.dumps(descriptor, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
+                    assert len(json.dumps(navigation, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 32000
                 data = Path(descriptor["path"]).read_bytes()
                 assert hashlib.sha256(data).hexdigest() == descriptor["sha256"]
                 published = json.loads(data)
@@ -586,12 +599,12 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 # Follow the public reader's actual page cursor rather than
                 # guessing offsets from the capture size. This keeps each
                 # request's real page budget and avoids overlapping reads.
-                queue.append(descriptor["command"])
+                queue.append(navigation["command"])
                 if progressive:
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
                     assert "content" not in descriptor
-                    queue = [descriptor["index_command"], descriptor["recovery"]["command"]
+                    queue = [navigation["recovery"]["command"] + " --list", navigation["recovery"]["command"]
                         + " --select /goal_id --select /heartbeat_receipt"]
                 phase = name + "_read"
                 if not queue:
@@ -600,7 +613,7 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             else:
                 name = phase.removesuffix("_read")
                 descriptor = observed[name][1]
-                page = last_context_page(request)
+                page = last_context_page(request, allow_selection=progressive)
                 assert page and page["ok"]
                 if progressive:
                     values = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
