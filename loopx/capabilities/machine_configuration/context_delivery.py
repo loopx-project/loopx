@@ -29,7 +29,7 @@ def context_delivery_machine_configuration_namespace() -> MachineConfigurationNa
         title="Differential context",
         description=(
             "Reuse unchanged context for Codex App heartbeats, SSH Goals and benchmark heartbeats. On by default for supported Codex sessions; "
-            "unsupported declarations fail and known context loss keeps full context. "
+            "explicit unsupported activation fails and known context loss keeps full context. "
             "Completed reads use an explicit native-hook continuity assumption. "
             "A saved preference does not establish host readiness or actual delta use."
         ),

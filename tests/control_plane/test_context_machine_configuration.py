@@ -432,8 +432,9 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
                     words = shlex.split(command)
                     if "--context-delivery" in words:
                         index = words.index("--context-delivery")
-                        del words[index:index + 2]
-                    command = shlex.join(words)
+                        # Keep the original shell quoting and $LOOPX_TURN
+                        # expansion while omitting only this presentation flag.
+                        command = command.replace("--context-delivery " + words[index + 1], "", 1)
                 return {"type": "function_call", "id": "guard-call", "call_id": "guard-call",
                     "name": "exec_command", "arguments": json.dumps({
                         "cmd": turn_assignment + "\n" + command + " > " + shlex.quote(str(saved)),
