@@ -255,7 +255,10 @@ def handle_pr_review_command(
         target_exact_heads=target_exact_heads,
     )
     try:
-        machine_configuration = (read_machine_configuration(runtime_root, registry=build_builtin_machine_configuration_registry()) if runtime_root is not None else None)
+        machine_configuration = (read_machine_configuration(
+            runtime_root, registry=build_builtin_machine_configuration_registry(),
+            namespace_ids=("pull_request_review",),
+        ) if runtime_root is not None else None)
         goal = None
         goal_id = getattr(args, "goal_id", None)
         if goal_id:

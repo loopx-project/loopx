@@ -74,6 +74,59 @@ def test_native_preparation_preserves_original_and_creates_one_real_actor(stewar
     assert transport.bindings.read()["bindings"][-1]["managed_actor"] == actor
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_retained_actor_on_another_executor_does_not_block_captured_project_work(steward, tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, external, transport, binding, capture, _ = steward
+    sid, service = original(steward)
+    storage(runtime, provider)
+    preview = service.prepare(binding["binding_id"], session_id=sid)
+    actor = service.prepare(binding["binding_id"], session_id=sid,
+        expected_plan_id=preview["plan"]["plan_id"], execute=True)["actor"]
+    event = external.event("notes-app", "captured-project-work", "Explain this project")
+    admit = transport.core.admit
+
+    def unavailable(**_kwargs):
+        raise OSError("source captured before Core admission")
+
+    monkeypatch.setattr(transport.core, "admit", unavailable)
+    with pytest.raises(OSError, match="before Core admission"):
+        transport.admit("notes-app", event)
+    monkeypatch.setattr(transport.core, "admit", admit)
+    path = next(path for path in transport.root.glob("*.json")
+                if json.loads(path.read_text())["event"]["message_id"] == event["message_id"])
+    assert json.loads(path.read_text())["status"] == "captured"
+    # A persisted executor selection retains the previously prepared identity.
+    # This compatibility fixture is isolated from all real bindings and Goals.
+    current = transport.bindings.read()
+    selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+    selected["executor_endpoint_id"] = "antigravity"
+    transport.bindings.path.write_text(json.dumps(current))
+    before = capture.read_bytes()
+    transport.reconcile_request(path)
+    row = transport.core.read_request(json.loads(path.read_text())["request_ref"])
+    assert row["status"] == "accepted"
+    result = finish(runtime, row)
+    assert result["status"] == "completed"
+    transport.reconcile()
+    delivered = json.loads(path.read_text())
+    assert delivered["status"] == "delivered" and delivered["deliveries"]["terminal"]["verified"]
+    reply = external.messages[delivered["deliveries"]["terminal"]["attempt"]["message_ref"]]
+    assert reply["chat_id"] == event["chat_id"]
+    assert [message["text"] for message in store.messages(row["session_id"]) if message["role"] == "user"] == [event["content"]]
+    packets = [json.loads(line) for line in capture.read_bytes()[len(before):].splitlines()]
+    assert sum(packet["method"] == "turn/start" for packet in packets) == 1
+    assert transport.reconcile() == 0
+    transport.ingress.observe()
+    assert transport.ingress.health(binding["binding_id"])["status"] == "verified"
+    assert next(item for item in transport.bindings.read()["bindings"]
+                if item["binding_id"] == binding["binding_id"])["managed_actor"] == actor
+    before_prepare = capture.read_bytes(), runtime.registry_path.read_bytes()
+    with pytest.raises(ValueError):
+        service.prepare(binding["binding_id"], session_id=sid)
+    assert (capture.read_bytes(), runtime.registry_path.read_bytes()) == before_prepare
+
+
 @pytest.mark.parametrize("fault", ["queued", "provider", "stale_preview", "foreign_session"])
 def test_rejected_preparation_has_no_native_goal_or_model_effect(steward, fault):
     store, runtime, provider, _, binding, capture, _ = steward

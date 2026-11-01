@@ -1605,7 +1605,11 @@ def _run_qualification_loop(
         kind = "shell" if shell else _behavior_command_kind(tool_call.command, state)
         try:
             if shell:
-                output, exit_code = shell.execute(tool_call.command)
+                # A captured module reader uses the same supervised CLI bridge,
+                # without allowing the shell to import the source checkout.
+                reader = replan_view_command_tokens(tool_call.command)
+                command = shlex.join(reader) if reader is not None else tool_call.command
+                output, exit_code = shell.execute(command)
                 observe_shell_evidence(output, state)
                 state.read_only_host_commands_executed = True
                 if exit_code:
@@ -1715,9 +1719,10 @@ class DoubaoReplanSemanticActionBehaviorActor:
                     "guard returns native context navigation, execute its recovery "
                     "reader before acting. If the delivered replan obligation names "
                     "a context_read command, execute that exact command before "
-                    "choosing a semantic result. After reading the work evidence, "
-                    "execute replan_action_packet.writeback to obtain the exact "
-                    "typed action contract. Complete "
+                    "choosing a semantic result. Read the work evidence. "
+                    "If the current replan_action_packet supplies a writeback command, "
+                    "execute that exact command to obtain the typed action contract. "
+                    "Otherwise use its inline writeback_contract. Complete "
                     "one bounded in-scope action and persist its result through the "
                     "real LoopX CLI. After quota, `cat` only the exact path named "
                     "in active_state_next_action, then `cat` only the source_ref "
@@ -1756,8 +1761,17 @@ class DoubaoReplanSemanticActionBehaviorActor:
                             if state.seen_quota else _handle_quota_command(command, state))
                 if is_context_read_command(command):
                     return _handle_context_read(command, state)
-                if replan_view_command_tokens(command) is not None:
-                    return _handle_replan_context_read(command, state)
+                if (reader := replan_view_command_tokens(command)) is not None:
+                    packet = state.quota_packet or {}
+                    obligation = packet.get("autonomous_replan_obligation")
+                    action = packet.get("replan_action_packet")
+                    for expected in (
+                        obligation.get("context_read") if isinstance(obligation, Mapping) else None,
+                        action.get("writeback") if isinstance(action, Mapping) else None,
+                    ):
+                        if isinstance(expected, str) and replan_view_command_tokens(expected) == reader:
+                            return _handle_replan_context_read(expected, state)
+                    raise ValueError("unexpected_replan_context_read")
                 result = dispatch_vision_closeout(command, state, execute=_execute_loopx)
                 if result is None:
                     raise ValueError("This fixture grants CLI authority for quota, help, vision refresh and settlement only")

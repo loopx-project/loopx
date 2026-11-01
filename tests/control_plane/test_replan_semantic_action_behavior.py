@@ -396,9 +396,11 @@ def _composition_successor_action(
     return ScriptedExecToolAction(command=shlex.join(command_tokens))
 
 
+@pytest.mark.parametrize("context_mode", ["on", "off"])
 def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context_mode: str,
 ) -> None:
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_mode)
     fixture = _build_fixture(tmp_path / "oracle")
     transport = _context_aware_transport(
         [
@@ -425,7 +427,7 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
         "workspace_read",
         "semantic_replan_writeback",
     ]
-    assert "context_read" in receipt["observed_tool_sequence"]
+    assert ("context_read" in receipt["observed_tool_sequence"]) is (context_mode == "on")
     assert receipt["context_delivery"] in {
         "host_projected",
         "progressive_replan_view",
@@ -462,6 +464,10 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     assert "execute the projected typed writeback" in system_prompt
     assert "execute exactly one loopx refresh-state command" in system_prompt
     assert "do not create a Todo, chain commands, or combine actions" in system_prompt
+    assert "If the current replan_action_packet supplies a writeback command" in system_prompt
+    assert "Otherwise use its inline writeback_contract" in system_prompt
+    delivered_action = _latest_quota_packet(transport.requests[-1])["replan_action_packet"]
+    assert ("writeback" in delivered_action) is (context_mode == "on")
 
     quota_packet = QuotaToolContext.from_output(transport.requests[2]["messages"][-1]["content"]).packet
     assert quota_packet.get("required_reads") in (None, [])

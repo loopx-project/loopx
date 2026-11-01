@@ -1,4 +1,4 @@
-import {prepareClaimExecution} from "./claim_execution.ts";
+import {prepareClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {retiredHandoffModeRejection, HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
 import {currentLeaseAcquisitionProof} from "./lease_acquisition_proof.ts";
@@ -340,13 +340,14 @@ export async function executeCoordinationTodoClaim(
   store: AuthorityStore,
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  observeWorkspace?: ClaimWorkspaceObserver,
 ): Promise<CoordinationTodoClaimResult> {
   // Retry only a conclusive provider CAS rejection. Each attempt rereads the
   // original receipt and the complete head, then rechecks source authorization,
   // claim ownership, acceptance and lease/write-scope exclusion. Pinned revisions
   // (including handoff grants) must return to their caller for a fresh observation.
   for (let attempt = 0; ; attempt++) {
-    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent);
+    const result = await executeClaimAttempt(store, rawInput, authoritySourcesCurrent, observeWorkspace);
     if (attempt >= 2 || rawInput.expected_provider_revision !== undefined ||
         rawInput.transfer_grant !== undefined || result.status !== "conflict" ||
         result.conflict_kind !== "provider_revision_mismatch") return result;
@@ -357,6 +358,7 @@ async function executeClaimAttempt(
   store: AuthorityStore,
   rawInput: CoordinationTodoClaimInput,
   authoritySourcesCurrent: AuthoritySourceCheck,
+  observeWorkspace?: ClaimWorkspaceObserver,
 ): Promise<CoordinationTodoClaimResult> {
   let input: CoordinationTodoClaimInput;
   try {
@@ -583,13 +585,15 @@ async function executeClaimAttempt(
   let lease: JsonObject | null = null;
   let leaseChanged = false;
   let leaseIdempotent = false;
+  let overlapAdvisories: JsonObject[] = [];
   try {
     const currentLease = projection.leases.get(input.todo_id);
     if (handoffMode === "hard_lease" && input.manage_execution === true) {
-      const prepared = prepareClaimExecution(head.head, input);
+      const prepared = await prepareClaimExecution(head.head, input, observeWorkspace);
       lease = prepared.lease;
       leaseChanged = prepared.changed;
       leaseIdempotent = !leaseChanged;
+      overlapAdvisories = prepared.overlapAdvisories ?? [];
     } else if (handoffMode === "hard_lease" && leaseRequest !== null) {
       // Validate required scopes before planning; a caller cannot omit a required conflict.
       const writeScopes = coordinationTodoWriteScopes(todo);
@@ -692,6 +696,7 @@ async function executeClaimAttempt(
     handoff_mode: handoffMode,
     ...(changed ? {updated_at: updatedAt} : {}),
     mutation_authority: mutationAuthority,
+    ...(overlapAdvisories.length ? {integration_overlap_advisories: overlapAdvisories} : {}),
     ...(input.manage_execution ? {execution_managed: true, claim_operation_id: input.operation_id} : {}),
     ...(leaseRequest === null && !(input.manage_execution && handoffMode === "hard_lease") ? {} : {
       todo_changed: todoChanged,

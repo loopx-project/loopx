@@ -156,6 +156,28 @@ def test_machine_defaults_reach_real_history_and_change_quality_paths(
     assert prepared["policy"]["enabled"] is True
 
 
+def test_goal_readers_keep_their_defaults_when_an_unrelated_owner_is_incompatible(tmp_path):
+    repo, registry_path, runtime_root = _fixture(tmp_path)
+    path = runtime_root / "machine/configuration.json"
+    config = json.loads(path.read_text())
+    config["namespaces"]["steward_executor"] = {
+        "schema_version": "steward_executor_machine_defaults_v1",
+        "executor_endpoint": "future_executor",
+    }
+    path.write_text(json.dumps(config))
+    original = path.read_bytes()
+    goal = _history_goal(registry_path, runtime_root)
+    assert goal["execution_profile"]["replan_after_completed_todos"] == 2
+    (repo / "app.py").write_text("value = 2\n", encoding="utf-8")
+    prepared = build_change_quality_prepare_packet(
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=GOAL_ID, repo_path=repo, base_ref="HEAD",
+    )
+    assert prepared["status"] == "review_required"
+    assert prepared["policy"]["enabled"] is True
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize("update", [{}, {"change_quality_enabled": False}, {"execution_turn_granularity": "fine"}])
 def test_unrelated_configuration_preserves_explicit_default_cadence(tmp_path: Path, update) -> None:
     _repo, registry_path, runtime_root = _fixture(tmp_path)

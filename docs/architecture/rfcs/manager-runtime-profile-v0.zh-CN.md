@@ -36,8 +36,16 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
 - `trusted_owner` 不是通用提权。用户请求与既有 standing grant 仍限定工作范围；
   merge、release、deploy、delete、payment 等受保护操作继续走各自的 typed contract；
   外部 provider 权限、受众边界和 LoopX durable state owner 不被改写。
-- 当前只有 Codex endpoint 能执行 `trusted_owner`。选择其他 endpoint 时必须返回可恢复的
-  typed error，不能把受限执行伪装成已开放。
+- Codex 与本地 Antigravity Language Server 支持 `trusted_owner`。Antigravity 沿用已登录
+  宿主的现有工具权限和原生审批；LoopX 不会自动接受这些审批。等待交互时返回可恢复的
+  gate。选择其他 endpoint 时必须返回可恢复的 typed error，不能把受限执行伪装成已开放。
+- Antigravity 的 `restricted` Chat 仅处理文本：每次调用显式禁用原生工具调用并使用只读
+  planner 模式，不继承上一回合的工具配置。这是 provider 工具限制，不是 Codex 或操作
+  系统 sandbox。强能力模式仍限于既有核验过的本人受众。受治理 Task 执行、工作区文件
+  系统授权和原生受管理管家身份准备仍由既有 Codex owner 承接；选择 Antigravity 不扩展
+  这些契约。Argon 档位必须由本地账号提供，并与请求的思考深度一致。原始 cascade 丢失
+  时续接失败，不静默创建替代会话。停止等待原生 cascade 回到 idle；超时或部分输出
+  不代表成功完成。
 - `trusted_owner` 适用于本地私有 Owner 管家和由既有 Core conversation owner 重新核验的
   原生本人管家私聊。Core 核验 App、Owner 身份、私聊来源、当前资源授权和冻结的 Session
   身份；受众证明本身不授予工具，仍按实际机器策略执行，包括显式受限选择。其他外部

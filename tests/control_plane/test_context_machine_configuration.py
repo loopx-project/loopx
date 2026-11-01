@@ -82,6 +82,33 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert not (runtime / "context-delivery").exists()
 
 
+@pytest.mark.parametrize("mode", ["on", "off"])
+def test_context_mode_does_not_depend_on_an_unrelated_executor(tmp_path, mode):
+    registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+    path = runtime / "machine/configuration.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "context_delivery": {"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": mode},
+        "steward_executor": {"schema_version": "steward_executor_machine_defaults_v1",
+                             "executor_endpoint": "future_executor"},
+    }}))
+    original = path.read_bytes()
+    code, result = _run_cli(registry, runtime, "quota", "context-config", "--codex-app",
+        "--goal-id", "fixture", "--agent-id", "worker")
+    if mode == "on" and os.name != "posix":
+        assert code != 0 and "unsupported" in result["reason"], result
+    else:
+        assert code == 0, result
+        assert result["context_delivery"]["enabled"] is (mode == "on"), result
+    assert path.read_bytes() == original
+    assert not registry.exists()
+    assert not (runtime / "goals").exists()
+    if mode == "off":
+        assert not (runtime / "context-delivery").exists()
+    elif os.name == "posix":
+        assert (runtime / "context-delivery").stat().st_mode & 0o077 == 0
+
+
 @pytest.mark.parametrize("invalid", [True, False, None, 1, "auto", "codex_app_heartbeat"])
 def test_invalid_machine_mode_never_writes(tmp_path, invalid):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
@@ -440,8 +467,10 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
     ("file", None, False, False), ("sqlite", None, False, False),
 ])
 def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypatch, provider, worker_mode, machine_on, transport_ready):
+    from argparse import Namespace
     from benchmark.runtime.worker import run_once
-    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
+    from scripts.external_scheduler_worker import build_should_run_command, parse_tick
+    from tests.control_plane.codex_checkpoint_fixture import local_inference_provider, native_process_continuation
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
     import sys
 
@@ -466,11 +495,24 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         def unavailable(*_args):
             raise ValueError("Fixture native hooks unavailable")
         monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unavailable)
-    observed, errors = [], []
+    # The real outer scheduler observes before the native worker prepares its
+    # session. It inherits the treatment, but must consume an inline decision.
+    observer_env = {**env, "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+        "LOOPX_CONTEXT_DELIVERY": "off" if worker_mode == "off" or not transport_ready else "on"}
+    observer = build_should_run_command(Namespace(cli_bin=program, registry=str(registry),
+        runtime_root=str(runtime), goal_id=GOAL_ID, agent_id=AGENT_ID, runtime_profile="generic_cli"))
+    observed_guard = subprocess.run(observer, cwd=project, env=observer_env,
+        capture_output=True, text=True, timeout=30, check=False)
+    assert observed_guard.returncode == 0, observed_guard.stderr or observed_guard.stdout
+    assert parse_tick(json.loads(observed_guard.stdout)).should_run
+    observed, errors, process_continuations = [], [], []
     saved = workspace / "original-guard.json"
 
     def response(request, number, message):
         try:
+            if continuation := native_process_continuation(request, f"context-default-{number}"):
+                process_continuations.append(number)
+                return continuation
             if number == 1:
                 body = _input_text(request)
                 command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
@@ -521,7 +563,7 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         original["OPENAI_BASE_URL"] = url
         result = run_once(env)
     assert result["ok"], result
-    assert not errors and len(requests) == 2, errors
+    assert not errors and len(requests) == 2 + len(process_continuations), errors
     assert env == original, "Resolved worker defaults must not mutate caller/frozen input"
     assert _heartbeat_receipt_count(runtime, observed[0]) == 1 and _spend_run_count(runtime) == 0
     if worker_mode == "off" or not transport_ready:

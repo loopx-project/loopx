@@ -116,3 +116,83 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     assert released["released"]
     assert cli("inspect", "d")["lease"] == legacy["lease"]
     assert not state.exists()
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="worktree fixture requires symlinks")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, capsys, provider):
+    """Normal claims admit sibling edits without weakening physical collisions."""
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "repo"
+    project.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(project), *args], capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--allow-empty", "-m", "fixture")
+    git("remote", "add", "origin", "https://github.com/example/project.git")
+    a, b = tmp_path / "a", tmp_path / "b"
+    git("worktree", "add", "-b", "a", str(a))
+    git("worktree", "add", "-b", "b", str(b))
+    alias = tmp_path / "alias"
+    alias.symlink_to(a, target_is_directory=True)
+    runtime, state, registry = tmp_path / "runtime", tmp_path / "state.md", tmp_path / "registry.json"
+    goal = "ordinary-worktree-claim"
+    state.write_text("# Ordinary claim\n\n## Agent Todo\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": goal, "repo": str(project), "state_file": str(state),
+        "coordination": {"registered_agents": ["agent-a", "agent-b"]},
+    }]}))
+    projection = build_todo_runtime_shadow_projection(goal_id=goal, handoff_mode="hard_lease", leases=[], todos=[{
+        "schema_version": "todo_item_v0", "todo_id": f"todo_ordinary_{key}", "role": "agent", "status": "open", "done": False,
+        "text": "Edit isolated source", "archive_state": "active", "source_section": "Agent Todo", "index": i,
+        "task_class": "advancement_task", "task_domain": "code", "task_repository": "git:github.com/example/project",
+        "required_write_scopes": ["src/**"],
+    } for i, key in enumerate(("a", "b"), 1)])
+    initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
+
+    def cli(command, key, *args, expected=0):
+        rc = cli_main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+                       *command, "--goal-id", goal, "--todo-id", f"todo_ordinary_{key}", *args])
+        output = capsys.readouterr().out
+        assert rc == expected, output
+        return json.loads(output)
+
+    def claim(key, operation, expected=0):
+        return cli(["todo", "claim"], key, "--agent-id", f"agent-{key}", "--claimed-by", f"agent-{key}",
+                   "--claim-operation-id", operation, expected=expected)
+
+    monkeypatch.chdir(a)
+    assert claim("a", "claim-a")["execution_managed"]
+    first = cli(["task-lease", "inspect"], "a")["lease"]
+    monkeypatch.chdir(alias)
+    assert claim("b", "same-checkout", expected=1)["ok"] is False
+    assert not cli(["task-lease", "inspect"], "b")["active"]
+    monkeypatch.chdir(b)
+    (b / "src").symlink_to(a, target_is_directory=True)
+    assert claim("b", "redirected-scope", expected=1)["ok"] is False
+    (b / "src").unlink()
+    git("remote", "set-url", "origin", "https://github.com/example/other.git")
+    assert claim("b", "wrong-repository", expected=1)["ok"] is False
+    git("remote", "set-url", "origin", "https://github.com/example/project.git")
+    (b / "nested").mkdir()
+    monkeypatch.chdir(b / "nested")
+    accepted = claim("b", "claim-b")
+    assert accepted["execution_managed"]
+    assert accepted["integration_overlap_advisories"] == [{
+        "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scopes": ["src/**"],
+        "reason": "independent_worktree_integration_overlap",
+    }]
+    second = cli(["task-lease", "inspect"], "b")["lease"]
+    assert "write_workspace" in first
+    assert first["write_workspace"] != second["write_workspace"]
+    assert str(tmp_path) not in json.dumps(second)
+    assert cli(["todo", "list"], "b")["todo"]["claimed_by"] == "agent-b"
+    replay = claim("b", "claim-b")
+    assert replay["status"] == "replayed"
+    assert cli(["task-lease", "inspect"], "b")["lease"] == second
+    cli(["task-lease", "release"], "b", "--owner", "agent-b", "--idempotency-key", second["idempotency_key"],
+        "--expected-version", str(second["version"]))
+    assert claim("b", "claim-b", expected=1)["ok"] is False
+    assert not cli(["task-lease", "inspect"], "b")["active"]

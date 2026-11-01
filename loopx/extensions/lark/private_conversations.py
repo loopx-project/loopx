@@ -230,8 +230,8 @@ class LarkPrivateConversations:
             pending = row["status"] != "delivered"
             if (not pending and path.parent == self.root
                     and row.get("session_id") and row.get("turn_id")):
-                # Delivery of a quota-failure notice does not finish the user's
-                # request. Read only the existing Core correlation and Turn;
+                # Delivery of a quota failure or partial result does not finish
+                # the request. Read only the existing Core correlation and Turn;
                 # recovery eligibility, allowance and effects still belong to
                 # the original worker's fresh admission checks.
                 native = self.core.read_request(row["request_ref"])

@@ -29,7 +29,8 @@ def machine_defaults_store_path(runtime_root: Path) -> Path:
 
 def read_periodic_report_machine_defaults(runtime_root: Path) -> dict[str, Any] | None:
     return read_machine_configuration(
-        runtime_root, registry=build_builtin_machine_configuration_registry()
+        runtime_root, registry=build_builtin_machine_configuration_registry(),
+        namespace_ids=("periodic_report",),
     )
 
 

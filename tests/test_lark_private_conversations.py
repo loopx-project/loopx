@@ -276,6 +276,148 @@ def test_delivered_quota_failure_stays_pending_across_restart_without_replaying(
 
 
 @pytest.mark.parametrize("command", ["stop", "new"])
+@pytest.mark.parametrize("error_code", ["response_timeout", "upstream_transport_failure"])
+def test_delivered_timeout_stays_pending_without_replaying_and_honors_stop(ordinary, monkeypatch, command, error_code):  # noqa: F811
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    starts = []
+
+    def timeout_after_start(_adapter, message, event_sink):
+        starts.append(message)
+        event_sink("turn.started", {"upstream_turn_id": "synthetic-timeout"})
+        raise CodexChatAgentError("Synthetic upstream failure", gate=None, error_code=error_code)
+
+    monkeypatch.setattr(CodexAppServerAdapter, "start_turn", timeout_after_start)
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        transport.admit("notes-app", provider.event("notes-app", "timeout-pending", "Complete this request."))
+        row = transport.core.pending()[0]
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert failed["status"] == "failed" and failed["error_code"] == error_code
+        transport.reconcile()
+        saved = json.loads((transport.root / f"{row['request_ref']}.json").read_text())
+        assert saved["status"] == "delivered" and saved["deliveries"]["terminal"]["verified"]
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        before = ordinary[4].read_bytes(), list(provider.writes), store.messages(row["session_id"])
+        with monkeypatch.context() as observation_only:
+            observation_only.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("health admitted work"))
+            observation_only.setattr(transport.core, "recover_failed_request", lambda *_a, **_kw: pytest.fail("health replayed work"))
+            assert transport.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+            assert restarted.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+        assert (ordinary[4].read_bytes(), provider.writes, store.messages(row["session_id"])) == before
+        assert store.load_turn(row["session_id"], row["turn_id"]) == failed
+        assert len(starts) == 1 and "Complete this request." in starts[0]
+        transport.admit("notes-app", provider.event("notes-app", "retire-timeout", f"/{command}"))
+        transport.reconcile()
+        assert transport.health()[row["binding_id"]]["pending_count"] == 0
+        assert len(starts) == 1
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["stop", "new"])
+def test_delivered_unfinished_work_remains_visible_without_admitting_recovery(ordinary, monkeypatch, command):  # noqa: F811
+    store, runtime, _, _, _, fake, _ = ordinary
+    work = {"remaining": "Finish the verified remaining result", "dependency": "Temporary source outage", "effects_settled": True}
+    partial = "Partial result; authorized work remains.\n<loopx-review-json>" + json.dumps({
+        "message": "", "unfinished_work": work}) + "</loopx-review-json>"
+    source = fake.read_text()
+    start = source.index("        response = 'Visible runtime response.")
+    end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+    fake.write_text(source[:start] + f"        response = {partial!r}\n" + source[end:])
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = provider.event("notes-app", "unfinished-visible", "Finish this synthetic request.")
+        transport.admit("notes-app", event)
+        row = transport.core.pending()[0]
+        turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert turn["response"]["unfinished_work"] == work
+        transport.reconcile()
+        assert transport.core.read_request(row["request_ref"])["delivery_verified"]
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        starts = ordinary[4].read_bytes(), list(provider.writes)
+        with monkeypatch.context() as observation_only:
+            observation_only.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("health admitted work"))
+            observation_only.setattr(transport.core, "recover_failed_request", lambda *_args, **_: pytest.fail("health replayed work"))
+            assert transport.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+            assert restarted.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+        assert (ordinary[4].read_bytes(), provider.writes) == starts
+        assert store.load_turn(row["session_id"], row["turn_id"]) == turn
+        transport.admit("notes-app", provider.event("notes-app", "retire-unfinished", f"/{command}"))
+        transport.reconcile()
+        assert transport.health()[row["binding_id"]]["pending_count"] == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["stop", "new"])
+def test_original_quota_recovery_with_gate_remains_pending_after_verified_reply(ordinary, monkeypatch, command):  # noqa: F811
+    from datetime import timedelta, timezone
+    from loopx.capabilities.native_chat import external_conversations
+    from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+
+    store, runtime, _, _, _, fake, _ = ordinary
+    source = fake.read_text().replace('"codexErrorInfo": "cyberPolicy"', '"codexErrorInfo": "usageLimitExceeded"')
+    source = source.replace('            print(json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "durable-thread", "turnId": active_turn, "delta": "Partial answer."}}), flush=True)\n', '')
+    fake.write_text(source)
+    store, runtime, provider, transport = connect(ordinary)
+    try:
+        event = provider.event("notes-app", "quota-gate-visible", "typed terminal failure")
+        transport.admit("notes-app", event)
+        row = transport.core.pending()[0]
+        failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)
+        assert failed["error_code"] == "usage_limit_exceeded"
+        transport.reconcile()
+        failed_path = store._turn_path(row["session_id"], row["turn_id"])
+        failed_bytes = failed_path.read_bytes()
+        runtime.adapters.pop(row["session_id"]).close_session()
+        gate = {"kind": "authorization", "summary": "Original workspace authorization needs verification", "next_action": ""}
+        answer = "Recovery reached the original authorization boundary.\n<loopx-review-json>" + json.dumps({
+            "message": "", "gate": gate}) + "</loopx-review-json>"
+        source = source.replace('if "typed terminal failure" in json.dumps(request.get("params") or {}):', 'if False:')
+        start = source.index("        response = 'Visible runtime response.")
+        end = source.index('        print(json.dumps({"method": "item/agentMessage/delta"', start)
+        fake.write_text(source[:start] + f"        response = {answer!r}\n" + source[end:])
+        clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+        class AfterBackoff(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock
+        monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+        monkeypatch.setattr(CodexAppServerAdapter, "failed_request_observation", staticmethod(lambda **kw: {
+            "thread_id": "durable-thread", "turn_id": kw["turn_id"], "codex_error_info": "usageLimitExceeded",
+            "only_original_user_item": True, "quota_available": True,
+            "quota_observed_at": int(clock.timestamp() * 1000) / 1000}))
+        # The original scanner owns recovery; observing health never admits it.
+        transport = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        transport.reconcile()
+        continued = transport.core.read_request(row["request_ref"])
+        assert continued["turn_id"] != row["turn_id"] and continued["context_recovery"]["quota_attempt"] == 1
+        completed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=continued["turn_id"], timeout_sec=10)
+        assert completed["status"] == "completed" and completed["response"]["gate"] == gate
+        transport.reconcile_request(transport.root / f"{row['request_ref']}.json")
+        assert transport.core.read_request(row["request_ref"])["delivery_verified"]
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+            runner=provider, cli_bin="lark-cli")
+        before = ordinary[4].read_bytes(), list(provider.writes)
+        assert transport.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+        assert restarted.health()[row["binding_id"]] == {"pending_count": 1, "recovery_count": 0}
+        restarted.reconcile()
+        assert (ordinary[4].read_bytes(), provider.writes) == before
+        assert failed_path.read_bytes() == failed_bytes
+        assert store.load_turn(row["session_id"], continued["turn_id"]) == completed
+        transport.admit("notes-app", provider.event("notes-app", "retire-quota-gate", f"/{command}"))
+        transport.reconcile()
+        assert transport.health()[row["binding_id"]]["pending_count"] == 0
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("command", ["stop", "new"])
 def test_health_reads_source_controls_once_and_keeps_fresh_recovery(ordinary, monkeypatch, command):  # noqa: F811
     from loopx.capabilities.native_chat import external_conversations
     from loopx.control_plane import effect_runtime

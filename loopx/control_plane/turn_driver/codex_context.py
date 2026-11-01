@@ -119,8 +119,8 @@ def _read(path: Path, *, private: bool = True) -> dict[str, Any]:
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or (private and info.st_mode & 0o077) or info.st_size > MAX_REQUEST_BYTES):
             raise ValueError("context transport needs a bounded private regular file")
-        raw = stream.read(MAX_REQUEST_BYTES + 1)
-    if len(raw) > MAX_REQUEST_BYTES:
+        raw = stream.read(info.st_size + 1)
+    if len(raw) != info.st_size:
         raise ValueError("context transport file is too large")
     result = json.loads(raw)
     if not isinstance(result, dict):

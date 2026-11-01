@@ -16,7 +16,7 @@
 <link rel="stylesheet" href="../../images/edgebench-feedback-and-memory/article.css">
 </head>
 <body><main id="main"><div class="language"><a href="../">← LoopX 博客</a><a href="../../edgebench-feedback-and-memory/" lang="en">English</a></div>
-<header><p class="muted">黄睿腾 · 2026 年 10 月 29 日</p><h1>让 Agent 多做十小时，究竟多做出了什么？</h1><p class="subtitle">EdgeBench 如何反过来改造 LoopX 的长程控制面</p><p class="lead">一项研究可以起步更好，却在接下来的十小时里几乎没有增长。也可以不断改代码，最后丢掉最好结果。我们用这两种失败，重新审视目标、反馈、实验步长与恢复。</p><p>这条研究从 10 月初的轨迹诊断开始，先修评测与续跑，再追踪证据怎样进入下一次实验，最后把控制面自己的成本算进来。下面按这个过程展开：哪些机制改了，哪些结果支持它，哪些结果迫使我们改方向。</p></header><nav aria-label="文章目录"><a href="#research-history">研究时间线</a><a href="#ledger">可信反馈</a><a href="#goal-continuity">目标不丢</a><a href="#experiment-stride">实验步长</a><a href="#recovery-state">完整恢复</a><a href="#later-common-windows">后程结果</a><a href="#context">总成本</a></nav><section id="thesis">
+<header><p class="muted">黄睿腾 · 2026 年 10 月 29 日</p><h1>让 Agent 多做十小时，究竟多做出了什么？</h1><p class="subtitle">EdgeBench 如何反过来改造 LoopX 的长程控制面</p><p class="lead">一项研究可以起步更好，却在接下来的十小时里几乎没有增长。也可以不断改代码，最后丢掉最好结果。我们用这两种失败，重新审视目标、反馈、实验步长与恢复。</p><p>这条研究从 10 月初的轨迹诊断开始，先修评测与续跑，再追踪证据怎样进入下一次实验，最后把控制面自己的成本算进来。下面按这个过程展开：哪些机制改了，哪些结果支持它，哪些结果迫使我们改方向。</p></header><p>本文回答机制怎样改变真实研究，以及还没有改善什么。若想先看“下一次决定到底读到了什么”，可从<a href="../context-delivery/">上下文的渐进与差分交付</a>开始，再回到下文的成果与完整成本。</p><nav aria-label="文章目录"><a href="#research-history">研究时间线</a><a href="#ledger">可信反馈</a><a href="#goal-continuity">目标不丢</a><a href="#experiment-stride">实验步长</a><a href="#recovery-state">完整恢复</a><a href="#later-common-windows">后程结果</a><a href="#context">总成本</a></nav><section id="thesis">
 <p>这里的 kernel 指 LoopX 共享的目标、准入、事务和恢复规则。LoopX 让原始目标、验收条件、工作归属和证据跨会话、跨宿主持久化。控制面约束状态转换，为模型的下一步提供反馈，但不能认证这个选择是否高明。一条发现、一次读取回执、一条 replan 记录都只是中间证据；真正需要追踪的链条，要落到实际工作和经过验证的成果。</p>
 <p>这些规则的归属和<a href="../typescript-control-plane-refactor/#model-assisted-semantics">强模型参与的语义修复</a>，见 TypeScript 重构一文。下面从研究过程检查这些规则怎样影响实际工作。</p>
 <ol class="flow" aria-label="基于证据的工作循环"><li><strong>目标</strong><span>验收与范围</span></li><li><strong>证据</strong><span>结果与限制</span></li><li><strong>决策</strong><span>继续或换方向</span></li><li><strong>工作</strong><span>执行与验证</span></li><li><strong>保留</strong><span>保住最佳有效成果</span></li></ol>
@@ -75,7 +75,7 @@
 <details><summary>较早的字节对照与撤回的测量</summary><span id="staged-context"></span><span id="staged-transport"></span>
 <p>历史离线回放说明了为什么必须算总量：结构化 Host 和原生呈现字节下降 57.72%、60.23%，原生入口加完整恢复上升 6.37%。这些是历史字节观察，不是当前提交的模型 token 结果。早期离线探针还曾报告 CLI 字节增加 2.25%，但因漏掉最终 CLI 压缩并重新格式化入口，已撤回其实际 CLI 交付测量资格。该数字仅作为无效历史记录保留，不用于完整交付或成本结论。不能把视图缩小 60% 写成总成本下降 60%。</p>
 </details>
-<p>当前效率工作把普通入口、分段交付接到共享传输，减少重复读取和重新绑定，消掉可避免的结算往返。差分关闭的默认路径同样重要；开启后也必须正确恢复，并让产品和 benchmark 都易于启用。<strong>所有机制合计 15%</strong> 的参考目标尚未完成资格验证；它不是每个机制各有一份额度，也不能用来漏记失败和重建成本。</p>
+<p>这条效率主线把普通入口、分段交付接到共享传输，减少重复读取和重新绑定，消掉可避免的结算往返。当前 context delivery 的渐进选择、必要事实分层、精确共享与周期差分，另见<a href="../context-delivery/">完整机制与语音任务示例</a>。启用后的实际读取、关闭后的原路径和失效恢复都需要分别核验；新实现不能回填历史实验的资格。<strong>所有机制合计 15%</strong> 的参考目标尚未完成资格验证；它不是每个机制各有一份额度，也不能用来漏记失败和重建成本。</p>
 </section><details><summary>同点接续：完整结果与用量</summary><section id="memory"><h3>证据有没有改变下一步工作？</h3>
 <span id="decision-followthrough"></span><p>成熟 checkpoint 可以帮助观察一个具体决策边界。接收者继承相同科学状态和 incumbent，再追踪它读了什么证据、选了什么实验、实际做了什么、原生反馈如何。负向本地结果若能在明确条件下排除一条分支，也有价值。继续原方向有依据时，replan 不必强行改道。</p>
 <p>近期 <a href="https://github.com/loopx-project/loopx/pull/7269">#7269</a> 让 Agent 先读目标、事实和反馈，再读写回格式；释放过时的任务选择偏好，并在创建 successor 后保留原 Turn 的结算身份。它对应两个真实往返来源：决策前先读大段写入指令，以及后续任务创建后还要补一轮确认结算归属。</p>
@@ -110,6 +110,6 @@
 <p>截至 10 月 28 日的上下文研究让 Grid、Schema、Ad Placement 从原始任务开始，使用 Sol/max，每题最多 18h。可用的历史 Official 或旧 LoopX 作为描述性参考，保留模型／effort、源码、评分器、机会和时钟差异，不冒称严格配对；旧材料无法回答相应问题时再补 base。各次尝试按实际源码、连续性依据和传输路径分别分析，不合并成同一处理。</p>
 <p>先核实实际交付确实改变：首次完整读取、声明连续性依据的后续差分、已知基线失效时的完整回退，以及一次从复盘到工作的完整交互。再比较有效进展、成果保留和完整用量。开关、回执、局部小包都不能替代这些证据。Feature 偏离预期时，停止相关尝试，保留其成本和历史，修复后用新的尝试身份重启。</p>
 <p>新原生 Hook 路径的首批 Grid、Ad 交互已完成完整分页、一次差分及后续任务工作。同一次捕获内，差分载荷分别比对应完整包小 19.53%、19.48%；这只是一轮读取的载荷比较，不含分页封装、后续模型输入、Hook、恢复或复盘费用，不能外推为总成本下降。完整复盘到后续原生成果、持续收益和故障恢复仍待验证。</p><p>效果目标是很多小时之后仍能取得有效进展并保住成果；效率目标是用更低完整成本和人工介入取得同等验收价值。下一份结果需要同时回答它们；这些尝试沿用各自原定截止时间，替换尝试的失败和消耗也保留。</p>
-</section><footer><p>数值分别保留各历史模型、版本、窗口与有效性边界。公开实现：<a href="https://github.com/loopx-project/loopx">LoopX</a>。早期详细记录保留在<a href="https://github.com/loopx-project/loopx/blob/a9a720db/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html">上一版文章</a>。这里不发布原始轨迹、隐藏评测材料、运行时凭证或私有操作上下文。</p></footer>
+<p>这里保留的是 10 月 28 日的研究检查点。后续 reader、默认策略或编码器合入，不会使这些未验证项自动通过。<a href="../context-delivery/#evidence">机制文章的合成字节测量</a>与本节的模型轨迹属于不同证据层，不能拼成一项节费结论。</p></section><footer><p>数值分别保留各历史模型、版本、窗口与有效性边界。公开实现：<a href="https://github.com/loopx-project/loopx">LoopX</a>。早期详细记录保留在<a href="https://github.com/loopx-project/loopx/blob/a9a720db/apps/presentation/site/public/blog/zh/edgebench-feedback-and-memory/index.html">上一版文章</a>。这里不发布原始轨迹、隐藏评测材料、运行时凭证或私有操作上下文。</p></footer>
 </main></body>
 </html>

@@ -58,6 +58,9 @@ def _host_tool_gate(summary: str, next_action: str) -> dict[str, str]:
 # endpoint that is listed as a capability refused the session.
 AGENT_ENDPOINT_UNAVAILABLE = "agent_endpoint_unavailable"
 AGENT_ENDPOINT_NEXT_ACTIONS = {
+    "antigravity_unavailable": (
+        "Open Antigravity and sign in to its local Language Server, then retry this session."
+    ),
     "dsh_runtime_unavailable": (
         "The LoopX Chat service interpreter cannot import deepseek_harness. "
         "Run `loopx doctor` in that service environment and check python.executable; "

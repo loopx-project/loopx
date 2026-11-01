@@ -954,6 +954,27 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
                 "digest only; raw names and values stay private"
             ),
         },
+        "task_service_access": {
+            "policy_schema": "benchmark_task_service_access_v0",
+            "receipt_schema": "benchmark_task_service_access_receipt_v0",
+            "authority": "runner",
+            "purpose": "benchmark_task_service",
+            "hint": (
+                "Declare exact container-host HTTP origins only when the runner "
+                "proves that each origin is the isolated benchmark task service."
+            ),
+            "fail_closed_on": [
+                "undeclared_origin",
+                "wrong_port",
+                "lookalike_host",
+                "userinfo",
+                "mixed_external_request",
+            ],
+            "public_receipt_boundary": (
+                "authorization id and digest, request and origin counts, and an "
+                "origin-set digest only; raw origins stay private"
+            ),
+        },
         "declared_feedback_protocol": {
             "default": "official_feedback_blinded",
             "opt_in": {
@@ -1149,6 +1170,16 @@ BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
         },
         {
             "schema_version": "benchmark_task_environment_access_receipt_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_service_access_v0",
+            "module": "loopx.capabilities.benchmark_toolkit.integrity",
+            "doc": "loopx/capabilities/benchmark_toolkit/README.md",
+        },
+        {
+            "schema_version": "benchmark_task_service_access_receipt_v0",
             "module": "loopx.capabilities.benchmark_toolkit.integrity",
             "doc": "loopx/capabilities/benchmark_toolkit/README.md",
         },

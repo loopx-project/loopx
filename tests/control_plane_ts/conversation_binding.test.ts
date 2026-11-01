@@ -4,6 +4,7 @@ import {planConversationBinding, resolveBoundConversation, planBoundConversation
   stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget,
   listLocalBoundSessions} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 import {resolveConversationScope, projectConversationIdentity} from "../../loopx/control_plane/collaboration/conversation_scope.ts";
+import {stewardManagedBasis} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 
 const project = {kind: "project_workspace", project_ref: "a".repeat(24), workspace_path: "/authorized/notes",
   audience: "local_owner", grant: "workspace_read"};
@@ -16,6 +17,38 @@ const observation = {transport_ref: row.transport_ref, provider_ref: row.provide
 const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision: 0, bindings: []};
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
+
+for (const endpoint of ["codex", "antigravity", "kiro-cli"]) {
+  test(`retained steward identity permits bound reads after selecting ${endpoint}`, () => {
+    const actor = {schema_version: "loopx_steward_managed_actor_v0",
+      goal_id: `steward-agent-${"8".repeat(24)}`, goal_instance_id: null, agent_id: "steward",
+      session_id: "7".repeat(32), source_ref: "6".repeat(24), creation_operation_id: "original-creation"};
+    const steward = {...row, binding_id: "8".repeat(24), transport_ref: "owner-steward",
+      provider_ref: "9".repeat(24), context_kind: "steward", grant: "portfolio_read", goal_ids: [],
+      executor_endpoint_id: endpoint, managed_actor: actor};
+    const configured = {...planConversationBinding(request).state, bindings: [row, steward]};
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const notes = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: [project], ...source});
+    assert.deepEqual(notes.binding, row, "An unrelated steward cannot block project admission");
+    const selected = resolveBoundConversation({current: configured, binding_id: steward.binding_id,
+      observation: {...observation, transport_ref: steward.transport_ref, provider_ref: steward.provider_ref},
+      available_projects: [project], ...source});
+    assert.deepEqual(selected.binding.managed_actor, actor);
+    assert.equal(selected.binding.executor_endpoint_id, endpoint);
+    for (const invalid of [{...steward, context_kind: "project", grant: "workspace_read"},
+      {...steward, audience: "group", group_refs: ["5".repeat(24)]},
+      {...steward, managed_actor: {...actor, agent_id: "another-agent"}}]) {
+      assert.throws(() => resolveBoundConversation({current: {...configured, bindings: [row, invalid]},
+        binding_id: row.binding_id, observation, available_projects: [project], ...source}));
+    }
+    if (endpoint !== "codex") {
+      assert.throws(() => stewardManagedBasis({binding: steward,
+        session: {steward_context: selected.context}, observation}), /original idle private steward/,
+      "Retaining an identity cannot authorize unsupported native execution");
+    }
+  });
+}
 
 test("unfinished completed work requires typed intent and latest settled native/source proof, once", () => {
   const configured = planConversationBinding(request).state;
@@ -729,4 +762,68 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
   for (const changed of [{...original, command: "stop"}, {...original, status: "rejected"}]) {
     assert.equal(planBoundConversationRequest({...packet, request: changed}).pending, false);
   }
+});
+
+for (const errorCode of ["response_timeout", "upstream_transport_failure",
+  "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"]) {
+test(`delivered ${errorCode} notices retain the exact failed request, including other executors`, () => {
+  const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "timed-out", delivery_verified: true};
+  const turn = {session_id: "original", turn_id: "timed-out", status: "failed", error_code: errorCode};
+  const packet = {request, current_session: {session_id: "original", status: "ready", agent_id: "antigravity"},
+    pending_observation: {turn, stop_observed: false}};
+  assert.deepEqual(planBoundConversationRequest(packet), {pending: true});
+  assert.equal(planBoundConversationRequest({...packet, current_session: null}).pending, true);
+  assert.equal(planBoundConversationRequest({...packet,
+    pending_observation: {turn, stop_observed: true}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...packet.current_session, status: "closed"}}).pending, false);
+  for (const changed of [{...turn, session_id: "foreign"}, {...turn, turn_id: "foreign"},
+    {...turn, status: "completed"}, {...turn, error_code: "policy"}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      pending_observation: {turn: changed, stop_observed: false}}).pending, false);
+  }
+  assert.equal(planBoundConversationRequest({...packet, request: {...request, command: "stop"}}).pending, false);
+});
+}
+
+test("delivered partial results remain pending without authorizing another execution", () => {
+  const original = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "partial"};
+  const work = {remaining: "Finish the retained result", dependency: "Temporary source outage", effects_settled: true};
+  const response = {message: "Partial result", proposals: [], gate: null, protected_action: null, unfinished_work: work};
+  const turn = {session_id: "original", turn_id: "partial", status: "completed", response};
+  const packet = {request: original, current_session: {session_id: "original", status: "ready"},
+    pending_observation: {turn, stop_observed: false}};
+  assert.deepEqual(planBoundConversationRequest(packet), {pending: true});
+  for (const unfinished_work of [null, {...work, effects_settled: false}, {...work, remaining: ""}, {...work, extra: true}]) {
+    assert.equal(planBoundConversationRequest({...packet, pending_observation: {turn: {...turn,
+      response: {...response, unfinished_work}}, stop_observed: false}}).pending, false);
+  }
+  for (const changed of [{...turn, response: {...response, gate: {kind: "approval"}}},
+    {...turn, response: {...response, protected_action: {kind: "publish"}}},
+    {...turn, response: {...response, proposals: [{kind: "new-work"}]}},
+    {...turn, session_id: "foreign"}, {...turn, turn_id: "foreign"}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      pending_observation: {turn: changed, stop_observed: false}}).pending, false);
+  }
+  assert.equal(planBoundConversationRequest({...packet, pending_observation: {turn, stop_observed: true}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...packet.current_session, status: "closed"}}).pending, false);
+
+  const recovery = {quota_attempt: 1, failed_turn_id: "quota-failure", client_turn_id: "original-quota-continuation"};
+  const gated = {...turn, client_turn_id: recovery.client_turn_id,
+    response: {...response, unfinished_work: null, gate: {kind: "authorization", summary: "Verification remains blocked"}}};
+  const waiting = {...packet, request: {...original, context_recovery: recovery},
+    pending_observation: {turn: gated, stop_observed: false}};
+  assert.deepEqual(planBoundConversationRequest(waiting), {pending: true});
+  for (const context_recovery of [null, {...recovery, quota_attempt: 0}, {...recovery, quota_attempt: 4},
+    {...recovery, failed_turn_id: "partial"}, {...recovery, client_turn_id: "unrelated"}]) {
+    assert.equal(planBoundConversationRequest({...waiting,
+      request: {...original, context_recovery}}).pending, false);
+  }
+  assert.equal(planBoundConversationRequest({...waiting, pending_observation: {turn: {...gated,
+    response: {...gated.response, gate: null}}, stop_observed: false}}).pending, false);
+  assert.equal(planBoundConversationRequest({...waiting,
+    pending_observation: {turn: gated, stop_observed: true}}).pending, false);
 });
