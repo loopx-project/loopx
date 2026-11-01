@@ -27,6 +27,9 @@ test("observed Git origins use the Todo repository identity contract", {
   git("-C", main, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
     "commit", "--allow-empty", "-m", "fixture");
   git("-C", main, "worktree", "add", "-b", "fixture", worktree);
+  await mkdir(join(worktree, "docs"));
+  await writeFile(join(worktree, "docs/guide.md"), "public fixture\n");
+  const overlaps = (path: string) => evaluateTaskLeaseWriteScopesOverlap({left: ["docs/**"], right: [path]}).overlap === true;
   for (const [origin, expected] of [
     ["https://GITHUB.com:443/example/project.git", repo],
     ["ssh://git@github.com:22/example/project.git", repo],
@@ -37,7 +40,7 @@ test("observed Git origins use the Todo repository identity contract", {
   ]) {
     await t.test(origin, async () => {
       git("-C", main, "config", "remote.origin.url", origin);
-      const observed = await observeLeaseWorktree(worktree, () => false);
+      const observed = await observeLeaseWorktree(worktree, overlaps);
       assert.equal(observed.repository, expected);
       const input = request();
       const decision = evaluateTaskLeaseAcquireDecision({...input, other_leases: [],
@@ -56,7 +59,7 @@ test("observed Git origins use the Todo repository identity contract", {
   ]) {
     await t.test(`reject ${origin}`, async () => {
       git("-C", main, "config", "remote.origin.url", origin);
-      await assert.rejects(observeLeaseWorktree(worktree, () => false));
+      await assert.rejects(observeLeaseWorktree(worktree, overlaps));
     });
   }
 });
