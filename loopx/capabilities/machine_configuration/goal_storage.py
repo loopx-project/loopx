@@ -46,7 +46,9 @@ def new_goal_storage_target(runtime_root: Path) -> dict[str, Any]:
     from .builtins import build_builtin_machine_configuration_registry
     from .store import read_machine_configuration
     registry = build_builtin_machine_configuration_registry()
-    configuration = read_machine_configuration(runtime_root, registry=registry)
+    configuration = read_machine_configuration(
+        runtime_root, registry=registry, namespace_ids=("goal_storage",),
+    )
     raw = (configuration or {}).get("namespaces", {}).get("goal_storage")
     if raw is None:
         # Reuse the registered configuration owner also projected by Settings.

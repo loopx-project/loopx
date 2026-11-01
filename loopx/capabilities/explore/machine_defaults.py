@@ -104,4 +104,5 @@ def resolve_explore_goal(goal: Mapping[str, Any], runtime_root: Path) -> dict[st
 
     return apply_explore_machine_default(goal, read_machine_configuration(
         runtime_root, registry=build_builtin_machine_configuration_registry(),
+        namespace_ids=("explore_harness",),
     ))

@@ -106,6 +106,59 @@ def test_unknown_namespace_and_unknown_envelope_field_fail_closed() -> None:
         normalize_machine_configuration(config, registry=_registry())
 
 
+def test_read_scope_uses_only_its_registered_owner_and_leaves_siblings_opaque(tmp_path):
+    import json
+    from loopx.capabilities.machine_configuration.store import (
+        configure_machine_configuration, read_machine_configuration,
+    )
+
+    config = _config()
+    config["namespaces"]["future_setting"] = {"schema_version": "unrecognized_v1"}
+    path = tmp_path / "machine/configuration.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(config))
+    before = path.read_bytes()
+    selected = read_machine_configuration(tmp_path, registry=_registry(), namespace_ids=("example",))
+    assert selected == _config()
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError, match="unsupported machine-configuration namespace"):
+        read_machine_configuration(tmp_path, registry=_registry())
+    with pytest.raises(ValueError, match="unsupported machine-configuration namespace"):
+        configure_machine_configuration(runtime_root=tmp_path, configuration=config, registry=_registry())
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("field,value,error", [
+    ("schema_version", "example_v1", ValueError),
+    ("enabled", "false", TypeError),
+    ("surprise", True, ValueError),
+])
+def test_scoped_read_still_rejects_an_invalid_selected_owner(field, value, error):
+    config = _config()
+    config["namespaces"]["example"][field] = value
+    with pytest.raises(error):
+        normalize_machine_configuration(config, registry=_registry(), namespace_ids=("example",))
+
+
+def test_known_absent_read_owner_is_absent_without_certifying_an_unknown_sibling():
+    config = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {"future": None}}
+    assert normalize_machine_configuration(config, registry=_registry(), namespace_ids=("example",)) == {
+        "schema_version": "loopx_machine_configuration_v0", "namespaces": {},
+    }
+    for scope in ((), ("unregistered_owner",)):
+        with pytest.raises(ValueError):
+            normalize_machine_configuration(config, registry=_registry(), namespace_ids=scope)
+
+
+@pytest.mark.parametrize("change", [
+    {"arbitrary": True}, {"schema_version": "unrecognized_v1"},
+    {"namespaces": []}, {"namespaces": {}},
+])
+def test_read_scope_cannot_hide_a_malformed_machine_envelope(change):
+    with pytest.raises((ValueError, TypeError)):
+        normalize_machine_configuration({**_config(), **change}, registry=_registry(), namespace_ids=("example",))
+
+
 def test_consumer_schema_version_and_fields_are_enforced() -> None:
     config = _config()
     config["namespaces"]["example"]["schema_version"] = "example_v1"
