@@ -299,7 +299,7 @@ class CodexAppServerAdapter:
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
+        hard_timeout_sec: float | None = None,
         execution_mode: bool = False,
         runtime_profile: str = "restricted",
         sandbox: str | None = None,

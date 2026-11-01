@@ -32,6 +32,27 @@ loopx dashboard
 `loopx dashboard --no-open`，并访问命令实际打印的 URL。默认地址为
 `http://127.0.0.1:8767/chat/`。
 
+普通 Codex / ACP 交互任务默认不设总时长截止；有持续进展的工作可以继续。
+启动连接和无活动检测仍有期限，停止操作仍可中断。需要限时可显式传入
+`--hard-timeout-seconds 1800`；`--hard-timeout-seconds 0` 取消该截止。
+已有 macOS 服务保留原设置，使用 `LOOPX_CHAT_HARD_TIMEOUT_SECONDS=0`
+经既有安装/启动管理器更新；有已接收任务时先等其结束，不强杀服务。
+已接收的排队消息默认保留到执行或停止，显式 TTL 仍会到期。
+这不改变 Goal、租约、权限、实验预算或有界 managed-host segment 的期限；
+持续执行仍消耗宿主模型与工具额度。旧超时记录保留，恢复时先核对已产生的效果，
+继续尚未完成的部分，避免重复外发、委派或其他操作。
+
+English: Interactive Codex/ACP turns have no default wall-clock cutoff. Startup,
+idle detection and Stop remain active. Set `--hard-timeout-seconds 1800` for an
+explicit deadline, or `0` to disable it. Existing managed macOS installations
+preserve their setting; update through their existing service owner using
+`LOOPX_CHAT_HARD_TIMEOUT_SECONDS=0` and wait for accepted work to settle before
+activation. Accepted queued input no longer expires implicitly; explicit TTLs
+still apply. Goal/lease/permission boundaries, experiment budgets and bounded
+managed-host segments remain in force. Continued execution still consumes host
+allowance. Retain old timeout records and reconcile effects before continuing
+unfinished work.
+
 <details>
 <summary>可选：从终端检查页面和状态是否可读</summary>
 

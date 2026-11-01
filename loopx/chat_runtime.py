@@ -237,7 +237,7 @@ class ChatRuntimeController:
         kiro_cli_bin: str = KIRO_CLI_BIN,
         startup_timeout_sec: float | None = None,
         idle_timeout_sec: float = 180.0,
-        hard_timeout_sec: float = 900.0,
+        hard_timeout_sec: float | None = None,
         endpoint_registry: AgentEndpointRegistry | None = None,
         registry_path: Path | None = None,
         manager_scope_resolver: Callable[[dict[str, Any]], list[str] | None] | None = None,
@@ -465,7 +465,7 @@ class ChatRuntimeController:
                 provider=str(profile["provider"]),
                 model=model,
                 reasoning_effort=reasoning_effort,
-                timeout_sec=self.hard_timeout_sec,
+                timeout_sec=self.hard_timeout_sec if self.hard_timeout_sec is not None else 900.0,
                 # A segment is fresh, so this adapter carries the visible history
                 # itself instead of relying on a host session to remember it.
                 history=list(history or []),
