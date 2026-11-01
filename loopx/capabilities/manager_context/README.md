@@ -34,6 +34,47 @@ Keep the policy private (0600); do not commit it. A read grant without a sender
 grant is insufficient. This does not grant remote delivery, evidence reads,
 worker launch, Todo/lease changes or protected operations.
 
+### Several recipients in one conversation Turn
+
+`context_handoff` retains the single-request object and also accepts an array
+of up to 32 `{goal_id, agent_id, brief, execution_binding_id?}` objects. Each
+array entry needs its own complete `collaboration_brief_v0`; the exact Goal/Agent
+pair must be unique. An empty array means no handoff. Invalid syntax rejects the
+whole envelope before effects. This is targeted delivery, not a broadcast list
+or a team assignment. The model resolves every recipient from current authorized
+responsibilities and work; it must not make one recipient relay a multi-party
+question just because the transport formerly admitted one object.
+
+The host uses the same per-recipient source policy, Goal lifetime fence, inbox,
+request identity and original-conversation return. Live authorization is checked
+for each entry; cancellation or revocation can therefore leave a partial result.
+Successful entries appear in `context_handoff_receipts`, refusals in
+`context_handoff_failures`, and each independent execution selection in
+`context_executions`. There is no all-or-nothing transaction or new scheduler.
+Retrying the same source/recipient reuses its original request, including after
+a lost answer; it does not resend completed effects or reset a receiver's work.
+
+The conversation renders each recipient's own brief, controls, read/adoption and
+return state. One conclusion cannot settle the remaining recipients. Each reply
+returns to the original source through the existing outbox; a peer does not gain
+access to another recipient's private reply. A batch grants no Todo, lease,
+priority, worker launch, protected operation or extra audience access. Existing
+single-request receipts and callers remain readable without migration. Model
+recipient selection, real worker completion, installed App and provider delivery
+still need their respective qualification; deterministic transport tests alone
+do not establish them.
+
+In the conversation, read each recipient card separately: a delivered inbox
+request is not receiver adoption, and adoption is not a returned conclusion.
+Expand **View delegation details** for that recipient's brief and existing
+request controls. The desktop example keeps both recipients visible; the narrow
+example shows a selected brief with vertical scrolling. These are synthetic
+packaged-browser examples, not evidence of installed or real-model completion.
+
+![One request, two independent recipient cards](../../../docs/assets/personal-workspace/multi-recipient/conversation.png)
+
+![Recipient detail in the narrow conversation](../../../docs/assets/personal-workspace/multi-recipient/recipient-detail.png)
+
 ### Executing already bound work
 
 An operator may separately authorize an external audience to select existing

@@ -135,7 +135,18 @@ function proveCommittedRequest(value: unknown): JsonObject {
       || facts?.authorized_source_id !== request.source_id) {
     return { kind: "unproved", reason: "source_mismatch" };
   }
-  const receiptValue = turn.context_handoff_receipt;
+  let receiptValue = turn.context_handoff_receipt;
+  if (turn.context_handoff_receipts != null) {
+    if (receiptValue != null || !Array.isArray(turn.context_handoff_receipts)) {
+      return {kind: "unproved", reason: "handoff_receipt_conflict"};
+    }
+    const receipts = turn.context_handoff_receipts.map(jsonObject);
+    const matching = receipts.filter(receipt => receipt?.request_id === request.request_id);
+    if (receipts.some(receipt => !receipt) || matching.length !== 1) {
+      return {kind: "unproved", reason: "handoff_receipt_conflict"};
+    }
+    receiptValue = matching[0];
+  }
   if (receiptValue !== null && receiptValue !== undefined) {
     const receipt = jsonObject(receiptValue);
     const receiptRef = optionalGoalRef(receipt?.goal_ref);

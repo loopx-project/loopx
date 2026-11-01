@@ -899,6 +899,7 @@ export type ChatVisibleMessage = {
   /** Client-side lineage added when messages from several Sessions are merged. */
   session_id?: string;
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   origin?: string;
   attachments?: ChatImageAttachment[];
   /** Read-only original-source view; text remains the canonical model input. */

@@ -764,9 +764,9 @@ def normalize_agent_response(
 ) -> dict[str, Any]:
     """Normalize one structured provider response to the public Chat contract."""
 
-    from .capabilities.manager_context import normalize_request
+    from .control_plane.collaboration.inbox import normalize_handoff
 
-    handoff = normalize_request(payload.get("context_handoff"))
+    handoff = normalize_handoff(payload.get("context_handoff"))
     protected = tuple(protected_paths)
     message = redact_response_markdown(
         str(payload.get("message") or ""),

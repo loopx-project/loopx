@@ -30,6 +30,7 @@ def main():
     args.add_argument("--status-file", type=Path, required=True)
     args.add_argument("--assets-dir", type=Path)
     args.add_argument("--long-history", action="store_true")
+    args.add_argument("--multi-recipient", action="store_true")
     args.add_argument("--canonical-storage", choices=("sqlite", "file"), default="sqlite")
     args.add_argument("--requests", type=int, default=13)
     selected = args.parse_args()
@@ -111,6 +112,25 @@ def main():
         report(runtime, "billing-exports", target["agent_id"], last_receipt["request_id"], "conclusion",
             "已核对本次迁移说明与示例，版本一致，原始检查结果已保留。", registry=registry,
             caller_goal_ref=last_receipt["goal_ref"])
+
+        if selected.multi_recipient:
+            from loopx.capabilities.manager_context.execution import handoff_response
+            turn, _ = store.create_turn(session["session_id"], client_turn_id="multi-recipient",
+                message="请 builder 和 reviewer 分别核对迁移方案，独立返回结论。", origin="web")
+            response = handoff_response(runtime, registry, session=session, turn=turn,
+                response={"message": "分别交给两位负责的 Agent，结果返回本次对话。", "context_handoff": [
+                    {"goal_id": "billing-exports", "agent_id": agent, "brief": {**brief,
+                        "purpose": "核对迁移方案 · " + agent}} for agent in ("builder", "reviewer")]},
+                source_store=store, source_authorized=lambda: True, execution_allowed=lambda: True)
+            if len(response["context_handoff_receipts"]) != 2:
+                raise RuntimeError("Both synthetic recipients must receive independently")
+            store.append_message(session["session_id"], role="assistant", text=response["message"],
+                turn_id=turn["turn_id"], origin="web")
+            store.update_turn(session["session_id"], turn["turn_id"], status="completed", response=response)
+            store.finalize_managed_turn_completion(session["session_id"], turn["turn_id"])
+            last_receipt = response["context_handoff_receipts"][1]
+            acknowledge(runtime, "billing-exports", "reviewer", last_receipt["request_id"], "adopt",
+                "独立核查迁移方案。", registry=registry, caller_goal_ref=last_receipt["goal_ref"])
 
         class Handler(ChatRequestHandler):
             def do_POST(self):
@@ -195,6 +215,11 @@ def main():
                     server.deliver_window = True
                 elif command == "recover":
                     server.fault = server.fault_window = server.deliver_window = False
+                elif command == "report-multi" and selected.multi_recipient:
+                    report(runtime, "billing-exports", "reviewer", last_receipt["request_id"], "conclusion",
+                        "reviewer 已完成独立核查；builder 的结论仍待返回。", registry=registry,
+                        caller_goal_ref=last_receipt["goal_ref"])
+                    drain(runtime, registry, store, lambda *_: None)
                 elif command == "deliver":
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "source-unavailable":

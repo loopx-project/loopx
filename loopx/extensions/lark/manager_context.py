@@ -375,7 +375,7 @@ def manager_message(text: str, materials: object, *, reply_context: str = "") ->
     context = materials if isinstance(materials, list) else []
     lines = [
         "这是来自已绑定 Lark 管家群的已授权用户消息。请直接回答当前问题；"
-        "对已有授权的意图委托使用 context_handoff，直接交给目标 Agent 自主判断并推进，"
+        "对已有授权的意图委托使用 context_handoff；同时询问多位 Agent 时使用逐接收者完整简报数组，各自校验授权、投递及回传，直接交给目标 Agent 自主判断并推进，"
         "不要添加确认或直接替它改优先级。"
     ]
     if reply_context:
