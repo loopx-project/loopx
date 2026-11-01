@@ -221,7 +221,7 @@ def connect(fixture):
                                                              runner=provider, cli_bin="lark-cli")
 
 
-@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "unfinished", "source-changed", "closed", "lost-ack", "message-crash"])
+@pytest.mark.parametrize("case", ["normal", "invalid-metadata", "metadata-only", "unfinished", "source-changed", "closed", "lost-ack", "message-crash"])
 def test_original_worker_recovers_native_result_without_replay(tmp_path, language_server, monkeypatch, case):  # noqa: F811
     from test_native_steward_private import steward
     from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
@@ -236,10 +236,12 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
         binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
             executor_endpoint_id="antigravity", context_kind="steward")
         original = AntigravityAdapter.start_turn
-        language_server["invalid_handoff"] = case == "invalid-metadata"
+        language_server["invalid_handoff"] = case in {"invalid-metadata", "metadata-only"}
         language_server["unfinished"] = case == "unfinished"
         def lost_core_terminal(adapter, message, event_sink):
-            original(adapter, message, event_sink)
+            result = original(adapter, message, event_sink)
+            if case == "metadata-only":
+                return result
             raise CodexChatAgentError("Synthetic lost Core terminal commit", gate=None, error_code="antigravity_rpc_error")
         monkeypatch.setattr(AntigravityAdapter, "start_turn", lost_core_terminal)
         event = provider.event("steward-app", "native-original", "Complete the original request")
@@ -247,6 +249,15 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
         ref = identity_ref(binding["provider_ref"], event["message_id"])
         row = transport.core.read_request(ref)
         failed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+        if case == "metadata-only":
+            assert failed["status"] == "completed" and failed["response"]["gate"]["kind"] == "response_metadata_invalid"
+            assert transport.reconcile() == 1
+            assert transport.health()[row["binding_id"]]["pending_count"] == 1
+            assert "Argon answer 1" in provider.writes[-1][1]
+            assert "相关操作和委派尚未提交" in provider.writes[-1][1]
+            assert not transport.core.context_recovery_candidate(ref)  # No business replay.
+            assert language_server["sent_count"] == 1
+            return
         assert failed["status"] == "failed" and failed["error_code"] == "antigravity_rpc_error"
         assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
         path = transport.root / f"{ref}.json"
@@ -273,6 +284,8 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
             with pytest.raises(OSError, match="journal/message crash"):
                 transport.reconcile()
             monkeypatch.setattr(store, "append_message", append)
+            monkeypatch.setattr(ChatExternalConversations, "_native_result_text",
+                                staticmethod(lambda _: pytest.fail("Frozen message intent was regenerated")))
         if case == "lost-ack":
             # The original intent owner retains/reconciles an uncertain write.
             try:

@@ -1192,7 +1192,7 @@ steering、stop/new 与 attached-host 路由。provider 读回必须完整覆盖
 还在既有 `turn.started` 事件中保存发送前 prompt hash 和原生起始索引。证据缺失、
 冲突或以 stream error 结束时继续保留待办。
 
-既有请求 journal 先预留采用结果，再以确定性 message id 追加一条 canonical Chat
+既有请求 journal 先冻结采用结果和消息正文，再以确定性 message id 追加一条 canonical Chat
 消息；原失败 Turn、事件和已送达的失败通知均不改写。飞书沿同一个 Inbox 意图与
 读回路径使用独立阶段，崩溃后恢复同一消息和回执。写入后丢失确认仍记为欠回，
 不能盲目重发。操作元数据无效时保留正文、明确显示 gate，不提交其中任何动作；

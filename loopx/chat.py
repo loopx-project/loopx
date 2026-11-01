@@ -839,9 +839,9 @@ def parse_agent_response(
                 # Preserve prose, but admit none of the unvalidated actions.
                 if not isinstance(payload.get("message"), str) or not payload["message"].strip():
                     raise
-                return normalize_agent_response({"message": payload["message"],
-                    "gate": {"kind": "response_metadata_invalid", "summary":
-                        "答复正文已保留，但操作或委派元数据未通过校验；相关操作和委派尚未提交。"}},
+                summary = "答复正文已保留，但操作或委派元数据未通过校验；相关操作和委派尚未提交。"
+                return normalize_agent_response({"message": payload["message"] + "\n\n待处理：" + summary,
+                    "gate": {"kind": "response_metadata_invalid", "summary": summary}},
                     protected_paths=protected)
         key = re.search(r'"message"\s*:\s*', body)
         if key:

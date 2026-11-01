@@ -1817,7 +1817,7 @@ and input time inside the failed Turn. New inputs additionally persist the
 pre-send prompt hash and native start index in the existing `turn.started` event.
 Missing, conflicting or stream-error evidence keeps the request pending.
 
-The existing request journal reserves the adopted result before appending one
+The existing request journal freezes the adopted result and rendered message before appending one
 deterministic canonical Chat message. The original failed Turn, events and
 delivered failure notice remain unchanged. Lark uses a distinct phase in the
 same Inbox intent/readback path; a crash resumes the same message and receipt.

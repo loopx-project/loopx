@@ -57,7 +57,18 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   for (const change of [{status: "closed"}, {session_mode: "attached_host"}, {agent_id: "codex"}]) {
     assert.equal(planBoundConversationRequest({...packet, current_session: {...session, ...change}}).recovery_candidate, false);
   }
-  const adopted = {turn_id: "failed", native_observation: proof, delivery_verified: true};
+  assert.throws(() => planBoundConversationRequest({...packet,
+    binding: {...selected, audience: "group", group_refs: ["a".repeat(24)]}}), /group Chat requires a native project executor/);
+  const newRef = "9".repeat(24);
+  assert.equal(planBoundConversationRequest({...packet, request: {...packet.request, request_ref: newRef},
+    context_recovery: {...packet.context_recovery, failed_turn: {...failed, client_turn_id: `external-${newRef}`},
+      native_observation: {...proof, request_ref: newRef}}}).recovery_eligible, true);
+  const adopted = {turn_id: "failed", message_id: "native.failed.recovered", message_text: "Frozen answer",
+    native_observation: proof, delivery_verified: true};
+  assert.equal(planBoundConversationRequest({...packet,
+    request: {...packet.request, native_result_recovery: {...adopted, delivery_verified: false}}}).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest({...packet,
+    request: {...packet.request, native_result_recovery: {...adopted, delivery_verified: false, message_id: "other"}}}).recovery_eligible, false);
   const delivered = {...packet.request, native_result_recovery: adopted};
   assert.equal(planBoundConversationRequest({...packet, request: delivered}).recovery_candidate, false);
   assert.equal(planBoundConversationRequest({request: delivered, current_session: session,
@@ -71,6 +82,9 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
       unfinished_work: {remaining: "Still owed", dependency: "Original worker", effects_settled: true}}}}};
   assert.equal(planBoundConversationRequest({request: unfinished, current_session: session,
     pending_observation: {turn: failed, stop_observed: false}}).pending, true);
+  assert.equal(planBoundConversationRequest({request: packet.request, current_session: session,
+    pending_observation: {turn: {...failed, status: "completed", response: {...proof.response,
+      gate: {kind: "response_metadata_invalid", summary: "Action metadata was not admitted"}}}, stop_observed: false}}).pending, true);
 });
 
 for (const endpoint of ["codex", "antigravity", "kiro-cli"]) {

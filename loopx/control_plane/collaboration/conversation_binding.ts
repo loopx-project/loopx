@@ -461,13 +461,17 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && turn?.client_turn_id === reservation.client_turn_id
       && gate !== null && typeof gate === "object" && !Array.isArray(gate)
       && typeof (gate as JsonObject).kind === "string" && typeof (gate as JsonObject).summary === "string";
+    const invalidMetadata = gate !== null && typeof gate === "object" && !Array.isArray(gate)
+      && (gate as JsonObject).kind === "response_metadata_invalid" && typeof (gate as JsonObject).summary === "string";
     const unfinished = turn?.status === "completed" && response !== null
-      && (unfinishedProjectWork(response) !== null || quotaGate);
+      && (unfinishedProjectWork(response) !== null || quotaGate || invalidMetadata);
     const recovered = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "recovered native result");
     const native = recovered?.native_observation as JsonObject | undefined;
     const result = native?.response as JsonObject | undefined;
     const returned = recovered?.delivery_verified === true && recovered.turn_id === row.turn_id
+      && recovered.message_id === `native.${row.turn_id}.recovered`
+      && typeof recovered.message_text === "string" && recovered.message_text.length > 0
       && result != null && !["gate", "context_handoff", "protected_action", "goal_draft", "unfinished_work"].some(key => result[key])
       && Array.isArray(result.proposals) && result.proposals.length === 0;
     return {pending: !returned && row.command === null && row.status === "accepted"
@@ -599,7 +603,10 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       && [proof.input_sha256, proof.answer_sha256].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
       && response?.schema_version === "loopx_chat_agent_response_v0"
       && typeof response.message === "string" && response.message.trim().length > 0
-      && (adopted === null || adopted.turn_id === failed.turn_id && isDeepStrictEqual(adopted.native_observation, proof))};
+      && (adopted === null || adopted.turn_id === failed.turn_id
+        && adopted.message_id === `native.${failed.turn_id}.recovered`
+        && typeof adopted.message_text === "string" && adopted.message_text.length > 0
+        && isDeepStrictEqual(adopted.native_observation, proof))};
   }
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
   // One completed-work continuation is terminal for this request, including

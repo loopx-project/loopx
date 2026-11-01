@@ -271,7 +271,7 @@ class ChatExternalConversations:
         text = "已恢复本次请求的原答复：\n\n" + response["message"]
         if any(response.get(key) for key in ("context_handoff", "proposals", "protected_action", "goal_draft")):
             text += "\n\n操作状态：本次仅恢复原答复，结构化操作或委派尚未提交；未重新执行原请求。"
-        if (response.get("gate") or {}).get("summary"):
+        if (response.get("gate") or {}).get("summary") and response["gate"]["summary"] not in text:
             text += "\n\n待处理：" + response["gate"]["summary"]
         if response.get("unfinished_work"):
             text += "\n\n未完事项：" + response["unfinished_work"]["remaining"]
@@ -322,11 +322,12 @@ class ChatExternalConversations:
             if recovered is None:
                 recovered = {"turn_id": turn["turn_id"], "native_observation": proof,
                     "message_id": f"native.{turn['turn_id']}.recovered", "delivery_verified": False}
+                recovered["message_text"] = self._native_result_text(recovered)
                 row["native_result_recovery"] = recovered
                 _atomic_write_json(path, row)
             # The same explicit message identity closes the journal/message
             # crash gap. Neither the failed Turn nor its events are rewritten.
-            store.append_message(session["session_id"], role="agent", text=self._native_result_text(recovered),
+            store.append_message(session["session_id"], role="agent", text=recovered["message_text"],
                 turn_id=turn["turn_id"], origin=turn["origin"], message_id=recovered["message_id"])
             return row
 
@@ -336,7 +337,7 @@ class ChatExternalConversations:
         if recovered is None:
             return None
         plan = self._context_recovery_plan(row, observation=recovered["native_observation"], source_verified=True)
-        text = self._native_result_text(recovered)
+        text = recovered["message_text"]
         message = next((item for item in self.controller.store.messages(row["session_id"])
                         if item.get("message_id") == recovered["message_id"]), None)
         if (plan.get("recovery_eligible") is True and message is not None

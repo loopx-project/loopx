@@ -17,7 +17,8 @@ from loopx.chat import (
 def test_invalid_action_metadata_preserves_answer_without_admitting_actions(metadata):
     response = parse_agent_response("The original answer.\n" + CHAT_REVIEW_OPEN_TAG
         + json.dumps({"message": "", **metadata}) + CHAT_REVIEW_CLOSE_TAG)
-    assert response["message"] == "The original answer."
+    assert response["message"].startswith("The original answer.\n\n待处理：")
+    assert "相关操作和委派尚未提交" in response["message"]
     assert response["gate"]["kind"] == "response_metadata_invalid"
     assert not response.get("context_handoff") and not response.get("goal_draft")
     assert response["proposals"] == [] and response["protected_action"] is None
