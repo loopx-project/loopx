@@ -46,7 +46,10 @@ from .vision_shell_host import VisionShellHost
 REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
     "replan_semantic_action_behavior_receipt_v0"
 )
-REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 7
+# Native progressive delivery adds three bounded reads (capture, review, and
+# writeback) to the same semantic action path. Preserve the prior seven-call
+# behavior budget while allowing those mandatory reads to complete.
+REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 10
 
 
 class _HostToolError(RuntimeError):
@@ -104,6 +107,7 @@ class _QualificationState:
     read_only_host_commands_executed: bool = False
     delivery_context_read: bool = False
     replan_context_read: bool = False
+    replan_writeback_read: bool = False
     frontier_context_read: bool = False
     work_source_read: bool = False
     created_successor_id: str | None = None
@@ -1098,14 +1102,25 @@ def _handle_replan_context_read(command: str, state: _QualificationState) -> str
     if state.quota_context.capture_path is not None and not state.delivery_context_read:
         raise ValueError("replan_context_read_before_delivery_context")
     obligation = state.quota_packet.get("autonomous_replan_obligation")
-    expected = (
+    review_command = (
         str(obligation.get("context_read") or "")
         if isinstance(obligation, Mapping)
         else ""
     )
+    action = state.quota_packet.get("replan_action_packet")
+    writeback_command = (
+        str(action.get("writeback") or "") if isinstance(action, Mapping) else ""
+    )
     normalized = replan_view_command_tokens(command)
-    if not expected or command != expected or normalized is None:
+    if normalized is None or command not in {review_command, writeback_command}:
         raise ValueError("unexpected_replan_context_read")
+    is_writeback = command == writeback_command and command != review_command
+    if is_writeback and not state.replan_context_read:
+        raise ValueError("replan_writeback_read_before_review")
+    if is_writeback and state.replan_writeback_read:
+        raise ValueError("repeated_replan_writeback_read")
+    if not is_writeback and state.replan_context_read:
+        raise ValueError("repeated_replan_context_read")
     output = execute_loopx_cli(
         shlex.join(normalized),
         source_root=state.fixture.source_root,
@@ -1114,17 +1129,31 @@ def _handle_replan_context_read(command: str, state: _QualificationState) -> str
     view = json.loads(output)
     if not isinstance(view, Mapping):
         raise ValueError("replan_context_read_invalid")
-    state.quota_observation = _quota_behavior_observation(
-        state.quota_packet,
-        replan_view=view,
-    )
-    if (
-        state.fixture.required_vision
-        and "required_agent_vision_missing"
-        not in state.quota_observation["trigger_kinds"]
-    ):
-        raise ValueError("required_vision_fixture_trigger_mismatch")
-    state.replan_context_read = True
+    if is_writeback:
+        expected_obligation_id = (
+            obligation.get("obligation_id")
+            if isinstance(obligation, Mapping)
+            else None
+        )
+        if (
+            view.get("stage") != "writeback"
+            or view.get("obligation_id") != expected_obligation_id
+            or not isinstance(view.get("writeback_contract"), Mapping)
+        ):
+            raise ValueError("replan_writeback_read_invalid")
+        state.replan_writeback_read = True
+    else:
+        state.quota_observation = _quota_behavior_observation(
+            state.quota_packet,
+            replan_view=view,
+        )
+        if (
+            state.fixture.required_vision
+            and "required_agent_vision_missing"
+            not in state.quota_observation["trigger_kinds"]
+        ):
+            raise ValueError("required_vision_fixture_trigger_mismatch")
+        state.replan_context_read = True
     state.read_only_host_commands_executed = True
     return output
 
@@ -1195,6 +1224,11 @@ def _require_observed_frontier(
         raise ValueError(f"{prefix}_before_frontier_read")
     if work_source_required and not state.work_source_read:
         raise ValueError(f"{prefix}_before_work_source_read")
+    if (
+        state.quota_observation.get("context_delivery") == "progressive_replan_view"
+        and not state.replan_writeback_read
+    ):
+        raise ValueError(f"{prefix}_before_replan_writeback_read")
 
 
 def _handle_successor_command(command: str, state: _QualificationState) -> str:
@@ -1231,7 +1265,6 @@ def _handle_successor_command(command: str, state: _QualificationState) -> str:
         and decoded.get("ok") is True
         and decoded.get("added") is True
         and state.created_successor_id
-        and decoded.get("host_action") == "end_current_heartbeat"
     ):
         raise ValueError("successor_create_failed")
     transition = decoded.get("replan_transition")
@@ -1243,6 +1276,17 @@ def _handle_successor_command(command: str, state: _QualificationState) -> str:
         and transition.get("outcome") == "new_runnable_successor"
     ):
         raise ValueError("successor_transition_missing")
+    immediate_end = (
+        transition.get("turn_boundary") == "end_current_heartbeat"
+        and decoded.get("host_action") == "end_current_heartbeat"
+    )
+    settle_then_end = (
+        transition.get("turn_boundary") == "settle_original_turn_before_end"
+        and isinstance(decoded.get("settlement_identity"), Mapping)
+        and isinstance(decoded.get("settlement_plan"), Mapping)
+    )
+    if not (immediate_end or settle_then_end):
+        raise ValueError("successor_create_failed")
     state.semantic_delta = {
         "accepted": True,
         "satisfying_outcomes": ["new_runnable_successor"],
@@ -1424,16 +1468,19 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "semantic_action_before_replan_context_read",
         "semantic_action_before_frontier_read",
         "semantic_action_before_work_source_read",
+        "semantic_action_before_replan_writeback_read",
         "semantic_action_misses_uncovered_frontier",
         "refresh_state_help_before_quota",
         "refresh_state_help_before_frontier_read",
         "refresh_state_help_before_work_source_read",
+        "refresh_state_help_before_replan_writeback_read",
         "repeated_refresh_state_help",
         "successor_create_before_quota",
         "successor_create_before_delivery_context_read",
         "successor_create_before_replan_context_read",
         "successor_create_before_frontier_read",
         "successor_create_before_work_source_read",
+        "successor_create_before_replan_writeback_read",
         "successor_create_obligation_mismatch",
         "successor_create_composition_binding_mismatch",
         "repeated_successor_create",
@@ -1455,6 +1502,10 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "manual_evidence_read_is_not_replan",
         "replan_context_read_before_quota",
         "replan_context_read_before_delivery_context",
+        "replan_writeback_read_before_review",
+        "repeated_replan_context_read",
+        "repeated_replan_writeback_read",
+        "replan_writeback_read_invalid",
         "unexpected_replan_context_read",
         "replan_context_read_invalid",
         "unexpected_command",
@@ -1622,7 +1673,9 @@ class DoubaoReplanSemanticActionBehaviorActor:
                     "guard returns native context navigation, execute its recovery "
                     "reader before acting. If the delivered replan obligation names "
                     "a context_read command, execute that exact command before "
-                    "choosing a semantic result. Complete "
+                    "choosing a semantic result. After reading the work evidence, "
+                    "execute replan_action_packet.writeback to obtain the exact "
+                    "typed action contract. Complete "
                     "one bounded in-scope action and persist its result through the "
                     "real LoopX CLI. After quota, `cat` only the exact path named "
                     "in active_state_next_action, then `cat` only the source_ref "
