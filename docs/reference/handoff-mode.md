@@ -284,8 +284,16 @@ under a fresh operation and current revision. Other execution fences remain:
 | Expired execution matches the retained claim; eligible registered replacement actor | Use ordinary `todo claim` for atomic takeover, then use its new reference. |
 | Active foreign holder, divergent history, or absent claim | Reconcile ownership through its lifecycle; never borrow another holder's proof. |
 | `soft_claim` with released same-owner history, ordinary owner copy edit | Omit lease proof; keep the history. No replacement lease is needed or allowed. |
+| Rejected wait revision on an already deferred Todo | Review and explicitly resume the original Todo, then reapply the reviewed deferral using a separate operation and current provider revision. Neither step grants execution. |
 | Non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
 | Edit changes retained leased work requirements or status | Use the owning lifecycle transition; acquiring another lease cannot authorize the metadata edit. |
+
+For a deferred wait revision, the returned retry uses `--status open
+--clear-resume-when` with a reviewed reason, fresh update operation and current
+provider CAS. Read that result before submitting the intended deferral with
+another operation and fresh CAS. Do not repeat the rejected same-status request
+or carry its resume condition into the resume command. An active retained lease
+must be released by its holder first; explicit stale proof remains rejected.
 
 The existing `open -> blocked -> open` lifecycle also accepts a typed
 prerequisite wait: use `todo update --status blocked --resume-when
@@ -345,6 +353,12 @@ claim+lease 均不可执行，必须先审核迁移；合并式 claim+lease 仍�
 冲突不会得到不可执行的 acquire 建议；修改已租用工作的要求或状态须走对应 lifecycle。
 提示不包含 execution key、不授予权限，也不修改 mode 或 provider。并发造成 version
 变化时重新读取，不能绕过 CAS；dry-run 和拒绝路径不产生 Todo 或租约写入。
+
+修改已 deferred Todo 的等待条件若被拒绝，恢复命令先以 `--status open
+--clear-resume-when`、审核后的 reason、新 update operation 和当前 provider CAS
+显式恢复原任务；读回后，再用另一个 operation 和新的 CAS 提交审核后的延期。
+不重复原同状态请求，也不把其 resume 条件带入恢复命令。两步均不授予执行权，完整
+任务和历史保留；有效的历史 lease 须先由 holder 释放，显式过期 proof 仍被拒绝。
 
 ### Agent 普通 CLI 操作
 

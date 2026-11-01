@@ -181,6 +181,41 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   if (lease?.active && !sameOwner) {
     return {...base, action: "reconcile_lease_owner", reason: "Another active holder owns this execution. Its owner must release or explicitly hand it over through the lease lifecycle; this request cannot borrow its proof or take over. Inspect the current holder before retrying."};
   }
+  // Both a bundled edit and a wait revision may need the same administrative
+  // resume. Probe its existing owner once; this never changes admission.
+  const reopen = {...input, patch: {}, clear_fields: [], planning_intent: {
+    status: "open", reason: "Reviewed lifecycle recovery", clear_resume_when: true,
+  }};
+  const lifecycleFacts = {goal_id: input.goal_id, todo_id: input.todo_id,
+    actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
+    lease: lease === null ? undefined : index.leases.get(input.todo_id),
+    lease_idempotency_key: input.lease_idempotency_key ?? null,
+    lease_expected_version: input.lease_expected_version ?? null, now: input.now};
+  const canReopen = mode === "hard_lease" && isBlockedLifecycleTransition(reopen, todo) &&
+    blockedLifecycleRejection(lifecycleFacts) === null;
+  const canResume = (mode === "hard_lease" || lease !== null) && isDeferredReopen(reopen, todo) &&
+    deferredReopenRejection(lifecycleFacts) === null;
+  const reopenRetry = {command: "loopx todo update --status open --reason '<reviewed reason>'",
+    cli_args: ["todo", "update", "--goal-id", input.goal_id, "--todo-id", input.todo_id,
+      ...(input.actor_agent_id ? ["--agent-id", input.actor_agent_id] : []), "--status", "open"],
+    goal_id: input.goal_id, todo_id: input.todo_id, agent_id: input.actor_agent_id,
+    requires_flags: ["--reason"],
+    remove_flags: ["--text", "--claimed-by", "--required-write-scope", "--successor-todo-id"],
+    proof_source: "fresh_lifecycle_admission"};
+  if (todo.status === "deferred" && intent.status === "deferred") {
+    if (!canResume) {
+      return {...base, action: "resolve_lifecycle_edit",
+        reason: "This deferred Todo cannot currently resume through its administrative lifecycle. Inspect the retained execution and wait before revising it; an active lease must be released by its holder first. Do not repeat the deferred update or acquire execution on suspended work.",
+        ...(lease?.active && sameOwner ? {release: {command: "loopx task-lease release",
+          requires_flags: ["--owner", "--idempotency-key", "--expected-version"],
+          proof_source: "current_owner_lease_readback"}} : {})};
+    }
+    return {...base, action: "resolve_lifecycle_edit",
+      reason: "Review the existing wait, then explicitly resume the unchanged Todo before reapplying the reviewed deferral. Use a separate update operation and current provider revision for each step; remove the old resume condition from the resume request. No acquire or old execution proof is needed, and neither transition grants execution. Keep the original requirements, ownership and history.",
+      retry: {...reopenRetry, cli_args: [...reopenRetry.cli_args, "--clear-resume-when"],
+        requires_flags: ["--reason", "--update-operation-id", "--update-expected-provider-revision"],
+        remove_flags: [...reopenRetry.remove_flags, "--resume-when"]}};
+  }
   if (intent.status === "blocked" || intent.status === "deferred") {
     return {...base, action: "resolve_lifecycle_edit",
       reason: "Pause with a reason and optional note/evidence in one Todo update. The current holder's lease is retired atomically; no acquire or separate release is needed. Work requirements, text, ownership and successor changes are separate operations. A foreign active holder cannot be retired by this request; explicit stale proof is never replaced.",
@@ -221,31 +256,13 @@ export function todoUpdateLeaseRecovery(head: JsonObject, input: CoordinationTod
   // claim/acquire a lease that the blocked status itself makes ineligible.
   // This is a diagnostic probe only; the actual retry rechecks owner admission
   // and the lifecycle fence in the ordinary provider transaction.
-  const reopen = {...input, patch: {}, clear_fields: [], planning_intent: {
-    status: "open", reason: "Reviewed lifecycle recovery", clear_resume_when: true,
-  }};
-  const lifecycleFacts = {goal_id: input.goal_id, todo_id: input.todo_id,
-    actor_agent_id: input.actor_agent_id, registered_agents: input.registered_agents,
-    lease: lease === null ? undefined : index.leases.get(input.todo_id),
-    lease_idempotency_key: input.lease_idempotency_key ?? null,
-    lease_expected_version: input.lease_expected_version ?? null, now: input.now};
-  const canReopen = mode === "hard_lease" && isBlockedLifecycleTransition(reopen, todo) &&
-    blockedLifecycleRejection(lifecycleFacts) === null;
-  const canResume = (mode === "hard_lease" || lease !== null) && isDeferredReopen(reopen, todo) &&
-    deferredReopenRejection(lifecycleFacts) === null;
   if (intent.status === "open" && (canReopen || canResume)) {
     const nextEdit = mode === "soft_claim"
       ? "Then retry only a permitted owner copy edit without either lease proof flag. Planning, ownership and terminal edits keep their own admission; do not acquire a lease in soft_claim."
       : "Ordinary owner metadata then needs no execution lease; other work still uses its execution or lifecycle admission.";
     return {...base, action: "resolve_lifecycle_edit",
       reason: `Reopen this ${todo.status} Todo with status=open and a reviewed reason; optional note/evidence can commit with it. Keep text, work requirements, ownership and successors separate. Use a fresh update operation and current provider revision after reviewing the wait. An omitted wait is cleared by this explicit resume. ${nextEdit} Reopening alone grants no execution authority.`,
-      retry: {command: "loopx todo update --status open --reason '<reviewed reason>'",
-        cli_args: ["todo", "update", "--goal-id", input.goal_id, "--todo-id", input.todo_id,
-          ...(input.actor_agent_id ? ["--agent-id", input.actor_agent_id] : []), "--status", "open"],
-        goal_id: input.goal_id, todo_id: input.todo_id, agent_id: input.actor_agent_id,
-        requires_flags: ["--reason"],
-        remove_flags: ["--text", "--claimed-by", "--required-write-scope", "--successor-todo-id"],
-        proof_source: "fresh_lifecycle_admission"}};
+      retry: reopenRetry};
   }
   const editRejection = lease === null || isOwnerDeferral(input, todo) ? null : leasedTodoEditRejection(todo, intent);
   if (editRejection !== null) {
