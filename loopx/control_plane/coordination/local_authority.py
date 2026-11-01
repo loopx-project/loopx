@@ -14,6 +14,7 @@ from typing import Any, NoReturn
 from uuid import uuid4
 
 from ...agent_registry import registered_agent_ids_from_registry
+from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
 from ..runtime.time import now_local_iso as now_local
 from ..effect_runtime import (
@@ -161,6 +162,11 @@ def claim_canonical_todo_if_promoted(
     """Route a claim to the canonical TypeScript transaction owner."""
     with authority_registry_source(registry_path) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
+    # This is only a candidate location. The lease owner observes physical
+    # isolation and the current canonical scopes before granting execution.
+    worktree = _git_worktree_root(Path.cwd()) if manage_execution else None
+    if worktree is not None and not (worktree / ".git").is_file():
+        worktree = None
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
@@ -180,6 +186,7 @@ def claim_canonical_todo_if_promoted(
                 else f"todo-claim:{goal_id}:{todo_id}:{uuid4().hex}"
             ),
             **({"manage_execution": True} if manage_execution else {}),
+            **({"write_worktree": str(worktree)} if worktree is not None else {}),
             "lease_request": (
                 {
                     "idempotency_key": task_lease_idempotency_key,

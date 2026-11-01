@@ -8,7 +8,7 @@ import {indexCoordinationProjection} from "./coordination_projection.ts";
 import {canonicalTaskLease, canonicalTaskLeaseAcquireFacts} from "./task_lease_state.ts";
 import {coordinationTodoWriteScopes} from "./todo_write_scopes.ts";
 import {leaseEpoch, leaseVersion, leaseIsActive, normalizeTtl, type LeaseRecord} from "../work_items/task_lease_acquire.ts";
-import {sameLeaseWorkspace} from "../work_items/task_lease_workspace.ts";
+import {sameLeaseWorkspace, type LeaseWorkspace} from "../work_items/task_lease_workspace.ts";
 import {leaseWriteRepository} from "../work_items/task_lease_repository.ts";
 import {evaluateTaskLeaseAcquireDecision, materializeTaskLeaseAcquire} from "../work_items/task_lease_acquire_decision.ts";
 import {decideTaskLeaseLifecycle, materializeTaskLeaseLifecycle} from "../work_items/task_lease_lifecycle_decision.ts";
@@ -23,6 +23,8 @@ export function claimExecutionReference(id: unknown, key: unknown, version: unkn
 
 type ExecutionInput = {goal_id: string; todo_id: string; actor_agent_id: string | null;
   registered_agents: readonly string[]; now: Date};
+
+export type ClaimWorkspaceObserver = (writeScopes: readonly string[]) => Promise<LeaseWorkspace>;
 
 /** Resolve only this accepted execution. No acquisition, adoption of a newer
  * generation, or write retry is hidden behind a progress/completion request. */
@@ -82,8 +84,9 @@ export function maintainClaimExecution(head: JsonObject, input: ExecutionInput, 
 /** Prepare execution only after the Todo claim owner accepts the actor (and any
  * transfer grant). Expired execution is reclaimable without the old process;
  * acquisition still validates scope, eligibility and generation under one CAS. */
-export function prepareClaimExecution(head: JsonObject,
-  input: ExecutionInput & {operation_id: string; claimed_by: string}): {lease: LeaseRecord; changed: boolean} {
+export async function prepareClaimExecution(head: JsonObject,
+  input: ExecutionInput & {operation_id: string; claimed_by: string},
+  observeWorkspace?: ClaimWorkspaceObserver): Promise<{lease: LeaseRecord; changed: boolean; overlapAdvisories?: JsonObject[]}> {
   const index = indexCoordinationProjection(head, input.goal_id);
   const facts = canonicalTaskLeaseAcquireFacts(index, input.goal_id, input.todo_id, input.registered_agents, input.now);
   const current = facts.current;
@@ -92,16 +95,26 @@ export function prepareClaimExecution(head: JsonObject,
     const renewed = maintainClaimExecution(head, input, current);
     return {lease: renewed ?? current, changed: renewed !== null};
   }
+  const todo = index.todos.get(input.todo_id)!;
+  const writeScopes = coordinationTodoWriteScopes(todo);
+  // Only declared repository code work can use the code-edit isolation mode.
+  // Shared-state and historical callers retain their conservative exclusion.
+  const workspace = observeWorkspace && todo.task_domain === "code" &&
+    typeof todo.task_repository === "string" && writeScopes.length > 0
+    ? await observeWorkspace(writeScopes) : null;
   const command = {owner: input.claimed_by,
     idempotency_key: `claim-${canonicalAuthoritySha256({goal_id: input.goal_id, todo_id: input.todo_id,
       owner: input.claimed_by, operation_id: input.operation_id})}`,
     expected_version: current ? leaseVersion(current) : 0, ttl_seconds: normalizeTtl(null),
-    write_scopes: coordinationTodoWriteScopes(index.todos.get(input.todo_id)!)};
+    write_scopes: writeScopes, ...(workspace ? {write_workspace: workspace} : {})};
   const decision = evaluateTaskLeaseAcquireDecision({handoff_mode: String(head.handoff_mode),
     registered_agents: [...input.registered_agents], ...facts,
     // Claim admission has already authorized this assignment. Acquire and the
     // Todo owner change commit together; the old assignment is not a new gate.
     todo: facts.todo === null ? null : {...facts.todo, claimed_by: input.claimed_by}, command});
   if (decision.outcome !== "apply") throw new AuthorityStoreProtocolError(`Task claim execution rejected: ${decision.code}`);
-  return {lease: materializeTaskLeaseAcquire(input, command, decision, input.now), changed: true};
+  const overlapAdvisories = (decision.overlap_advisory_indexes ?? []).map(index => ({
+    todo_id: facts.other_leases[index].todo_id, owner: facts.other_leases[index].owner ?? null,
+    write_scopes: facts.other_leases[index].write_scopes, reason: "independent_worktree_integration_overlap"}));
+  return {lease: materializeTaskLeaseAcquire(input, command, decision, input.now), changed: true, overlapAdvisories};
 }
