@@ -3,7 +3,7 @@ import type {WorkspaceDrawerSelection} from "./personal-workspace-model";
 // View state only. Configuration and permission decisions remain with each
 // existing editor and its backend; the background Goal is never a fallback.
 export type SettingsTarget = Extract<WorkspaceDrawerSelection, {kind: "settings"}>;
-const tabs = ["appearance", "capabilities", "language", "lark", "machine", "provider", "steward", "conversation", "cadence", "ownership"] as const;
+const tabs = ["appearance", "capabilities", "language", "lark", "machine", "provider", "steward", "conversation", "cadence", "ownership", "background"] as const;
 
 export function readSettingsRoute(url: URL): SettingsTarget | null {
   const scope = url.searchParams.get("settings_scope");
