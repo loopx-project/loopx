@@ -48,11 +48,11 @@ Claude Code 使用 `/loopx <复杂任务>`；其他运行时见[宿主接入](#�
      not news. Keep both languages aligned, newest first, using verified publication
      dates (UTC). -->
 
-- **2026-10-25 · 🤝 [长程 Agent 研究：欢迎学术与企业合作者](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)** — 欢迎学术与企业团队围绕 EdgeBench 和真实长程任务，合作研究反馈、重规划与可复现评测，在可比预算下评估效果与完整成本。[交流合作](https://github.com/loopx-project/loopx/discussions)。
+- **2026-10-25 · 🤝 [长程 Agent 研究：欢迎学术与企业合作者](https://loopx-project.github.io/loopx/blog/zh/edgebench-feedback-and-memory/)** — 探索**等预算下的长期效果突破**：围绕 EdgeBench 和真实长程任务，研究反馈、重规划与可复现评测，同时核对效果与完整成本。欢迎学术与企业团队合作。[交流合作](https://github.com/loopx-project/loopx/discussions)。
 - **2026-10-20 · 🚀 [LoopX 2.0](https://github.com/loopx-project/loopx/releases/tag/v2.0.0)** — 共享 TypeScript 控制面与长程研究工作台。[迁移指南](docs/product/releases/v2.0.0.md#中文指南) · [重构历程](https://loopx-project.github.io/loopx/blog/zh/typescript-control-plane-refactor/)。
 - **2026-10-14 · 🤖 [Agentic Software](https://loopx-project.github.io/loopx/blog/zh/semantic-software-development/)** — 连接目标、证据、人的反馈与工程交付。
 - **2026-10-02 · 🧠 [长程自举与 RSI](https://loopx-project.github.io/loopx/blog/zh/long-horizon-rsi/)** — 回顾用 LoopX 开发 LoopX 的四个月公开历史，讨论长程连续性如何支撑系统级自我改进。
-- **2026-09-18 · 🧪 [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)** — 46 个长程任务的 Agent 对照研究：比较 Plain Codex、原生 Goal 与 LoopX Heartbeat，公开逐任务结果、方法与适用边界。
+- **2026-09-18 · 🧪 [LoopX × LHTB](https://loopx-project.github.io/loopx/benchmarks/lhtb/?lang=zh)** — 46 个长程任务、同一模型的对照研究，为**“计算换效果”提供实证支持**：LoopX Heartbeat 平均 Reward 较 Plain Codex 提升 17.3%、较原生 Goal 提升 10.6%。预算不同，方法与适用边界公开。
 - **2026-09-06 · 🎉 [LoopX 1.0](https://github.com/loopx-project/loopx/releases/tag/v1.0.0)** — 个人 Agent 工作区：跨会话跟进 Agent 工作、处理待决事项、核对交付结果。[工作区指南](https://github.com/loopx-project/loopx/blob/v1.0.0/docs/guides/personal-workspace-user-guide.md)。
 - **2026-08-02 · ⏱️ [200+ 小时长程轨迹在 X 公开分享](https://x.com/huangruiteng/status/2083904257494024425)** — 早期 owner-run 案例跨越 200+ 小时自然时长，展示执行、等待、人工决策与恢复的衔接，并在 X 获得广泛传播。[轨迹与边界](#开源-issue-fix)。
 

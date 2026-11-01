@@ -475,6 +475,7 @@ def _turn_scoped_cli_settlement_context(
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
         lifecycle_actor_args=f" --agent-id {shlex.quote(agent_id)}",
+        handoff_mode=(payload.get("goal_boundary") or {}).get("handoff_mode"),
         turn_instance_id=turn_instance_id,
         autonomous_replan=semantic_replan_obligation_id is not None,
         delivery_boundary=(

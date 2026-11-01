@@ -47,6 +47,7 @@ class ChatConfigurationRequestMixin(
             f"{media_api.CONTENT_MEDIA_PATH}/file": self._content_media_file,
             accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_read,
             f"{accounts_api.CODEX_ACCOUNTS_PATH}/clients": self._codex_account_clients,
+            f"{accounts_api.CODEX_ACCOUNTS_PATH}/keys": self._codex_api_keys_read,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_read,
             attached_api.CODEX_ATTACHED_LIVE_PATH: self._codex_attached_live,
             request_api.REQUEST_CONTROL_PATH: self._request_control_read,
@@ -68,6 +69,7 @@ class ChatConfigurationRequestMixin(
         return {
             media_api.CONTENT_MEDIA_PATH: self._content_media_request,
             accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_write,
+            f"{accounts_api.CODEX_ACCOUNTS_PATH}/keys": self._codex_api_keys_write,
             context_api.DECISION_CONTEXT_PATH: self._decision_context_request,
             attached_api.CODEX_ATTACHED_PATH: self._codex_attached_send,
             attached_api.CODEX_ATTACHED_OPEN_PATH: self._codex_attached_open,

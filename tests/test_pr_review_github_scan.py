@@ -857,16 +857,48 @@ def test_head_drift_observation_does_not_suppress_the_new_remote_head(
     assert item["merge_readiness_observation"] is None
 
 
-def test_merge_readiness_requires_goal_scope() -> None:
+@pytest.mark.parametrize("hold", [None, "head", "review", "ci", "thread", "pagination"])
+def test_standalone_merge_readiness_keeps_all_gates_without_goal_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    hold: str | None,
+) -> None:
+    pull_request = _merge_ready_pr()
+    threads = _complete_review_threads()
+    if hold == "head":
+        pull_request["headRefOid"] = HEAD_2
+    elif hold == "review":
+        pull_request["reviews"] = []
+    elif hold == "ci":
+        pull_request["statusCheckRollup"][0]["conclusion"] = "FAILURE"
+    elif hold == "thread":
+        threads = _complete_review_threads(1)
+    elif hold == "pagination":
+        threads["complete"] = False
+    monkeypatch.setattr(pr_review_cli_module, "resolve_current_github_login", lambda: "maintainer")
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_pull_request", lambda **_kwargs: pull_request)
+    monkeypatch.setattr(pr_review_cli_module, "fetch_github_review_thread_summary", lambda **_kwargs: threads)
+
+    def no_goal_access(**_kwargs):
+        raise AssertionError("Standalone readiness cannot read or write Goal observations")
+
+    monkeypatch.setattr(pr_review_cli_module, "read_readiness_observations", no_goal_access)
+    monkeypatch.setattr(pr_review_cli_module, "record_readiness_observation", no_goal_access)
     out: list[dict[str, object]] = []
     result = pr_review_cli_module.handle_pr_review_command(
         _merge_readiness_args(goal_id=None),
+        runtime_root=tmp_path,
         output_format=lambda _args: "json",
         print_payload=_capture_payload(out),
     )
 
-    assert result == 1
-    assert out[0]["error"] == "merge readiness requires --goal-id"
+    assert result == (0 if hold is None else 1)
+    assert out[0]["ready"] is (hold is None)
+    assert out[0]["source"] == "github_cli"
+    assert out[0]["expected_exact_head"] == f"4110@{HEAD_1}"
+    assert out[0]["local_goal_observation_write_performed"] is False
+    assert "readiness_observation" not in out[0]
+    assert not list(tmp_path.iterdir())
 
 
 def test_pr_review_cli_uses_machine_capability_priority_when_flag_is_omitted(
