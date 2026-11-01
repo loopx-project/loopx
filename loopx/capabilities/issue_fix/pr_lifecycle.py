@@ -76,6 +76,8 @@ MAINTAINER_CORRECTION_REJECTION_REASONS = {
     "author_not_maintainer",
     "terminal_pr_state",
     "goal_not_active",
+    "origin_request_cancelled",
+    "origin_request_unreadable",
 }
 # GitHub Apps post as `<slug>[bot]`; without a configured LoopX actor login this
 # suffix is the only self/bot signal available from body-free event metadata.
@@ -713,6 +715,7 @@ def evaluate_issue_fix_maintainer_correction_admission(
             "disposition": "accepted" if accepted else "context_only",
             "reason": reason,
             "todo_id": None,
+            "accepted_head_sha": observation.get("head_commit_ref") if accepted else None,
             "recorded_at": recorded_at,
             "superseded_by": None,
             "body_captured": False,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ...paths import resolve_runtime_root
+from ...control_plane.projects.registry_codec import load_project_registry
 from ...agent_registry import load_goal_from_registry
 from ...boundary_authority import checkpointed_boundary_authority_summary
 from ...control_plane.goals.activation import goal_is_stopped
@@ -195,6 +198,28 @@ def _correction_todo_readback_receipt(
     return receipt
 
 
+def _resolve_origin_request_identity(runtime_root: Path, request_id: str) -> dict[str, Any]:
+    paths = list((runtime_root / ".local/manager-context/entries").glob(f"*/{request_id}.json"))
+    if not paths:
+        raise ValueError("origin_request_not_found")
+    if len(paths) != 1:
+        raise ValueError("origin_request_ambiguous")
+    try:
+        entry = json.loads(paths[0].read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("origin_request_not_found") from exc
+    if not isinstance(entry, dict):
+        raise ValueError("origin_request_not_found")
+    if isinstance(entry.get("recipient"), dict):
+        raise ValueError("origin_request_unsupported_target")
+    if not all(isinstance(entry.get(key), str) and entry[key] for key in ("goal_id", "agent_id")):
+        raise ValueError("origin_request_unsupported_target")
+    identity = {key: entry[key] for key in ("goal_id", "agent_id")}
+    if isinstance(entry.get("goal_ref"), dict):
+        identity["goal_ref"] = entry["goal_ref"]
+    return identity
+
+
 def _settle_maintainer_correction_entries(
     *,
     payload: dict[str, Any],
@@ -223,10 +248,40 @@ def _settle_maintainer_correction_entries(
 
     row = read_issue_fix_pr_lifecycle_ledger_row(ledger_path, repo=repo, pr_ref=pr_ref)
     ledger_entries = issue_fix_maintainer_correction_entries(row)
+    origin = (row or {}).get("origin_request")
+    view = None
+    origin_refusal = None
+    if origin:
+        from ...control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+        from ...control_plane.collaboration.request_control_source import execute_request_control
+
+        try:
+            identity = _resolve_origin_request_identity(Path(origin["runtime_root"]), origin["request_id"])
+            if any(identity[key] != origin[key] for key in ("goal_id", "agent_id")):
+                raise ValueError("origin request identity changed")
+            with collaboration_goal_scope(Path(origin["registry_path"]), goal_id=identity["goal_id"],
+                    agents=(), require_active=False) as scope:
+                goal_ref = identity.get("goal_ref") or scope.current_goal_ref or {"goal_id": identity["goal_id"]}
+            result = execute_request_control(registry_path=Path(origin["registry_path"]),
+                runtime_root=Path(origin["runtime_root"]), goal_ref=goal_ref,
+                receiver_agent_id=identity["agent_id"], request_id=origin["request_id"],
+                actor_agent_id=identity["agent_id"], operation="inspect", execute=False)
+            if not result.get("ok"):
+                raise ValueError("request inspection failed")
+            view = result["view"]
+            if not view.get("control_state"):
+                raise ValueError("request control state unavailable")
+            if view["control_state"] in {"cancelled", "cancellation_pending"}:
+                origin_refusal = "origin_request_cancelled"
+        except Exception:
+            origin_refusal = "origin_request_unreadable"
     settlements: list[dict[str, Any]] = []
     current_todo_write: dict[str, Any] | None = None
     changed_entries: list[dict[str, Any]] = []
     for entry in ledger_entries:
+        if origin and entry.get("disposition") == "accepted" and "accepted_head_sha" not in entry:
+            entry["accepted_head_sha"] = observation.get("head_commit_ref")
+            changed_entries.append(dict(entry))
         operation_id = str(entry.get("operation_id") or "")
         is_current = operation_id == current_operation_id
         intent = entry.get("todo_intent")
@@ -242,7 +297,10 @@ def _settle_maintainer_correction_entries(
             ledger_entries=ledger_entries,
             goal_stopped=goal_stopped,
         )
+        refusal = origin_refusal or refusal
         if refusal is not None and not entry.get("todo_id"):
+            if is_current and origin_refusal:
+                admission.update(disposition="context_only", reason=refusal)
             changed_entries.append(
                 {**entry, "disposition": "context_only", "reason": refusal,
                  "effect_recheck": "refused"}
@@ -310,6 +368,49 @@ def _settle_maintainer_correction_entries(
             ledger_path, repo=repo, pr_ref=pr_ref
         )
     payload["maintainer_corrections"] = issue_fix_maintainer_correction_entries(row)
+    if origin:
+        from ...todos import list_goal_todos
+        from ...control_plane.collaboration.inbox import reply_status
+        from ..manager_context.roundtrip import report
+
+        todos = {} if origin_refusal else {t["todo_id"]: t for t in list_goal_todos(
+            registry_path=registry_path, goal_id=goal_id)["todos"]}
+        head = str(observation.get("head_commit_ref") or "")
+        entries = payload["maintainer_corrections"]
+        for entry in entries:
+            if (origin_refusal or not view or entry.get("disposition") != "accepted"
+                    or not entry.get("todo_id") or not head
+                    or head == entry.get("accepted_head_sha")
+                    or todos.get(entry["todo_id"], {}).get("status") != "done"):
+                continue
+            returns = entry.setdefault("returns", [])
+            if any(r["head_sha"] == head for r in returns):
+                continue
+            operation_id = entry["operation_id"]
+            update_id = f"issue-fix-correction:{operation_id}:{head[:12]}"
+            event = entry.get("source_event") or {}
+            checks = observation.get("checks") or {}
+            text = (f"Maintainer correction {entry.get('correction_kind')} "
+                f"({event.get('kind')} {event.get('id')}) applied in "
+                f"{observation.get('permalink')} at head {head[:12]}; "
+                f"PR state {observation.get('state')}, checks {checks.get('aggregate')}; "
+                f"todo {entry['todo_id']} done.")
+            origin_root = resolve_runtime_root(
+                load_project_registry(Path(origin["registry_path"])),
+                origin["runtime_root"], registry_path=Path(origin["registry_path"]))
+            result = report(origin_root, identity["goal_id"], identity["agent_id"],
+                origin["request_id"], "conclusion", text, registry=Path(origin["registry_path"]),
+                update_id=(update_id if any(
+                    r["phase"] == "conclusion" for r in reply_status(origin_root, origin)
+                ) else None), workspace=project, request_revision=view["revision"])
+            returns.append({"update_id": update_id, "result_key": result.get("result_key", "conclusion"),
+                "enqueued_at": now_utc_iso(), "head_sha": head})
+            upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
+        statuses = {r.get("result_key", r["phase"]): r["status"]
+            for r in reply_status(Path(origin["runtime_root"]), origin)}
+        payload["return_delivery"] = [{"operation_id": e["operation_id"],
+            "update_id": r["update_id"], "status": statuses.get(r["result_key"], "explicit_unverified")}
+            for e in entries for r in e.get("returns", [])]
     return {
         "schema_version": "issue_fix_maintainer_correction_settlement_v0",
         "settlements": settlements,
@@ -785,6 +886,12 @@ def register_issue_fix_commands(
             "Path to mocked gh pr view JSON metadata, or '-' for stdin. "
             "Bodies, comments, raw logs, and provider responses stay out."
         ),
+    )
+    pr_lifecycle_parser.add_argument("--origin-registry", help="Origin lifecycle registry path.")
+    pr_lifecycle_parser.add_argument("--origin-runtime-root", help="Origin runtime root path.")
+    pr_lifecycle_parser.add_argument(
+        "--origin-request-id",
+        help="Bind this PR row to the originating steward request (requires Goal and agent).",
     )
     pr_lifecycle_parser.add_argument(
         "--maintainer-correction-json",
@@ -1483,6 +1590,20 @@ def handle_issue_fix_command(
             )
             ledger_path: Path | None = None
             prior_maintainer_corrections = None
+            prior_row = None
+            if any((args.origin_request_id, args.origin_registry, args.origin_runtime_root)) and not all(
+                (args.origin_request_id, args.origin_registry, args.origin_runtime_root)
+            ):
+                raise ValueError("--origin-request-id requires --origin-registry and --origin-runtime-root")
+            if args.origin_request_id:
+                from ...control_plane.content_digest import BARE_SHA256_PATTERN
+
+                if not BARE_SHA256_PATTERN.fullmatch(args.origin_request_id):
+                    raise ValueError("invalid origin request id")
+                origin_registry = Path(args.origin_registry).expanduser().resolve()
+                origin_runtime = Path(args.origin_runtime_root).expanduser().resolve()
+                if not args.goal_id or not args.claimed_by or not should_write_domain_state:
+                    raise ValueError("--origin-request-id requires --goal-id and --claimed-by and ledger writes")
             if should_write_domain_state:
                 ledger_path = (
                     Path(args.ledger_path).expanduser()
@@ -1492,18 +1613,38 @@ def handle_issue_fix_command(
                         goal_id=args.goal_id,
                     )
                 )
-                if args.maintainer_correction_json:
-                    prior_reference = normalise_github_issue_reference(
-                        repo=args.repo, issue_ref=args.pr_ref, url=args.url
-                    )
-                    prior_row = read_issue_fix_pr_lifecycle_ledger_row(
-                        ledger_path,
-                        repo=str(prior_reference["repo"]),
-                        pr_ref=str(prior_reference["issue_ref"]),
-                    )
-                    prior_maintainer_corrections = (
-                        issue_fix_maintainer_correction_entries(prior_row)
-                    )
+                prior_reference = normalise_github_issue_reference(
+                    repo=args.repo, issue_ref=args.pr_ref, url=args.url
+                )
+                prior_row = read_issue_fix_pr_lifecycle_ledger_row(
+                    ledger_path,
+                    repo=str(prior_reference["repo"]),
+                    pr_ref=str(prior_reference["issue_ref"]),
+                )
+                prior_maintainer_corrections = (
+                    issue_fix_maintainer_correction_entries(prior_row)
+                )
+            origin = (prior_row or {}).get("origin_request")
+            if args.origin_request_id:
+                if origin and (origin["request_id"] != args.origin_request_id
+                        or origin["registry_path"] != str(origin_registry)
+                        or origin["runtime_root"] != str(origin_runtime)):
+                    raise ValueError("origin_request_conflict")
+                if not origin_registry.is_file() or not origin_runtime.is_dir():
+                    raise ValueError("origin registry and runtime root must exist")
+                try:
+                    origin_profile = load_project_registry(origin_registry).get("profile_id")
+                except (ValueError, OSError) as exc:
+                    raise ValueError("origin registry is unreadable") from exc
+                if origin_profile != "source_session_v1":
+                    raise ValueError("origin registry requires source_session_v1")
+                candidate = {"request_id": args.origin_request_id,
+                    "registry_path": str(origin_registry), "runtime_root": str(origin_runtime),
+                    **_resolve_origin_request_identity(origin_runtime, args.origin_request_id),
+                    "recorded_at": origin["recorded_at"] if origin else generated_at}
+                if origin and origin != candidate:
+                    raise ValueError("origin_request_conflict")
+                origin = candidate
             payload = build_issue_fix_pr_lifecycle_monitor_packet(
                 repo=args.repo,
                 pr_ref=args.pr_ref,
@@ -1522,6 +1663,8 @@ def handle_issue_fix_command(
                 prior_maintainer_corrections=prior_maintainer_corrections,
                 generated_at=generated_at,
             )
+            if origin:
+                payload["origin_request"] = origin
             if should_write_domain_state and ledger_path is not None:
                 upsert_issue_fix_pr_lifecycle_ledger_jsonl(
                     ledger_path,
@@ -2093,5 +2236,6 @@ def handle_issue_fix_command(
             if getattr(args, "issue_fix_command", None) in REVIEWER_COMMANDS
             else render_issue_fix_acceptance_loop_markdown
         )
+    payload.pop("origin_request", None)
     print_payload(payload, output_format(args), renderer)
     return 0 if payload.get("ok") else 1

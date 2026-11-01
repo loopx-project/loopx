@@ -425,6 +425,23 @@ no configured LoopX actor login exists yet), `author_not_maintainer`
 Immediately before the Todo write the gates run again against the ledger as it
 stands, and a stopped Goal refuses with `goal_not_active`.
 
+Bind the row with `--origin-request-id`, `--origin-registry` and
+`--origin-runtime-root` alongside `--goal-id` and `--claimed-by`: the origin
+uses a separate lifecycle-only `source_session_v1` registry while issue-fix
+uses the project registry for Goal/Todo operations. All origin flags are
+required together; the binding survives reruns without them, and a different
+request id, registry or runtime root fails with `origin_request_conflict`.
+The request record supplies the origin Goal, receiver agent and optional Goal reference;
+`--goal-id` and `--claimed-by` identify only the project side. Binding requires
+one readable matching entry in the origin runtime; recipient addressing is unsupported.
+Settlement resolves the entry again and refuses missing or changed identities.
+Local locators remain ledger-only. Before Todo creation, origin inspection
+fails closed with `origin_request_cancelled` or `origin_request_unreadable`;
+existing Todos retain readback-only behavior. A completed Todo observed at a
+new head queues a body-free conclusion through the origin runtime, deduplicated
+by operation/head in `returns`, with `return_delivery` readback; cancellation
+or unreadability prevents enqueue. The return service owns actual delivery.
+
 With `--execute-transition`, an accepted `actionable_patch` creates exactly one
 `issue_fix_maintainer_correction_patch` todo claimed by the registered agent.
 `semantic_ambiguity` and `missing_authority` create a concrete user gate that

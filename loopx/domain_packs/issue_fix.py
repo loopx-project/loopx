@@ -259,7 +259,7 @@ def merge_issue_fix_maintainer_correction_entries(
         operation_id = str(entry.get("operation_id") or "")
         if not operation_id:
             continue
-        merged[operation_id] = dict(entry)
+        merged[operation_id] = {**merged.get(operation_id, {}), **entry}
     return list(merged.values())
 
 
@@ -345,7 +345,8 @@ def upsert_issue_fix_pr_lifecycle_ledger_jsonl(
         existing_queue = existing.get("reviewer_notification_queue")
         incoming_queue = incoming.get("reviewer_notification_queue")
         return bool(
-            existing_fingerprint
+            existing.get("origin_request") == incoming.get("origin_request")
+            and existing_fingerprint
             and existing_fingerprint == incoming_fingerprint
             and existing_correction_fingerprint == incoming_correction_fingerprint
             and existing_receipts == incoming_receipts
@@ -359,6 +360,8 @@ def upsert_issue_fix_pr_lifecycle_ledger_jsonl(
         incoming: dict[str, Any],
     ) -> dict[str, Any]:
         merged = incoming
+        if existing.get("origin_request"):
+            merged = {**merged, "origin_request": existing["origin_request"]}
         receipts = existing.get("reviewer_notification_receipts")
         if (
             "reviewer_notification_receipts" not in merged
