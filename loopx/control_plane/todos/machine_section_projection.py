@@ -57,6 +57,15 @@ from ..content_digest import BARE_SHA256_PATTERN
 
 TODO_SECTION_PROJECTION_SCHEMA_VERSION = "loopx_todo_section_projection_v0"
 DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT = 20
+SQLITE_ARCHIVE_POINTER_COMMENT = (
+    '<!-- loopx:todo-archive-pointer authority=sqlite_v0 '
+    'query="loopx todo list --include-archived" -->'
+)
+BOUNDED_ACTIVE_VIEW_TEXT_LIMIT = 160
+BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS = 120
+BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS = frozenset(
+    {"note", "evidence", "reason", "completion_result"}
+)
 _MARKER_PATTERN = re.compile(
     r"(?m)^<!-- loopx:todo-section-projection-v0 "
     r"role=(?P<role>user|agent|archive) "
@@ -238,6 +247,7 @@ def _render_section(
     provider_revision: str,
     newline: str,
     private_validation: Mapping[str, Mapping[str, object]],
+    archive_pointer_comment: str | None = None,
 ) -> tuple[str, str]:
     digest = _sha256_text(_canonical_json(records))
     heading = (
@@ -250,6 +260,7 @@ def _render_section(
         todo_region_marker(role, "begin"),
         f"<!-- loopx:todo-section-projection-v0 role={role} "
         f"provider_revision={provider_revision} records_sha256={digest} -->",
+        *([archive_pointer_comment] if archive_pointer_comment else []),
         "",
     ]
     for record in records:
@@ -457,6 +468,36 @@ def _select_projected_archive_records(
     ]
 
 
+def _compact_record_for_bounded_active_view(
+    record: Mapping[str, object],
+) -> dict[str, object]:
+    compacted: dict[str, object] = {
+        key: value
+        for key, value in record.items()
+        if key not in BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS
+    }
+    scopes = compacted.get("required_write_scopes")
+    if (
+        isinstance(scopes, list)
+        and sum(len(str(item)) for item in scopes) > BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS
+    ):
+        compacted.pop("required_write_scopes", None)
+    raw_text = " ".join(str(compacted.get("text") or "").strip().split())
+    if len(raw_text) > BOUNDED_ACTIVE_VIEW_TEXT_LIMIT:
+        truncated_text = (
+            raw_text[: BOUNDED_ACTIVE_VIEW_TEXT_LIMIT - 3].rstrip() + "..."
+        )
+        compacted["text"] = truncated_text
+        priority, title = todo_priority_parts(truncated_text)
+        if priority:
+            compacted["priority"] = priority
+            compacted["title"] = normalize_todo_text(title, limit=None)
+        else:
+            compacted.pop("priority", None)
+            compacted.pop("title", None)
+    return compacted
+
+
 def render_canonical_todo_sections(
     markdown: str,
     records: Sequence[Mapping[str, object]],
@@ -464,6 +505,7 @@ def render_canonical_todo_sections(
     provider_revision: str,
     private_validation_declarations: Mapping[str, Mapping[str, Any]] | None = None,
     max_projected_archive_records: int | None = None,
+    bounded_active_view: bool = False,
 ) -> TodoSectionProjectionResult:
     """Replace only Todo sections and verify deterministic parse/render parity."""
 
@@ -523,25 +565,40 @@ def render_canonical_todo_sections(
             )
         private_validation[todo_id] = source[1]
     by_role = {
-        role: sorted(
-            [
-                record
-                for record in canonical
-                if record.get("role") == role
-                and record.get("archive_state") == "active"
-            ],
-            key=_record_sort_key,
-        )
+        role: [
+            (
+                _compact_record_for_bounded_active_view(record)
+                if bounded_active_view
+                else record
+            )
+            for record in sorted(
+                [
+                    record
+                    for record in canonical
+                    if record.get("role") == role
+                    and record.get("archive_state") == "active"
+                ],
+                key=_record_sort_key,
+            )
+        ]
         for role in TODO_SECTION_HEADINGS
     }
     all_active = [*by_role["user"], *by_role["agent"]]
-    archived = _select_projected_archive_records(
-        sorted(
-            [record for record in canonical if record.get("archive_state") == "archive"],
-            key=_record_sort_key,
-        ),
-        active_records=all_active,
-        max_projected_archive_records=max_projected_archive_records,
+    archived = (
+        []
+        if bounded_active_view
+        else _select_projected_archive_records(
+            sorted(
+                [
+                    record
+                    for record in canonical
+                    if record.get("archive_state") == "archive"
+                ],
+                key=_record_sort_key,
+            ),
+            active_records=all_active,
+            max_projected_archive_records=max_projected_archive_records,
+        )
     )
     newline = "\r\n" if "\r\n" in markdown else "\n"
     rendered_sections: dict[str, str] = {}
@@ -561,6 +618,9 @@ def render_canonical_todo_sections(
             provider_revision=provider_revision,
             newline=newline,
             private_validation=private_validation,
+            archive_pointer_comment=(
+                SQLITE_ARCHIVE_POINTER_COMMENT if bounded_active_view else None
+            ),
         )
 
     try:
@@ -623,7 +683,11 @@ def inspect_todo_section_projection(markdown: str) -> dict[str, object]:
 
 
 __all__ = [
+    "BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS",
+    "BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS",
+    "BOUNDED_ACTIVE_VIEW_TEXT_LIMIT",
     "DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT",
+    "SQLITE_ARCHIVE_POINTER_COMMENT",
     "TODO_SECTION_PROJECTION_SCHEMA_VERSION",
     "TodoSectionProjectionError",
     "TodoSectionProjectionResult",

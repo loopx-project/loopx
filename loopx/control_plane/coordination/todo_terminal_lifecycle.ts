@@ -79,11 +79,14 @@ import {
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {isLifecycleCloseout, prepareTerminalReentry, requiresReentrySettlement} from "./todo_terminal_reentry.ts";
+import {selectCoordinationTodoArchive} from "./todo_archive_selection.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_receipt_v0";
+export const DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE = 12;
+export const ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = 10;
 const TERMINAL_COMMANDS = ["complete", "supersede"] as const;
 const TODO_ROLES = ["agent", "user"] as const;
 const DECISION_OUTCOMES = ["approve", "reject", "cancel"] as const;
@@ -1929,6 +1932,44 @@ export async function executeCoordinationTodoTerminalLifecycle(
     ? projection.todos.get(String(todo.unblocks_todo_id)) : undefined;
   const changed = authority.outcome === "apply" || edit?.changed === true ||
     terminalUpgradeReceipt !== null;
+  const targetRole = (todo.role === "user" ? "user" : "agent") as TodoRole;
+  const postTerminalTodos = changed && target.todo.status === "done"
+    ? projection.todo_ids.map((todoId) => {
+        if (todoId === input.todo_id) return target.todo;
+        if (dependent && followthrough && todoId === String(todo.unblocks_todo_id)) {
+          return {...dependent, ...followthrough.updates, updated_at: target.todo.updated_at};
+        }
+        return projection.todos.get(todoId)!;
+      })
+    : [];
+  const activeDoneCount = postTerminalTodos.filter(
+    (item) => item.role === targetRole && item.archive_state === "active" && item.status === "done",
+  ).length;
+  const autoArchiveSelection = activeDoneCount > DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
+    ? selectCoordinationTodoArchive({
+        role: targetRole,
+        max_active_done: ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+        todos: postTerminalTodos,
+      })
+    : null;
+  const autoArchivedIds = new Set(autoArchiveSelection?.moved_todo_ids ?? []);
+  const finalTargetTodo = autoArchivedIds.has(input.todo_id)
+    ? {...target.todo, archive_state: "archive"}
+    : target.todo;
+  const autoArchiveMutations: CoordinationProjectionMutation[] = autoArchiveSelection === null
+    ? []
+    : autoArchiveSelection.moved_todo_ids
+        .filter((todoId) => todoId !== input.todo_id)
+        .map((todoId) => ({
+          kind: "todo_upsert" as const,
+          todo: {
+            ...(dependent && followthrough && todoId === String(todo.unblocks_todo_id)
+              ? {...dependent, ...followthrough.updates}
+              : projection.todos.get(todoId)!),
+            archive_state: "archive",
+            updated_at: target.todo.updated_at,
+          },
+        }));
   const result: JsonObject = {
     todo_id: input.todo_id,
     command: input.command,
@@ -1959,6 +2000,17 @@ export async function executeCoordinationTodoTerminalLifecycle(
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     ...(capabilityCompletionEvidence === null ? {} : {capability_completion_evidence: capabilityCompletionEvidence}),
+    ...(autoArchiveSelection !== null && autoArchiveSelection.moved_count > 0 ? {
+      auto_archive: {
+        role: autoArchiveSelection.role,
+        active_done_before: autoArchiveSelection.active_done_before,
+        active_done_after: autoArchiveSelection.active_done_after,
+        max_active_done: autoArchiveSelection.max_active_done,
+        moved_count: autoArchiveSelection.moved_count,
+        moved_todo_ids: autoArchiveSelection.moved_todo_ids,
+        retained_standing_decision_count: autoArchiveSelection.retained_standing_decision_count,
+      },
+    } : {}),
     // A preview that omits this would show an unconditional close for work the
     // real call still gates. Name the criteria the real call must run; never
     // their argv, which stays out of every projection.
@@ -1969,9 +2021,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
       : {}),
   };
   const mutations: CoordinationProjectionMutation[] = changed ? [
-    {kind: "todo_upsert", todo: target.todo, clear_fields: target.clear_fields},
-    ...(dependent && followthrough ? [{kind: "todo_upsert" as const,
+    {kind: "todo_upsert", todo: finalTargetTodo, clear_fields: target.clear_fields},
+    ...(dependent && followthrough && !autoArchivedIds.has(String(todo.unblocks_todo_id)) ? [{kind: "todo_upsert" as const,
       todo: {...dependent, ...followthrough.updates, updated_at: target.todo.updated_at}}] : []),
+    ...autoArchiveMutations,
     ...successorCandidates.map((successor) => ({kind: "todo_upsert" as const, todo: successor})),
     ...(released === null ? [] : [{kind: "lease_upsert" as const, lease: released}]),
   ] : [];
