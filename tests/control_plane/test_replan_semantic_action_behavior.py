@@ -332,6 +332,43 @@ def _explore_context_action(
     return ScriptedExecToolAction(command=read["command"])
 
 
+def test_context_delivery_off_keeps_original_ordinary_call_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "off")
+    fixture = _build_fixture(tmp_path / "oracle")
+    transport = _context_aware_transport(
+        [
+            ScriptedExecToolAction(command=fixture.quota_guard_command),
+            *[
+                ScriptedExecToolAction(command="cat replan-frontier.json")
+                for _ in range(5)
+            ],
+            ScriptedExecToolAction(command="cat fixture/permission-config.json"),
+            _semantic_action,
+        ]
+    )
+
+    receipt = DoubaoReplanSemanticActionBehaviorActor(
+        api_key="test-only-placeholder",
+        transport=transport,
+    ).qualify(
+        qualification_id="replan-inline-ordinary-budget",
+        fixture_root=tmp_path / "actor",
+    )
+
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "tool_call_budget_exhausted"
+    assert receipt["tool_call_count"] == receipt["tool_call_limit"] == 7
+    assert receipt["ordinary_tool_call_limit"] == 7
+    assert receipt["native_context_read_call_limit"] == 0
+    assert "context_read" not in receipt["observed_tool_sequence"]
+    assert "replan_context_read" not in receipt["observed_tool_sequence"]
+    assert receipt["semantic_action_accepted"] is False
+    assert len(transport.requests) == 7
+
+
 
 def _composition_successor_action(
     request: Mapping[str, object],
@@ -395,6 +432,12 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     }
     if receipt["context_delivery"] == "progressive_replan_view":
         assert "replan_context_read" in receipt["observed_tool_sequence"]
+        assert receipt["tool_call_limit"] == 10
+        assert receipt["native_context_read_call_limit"] == 3
+    else:
+        assert receipt["tool_call_limit"] == 7
+        assert receipt["native_context_read_call_limit"] == 0
+    assert receipt["ordinary_tool_call_limit"] == 7
     assert receipt["semantic_action_accepted"] is True
     assert "new_surface" in receipt["selected_semantic_outcomes"]
     assert "new_surface" in receipt["required_semantic_outcomes"]
