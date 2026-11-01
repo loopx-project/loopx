@@ -373,6 +373,18 @@ class ChatRuntimeController:
                     ),
                 },
             )
+        if agent_id in {"codex", "antigravity"}:
+            from .capabilities.native_chat.model_settings import native_adapter_configuration
+            manager_profile, objective, model_config = native_adapter_configuration(
+                self, agent_id=agent_id, goal_id=goal_id, objective=objective,
+                manager_runtime=manager_runtime, executor_model=executor_model,
+                agent_config=agent_config, execution_mode=execution_mode,
+            )
+            native_context = {
+                "objective": self._session_objective(goal_id=goal_id, objective=objective,
+                    project_coordination=project_coordination and not execution_mode),
+                "runtime_profile": str(manager_profile["runtime_profile"]) if manager_profile else "restricted",
+            }
         if agent_id == "antigravity":
             from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
             if execution_mode or project_context is not None or read_only_review:
@@ -380,87 +392,29 @@ class ChatRuntimeController:
                     "Antigravity supports Chat and Steward; use Codex for governed workspace execution.",
                     gate=None, error_code="unsupported_configuration",
                 )
-            manager_profile = (
-                dict(manager_runtime or self.manager_runtime_profile())
-                if goal_id == MANAGER_AGENT_GOAL_ID
-                else None
-            )
-            if manager_profile is not None:
-                objective = manager_agent_objective(
-                    str(manager_profile["runtime_profile"])
-                )
-            model_config = (
-                executor_model or manager_model_config(
-                    endpoint=agent_id,
-                    machine_defaults=self.steward_executor_defaults(),
-                )
-                if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
-                else executor_model or {}
-            )
-            if agent_config and agent_config.get("model"):
-                model_config = {**model_config, "model": agent_config["model"]}
-            if agent_config and agent_config.get("reasoning_effort"):
-                model_config = {**model_config, "reasoning_effort": agent_config["reasoning_effort"]}
             return AntigravityAdapter.start(
                 work_dir=work_dir,
-                objective=self._session_objective(
-                    goal_id=goal_id, objective=objective,
-                    project_coordination=project_coordination and not execution_mode,
-                ),
+                **native_context,
                 resume_thread_id=resume_thread_id,
                 history=history,
-                runtime_profile=(
-                    str(manager_profile["runtime_profile"])
-                    if manager_profile is not None
-                    else "restricted"
-                ),
                 executor_model=model_config,
                 hard_timeout_sec=self.hard_timeout_sec or 300.0,
             )
         if agent_id == "codex":
             from .capabilities.manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
             from .chat_loopx_mode import TOOL as COLLABORATION_TOOL
-            manager_profile = (
-                dict(manager_runtime or self.manager_runtime_profile())
-                if goal_id == MANAGER_AGENT_GOAL_ID
-                else None
-            )
-            if manager_profile is not None:
-                objective = manager_agent_objective(
-                    str(manager_profile["runtime_profile"])
-                )
-            model_config = (
-                executor_model or manager_model_config(
-                    endpoint=agent_id,
-                    machine_defaults=self.steward_executor_defaults(),
-                )
-                if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode
-                else executor_model or {}
-            )
-            if agent_config and agent_config.get("model"):
-                model_config = {**model_config, "model": agent_config["model"]}
-            if agent_config:
-                model_config = {**model_config, **{key: agent_config[key] for key in ("reasoning_effort", "service_tier") if agent_config.get(key)}}
             return CodexAppServerAdapter.start(
                 codex_bin=self.codex_bin,
                 codex_home=codex_home_override or self.codex_home,
                 work_dir=work_dir,
                 goal_id=goal_id,
-                objective=self._session_objective(
-                    goal_id=goal_id, objective=objective,
-                    project_coordination=project_coordination and not execution_mode,
-                ),
+                **native_context,
                 history=history,
                 resume_thread_id=resume_thread_id,
                 startup_timeout_sec=self.startup_timeout_sec,
                 idle_timeout_sec=self.idle_timeout_sec,
                 hard_timeout_sec=self.hard_timeout_sec,
                 execution_mode=execution_mode,
-                runtime_profile=(
-                    str(manager_profile["runtime_profile"])
-                    if manager_profile is not None
-                    else "restricted"
-                ),
                 sandbox=(
                     str(manager_profile["sandbox"])
                     if manager_profile is not None

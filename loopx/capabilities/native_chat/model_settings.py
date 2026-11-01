@@ -5,7 +5,7 @@ These are bounded visible provider values, not LoopX entity or file names.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController, ChatRuntimeAdapter
@@ -13,6 +13,24 @@ if TYPE_CHECKING:
 
 _AGENT_MODEL_ID_MAX_LENGTH = 160
 MODEL_SELECTION_UNSET = object()
+
+
+def native_adapter_configuration(controller: ChatRuntimeController, *, agent_id: str,
+        goal_id: str | None, objective: str, manager_runtime: Mapping[str, Any] | None,
+        executor_model: Mapping[str, Any] | None, agent_config: Mapping[str, str] | None,
+        execution_mode: bool) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+    """Share native-provider selection; the existing manager owner decides policy."""
+    from ...chat_manager import MANAGER_AGENT_GOAL_ID, manager_agent_objective, manager_model_config
+    profile = (dict(manager_runtime or controller.manager_runtime_profile())
+               if goal_id == MANAGER_AGENT_GOAL_ID else None)
+    if profile is not None:
+        objective = manager_agent_objective(str(profile["runtime_profile"]))
+    model = (executor_model or manager_model_config(
+        endpoint=agent_id, machine_defaults=controller.steward_executor_defaults())
+        if goal_id == MANAGER_AGENT_GOAL_ID and not execution_mode else executor_model or {})
+    return profile, objective, {**model, **{
+        key: agent_config[key] for key in ("model", "reasoning_effort", "service_tier")
+        if agent_config and agent_config.get(key)}}
 
 
 def session_model_settings_supported(session: dict[str, Any]) -> bool:
