@@ -508,6 +508,37 @@ The private trajectory records this exact request/result shape:
 }
 ```
 
+Some isolated task containers reach their runner-owned task service through a
+container-host alias rather than an IP loopback address. That alias is external by
+default. A runner may classify only its exact task-service origin as loopback-scoped
+by adding a qualification-time authorization:
+
+```json
+{
+  "schema_version": "benchmark_integrity_policy_v0",
+  "policy_id": "offline-task-service",
+  "network_access": "loopback_only",
+  "task_service_access": {
+    "schema_version": "benchmark_task_service_access_v0",
+    "authorization_id": "fixture-task-service-v1",
+    "authorization_sha256": "<sha256-of-immutable-runner-authorization>",
+    "authority": "runner",
+    "purpose": "benchmark_task_service",
+    "origins": ["http://host.docker.internal:35103"]
+  }
+}
+```
+
+Origins must use HTTP or HTTPS, one of the exact container-host aliases, and an
+explicit port. The runner derives them from its trusted task-service launch record;
+agent text cannot grant access. Wrong ports, lookalike hosts, userinfo, malformed
+origins, undeclared aliases, and any mixed external URL remain external-network
+violations. Authorized requests contribute to the existing loopback evidence count.
+The separate task-service receipt records only authorization identifiers, counts and
+an origin-set digest; it never copies raw origins. Like task-environment access, this
+qualification-time runner permission is excluded from the frozen evaluation-policy
+digest.
+
 The default protocol remains blind: the verifier starts after the agent and official
 feedback is hidden. A benchmark that intentionally returns periodic evaluation during
 solving must preregister an `evaluation_protocol` in the integrity policy with
