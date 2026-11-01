@@ -249,8 +249,8 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
             raise ValueError("capture must be a regular JSON file within the existing transport size limit")
         if private and (metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
             raise ValueError("native context requires a private capture owned by this user")
-        raw = stream.read(MAX_REQUEST_BYTES + 1)
-    if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
+        raw = stream.read(metadata.st_size + 1)
+    if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
     payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
