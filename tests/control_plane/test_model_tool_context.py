@@ -14,6 +14,9 @@ from loopx.control_plane.turn_driver.decision_capture import (
     write_context_read_reference,
 )
 
+NATIVE_CAPTURE_TEST = pytest.mark.skipif(
+    os.name != "posix", reason="Native captured-input transport is POSIX-only; other hosts retain inline delivery")
+
 
 def _captured_output(root: Path, *, mode: str = "full") -> tuple[str, dict]:
     root.mkdir(parents=True, exist_ok=True)
@@ -30,6 +33,7 @@ def _captured_output(root: Path, *, mode: str = "full") -> tuple[str, dict]:
 
 
 @pytest.mark.parametrize("mode", ["full", "delta"])
+@NATIVE_CAPTURE_TEST
 def test_oracle_uses_current_recovery_without_replacing_model_stdout(tmp_path, mode):
     output, packet = _captured_output(tmp_path, mode=mode)
     context = QuotaToolContext.from_output(output)
@@ -48,6 +52,7 @@ def test_inline_output_retains_the_explicit_opt_out_contract():
 
 
 @pytest.mark.parametrize("attack", ["other_capture", "other_digest", "session_lookup", "shell_chain"])
+@NATIVE_CAPTURE_TEST
 def test_model_read_cannot_escape_the_current_capture(tmp_path, attack):
     output, _ = _captured_output(tmp_path / "current")
     context = QuotaToolContext.from_output(output)
@@ -72,6 +77,7 @@ def test_model_read_cannot_escape_the_current_capture(tmp_path, attack):
     assert snapshot_disposable_fixture(tmp_path) == before
 
 
+@NATIVE_CAPTURE_TEST
 def test_real_reader_supports_batched_progressive_fields_without_a_guard(tmp_path):
     output, packet = _captured_output(tmp_path)
     context = QuotaToolContext.from_output(output)
@@ -87,6 +93,7 @@ def test_real_reader_supports_batched_progressive_fields_without_a_guard(tmp_pat
     assert not (tmp_path / ".loopx").exists()
 
 
+@NATIVE_CAPTURE_TEST
 def test_changed_current_capture_is_not_graded_as_its_previous_decision(tmp_path):
     output, _ = _captured_output(tmp_path)
     context = QuotaToolContext.from_output(output)
@@ -96,6 +103,7 @@ def test_changed_current_capture_is_not_graded_as_its_previous_decision(tmp_path
         QuotaToolContext.from_output(output)
 
 
+@NATIVE_CAPTURE_TEST
 def test_actor_receives_native_navigation_then_executes_its_progressive_reader(tmp_path, monkeypatch):
     from loopx.control_plane.testing.model_tool_behavior import scripted_exec_tool_response
     from loopx.control_plane.testing.selected_todo_tool_behavior import (
@@ -103,8 +111,6 @@ def test_actor_receives_native_navigation_then_executes_its_progressive_reader(t
     )
 
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
-    if os.name == "nt":
-        monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
     fixture = _build_fixture(tmp_path / "oracle")
     requests = []
 
