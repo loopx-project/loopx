@@ -1584,6 +1584,19 @@ def effect_runtime_result(
     ).get("result")
 
 
+def effect_runtime_projection_result(method: str, params: Mapping[str, Any]) -> Any:
+    """Keep projections inline unless a size refusal requires a local snapshot."""
+
+    try:
+        return effect_runtime_result(method, params)
+    except EffectRuntimeRejected as error:
+        if error.diagnostic_code != "request_too_large":
+            raise
+        # Reuse the existing bounded transport after refusal, never replay an
+        # ambiguous response or truncate the projection's complete source.
+        return effect_runtime_result(method, params, large_local_snapshot=True)
+
+
 def _serving_runtime_identity() -> dict[str, Any] | None:
     """Project the identity of the runtime serving this revision, if any."""
 

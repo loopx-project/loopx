@@ -58,13 +58,13 @@ def test_managed_projection_uses_one_controller_call_without_trusting_a_mutable_
     assert expected["disposition"] == ("user_action_required" if user_action_required else "wait")
     calls.clear()
     controller_calls = []
-    original_runtime = loop_controller.effect_runtime_result
+    original_runtime = loop_controller.effect_runtime_projection_result
 
     def record_runtime(method, params, **options):
         controller_calls.append((method, params["operation"]))
         return original_runtime(method, params, **options)
 
-    monkeypatch.setattr(loop_controller, "effect_runtime_result", record_runtime)
+    monkeypatch.setattr(loop_controller, "effect_runtime_projection_result", record_runtime)
     actual = decide_managed_step(journal, current, goal_id=GOAL_ID,
         agent_id=AGENT_ID, turn_key=journal["turn_key"])
     assert actual == expected
