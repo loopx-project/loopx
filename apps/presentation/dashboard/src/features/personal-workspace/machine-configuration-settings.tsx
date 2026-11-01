@@ -534,8 +534,8 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             </label></div>
             <p role="status">{(selectedCurrent?.mode ?? selected.default?.mode) === "on"
               ? selectedCurrent
-                ? locale === "zh-CN" ? "已为 Codex 保存开启偏好；宿主就绪与实际使用尚未验证。" : "Codex preference is on; host readiness and actual use are not verified."
-                : locale === "zh-CN" ? "Codex 默认开启；宿主就绪与实际使用尚未验证。" : "On by default for Codex; host readiness and actual use are not verified."
+                ? locale === "zh-CN" ? "已开启；原生初始化与实际使用尚未验证。" : "On; native setup and use unverified."
+                : locale === "zh-CN" ? "默认开启；原生初始化与实际使用尚未验证。" : "Default on; native setup and use unverified."
               : locale === "zh-CN" ? "Codex 已关闭。" : "Off for Codex."}</p>
             <ContextHelp label={locale === "zh-CN" ? "Codex 支持范围与生效条件" : "Codex support and activation requirements"}><p>{locale === "zh-CN"
               ? "目前仅支持 Codex App 心跳和 benchmark 心跳，无法确认或不支持的跑法报错。保存偏好不代表当前会话已采用差分，也不会改变其他应用或显式关闭的实验。宿主准备就绪且旧上下文完整时才使用差分，否则保留完整上下文。私有存储与会话隔离自动管理；每轮回执显示实际传输方式。"

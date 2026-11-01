@@ -450,6 +450,10 @@ def native_command(env, execution, stage, wake, session_wake):
     )
     if execution.context_delivery != "off":
         command[-1:-1] = json.loads(env.get("LOOPX_CODEX_CONTEXT_TRUST_ARGS", "[]"))
+        if env.get("LOOPX_CONTEXT_DELIVERY") == "off":
+            # Setup failure narrows this wake to full delivery, including the
+            # native shell whose frozen settings still record the requested on.
+            command[-1:-1] = ["-c", 'shell_environment_policy.set.LOOPX_CONTEXT_DELIVERY="off"']
     if stage == "plan":
         command[-1:-1] = ["-c", "features.goals=false"]
     return command
@@ -602,6 +606,7 @@ def run_once(env: dict[str, str]) -> dict:
                 # trial. Unavailable native hooks keep ordinary full IO.
                 env.pop("LOOPX_CODEX_CONTEXT_DIR", None)
                 env.pop("LOOPX_CODEX_CONTEXT_TRUST_ARGS", None)
+                env["LOOPX_CONTEXT_DELIVERY"] = "off"
                 receipt["context_transport"] = {"available": False, **_error_tail(exc)}
         body = "Finish the task."
         if stage == "plan":
