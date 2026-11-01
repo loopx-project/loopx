@@ -175,7 +175,11 @@ def _validate(state: Path) -> dict:
         raise ValueError("Invalid EdgeBench source receipt; preserve it and use a new log directory")
     checkout = state / "checkout"
     if (_git(checkout, "rev-parse", "HEAD") != receipt["commit"]
-            or _git(checkout, "remote", "get-url", "origin") != receipt["repository"]
+            # `git remote get-url` applies url.*.insteadOf transport rewrites.
+            # The receipt owns the canonical URL written into this checkout,
+            # while a developer may legitimately fetch it through SSH.
+            or _git(checkout, "config", "--local", "--get", "remote.origin.url")
+            != receipt["repository"]
             or _git(checkout, "status", "--porcelain", "--untracked-files=normal")):
         raise ValueError("Frozen EdgeBench source changed; restore it or use a new log directory")
     if not (checkout / "sforge/__init__.py").is_file():
