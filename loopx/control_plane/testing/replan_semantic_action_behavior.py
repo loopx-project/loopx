@@ -25,6 +25,8 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    QuotaToolContext,
+    is_context_read_command,
     LoopxCliExecutionError,
     DoubaoExecToolClient,
     argument_value,
@@ -92,6 +94,7 @@ class _QualificationState:
     steps: list[dict[str, Any]]
     turn_instance_id: str
     quota_packet: dict[str, Any] | None = None
+    quota_context: QuotaToolContext | None = None
     quota_observation: dict[str, Any] | None = None
     semantic_delta: dict[str, Any] | None = None
     seen_quota: bool = False
@@ -1009,14 +1012,22 @@ def _handle_quota_command(command: str, state: _QualificationState) -> str:
         fixture=state.fixture,
         turn_instance_id=state.turn_instance_id,
     )
-    decoded = json.loads(output)
-    if not isinstance(decoded, dict):
-        raise ValueError("quota result must be an object")
+    state.quota_context = QuotaToolContext.from_output(output)
+    decoded = state.quota_context.packet
     state.quota_packet = decoded
     state.quota_observation = _quota_behavior_observation(decoded)
     if state.fixture.required_vision and "required_agent_vision_missing" not in state.quota_observation["trigger_kinds"]:
         raise ValueError("required_vision_fixture_trigger_mismatch")
     state.seen_quota = True
+    state.read_only_host_commands_executed = True
+    return output
+
+
+def _handle_context_read(command: str, state: _QualificationState) -> str:
+    if state.quota_context is None:
+        raise ValueError("context read before quota")
+    output = state.quota_context.read(command, source_root=state.fixture.source_root,
+        project_root=state.fixture.project_root)
     state.read_only_host_commands_executed = True
     return output
 
@@ -1139,7 +1150,7 @@ def _handle_successor_command(command: str, state: _QualificationState) -> str:
         fixture=state.fixture,
         turn_instance_id=f"{state.turn_instance_id}-successor",
     )
-    reentry_packet = json.loads(reentry_output)
+    reentry_packet = QuotaToolContext.from_output(reentry_output).packet
     if not isinstance(reentry_packet, dict):
         raise ValueError("successor_reentry_quota_invalid")
     state.successor_reentry_observation = _successor_reentry_observation(
@@ -1205,7 +1216,7 @@ def _handle_semantic_writeback(
             fixture=state.fixture,
             turn_instance_id=f"{state.turn_instance_id}-semantic-reentry",
         )
-        reentry_packet = json.loads(reentry_output)
+        reentry_packet = QuotaToolContext.from_output(reentry_output).packet
         if not isinstance(reentry_packet, dict):
             raise ValueError("semantic_reentry_quota_invalid")
         state.semantic_reentry_observation = _semantic_reentry_observation(
@@ -1223,6 +1234,8 @@ def _dispatch_behavior_command(
 ) -> tuple[str, str, bool]:
     if _is_quota_guard(command):
         return _handle_quota_command(command, state), "quota_should_run", False
+    if is_context_read_command(command):
+        return _handle_context_read(command, state), "context_read", False
     if state.quota_packet is not None and (
         required := _required_explore_read_command(state.quota_packet)
     ):
@@ -1270,6 +1283,8 @@ def _behavior_command_kind(
 
     if _is_quota_guard(command):
         return "quota_should_run"
+    if is_context_read_command(command):
+        return "context_read"
     if state.quota_packet is not None and (
         required := _required_explore_read_command(state.quota_packet)
     ) and shlex.split(command) == shlex.split(required):
@@ -1522,6 +1537,8 @@ class DoubaoReplanSemanticActionBehaviorActor:
                 if _is_quota_guard(command):
                     return (_execute_loopx(command, fixture=fixture, turn_instance_id=state.turn_instance_id)
                             if state.seen_quota else _handle_quota_command(command, state))
+                if is_context_read_command(command):
+                    return _handle_context_read(command, state)
                 result = dispatch_vision_closeout(command, state, execute=_execute_loopx)
                 if result is None:
                     raise ValueError("This fixture grants CLI authority for quota, help, vision refresh and settlement only")

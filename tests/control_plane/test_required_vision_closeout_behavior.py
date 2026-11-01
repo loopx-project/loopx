@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from loopx.control_plane.testing.model_tool_behavior import (
+    QuotaToolContext,
     EXEC_COMMAND_TOOL, ScriptedAssistantAction, ScriptedDoubaoExecTransport, ScriptedExecToolAction,
 )
 from loopx.control_plane.testing.replan_semantic_action_behavior import (
@@ -24,7 +25,7 @@ def _packet(request: Mapping[str, Any]) -> dict[str, Any]:
     for message in request["messages"]:
         if message["role"] == "tool":
             try:
-                value = json.loads(message["content"])
+                value = QuotaToolContext.from_output(message["content"]).packet
             except json.JSONDecodeError:
                 continue
             if "replan_action_packet" in value:
@@ -110,7 +111,7 @@ def test_cli_validation_errors_are_correctable_in_the_same_draft(tmp_path: Path,
         return ScriptedExecToolAction(vision_patch_action(request).command.replace(
             "Reader is default; writing requires an explicit grant.", "x" * 700))
     def correct(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-        response = json.loads(request["messages"][-1]["content"])
+        response = QuotaToolContext.from_output(request["messages"][-1]["content"]).packet
         assert response["exit_code"] != 0
         assert "vision_budget_exceeded" in response["output"]
         return ScriptedExecToolAction(vision_patch_action(request).command.replace("evidence-permission-config", evidence))
@@ -138,7 +139,7 @@ def test_missing_durable_receipt_reaches_shell_and_can_be_retried(
         return execute(command, **kwargs)
 
     def retry_after_error(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-        feedback = json.loads(request["messages"][-1]["content"])
+        feedback = QuotaToolContext.from_output(request["messages"][-1]["content"]).packet
         assert feedback["exit_code"] != 0
         assert "vision_closeout_durable_writeback_missing" in feedback["output"]
         return projected_refresh(request)

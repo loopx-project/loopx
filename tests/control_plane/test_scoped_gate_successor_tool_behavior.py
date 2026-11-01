@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from loopx.control_plane.testing.model_tool_behavior import (
+    QuotaToolContext,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     scripted_assistant_response as _stop_response,
     scripted_exec_tool_response as _tool_response,
@@ -85,7 +86,7 @@ def test_real_quota_notice_and_selected_successor_execute_in_one_tool_loop(
         sort_keys=True,
     )
 
-    quota_result = json.loads(requests[1]["messages"][-1]["content"])
+    quota_result = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
     assert quota_result["selected_todo"]["todo_id"] == (
         SCOPED_GATE_SUCCESSOR_TODO_ID
     )

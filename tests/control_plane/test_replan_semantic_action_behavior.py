@@ -10,6 +10,7 @@ import pytest
 
 import loopx.control_plane.testing.replan_semantic_action_behavior as replan_behavior
 from loopx.control_plane.testing.model_tool_behavior import (
+    QuotaToolContext,
     ScriptedAssistantAction,
     ScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
@@ -29,7 +30,7 @@ def _latest_quota_packet(request: Mapping[str, object]) -> dict[str, object]:
         if not isinstance(message, Mapping) or message.get("role") != "tool":
             continue
         try:
-            packet = json.loads(str(message.get("content") or ""))
+            packet = QuotaToolContext.from_output(str(message.get("content") or "")).packet
         except json.JSONDecodeError:
             continue
         if isinstance(packet, dict) and packet.get("replan_action_packet"):
@@ -217,7 +218,7 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     assert "execute exactly one loopx refresh-state command" in system_prompt
     assert "do not create a Todo, chain commands, or combine actions" in system_prompt
 
-    quota_packet = json.loads(transport.requests[2]["messages"][-1]["content"])
+    quota_packet = QuotaToolContext.from_output(transport.requests[2]["messages"][-1]["content"]).packet
     assert quota_packet.get("required_reads") in (None, [])
     assert "successor Todo" not in quota_packet["active_state_next_action"]
     assert quota_packet["autonomous_replan_obligation"]["replan_context"][
@@ -507,7 +508,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     )
     assert successor_reentry["composition_status"] == "scheduled"
 
-    quota_packet = json.loads(transport.requests[1]["messages"][-1]["content"])
+    quota_packet = QuotaToolContext.from_output(transport.requests[1]["messages"][-1]["content"]).packet
     # The canonical context owner has already delivered the scoped hook body.
     # Displayed source commands are provenance, not another required tool call.
     _explore_context_action(transport.requests[1])
@@ -789,13 +790,11 @@ def test_successor_dry_run_shares_quota_agent_scope_for_user_gates(
         / "ACTIVE_GOAL_STATE.md"
     )
 
-    quota = json.loads(
-        _execute_loopx(
+    quota = QuotaToolContext.from_output(_execute_loopx(
             fixture.quota_guard_command,
             fixture=fixture,
             turn_instance_id="agent-scoped-quota-turn",
-        )
-    )
+        )).packet
     obligation_id = quota["autonomous_replan_obligation"]["obligation_id"]
     before = state_path.read_text(encoding="utf-8")
     dry_run = json.loads(
@@ -858,13 +857,11 @@ def test_untyped_successor_is_rejected_before_todo_mutation(
         / "replan-semantic-action-fixture"
         / "ACTIVE_GOAL_STATE.md"
     )
-    quota = json.loads(
-        _execute_loopx(
+    quota = QuotaToolContext.from_output(_execute_loopx(
             fixture.quota_guard_command,
             fixture=fixture,
             turn_instance_id="untyped-successor-turn",
-        )
-    )
+        )).packet
     obligation_id = quota["autonomous_replan_obligation"]["obligation_id"]
     before = state_path.read_text(encoding="utf-8")
 
