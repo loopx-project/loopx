@@ -425,6 +425,13 @@ uv run --extra test python scripts/chat_bundle.py verify --source
 uv run --extra test loopx chat --no-open
 ```
 
+`loopx update apply` and `loopx upgrade` keep their detached worker on the
+requesting installation, including when invoked inside another LoopX checkout.
+The caller's working directory and explicit registry/runtime routes remain in
+effect; a workspace or `PYTHONPATH` entry must not select another installation's
+update code. An observer disconnect still leaves one durable worker and the
+existing installation lock, status and result readback in control.
+
 Builds start with current assets only. Use `build --previous /path/to/prior/chat`
 when deliberately carrying a prior local delivery; release and installation
 commands select their predecessor automatically.

@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -122,6 +123,55 @@ def test_real_detached_worker_finishes_after_its_observer_exits(tmp_path):
     assert payload["status"] == "failed", payload
     assert payload["result"]["changes_applied"] is False
     assert payload["result"]["plan"]["apply_supported"] is False
+
+
+@pytest.mark.parametrize("command", ["update", "upgrade"])
+@pytest.mark.parametrize("shadow_pythonpath", [False, True])
+def test_detached_worker_keeps_its_installation_in_a_different_checkout(
+    tmp_path, monkeypatch, command, shadow_pythonpath,
+):
+    """The requesting installation owns the worker, not the caller's workspace."""
+    foreign = tmp_path / "another checkout"
+    shadow = foreign / "loopx"
+    shadow.mkdir(parents=True)
+    imported = tmp_path / "foreign-imported"
+    (shadow / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(imported)!r}).touch()\n"
+        "raise RuntimeError('foreign installation must not run the update')\n"
+    )
+    monkeypatch.chdir(foreign)
+    monkeypatch.setenv("LOOPX_UPDATE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("LOOPX_BIN_DIR", str(tmp_path / "bin"))
+    monkeypatch.delenv("LOOPX_RELEASE_ROOT", raising=False)
+    # Exercise the real checkout's supported refusal, never an installed user's
+    # archive/package-manager mutation. The worker still runs the owning CLI.
+    own_root = Path(operations.__file__).resolve().parents[2]
+    monkeypatch.setenv("PATH", str(own_root / "scripts") + os.pathsep + os.environ["PATH"])
+    if shadow_pythonpath:
+        monkeypatch.setenv("PYTHONPATH", str(foreign))
+    else:
+        monkeypatch.delenv("PYTHONPATH", raising=False)
+    registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"
+    if command == "upgrade":
+        registry, runtime = Path("registry.json"), Path("runtime")
+    args = argparse.Namespace(command=command, runtime_root=str(runtime),
+        timeout_seconds=30, repo=None, ref="main", archive_url=None,
+        source=True, allow_downgrade=False)
+    started = operations.start_or_observe(args, registry, registry_was_supplied=True)
+    operation_id = started["operation_id"]
+    for _ in range(100):
+        state = operations.read_operation(operation_id)
+        if imported.exists() or state["status"] not in {"starting", "running"}:
+            break
+        time.sleep(.1)
+    assert not imported.exists(), "the detached process imported the foreign checkout"
+    assert state["status"] == "failed", state
+    assert state["result"]["changes_applied"] is False
+    assert state["result"]["plan"]["apply_supported"] is False
+    request = json.loads((operations.operation_root() / operation_id / "request.json").read_text())
+    argv = request["argv"]
+    assert argv[argv.index("--registry") + 1] == str(registry)
+    assert argv[argv.index("--runtime-root") + 1] == str(runtime)
 
 
 @pytest.mark.parametrize("switched", [True, False])
