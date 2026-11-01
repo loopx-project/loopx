@@ -498,7 +498,7 @@ def _pending_return_paths(host, paths):
 
 
 @effect_runtime_request_scope()
-def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False):
+def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None):
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
@@ -511,6 +511,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     host = {"root": root, "registry": registry, "store": store, "now": now, "exact": exact, "cancelled": cancelled}
     paths = iter_result_paths(_root(root) / "replies")
     for path in _pending_return_paths(host, paths):
+        progress()
         if cancelled():
             break
         if not _belongs_to_chat_host(root, store, path):
@@ -616,7 +617,7 @@ class ReturnService:
         )
 
     def _return_step(self) -> None:
-        drain(*self.args, cancelled=self.stop.is_set)
+        drain(*self.args, cancelled=self.stop.is_set, progress=self._return_worker.checkpoint)
 
     def run_executions(self) -> None:
         # Native previews may wait on a subprocess. Keep result publication

@@ -45,6 +45,28 @@ on a step failure, and Lark retains its existing pool, in-flight futures and
 fairness/backoff state while the scanner recovers. Shared waits never imply
 model/request replay or establish provider health from thread liveness.
 
+The Chat process registers these four loops with the process-scoped
+`BackgroundServices` lifecycle owner. It reconciles existing owner intent at
+startup and every 15 seconds, isolates owner failures, and fences shutdown
+before closing registered services. There is no additional saved enable switch,
+job queue, system daemon or permission grant. The App/OS still supervises the
+Chat process. An enabled native observer that stopped is re-created from its
+current saved policy; a live scan or a normally completed one-shot is not replayed.
+
+Settings → **Background services** reads the same content-free projection as
+`GET /api/chat/background-services`. **Recheck** uses the loopback-protected
+`POST` endpoint with `{"operation":"recheck"}` to reconcile current owner intent
+and read back observations. Reads are passive. The TypeScript owner
+`control_plane/runtime/background_services.ts` distinguishes checking, completed
+scans, backoff, overdue progress, unavailable evidence and disabled work. A
+progress deadline diagnoses silence; it never kills a thread or authorizes an
+effect retry. Successful scanning does not assert successful delivery of every
+individual request. Native observation uses its provider's elected-lock health,
+including an owner in another process; a passive Core contender cannot replace
+that evidence. Its progress timestamp is not reported as a successful quota
+sample. Per-request receipts, profile listeners and ambiguous-write recovery
+remain with their existing owners.
+
 The experimental [MemT Nano Turn host](../../packages/loopx-memt-turn/README.md)
 is a separately installed `generic-cli` execution provider. Its native memory
 is scoped advisory history, not canonical work state or accepted Reward Memory.

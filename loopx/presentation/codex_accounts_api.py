@@ -16,7 +16,7 @@ CODEX_ACCOUNTS_PATH = "/api/chat/codex-accounts"
 
 
 class CodexAccountService:
-    def __init__(self, runtime_root: Path):
+    def __init__(self, runtime_root: Path, *, start_observer: bool = True):
         self.provider: Any = None
         self.watcher: Any = None
         self.mutex = threading.Lock()
@@ -32,7 +32,8 @@ class CodexAccountService:
         # Rehydrate an explicitly enabled observer after an App restart. The
         # absent/default-off path neither creates state nor reads native auth.
         try:
-            self._reconcile_observer()
+            if start_observer:
+                self._reconcile_observer()
         except Exception:
             self.error = "state_unavailable"
 
@@ -105,10 +106,28 @@ class CodexAccountService:
                 pass
             return {**cached, "ok": False, "available": True, "code": code, "error_code": code}
 
+    def reconcile_background(self) -> None:
+        with self.mutex:
+            self._reconcile_observer()
+
+    def background_observation(self) -> dict:
+        if self.provider is None:
+            return {"available": False, "enabled": None}
+        enabled = self.provider.path.exists() and self.provider._load()["policy"]["enabled"]
+        observe = getattr(self.provider, "observer_health", None)
+        # The provider observes its elected lock owner, which can be another
+        # process. The passive Core contender's thread is not that observation.
+        probe = observe(enabled) if callable(observe) else {"state": "unverified"}
+        return {"available": True, "enabled": enabled, "probe": {
+            "state": "unverified" if probe["state"] == "upgrade_required" else probe["state"],
+            "checked_at": probe.get("checked_at"), "next_check_at": probe.get("next_check_at"),
+        }}
+
     def close(self) -> None:
         self.closed = True
-        if self.watcher:
-            self.watcher.close()
+        with self.mutex:
+            if self.watcher:
+                self.watcher.close()
 
 
 class _HTTP(Protocol):

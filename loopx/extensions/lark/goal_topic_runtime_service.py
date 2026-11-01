@@ -67,14 +67,15 @@ class LarkGoalTopicRuntimeService:
         """Discover existing bindings without blocking the HTTP readiness path."""
 
         with self._lock:
-            if self._closed.is_set() or self._startup_thread is not None:
+            if self._closed.is_set():
                 return
-            self._startup_thread = threading.Thread(
-                target=self._refresh_on_start,
-                name="loopx-lark-startup",
-                daemon=True,
-            )
-            self._startup_thread.start()
+            if self._startup_thread is None:
+                self._startup_thread = threading.Thread(
+                    target=self._refresh_on_start,
+                    name="loopx-lark-startup",
+                    daemon=True,
+                )
+                self._startup_thread.start()
             if self.private_conversations is not None:
                 self._delivery_worker.start()
                 self._delivery_thread = self._delivery_worker.thread
