@@ -622,6 +622,48 @@ def test_baseline_and_treatment_use_same_harbor_entry(tmp_path):
         assert agent.replan_after_turns == (6 if agent.execution.uses_loopx else None)
 
 
+@pytest.mark.parametrize("option,mode,provider_env", [
+    ("on", "heartbeat", {}),
+    (1, "heartbeat", {}),
+    (None, "heartbeat", {}),
+    (True, "plain", {}),
+    (True, "native-goal", {}),
+    (True, "loopx-goal", {}),
+    (True, "turn", {}),
+    (True, "heartbeat", {"OPENAI_BASE_URL": ""}),
+    (True, "heartbeat", {"OPENAI_API_KEY": ""}),
+    (True, "heartbeat", {"CODEX_WIRE_API": "chat"}),
+])
+def test_harbor_provider_request_admission_rejects_unsupported_activation(
+    tmp_path, option, mode, provider_env,
+):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    with pytest.raises(ValueError, match="provider_request_admission"):
+        BenchmarkCodex(
+            logs_dir=tmp_path, model_name="fixture", execution_mode=mode,
+            provider_request_admission=option,
+            extra_env={"OPENAI_BASE_URL": "https://provider.invalid/v1",
+                       "OPENAI_API_KEY": "synthetic-provider-key",
+                       "CODEX_WIRE_API": "responses", **provider_env},
+            **({"validation_command": ["true"]} if mode == "turn" else {}),
+        )
+
+
+def test_harbor_provider_request_admission_off_ignores_ambient_activation(tmp_path, monkeypatch):
+    pytest.importorskip("harbor")
+    from benchmark.runtime.harbor import BenchmarkCodex
+
+    monkeypatch.setenv("LOOPX_PROVIDER_REQUEST_ADMISSION", "on")
+    kwargs = dict(logs_dir=tmp_path, model_name="fixture",
+                  extra_env={"OPENAI_BASE_URL": "", "OPENAI_API_KEY": "", "CODEX_WIRE_API": "chat"})
+    implicit = BenchmarkCodex(**kwargs)
+    explicit = BenchmarkCodex(**kwargs, provider_request_admission=False)
+    assert implicit._worker_env(cwd="/task") == explicit._worker_env(cwd="/task")
+    assert "LOOPX_PROVIDER_REQUEST_ADMISSION" not in implicit._worker_env(cwd="/task")
+
+
 def test_checkpoint_request_is_explicit_and_reaches_the_existing_worker_env(tmp_path, monkeypatch):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
@@ -825,7 +867,8 @@ def test_default_execution_has_no_independent_turn_deadline(tmp_path):
     (True, "fresh_replan", "explicit"),
 ])
 @pytest.mark.parametrize("context_delivery", ["off", "on"])
-def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery):
+@pytest.mark.parametrize("provider_request_admission", [False, True])
+def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path, monkeypatch, enabled, trigger, expected, context_delivery, provider_request_admission):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex, CodexOffline
     from benchmark.runtime.checkpoint_wake import CheckpointWake
@@ -843,8 +886,12 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
         request.write_text(json.dumps(declaration))
         checkpoint_args = {"checkpoint_request_path": str(request),
                            "checkpoint_request": request.read_bytes()}
+    provider_env = {"OPENAI_BASE_URL": "https://provider.invalid/v1",
+                    "OPENAI_API_KEY": "synthetic-provider-key", "CODEX_WIRE_API": "responses"}
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", turn_envelope=enabled,
                            context_delivery=context_delivery,
+                           provider_request_admission=provider_request_admission,
+                           extra_env=provider_env,
                            **checkpoint_args)
     with CheckpointWake({"LOOPX_WAKE_LOG_DIR": str(wake_root),
             **({"LOOPX_CHECKPOINT_REQUEST": str(request)} if trigger else {})},
@@ -870,7 +917,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     monkeypatch.setattr(agent, "_stage_source", stage)
     monkeypatch.setattr(agent, "exec_as_root", execute)
     monkeypatch.setattr(agent, "exec_as_agent", execute)
-    monkeypatch.setattr(agent, "_get_env", lambda key: None)
+    monkeypatch.setattr(agent, "_get_env", provider_env.get)
     async def task_exec(**kwargs):
         assert kwargs == {"command": 'printf "%s" "$PATH"', "timeout_sec": 30}
         return SimpleNamespace(stdout="/task/toolchain:/usr/bin:/bin", return_code=0)
@@ -890,6 +937,12 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert receipt.get("turn_envelope_source") == expected
     assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert agent._worker_env(cwd="/task").get("LOOPX_CONTEXT_DELIVERY") == ("on" if context_delivery != "off" else None)
+    assert receipt.get("provider_request_admission") == ("on" if provider_request_admission else None)
+    worker_env = agent._worker_env(cwd="/task")
+    assert worker_env.get("LOOPX_PROVIDER_REQUEST_ADMISSION") == ("on" if provider_request_admission else None)
+    assert worker_env["OPENAI_BASE_URL"] == provider_env["OPENAI_BASE_URL"]
+    assert worker_env["OPENAI_API_KEY"] == provider_env["OPENAI_API_KEY"]
+    assert provider_env["OPENAI_API_KEY"] not in json.dumps(receipt)
     if expected:
         assert receipt["turn_envelope"] is True
 

@@ -417,6 +417,48 @@ approval in its envelope; publishing and production actions keep their gates.
 Staging uses Harbor upload/exec methods, without Docker-label container discovery.
 Backend-specific networking stays in the benchmark's native launcher.
 
+### Opt-in provider request admission
+
+Set `provider_request_admission: true` in the Harbor heartbeat agent's `kwargs`,
+or pass `--provider-request-admission` to an EdgeBench heartbeat worker, to check
+the existing canonical admission before each model-provider request. This is a
+separate boolean opt-in from context delivery and turn envelopes. It requires a
+custom `OPENAI_BASE_URL`, `OPENAI_API_KEY` and the `responses` wire API; login-file
+routes and other execution modes reject activation before execution. The worker
+receives `LOOPX_PROVIDER_REQUEST_ADMISSION=on`, and enabled run/profile receipts
+record `provider_request_admission: "on"`. Omission keeps the existing environment
+and receipt shape. Disable it by omitting the option on a new trial.
+
+Each native invocation gets its own listener and random request path, bound once
+to that invocation. A successor never rebinds the earlier listener to a new
+process or admission identity. The request check reuses the existing Stop, quota
+and canonical admission owners; it does not grant additional work or invent a
+second quota counter. Inbound parsing, upstream connection setup and waiting for
+the response do not hold the Goal/registry lock. The admitted POST dispatch has
+an absolute two-second deadline, shortened by a smaller remaining phase budget.
+An uncertain or partially sent request remains unknown and is not retried by
+this transport.
+
+Per-invocation receipts distinguish requests started, bytes fully sent, pending
+responses and unknown partial sends. `sent` does not certify provider acceptance
+or completion; a response still pending when the worker exits remains visible
+as pending. Request observations contain identities and transport outcomes,
+without request/response bodies, query strings or credentials. Their file writes
+run outside the invocation state lock and the canonical admission scope.
+
+The isolated Codex home and checkpoint configuration retain the existing
+provider route. Only the native process command receives a temporary route
+override for its invocation. SForge may already have selected a host credential
+gateway, including an HTTP route; admission forwards to that same effective
+route read back from the trial, with its existing credential contract. A loopback
+listener alone is not a credential or OS isolation boundary. The caller still
+owns provider access, credential isolation and the worker's process/filesystem
+boundary. This option changes request admission, not provider identity, scoring
+or benchmark qualification.
+For HTTPS upstreams, an explicit proxy uses HTTP CONNECT; unsupported proxy
+layouts refuse activation before launch. A slow upload can reach the bounded
+send deadline and remain unknown even when the upstream has received some bytes.
+
 ## Results, timeout and recovery
 
 ### Live session observation
