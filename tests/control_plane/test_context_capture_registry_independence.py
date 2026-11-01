@@ -129,6 +129,21 @@ def test_replan_stages_read_original_authority_capture_without_registry(
         source = json.loads(capture.read_bytes())
         identity = source["heartbeat_receipt"]["settlement_identity"]
         assert (identity["goal_id"], identity["agent_id"], identity["turn_instance_id"]) == (GOAL, AGENT, TURN)
+        if guard.get("schema_version") == "context_capture_navigation_v1":
+            command, observed = guard["recovery"]["command"], bytearray()
+            while True:
+                argv = shlex.split(command)
+                result = run_cli("loopx.cli", fixture["project"], *argv[argv.index("quota"):])
+                assert result.returncode == 0, result.stdout + result.stderr
+                page = json.loads(result.stdout)
+                assert page["ok"] and page["offset"] == len(observed)
+                observed.extend(page["content"].encode("utf-8"))
+                if page["eof"]:
+                    assert page["next_offset"] is None and len(observed) == page["total_bytes"]
+                    break
+                assert page["next_offset"] == len(observed)
+                command = page["next_command"]
+            guard = json.loads(observed)
         missing = tmp_path / "unrelated-missing-registry.json"
 
         def snapshot():

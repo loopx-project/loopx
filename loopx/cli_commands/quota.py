@@ -18,7 +18,6 @@ from .quota_capture import (
     native_context_activation, model_context_reference,
 )
 from ..control_plane.turn_driver.decision_capture import (
-    context_capture_read_command,
     project_captured_context,
 )
 from ..usage_goal import observe_quota_result
@@ -410,26 +409,30 @@ def _emit_quota_result(
     if (not deferred_context and args.format == "json" and succeeded and capture_directory
             and native_context):
         import hashlib
-        from ..control_plane.turn_driver.codex_context import codex_context_directory, project_codex_context
+        from ..control_plane.turn_driver.codex_context import (
+            NativeContextSessionUnavailable, codex_context_directory, project_codex_context,
+        )
 
         try:
             capture_id = hashlib.sha256((capture_directory / "decision.json").read_bytes()).hexdigest()
-            directory = codex_context_directory(directory=args.codex_context_dir,
-                root=getattr(args, "codex_context_root", None), create=True)
+            try:
+                directory = codex_context_directory(directory=args.codex_context_dir,
+                    root=getattr(args, "codex_context_root", None), create=True)
+            except NativeContextSessionUnavailable:
+                # A declared host may not have initialized its native session.
+                # Deliver this complete capture without a session journal or
+                # baseline claim; do not repeat the already-committed guard.
+                directory = None
             payload = project_codex_context(payload, directory=directory,
                 capture_directory=capture_directory, goal_id=decision_identity[0], agent_id=decision_identity[1],
                 surface="turn_envelope" if getattr(args, "turn_envelope", False) else "quota_packet",
                 capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None))
             recovery = payload.get("recovery")
-            if recovery is None:
-                original = capture_directory / "decision.json"
-                recovery = {
-                    "path": str(original),
-                    "sha256": capture_id,
-                    "command": context_capture_read_command(original, capture_id),
-                }
+            # Without a prepared native projection, the view adapter publishes
+            # this complete CLI view and its reader commands as current recovery.
+            # The original authority decision remains separately captured.
             payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
-                metadata={"capture_sha256": capture_id, "recovery": recovery},
+                metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
                 max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
             payload = model_context_reference(payload)
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
