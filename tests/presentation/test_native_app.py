@@ -125,3 +125,18 @@ def test_clean_environment_cannot_reuse_another_codex_session(profile, monkeypat
     assert not set(env) & {"CODEX_THREAD_ID", "CODEX_APP_TOOLS_PIPE_PATH", "OPENAI_API_KEY", "NODE_OPTIONS"}
     assert env["CODEX_HOME"] == str(spec["home"])
     assert env["HTTPS_PROXY"] == os.environ["HTTPS_PROXY"]
+
+
+def test_register_current_requires_a_subscription_login(profile):
+    home, spec = profile
+    host_module = importlib.import_module("loopx_codex_provider_routing.native_host")
+    store = importlib.import_module("loopx_codex_provider_routing.native_account_store")
+    store.atomic(spec["home"] / "auth.json", store.encoded({"auth_mode": "apikey", "OPENAI_API_KEY": "example-key"}))
+    host = object.__new__(host_module.NativeHost)
+    host.accounts = store
+    host.manager = Mock(auth=spec["home"] / "auth.json")
+    host.manager.status.return_value = {"active_slot": None}
+    host.revision = lambda: "same-selection"
+    with pytest.raises(host_module.HostError, match="native_login_required"):
+        host.enroll_current("same-selection")
+    host.manager.enroll.assert_not_called()

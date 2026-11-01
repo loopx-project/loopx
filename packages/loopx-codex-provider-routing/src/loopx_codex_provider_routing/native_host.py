@@ -203,7 +203,8 @@ class NativeHost:
     def enroll_current(self, expected: str) -> dict:
         if self.revision() != expected or self.manager.status()["active_slot"] is not None:
             raise HostError("selection_changed")
-        if not self.manager.auth.exists():
+        if (not self.manager.auth.exists()
+                or self.accounts.auth_kind(self.accounts.read_private(self.manager.auth)) != "subscription"):
             raise HostError("native_login_required")
         self.expected = expected
         self.manager.enroll("primary", current=True)
