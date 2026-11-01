@@ -417,8 +417,10 @@ def test_private_report_artifacts_use_canonical_utf8_on_windows_text_mode(
 
 
 @pytest.mark.parametrize("tamper", [None, "report", "html", "source", "response"])
-@pytest.mark.parametrize("legacy_links", [False, True, None])
-def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_path, monkeypatch, tamper, legacy_links):
+@pytest.mark.parametrize("legacy_links,bounded_masthead", [(False, False), (True, False), (None, False), (None, True)])
+def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(
+    tmp_path, monkeypatch, tamper, legacy_links, bounded_masthead
+):
     from loopx.presentation.renderers import periodic_report_html as html
     from loopx.presentation.renderers import periodic_report_markdown as markdown
 
@@ -432,15 +434,18 @@ def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(tmp_pat
 
     prior_markdown = markdown.render_periodic_report_markdown
     prior_html = html.render_periodic_report_html
-    # Seed through the real freezer, retaining all three shipped layouts.
+    # Seed through the real freezer, retaining all four shipped layouts.
     # The old source rules remain independently specified, not inferred from
     # the new link-eligibility helper or the validator's selected fallback.
     with monkeypatch.context() as previous:
-        # Independently reproduce the shipped CSS. Its automatic side column
-        # predates bounded prose highlights in all three presentations.
-        previous.setattr(html, "_CSS", html._CSS.replace(
-            "grid-template-columns: minmax(0, 1fr) minmax(240px, 360px)",
-            "grid-template-columns: minmax(0, 1fr) auto", 1))
+        # The shipped styles lacked highlight wrapping. The three earlier
+        # presentations also used an automatic side column.
+        css = html._CSS.replace("\n  overflow-wrap: anywhere;", "", 1)
+        if not bounded_masthead:
+            css = css.replace(
+                "grid-template-columns: minmax(0, 1fr) minmax(240px, 360px)",
+                "grid-template-columns: minmax(0, 1fr) auto", 1)
+        previous.setattr(html, "_CSS", css)
         if legacy_links is not None:
             previous.setattr(markdown, "render_periodic_report_markdown", lambda document, **kwargs:
                 prior_markdown(document, **{**kwargs, "_legacy_layout": True}))
