@@ -40,15 +40,38 @@ try {
   await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
   const writes = []; page.on('request', request => {if (request.method() !== 'GET') writes.push(new URL(request.url()).pathname);});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const inventoryRequests = [];
+  page.on('request', request => {if (new URL(request.url()).pathname === '/api/chat/request-inventory') inventoryRequests.push(request);});
   // The fixture serves the conversation source owner, so the page reads the
   // real answer. An interception here would hide the later source refusal.
   await page.goto(ready.origin + '/chat/');
   await page.getByRole('navigation', {name: '管家视图'}).getByRole('button', {name: /^(Chat|对话)$/}).click();
   await page.getByText('复核迁移说明中的示例', {exact: true}).filter({visible: true}).first().waitFor();
+  assert.equal(inventoryRequests.length, 0, 'A closed delegation reader must not scan the whole history');
   const trigger = page.getByRole('button', {name: /委派，.*条待跟进/});
+  let releaseFirst, sawFirst;
+  const firstSeen = new Promise(resolve => sawFirst = resolve);
+  let firstRead = true;
+  await page.route('**/api/chat/request-inventory?*', async route => {
+    if (!firstRead) return route.continue();
+    firstRead = false;
+    const response = await route.fetch(); sawFirst();
+    await new Promise(resolve => releaseFirst = resolve);
+    return route.fulfill({response}).catch(() => {});
+  });
   await trigger.click();
   const dialog = page.getByRole('dialog', {name: '委派', exact: true});
+  await firstSeen;
+  const loadingNext = dialog.getByRole('button', {name: '加载下一页', exact: true});
+  assert.equal(await loadingNext.getAttribute('aria-disabled'), 'true');
+  assert.ok(await loadingNext.evaluate(node => {const box = node.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight;}));
+  await page.screenshot({path: resolve(output, 'loading-pagination.png')});
+  await fixture('conversation-arrival');
+  await page.getByText('新的委派阅读测试消息。', {exact: true}).waitFor({state: 'attached'});
+  assert.equal(inventoryRequests.length, 1, 'A conversation arrival cannot cancel and restart an in-flight inventory');
+  releaseFirst();
   await dialog.locator('.conversation-request-row').first().waitFor();
+  await page.unroute('**/api/chat/request-inventory?*');
   if (process.env.LOOPX_SEARCH_BEFORE === '1') {
     await page.screenshot({path: resolve(output, 'before-desktop.png')});
     await page.setViewportSize({width: 390, height: 844});
@@ -60,11 +83,17 @@ try {
     const settled = () => page.waitForFunction(() => document.querySelector('.conversation-requests-body')?.getAttribute('aria-busy') === 'false');
     await settled(); await page.screenshot({path: resolve(output, 'after-desktop.png')});
     await rows(12);
+    assert.ok(inventoryRequests.every(request => new URL(request.url()).searchParams.get('include_work') === 'false'),
+      'Collapsed lists must not read Core linked work');
     await search('核对账单导出的字段映射'); await rows(1);
     await search('核对账单导出的字段映射'); await settled();
     await rows(1);
     assert.equal(await trigger.getAttribute('aria-label'), '委派，13 条待跟进');
     await dialog.locator('.conversation-request-row > summary').click();
+    const workRead = page.waitForRequest(request => new URL(request.url()).searchParams.get('include_work') === 'true');
+    await dialog.getByText('关联工作与记录', {exact: true}).click();
+    assert.equal(new URL((await workRead).url()).searchParams.get('limit'), '1');
+    await dialog.getByText(/请求版本 1 ·/).waitFor();
     const original = dialog.getByText('原对话', {exact: true});
     const articles = dialog.locator('.conversation-request-detail article');
     // Workspace startup may attempt Session admission with this synthetic
@@ -117,7 +146,7 @@ try {
     await dialog.getByRole('button', {name: '清空', exact: true}).click(); await settled();
     await rows(12);
     await page.setViewportSize({width: 390, height: 844});
-    const more = dialog.getByRole('button', {name: '更多记录', exact: true});
+    const more = dialog.getByRole('button', {name: '加载下一页', exact: true});
     assert.ok(await more.evaluate(node => {
       const box = node.getBoundingClientRect();
       return box.top >= 0 && box.bottom <= innerHeight;
@@ -135,7 +164,7 @@ try {
     await rows(4);
     const inspected = await fixture('inspect');
     assert.equal(inspected.source_unchanged, true);
-    assert.equal(inspected.chat_unchanged, true);
+    assert.equal(inspected.chat_unchanged, true, 'History recovery restored the fixture journal; browsing leaves it unchanged');
     assert.equal(inspected.posts, beforeOriginal.posts);
     assert.equal(inspected.turn_count, 13, 'Reading original pages cannot execute another Turn');
 
@@ -146,7 +175,8 @@ try {
     await dialog.getByRole('button', {name: '刷新委派', exact: true}).click(); await settled();
     await dialog.getByRole('alert').waitFor(); await rows(0);
     assert.equal(await trigger.getAttribute('aria-label'), '委派，— 条待跟进');
-    assert.equal(await dialog.locator('.conversation-requests-pagination').count(), 0);
+    await dialog.getByText('记录数量未知', {exact: true}).waitFor();
+    assert.equal(await dialog.getByRole('button', {name: '加载下一页', exact: true}).getAttribute('aria-disabled'), 'true');
     // Changing the filter must not turn the same missing source into a new
     // empty workspace, nor may an unsuccessful retry lose that distinction.
     await search('builder'); await settled(); await dialog.getByRole('alert').waitFor();
@@ -201,9 +231,9 @@ try {
     // Rebuild from the beginning, but fulfill this click's requested extent;
     // the parent message refresh must not replace it with the old page count.
     await fixture('report-window');
-    const nextPage = english.getByRole('button', {name: 'More records', exact: true});
+    const nextPage = english.getByRole('button', {name: 'Load next page', exact: true});
     await nextPage.focus(); await page.keyboard.press('Enter'); await rows(13);
-    assert.equal(await english.getByRole('button', {name: 'More records', exact: true}).count(), 0);
+    assert.equal(await english.getByRole('button', {name: 'Load next page', exact: true}).count(), 0);
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), '13 / 13 shown');
     await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
