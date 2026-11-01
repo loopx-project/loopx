@@ -340,12 +340,13 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             components, research = research_participants(env, components, metadata, destination, evidence, deadline)
         opportunity = None
         if request.get("evaluation_opportunity") and not request.get("controller_handoff"):
-            from .sforge_checkpoint import capture_opportunity
+            from . import sforge_json
+            from .sforge_checkpoint import capture_opportunity, RELEASED_FIELDS
 
             evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-opportunity.json"
             incumbent = evidence.with_name("checkpoint-incumbent.tar.gz")
             opportunity = capture_opportunity(env, timeout=max(.1, deadline - time.time()), incumbent_path=incumbent)
-            evidence.write_text(json.dumps(opportunity), encoding="utf-8")
+            evidence.write_text(sforge_json.dumps(opportunity, fields=RELEASED_FIELDS), encoding="utf-8")
             evidence.chmod(0o600)
             opportunity_id = _participant_id(components, "evaluation_opportunity")
             components = [*components, {"id": opportunity_id, "source_path": str(evidence)}]

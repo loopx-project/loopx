@@ -1353,7 +1353,9 @@ def test_custom_provider_without_key_fails_before_creating_attempt(tmp_path, mon
     (False, 'official', False), (True, 'official', False),
     (True, 'heartbeat-resume', False), (True, 'heartbeat-resume', True),
 ])
-def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, monkeypatch, custom, profile, provider_request_admission):
+@pytest.mark.parametrize('bridge', [False, True], ids=['docker-default', 'docker-bridge'])
+def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
+        tmp_path, monkeypatch, custom, profile, bridge, provider_request_admission):
     pytest.importorskip('sforge')
     pytest.importorskip('harbor')
     from types import SimpleNamespace
@@ -1383,6 +1385,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, m
         judge=SimpleNamespace(selection='score_first', score_direction='maximize')))
     def backend(**kwargs):
         assert kwargs['oauth_proxy'] is custom
+        assert kwargs.get('docker_host_bridge', False) is bridge
         return SimpleNamespace(image_exists=lambda image: True)
     monkeypatch.setattr(run, 'RecordingDockerBackend', backend)
     def stop_before_solver(**kwargs):
@@ -1400,11 +1403,14 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(tmp_path, m
             '--effort', 'xhigh', '--judge-url', 'http://127.0.0.1:9999']
     if provider_request_admission:
         args += ['--provider-request-admission']
+    if bridge:
+        args += ['--docker-host-bridge']
     with pytest.raises(RuntimeError, match='synthetic launch boundary'):
         run.main(args)
     receipt = (tmp_path / 'runs/route/fixture/runtime-receipt.json').read_text()
     assert 'synthetic-provider-secret' not in receipt
     assert json.loads(receipt).get('provider_request_admission') == ('on' if provider_request_admission else None)
+    assert json.loads(receipt).get('docker_host_bridge', False) is bridge
 
 
 @pytest.mark.parametrize("capture", [False, True])

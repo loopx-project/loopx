@@ -3,16 +3,17 @@
 This research adapter calls SForge's native `run_agent`. Task images, prompts,
 submission cooldowns, judge isolation and scoring remain owned by the pinned
 EdgeBench checkout. Best-only adds host capture/admission scheduling; native and
-blind retain native automatic evaluation. The CLI defaults to the shared
+blind retain native automatic evaluation. The CLI defaults to a reviewed commit
+from the shared
 [EdgeBench integration branch](https://github.com/huangruiteng/EdgeBench/tree/codex/edgebench-integration),
 maintained jointly by `huangruiteng` and `loopx-agent`. The canonical repository
-and branch live in [`source-default.json`](source-default.json).
+and revision/compatibility-patch pair live in [`source-default.json`](source-default.json).
 Run the controller on Linux with Docker and native SForge
 iptables permissions; a macOS Docker socket alone does not provide that boundary.
 
 ## Select and freeze the native provider
 
-The first CLI entry for a log directory fetches the selected branch into
+The first CLI entry for a log directory fetches the selected revision into
 `.edgebench-source/checkout` and atomically freezes the effective source in
 `.edgebench-source/receipt.json`. Concurrent worker/judge startup shares that lock.
 Later entries reuse the frozen checkout without fetching, even if the branch,
@@ -22,8 +23,10 @@ before model/container entry. Use a new log directory to adopt a newer source;
 never repin an active or historical cohort.
 
 For a **new cohort with no explicit source options**, `source-default.json`
-selects the shared branch and the versioned
-[`nonfinite-checkpoint-v1` compatibility patch](compatibility/nonfinite-checkpoint-v1.patch).
+selects the reviewed integration commit
+[`e278cda3f4d2da3cf06aabf2df4daa99b9749501`](https://github.com/huangruiteng/EdgeBench/commit/e278cda3f4d2da3cf06aabf2df4daa99b9749501)
+and the versioned
+[`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
 This LoopX-owned patch fixes the native checkpoint representation of nonfinite
 released scores and metrics. Native scoring, report values and selection remain
 unchanged. Preparation verifies the asset digest and each touched file's exact
@@ -31,10 +34,13 @@ upstream blob and mode, applies the patch before provider import/installation,
 and creates a clean, reproducible Git commit with the fetched commit as its
 parent. The snapshot uses an explicit LoopX compatibility identity and the
 upstream commit time; it does not attribute the patch to an upstream author.
-Unrelated upstream changes can advance normally. A changed patch preimage,
-including a later upstream implementation of the fix, stops preparation without
-publishing a source directory. Review and update the bundled patch, or explicitly
-select the original source, before starting that new cohort.
+The default revision and patch are one reviewed pair: advancing the integration
+branch does not change a new default cohort. Updating the pair requires reviewing
+the new source and qualifying the native checkpoint transport again. A changed
+patch preimage, including a later upstream implementation of the fix, still stops
+preparation without publishing a source directory. Explicit branch/revision
+selection remains available and uses unmodified provider code; it does not
+silently inherit the default patch or its qualification.
 
 Patched sources use `edgebench_source_v2` receipts. `upstream_commit` is the
 fetched remote revision; `compatibility_patch` records the patch ID and SHA-256;
@@ -519,6 +525,17 @@ uniform offline record over evaluation reuse. The original native final result
 covers online submissions only; use the complete offline result for post-run
 qualification. Neither report by itself certifies integrity or score countability.
 No offline result is routed to the worker.
+
+Offline score files, the combined result and the command's summary retain native
+non-finite scores and nested metrics. Finite documents keep their existing JSON.
+Other documents use the local `sforge_nonfinite_json: 1` transport envelope:
+`value` contains JSON data with each non-finite number replaced by `null`, and
+`nonfinite_values` records its path and `positive_infinity`, `negative_infinity`
+or `nan` kind. Use `benchmark.runtime.sforge_json.loads` to read either form.
+Restart decodes saved scores before calling the unchanged native selector;
+it does not turn these results into zero, missing feedback or grading errors.
+Literal marker-shaped metrics remain data, including an escaped root marker.
+Malformed paths, duplicate keys and unmarked non-finite constants are rejected.
 
 The first completed valid finite score establishes a silent baseline. The task's
 native selection policy is the sole improvement criterion among valid scored

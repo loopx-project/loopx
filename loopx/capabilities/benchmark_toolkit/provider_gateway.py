@@ -281,7 +281,8 @@ def serve_runner_owned_provider_gateway(
                         self.send_header(key, value)
                 self.end_headers()
                 response_started = True
-                while chunk := response.read(64 * 1024):
+                # Forward available stream bytes without waiting to fill the buffer.
+                while chunk := response.read1(64 * 1024):
                     self.wfile.write(chunk)
                     self.wfile.flush()
             except ProviderGatewayRequestRejected as error:

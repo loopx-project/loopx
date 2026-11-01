@@ -127,6 +127,15 @@ def _host_process_drain(record: dict[str, Any] | None, *, supervises: str,
         return (HOST_PROCESS_NOT_LAUNCHED if record.get("process_group") is None
                 and "bridge_pid" not in record else HOST_PROCESS_UNATTRIBUTABLE)
     if not hasattr(os, "killpg"):
+        if sys.platform == "win32" and "windows_job" in record:
+            from .windows_host_job import active_job_processes, valid_job_name
+            if not valid_job_name(record["windows_job"]):
+                return HOST_PROCESS_UNATTRIBUTABLE
+            try:
+                active = active_job_processes(record["windows_job"])
+            except OSError:
+                return HOST_PROCESS_UNATTRIBUTABLE
+            return HOST_PROCESS_DRAINING if active else HOST_PROCESS_DRAINED
         # A launched Host on a platform without process groups is never proven
         # drained. This is a platform boundary, not an attribution failure.
         return HOST_PROCESS_UNSUPPORTED_PLATFORM
@@ -177,7 +186,11 @@ def execution_host_drain(record_path: Path, *, launch_possible: bool = False) ->
     host = _host_process_drain(owned_record, supervises=HOST_PROCESS_SUPERVISES_HOST,
                                expected=True)
     drain = next(state for state in _DRAIN_PRECEDENCE if state in {supervisor, host})
-    if not host_process_drain_supported() and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED):
+    assigned_windows_job = sys.platform == "win32" and any(
+        "windows_job" in item for item in (owned_record or {}, supervisor_record or {})
+    )
+    if (not assigned_windows_job and not host_process_drain_supported()
+            and (launch_possible or drain != HOST_PROCESS_NOT_LAUNCHED)):
         return HOST_PROCESS_UNSUPPORTED_PLATFORM
     return drain
 
@@ -283,6 +296,135 @@ def run_host_process(
     if delegated_lease is not None:
         request["delegated_lease"] = delegated_lease
     bridge = Path(__file__).with_name("host_process_bridge.ts")
+    bridge_environment, record_value, record_path, supervision, supervises = _bridge_record_scope(environment, delegated_lease)
+    launch_budget = max(1.0, timeout_seconds) if timeout_seconds is not None else 30.0
+    launch_deadline = time.monotonic() + launch_budget if launch_guard is not None else None
+    launch_arguments = (["--guarded-launch", str((time.time() + launch_budget) * 1000)]
+                        if launch_guard is not None else [])
+    with ExitStack() as containment:
+        windows_job = None
+        if sys.platform == "win32":
+            from .windows_host_job import WindowsHostJob
+            windows_job = containment.enter_context(WindowsHostJob())
+        proc = subprocess.Popen(
+            [
+                _node_executable(),
+                "--no-warnings",
+                "--experimental-strip-types",
+                str(bridge),
+                *launch_arguments,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            start_new_session=True,
+            env=bridge_environment,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+        result: dict[str, Any] | None = None
+        record = None
+        launch_scope = ExitStack()
+        guarded = (GuardedHostBridge(proc, deadline=launch_deadline,
+                   cleanup_timeout=8 if delegated_lease is not None else 5)
+                   if launch_deadline is not None else None)
+        try:
+            if windows_job is not None:
+                windows_job.assign(proc)
+            if launch_guard is not None:
+                launch_scope.enter_context(launch_guard())
+            record = _begin_host_process_record(record_path, record_value=record_value,
+                supervises=supervises, supervision=supervision, bridge_pid=proc.pid)
+            if record is not None and windows_job is not None:
+                record["windows_job"] = windows_job.name
+                _write_host_process_record(record_path, record)
+            frame = json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
+            if guarded is not None:
+                guarded.send(frame)
+            else:
+                proc.stdin.write(frame)
+                proc.stdin.flush()
+            lines = iter(proc.stdout)
+            while True:
+                event = (guarded.next(deadline=launch_deadline) if guarded is not None
+                         else json.loads(line) if (line := next(lines, None)) is not None else None)
+                if event is None:
+                    break
+                kind = event.get("kind")
+                if kind == "spawned" and isinstance(event.get("pid"), int):
+                    if record is not None:
+                        assert record_path is not None
+                        group = event.get("process_group")
+                        record.update(phase="spawned", host_pid=event["pid"],
+                                      process_group=group if isinstance(group, int) else None)
+                        _write_host_process_record(record_path, record)
+                    launch_deadline = None
+                    launch_scope.close()
+                elif kind in {"stdout", "stderr"} and isinstance(event.get("text"), str):
+                    consume = on_stdout if kind == "stdout" else on_stderr
+                    if consume is not None:
+                        consume(event["text"])
+                elif kind == "result" and event.get("outcome") in {
+                    "exited",
+                    "timeout",
+                    "cancelled",
+                    "output_limit",
+                    "spawn_failed",
+                }:
+                    result = event
+                    launch_deadline = None
+                    launch_scope.close()
+                elif kind == "not_launched" and guarded is not None:
+                    guarded.not_launched = True
+                    raise TimeoutError("managed Host bridge launch deadline expired")
+                else:
+                    raise RuntimeError("Invalid managed Host process observation")
+        finally:
+            try:
+                if guarded is not None and (launch_deadline is not None or sys.exc_info()[0] is not None):
+                    # A failed handoff still owns the Goal fence. The TS bridge must
+                    # report no launch or finish its Host cleanup before it releases.
+                    guarded.cancel()
+                    if record is not None and guarded.not_launched:
+                        assert record_path is not None
+                        record.update(phase=HOST_PROCESS_NOT_LAUNCHED, process_group=None)
+                        record.pop("bridge_pid", None)
+                        _write_host_process_record(record_path, record)
+                else:
+                    # EOF asks the TS supervisor to clean its Host, also on a
+                    # callback failure. Leased cleanup retains its original budget.
+                    proc.stdin.close()
+                    try:
+                        proc.wait(timeout=8 if delegated_lease is not None else 5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+            finally:
+                try:
+                    if windows_job is not None:
+                        windows_job.finish()
+                finally:
+                    try:
+                        launch_scope.close()
+                    finally:
+                        if guarded is not None:
+                            guarded.close_output()
+                        else:
+                            proc.stdout.close()
+        if record is not None and result is not None and proc.returncode == 0:
+            assert record_path is not None
+            # The supervisor returned only after cleaning its group; the group is still re-read.
+            record["phase"] = "finished"
+            _write_host_process_record(record_path, record)
+        if proc.returncode != 0 or result is None:
+            raise RuntimeError("Managed Host process supervision returned no result")
+        return result
+
+
+def _bridge_record_scope(environment, delegated_lease):
+    """Separate the supervisor's private record namespace from its child Host."""
     # The bridge runs on the caller's environment, which may pin the release the
     # Host must run and name the record its supervisor owns. Copy it instead of
     # replacing it with the ambient one, and consume the record env from the
@@ -302,111 +444,4 @@ def run_host_process(
         record_path = host_process_supervisor_record(record_path)
         supervises = HOST_PROCESS_SUPERVISES_NESTED_HOST
         supervision = "leased"
-    launch_budget = max(1.0, timeout_seconds) if timeout_seconds is not None else 30.0
-    launch_deadline = time.monotonic() + launch_budget if launch_guard is not None else None
-    launch_arguments = (["--guarded-launch", str((time.time() + launch_budget) * 1000)]
-                        if launch_guard is not None else [])
-    proc = subprocess.Popen(
-        [
-            _node_executable(),
-            "--no-warnings",
-            "--experimental-strip-types",
-            str(bridge),
-            *launch_arguments,
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        encoding="utf-8",
-        errors="strict",
-        start_new_session=True,
-        env=bridge_environment,
-    )
-    assert proc.stdin is not None and proc.stdout is not None
-    result: dict[str, Any] | None = None
-    record = None
-    launch_scope = ExitStack()
-    guarded = (GuardedHostBridge(proc, deadline=launch_deadline,
-               cleanup_timeout=8 if delegated_lease is not None else 5)
-               if launch_deadline is not None else None)
-    try:
-        if launch_guard is not None:
-            launch_scope.enter_context(launch_guard())
-        record = _begin_host_process_record(record_path, record_value=record_value,
-            supervises=supervises, supervision=supervision, bridge_pid=proc.pid)
-        frame = json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n"
-        if guarded is not None:
-            guarded.send(frame)
-        else:
-            proc.stdin.write(frame)
-            proc.stdin.flush()
-        lines = iter(proc.stdout)
-        while True:
-            event = (guarded.next(deadline=launch_deadline) if guarded is not None
-                     else json.loads(line) if (line := next(lines, None)) is not None else None)
-            if event is None:
-                break
-            kind = event.get("kind")
-            if kind == "spawned" and isinstance(event.get("pid"), int):
-                if record is not None:
-                    assert record_path is not None
-                    group = event.get("process_group")
-                    record.update(phase="spawned", host_pid=event["pid"],
-                                  process_group=group if isinstance(group, int) else None)
-                    _write_host_process_record(record_path, record)
-                launch_deadline = None
-                launch_scope.close()
-            elif kind in {"stdout", "stderr"} and isinstance(event.get("text"), str):
-                consume = on_stdout if kind == "stdout" else on_stderr
-                if consume is not None:
-                    consume(event["text"])
-            elif kind == "result" and event.get("outcome") in {
-                "exited",
-                "timeout",
-                "cancelled",
-                "output_limit",
-                "spawn_failed",
-            }:
-                result = event
-                launch_deadline = None
-                launch_scope.close()
-            elif kind == "not_launched" and guarded is not None:
-                guarded.not_launched = True
-                raise TimeoutError("managed Host bridge launch deadline expired")
-            else:
-                raise RuntimeError("Invalid managed Host process observation")
-    finally:
-        try:
-            if guarded is not None and (launch_deadline is not None or sys.exc_info()[0] is not None):
-                # A failed handoff still owns the Goal fence. The TS bridge must
-                # report no launch or finish its Host cleanup before it releases.
-                guarded.cancel()
-                if record is not None and guarded.not_launched:
-                    assert record_path is not None
-                    record.update(phase=HOST_PROCESS_NOT_LAUNCHED, process_group=None)
-                    record.pop("bridge_pid", None)
-                    _write_host_process_record(record_path, record)
-            else:
-                # EOF asks the TS supervisor to clean its Host, also on a
-                # callback failure. Leased cleanup retains its original budget.
-                proc.stdin.close()
-                try:
-                    proc.wait(timeout=8 if delegated_lease is not None else 5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-        finally:
-            launch_scope.close()
-            if guarded is not None:
-                guarded.close_output()
-            else:
-                proc.stdout.close()
-    if record is not None and result is not None and proc.returncode == 0:
-        assert record_path is not None
-        # The supervisor returned only after cleaning its group; the group is still re-read.
-        record["phase"] = "finished"
-        _write_host_process_record(record_path, record)
-    if proc.returncode != 0 or result is None:
-        raise RuntimeError("Managed Host process supervision returned no result")
-    return result
+    return bridge_environment, record_value, record_path, supervision, supervises

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import inspect
+import ipaddress
 import json
 import tarfile
 from pathlib import Path, PurePosixPath
@@ -17,8 +18,12 @@ from .provider_failure import observe_terminal_provider_failure
 
 class RecordingDockerBackend(DockerBackend):
     def __init__(self, *, log_dir: Path, logger, oauth_proxy: bool = False,
-                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None, client=None):
+                 blind_api_endpoint: tuple[str, int] | None = None, feedback=None, checkpoint=None, client=None,
+                 docker_host_bridge: bool = False):
+        if not isinstance(docker_host_bridge, bool):
+            raise ValueError("docker_host_bridge must be an explicit boolean")
         super().__init__(client)
+        self.docker_host_bridge = docker_host_bridge
         self.log_dir, self.logger = log_dir, logger
         self.blind_api_endpoint = blind_api_endpoint
         self.feedback = feedback
@@ -52,6 +57,19 @@ class RecordingDockerBackend(DockerBackend):
 
     def create_container(self, image, name, **kwargs):
         hosts = dict(kwargs.get("extra_hosts") or {})
+        if self.docker_host_bridge:
+            # Docker Desktop/VM runtimes can resolve `host-gateway` to the
+            # desktop host, while a runner inside the VM serves its gateway
+            # on the Docker bridge. Select that topology explicitly, without
+            # guessing from the runner OS or hardcoding a bridge subnet.
+            config = self.client.networks.get("bridge").attrs["IPAM"]["Config"]
+            addresses = [ipaddress.ip_address(item["Gateway"])
+                         for item in config if item.get("Gateway")]
+            gateways = {str(ip) for ip in addresses if ip.version == 4
+                        and not (ip.is_loopback or ip.is_unspecified or ip.is_multicast)}
+            if len(gateways) != 1:
+                raise RuntimeError("Docker host bridge requires one routable IPv4 gateway")
+            hosts["host.docker.internal"] = gateways.pop()
         if self.auth_ips:
             hosts["auth.openai.com"] = self.auth_ips[0]
         kwargs["extra_hosts"] = hosts

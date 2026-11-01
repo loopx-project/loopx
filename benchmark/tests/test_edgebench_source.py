@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -210,6 +211,9 @@ def test_bundled_patch_passes_required_public_checks(tmp_path):
     from loopx.contract import scan_public_boundary
 
     defaults = json.loads(source.DEFAULT_FILE.read_text())
+    # The production bundle is qualified with an immutable upstream revision.
+    # A moving branch can invalidate its full-index preimages between cohorts.
+    assert re.fullmatch(r"[0-9a-f]{40}", defaults["ref"])
     _, patch = source._bundled_patch(defaults["compatibility_patch"])
     asset = tmp_path / "compatibility.patch"
     asset.write_bytes(patch)
@@ -217,6 +221,40 @@ def test_bundled_patch_passes_required_public_checks(tmp_path):
     git(tmp_path, "add", "--", asset.name)
     assert git(tmp_path, "diff", "--cached", "--check") == ""
     assert scan_public_boundary([asset], registry={})["ok"]
+
+
+def test_pinned_default_and_patch_advance_only_as_a_reviewed_pair(repository, tmp_path):
+    install_test_patch(repository)
+    defaults = json.loads(source.DEFAULT_FILE.read_text())
+    defaults["ref"] = git(repository, "rev-parse", "HEAD")
+    source.DEFAULT_FILE.write_text(json.dumps(defaults))
+    old_checkout, original = source.prepare_source(tmp_path / "old")
+    old_receipt = (old_checkout.parent / "receipt.json").read_bytes()
+
+    # Even a touched-file change on the remote branch cannot break a new cohort
+    # or silently opt it into an unqualified provider revision.
+    (repository / "sforge/__init__.py").write_text("MARKER = 'new-upstream'\n")
+    git(repository, "add", "sforge/__init__.py")
+    git(repository, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "advance provider")
+    advanced = git(repository, "rev-parse", "HEAD")
+    new_checkout, same = source.prepare_source(tmp_path / "new")
+    assert same == original
+    assert (new_checkout / "sforge/__init__.py").read_text() == "MARKER = 'patched-source'\n"
+
+    # Updating just the pin still fails closed; no partially prepared source
+    # can be consumed by a concurrent worker or judge.
+    defaults["ref"] = advanced
+    source.DEFAULT_FILE.write_text(json.dumps(defaults))
+    with pytest.raises(ValueError, match="preimage differs"):
+        source.prepare_source(tmp_path / "unpaired")
+    assert not (tmp_path / "unpaired" / source.STATE_DIR).exists()
+
+    install_test_patch(repository)
+    _, refreshed = source.prepare_source(tmp_path / "refreshed")
+    assert refreshed["upstream_commit"] == advanced != original["upstream_commit"]
+    assert refreshed["compatibility_patch"]["sha256"] != original["compatibility_patch"]["sha256"]
+    assert source.prepare_source(tmp_path / "old")[1] == original
+    assert (old_checkout.parent / "receipt.json").read_bytes() == old_receipt
 
 
 def test_default_patch_creates_reproducible_clean_source(repository, tmp_path, monkeypatch):

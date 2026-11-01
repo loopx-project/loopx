@@ -154,8 +154,14 @@ def test_failed_capture_replies_once_after_releasing_source(
         return effect_runtime_result(method, request, **kwargs)
 
     monkeypatch.setattr(worker_module, "effect_runtime_result", failed_probe)
+    # Diagnose capture after storage admission. Real filename fidelity is
+    # independently checked on the host volume by test_checkpoint_storage.
+    storage_probes = []
+    monkeypatch.setattr(supervisor_module, "qualify_export_storage", storage_probes.append)
+    monkeypatch.setattr(worker_module, "qualify_export_storage", storage_probes.append)
     points = tmp_path / "points"
     supervisor = supervisor_module.CheckpointSupervisor(controller, points, retention_enabled=False)
+    assert storage_probes == [points]
     supervisor.bind({"SFORGE_TOKEN": token})
     points.mkdir(mode=0o700)
     supervisor.container = worker
@@ -166,6 +172,7 @@ def test_failed_capture_replies_once_after_releasing_source(
     supervisor.close()
 
     assert supervisor.failure is None
+    assert storage_probes == [points, points / nonce]
     assert worker.attrs["State"] == {"Running": True, "Paused": False}
     assert events == ["pause", "probe", "unpause", "client_close", "reply_transfer", "reply_publish"]
     assert candidate.read_bytes() == b"original source bytes\n"
