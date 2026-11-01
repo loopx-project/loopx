@@ -63,6 +63,7 @@ WINDOWS_QUALIFIED_SUITES = (
     "tests/control_plane_ts/quota_void_commit.test.ts",  # #6356
     "tests/control_plane_ts/shadow_entry_delivery.test.ts",  # #6356
     "tests/control_plane_ts/sqlite_backup.test.ts",  # #6258
+    "tests/control_plane_ts/task_lease_workspace.test.ts",  # #7805
 )
 
 
