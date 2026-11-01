@@ -1277,8 +1277,12 @@ def collect_doctor(
             source_root=repo_root,
         )
         agy_facades = inspect_skill_facades(agy_cfg_home / "skills")
+        workflow_skill_ids = set(
+            agy_workflow_readback.get("materialized_skill_ids") or ()
+        )
         agy_facades_ready = all(
-            item.get("required_phrases") for item in agy_facades.values()
+            item.get("required_phrases") or name in workflow_skill_ids
+            for name, item in agy_facades.items()
         )
         legacy_loopx_exists = (legacy_agy_home / "skills" / "loopx.md").is_file()
         agy_ready = bool(
