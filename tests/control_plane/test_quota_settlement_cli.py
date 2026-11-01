@@ -26,10 +26,6 @@ from loopx.control_plane.quota.settlement_validation import (
 )
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from loopx.control_plane.turn_driver.decision_capture import (
-    read_context_capture_file,
-    read_context_read_reference,
-)
 from loopx.control_plane.scheduler.state import (
     APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
     load_scheduler_state,
@@ -41,6 +37,7 @@ from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
     read_fixture_todos,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOAL_ID = "settlement-cli-fixture"
@@ -281,16 +278,7 @@ def _run_generated_cli(
         text=True,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
     )
-    payload = json.loads(result.stdout)
-    if payload.get("mode") in {"full", "delta"} and isinstance(payload.get("recovery"), dict):
-        # Execute the generated default-on command unchanged. These policy
-        # oracles inspect its current immutable capture without another guard,
-        # admission or retention claim; native reader coverage lives separately.
-        recovery = payload["recovery"]
-        if "reference_file" in recovery:
-            recovery = read_context_read_reference(recovery["reference_file"])[1]
-        _, _, payload = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)
-    return result.returncode, payload
+    return result.returncode, read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
 
 def _spend_run_count(runtime: Path) -> int:
