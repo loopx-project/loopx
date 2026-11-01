@@ -47,7 +47,7 @@ from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
 from .turn_cadence import managed_cadence_start
-from .turn_host_request import prepare_turn_host_request
+from .turn_host_request import build_codex_cli_host_runner, prepare_turn_host_request
 from .turn_decision import collect_turn_status_payload, current_turn_host_launch_decision
 from .turn_dsh_host import build_dsh_host_runner, build_dsh_operation_host_runner
 from .turn_rendering import build_turn_error_payload
@@ -835,47 +835,13 @@ def execute_turn_run_once(
                     goal_ref=goal_ref,
                 )
 
-            def run_built_in_host(
-                request: Mapping[str, Any],
-            ) -> dict[str, Any]:
-                options = {
-                    "runtime_root": runtime_root,
-                    "project": project,
-                    "codex_bin": args.codex_bin,
-                    "sandbox": args.codex_sandbox,
-                    "model": args.codex_model,
-                    "reasoning_effort": args.codex_reasoning_effort,
-                    "mcp_server": args.codex_mcp_server_json,
-                    "timeout_seconds": None if args.timeout_seconds is None else max(1.0, args.timeout_seconds - 5.0),
-                }
-                options["goal_admission"] = (
-                    goal_admission or FirstPartyHostGoalAdmission.for_plan(
-                        registry_path=registry_path, goal_id=args.goal_id,
-                        planned_goal_ref=goal_ref,
-                    )
-                ).with_launch_decision(current_launch_decision)
-                if getattr(args, "codex_operation_tools", False):
-                    from ..control_plane.turn_driver.codex_operation_host import (
-                        run_codex_operation_host,
-                    )
-
-                    return run_codex_operation_host(
-                        request,
-                        registry_path=registry_path,
-                        confirmed_operation_id=getattr(
-                            args, "codex_confirmed_operation_id", None
-                        ),
-                        source_route=getattr(
-                            args, "codex_operation_source_route_json", None
-                        ),
-                        operation_request_file=(Path(args.operation_request_file)
-                            if getattr(args, "operation_request_file", None) else None),
-                        operation_request_sha256=getattr(args, "operation_request_sha256", None),
-                        **options,
-                    )
-                return run_codex_cli_host(request, registry_path=registry_path, **options)
-
-            host_runner = run_built_in_host
+            host_runner = build_codex_cli_host_runner(
+                args, runtime_root=runtime_root, project=project,
+                registry_path=registry_path, goal_ref=goal_ref,
+                goal_admission=goal_admission,
+                current_launch_decision=current_launch_decision,
+                run_codex_cli_host=run_codex_cli_host,
+            )
 
             def resolve_built_in_session_binding(
                 turn_envelope: Mapping[str, Any],
