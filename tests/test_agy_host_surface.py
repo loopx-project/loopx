@@ -47,9 +47,6 @@ from loopx.agy_goal_mode import (
     AGY_NATIVE_WAKE_TOOLS,
     ANTIGRAVITY_APP_AGENT_TYPE,
     agy_home,
-    antigravity_config_home,
-    build_antigravity_hooks_template,
-    build_antigravity_sidecar_template,
 )
 
 HOST_SURFACE = "agy"
