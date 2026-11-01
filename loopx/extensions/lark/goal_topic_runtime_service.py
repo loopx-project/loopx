@@ -60,7 +60,8 @@ class LarkGoalTopicRuntimeService:
         self._delivery_wakeup = threading.Event()
         self._startup_thread: threading.Thread | None = None
         self._delivery_thread: threading.Thread | None = None
-        self._delivery_worker: HostedWorker | None = None
+        self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
+            name="loopx-lark-private-delivery", retry_seconds=5)
 
     def start(self) -> None:
         """Discover existing bindings without blocking the HTTP readiness path."""
@@ -75,8 +76,6 @@ class LarkGoalTopicRuntimeService:
             )
             self._startup_thread.start()
             if self.private_conversations is not None:
-                self._delivery_worker = HostedWorker(target=self._reconcile_private, stop=self._closed,
-                    name="loopx-lark-private-delivery", retry_seconds=5)
                 self._delivery_worker.start()
                 self._delivery_thread = self._delivery_worker.thread
 
@@ -100,7 +99,8 @@ class LarkGoalTopicRuntimeService:
         # existing scanner; it is neither a queue nor a delivery receipt.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
-            while not self._closed.is_set():
+            def step() -> None:
+                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
@@ -174,7 +174,10 @@ class LarkGoalTopicRuntimeService:
                         ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
-                self._delivery_wakeup.wait(1)
+
+            self._delivery_worker.repeat(step, interval_seconds=1, wait=self._delivery_wakeup.wait,
+                on_error=lambda: logging.getLogger(__name__).warning(
+                    "Private Chat delivery discovery is pending"))
 
     def _admit_private(self, profile: str, event: dict[str, Any]) -> dict[str, Any]:
         if self._closed.is_set():
@@ -563,8 +566,7 @@ class LarkGoalTopicRuntimeService:
             stop.set()
         for _stop, thread, _fingerprint in workers:
             thread.join(timeout=3)
-        if self._delivery_worker is not None:
-            self._delivery_worker.close(timeout=3)
+        self._delivery_worker.close(timeout=3)
 
 
 __all__ = ["LarkGoalTopicRuntimeService"]

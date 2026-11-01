@@ -98,10 +98,11 @@ def test_health_requires_a_live_lock_and_does_not_reuse_a_stale_success(service)
         assert "private synthetic marker detail" not in json.dumps(provider.observer_health(True))
 
 
-def test_unexpected_tick_failure_retries_and_progresses_without_leaking_details(service, monkeypatch):
+@pytest.mark.parametrize("hosted", [False, True], ids=["standalone", "shared-core-loop"])
+def test_unexpected_tick_failure_retries_and_progresses_without_leaking_details(service, monkeypatch, hosted):
     owner, provider, native = service
     owner.watcher.close()
-    watcher = native.Watcher(provider)
+    watcher = owner._new_observer(native) if hosted else native.Watcher(provider)
     owner.watcher = watcher
     original_tick, original_atomic, original_wait = provider.tick, native.atomic, watcher.stop.wait
     phases, calls = [], []

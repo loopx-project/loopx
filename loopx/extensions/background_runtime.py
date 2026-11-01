@@ -52,6 +52,38 @@ class HostedWorker:
                 if self.stop.wait(self.retry_seconds):
                     return
 
+    def repeat(self, step: Callable[[], float | None], *, interval_seconds: float,
+               on_error: Callable[[], None] | None = None,
+               wait: Callable[[float], object] | None = None) -> None:
+        """Drive an opted-in reconciliation step without rebuilding its scope.
+
+        The caller keeps its lease, pool, cursors and receipts around this call.
+        A returned delay selects the next observation, not a request retry.
+        Health hooks belong in the step/on_error and observe actual work; this
+        runner never publishes healthy merely because its thread is alive.
+        """
+        if not math.isfinite(interval_seconds) or interval_seconds <= 0:
+            raise ValueError("Worker interval must be positive and finite")
+        while not self.stop.is_set():
+            failed = False
+            try:
+                requested = step()
+                delay = interval_seconds if requested is None else requested
+                if not math.isfinite(delay) or delay <= 0:
+                    raise ValueError("Worker step delay must be positive and finite")
+            except Exception:
+                if on_error is not None:
+                    on_error()
+                else:
+                    logging.getLogger(__name__).warning("Background step failed; provider details withheld")
+                if self.retry_seconds is None:
+                    return
+                delay = self.retry_seconds
+                failed = True
+            if not self.stop.is_set():
+                # A hint may advance a normal scan, never bypass error backoff.
+                (self.stop.wait if failed else (wait or self.stop.wait))(delay)
+
     def close(self, *, timeout: float = 2) -> None:
         self.stop.set()
         thread = self.thread

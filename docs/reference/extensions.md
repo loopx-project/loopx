@@ -25,7 +25,9 @@ LoopX Core
 
 Python-hosted background loops share `loopx.extensions.background_runtime.HostedWorker`
 for idempotent thread start, cooperative close and explicitly selected failure
-retry. This is Python thread IO, not another policy or Agent supervisor. Native
+retry. Its `repeat` driver owns reconciliation repetition, next-observation
+waits and step-error backoff without rebuilding the caller's live scope. This
+is Python thread IO, not another policy or Agent supervisor. Native
 account observation, manager returns/queued-source recovery and Lark private
 delivery use it through their existing owners. A normal return is terminal;
 retry is off unless that owner explicitly enables it. A live thread does not
@@ -34,7 +36,13 @@ Keep authorization, election locks, receipts, cursors/backoff and ambiguous-writ
 recovery with the provider. Never use host restart to replay a model request or
 discard an in-flight journal. The standalone native account wheel retains its
 own process entrypoint and needs no Core import for account IO; when hosted by
-Core, it delegates thread lifetime to this shared host.
+Core, it delegates thread lifetime and observation cadence to this shared host.
+The same native step/health callbacks drive standalone and hosted observation;
+the small standalone wait loop remains because that distribution supports
+account IO without installing Core. Manager startup discovery is not replayed
+on a step failure, and Lark retains its existing pool, in-flight futures and
+fairness/backoff state while the scanner recovers. Shared waits never imply
+model/request replay or establish provider health from thread liveness.
 
 The experimental [MemT Nano Turn host](../../packages/loopx-memt-turn/README.md)
 is a separately installed `generic-cli` execution provider. Its native memory
