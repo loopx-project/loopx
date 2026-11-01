@@ -59,6 +59,7 @@ def status_projection_cache_key(
     goal_id: str | None,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> str:
     request = {
         "schema_version": STATUS_PROJECTION_CACHE_SCHEMA_VERSION,
@@ -73,6 +74,10 @@ def status_projection_cache_key(
             available_capabilities
         ),
     }
+    if not include_presentation_projections:
+        # Decision-only payloads omit presentation projections; keep them out of
+        # the default status key so a display read never serves a reduced view.
+        request["presentation_projections"] = False
     encoded = json.dumps(
         request,
         ensure_ascii=True,
@@ -136,6 +141,7 @@ def status_projection_cache_metadata(
     max_age_seconds: int,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
     key = status_projection_cache_key(
         registry_path=registry_path,
@@ -145,6 +151,7 @@ def status_projection_cache_metadata(
         goal_id=goal_id,
         available_capabilities=available_capabilities,
         agent_lane_id=agent_lane_id,
+        include_presentation_projections=include_presentation_projections,
     )
     normalized_capabilities = _normalized_available_capabilities(
         available_capabilities
@@ -172,6 +179,7 @@ def load_status_projection_cache(
     max_age_seconds: int,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     metadata = status_projection_cache_metadata(
         registry_path=registry_path,
@@ -182,6 +190,7 @@ def load_status_projection_cache(
         max_age_seconds=max_age_seconds,
         available_capabilities=available_capabilities,
         agent_lane_id=agent_lane_id,
+        include_presentation_projections=include_presentation_projections,
     )
     path = Path(str(metadata["path"]))
     metadata["hit"] = False
@@ -246,6 +255,7 @@ def write_status_projection_cache(
     max_age_seconds: int,
     available_capabilities: Any = None,
     agent_lane_id: str | None = None,
+    include_presentation_projections: bool = True,
 ) -> dict[str, Any]:
     metadata = status_projection_cache_metadata(
         registry_path=registry_path,
@@ -256,6 +266,7 @@ def write_status_projection_cache(
         max_age_seconds=max_age_seconds,
         available_capabilities=available_capabilities,
         agent_lane_id=agent_lane_id,
+        include_presentation_projections=include_presentation_projections,
     )
     path = Path(str(metadata["path"]))
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -681,6 +681,7 @@ def handle_quota_command(
                     limit=status_limit,
                     goal_id=status_goal_id,
                     available_capabilities=args.available_capabilities,
+                    include_presentation_projections=False,
                 ),
             )
         elif args.quota_command in {

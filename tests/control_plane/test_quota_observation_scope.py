@@ -113,6 +113,8 @@ def test_scope_reaches_collector_and_cache_identity(tmp_path, mode, goal_id):
 
     def collect(**kwargs):
         calls.append(kwargs["goal_id"])
+        # Quota decisions never read the status presentation projections.
+        assert kwargs["include_presentation_projections"] is False
         now = now_utc_iso()
         envelope = seal_projection_envelope(projection="status", observed_at=now,
             sources=[source_fact("registry", last_read_at=now)],

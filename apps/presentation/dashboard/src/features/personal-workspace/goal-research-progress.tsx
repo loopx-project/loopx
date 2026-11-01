@@ -5,6 +5,7 @@ import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, Trajec
 import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
+import {ToolContextInventory} from "./goal-tool-context";
 import "./goal-research-progress.css";
 
 // Read models from benchmark-toolkit. This view formats existing counts and
@@ -306,7 +307,7 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </ContextHelp></div>
             <p>{zh ? "其中输入" : "Of which input"} <strong>{incomplete.usage ? number(incomplete.usage.input_tokens) : "—"}</strong> · {zh ? "输出" : "output"} <strong>{incomplete.usage ? number(incomplete.usage.output_tokens) : "—"}</strong> tokens</p>
           </div> : null}
-          <div className="research-usage-secondary"><LoopXInputShare usage={usage} zh={zh}/>
+          <div className="research-usage-secondary"><LoopXInputShare usage={usage} zh={zh}/><ToolContextInventory value={usage?.tool_context} zh={zh}/>
           {usage ? <div className="research-request-coverage">
             <div className="research-usage-heading"><h4>{zh ? "请求覆盖" : "Request coverage"}</h4>
               {coverage?.status !== "verified" ? <span className="research-usage-scope">{coverage ? (zh ? "核对失败" : "Reconciliation failed") : (zh ? "未核对" : "Not reconciled")}</span> : null}

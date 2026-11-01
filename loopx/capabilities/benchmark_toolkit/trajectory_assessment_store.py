@@ -150,17 +150,22 @@ def _usage_capture(
     session_id: str,
     *,
     include_incomplete: bool = False,
+    include_tool_context: bool = False,
     loopx_input_json: str | None = None,
     input_goal_id: str | None = None,
 ) -> dict:
     path = _source_path(source_root, artifact)
     digest = hashlib.sha256()
     events = []
+    tool_context = []
     # Transport only the provider's counter/lifecycle fields, not model text,
     # account metadata or tool outputs. TS owns all accounting decisions.
     for line_number, event in _usage_rows(path, digest):
         if not isinstance(event, dict):
             raise ValueError("Usage capture contains a non-object event")
+        if include_tool_context:
+            from .trajectory_tool_context import project_tool_context
+            tool_context.extend(project_tool_context([event], first_line=line_number))
         payload = event.get("payload") or {}
         if not isinstance(payload, dict):
             raise ValueError("Usage capture contains a non-object payload")
@@ -243,6 +248,7 @@ def _usage_capture(
             "events": events,
             "session_id": session_id,
             "include_incomplete": include_incomplete,
+            **({"tool_context": tool_context} if include_tool_context else {}),
             **({"loopx_input_trace": observation, "input_goal_id": input_goal_id}
                if loopx_input_json is not None else {}),
         },
@@ -353,6 +359,7 @@ def register_pack(
     usage_jsonl: str | None = None,
     usage_session_id: str | None = None,
     include_incomplete_usage: bool = False,
+    include_tool_context: bool = False,
     loopx_input_json: str | None = None,
     native_outcomes_json: str | None = None,
     base_pack_id: str | None = None,
@@ -388,6 +395,8 @@ def register_pack(
         record["base_pack_id"] = _opaque(base_pack_id)
     if include_incomplete_usage and usage_jsonl is None:
         raise ValueError("include-incomplete-usage requires a usage capture")
+    if include_tool_context and usage_jsonl is None:
+        raise ValueError("include-tool-context requires a usage capture")
     if loopx_input_json is not None and usage_jsonl is None:
         raise ValueError("LoopX input observation requires a usage capture")
     if (usage_jsonl is None) != (usage_session_id is None):
@@ -398,6 +407,7 @@ def register_pack(
         record["solver_usage"] = _usage_capture(
             source_root, usage_jsonl, usage_session_id,
             include_incomplete=include_incomplete_usage,
+            include_tool_context=include_tool_context,
             loopx_input_json=loopx_input_json,
             input_goal_id=record["input"]["scope"]["goal_id"],
         )
