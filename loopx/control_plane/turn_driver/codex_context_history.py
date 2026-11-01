@@ -12,12 +12,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from contextlib import contextmanager
-from collections import Counter
-from collections.abc import Iterator
-from pathlib import Path
 import re
 import stat
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, BinaryIO
 
 # A compatibility profile of the native rollout, not a shared control vocabulary.
@@ -33,7 +33,7 @@ _IO_CHUNK_BYTES = 64 * 1024
 # Bound one decoded protocol record, not the history or the replay interval.
 _MAX_RECORD_BYTES = 16 * 1024 * 1024
 _SHELL_OUTPUT = re.compile(r"\AChunk ID: [^\r\n]+\nWall time: [0-9.]+ seconds\n"
-    r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.S)
+    r"Process exited with code 0\n(?:Original token count: [0-9]+\n)?Output:\n(.*)\Z", re.DOTALL)
 
 
 def _digest(value: object) -> str:
@@ -216,9 +216,7 @@ def _matches(anchor: dict[str, Any], snapshot: dict[str, Any], stream: BinaryIO,
         if start > cursor:
             return False
         cursor = max(cursor, stop)
-    if seen_pages != expected_pages or cursor != len(body):
-        return False
-    return True
+    return seen_pages == expected_pages and cursor == len(body)
 
 
 def _append_only(record: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -230,9 +228,8 @@ def _append_only(record: dict[str, Any], event: dict[str, Any]) -> bool:
             return False
     elif kind not in _APPEND_RECORDS:
         return False
-    if kind == "turn_context" and (payload.get("cwd") != event["cwd"] or payload.get("model") != event["model"]):
-        return False
-    return True
+    return kind != "turn_context" or (
+        payload.get("cwd") == event["cwd"] and payload.get("model") == event["model"])
 
 
 def observe_native_read(state: dict[str, Any], event: dict[str, Any],
