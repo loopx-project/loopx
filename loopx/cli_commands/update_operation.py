@@ -115,7 +115,15 @@ def start_or_observe(args: argparse.Namespace, registry_path: Path, *, registry_
             os.chmod(folder / "worker.log", 0o600)
             options = {"start_new_session": True} if os.name != "nt" else {
                 "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
-            child = subprocess.Popen([sys.executable, "-m", __name__, "--worker", operation_id],
+            # Keep relative source/state routes in the caller's cwd, but import
+            # the installation that admitted this update. Plain -m can load a
+            # different LoopX checkout from cwd before the installed package.
+            entry = (
+                "import sys; sys.path.insert(0, sys.argv.pop(1)); "
+                "import runpy; runpy.run_module('loopx.cli_commands.update_operation', run_name='__main__')"
+            )
+            child = subprocess.Popen([sys.executable, "-P", "-c", entry,
+                str(Path(__file__).resolve().parents[2]), "--worker", operation_id],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=log, **options)
         atomic_json(root / f"{key}.active.json", {"operation_id": operation_id, "pid": child.pid})
         atomic_json(folder / "worker.json", {"pid": child.pid})
