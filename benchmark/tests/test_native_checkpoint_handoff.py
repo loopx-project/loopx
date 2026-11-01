@@ -384,7 +384,9 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     from benchmark.runtime.worker import run_once
     from tests.control_plane import test_quota_settlement_cli as cli
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_source_fixture
-    from tests.control_plane.codex_checkpoint_fixture import NativeContextReader, native_context_command
+    from tests.control_plane.codex_checkpoint_fixture import (
+        NativeContextReader, native_context_command, native_process_continuation,
+    )
 
     project, runtime, registry = cli._write_fixture(tmp_path / "authority")
     document = json.loads(registry.read_text())
@@ -425,6 +427,8 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
 
     def response(payload, index, message):
         requests.append(payload)
+        if continuation := native_process_continuation(payload, f"checkpoint_{index}"):
+            return continuation
         if context_delivery == "on" and phase["kind"] != "initial":
             follow = reader.follow(payload)
             if follow:

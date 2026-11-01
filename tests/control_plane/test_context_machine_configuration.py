@@ -13,6 +13,7 @@ from contextlib import redirect_stdout
 import pytest
 
 from loopx.capabilities.machine_configuration.context_delivery import CONTEXT_DELIVERY_MACHINE_SCHEMA
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
@@ -240,12 +241,13 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "machine-original-turn"]
     code, wire = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and wire["mode"] == "full", wire
-    recovery = wire["recovery"]
+    recovery = read_context_read_reference(wire["recovery"]["reference_file"])[1]
     raw = Path(recovery["path"]).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == recovery["sha256"]
     assert json.loads(raw)["goal_id"] == GOAL_ID
 
     def complete_reader(view):
+        view = read_context_read_reference(view["reference_file"])[1]["navigation"]
         # Native delivery advertises a file; only its reader pages are content.
         observed = bytearray()
         while True:
@@ -267,13 +269,14 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     code, warm = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and warm["mode"] == "delta", warm
     complete_reader(warm)
-    old_generation = warm["target"]["continuity_generation"]
+    old_generation = read_context_read_reference(warm["reference_file"])[1]["navigation"]["target"]["continuity_generation"]
     old_configuration = (runtime / "machine/configuration.json").read_bytes()
     assert configure(registry, runtime, tmp_path, "off")[0] == 0
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
     assert (runtime / "machine/configuration.json").read_bytes() == old_configuration
     code, fresh = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and fresh["mode"] == "full", fresh
+    fresh = read_context_read_reference(fresh["reference_file"])[1]["navigation"]
     assert fresh["target"]["continuity_generation"] != old_generation
     code, page = _run_cli(registry, runtime, "quota", "context-read", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, cwd=project)

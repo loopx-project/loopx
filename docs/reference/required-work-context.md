@@ -880,6 +880,30 @@ journal，防止短暂 IO 故障恢复后复活旧基线。不可变 capture 与
 
 ### Selected capture details / 按需读取捕获详情
 
+Enabled native navigation uses `quota context-read --reference-file <file>`.
+The immutable, private reader document keeps the full capture digest; selected
+continuations also keep the exact selection and its full digest there. The CLI
+checks both on every page, including after a later Turn or a changed reader
+profile. Its short filename is only a locator, never a truncated integrity check,
+permission or freshness claim. Missing, malformed, public or symlinked reader
+documents and capture/selection digest mismatches fail closed without admission. Selection reads may publish a derived
+private reader document beside the capture; they do not write Goal state.
+Compact selected pages use `context_capture_selection_page_v1`, with a reader
+reference and byte cursors instead of repeated hashes or pointer vectors. They
+are never full-input observations. Explicit file/hash readers and full-page
+observation receipts keep their existing schema and complete digest fields.
+The navigation document also retains the complete machine navigation metadata.
+Very small output budgets may keep the existing explicit hash reference when
+the compact navigation cannot fit; no navigation or source is truncated.
+
+已启用的原生导航通过 `--reference-file` 读取不可变私有引用；完整 capture 摘要、
+选读路径与 selection 摘要保存在本地，CLI 每页校验，跨 Turn 或 reader profile
+改变也不会混读。短文件名只负责定位，不替代完整校验，也不代表权限或新鲜度。
+引用缺失、格式错误、公开可读、为符号链接或摘要不符时拒绝读取，不重新 admission。选读可在
+捕获旁生成派生私有引用，不修改 Goal 状态。精简选读页返回引用及字节游标，使用
+独立 schema，不能作为完整输入证明；原显式文件/摘要接口及完整页证明保持兼容。
+导航引用同时保存完整机器元数据；极小输出预算保留原显式摘要引用，不截断正文或导航。
+
 `quota context-read --select /path --select /another/path` reads an explicit
 batch of RFC 6901 JSON pointers from the original digest-bound capture. Supply
 the existing `--capture-file` and `--capture-sha256` reference, or start through

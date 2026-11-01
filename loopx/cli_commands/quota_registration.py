@@ -207,6 +207,7 @@ def register_quota_command(
               "Waits at most 120s for a digest-bound release; failure retains the original receipt."),
     )
     quota_parser.add_argument("--capture-file", help="For context-read/context-project: original captured JSON file; no guard is evaluated.")
+    quota_parser.add_argument("--reference-file", help="For context-read: immutable private reader reference holding the complete capture/selection digests. No admission or live Goal lookup.")
     # Host preflight captures the complete native input, then presents that same
     # immutable view after the model's lifecycle hooks establish continuity.
     quota_parser.add_argument("--defer-context-presentation", action="store_true", help=argparse.SUPPRESS)
