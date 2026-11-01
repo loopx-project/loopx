@@ -346,10 +346,9 @@ def run_host_process(
             else:
                 proc.stdin.write(frame)
                 proc.stdin.flush()
-            lines = iter(proc.stdout)
             while True:
                 event = (guarded.next(deadline=launch_deadline) if guarded is not None
-                         else json.loads(line) if (line := next(lines, None)) is not None else None)
+                         else json.loads(line) if (line := next(proc.stdout, None)) is not None else None)
                 if event is None:
                     break
                 kind = event.get("kind")
