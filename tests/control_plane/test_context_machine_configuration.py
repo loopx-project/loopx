@@ -377,12 +377,13 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
 @pytest.mark.skipif(os.name != "posix", reason="Native benchmark worker qualification uses POSIX isolation")
-@pytest.mark.parametrize("provider,worker_mode,machine_on", [
-    ("file", "off", False), ("file", "off", True),
-    ("sqlite", "off", False), ("sqlite", "off", True),
-    ("file", None, False), ("sqlite", None, False),
+@pytest.mark.parametrize("provider,worker_mode,machine_on,transport_ready", [
+    ("file", "off", False, True), ("file", "off", True, True),
+    ("sqlite", "off", False, True), ("sqlite", "off", True, True),
+    ("file", None, False, True), ("sqlite", None, False, True),
+    ("file", None, False, False), ("sqlite", None, False, False),
 ])
-def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypatch, provider, worker_mode, machine_on):
+def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypatch, provider, worker_mode, machine_on, transport_ready):
     from benchmark.runtime.worker import run_once
     from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
@@ -405,6 +406,10 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60", LOOPX_USAGE_PING="0")
     if worker_mode is not None:
         env["LOOPX_CONTEXT_DELIVERY"] = worker_mode
+    if not transport_ready:
+        def unavailable(*_args):
+            raise ValueError("Fixture native hooks unavailable")
+        monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unavailable)
     observed, errors = [], []
     saved = workspace / "original-guard.json"
 
@@ -412,24 +417,25 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
         try:
             if number == 1:
                 body = _input_text(request)
-                if worker_mode == "off":
-                    assert "context-project" not in body
-                    command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
-                    turn_assignment = next(line.strip() for line in body.splitlines() if line.startswith("LOOPX_TURN="))
-                    observed.append(shlex.split(turn_assignment)[0].split("=", 1)[1])
-                else:
-                    # The actual default worker stages native hooks and presents
-                    # the original preflight; no external provider is contacted.
-                    command = next(line.strip() for line in body.splitlines() if " quota context-project " in line)
+                command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
+                turn_assignment = next(line.strip() for line in body.splitlines() if line.startswith("LOOPX_TURN="))
+                observed.append(shlex.split(turn_assignment)[0].split("=", 1)[1])
+                if worker_mode is None and transport_ready:
+                    assert "--context-delivery on" in command
+                if not transport_ready:
+                    # An ordinary guard may omit presentation flags. The actual
+                    # native tool environment must still retain runtime off.
                     words = shlex.split(command)
-                    observed.append(words[words.index("--turn-instance-id") + 1])
-                    turn_assignment = ""
+                    if "--context-delivery" in words:
+                        index = words.index("--context-delivery")
+                        del words[index:index + 2]
+                    command = shlex.join(words)
                 return {"type": "function_call", "id": "guard-call", "call_id": "guard-call",
                     "name": "exec_command", "arguments": json.dumps({
                         "cmd": turn_assignment + "\n" + command + " > " + shlex.quote(str(saved)),
                         "max_output_tokens": 1000})}
             decision = json.loads(saved.read_text())
-            if worker_mode is None:
+            if worker_mode is None and transport_ready:
                 assert decision["mode"] == "full", decision
                 # Independent byte readback checks the current capture. This
                 # is not evidence that the model retained its whole input.
@@ -459,8 +465,11 @@ def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypat
     assert not errors and len(requests) == 2, errors
     assert env == original, "Resolved worker defaults must not mutate caller/frozen input"
     assert _heartbeat_receipt_count(runtime, observed[0]) == 1 and _spend_run_count(runtime) == 0
-    if worker_mode == "off":
-        assert "context_transport" not in result
+    if worker_mode == "off" or not transport_ready:
+        if worker_mode == "off":
+            assert "context_transport" not in result
+        else:
+            assert result["context_transport"]["available"] is False
         assert not (runtime / "context-delivery").exists() and not (home / "loopx-context").exists()
         assert not (home / "hooks.json").exists()
     else:
