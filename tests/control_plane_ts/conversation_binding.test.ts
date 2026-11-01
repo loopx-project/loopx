@@ -764,6 +764,26 @@ test("quota backlog projection retires explicit lifecycle stops, not unavailable
   }
 });
 
+test("delivered timeout notices retain the exact failed request, including other executors", () => {
+  const request = {request_ref: "f".repeat(24), command: null, status: "accepted",
+    session_id: "original", turn_id: "timed-out", delivery_verified: true};
+  const turn = {session_id: "original", turn_id: "timed-out", status: "failed", error_code: "response_timeout"};
+  const packet = {request, current_session: {session_id: "original", status: "ready", agent_id: "antigravity"},
+    pending_observation: {turn, stop_observed: false}};
+  assert.deepEqual(planBoundConversationRequest(packet), {pending: true});
+  assert.equal(planBoundConversationRequest({...packet, current_session: null}).pending, true);
+  assert.equal(planBoundConversationRequest({...packet,
+    pending_observation: {turn, stop_observed: true}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    current_session: {...packet.current_session, status: "closed"}}).pending, false);
+  for (const changed of [{...turn, session_id: "foreign"}, {...turn, turn_id: "foreign"},
+    {...turn, status: "completed"}, {...turn, error_code: "policy"}]) {
+    assert.equal(planBoundConversationRequest({...packet,
+      pending_observation: {turn: changed, stop_observed: false}}).pending, false);
+  }
+  assert.equal(planBoundConversationRequest({...packet, request: {...request, command: "stop"}}).pending, false);
+});
+
 test("delivered partial results remain pending without authorizing another execution", () => {
   const original = {request_ref: "f".repeat(24), command: null, status: "accepted",
     session_id: "original", turn_id: "partial"};
