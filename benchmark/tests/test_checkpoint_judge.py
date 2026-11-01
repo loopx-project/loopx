@@ -247,6 +247,7 @@ def test_nonfinite_opportunity_crosses_real_http_client_and_retains_binding(nati
 
 
 def test_malformed_http_nonfinite_paths_cannot_download_an_incumbent(tmp_path):
+    pytest.importorskip("fastapi")
     from fastapi import FastAPI
     from benchmark.runtime import sforge_checkpoint, sforge_json
     from benchmark.tests.test_checkpoint_controller import server
