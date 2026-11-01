@@ -4,14 +4,14 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
-import { resolveTestPython } from "../../scripts/test-python.mjs";
+import { testPythonCommand } from "../../scripts/test-python.mjs";
 import { outputDir, repoRoot } from "./fixture.mjs";
 import { deliveryReadFixture } from "./showcase-workspace.mjs";
 import { fetchWorkspaceBackend, openWorkspacePage } from "./scenario-context.mjs";
 
 async function requestAuthority(text) {
   const root = await mkdtemp(resolve(tmpdir(), "loopx-map-request-"));
-  const child = spawn(resolveTestPython(), ["-u", "-c", `
+  const python = testPythonCommand(`
 from pathlib import Path
 import json, os, signal, sys, tempfile
 root = Path(sys.argv[1]); tempfile.tempdir = str(root)
@@ -41,7 +41,8 @@ finally:
     server.server_close()
     assert read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="product-release") == before
     restart_effect_runtime()
-`, root, text], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+`);
+  const child = spawn(python.command, [...python.args, root, text], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
   const lines = createInterface({ input: child.stdout });
   let diagnostic = "";
   child.stderr.on("data", chunk => { diagnostic = (diagnostic + chunk).slice(-3000); });
