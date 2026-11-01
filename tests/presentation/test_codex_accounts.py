@@ -430,6 +430,11 @@ def test_existing_busy_pause_reenters_new_readonly_preflight(native, tmp_path):
 @pytest.mark.parametrize("status", ["queued", "starting", "running", "completing", "interrupting", "invalid"])
 def test_native_restart_uses_real_accepted_work_fence_before_app_quit(native, monkeypatch, tmp_path, status):
     from loopx.chat_store import ChatSessionStore
+    # The accepted-work fence is platform independent. native_host.switch()
+    # refuses a non-macOS host at its entry gate, so without this the Linux
+    # CI run stopped at `platform_unavailable` and never reached the
+    # `waiting_for_idle` assertion below.
+    monkeypatch.setattr(sys, "platform", "darwin")
     host_module = importlib.import_module("loopx_codex_provider_routing.native_host")
     store = ChatSessionStore(tmp_path / "runtime")
     sid = store.create_session(goal_id="test", agent_id="test", adapter_kind="fake",
