@@ -5,10 +5,14 @@ import shlex
 
 from .zcode_goal_mode import native_goal_activation
 from .agent_registry import normalize_registered_agents
-from .agy_goal_mode import AGY_ACCEPTED_INPUTS
+from .agy_goal_mode import (
+    AGY_ACCEPTED_INPUTS,
+    ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY,
+)
 from .control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from .hosts.skill_facade import (
     agy_cli_activation,
+    antigravity_app_activation,
     cursor_agent_activation,
     gemini_cli_activation,
     kiro_cli_activation,
@@ -61,6 +65,7 @@ def scheduler_command_binding_for_agent_type(
         "cursor-agent": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "zcode": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "agy": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
+        "antigravity-app": SchedulerRuntimeProfile.ANTIGRAVITY_APP,
         "kiro-cli": SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
         "deepseek-harness": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
         "deepseek-harness-native": SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP,
@@ -91,6 +96,7 @@ SUPPORTED_AGENT_TYPES = [
     "cursor-agent",
     "zcode",
     "agy",
+    "antigravity-app",
     "kiro-cli",
     "deepseek-harness",
     "deepseek-harness-native",
@@ -282,6 +288,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
         "entry": "the LoopX skill installed in ~/.gemini/antigravity-cli/skills",
         "accepted_inputs": list(AGY_ACCEPTED_INPUTS),
     },
+    "antigravity-app": ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY,
     "kiro-cli": KIRO_CLI_AGENT_TYPE_CATALOG_ENTRY,
     "deepseek-harness": {
         "display_name": "DeepSeek Harness",
@@ -389,6 +396,10 @@ HOST_SURFACE_TO_AGENT_TYPE = {
     "agy": "agy",
     "antigravity": "agy",
     "antigravity-cli": "agy",
+    "antigravity-app": "antigravity-app",
+    "antigravity_app": "antigravity-app",
+    "agy-app": "antigravity-app",
+    "agy_app": "antigravity-app",
     "kiro-cli": "kiro-cli",
     "kiro": "kiro-cli",
     "deepseek-harness": "deepseek-harness",
@@ -532,6 +543,7 @@ def _heartbeat_commands(
         "cursor-agent": "Cursor Agent CLI loop gated by LoopX",
         "zcode": "ZCode agent loop gated by LoopX",
         "agy": "Antigravity CLI agent loop with advisory LoopX quota pacing",
+        "antigravity-app": "Antigravity App schedule timer & sidecar heartbeat loop",
         "kiro-cli": "Kiro CLI native /goal loop with advisory LoopX quota pacing",
         "deepseek-harness": "DeepSeek Harness automation loop gated by LoopX",
         "deepseek-harness-native": "DeepSeek Harness same-session plugin loop gated by LoopX",
@@ -1306,6 +1318,13 @@ def build_host_loop_activation_packet(
         )
     elif canonical == "agy":
         surface = agy_cli_activation(commands, cli_bin)
+    elif canonical == "antigravity-app":
+        surface = antigravity_app_activation(
+            commands,
+            cli_bin,
+            goal_id=goal_id,
+            agent_id=str(selected_agent_id) if selected_agent_id else None,
+        )
     elif canonical == "kiro-cli":
         surface = kiro_cli_activation(commands, cli_bin)
     elif canonical == "deepseek-harness":

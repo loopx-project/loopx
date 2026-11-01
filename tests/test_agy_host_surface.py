@@ -28,6 +28,16 @@ from loopx.host_loop_activation import (
     scheduler_command_binding_for_agent_type,
 )
 from loopx.slash_command_install import install_slash_commands
+from loopx.workflow_skill_install import workflow_skill_install
+from loopx.doctor import collect_doctor
+from loopx.control_plane.scheduler.execution_context import (
+    ExecutionMode,
+    HostSurface,
+    SchedulerOwner,
+    SchedulerRuntimeProfile,
+    resolve_scheduler_execution_context,
+    scheduler_execution_context_for_runtime_profile,
+)
 from loopx.agy_goal_mode import (
     AGY_GOAL_CANCELLED_TOKEN,
     AGY_GOAL_COMMAND,
@@ -35,7 +45,11 @@ from loopx.agy_goal_mode import (
     AGY_GOAL_COMPLETE_TOKEN,
     AGY_NATIVE_WAKE_FACTS,
     AGY_NATIVE_WAKE_TOOLS,
+    ANTIGRAVITY_APP_AGENT_TYPE,
     agy_home,
+    antigravity_config_home,
+    build_antigravity_hooks_template,
+    build_antigravity_sidecar_template,
 )
 
 HOST_SURFACE = "agy"
@@ -251,3 +265,156 @@ def test_native_goal_and_wake_facts_match_the_live_probes() -> None:
         "send_message",
         "manage_inbox",
     }
+
+
+def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Antigravity 2.0 (antigravity-app) is a first-class host surface alongside agy."""
+    start_dir = tmp_path / "start"
+    start_dir.mkdir()
+    payload = start_goal_accepts_surface(ANTIGRAVITY_APP_AGENT_TYPE, start_dir)
+    assert (
+        payload["command_pack"]["host_loop_activation"]["host_surface"]
+        == "antigravity_app_loop"
+    )
+    activation = build_host_loop_activation_packet(
+        agent_type=ANTIGRAVITY_APP_AGENT_TYPE,
+        goal_id="surface-goal",
+        agent_id="probe-agent",
+        registered_agents=["probe-agent"],
+    )
+    assert activation["host_surface"] == "antigravity_app_loop"
+    assert (
+        activation["activation_method"]
+        == "bind_antigravity_schedule_loop_and_sidecar"
+    )
+    mutation = activation["host_mutation"]
+    assert mutation["host_loop_primitive"] == "antigravity-schedule-tool-and-sidecar"
+    assert mutation["in_session_schedule_call"]["tool"] == "schedule"
+    assert "DurationSeconds" in mutation["in_session_schedule_call"]["arguments"]
+    assert "waiting_external" in mutation["in_session_schedule_call"]["when_to_use"]
+    assert (
+        mutation["sidecar_template"]["schema_version"]
+        == "loopx_antigravity_sidecar_template_v0"
+    )
+    assert (
+        "antigravity_app"
+        in mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"]["gate_command"]
+    )
+    assert (
+        mutation["hooks_template"]["loopx"]["schema_version"]
+        == "loopx_antigravity_hooks_gate_v0"
+    )
+
+    gate_dir = tmp_path / "gate"
+    gate_dir.mkdir()
+    selection_gate_offers_surface(ANTIGRAVITY_APP_AGENT_TYPE, gate_dir)
+
+    assert normalize_agent_type("antigravity-app") == ANTIGRAVITY_APP_AGENT_TYPE
+    assert normalize_agent_type("agy-app") == ANTIGRAVITY_APP_AGENT_TYPE
+    assert normalize_agent_type("antigravity 2.0") == ANTIGRAVITY_APP_AGENT_TYPE
+    assert scheduler_command_binding_for_agent_type(ANTIGRAVITY_APP_AGENT_TYPE) == {
+        "runtime_profile": "antigravity_app"
+    }
+
+    # Verify both hosted automation (sidecar.json) and interactive (in-session schedule) execution contexts
+    hosted_ctx = scheduler_execution_context_for_runtime_profile(
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP
+    )
+    assert hosted_ctx.ok
+    assert hosted_ctx.context is not None
+    assert hosted_ctx.context.app_automation_applicable is True
+    assert (
+        hosted_ctx.projection()["app_automation_applicability"] == "applicable"
+    )
+
+    interactive_ctx = resolve_scheduler_execution_context(
+        {
+            "host_surface": HostSurface.ANTIGRAVITY_APP.value,
+            "scheduler_owner": SchedulerOwner.AGENT_CLI_LOOP.value,
+            "execution_mode": ExecutionMode.INTERACTIVE.value,
+        }
+    )
+    assert interactive_ctx.ok
+
+
+def test_antigravity_dual_skills_mcp_hooks_workflow_skills_and_doctor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ~/.gemini/config/skills/<name>/SKILL.md dual compatibility,
+    --agy-home override, optional mcp_config.json + hooks.json registration,
+    workflow-skills --install, and doctor checks."""
+    import loopx.slash_command_install as sci
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("AGY_HOME", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_HOME", raising=False)
+    monkeypatch.setattr(
+        sci,
+        "_loopx_mcp_command",
+        lambda: ("/usr/bin/python3", "/opt/loopx/mcp_server.py"),
+    )
+
+    # 1. Default `agy` surface installs BOTH legacy flat ~/.gemini/antigravity-cli/skills/<name>.md
+    #    AND Antigravity 2.0 ~/.gemini/config/skills/<name>/SKILL.md
+    dual_payload = install_slash_commands(
+        execute=True,
+        surfaces=["agy"],
+    )
+    assert dual_payload["ok"] is True
+    assert (
+        tmp_path / "home" / ".gemini" / "antigravity-cli" / "skills" / "loopx.md"
+    ).is_file()
+    assert (
+        tmp_path / "home" / ".gemini" / "config" / "skills" / "loopx" / "SKILL.md"
+    ).is_file()
+
+    # 2. Explicit --agy-home with --with-agy-mcp and --with-agy-hooks
+    custom_agy_home = tmp_path / "custom-agy-config"
+    app_payload = install_slash_commands(
+        execute=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home),
+        with_agy_mcp=True,
+        with_agy_hooks=True,
+    )
+    assert app_payload["ok"] is True
+    assert (custom_agy_home / "skills" / "loopx" / "SKILL.md").is_file()
+    assert (custom_agy_home / "mcp_config.json").is_file()
+    assert (custom_agy_home / "hooks.json").is_file()
+
+    # Uninstall retires managed MCP, hooks, and skill files cleanly
+    uninstall_payload = install_slash_commands(
+        execute=True,
+        uninstall=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home),
+        with_agy_mcp=True,
+        with_agy_hooks=True,
+    )
+    assert uninstall_payload["ok"] is True
+    assert not (custom_agy_home / "skills" / "loopx" / "SKILL.md").exists()
+
+    # 3. workflow-skills --install --host-surface antigravity-app --agy-home
+    wf_payload = workflow_skill_install(
+        execute=True,
+        host_surface="antigravity-app",
+        agy_home=str(custom_agy_home),
+    )
+    assert wf_payload["ok"] is True
+    assert (custom_agy_home / "skills" / "loopx-project" / "SKILL.md").is_file()
+    assert (custom_agy_home / "skills" / "loopx" / "SKILL.md").is_file()
+
+    # 4. doctor --agent-type antigravity-app checks the Antigravity config home
+    monkeypatch.setenv("AGY_HOME", str(custom_agy_home))
+    doc = collect_doctor(agent_type="antigravity-app")
+    assert "antigravity" in doc
+    assert doc["antigravity"]["config_home"] == str(custom_agy_home)
+    assert doc["antigravity"]["workflow_skills_readback"]["ready"] is True
+    agy_check = next(
+        c for c in doc["checks"] if c["id"] == "antigravity_host_surface_ready"
+    )
+    assert agy_check["ok"] is True

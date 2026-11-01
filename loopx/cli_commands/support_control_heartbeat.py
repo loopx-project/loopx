@@ -223,6 +223,7 @@ def handle_heartbeat_prompt_command(
         None,
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT.value,
         SchedulerRuntimeProfile.TRAE_APP.value,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP.value,
         SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value,
         # Kiro CLI moved off generic_cli onto its own profile; its facade
         # still reads the thin Agent input, so keep that output shape.

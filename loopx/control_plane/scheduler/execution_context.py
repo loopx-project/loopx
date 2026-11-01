@@ -17,6 +17,7 @@ class HostSurface(str, Enum):
     CODEX_CLI = "codex_cli"
     CODEX_APP_SERVER = "codex_app_server"
     TRAE_APP = "trae_app"
+    ANTIGRAVITY_APP = "antigravity_app"
     GENERIC_CLI = "generic_cli"
     CLAUDE_CODE = "claude_code"
     KUNLUNCODE = "kunluncode"
@@ -44,6 +45,7 @@ class SchedulerRuntimeProfile(str, Enum):
     CODEX_APP_SSH_VISIBLE = "codex_app_ssh_goal"
     CODEX_CLI_VISIBLE = "codex_cli"
     TRAE_APP = "trae_app"
+    ANTIGRAVITY_APP = "antigravity_app"
     CLAUDE_CODE_VISIBLE = "claude_code"
     KUNLUNCODE_VISIBLE = "kunluncode"
     KIRO_CLI_VISIBLE = "kiro_cli"
@@ -84,6 +86,7 @@ GUIDED_START_TURN_RUNTIME_PROFILES = frozenset(
     {
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         SchedulerRuntimeProfile.TRAE_APP,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
         SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE,
     }
 )
@@ -97,6 +100,7 @@ APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES = frozenset(
     {
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         SchedulerRuntimeProfile.TRAE_APP,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }
 )
 
@@ -124,6 +128,11 @@ _SCHEDULER_RUNTIME_PROFILE_CONTEXTS = {
     ),
     SchedulerRuntimeProfile.TRAE_APP: (
         HostSurface.TRAE_APP,
+        SchedulerOwner.HOST_AUTOMATION,
+        ExecutionMode.HOSTED_AUTOMATION,
+    ),
+    SchedulerRuntimeProfile.ANTIGRAVITY_APP: (
+        HostSurface.ANTIGRAVITY_APP,
         SchedulerOwner.HOST_AUTOMATION,
         ExecutionMode.HOSTED_AUTOMATION,
     ),
@@ -185,7 +194,12 @@ class SchedulerExecutionContext:
     @property
     def app_automation_applicable(self) -> bool:
         return (
-            self.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP}
+            self.host_surface
+            in {
+                HostSurface.CODEX_APP,
+                HostSurface.TRAE_APP,
+                HostSurface.ANTIGRAVITY_APP,
+            }
             and self.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
             and self.execution_mode is ExecutionMode.HOSTED_AUTOMATION
         )
@@ -200,11 +214,13 @@ class SchedulerExecutionContext:
             "valid": True,
         }
         # Keep existing non-Trae projections byte-compatible. The neutral App
-        # field is needed to identify Trae's independent automation contract,
-        # but a second negative applicability flag adds no information for CLI
-        # and Goal runtimes.
-        if self.host_surface is HostSurface.TRAE_APP:
-            projection["app_automation_applicability"] = "applicable"
+        # field is needed to identify Trae/Antigravity's independent automation
+        # contract, but a second negative applicability flag adds no information
+        # for CLI and Goal runtimes.
+        if self.host_surface in {HostSurface.TRAE_APP, HostSurface.ANTIGRAVITY_APP}:
+            projection["app_automation_applicability"] = (
+                "applicable" if self.app_automation_applicable else "not_applicable"
+            )
         else:
             projection["codex_app_applicability"] = (
                 "applicable" if self.codex_app_applicable else "not_applicable"
@@ -235,7 +251,10 @@ class SchedulerExecutionContextResolution:
             "valid": False,
             "errors": list(self.errors),
         }
-        if supplied.get("host_surface") == HostSurface.TRAE_APP.value:
+        if supplied.get("host_surface") in {
+            HostSurface.TRAE_APP.value,
+            HostSurface.ANTIGRAVITY_APP.value,
+        }:
             projection["app_automation_applicability"] = "blocked_invalid_context"
         else:
             projection["codex_app_applicability"] = "blocked_invalid_context"
@@ -257,8 +276,17 @@ def _validation_errors(context: SchedulerExecutionContext) -> list[str]:
         HostSurface.KUNLUNCODE,
         HostSurface.KIRO_CLI,
     }
-    if context.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP}:
+    if context.host_surface in {
+        HostSurface.CODEX_APP,
+        HostSurface.TRAE_APP,
+        HostSurface.ANTIGRAVITY_APP,
+    }:
         host_name = context.host_surface.value
+        if context.host_surface is HostSurface.ANTIGRAVITY_APP and (
+            context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
+            and context.execution_mode is ExecutionMode.INTERACTIVE
+        ):
+            return errors
         if context.scheduler_owner is not SchedulerOwner.HOST_AUTOMATION:
             errors.append(f"{host_name} requires scheduler_owner=host_automation")
         if context.execution_mode is not ExecutionMode.HOSTED_AUTOMATION:

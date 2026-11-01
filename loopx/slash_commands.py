@@ -77,6 +77,7 @@ def build_slash_command_catalog(
                     "cursor-agent": "drive the loop from the agent's own turns; enter every turn through quota should-run",
                     "zcode": "drive the loop from the agent's turns; enter through quota should-run",
                     "agy": "native /goal + schedule wakes; quota entry advisory",
+                    "antigravity-app": "native schedule(DurationSeconds=...) timer closed loop + sidecar.json heartbeat",
                     "kiro-cli": "native /goal loop; quota entry advisory",
                     "manual": "wire an external scheduler or run quota/status manually",
                     "other-agent": "use the custom host loop driver declared by `loopx agent-onboard`",
