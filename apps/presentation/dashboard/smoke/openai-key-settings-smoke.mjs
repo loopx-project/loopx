@@ -91,6 +91,9 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-testid="openai-key-settings"] input[type="checkbox"]')?.checked);
   await native.getByRole("button", {name: "检查额度", exact: true}).click();
   await native.locator("header").getByText(/当前 OPENAI-API/).waitFor();
+  await command("api-observation");
+  await panel.getByText(/API 已接受请求 · example-selected-model/).waitFor();
+  await panel.getByText(/限流窗口请求余量 42 · 限流窗口 Token 余量 12000/).waitFor();
   await panel.scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "openai-fallback-active-desktop.png"), animations: "disabled"});
   await command("subscription-recovered");

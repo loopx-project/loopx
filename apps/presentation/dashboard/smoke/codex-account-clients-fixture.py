@@ -102,6 +102,12 @@ def main() -> None:
                 elif command == "subscription-recovered" and api_fixture:
                     recovered, now = True, now + 301
                     print(json.dumps({"subscription_recovered": True}), flush=True)
+                elif command == "api-observation" and api_fixture:
+                    keys = provider.api_keys()
+                    keys.record(keys.status()["keys"][0]["id"], status=200, code=None,
+                                model="example-selected-model", headers={
+                                    "x-ratelimit-remaining-requests": "42", "x-ratelimit-remaining-tokens": "12000"})
+                    print(json.dumps({"api_observation": True}), flush=True)
                 elif command == "unregistered":
                     slots, active, selection, registration_busy = [], None, "unregistered", True
                     result = service.call("configure", {"expected_revision": provider.status()["revision"],

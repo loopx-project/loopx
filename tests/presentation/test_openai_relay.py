@@ -41,11 +41,11 @@ def relay(monkeypatch, tmp_path):
             if isinstance(outcome, BaseException):
                 raise outcome
             return outcome
-    server = module.RelayServer(owner, {"port": 0, "token": "synthetic-loopback-token"}, opener=Upstream())
+    server = module.RelayServer(owner, {"port": 0, "token": "example-loopback-token"}, opener=Upstream())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     body = {"model": "unchanged-selected-model", "input": "synthetic prompt", "stream": True, "tools": []}
-    def post(token="synthetic-loopback-token", origin=None):
+    def post(token="example-loopback-token", origin=None):
         headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
         if origin:
             headers["Origin"] = origin
@@ -115,7 +115,7 @@ def test_pool_exhaustion_is_bounded_and_does_not_probe_in_background(relay):
 
 def test_default_off_origin_and_token_guards_precede_upstream_access(relay):
     owner, _, calls, _, post, _ = relay
-    assert post(token="other-token")[0] == 401
+    assert post(token="example-wrong-token")[0] == 401
     assert post(origin="https://outside.example")[0] == 401
     native = importlib.import_module("loopx_codex_provider_routing.native")
     state = owner._load()
