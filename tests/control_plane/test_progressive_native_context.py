@@ -10,6 +10,7 @@ import pytest
 
 from loopx.cli_commands.quota_capture import read_context_capture
 from loopx.control_plane.turn_driver import codex_context as context
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 from test_codex_context_lifecycle import setup, project, deliver, read_pages
 from test_goal_acceptance_cli import acceptance_goal as acceptance_goal
 from test_quota_settlement_cli import _run_cli
@@ -141,13 +142,14 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
     assert code == 0 and view["ok"] and view["mode"] == "full", view
 
     def check_recovery(view):
+        wire, view = view, reference_metadata_oracle(view)
         journal = context._state(tmp_path)["recovery"]
         assert view["capture_sha256"] == digest
         assert {key: view["recovery"][key] for key in ("path", "sha256")} == {
             key: journal[key] for key in ("path", "sha256")}
-        argv = shlex.split(view["recovery"]["command"])
+        argv = shlex.split(wire["recovery"]["command"])
         if output_limit is not None:
-            assert len((json.dumps(view, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
+            assert len((json.dumps(wire, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
             assert int(argv[argv.index("--max-page-output-bytes") + 1]) <= output_limit
             # Discovery and selection remain usable from the complete current
             # recovery, independently of optional shortcut command fields.
@@ -181,11 +183,12 @@ def test_saved_native_projection_recovers_the_required_view(tmp_path, monkeypatc
     recovered = check_recovery(view)
     if failure is None:
         deliver(tmp_path, event, recovered)
-        assert context._state(tmp_path)["candidate"]["capture_file"] == view["recovery"]["path"]
+        assert context._state(tmp_path)["candidate"]["capture_file"] == reference_metadata_oracle(view)["recovery"]["path"]
         code, warm = _run_cli(registry, runtime, *command, cwd=tmp_path)
         assert code == 0 and warm["ok"], warm
-        if "target" in warm:
-            assert warm["target"]["context_epoch"] == view["target"]["context_epoch"]
+        warm_metadata = reference_metadata_oracle(warm)
+        if "target" in warm_metadata:
+            assert warm_metadata["target"]["context_epoch"] == reference_metadata_oracle(view)["target"]["context_epoch"]
         check_recovery(warm)
         context.codex_context_hook(str(tmp_path), {**event, "source": "compact"})
         code, compacted = _run_cli(registry, runtime, *command, cwd=tmp_path)

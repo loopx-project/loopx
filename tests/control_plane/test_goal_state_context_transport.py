@@ -16,6 +16,7 @@ from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_s
 from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
 from loopx.control_plane.testing.canary_harness import write_fixture_registry
 from loopx.control_plane.work_items import context_readback
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -85,11 +86,10 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
             "--decision-output-root", str(captures)])
     page, raw = json.loads(output.getvalue()), bytearray()
     assert code == 0 and page["ok"], (page.get("reason"), page.get("error"), page.get("error_code"))
-    digest = page["sha256"]
+    digest = reference_metadata_oracle(page)["sha256"]
     if page.get("schema_version") != "context_capture_page_v1":
-        page = read_context_capture(build_parser().parse_args([
-            "--format", "json", "quota", "context-read", "--capture-file", page["path"],
-            "--capture-sha256", digest, "--offset", "0", "--page-bytes", "3072"]))
+        page = read_context_capture(build_parser().parse_args(
+            shlex.split(page["command"])[1:] + ["--page-bytes", "3072"]))
         assert page["ok"], page
     while True:
         assert page["offset"] == len(raw) and page["sha256"] == digest
