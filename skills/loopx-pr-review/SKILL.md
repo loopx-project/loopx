@@ -134,10 +134,12 @@ and return its URL. After APPROVE (incl. existing approval), execute
 owner/GitHub authority, preserving discussion and unresolved reviews. Merge routes through
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
-Immediately before every merge, run `loopx --format json pr-review --goal-id GOAL
---repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Its compact
-Goal observation suppresses only unchanged requalification; material change reopens it, admin
-bypass never overrides this gate, and author fallback needs user authority.
+Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
+--check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Pass `--goal-id GOAL`
+when the work is already Goal-managed; its compact observation suppresses only unchanged
+requalification. Standalone work requires no Goal and writes no Goal observation.
+Material change reopens qualification, admin bypass never overrides this gate, and author
+fallback needs user authority.
 
 ## Full PR Review And Bilingual Format
 

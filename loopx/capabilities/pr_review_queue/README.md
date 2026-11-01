@@ -279,7 +279,7 @@ workflow or the merge-focused `loopx-pr-merge` skill.
 | Command | CLI reference | Intent |
 | --- | --- | --- |
 | `/loopx-pr-review` | `loopx pr-review [--repo owner/repo] [--target-exact-head NUMBER@HEAD_OID] [--state open\|merged\|all] [--review-order forward\|reverse] [--since ISO] [--fresh-audit-exact-head NUMBER@HEAD_OID]` | Review a small explicit batch with repeatable `--target-exact-head`, or list a lifecycle queue when no target is supplied. Both paths provide concrete main-regression analysis and the five-block review contract. Forward visits other authors first; reverse inverts the entire actionable queue. Saved Agent settings apply automatically. `--fresh-audit-exact-head` separately forces new evidence for an unchanged concluded head. |
-| pre-merge readback | `loopx pr-review --goal-id GOAL --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. The Goal-scoped command records a compact public-safe readiness observation; this read grants no merge authority. |
+| pre-merge readback | `loopx pr-review [--goal-id GOAL] --repo owner/repo --check-merge-readiness NUMBER@HEAD_OID` | Immediately before merge, fail closed unless the remote PR is still open at the reviewed head, its standalone conclusion approves that head, all checks are successful or skipped, review-thread pagination is complete with no unresolved thread, and merge state is compatible. Standalone checks require no Goal and write no Goal state. Add `--goal-id GOAL` for existing Goal-managed work to retain its CI policy and record a compact public-safe observation; this read grants no merge authority. |
 
 The slash command must run the CLI first. Agentloop must not reconstruct the
 review window by manually calling `gh pr view` / `gh pr list` for every PR. The
@@ -1263,8 +1263,9 @@ The packet should let a reviewer move through PRs in order:
    copied as the final risk judgement.
 8. Recheck the exact head, then decide `approve`, `request changes`, `defer`, or
    `merge after checks`. Immediately before merge, require
-   `loopx pr-review --goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` to
-   return `ready=true`.
+   `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` to
+   return `ready=true`. Add `--goal-id GOAL` only for already Goal-managed work;
+   standalone delivery requires no registration or binding.
 
 A response that only lists `Open` and `Merged` PRs, scale, and recommended next
 order is incomplete for `/loopx-pr-review`; it should continue into the
@@ -1294,10 +1295,12 @@ A first implementation is acceptable when:
 - `--fresh-audit-exact-head NUMBER@HEAD_OID` is the only packet-level way to
   turn an unchanged valid conclusion into an actionable fresh audit, and
   malformed, absent, or already-actionable targets fail closed;
-- Goal-scoped `--goal-id GOAL --check-merge-readiness NUMBER@HEAD_OID` rejects head drift, stale review
+- `--check-merge-readiness NUMBER@HEAD_OID` works without a Goal or Goal writes
+  and rejects head drift, stale review
   prose, non-approval conclusions, red/pending/unknown checks, incomplete or
-  unresolved review-thread evidence, and incompatible merge state, then records
-  the compact observation used to suppress only unchanged requalification;
+  unresolved review-thread evidence, and incompatible merge state; adding
+  `--goal-id GOAL` retains Goal policy and records the compact observation used
+  to suppress only unchanged requalification;
 - the default limit is 100, and exhaustive requests only proceed when
   `result_completeness.complete=true`; truncated packets provide a larger
   `recommended_limit` for the next read;

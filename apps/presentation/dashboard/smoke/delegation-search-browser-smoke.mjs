@@ -232,7 +232,10 @@ try {
     // the parent message refresh must not replace it with the old page count.
     await fixture('report-window');
     const nextPage = english.getByRole('button', {name: 'Load next page', exact: true});
-    await nextPage.focus(); await page.keyboard.press('Enter'); await rows(13);
+    // A parent refresh can temporarily aria-disable paging after the fixture
+    // returns. Click waits for actionability; raw Enter can be ignored while
+    // busy. Keyboard activation and result focus are exercised above.
+    await nextPage.click(); await rows(13);
     assert.equal(await english.getByRole('button', {name: 'Load next page', exact: true}).count(), 0);
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), '13 / 13 shown');
     await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);

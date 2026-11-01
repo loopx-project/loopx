@@ -828,7 +828,8 @@ def client_host(native, monkeypatch, tmp_path):
         state.update(active=slot, revision="selected", switch=state["switch"] + 1)
         return {"history_untouched": True}
 
-    def reopen(*_):
+    def reopen(*_, spec):
+        assert spec is adapter.spec, "Reopening must retain the inspected profile"
         state.update(pid=22, open=state["open"] + 1)
 
     def quit(command, **parameters):
