@@ -529,12 +529,14 @@ export function MachineConfigurationSettings({ section, onChanged }: {
             <div className="personal-capability-fields"><label className="is-boolean">
               <span>Codex</span>
               <input aria-label={locale === "zh-CN" ? "在 Codex 中使用差分上下文" : "Use differential context in Codex"}
-                type="checkbox" role="switch" checked={selectedCurrent?.mode === "on"} disabled={Boolean(busy) || !editorAvailable}
+                type="checkbox" role="switch" checked={(selectedCurrent?.mode ?? selected.default.mode) === "on"} disabled={Boolean(busy) || !editorAvailable}
                 onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off")} />
             </label></div>
-            <p role="status">{selectedCurrent?.mode === "on"
-              ? locale === "zh-CN" ? "已为 Codex 保存开启偏好；宿主就绪与实际使用尚未验证。" : "Codex preference is on; host readiness and actual use are not verified."
-              : locale === "zh-CN" ? "Codex 未开启。" : "Off for Codex."}</p>
+            <p role="status">{(selectedCurrent?.mode ?? selected.default.mode) === "on"
+              ? selectedCurrent
+                ? locale === "zh-CN" ? "已为 Codex 保存开启偏好；宿主就绪与实际使用尚未验证。" : "Codex preference is on; host readiness and actual use are not verified."
+                : locale === "zh-CN" ? "Codex 默认开启；宿主就绪与实际使用尚未验证。" : "On by default for Codex; host readiness and actual use are not verified."
+              : locale === "zh-CN" ? "Codex 已关闭。" : "Off for Codex."}</p>
             <ContextHelp label={locale === "zh-CN" ? "Codex 支持范围与生效条件" : "Codex support and activation requirements"}><p>{locale === "zh-CN"
               ? "目前仅支持 Codex App 心跳和 benchmark 心跳，无法确认或不支持的跑法报错。保存偏好不代表当前会话已采用差分，也不会改变其他应用或显式关闭的实验。宿主准备就绪且旧上下文完整时才使用差分，否则保留完整上下文。私有存储与会话隔离自动管理；每轮回执显示实际传输方式。"
               : "Currently supports only Codex App and benchmark heartbeats; unknown or unsupported declarations return an error. Saving a preference does not establish use in the current session or change other applications or explicitly disabled runs. Delta requires a ready host and complete retained context; otherwise full context is preserved. Private storage and session isolation are automatic; each delivery reports its actual mode."}</p></ContextHelp>

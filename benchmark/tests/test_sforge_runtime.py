@@ -277,7 +277,7 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     assert "turn_envelope" not in profile
     assert "turn_envelope_source" not in profile
     assert "LOOPX_TURN_ENVELOPE" not in env
-    assert env.get("LOOPX_CONTEXT_DELIVERY") == ("on" if context_delivery != "off" else None)
+    assert env["LOOPX_CONTEXT_DELIVERY"] == context_delivery
     assert profile.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):

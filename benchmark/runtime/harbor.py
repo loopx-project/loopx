@@ -74,7 +74,7 @@ class BenchmarkCodex(CodexOffline):
         task_entry=None,
         planning_timeout_sec=None,
         turn_envelope=False,
-        context_delivery="off",
+        context_delivery=None,
         provider_request_admission=False,
         native_goal_continue=False,
         task_objective=None,
@@ -634,7 +634,7 @@ class BenchmarkCodex(CodexOffline):
                 **({"LOOPX_CHECKPOINT_REQUEST": self.checkpoint_request_path}
                    if self.checkpoint_request_path is not None else {}),
                 **({"LOOPX_TURN_ENVELOPE": "1"} if self.execution.turn_envelope else {}),
-                **({"LOOPX_CONTEXT_DELIVERY": "on"} if self.execution.context_delivery != "off" else {}),
+                "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
                 **({"LOOPX_PROVIDER_REQUEST_ADMISSION": "on"} if self.provider_request_admission else {}),
                 **({"LOOPX_NATIVE_GOAL_CONTINUE": "1"} if self.native_goal_continue else {}),
                 "LOOPX_ITERATION_CONTEXT": self.execution.context,

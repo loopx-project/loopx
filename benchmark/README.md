@@ -878,7 +878,10 @@ must actually deliver a complete full packet and later deltas across worker
 wakes; every fresh receiver must begin with a complete current full packet.
 The static inference follows model-visible page cursors, and a separate byte-map
 oracle checks complete delivery and retained delta bases before candidate work.
-The default remains `off`. Neither mode measures paid inference, task quality or
+This joint qualifier deliberately retains its explicit `off` control by default;
+new benchmark heartbeat workers default on and can select `--context-delivery off`.
+Do not mutate a frozen trial to adopt that changed default.
+Neither qualifier mode measures paid inference, task quality or
 fees; reusing a point still does not count its source test as passed in this run.
 
 The public fixture runs six actual native work wakes, captures the pending

@@ -490,7 +490,7 @@ def run_once(env: dict[str, str]) -> dict:
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY"),
         turn_envelope=env.get("LOOPX_TURN_ENVELOPE", "0") == "1",
-        context_delivery=env.get("LOOPX_CONTEXT_DELIVERY", "off"),
+        context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -512,7 +512,7 @@ def run_once(env: dict[str, str]) -> dict:
     home = Path(env["LOOPX_CODEX_HOME"])
     env = process_environment(home, base=env)
     # Preserve this trial's resolved off/on choice in both preflight and solver
-    # subprocesses; an omitted off must not inherit a machine-wide opt-in.
+    # subprocesses; an explicit off must not inherit a machine-wide default.
     env["LOOPX_CONTEXT_DELIVERY"] = execution.context_delivery
     # The resolved trial treatment must not inherit an ambient parent opt-in.
     if request_admission:

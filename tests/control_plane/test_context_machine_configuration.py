@@ -76,7 +76,7 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert len(contexts) == 1
     assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
     assert contexts[0]["configuration_template"] == {
-        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off",
+        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on",
     }
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
     assert not (runtime / "context-delivery").exists()
@@ -194,9 +194,9 @@ def test_inherited_on_rejects_unknown_or_unsupported_before_admission(tmp_path, 
 
 @pytest.mark.parametrize("profile", ["codex_app", "benchmark", "codex_app_ssh_goal"])
 @pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
-def test_native_configuration_inherits_declared_scenarios_and_later_off(tmp_path, monkeypatch, profile):
+def test_native_configuration_defaults_on_and_later_explicit_off(tmp_path, monkeypatch, profile):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
-    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    assert not (runtime / "machine/configuration.json").exists()
     if profile == "benchmark":
         monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
         monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
@@ -220,8 +220,9 @@ def test_native_configuration_inherits_declared_scenarios_and_later_off(tmp_path
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stored_mode", [None, "on"])
 @pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
-def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmission(tmp_path, monkeypatch, provider):
+def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmission(tmp_path, monkeypatch, provider, stored_mode):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("CODEX_THREAD_ID", "machine-context-session")
     monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
@@ -229,7 +230,10 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     _initialize_fixture_authority(project, runtime, provider=provider)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     original_state = state.read_bytes()
-    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    if stored_mode is not None:
+        assert configure(registry, runtime, tmp_path, stored_mode)[0] == 0
+    else:
+        assert not (runtime / "machine/configuration.json").exists()
     code, setup = _run_cli(registry, runtime, "quota", "context-config", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
     assert code == 0, setup
@@ -371,10 +375,10 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
 @pytest.mark.skipif(os.name != "posix", reason="Native benchmark worker qualification uses POSIX isolation")
 @pytest.mark.parametrize("provider,worker_mode,machine_on", [
-    ("file", None, False), ("file", None, True),
-    ("sqlite", None, False), ("sqlite", None, True), ("sqlite", "off", True),
+    ("file", "off", False), ("file", "off", True),
+    ("sqlite", "off", False), ("sqlite", "off", True),
 ])
-def test_native_worker_default_off_isolates_machine_on(tmp_path, monkeypatch, provider, worker_mode, machine_on):
+def test_native_worker_explicit_off_isolates_machine_on(tmp_path, monkeypatch, provider, worker_mode, machine_on):
     from benchmark.runtime.worker import run_once
     from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
