@@ -250,9 +250,14 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             selection_digest = expected
             selectors = [item["pointer"] for item in views]
             if reference_file is not None and pinned_selection is None:
-                reference_file = write_context_read_reference(path, digest, selection={
-                    "select": None if initial_read else selectors, "initial_read": initial_read,
-                    "list_fields": list_fields, "list_depth": list_depth, "sha256": expected})
+                try:
+                    reference_file = write_context_read_reference(path, digest, selection={
+                        "select": None if initial_read else selectors, "initial_read": initial_read,
+                        "list_fields": list_fields, "list_depth": list_depth, "sha256": expected})
+                except OSError:
+                    # A verified read must not require a writable capture root.
+                    # Legacy cursors pin the same capture, selection and digest.
+                    reference_file = None
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
         return _capture_page(path, raw, digest, offset=offset, size=size,

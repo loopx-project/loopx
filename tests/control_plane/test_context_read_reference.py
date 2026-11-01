@@ -1,5 +1,4 @@
 """Reader references hide repeated digests without weakening byte verification."""
-from argparse import Namespace
 import hashlib
 import json
 from pathlib import Path
@@ -15,15 +14,12 @@ from loopx.control_plane.turn_driver.decision_capture import (
 
 
 def read(command, **overrides):
-    words = shlex.split(command)
-    args = dict(format="json", offset=0, page_bytes=64000, max_page_output_bytes=64000)
-    for name in ("reference-file", "capture-file", "capture-sha256", "offset", "page-bytes", "max-page-output-bytes"):
-        if "--" + name in words:
-            value = words[words.index("--" + name) + 1]
-            args[name.replace("-", "_")] = int(value) if name in {"offset", "page-bytes", "max-page-output-bytes"} else value
-    args["initial_read"] = "--initial-read" in words
-    args.update(overrides)
-    return read_context_capture(Namespace(**args))
+    from loopx.cli import build_parser
+
+    args = build_parser().parse_args(shlex.split(command)[1:])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return read_context_capture(args)
 
 
 def fixture(tmp_path):
@@ -93,6 +89,42 @@ def test_initial_reference_rejects_changed_selection_profile(tmp_path, monkeypat
     rejected = read(first["next_command"])
     assert rejected["ok"] is False and "digest changed" in rejected["reason"]
     assert "content" not in rejected
+
+
+@pytest.mark.parametrize("selection", ["fields", "index", "initial"])
+def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypatch, selection):
+    import errno
+    from loopx.cli_commands import quota_capture
+
+    payload, machine, model = fixture(tmp_path)
+    before = Path(machine["path"]).read_bytes()
+
+    def unavailable(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "synthetic metadata unavailable")
+
+    monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable)
+    options = {"fields": {"select": ["/selected_todo", "/criterion"]},
+               "index": {"list_fields": True}, "initial": {"initial_read": True}}[selection]
+    page = read(model["command"], max_page_output_bytes=3500, page_bytes=3000, **options)
+    content = []
+    while True:
+        assert page["ok"] and page["schema_version"] == "context_capture_page_v1"
+        assert page["sha256"] == machine["sha256"] and page["selection_sha256"]
+        assert capture_page_range(page, raw=before, digest=machine["sha256"]) is None
+        content.append(page["content"])
+        if page["eof"]:
+            break
+        assert "--capture-sha256" in page["next_command"] and "--selection-sha256" in page["next_command"]
+        page = read(page["next_command"])
+    values = json.loads("".join(content))["selections"]
+    if selection == "fields":
+        assert {item["pointer"]: item["value"] for item in values} == {
+            "/selected_todo": payload["selected_todo"], "/criterion": payload["criterion"]}
+    elif selection == "index":
+        assert {item["pointer"] for item in values[0]["fields"]} == {"/" + key for key in payload}
+    else:
+        assert next(item["value"] for item in values if item["pointer"] == "/goal_boundary") == payload["goal_boundary"]
+    assert Path(machine["path"]).read_bytes() == before
 
 
 @pytest.mark.parametrize("damage", ["capture", "selection", "symlink", "permissions"])
