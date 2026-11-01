@@ -60,7 +60,9 @@ def test_mode_default_context_preserves_explicit_fresh_and_transport_opt_ins(tmp
     expected = "resume" if mode in {"heartbeat", "turn"} else "fresh"
     implicit = Execution(mode=mode, **extra)
     assert implicit.context == expected
-    assert implicit.context_delivery == "off" and implicit.turn_envelope is False
+    assert implicit.context_delivery == ("on" if mode == "heartbeat" else "off")
+    assert implicit.turn_envelope is False
+    assert Execution(mode=mode, context_delivery="off", **extra).context_delivery == "off"
     assert Execution(mode=mode, context="fresh", **extra).context == "fresh"
     if expected == "fresh":
         with pytest.raises(ValueError, match="resume requires"):
@@ -936,7 +938,7 @@ def test_harbor_install_receipt_keeps_capture_independent_from_display(tmp_path,
     assert ("turn_envelope" in receipt) is (expected is not None)
     assert receipt.get("turn_envelope_source") == expected
     assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
-    assert agent._worker_env(cwd="/task").get("LOOPX_CONTEXT_DELIVERY") == ("on" if context_delivery != "off" else None)
+    assert agent._worker_env(cwd="/task")["LOOPX_CONTEXT_DELIVERY"] == context_delivery
     assert receipt.get("provider_request_admission") == ("on" if provider_request_admission else None)
     worker_env = agent._worker_env(cwd="/task")
     assert worker_env.get("LOOPX_PROVIDER_REQUEST_ADMISSION") == ("on" if provider_request_admission else None)
@@ -1205,20 +1207,21 @@ def test_native_context_opt_in_is_only_a_heartbeat_treatment(mode):
 
 
 @pytest.mark.parametrize("declared_mode", [None, "heartbeat"])
-def test_context_preflight_accepts_the_resolved_heartbeat_mode(tmp_path, monkeypatch, declared_mode):
+def test_context_preflight_defaults_on_and_exports_resolved_heartbeat_mode(tmp_path, monkeypatch, declared_mode):
     from benchmark.tests.test_resume_sessions import resume_env
     from loopx.control_plane.turn_driver.codex_context import context_delivery_activation
 
     env = resume_env(tmp_path, monkeypatch)
     if declared_mode is None:
         env.pop("LOOPX_EXECUTION_MODE")
-    env["LOOPX_CONTEXT_DELIVERY"] = "on"
+    env.pop("LOOPX_CONTEXT_DELIVERY", None)
     monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", lambda *args: None)
 
     def preflight(current, *_args, **_kwargs):
         activation = context_delivery_activation("on", runtime_profile="generic_cli",
             benchmark_mode=current.get("LOOPX_EXECUTION_MODE"))
         assert activation["scenario"] == "codex_benchmark_heartbeat"
+        assert current["LOOPX_CONTEXT_DELIVERY"] == "on"
         return "Current Todo input."
 
     monkeypatch.setattr("benchmark.runtime.worker.heartbeat_body", preflight)
@@ -1277,7 +1280,7 @@ def test_context_selection_is_fixed_by_trial_home(tmp_path):
     args = settings(tmp_path, execution=Execution(mode="heartbeat", context_delivery="on"))
     prepare_codex_home(**args)
     with pytest.raises(ValueError, match="settings changed"):
-        prepare_codex_home(**(args | {"execution": Execution(mode="heartbeat")}))
+        prepare_codex_home(**(args | {"execution": Execution(mode="heartbeat", context_delivery="off")}))
 
 
 @pytest.mark.parametrize("kind", ["public_directory", "symlink_directory", "existing_hooks"])

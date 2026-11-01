@@ -72,7 +72,7 @@ change receipt replay validation or declare a model-input/token saving.
 Unmarked or mixed ownership keeps the original full progressive read in
 `agent_channel.required_reads`. Malformed markers, non-generated content inside
 a marked region, unavailable files and invalid UTF-8 fail closed. Unknown
-narrative is never classified by headings or clipped to a size budget. For default-off and signed-envelope callers, read all
+narrative is never classified by headings or clipped to a size budget. For explicit-off and signed-envelope callers, read all
 delivered context and remaining reads before dependent work; changed sources need
 a fresh guard. Enabled scoped acceptance does not replace original Goal intent.
 
@@ -359,7 +359,7 @@ statements, source quotes and source references. Each read still supplies the
 current revision, membership, keys, lifecycle state, expiry, operation lineage
 and unknown fields literally; an empty view replaces earlier preferences.
 The existing scope-less preference hook uses the validated capture's exact
-Goal/Agent binding, without adding fields to ordinary/default-off producer output
+Goal/Agent binding, without adding fields to ordinary/disabled producer output
 or parsing its read command. Explore retains its explicit scoped hook identity.
 Unknown, failed, incompatible or ambiguous hook views stay complete. A changed
 scope or lost baseline still selects full delivery; reuse never makes a retired
@@ -403,7 +403,7 @@ the reconstructed context must still match its complete digest. Cold delivery,
 session invalidation and authority remain unchanged. This saves transport only;
 it does not establish model retention, billed-token savings or useful outcomes.
 
-These are presentation rules within the existing default-off option, not a new
+These are presentation rules within the existing native option, not a new
 configuration or admission policy. A missing continuity basis, a changed epoch, a damaged
 patch or an incompatible reader automatically recovers the same original full
 capture. Recovery never reruns the guard, asks the owner, spends quota or grants
@@ -425,18 +425,23 @@ host setup or actual delta use; the settings view states this explicitly. Its
 `{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}` or
 the same object with `"mode":"on"`. The CLI exposes that same owner through
 `machine-config preview/apply --namespace context_delivery --config-json FILE`;
-apply requires the exact preview revision. Removing the namespace restores off.
+apply requires the exact preview revision. Removing the namespace restores the on default for supported native Codex sessions; save `mode: "off"` to keep it disabled.
 Sibling settings and Goal records are preserved. The application row selects Codex
 within this capability; the existing `mode` remains that Codex preference, with no
 additional global switch or host configuration authority. Read-only editors cannot
 save it. The UI does not alter other hosts or initialize the current native session.
 
 An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
-machine default, with off when absent. The existing worker environment's explicit
-`LOOPX_CONTEXT_DELIVERY=off` also overrides inheritance; environment on alone does
-not enable delivery. Benchmark trials keep their existing `context_delivery=on`
-opt-in. Workers propagate the resolved trial choice, including default off, to
-both preflight and solver subprocesses without changing the caller's settings.
+machine preference, preserving a saved off. An absent preference defaults on only
+for supported POSIX native Codex App/SSH and declared benchmark heartbeat callers.
+Ordinary CLI, other hosts and unsupported platforms keep full delivery. Explicit
+on, or an explicitly saved on for an unknown declaration, still rejects unsupported
+or conflicting modes. The worker environment's `LOOPX_CONTEXT_DELIVERY=off` also
+overrides inheritance; environment on alone supplies no host or execution proof.
+New benchmark heartbeat trials default to `context_delivery=on`; pass `off` to
+disable. Other benchmark modes remain off. Workers pin the resolved trial choice
+in preflight and solver subprocesses; existing saved/frozen trials must not be
+rewritten or reused to qualify the new default.
 
 Machine consumers that parse `should_run`, selected work or settlement identities
 must explicitly request raw output on internal `quota should-run` calls using
@@ -721,7 +726,7 @@ context delivery 时，未标记或混合归属仅在内部桥接传路径与修
 安装后重新生成旧展开式 heartbeat 提示；此 PR 不热更新 runtime/automation，
 也不证明模型已采用或获得质量收益。回滚需恢复旧版本并重新生成提示。
 
-既有默认关闭的原生 context delivery 由同一 TypeScript codec 处理普通 quota 与
+既有原生 context delivery 由同一 TypeScript codec 处理普通 quota 与
 TurnEnvelope。在基线连续性成立的口径内，两入口仍逐轮发送 `planning_horizon.core_goal` 的
 原始目标、来源和可用性，包括目标改变或缺失。完整 `acceptance_contract` 与已登记
 规划树按精确复用、子树变化或全量交付；累计验收树不等于原始目标句。未知 horizon
@@ -765,15 +770,18 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
 `{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
 把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
---config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复关闭，
+--config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复受支持 Codex 原生会话的默认开启；保持关闭须保存 `mode: "off"`，
 不改写其他配置和 Goal 记录。应用行选择的是此能力下的 Codex；既有 `mode` 仍表示
 该 Codex 偏好，不新增总开关或宿主配置 authority。只读编辑器不能保存；界面不会
 改变其他应用或初始化当前原生会话。
 
-显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，未配置则关闭。
-已有 worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承；环境 on 本身不启用投递。
-benchmark trial 保留既有 `context_delivery=on` 启用方式。worker 将本次运行已解析的选择
-（含默认关闭）传给预检和 solver 子进程，不改写调用方原设置。
+显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，已保存的关闭继续生效。
+未配置时，仅在受支持的 POSIX Codex App／SSH 和已声明的 benchmark 心跳入口默认开启；
+普通 CLI、其他宿主和不支持的平台仍完整交付。显式开启或已保存开启遇到未知／冲突声明
+仍拒绝。worker 环境的 `LOOPX_CONTEXT_DELIVERY=off` 也覆盖继承，环境 on 本身不证明宿主或执行权限。
+新 benchmark heartbeat trial 默认 `context_delivery=on`，指定 `off` 可关闭；其他跑法仍关闭。
+worker 把本次运行已解析的选择固定传给预检和 solver 子进程，不改写调用方原设置，
+不修改或复用旧的在途／冻结 trial 来宣称新默认合格。
 开启接受以下原生声明：Codex App 心跳（`--codex-app` 或等价完整调度声明）、
 Codex App SSH Goal（`--runtime-profile codex_app_ssh_goal`），以及现有 Codex benchmark 心跳 worker（`generic_cli` 与其显式心跳环境）。缺失、冲突、
 不支持的 Codex 声明在准入前报错。机器偏好仅作用于 Codex；其他已明确解析的宿主

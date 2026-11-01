@@ -29,7 +29,7 @@ from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from benchmark.runtime.codex import Execution, TASK_ENTRIES, turn_envelope_receipt
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
@@ -121,8 +121,8 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
-    parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
-                        help="Experimental native Codex benchmark heartbeat reuse only; off by default")
+    parser.add_argument("--context-delivery", choices=("off", "on"),
+                        help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
     parser.add_argument("--provider-request-admission", action="store_true",
                         help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
@@ -197,6 +197,8 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
+    if args.context_delivery is None:
+        args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
     if args.provider_request_admission:

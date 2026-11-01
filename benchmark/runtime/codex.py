@@ -28,11 +28,13 @@ class Execution:
     validation_command: tuple[str, ...] = ()
     task_entry: str | None = None
     turn_envelope: bool = False
-    context_delivery: str = "off"
+    context_delivery: str | None = None
 
     def __post_init__(self) -> None:
         if self.context is None:
             object.__setattr__(self, "context", "resume" if self.mode in {"heartbeat", "turn"} else "fresh")
+        if self.context_delivery is None:
+            object.__setattr__(self, "context_delivery", "on" if self.mode == "heartbeat" else "off")
         if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
         if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
@@ -157,7 +159,8 @@ def codex_settings(
             # policy explicitly so model tools cannot silently lose it.
             "[shell_environment_policy.set]",
             'LOOPX_USAGE_PING = "0"',
-            *(['LOOPX_CONTEXT_DELIVERY = "on"', 'LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
+            f"LOOPX_CONTEXT_DELIVERY = {json.dumps(execution.context_delivery)}",
+            *(['LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
             "[features]",
             f"goals = {str(execution.native_goal).lower()}",
             "unified_exec = true",
