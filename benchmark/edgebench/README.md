@@ -7,7 +7,7 @@ blind retain native automatic evaluation. The CLI defaults to a reviewed commit
 from the shared
 [EdgeBench integration branch](https://github.com/huangruiteng/EdgeBench/tree/codex/edgebench-integration),
 maintained jointly by `huangruiteng` and `loopx-agent`. The canonical repository
-and reviewed revision live in [`source-default.json`](source-default.json).
+and revision/compatibility-patch pair live in [`source-default.json`](source-default.json).
 Run the controller on Linux with Docker and native SForge
 iptables permissions; a macOS Docker socket alone does not provide that boundary.
 
@@ -23,18 +23,28 @@ before model/container entry. Use a new log directory to adopt a newer source;
 never repin an active or historical cohort.
 
 For a **new cohort with no explicit source options**, `source-default.json`
-selects the reviewed integration commit
-[`2e29d24f44fece91dc240fc5459d17cad19c5fcd`](https://github.com/huangruiteng/EdgeBench/commit/2e29d24f44fece91dc240fc5459d17cad19c5fcd).
-It includes the reviewed non-finite feedback serialization and serialized game
-session lifecycle fixes in the shared branch itself, so the default no longer
-needs a LoopX compatibility patch. Native scoring, report values and selection
-remain provider-owned. Advancing the integration branch still does not change a
-cohort: updating this pin requires reviewing and qualifying the new source.
-Explicit branch/revision selection remains available and uses the selected
-unmodified provider code.
+selects the reviewed provider commit
+[`118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2`](https://github.com/huangruiteng/EdgeBench/commit/118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2)
+and the versioned
+[`nonfinite-checkpoint-v2` compatibility patch](compatibility/nonfinite-checkpoint-v2.patch).
+This LoopX-owned patch fixes the native checkpoint representation of nonfinite
+released scores and metrics. Native scoring, report values and selection remain
+unchanged. The upstream revision fixes ordinary HTTP feedback serialization;
+checkpoint encoding is a separate boundary and still requires this patch.
+Preparation verifies the asset digest and each touched file's exact
+upstream blob and mode, applies the patch before provider import/installation,
+and creates a clean, reproducible Git commit with the fetched commit as its
+parent. The snapshot uses an explicit LoopX compatibility identity and the
+upstream commit time; it does not attribute the patch to an upstream author.
+The default revision and patch are one reviewed pair: advancing the integration
+branch does not change a new default cohort. Updating the pair requires reviewing
+the new source and qualifying the native checkpoint transport again. A changed
+patch preimage, including a later upstream implementation of the fix, still stops
+preparation without publishing a source directory. Explicit branch/revision
+selection remains available and uses unmodified provider code; it does not
+silently inherit the default patch or its qualification.
 
-When a future default needs a compatibility patch, patched sources use
-`edgebench_source_v2` receipts. `upstream_commit` is the
+Patched sources use `edgebench_source_v2` receipts. `upstream_commit` is the
 fetched remote revision; `compatibility_patch` records the patch ID and SHA-256;
 `commit` is the **effective local derived revision** actually imported and bound
 by native checkpoint provenance. This derived SHA is not an upstream revision
@@ -46,7 +56,7 @@ cohort. Preserve the complete `.edgebench-source` directory for offline reuse or
 exact patched-source replay. Older `edgebench_source_v1` cohorts retain their
 original unmodified source and receipt; preparation never upgrades them.
 
-Bundled patches use one-line unified context and Git's
+The bundled patch uses one-line unified context and Git's
 `diff.suppressBlankEmpty=true` representation. This keeps its full-index file
 identities and changed content readable while avoiding unrelated example text
 and trailing-space context markers in the containing repository. Validation

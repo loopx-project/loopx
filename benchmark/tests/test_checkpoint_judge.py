@@ -39,6 +39,77 @@ def test_disabled_extension_preserves_the_native_route_surface(native_config):
         second.state.judge.close()
 
 
+@pytest.mark.parametrize("score,wire_score", [
+    (float("inf"), "Infinity"), (float("-inf"), "-Infinity"),
+    (float("nan"), "NaN"), (0.0, 0.0), (None, None),
+])
+def test_ordinary_feedback_keeps_failure_zero_and_missing_scores_distinct(
+        native_config, monkeypatch, score, wire_score):
+    import requests
+    from benchmark.edgebench.checkpoint_judge import create_app
+    from benchmark.edgebench.source import active_source_receipt
+    from benchmark.tests.test_checkpoint_controller import server
+    from sforge.harness.feedback_transport import JOURNAL_FILE, payload_sha256
+
+    active_source_receipt()
+    # Exercise ordinary solver feedback, not the checkpoint-only JSON codec.
+    # A broken proxy cannot explain an in-process Judge serialization failure.
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+    app = create_app(native_config)
+    state = app.state.judge
+    try:
+        with server(app) as url, requests.Session() as client:
+            client.trust_env = False
+            token = state.register_session(
+                "fixture", "source", max_agent_submissions=3, submission_cooldown=3600)
+            state.consume_round(token)
+            report = {"score": score, "pass_rate": .5, "valid": False,
+                      "metrics": {"nested": [score, 0.0, None]}}
+            state._record_submission("source", "accepted", "fixture", "agent-1", report, None)
+            state.submissions["accepted"] = {
+                "run_id": "source", "task_id": "fixture", "round": "agent-1",
+                "status": "completed", "report": report, "error": None}
+            before = state.resolve_token(token)
+            original = json.dumps(report, sort_keys=True)
+            relay = before["feedback_relay_id"]
+            delivered = []
+            for operation in ("result/accepted", "history"):
+                host = client.get(url + "/api/v1/" + operation,
+                                  params={"token": token}, timeout=5)
+                response = client.get(url + "/api/v1/feedback/" + relay + "/" + operation,
+                                      timeout=5)
+                assert host.status_code == response.status_code == 200
+                payload = response.json()
+                json.dumps(payload, allow_nan=False)
+                delivered.append(payload)
+                if operation.startswith("result/"):
+                    assert host.json() == payload
+                    assert payload["report"]["score"] == wire_score
+                    assert payload["report"]["metrics"]["nested"] == [wire_score, 0.0, None]
+                else:
+                    assert host.json()["entries"] == payload["entries"]
+                    assert host.json()["best_score"] == payload["best_score"]
+                    assert payload["entries"][0]["score"] == wire_score
+                    for history in (host.json(), payload):
+                        availability = history["agent_submission_availability"]
+                        assert availability["remaining_submissions"] == 2
+                        assert 0 < availability["cooldown_remaining_seconds"] <= 3600
+
+            # Reading feedback must not consume another evaluation or rewrite
+            # the native numeric state used by ranking and checkpoint capture.
+            assert state.resolve_token(token) == before
+            assert json.dumps(state.submissions["accepted"]["report"], sort_keys=True) == original
+            records = [json.loads(line) for line in (
+                native_config.log_dir / "runs/source/fixture" / JOURNAL_FILE
+            ).read_text().splitlines()]
+            responses = [row for row in records if row["record_kind"] == "response"]
+            assert [row["payload_sha256"] for row in responses] == [
+                payload_sha256(payload) for payload in delivered]
+    finally:
+        state.close()
+
+
 def test_capture_retains_consumed_round_history_and_cooldown_without_mutation(native_config):
     from fastapi.testclient import TestClient
     from benchmark.edgebench.checkpoint_judge import create_app, ROUTE
