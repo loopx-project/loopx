@@ -203,7 +203,15 @@ export const goalWorkMapScenario = {
       await rename(hiddenRegistry, authority.registry);
       await drawer.getByRole("button", { name: "重试读取完整要求", exact: true }).click();
       await drawer.getByText(finalRequirement, { exact: true }).waitFor();
-      await page.getByRole("button", { name: /关闭详情/ }).click();
+      await page.getByRole("button", { name: /关闭详情/ }).evaluate(button => {
+        button.click();
+        document.querySelector(".goal-overview-evidence > summary")?.focus();
+      });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+      assert.equal(await page.locator(".goal-overview-evidence > summary").evaluate(
+        summary => document.activeElement === summary), true,
+      "Closing Task details must preserve focus explicitly moved to another control");
+      await page.screenshot({ path: resolve(outputDir, "goal-map-focus-return-desktop.png"), animations: "disabled" });
 
       limits = { omitted_node_count: 3, topology_complete: false };
       const evidence = page.locator(".goal-overview-evidence");
