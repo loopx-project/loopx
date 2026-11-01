@@ -190,9 +190,8 @@ def test_acceptance_observation_does_not_transport_the_large_selected_body(tmp_p
         "text": "Retain this complete requirement. " * 100_000 + "Do not omit this tail.",
         "status": "open", "done": False, "task_class": "advancement_task", "action_kind": "implement",
         "index": 1, "source_section": "Agent Todo", "archive_state": "active", "claimed_by": "agent-a"}
-    from loopx.control_plane.effect_runtime import MAX_REQUEST_BYTES
-
-    assert len(todo["text"].encode()) > MAX_REQUEST_BYTES
+    # The observation must omit unused bodies even if the wire can hold them.
+    assert len(todo["text"].encode()) > 2 * 1024 * 1024
     initialize_canonical_authority(runtime, "large-acceptance-context",
         build_todo_runtime_shadow_projection(goal_id="large-acceptance-context", todos=[todo], handoff_mode="soft_claim"),
         state_path=state, provider=provider)

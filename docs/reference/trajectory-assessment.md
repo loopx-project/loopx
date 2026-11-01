@@ -789,7 +789,7 @@ counter observations are differenced across Turns; summing the cumulative
 part of input, and reasoning is part of output, not another additive cost.
 
 Complete counter histories use the existing private local snapshot transport
-when they exceed the ordinary 2 MiB RPC wire. Only this explicitly allowed
+when they exceed the ordinary [8 MiB RPC wire](canonical-snapshot-pagination.md#shared-rpc-byte-budget). Only this explicitly allowed
 method opts in; reduced snapshots retain the 64 MiB ceiling and digest checks.
 Oversized captures fail explicitly rather than dropping earlier Turns.
 
