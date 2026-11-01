@@ -40,8 +40,8 @@ EFFECT_RUNTIME_READINESS_SCHEMA_VERSION = "loopx_effect_runtime_readiness_v0"
 EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
     "loopx_effect_runtime_startup_error_v0"
 )
-MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
 LOCAL_SNAPSHOT_METHODS = frozenset({
     "todo.read",
@@ -945,6 +945,13 @@ def _stop_effect_runtime(
     }
 
 
+def _encode_rpc_json(value: Mapping[str, Any]) -> bytes:
+    # Count and transmit UTF-8 bytes; lone surrogates retain valid JSON escapes.
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8", errors="backslashreplace",
+    )
+
+
 def _request_with_info(
     info: Mapping[str, Any],
     *,
@@ -974,9 +981,9 @@ def _request_with_info(
             descriptor = os.open(response_sink, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(descriptor)
             request["response_sink"] = str(response_sink)
-            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+            encoded = _encode_rpc_json(request) + b"\n"
             if len(encoded) > MAX_REQUEST_BYTES:
-                params_bytes = json.dumps(dict(params), separators=(",", ":")).encode()
+                params_bytes = _encode_rpc_json(dict(params))
                 if len(params_bytes) > MAX_LOCAL_SNAPSHOT_BYTES:
                     raise EffectRuntimeRejected(
                         "TypeScript Effect runtime local snapshot is oversized",
@@ -992,9 +999,9 @@ def _request_with_info(
                     "path": str(params_path), "byte_count": len(params_bytes),
                     "sha256": hashlib.sha256(params_bytes).hexdigest(),
                 }
-                encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+                encoded = _encode_rpc_json(request) + b"\n"
         else:
-            encoded = (json.dumps(request, separators=(",", ":")) + "\n").encode()
+            encoded = _encode_rpc_json(request) + b"\n"
         if len(encoded) > MAX_REQUEST_BYTES:
             raise EffectRuntimeRejected(
                 "TypeScript Effect runtime request is oversized",

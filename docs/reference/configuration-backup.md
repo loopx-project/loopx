@@ -489,7 +489,7 @@ SQLite gets a 64 MiB process-local [hard heap limit](https://www.sqlite.org/prag
 this is why that verifier is not dispatched in the shared Effect daemon. Views
 and virtual tables cannot masquerade as authority tables. WAL-mode copies and
 unsupported/service-owned providers remain unknown and need their existing
-owner; PostgreSQL is never contacted. The normal 2 MiB RPC wire is unchanged;
+owner; PostgreSQL is never contacted. The shared [8 MiB ordinary RPC wire](canonical-snapshot-pagination.md#shared-rpc-byte-budget) remains bounded;
 only the two complete-manifest checks opt into the existing 64 MiB private-file
 transport. These unchanged bounds are approved for local POSIX File/SQLite
 inert inspection by the [recorded maintainer decision](../architecture/rfcs/complete-state-recovery-v0.md#m1-capacity-default-decision).

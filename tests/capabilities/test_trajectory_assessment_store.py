@@ -1156,7 +1156,7 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
     )
     assert (
         len(json.dumps(params, separators=(",", ":")).encode())
-        > effect_runtime.MAX_REQUEST_BYTES
+        > 2 * 1024 * 1024  # Keep the original complete 4,500-Turn counter history.
     )
     registry = sources.parent / "registry.json"
     registry.write_text('{"projects":{}}')
@@ -1220,7 +1220,9 @@ def test_large_usage_real_cli_register_readback_and_replay(pack, monkeypatch):
     assert "solver_usage" not in inspect_pack(**scope, pack_id=old["pack_id"])
     assert view["job"] is None and view["result"] is None
 
-    # The method opts into a bounded channel, not a larger ordinary RPC wire.
+    # Keep the original 2 MiB refusal and reduced private-channel negative.
+    # The complete counter history above qualifies the current default wire.
+    monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 2 * 1024 * 1024)
     with pytest.raises(
         effect_runtime.EffectRuntimeRejected, match="request is oversized"
     ):

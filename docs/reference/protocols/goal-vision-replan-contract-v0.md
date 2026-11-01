@@ -1007,7 +1007,7 @@ configured, the current agent vision, and the local source binding. A replan
 obligation covers the full Todo frontier. Archived dependencies remain inputs.
 Large local bases use digest-checked private files across the Python/TypeScript
 runtime boundary, including the response; the CLI still returns the complete
-basis. The 2 MiB default RPC guard remains for other effects. File size is
+basis. Other effects retain the shared [8 MiB RPC guard](../canonical-snapshot-pagination.md#shared-rpc-byte-budget). File size is
 bounded and an unverifiable response after a possible commit is ambiguous,
 so the caller reads the exact receipt before retrying any mutation. Neither
 transport nor a future paged presentation may silently omit a basis component.
