@@ -1078,6 +1078,9 @@ class LarkPrivateConversations:
         elif phase_state.get("started"):
             # A crash between provider write and its receipt is ambiguous. Keep
             # the original source recoverable; never resend blindly.
+            phase_state["blocker"] = "provider_delivery_receipt_unknown"
+            record["deliveries"][phase] = phase_state
+            _atomic_write_json(path, record)
             return False
         else:
             def attempt(value: Any) -> None:
@@ -1493,6 +1496,29 @@ class LarkPrivateConversations:
                 return
             self._feedback(path, record, inbox=lambda: self._inbox(record, observation=selected["observation"]))
 
+    def _reconcile_native_result(self, path: Path, native: dict[str, Any]) -> int:
+        # Use the original reply worker and Inbox intent/readback owner. This
+        # separate phase preserves the already delivered failure notice.
+        with exclusive_file_lock(path, operation="deliver_private_chat_request"):
+            record = _read_json(path)
+            if any(record.get(key) != native.get(key) for key in
+                   ("request_ref", "binding_id", "source", "session_id", "turn_id")):
+                return 0
+            text = self.core.native_result_reply(record["request_ref"])
+            if text is None:
+                return 0
+            recovered = native["native_result_recovery"]
+            def authorized() -> bool:
+                return self.core.native_result_reply(record["request_ref"]) == text
+
+            delivery_id = hashlib.sha256(recovered["message_id"].encode()).hexdigest()
+            if not self._deliver(path, record, f"native_result.{record['turn_id']}", text,
+                    inbox=lambda: self._inbox(record), authorization_check=authorized,
+                    reply_placement="chat_root", delivery_id=delivery_id, finalize_source=False):
+                return 0
+            self.core.record_native_result_delivery(record["request_ref"], message_id=recovered["message_id"])
+            return 1
+
     def reconcile_request(self, path: Path) -> int:
         if path.parent == self.root / "web-projections":
             return self._reconcile_web_projection(path)
@@ -1513,6 +1539,8 @@ class LarkPrivateConversations:
             # the old Turn and every frozen/ambiguous provider attempt.
             recovered = self.core.recover_failed_request(row["request_ref"],
                 source_observation=lambda selected: self._recovery_source_observation(row, selected))
+            if recovered.get("native_result_recovery"):
+                return self._reconcile_native_result(path, recovered)
             if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
                     and recovered.get("turn_id") != row["turn_id"]):
                 with exclusive_file_lock(path, operation="deliver_private_chat_request"):

@@ -18,6 +18,75 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("native terminal recovery adopts a result without Turn admission or lost failure provenance", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24);
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity",
+    upstream_mode: "default", status: "ready", upstream_thread_id: "native", active_turn_id: null,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+  const failed = {session_id: "original", turn_id: "failed", client_turn_id: `external-${ref}`, message: "Original request",
+    status: "failed", delta_count: 1, response: null, error_code: "antigravity_rpc_error",
+    started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:00:10Z"};
+  const proof = {thread_id: "native", request_ref: ref, execution_id: "original-execution",
+    input_created_at: "2026-01-01T00:00:05Z", start_step_index: 4, total_steps: 8,
+    input_sha256: "1".repeat(64), answer_sha256: "2".repeat(64),
+    latest_input_verified: true, normal_terminal_verified: true,
+    response: {schema_version: "loopx_chat_agent_response_v0", message: "Existing answer", proposals: [], gate: null}};
+  const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+    message: "Original request", origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+    binding: selected, current_session: session, context_recovery: {version: 21, failed_turn: failed,
+      steering_observed: false, stop_observed: false, attachments_present: false, source_verified: true, native_observation: proof}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.operation, "adopt_native_result");
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.client_turn_id, undefined);
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {native_observation: {...proof, thread_id: "other"}},
+    {native_observation: {...proof, request_ref: "a".repeat(24)}},
+    {native_observation: {...proof, normal_terminal_verified: false}},
+    {native_observation: {...proof, latest_input_verified: false}},
+    {native_observation: {...proof, input_created_at: "2026-01-02T00:00:00Z"}},
+    {failed_turn: {...failed, client_turn_id: "another-input"}},
+    {failed_turn: {...failed, error_code: "host_gate"}}, {failed_turn: {...failed, status: "interrupted"}}]) {
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, false);
+  }
+  for (const change of [{status: "closed"}, {session_mode: "attached_host"}, {agent_id: "codex"}]) {
+    assert.equal(planBoundConversationRequest({...packet, current_session: {...session, ...change}}).recovery_candidate, false);
+  }
+  assert.throws(() => planBoundConversationRequest({...packet,
+    binding: {...selected, audience: "group", group_refs: ["a".repeat(24)]}}), /group Chat requires a native project executor/);
+  const newRef = "9".repeat(24);
+  assert.equal(planBoundConversationRequest({...packet, request: {...packet.request, request_ref: newRef},
+    context_recovery: {...packet.context_recovery, failed_turn: {...failed, client_turn_id: `external-${newRef}`},
+      native_observation: {...proof, request_ref: newRef}}}).recovery_eligible, true);
+  const adopted = {turn_id: "failed", message_id: "native.failed.recovered", message_text: "Frozen answer",
+    native_observation: proof, delivery_verified: true};
+  assert.equal(planBoundConversationRequest({...packet,
+    request: {...packet.request, native_result_recovery: {...adopted, delivery_verified: false}}}).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest({...packet,
+    request: {...packet.request, native_result_recovery: {...adopted, delivery_verified: false, message_id: "other"}}}).recovery_eligible, false);
+  const delivered = {...packet.request, native_result_recovery: adopted};
+  assert.equal(planBoundConversationRequest({...packet, request: delivered}).recovery_candidate, false);
+  assert.equal(planBoundConversationRequest({request: delivered, current_session: session,
+    pending_observation: {turn: failed, stop_observed: false}}).pending, false);
+  const incomplete = {...delivered, native_result_recovery: {...adopted,
+    native_observation: {...proof, response: {...proof.response, gate: {kind: "response_metadata_invalid"}}}}};
+  assert.equal(planBoundConversationRequest({request: incomplete, current_session: session,
+    pending_observation: {turn: failed, stop_observed: false}}).pending, true);
+  const unfinished = {...delivered, native_result_recovery: {...adopted,
+    native_observation: {...proof, response: {...proof.response,
+      unfinished_work: {remaining: "Still owed", dependency: "Original worker", effects_settled: true}}}}};
+  assert.equal(planBoundConversationRequest({request: unfinished, current_session: session,
+    pending_observation: {turn: failed, stop_observed: false}}).pending, true);
+  assert.equal(planBoundConversationRequest({request: packet.request, current_session: session,
+    pending_observation: {turn: {...failed, status: "completed", response: {...proof.response,
+      gate: {kind: "response_metadata_invalid", summary: "Action metadata was not admitted"}}}, stop_observed: false}}).pending, true);
+});
+
 for (const endpoint of ["codex", "antigravity", "kiro-cli"]) {
   test(`retained steward identity permits bound reads after selecting ${endpoint}`, () => {
     const actor = {schema_version: "loopx_steward_managed_actor_v0",

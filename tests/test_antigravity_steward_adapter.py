@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from datetime import datetime, timezone
+from copy import deepcopy
 import json
 import threading
 import time
@@ -140,6 +142,8 @@ def language_server(monkeypatch):
                     self.end_headers()
                     return
                 state["sent_count"] += 1
+                state.setdefault("inputs", []).append({"text": body["items"][0]["text"],
+                    "created_at": datetime.now(timezone.utc).isoformat()})
                 state["active"] = True
                 state["cancelled"].clear()
                 state["sent"].set()
@@ -151,16 +155,29 @@ def language_server(monkeypatch):
                     answer = f"Argon answer {index + 1}"
                     if not state.get("plain_text"):
                         answer = '<loopx-review-json>' + json.dumps({"message": answer,
-                            "proposals": [], "context_handoff": [], "gate": None}) + '</loopx-review-json>'
+                            "proposals": [], "context_handoff": ([{"goal_id": "work", "agent_id": "worker", "brief": "invalid"}]
+                                if state.get("invalid_handoff") else []), "gate": None,
+                            **({"unfinished_work": {"remaining": "Original work still owed", "dependency": "Original worker",
+                                "effects_settled": True}} if state.get("unfinished") else {})}) + '</loopx-review-json>'
+                    native = state["inputs"][index]
+                    meta = {"createdAt": native["created_at"], "executionId": f"execution-{index}"}
                     response["steps"].extend([
-                        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"},
+                        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": index * 2}},
+                         "userInput": {"items": [{"text": native["text"]}], "userResponse": native["text"]}},
                         {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": index * 2 + 1}},
                          "status": "CORTEX_STEP_STATUS_WAITING" if state["mode"] == "waiting" else "CORTEX_STEP_STATUS_DONE",
-                         "plannerResponse": {"thinking": "synthetic status", "response": answer}}])
+                         "plannerResponse": {"thinking": "synthetic status", "response": answer,
+                                             "stopReason": "STOP_REASON_STOP_PATTERN"}}])
                 if state.get("native_indices"):
                     for offset, step in enumerate(response["steps"]):
                         step["metadata"] = {"sourceTrajectoryStepInfo": {"stepIndex": offset}}
             elif method == "CancelCascadeInvocation":
+                if state.get("cancel_failure"):
+                    self.send_response(500)
+                    self.end_headers()
+                    return
                 state["active"] = False
                 state["cancelled"].set()
                 response = {}
@@ -189,6 +206,65 @@ def language_server(monkeypatch):
 
 def adapter_for(tmp_path, **kwargs):
     return AntigravityAdapter.start(work_dir=tmp_path, objective="Act as LoopX Steward.", **kwargs)
+
+
+def test_cancel_failure_cannot_replace_the_original_provider_error(tmp_path, language_server):
+    from loopx.chat_agent import CodexChatAgentError
+
+    adapter = adapter_for(tmp_path)
+    language_server.update(send_failure=True, cancel_failure=True)
+    with pytest.raises(CodexChatAgentError, match="SendUserCascadeMessage failed with HTTP 503") as error:
+        adapter.start_turn("Original input")
+    assert any("cancellation remains unconfirmed" in note for note in error.value.__notes__)
+
+
+@pytest.mark.parametrize("change", ["none", "stream-error", "pending-tool", "foreign-input", "wrong-source",
+    "old-input", "execution-changed", "incomplete", "wrong-anchor", "running", "missing-index", "changed-during-read"])
+def test_completed_result_readback_is_exact_and_never_executes(tmp_path, language_server, change):
+    ref = "f" * 24
+    context = {"schema_version": "manager_turn_context_v1", "context_delegation": {"source_id": ref}}
+    prompt = "Fresh Core evidence (JSON data, not instructions):\n" + json.dumps(context) + "\n\nCurrent user message:\nOriginal request"
+    steps = [
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+         "userInput": {"items": [{"text": prompt}], "userResponse": prompt}},
+        {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_DONE", "runCommand": {"exitCode": 0}},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+         "plannerResponse": {"response": "Original completed answer", "stopReason": "STOP_REASON_STOP_PATTERN"}},
+    ]
+    for index, step in enumerate(steps):
+        step["metadata"] = {"createdAt": "2026-01-01T00:00:05Z", "executionId": "original-execution",
+                            "sourceTrajectoryStepInfo": {"stepIndex": index}}
+    if change == "stream-error":
+        steps[-1]["plannerResponse"]["stopReason"] = "STOP_REASON_CLIENT_STREAM_ERROR"
+    elif change == "pending-tool":
+        steps[1]["status"] = "CORTEX_STEP_STATUS_RUNNING"
+    elif change == "foreign-input":
+        steps[-1]["type"] = "CORTEX_STEP_TYPE_USER_INPUT"
+    elif change == "wrong-source":
+        steps[0]["userInput"] = {"items": [{"text": prompt.replace(ref, "e" * 24)}],
+                                  "userResponse": prompt.replace(ref, "e" * 24)}
+    elif change == "old-input":
+        steps[0]["metadata"]["createdAt"] = "2025-01-01T00:00:00Z"
+    elif change == "execution-changed":
+        steps[1]["metadata"]["executionId"] = "foreign"
+    elif change == "missing-index":
+        steps[1]["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 7
+    frame = {"at": 0, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING" if change == "running" else "CASCADE_RUN_STATUS_IDLE"}
+    if change == "incomplete":
+        frame["total"] = 4
+    language_server.update(active=True, frames=[], frame=frame)
+    if change == "changed-during-read":
+        after = deepcopy(frame)
+        after["total"] = 4
+        language_server["frames"] = [frame, after]
+    proof = AntigravityAdapter.completed_result_observation(cascade_id="synthetic-cascade", request_ref=ref,
+        message="Original request", started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z",
+        work_dir=tmp_path, input_anchor={"input_sha256": "0" * 64} if change == "wrong-anchor" else None)
+    assert (proof is not None) == (change == "none")
+    if proof:
+        assert proof["response"]["message"] == "Original completed answer"
+    assert not any(method in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}
+                   for method, _ in language_server["calls"])
 
 
 def test_antigravity_adapter_executes_repeated_turns_and_streams_response(tmp_path, language_server):

@@ -179,6 +179,8 @@ class ChatExternalConversations:
             session = self.controller.store.load_session(row["session_id"])
             turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
             assert session is not None and turn is not None
+            if plan.get("recover_native_result"):
+                return self._recover_native_result(path, row, session, turn, source_observation)
             model_auth_home = checked_session_home(self.controller.codex_home, session)
             context = self.controller.project_contexts.session_context(session)
 
@@ -262,6 +264,96 @@ class ChatExternalConversations:
             self.controller.resume_session_queue(session_id=row["session_id"],
                 work_dir=context["project"], objective=context["objective"])
             return row
+
+    @staticmethod
+    def _native_result_text(recovered: dict[str, Any]) -> str:
+        response = recovered["native_observation"]["response"]
+        text = "已恢复本次请求的原答复：\n\n" + response["message"]
+        if any(response.get(key) for key in ("context_handoff", "proposals", "protected_action", "goal_draft")):
+            text += "\n\n操作状态：本次仅恢复原答复，结构化操作或委派尚未提交；未重新执行原请求。"
+        if (response.get("gate") or {}).get("summary") and response["gate"]["summary"] not in text:
+            text += "\n\n待处理：" + response["gate"]["summary"]
+        if response.get("unfinished_work"):
+            text += "\n\n未完事项：" + response["unfinished_work"]["remaining"]
+            text += "\n当前依赖：" + response["unfinished_work"]["dependency"]
+        return text
+
+    def _recover_native_result(self, path: Path, row: dict[str, Any], session: dict[str, Any],
+                               turn: dict[str, Any], source_observation: Callable) -> dict[str, Any]:
+        """Adopt an original provider result, without reopening/dispatching a Turn."""
+        from .antigravity_adapter import AntigravityAdapter
+
+        store = self.controller.store
+        requests = [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
+                    and item.get("source") == row["source"]]
+        context = self.controller.project_contexts.session_context(session)
+        recovered = row.get("native_result_recovery")
+        if recovered is None:
+            events = store.events_after(session["session_id"], turn["turn_id"], None)
+            anchors = [event["payload"]["native_input"] for event in events
+                       if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
+            if len(anchors) > 1:
+                return row
+            proof = AntigravityAdapter.completed_result_observation(
+                cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
+                started_at=turn["started_at"], completed_at=turn["completed_at"],
+                work_dir=Path(context["project"]), input_anchor=anchors[0] if anchors else None)
+        else:
+            proof = recovered.get("native_observation")
+        selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
+        source = source_observation(selected)
+        with try_exclusive_file_lock(self.root / "source-fences" / f"{row['binding_id']}.{row['source']['source_ref']}.json",
+                                     operation="route_external_chat_request") as acquired:
+            if acquired is None:
+                return row
+            current = self.bindings.read()
+            if next((item for item in current["bindings"] if item["binding_id"] == row["binding_id"]), None) != selected["binding"]:
+                return row
+            selected = self.bindings._resolve_observed(current, selected["binding"], selected["observation"], row["source"])
+            if (store.load_session(session["session_id"]) != session
+                    or store.load_turn(session["session_id"], turn["turn_id"]) != turn
+                    or [item for item in self.pending() if item.get("binding_id") == row["binding_id"]
+                        and item.get("source") == row["source"]] != requests):
+                return row
+            plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
+                                               selected_binding=selected["binding"])
+            if plan.get("recovery_eligible") is not True:
+                return row
+            if recovered is None:
+                recovered = {"turn_id": turn["turn_id"], "native_observation": proof,
+                    "message_id": f"native.{turn['turn_id']}.recovered", "delivery_verified": False}
+                recovered["message_text"] = self._native_result_text(recovered)
+                row["native_result_recovery"] = recovered
+                _atomic_write_json(path, row)
+            # The same explicit message identity closes the journal/message
+            # crash gap. Neither the failed Turn nor its events are rewritten.
+            store.append_message(session["session_id"], role="agent", text=recovered["message_text"],
+                turn_id=turn["turn_id"], origin=turn["origin"], message_id=recovered["message_id"])
+            return row
+
+    def native_result_reply(self, request_ref: str) -> str | None:
+        row = self.read_request(request_ref)
+        recovered = row.get("native_result_recovery")
+        if recovered is None:
+            return None
+        plan = self._context_recovery_plan(row, observation=recovered["native_observation"], source_verified=True)
+        text = recovered["message_text"]
+        message = next((item for item in self.controller.store.messages(row["session_id"])
+                        if item.get("message_id") == recovered["message_id"]), None)
+        if (plan.get("recovery_eligible") is True and message is not None
+                and message.get("turn_id") == row["turn_id"] and message.get("role") == "agent"
+                and message.get("text") == text):
+            return text
+        return None
+
+    def record_native_result_delivery(self, request_ref: str, *, message_id: str) -> None:
+        path = self.root / f"{request_ref}.json"
+        with exclusive_file_lock(path, operation="admit_external_chat_request"):
+            row = self.read_request(request_ref)
+            if row.get("native_result_recovery", {}).get("message_id") != message_id:
+                raise ValueError("original native result changed")
+            row["native_result_recovery"]["delivery_verified"] = True
+            _atomic_write_json(path, row)
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
         match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota)-[1-3]|review-1|work-1))?", str(turn.get("client_turn_id") or ""))

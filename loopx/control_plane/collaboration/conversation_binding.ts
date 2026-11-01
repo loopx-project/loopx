@@ -461,9 +461,20 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && turn?.client_turn_id === reservation.client_turn_id
       && gate !== null && typeof gate === "object" && !Array.isArray(gate)
       && typeof (gate as JsonObject).kind === "string" && typeof (gate as JsonObject).summary === "string";
+    const invalidMetadata = gate !== null && typeof gate === "object" && !Array.isArray(gate)
+      && (gate as JsonObject).kind === "response_metadata_invalid" && typeof (gate as JsonObject).summary === "string";
     const unfinished = turn?.status === "completed" && response !== null
-      && (unfinishedProjectWork(response) !== null || quotaGate);
-    return {pending: row.command === null && row.status === "accepted"
+      && (unfinishedProjectWork(response) !== null || quotaGate || invalidMetadata);
+    const recovered = row.native_result_recovery == null ? null
+      : requireJsonObject(row.native_result_recovery, "recovered native result");
+    const native = recovered?.native_observation as JsonObject | undefined;
+    const result = native?.response as JsonObject | undefined;
+    const returned = recovered?.delivery_verified === true && recovered.turn_id === row.turn_id
+      && recovered.message_id === `native.${row.turn_id}.recovered`
+      && typeof recovered.message_text === "string" && recovered.message_text.length > 0
+      && result != null && !["gate", "context_handoff", "protected_action", "goal_draft", "unfinished_work"].some(key => result[key])
+      && Array.isArray(result.proposals) && result.proposals.length === 0;
+    return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (unfinished || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
@@ -543,13 +554,14 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (version < 1) throw new EffectRuntimeRequestError("invalid context representation version");
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   if (!current || row.command !== null || row.status !== "accepted" || row.delivery_verified !== true
-      || row.agent_target != null || current.session_id !== row.session_id || current.agent_id !== "codex"
-      || current.upstream_mode !== "chat" || current.status === "closed"
+      || row.agent_target != null || current.session_id !== row.session_id
+      || !["codex", "antigravity"].includes(String(current.agent_id))
+      || current.upstream_mode !== (current.agent_id === "antigravity" ? "default" : "chat") || current.status === "closed"
       || current.session_mode === "attached_host") return no;
   const selected = binding(params.binding);
   if (selected.audience === "group") return no;
   const steward = selected.context_kind === "steward";
-  if (selected.executor_endpoint_id !== "codex" || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
+  if (selected.executor_endpoint_id !== current.agent_id || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
   const saved = steward ? normalizeStewardContext(current.steward_context)
     : normalizeProjectContext(current.project_context);
   const source = requireJsonObject(row.source, "original conversation source");
@@ -560,6 +572,42 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
+  if (current.agent_id === "antigravity") {
+    // Result adoption has no admission/dispatch authority. Keep the failed
+    // Turn and original failure delivery, even when native tools ran.
+    if (!steward || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+        || failed.client_turn_id !== `external-${row.request_ref}` || failed.status !== "failed"
+        || failed.response != null || failed.message !== row.message || row.context_recovery != null
+        || !["response_timeout", "antigravity_rpc_error", "antigravity_transport_error",
+          "upstream_transport_failure", "server_restarted"].includes(String(failed.error_code))
+        || recovery.attachments_present !== false || recovery.steering_observed !== false
+        || recovery.stop_observed !== false) return no;
+    const adopted = row.native_result_recovery == null ? null
+      : requireJsonObject(row.native_result_recovery, "adopted native result");
+    if (adopted?.delivery_verified === true) return no;
+    const candidate = {...no, operation: "adopt_native_result", recovery_candidate: true,
+      recover_native_result: true, failed_turn_id: failed.turn_id, session_id: current.session_id};
+    const proof = recovery.native_observation == null ? null
+      : requireJsonObject(recovery.native_observation, "native terminal readback");
+    if (proof === null) return candidate;
+    const created = Date.parse(String(proof.input_created_at));
+    const start = Date.parse(String(failed.started_at)), end = Date.parse(String(failed.completed_at));
+    const response = proof.response == null ? null : requireJsonObject(proof.response, "native result response");
+    return {...candidate, recovery_eligible: recovery.source_verified === true
+      && proof.thread_id === current.upstream_thread_id && proof.request_ref === row.request_ref
+      && typeof proof.execution_id === "string" && proof.execution_id.length > 0
+      && proof.latest_input_verified === true && proof.normal_terminal_verified === true
+      && Number.isFinite(created) && created >= start && created <= end
+      && Number.isSafeInteger(proof.start_step_index) && Number(proof.start_step_index) >= 0
+      && Number.isSafeInteger(proof.total_steps) && Number(proof.total_steps) > Number(proof.start_step_index) + 1
+      && [proof.input_sha256, proof.answer_sha256].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
+      && response?.schema_version === "loopx_chat_agent_response_v0"
+      && typeof response.message === "string" && response.message.trim().length > 0
+      && (adopted === null || adopted.turn_id === failed.turn_id
+        && adopted.message_id === `native.${failed.turn_id}.recovered`
+        && typeof adopted.message_text === "string" && adopted.message_text.length > 0
+        && isDeepStrictEqual(adopted.native_observation, proof))};
+  }
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "reserved context recovery");
   // One completed-work continuation is terminal for this request, including
   // when it later fails. It cannot fall through to routing/quota retries.
