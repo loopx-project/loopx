@@ -216,7 +216,7 @@ export const configurationBackupScenario = {
       let contextSwitch = await openContextSettings();
       await page.screenshot({path: resolve(outputDir, "context-default-on-desktop.png"), animations: "disabled"});
       assert.equal(await contextSwitch.isChecked(), true, "Unconfigured Codex must show its effective on default");
-      await page.getByText("On by default for Codex; host readiness and actual use are not verified.", {exact: true}).waitFor();
+      await page.getByText("Default on; native setup and use unverified.", {exact: true}).waitFor();
       await page.setViewportSize({width: 390, height: 844});
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
       await contextSwitch.scrollIntoViewIfNeeded();
@@ -235,7 +235,7 @@ export const configurationBackupScenario = {
       assert.equal((await storedSettings()).namespaces.context_delivery.mode, "off", "Failed apply must preserve saved off");
       await page.unroute(applyRoute);
       await contextSwitch.click();
-      await page.getByText("Codex preference is on; host readiness and actual use are not verified.", {exact: true}).waitFor();
+      await page.getByText("On; native setup and use unverified.", {exact: true}).waitFor();
       const afterSettings = await storedSettings();
       assert.equal(afterSettings.namespaces.context_delivery.mode, "on");
       assert.equal(afterSettings.namespaces.goal_storage.new_goal_provider, "sqlite", "The opt-out/on transaction must preserve sibling settings");
