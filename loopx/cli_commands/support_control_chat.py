@@ -7,6 +7,7 @@ retains adapter timeout policy and server/transport lifecycle ownership.
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,9 @@ def chat_server_options(
         explicit_global_registry(args.runtime_root, registry_path=registry_path)
         if args.global_registry else registry_path
     )
+    hard_timeout = float(args.hard_timeout_seconds)
+    if not math.isfinite(hard_timeout) or hard_timeout < 0:
+        raise ValueError("hard timeout must be a nonnegative finite number (0 disables it)")
     scan_roots = [Path(item).expanduser() for item in args.scan_path]
     return {
         "project_workspace_grant": args.project_workspace_grant,
@@ -55,7 +59,7 @@ def chat_server_options(
             if args.startup_timeout_seconds is not None else None
         ),
         "idle_timeout_sec": max(0.1, float(args.idle_timeout_seconds)),
-        "hard_timeout_sec": max(0.1, float(args.hard_timeout_seconds)),
+        "hard_timeout_sec": hard_timeout if hard_timeout else None,
         "assets_dir": Path(args.assets_dir).expanduser() if args.assets_dir else None,
         "open_browser": not bool(args.no_open),
         "verbose": bool(args.verbose),
@@ -96,8 +100,8 @@ def register_chat_and_dashboard_commands(
     chat_parser.add_argument(
         "--hard-timeout-seconds",
         type=float,
-        default=900.0,
-        help="Absolute maximum seconds for one Agent turn.",
+        default=0.0,
+        help="Absolute maximum seconds for one interactive Agent turn; 0 (default) disables it. Idle and startup limits remain.",
     )
     chat_parser.add_argument(
         "--assets-dir",

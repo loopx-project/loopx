@@ -972,6 +972,16 @@ Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
 
+**Interactive lifetime checkpoint.** Ordinary Codex/ACP Chat turns have no
+implicit absolute cutoff while their existing idle/startup checks and Stop
+remain active. Accepted queued input has no default TTL; explicitly requested
+limits, queue capacity, source validation and bounded managed-host segments keep
+their owners. Synthetic long-activity, explicit-limit, idle, queue and service
+configuration tests qualify this slice. Existing installed settings and immutable
+old failures are retained; installed activation and effect-aware recovery of an
+original timed-out request remain separate acceptance, not inferred replay.
+
+
 **Bound-conversation status presentation.** The shared display renderer leads
 with canonical execution/recovery state, project and queue/permission facts;
 the Lark adapter reserves full commands and diagnostics for help, retaining a
