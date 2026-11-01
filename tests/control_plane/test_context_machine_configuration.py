@@ -76,7 +76,7 @@ def test_machine_catalog_discovers_context_delivery_without_activation(tmp_path)
     assert len(contexts) == 1
     assert contexts[0]["schema_versions"] == [CONTEXT_DELIVERY_MACHINE_SCHEMA]
     assert contexts[0]["configuration_template"] == {
-        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off",
+        "schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on",
     }
     assert not registry.exists() and not (runtime / "machine/configuration.json").exists()
     assert not (runtime / "context-delivery").exists()
@@ -194,9 +194,9 @@ def test_inherited_on_rejects_unknown_or_unsupported_before_admission(tmp_path, 
 
 @pytest.mark.parametrize("profile", ["codex_app", "benchmark", "codex_app_ssh_goal"])
 @pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
-def test_native_configuration_inherits_declared_scenarios_and_later_off(tmp_path, monkeypatch, profile):
+def test_native_configuration_defaults_on_and_later_explicit_off(tmp_path, monkeypatch, profile):
     registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
-    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    assert not (runtime / "machine/configuration.json").exists()
     if profile == "benchmark":
         monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
         monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
@@ -220,8 +220,9 @@ def test_native_configuration_inherits_declared_scenarios_and_later_off(tmp_path
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("stored_mode", [None, "on"])
 @pytest.mark.skipif(os.name != "posix", reason="Native continuity uses POSIX private directories and locks")
-def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmission(tmp_path, monkeypatch, provider):
+def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmission(tmp_path, monkeypatch, provider, stored_mode):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     monkeypatch.setenv("CODEX_THREAD_ID", "machine-context-session")
     monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
@@ -229,7 +230,10 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     _initialize_fixture_authority(project, runtime, provider=provider)
     state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     original_state = state.read_bytes()
-    assert configure(registry, runtime, tmp_path, "on")[0] == 0
+    if stored_mode is not None:
+        assert configure(registry, runtime, tmp_path, stored_mode)[0] == 0
+    else:
+        assert not (runtime / "machine/configuration.json").exists()
     code, setup = _run_cli(registry, runtime, "quota", "context-config", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, cwd=project)
     assert code == 0, setup
@@ -269,11 +273,18 @@ def test_machine_on_reaches_real_guard_and_same_capture_readback_without_readmis
     code, warm = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and warm["mode"] == "delta", warm
     complete_reader(warm)
-    old_generation = read_context_read_reference(warm["reference_file"])[1]["navigation"]["target"]["continuity_generation"]
-    old_configuration = (runtime / "machine/configuration.json").read_bytes()
+    old_generation = read_context_read_reference(
+        warm["reference_file"]
+    )[1]["navigation"]["target"].get("continuity_generation")
+    configuration_file = runtime / "machine/configuration.json"
+    old_configuration = configuration_file.read_bytes() if configuration_file.exists() else None
+    assert (old_configuration is None) is (stored_mode is None)
     assert configure(registry, runtime, tmp_path, "off")[0] == 0
     assert configure(registry, runtime, tmp_path, "on")[0] == 0
-    assert (runtime / "machine/configuration.json").read_bytes() == old_configuration
+    if old_configuration is not None:
+        assert configuration_file.read_bytes() == old_configuration
+    else:
+        assert json.loads(configuration_file.read_text())["namespaces"]["context_delivery"]["mode"] == "on"
     code, fresh = _run_cli(registry, runtime, *args, cwd=project)
     assert code == 0 and fresh["mode"] == "full", fresh
     fresh = read_context_read_reference(fresh["reference_file"])[1]["navigation"]
@@ -370,11 +381,13 @@ def test_explicit_on_unknown_host_fails_before_first_use_directory_creation(tmp_
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
 @pytest.mark.skipif(os.name != "posix", reason="Native benchmark worker qualification uses POSIX isolation")
-@pytest.mark.parametrize("provider,worker_mode,machine_on", [
-    ("file", None, False), ("file", None, True),
-    ("sqlite", None, False), ("sqlite", None, True), ("sqlite", "off", True),
+@pytest.mark.parametrize("provider,worker_mode,machine_on,transport_ready", [
+    ("file", "off", False, True), ("file", "off", True, True),
+    ("sqlite", "off", False, True), ("sqlite", "off", True, True),
+    ("file", None, False, True), ("sqlite", None, False, True),
+    ("file", None, False, False), ("sqlite", None, False, False),
 ])
-def test_native_worker_default_off_isolates_machine_on(tmp_path, monkeypatch, provider, worker_mode, machine_on):
+def test_native_worker_default_on_and_explicit_off_isolation(tmp_path, monkeypatch, provider, worker_mode, machine_on, transport_ready):
     from benchmark.runtime.worker import run_once
     from tests.control_plane.codex_checkpoint_fixture import local_inference_provider
     from tests.control_plane.test_codex_context_boundary import _input_text, _native_fixture
@@ -397,6 +410,10 @@ def test_native_worker_default_off_isolates_machine_on(tmp_path, monkeypatch, pr
         OPENAI_API_KEY="synthetic-loopback-only", LOOPX_CODEX_TURN_TIMEOUT_SEC="60", LOOPX_USAGE_PING="0")
     if worker_mode is not None:
         env["LOOPX_CONTEXT_DELIVERY"] = worker_mode
+    if not transport_ready:
+        def unavailable(*_args):
+            raise ValueError("Fixture native hooks unavailable")
+        monkeypatch.setattr("benchmark.runtime.context_delivery.prepare_context_delivery", unavailable)
     observed, errors = [], []
     saved = workspace / "original-guard.json"
 
@@ -404,16 +421,41 @@ def test_native_worker_default_off_isolates_machine_on(tmp_path, monkeypatch, pr
         try:
             if number == 1:
                 body = _input_text(request)
-                assert "context-project" not in body
                 command = next(line.strip() for line in body.splitlines() if " quota should-run " in line)
                 turn_assignment = next(line.strip() for line in body.splitlines() if line.startswith("LOOPX_TURN="))
                 observed.append(shlex.split(turn_assignment)[0].split("=", 1)[1])
+                if worker_mode is None and transport_ready:
+                    assert "--context-delivery on" in command
+                if not transport_ready:
+                    # An ordinary guard may omit presentation flags. The actual
+                    # native tool environment must still retain runtime off.
+                    words = shlex.split(command)
+                    if "--context-delivery" in words:
+                        index = words.index("--context-delivery")
+                        # Keep the original shell quoting and $LOOPX_TURN
+                        # expansion while omitting only this presentation flag.
+                        command = command.replace("--context-delivery " + words[index + 1], "", 1)
                 return {"type": "function_call", "id": "guard-call", "call_id": "guard-call",
                     "name": "exec_command", "arguments": json.dumps({
                         "cmd": turn_assignment + "\n" + command + " > " + shlex.quote(str(saved)),
                         "max_output_tokens": 1000})}
             decision = json.loads(saved.read_text())
-            assert decision["ok"] and decision["should_run"], decision
+            if worker_mode is None and transport_ready:
+                assert decision["mode"] == "full", decision
+                # Independent byte readback checks the current capture. This
+                # is not evidence that the model retained its whole input.
+                command = decision["recovery"]["command"]
+                content = ""
+                while command:
+                    page = json.loads(subprocess.check_output(shlex.split(command), text=True, cwd=project))
+                    content += page["content"]
+                    if page["eof"]:
+                        break
+                    command = page["next_command"]
+                decision = json.loads(content)
+            assert decision.get("ok") is True and decision.get("should_run") is True, json.dumps({
+                key: decision.get(key) for key in ("ok", "should_run", "error", "error_code", "error_detail", "reason")
+            })
             assert decision["goal_id"] == GOAL_ID
             assert decision["heartbeat_receipt"]["turn_instance_id"] == observed[0]
             return message
@@ -430,6 +472,13 @@ def test_native_worker_default_off_isolates_machine_on(tmp_path, monkeypatch, pr
     assert not errors and len(requests) == 2, errors
     assert env == original, "Resolved worker defaults must not mutate caller/frozen input"
     assert _heartbeat_receipt_count(runtime, observed[0]) == 1 and _spend_run_count(runtime) == 0
-    assert "context_transport" not in result
-    assert not (runtime / "context-delivery").exists() and not (home / "loopx-context").exists()
-    assert not (home / "hooks.json").exists()
+    if worker_mode == "off" or not transport_ready:
+        if worker_mode == "off":
+            assert "context_transport" not in result
+        else:
+            assert result["context_transport"]["available"] is False
+        assert not (runtime / "context-delivery").exists() and not (home / "loopx-context").exists()
+        assert not (home / "hooks.json").exists()
+    else:
+        assert result["context_delivery"] == "on" and result["context_transport"]["available"]
+        assert (home / "hooks.json").is_file()

@@ -277,7 +277,7 @@ def test_checkpoint_request_reaches_sforge_worker_without_changing_default_profi
     assert "turn_envelope" not in profile
     assert "turn_envelope_source" not in profile
     assert "LOOPX_TURN_ENVELOPE" not in env
-    assert env.get("LOOPX_CONTEXT_DELIVERY") == ("on" if context_delivery != "off" else None)
+    assert env["LOOPX_CONTEXT_DELIVERY"] == context_delivery
     assert profile.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
     assert profile.get("checkpoint_capture_enabled") is (True if capture_path else None)
     with pytest.raises(ValueError, match="checkpoint_request_path"):
@@ -1414,7 +1414,7 @@ def test_edgebench_cli_merges_sforge_env_with_explicit_runner_config(
 
 
 @pytest.mark.parametrize("capture", [False, True])
-@pytest.mark.parametrize("context_delivery", ["off", "on"])
+@pytest.mark.parametrize("context_delivery", [None, "off", "on"])
 def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_path, monkeypatch, capture, context_delivery):
     pytest.importorskip("sforge")
     pytest.importorskip("harbor")
@@ -1433,9 +1433,10 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
         game_mode=False, submit_paths=["solver.py"], work=SimpleNamespace(agent_query="Original acceptance."),
         judge=SimpleNamespace(selection="score_first", score_direction="maximize")))
     monkeypatch.setattr(run, "RecordingDockerBackend", lambda **k: SimpleNamespace(image_exists=lambda image: True))
+    expected_delivery = "on" if context_delivery is None else context_delivery
     def before_solver(**kwargs):
         worker = kwargs["agent"]
-        assert worker.context_delivery is context_delivery
+        assert worker.context_delivery == expected_delivery
         assert worker.task_objective == "Original acceptance."
         assert worker.feedback_prompt.startswith(worker.workspace_instructions)
         assert worker.feedback_prompt.endswith("---\n\nOriginal acceptance.\n")
@@ -1450,8 +1451,8 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     args = ["--task", "fixture", "--tasks-dir", str(tmp_path), "--log-dir", str(tmp_path),
             "--run-id", "storage", "--worker", "heartbeat-explore", "--model", "fixture",
             "--effort", "xhigh", "--judge-url", "http://127.0.0.1:9999", "--feedback", "native"]
-    if context_delivery != "off":
-        args += ["--context-delivery", "on"]
+    if context_delivery is not None:
+        args += ["--context-delivery", context_delivery]
     if capture:
         declaration = tmp_path / "request.json"
         declaration.write_text(json.dumps({"destination": "/logs/agent/checkpoints",
@@ -1460,4 +1461,4 @@ def test_native_checkpoint_storage_guidance_reaches_both_prompt_surfaces(tmp_pat
     with pytest.raises(RuntimeError, match="validated before model execution"):
         run.main(args)
     receipt = json.loads((tmp_path / "runs/storage/fixture/runtime-receipt.json").read_text())
-    assert receipt.get("context_delivery") == (context_delivery if context_delivery != "off" else None)
+    assert receipt.get("context_delivery") == (expected_delivery if expected_delivery != "off" else None)

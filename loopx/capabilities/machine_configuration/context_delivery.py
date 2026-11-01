@@ -28,11 +28,11 @@ def context_delivery_machine_configuration_namespace() -> MachineConfigurationNa
         apply_public_update=lambda _current, update: dict(update),
         title="Differential context",
         description=(
-            "Reuse unchanged context for Codex App heartbeats, SSH Goals and benchmark heartbeats. Off by default; "
-            "unsupported declarations fail and known context loss keeps full context. "
+            "Reuse unchanged context for Codex App heartbeats, SSH Goals and benchmark heartbeats. On by default for supported Codex sessions; "
+            "explicit unsupported activation fails and known context loss keeps full context. "
             "Completed reads use an explicit native-hook continuity assumption. "
             "A saved preference does not establish host readiness or actual delta use."
         ),
         documentation={"path": "docs/reference/required-work-context.md#machine-default"},
-        default_configuration={"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "off"},
+        default_configuration={"schema_version": CONTEXT_DELIVERY_MACHINE_SCHEMA, "mode": "on"},
     )
