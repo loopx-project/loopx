@@ -234,3 +234,67 @@ test("source diagnostics identify the unavailable Goal and retain no raw error d
   assert.deepEqual(current.source_failures, []);
   assert.equal(rows(current).length, 1, "old-writer metadata cannot retire or duplicate the original notice");
 });
+
+const terminal = {todo_id: "todo_failed", text: "Build the preview", outcome: "reject",
+  reason: "Review rejected the proposal", evidence: "https://example.org/review", terminal_outcome_count: 1};
+const failurePlan = (state: JsonObject, failures: JsonObject[]) => planOwnerAttention({state,
+  goals: [{goal_id: "alpha", todos: [], failures}], source_complete: true});
+
+test("reject and cancel each create one stable terminal subject with complete terms", () => {
+  for (const outcome of ["reject", "cancel"]) {
+    const failure = {...terminal, outcome};
+    const state = failurePlan(failurePlan(empty(), []), [failure]);
+    assert.equal(rows(state).length, 1);
+    const notice = rows(state)[0];
+    assert.equal(notice.key, "alpha/todo_failed/terminal");
+    const {text, reason, evidence, terminal_outcome_count} = failure;
+    assert.equal(notice.digest, canonicalAuthoritySha256({text, note: outcome, reason, evidence, terminal_outcome_count}));
+    for (const term of [text, outcome, reason, evidence, "需要所有者决定", "1 项"]) assert.ok(String(notice.body).includes(term));
+    assert.deepEqual(failurePlan(JSON.parse(JSON.stringify(state)), [failure]), state);
+    const changed = failurePlan(state, [{...failure, reason: "Revised review reason"}]);
+    assert.equal(rows(changed).length, 2);
+    assert.equal(rows(changed)[0].status, "superseded");
+    assert.equal(rows(changed)[1].generation, 2);
+  }
+});
+
+test("a second terminal outcome changes generation even when latest terms are otherwise identical", () => {
+  const first = failurePlan(failurePlan(empty(), []), [terminal]);
+  const second = failurePlan(first, [{...terminal, terminal_outcome_count: 2}]);
+  assert.equal(rows(second).length, 2);
+  assert.equal(rows(second)[0].status, "superseded");
+  assert.equal(rows(second)[1].generation, 2);
+  assert.notEqual(rows(second)[0].digest, rows(second)[1].digest);
+  assert.ok(String(rows(second)[1].body).includes("2 项"));
+});
+
+test("resolved, deferred, superseded or cleared terminal outcomes withdraw unsent failure notices", () => {
+  for (const change of [{status: "done"}, {status: "deferred"}, {status: "blocked", superseded_by: "todo_new"},
+    {status: "blocked", decision_scope_outcomes: []}]) {
+    const pending = failurePlan(failurePlan(empty(), []), [terminal]);
+    const resolved = planOwnerAttention({state: pending, source_complete: true,
+      goals: [{goal_id: "alpha", todos: [{...task, todo_id: terminal.todo_id, role: "agent", ...change}], failures: []}]});
+    assert.equal(rows(resolved)[0].status, "superseded");
+    assert.equal((resolved.subjects as JsonObject[])[0].active, false);
+  }
+});
+
+test("two failures remain distinct and terminal size failures retain the existing cap", () => {
+  const base = failurePlan(empty(), []);
+  const state = failurePlan(base, [terminal, {...terminal, todo_id: "todo_second", outcome: "cancel"}]);
+  assert.deepEqual(rows(state).map(row => row.key), ["alpha/todo_failed/terminal", "alpha/todo_second/terminal"]);
+  const long = rows(failurePlan(base, [{...terminal, reason: "题".repeat(9000)}]))[0];
+  assert.equal(long.status, "failed");
+  assert.equal(long.error_code, "notice_content_too_large");
+});
+
+test("absent failures preserves the ordinary plan byte for byte", () => {
+  const base = plan(empty(), []);
+  for (const todos of [[], [reviewTask], [{...task, status: "done"}]]) {
+    const legacy = plan(base, todos);
+    const explicit = planOwnerAttention({state: base, source_complete: true,
+      goals: [{goal_id: "alpha", todos, failures: []}]});
+    assert.equal(JSON.stringify(legacy), JSON.stringify(explicit));
+    assert.ok(!JSON.stringify(legacy).includes("/terminal"));
+  }
+});

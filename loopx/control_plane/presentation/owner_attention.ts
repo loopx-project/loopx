@@ -136,6 +136,19 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
       if (current.has(key)) throw new Error("duplicate owner Todo");
       current.set(key, {key, goal_id: goalId, todo_id: todoId, terms, digest: digest(terms), active: true});
     }
+    // Failure rows are complete active blocked-terminal snapshots from Core.
+    for (const failure of records(goal.failures ?? [], "failures")) {
+      const todoId = requireNonEmptyString(failure.todo_id, "failure.todo_id");
+      if (!["reject", "cancel"].includes(String(failure.outcome))) throw new Error("invalid terminal outcome");
+      const count = requireInteger(failure.terminal_outcome_count ?? 1, "terminal_outcome_count");
+      if (count < 1) throw new Error("invalid terminal outcome count");
+      const terms: JsonObject = {text: requireNonEmptyString(failure.text, "failure.text"),
+        note: failure.outcome, reason: failure.reason ?? "", terminal_outcome_count: count};
+      if (failure.evidence != null && failure.evidence !== "") terms.evidence = failure.evidence;
+      const key = `${goalId}/${todoId}/terminal`;
+      if (current.has(key)) throw new Error("duplicate terminal Todo");
+      current.set(key, {key, goal_id: goalId, todo_id: todoId, terms, digest: digest(terms), active: true});
+    }
   }
   const subjects: JsonObject[] = [...current.values()].map(row => {
     const old = previous.find(item => item.key === row.key);
@@ -145,10 +158,12 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
       const id = digest([row.key, generation, row.digest]);
       const terms = row.terms as JsonObject;
       // Structured scopes remain identity/authority inputs, not operator copy.
-      const body = [`待你处理 · ${row.goal_id}`, String(terms.text),
+      const terminal = terms.terminal_outcome_count != null;
+      const body = [terminal ? `任务失败 · ${row.goal_id}` : `待你处理 · ${row.goal_id}`, String(terms.text),
         ...["note", "reason", "evidence"].flatMap(key =>
           terms[key] == null ? [] : [`${({note: "说明", reason: "原因", evidence: "依据"} as Record<string, string>)[key]}：${
             typeof terms[key] === "string" ? terms[key] : JSON.stringify(terms[key])}`]),
+        ...(terminal ? [`终止决定共 ${terms.terminal_outcome_count} 项；需要所有者决定。`] : []),
         "可在原管家对话中查看或答复这项待办。"].join("\n\n");
       outbox.push({id, key: row.key, generation, digest: row.digest, goal_id: row.goal_id,
         todo_id: row.todo_id, body, status: Buffer.byteLength(body, "utf8") > 20000 ? "failed" : "pending",
