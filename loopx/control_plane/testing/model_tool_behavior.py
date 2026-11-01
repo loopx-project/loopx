@@ -519,6 +519,40 @@ def is_context_read_command(command: str) -> bool:
     return tokens[index:index + 2] == ["quota", "context-read"]
 
 
+def replan_view_command_tokens(command: str) -> list[str] | None:
+    """Normalize one captured replan reader without broadening shell authority.
+
+    The production reader is rendered through ``python -m loopx.entrypoint``
+    so it remains independent of the caller's installed console script.  Model
+    behavior hosts otherwise accept only the bounded ``loopx`` console form.
+    Keep this exception local to the read-only replan route and return a
+    console-shaped argv for the existing isolated CLI executor.
+    """
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if any(token in {";", "&&", "||", "|"} for token in tokens):
+        return None
+    normalized: list[str] | None = None
+    if tokens and Path(tokens[0]).name == "loopx":
+        normalized = list(tokens)
+    elif (
+        len(tokens) >= 5
+        and tokens[1] == "-m"
+        and tokens[2] in {"loopx.entrypoint", "loopx.cli"}
+        and Path(tokens[0]).name.startswith("python")
+    ):
+        normalized = ["loopx", *tokens[3:]]
+    if normalized is None or "quota" not in normalized:
+        return None
+    quota = normalized.index("quota")
+    if normalized[quota : quota + 2] != ["quota", "replan-view"]:
+        return None
+    return normalized
+
+
 @dataclass(frozen=True)
 class QuotaToolContext:
     """Grade the current capture separately from the model's actual stdout.

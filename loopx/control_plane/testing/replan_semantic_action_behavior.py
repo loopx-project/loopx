@@ -33,6 +33,7 @@ from .model_tool_behavior import (
     digest_text,
     execute_loopx_cli,
     loopx_command_tokens,
+    replan_view_command_tokens,
 )
 from .selected_todo_tool_behavior import bounded_workspace_read_plan
 from .replan_vision_closeout_behavior import (
@@ -101,6 +102,8 @@ class _QualificationState:
     seen_clock: bool = False
     seen_refresh_state_help: bool = False
     read_only_host_commands_executed: bool = False
+    delivery_context_read: bool = False
+    replan_context_read: bool = False
     frontier_context_read: bool = False
     work_source_read: bool = False
     created_successor_id: str | None = None
@@ -622,7 +625,11 @@ def _required_explore_read_command(packet: Mapping[str, Any]) -> str | None:
     return command
 
 
-def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
+def _quota_behavior_observation(
+    packet: Mapping[str, Any],
+    *,
+    replan_view: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     _required_explore_read_command(packet)
     signature = quota_action_signature_document(packet)
     action = dict(signature.get("action") or {})
@@ -632,15 +639,42 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(obligation, Mapping) or not isinstance(replan_action, Mapping):
         raise TypeError("quota must project an obligation and replan action packet")
     context = obligation.get("replan_context")
+    progressive_view = not isinstance(context, Mapping)
+    if progressive_view:
+        context = replan_view
     if not isinstance(context, Mapping):
-        raise TypeError("quota must host-project the replan coverage context")
+        raise TypeError("quota must deliver the replan coverage context")
+    novelty = obligation.get("replan_novelty_policy")
+    delivery = (
+        str(novelty.get("delivery") or "")
+        if progressive_view and isinstance(novelty, Mapping)
+        else str(context.get("delivery") or "")
+    )
+    evidence_source = (
+        str(novelty.get("evidence_source") or "")
+        if progressive_view and isinstance(novelty, Mapping)
+        else str(context.get("evidence_source") or "")
+    )
+    progressive_identity_valid = bool(
+        progressive_view
+        and context.get("ok") is True
+        and context.get("stage") == "review"
+        and context.get("goal_id") == _FIXTURE_GOAL_ID
+        and context.get("agent_id") == _FIXTURE_AGENT_ID
+        and context.get("obligation_id") == obligation.get("obligation_id")
+        and str(context.get("source_hash") or "").startswith("sha256:")
+    )
+    inline_delivery_valid = bool(
+        not progressive_view
+        and dict(context.get("delivery_receipt") or {}).get("status") == "delivered"
+    )
     if (
         packet.get("decision") != "autonomous_replan_required"
         or replan_action.get("decision") != "replan_required"
         or replan_action.get("obligation_id") != obligation.get("obligation_id")
-        or context.get("delivery") != "host_projected"
-        or context.get("evidence_source") != "compact_run_history"
-        or dict(context.get("delivery_receipt") or {}).get("status") != "delivered"
+        or delivery != "host_projected"
+        or evidence_source != "compact_run_history"
+        or not (progressive_identity_valid or inline_delivery_valid)
     ):
         raise ValueError("quota does not expose the semantic replan contract")
     if not (
@@ -658,9 +692,18 @@ def _quota_behavior_observation(packet: Mapping[str, Any]) -> dict[str, Any]:
         "quiet_noop_allowed": False,
         "external_write_requested": False,
         "replan_obligation_id": obligation.get("obligation_id"),
-        "context_delivery": "host_projected",
+        "context_delivery": (
+            "progressive_replan_view" if progressive_view else "host_projected"
+        ),
         "required_semantic_outcomes": list(
-            dict(replan_action.get("uncovered_frontier") or {}).get(
+            dict(
+                (
+                    context.get("uncovered_frontier")
+                    if progressive_view
+                    else replan_action.get("uncovered_frontier")
+                )
+                or {}
+            ).get(
                 "required_any_of"
             )
             or []
@@ -1015,8 +1058,24 @@ def _handle_quota_command(command: str, state: _QualificationState) -> str:
     state.quota_context = QuotaToolContext.from_output(output)
     decoded = state.quota_context.packet
     state.quota_packet = decoded
-    state.quota_observation = _quota_behavior_observation(decoded)
-    if state.fixture.required_vision and "required_agent_vision_missing" not in state.quota_observation["trigger_kinds"]:
+    obligation = decoded.get("autonomous_replan_obligation")
+    if isinstance(obligation, Mapping) and isinstance(
+        obligation.get("replan_context"), Mapping
+    ):
+        state.quota_observation = _quota_behavior_observation(decoded)
+    elif not (
+        state.quota_context.capture_path is not None
+        and isinstance(obligation, Mapping)
+        and isinstance(obligation.get("context_read"), str)
+        and obligation.get("context_read")
+    ):
+        raise TypeError("quota must deliver or reference the replan coverage context")
+    if (
+        state.fixture.required_vision
+        and state.quota_observation is not None
+        and "required_agent_vision_missing"
+        not in state.quota_observation["trigger_kinds"]
+    ):
         raise ValueError("required_vision_fixture_trigger_mismatch")
     state.seen_quota = True
     state.read_only_host_commands_executed = True
@@ -1028,6 +1087,44 @@ def _handle_context_read(command: str, state: _QualificationState) -> str:
         raise ValueError("context read before quota")
     output = state.quota_context.read(command, source_root=state.fixture.source_root,
         project_root=state.fixture.project_root)
+    state.delivery_context_read = True
+    state.read_only_host_commands_executed = True
+    return output
+
+
+def _handle_replan_context_read(command: str, state: _QualificationState) -> str:
+    if state.quota_packet is None or state.quota_context is None:
+        raise ValueError("replan_context_read_before_quota")
+    if state.quota_context.capture_path is not None and not state.delivery_context_read:
+        raise ValueError("replan_context_read_before_delivery_context")
+    obligation = state.quota_packet.get("autonomous_replan_obligation")
+    expected = (
+        str(obligation.get("context_read") or "")
+        if isinstance(obligation, Mapping)
+        else ""
+    )
+    normalized = replan_view_command_tokens(command)
+    if not expected or command != expected or normalized is None:
+        raise ValueError("unexpected_replan_context_read")
+    output = execute_loopx_cli(
+        shlex.join(normalized),
+        source_root=state.fixture.source_root,
+        project_root=state.fixture.project_root,
+    )
+    view = json.loads(output)
+    if not isinstance(view, Mapping):
+        raise ValueError("replan_context_read_invalid")
+    state.quota_observation = _quota_behavior_observation(
+        state.quota_packet,
+        replan_view=view,
+    )
+    if (
+        state.fixture.required_vision
+        and "required_agent_vision_missing"
+        not in state.quota_observation["trigger_kinds"]
+    ):
+        raise ValueError("required_vision_fixture_trigger_mismatch")
+    state.replan_context_read = True
     state.read_only_host_commands_executed = True
     return output
 
@@ -1089,6 +1186,11 @@ def _require_observed_frontier(
 ) -> None:
     if state.quota_packet is None:
         raise ValueError(f"{prefix}_before_quota")
+    if state.quota_context is not None and state.quota_context.capture_path is not None:
+        if not state.delivery_context_read:
+            raise ValueError(f"{prefix}_before_delivery_context_read")
+    if state.quota_observation is None:
+        raise ValueError(f"{prefix}_before_replan_context_read")
     if not state.frontier_context_read:
         raise ValueError(f"{prefix}_before_frontier_read")
     if work_source_required and not state.work_source_read:
@@ -1236,6 +1338,12 @@ def _dispatch_behavior_command(
         return _handle_quota_command(command, state), "quota_should_run", False
     if is_context_read_command(command):
         return _handle_context_read(command, state), "context_read", False
+    if replan_view_command_tokens(command) is not None:
+        return (
+            _handle_replan_context_read(command, state),
+            "replan_context_read",
+            False,
+        )
     if state.quota_packet is not None and (
         required := _required_explore_read_command(state.quota_packet)
     ):
@@ -1285,6 +1393,8 @@ def _behavior_command_kind(
         return "quota_should_run"
     if is_context_read_command(command):
         return "context_read"
+    if replan_view_command_tokens(command) is not None:
+        return "replan_context_read"
     if state.quota_packet is not None and (
         required := _required_explore_read_command(state.quota_packet)
     ) and shlex.split(command) == shlex.split(required):
@@ -1310,6 +1420,8 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "repeated_quota_should_run",
         "repeated_clock",
         "semantic_action_before_quota",
+        "semantic_action_before_delivery_context_read",
+        "semantic_action_before_replan_context_read",
         "semantic_action_before_frontier_read",
         "semantic_action_before_work_source_read",
         "semantic_action_misses_uncovered_frontier",
@@ -1318,6 +1430,8 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "refresh_state_help_before_work_source_read",
         "repeated_refresh_state_help",
         "successor_create_before_quota",
+        "successor_create_before_delivery_context_read",
+        "successor_create_before_replan_context_read",
         "successor_create_before_frontier_read",
         "successor_create_before_work_source_read",
         "successor_create_obligation_mismatch",
@@ -1339,6 +1453,10 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "semantic_reentry_not_future_monitor_wait",
         "semantic_reentry_did_not_exit",
         "manual_evidence_read_is_not_replan",
+        "replan_context_read_before_quota",
+        "replan_context_read_before_delivery_context",
+        "unexpected_replan_context_read",
+        "replan_context_read_invalid",
         "unexpected_command",
     }
 )
@@ -1500,7 +1618,11 @@ class DoubaoReplanSemanticActionBehaviorActor:
                     "project. Follow the heartbeat task and use the shell tool. "
                     "The shell working directory is the connected goal project "
                     "root; relative paths in the active-state action resolve there. "
-                    "Treat the quota packet as the control-plane authority. Complete "
+                    "Treat the quota packet as the control-plane authority. If the "
+                    "guard returns native context navigation, execute its recovery "
+                    "reader before acting. If the delivered replan obligation names "
+                    "a context_read command, execute that exact command before "
+                    "choosing a semantic result. Complete "
                     "one bounded in-scope action and persist its result through the "
                     "real LoopX CLI. After quota, `cat` only the exact path named "
                     "in active_state_next_action, then `cat` only the source_ref "
@@ -1539,6 +1661,8 @@ class DoubaoReplanSemanticActionBehaviorActor:
                             if state.seen_quota else _handle_quota_command(command, state))
                 if is_context_read_command(command):
                     return _handle_context_read(command, state)
+                if replan_view_command_tokens(command) is not None:
+                    return _handle_replan_context_read(command, state)
                 result = dispatch_vision_closeout(command, state, execute=_execute_loopx)
                 if result is None:
                     raise ValueError("This fixture grants CLI authority for quota, help, vision refresh and settlement only")

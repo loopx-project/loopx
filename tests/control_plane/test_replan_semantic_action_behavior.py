@@ -12,14 +12,78 @@ import loopx.control_plane.testing.replan_semantic_action_behavior as replan_beh
 from loopx.control_plane.testing.model_tool_behavior import (
     QuotaToolContext,
     ScriptedAssistantAction,
-    ScriptedDoubaoExecTransport,
+    ScriptedDoubaoExecTransport as RawScriptedDoubaoExecTransport,
     ScriptedExecToolAction,
+    replan_view_command_tokens,
 )
+from loopx.control_plane.quota.turn_envelope import _turn_envelope_result
 from loopx.control_plane.testing.replan_semantic_action_behavior import (
     DoubaoReplanSemanticActionBehaviorActor,
     _build_fixture,
     _execute_loopx,
 )
+
+
+def _context_aware_transport(
+    actions: list[object],
+) -> RawScriptedDoubaoExecTransport:
+    """Script the intended work while preserving native progressive reads."""
+
+    remaining = list(actions)
+
+    def choose(request: Mapping[str, object]) -> object:
+        messages = request.get("messages")
+        latest = messages[-1] if isinstance(messages, list) and messages else None
+        raw: object = None
+        if isinstance(latest, Mapping) and latest.get("role") == "tool":
+            try:
+                raw = json.loads(str(latest.get("content") or ""))
+            except json.JSONDecodeError:
+                raw = None
+        if (
+            isinstance(raw, Mapping)
+            and raw.get("schema_version") == "context_capture_navigation_v1"
+        ):
+            recovery = raw.get("recovery")
+            assert isinstance(recovery, Mapping)
+            command = str(recovery.get("command") or "")
+            assert command
+            return ScriptedExecToolAction(
+                command
+                + " --select /autonomous_replan_obligation"
+                + " --select /replan_action_packet"
+            )
+        if isinstance(raw, Mapping) and isinstance(raw.get("content"), str):
+            page = json.loads(raw["content"])
+            selections = page.get("selections") if isinstance(page, Mapping) else None
+            if isinstance(selections, list):
+                values = {
+                    row["pointer"]: row["value"]
+                    for row in selections
+                    if isinstance(row, Mapping)
+                    and isinstance(row.get("pointer"), str)
+                }
+                obligation = values.get("/autonomous_replan_obligation")
+                if isinstance(obligation, Mapping) and isinstance(
+                    obligation.get("context_read"), str
+                ):
+                    return ScriptedExecToolAction(str(obligation["context_read"]))
+        if not remaining:
+            raise AssertionError("context-aware scripted transport exhausted its actions")
+        action = remaining.pop(0)
+        return action(request) if callable(action) else action
+
+    return RawScriptedDoubaoExecTransport([choose] * 12)
+
+
+def _work_sequence(receipt: Mapping[str, object]) -> list[str]:
+    sequence = receipt.get("observed_tool_sequence")
+    assert isinstance(sequence, list)
+    return [
+        str(kind)
+        for kind in sequence
+        if kind not in {"context_read", "replan_context_read"}
+    ]
 
 
 def _latest_quota_packet(request: Mapping[str, object]) -> dict[str, object]:
@@ -36,6 +100,51 @@ def _latest_quota_packet(request: Mapping[str, object]) -> dict[str, object]:
         if isinstance(packet, dict) and packet.get("replan_action_packet"):
             return packet
     raise AssertionError("semantic action must follow a real quota packet")
+
+
+def test_progressive_replan_reader_preserves_semantic_observation(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path / "oracle")
+    output = _execute_loopx(
+        fixture.quota_guard_command,
+        fixture=fixture,
+        turn_instance_id="progressive-replan-reader",
+    )
+    context = QuotaToolContext.from_output(output)
+    progressive = _turn_envelope_result(
+        "replan_cli_view",
+        payload=context.packet,
+    )
+    obligation = progressive["autonomous_replan_obligation"]
+    assert isinstance(obligation, Mapping)
+    command = str(obligation["context_read"])
+    assert replan_view_command_tokens(command) is not None
+    state = replan_behavior._QualificationState(
+        fixture=fixture,
+        messages=[],
+        steps=[],
+        turn_instance_id="progressive-replan-reader",
+        quota_packet=progressive,
+        quota_context=context,
+        seen_quota=True,
+        delivery_context_read=True,
+    )
+
+    readback = json.loads(
+        replan_behavior._handle_replan_context_read(command, state)
+    )
+
+    assert readback["stage"] == "review"
+    assert state.replan_context_read is True
+    assert state.quota_observation is not None
+    assert state.quota_observation["context_delivery"] == "progressive_replan_view"
+    assert "new_surface" in state.quota_observation["required_semantic_outcomes"]
+    with pytest.raises(ValueError, match="unexpected_replan_context_read"):
+        replan_behavior._handle_replan_context_read(
+            command.replace("--replan-stage review", "--replan-stage writeback"),
+            state,
+        )
 
 
 def _semantic_action(
@@ -167,7 +276,7 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     tmp_path: Path,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command="date -Iseconds"),
             ScriptedExecToolAction(command=fixture.quota_guard_command),
@@ -185,14 +294,20 @@ def test_real_tool_loop_chooses_and_persists_semantic_replan_action(
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["observed_tool_sequence"] == [
+    assert _work_sequence(receipt) == [
         "clock",
         "quota_should_run",
         "workspace_read",
         "workspace_read",
         "semantic_replan_writeback",
     ]
-    assert receipt["context_delivery"] == "host_projected"
+    assert "context_read" in receipt["observed_tool_sequence"]
+    assert receipt["context_delivery"] in {
+        "host_projected",
+        "progressive_replan_view",
+    }
+    if receipt["context_delivery"] == "progressive_replan_view":
+        assert "replan_context_read" in receipt["observed_tool_sequence"]
     assert receipt["semantic_action_accepted"] is True
     assert "new_surface" in receipt["selected_semantic_outcomes"]
     assert "new_surface" in receipt["required_semantic_outcomes"]
@@ -258,7 +373,7 @@ def test_semantic_cli_execution_failure_retains_command_kind(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="cat replan-frontier.json"),
@@ -291,7 +406,7 @@ def test_real_tool_loop_allows_bounded_refresh_state_help(
     tmp_path: Path,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="cat replan-frontier.json"),
@@ -311,7 +426,7 @@ def test_real_tool_loop_allows_bounded_refresh_state_help(
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["observed_tool_sequence"] == [
+    assert _work_sequence(receipt) == [
         "quota_should_run",
         "workspace_read",
         "workspace_read",
@@ -325,7 +440,7 @@ def test_real_tool_loop_preserves_projected_targets_through_content_pipelines(
     tmp_path: Path,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(
@@ -346,7 +461,7 @@ def test_real_tool_loop_preserves_projected_targets_through_content_pipelines(
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["observed_tool_sequence"] == [
+    assert _work_sequence(receipt) == [
         "quota_should_run",
         "workspace_read",
         "workspace_read",
@@ -359,7 +474,7 @@ def test_refresh_state_help_requires_projected_frontier_reads(
     tmp_path: Path,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="loopx refresh-state --help"),
@@ -381,7 +496,7 @@ def test_model_exits_after_replan_confirms_goal_coverage_is_exhausted(
     tmp_path: Path,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle", exhausted_frontier=True)
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="cat replan-frontier.json"),
@@ -399,7 +514,7 @@ def test_model_exits_after_replan_confirms_goal_coverage_is_exhausted(
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["observed_tool_sequence"] == [
+    assert _work_sequence(receipt) == [
         "quota_should_run",
         "workspace_read",
         "semantic_replan_writeback",
@@ -473,7 +588,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
         tmp_path / "oracle",
         composition_frontier=True,
     )
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             _inline_explore_context_action,
@@ -491,7 +606,7 @@ def test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["observed_tool_sequence"] == [
+    assert _work_sequence(receipt) == [
         "quota_should_run",
         "workspace_read",
         "workspace_read",
@@ -544,7 +659,7 @@ def test_delivered_composition_context_cannot_be_replayed_or_retargeted(
             )
         actions.append(wrong_scope)
     receipt = DoubaoReplanSemanticActionBehaviorActor(
-        api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport(actions),
+        api_key="test-only-placeholder", transport=_context_aware_transport(actions),
     ).qualify(
         qualification_id=f"composition-read-{attempt}",
         fixture_root=tmp_path / "actor", composition_frontier=True,
@@ -581,7 +696,7 @@ def test_required_explore_read_uses_nested_interaction_contract() -> None:
 
 def test_action_outside_observed_frontier_is_rejected(tmp_path: Path) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="cat replan-frontier.json"),
@@ -620,7 +735,7 @@ def test_fully_repeated_observation_cannot_close_replan(tmp_path: Path) -> None:
             "--no-global-sync --suppress-external-sinks"
         )
 
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="cat replan-frontier.json"),
@@ -645,7 +760,7 @@ def test_manual_evidence_read_is_context_not_replan_completion(
     tmp_path: Path,
 ) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(
@@ -671,7 +786,7 @@ def test_manual_evidence_read_is_context_not_replan_completion(
 
 def test_semantic_action_must_follow_real_frontier_read(tmp_path: Path) -> None:
     fixture = _build_fixture(tmp_path / "oracle")
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             _semantic_action,
@@ -710,7 +825,7 @@ def test_model_can_create_and_bind_a_real_runnable_successor(tmp_path: Path) -> 
             f"--replan-obligation-id {obligation['obligation_id']}"
         )
 
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(command=fixture.quota_guard_command),
             ScriptedExecToolAction(command="cat replan-frontier.json"),
@@ -727,7 +842,7 @@ def test_model_can_create_and_bind_a_real_runnable_successor(tmp_path: Path) -> 
     )
 
     assert receipt["qualification_passed"] is True, receipt
-    assert receipt["observed_tool_sequence"] == [
+    assert _work_sequence(receipt) == [
         "quota_should_run",
         "workspace_read",
         "workspace_read",
@@ -881,7 +996,7 @@ def test_untyped_successor_is_rejected_before_todo_mutation(
 
 
 def test_semantic_writeback_before_quota_is_rejected(tmp_path: Path) -> None:
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [
             ScriptedExecToolAction(
                 command=(
@@ -909,7 +1024,7 @@ def test_semantic_writeback_before_quota_is_rejected(tmp_path: Path) -> None:
 
 
 def test_prose_intent_without_typed_action_is_rejected(tmp_path: Path) -> None:
-    transport = ScriptedDoubaoExecTransport(
+    transport = _context_aware_transport(
         [ScriptedAssistantAction(content="I would explore a new surface next.")]
     )
     receipt = DoubaoReplanSemanticActionBehaviorActor(
