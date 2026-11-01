@@ -210,7 +210,13 @@ def _run_cli(
     runtime: Path,
     *args: str,
     cwd: Path = REPO_ROOT,
+    raw_guard: bool = True,
 ) -> tuple[int, dict[str, Any]]:
+    # Existing guard observers consume the authority decision, independently of
+    # machine presentation defaults. Native lifecycle tests use raw_guard=False
+    # to exercise omitted/default activation; explicit on/off is never replaced.
+    if raw_guard and args[:2] == ("quota", "should-run") and "--context-delivery" not in args:
+        args = (*args, "--context-delivery", "off")
     result = subprocess.run(
         [
             sys.executable,

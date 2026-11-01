@@ -667,7 +667,7 @@ def assert_material_transition_followup() -> None:
         selection = contract["cli_channel"]["selection_command"]
         selected = run_cli(registry_path, *shlex.split(
             selection["command_args_template"].replace("{todo_id}", successor_id)
-        ))
+        ), "--context-delivery", "off")
         assert selected["heartbeat_receipt"]["settlement_identity"]["todo_id"] == successor_id, selected
         assert selected["interaction_contract"]["agent_channel"]["delivery_allowed"] is True, selected
         assert not find_todo(state_file, successor_id).get("claimed_by")  # Selection is not a claim.
