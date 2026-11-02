@@ -1426,6 +1426,7 @@ function initialReadPointers(context: JsonObject): string[] {
     "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
     "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"])
     include(field);
+  include("context_details", "unread_context_index");
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
