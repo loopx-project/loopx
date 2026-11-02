@@ -10,7 +10,7 @@ from loopx.capabilities.goal_inspection import (
     inspect_goal_capabilities,
     render_goal_capabilities,
 )
-from loopx.chat_goal_configuration_api import GoalConfigurationRequestMixin
+from loopx.chat.goal_configuration_api import GoalConfigurationRequestMixin
 from loopx.cli import main
 
 
