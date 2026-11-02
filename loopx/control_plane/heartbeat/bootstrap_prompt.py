@@ -99,7 +99,7 @@ def goal_bootstrap(args: Any, *, registry: Path) -> str:
         args.codex_app
         or getattr(args, "trae_app", False)
         or getattr(args, "runtime_profile", None)
-        in {"codex_app_heartbeat", "trae_app"}
+        in {"codex_app_heartbeat", "trae_app", "antigravity_app"}
     )
     command = _goal_command(args, registry=registry, legacy=not heartbeat)
     if heartbeat:
