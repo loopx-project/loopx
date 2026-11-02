@@ -170,6 +170,7 @@ def antigravity_app_activation(
     *,
     goal_id: str = "<goal-id>",
     agent_id: str | None = None,
+    conversation_id: str | None = None,
     runtime_root: str | None = None,
 ) -> dict[str, Any]:
     return skill_facade_cli_activation(
@@ -182,6 +183,7 @@ def antigravity_app_activation(
         **antigravity_app_activation_extras(
             goal_id=goal_id,
             agent_id=agent_id,
+            conversation_id=conversation_id,
             runtime_root=runtime_root,
             cli_bin=cli_bin,
         ),

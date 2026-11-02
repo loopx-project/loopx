@@ -303,12 +303,19 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
     sidecar_json = mutation["sidecar_template"]["sidecar_json"]
     assert sidecar_json["builtin"] == "schedule"
     assert sidecar_json["restart_policy"] == "always"
-    assert sidecar_json["args"][1:5] == [
-        "agentapi",
-        "new-conversation",
-        "--model=pro",
-        "--",
+    assert sidecar_json["args"][1:8] == [
+        "python3",
+        "-E",
+        "-P",
+        "-m",
+        "loopx.agy_goal_mode.host_runtime",
+        "sidecar-tick",
+        "--cli-bin",
     ]
+    assert "new-conversation" not in sidecar_json["args"]
+    assert (
+        "bind-session" in mutation["bind_session_command"]
+    )
     assert (
         "antigravity_app"
         in mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"]["gate_command"]

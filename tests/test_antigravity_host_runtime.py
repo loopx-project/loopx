@@ -177,13 +177,20 @@ def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
     )
     assert build_antigravity_hooks_template()["loopx"]["enabled"] is False
     assert "sidecar_json" in build_antigravity_sidecar_template()
-    kwargs = dict(goal_id="work", agent_id="worker", conversation_id="native-chat")
-    config = build_antigravity_sidecar_template(goal_id="work", agent_id="worker")[
-        "sidecar_json"
-    ]
+    kwargs = dict(
+        goal_id="work",
+        agent_id="worker",
+        conversation_id="native-chat",
+        resolve_local_executable=True,
+    )
+    config = build_antigravity_sidecar_template(**kwargs)["sidecar_json"]
     assert config["builtin"] == "schedule"
     assert config["args"][0] == "CRON_TZ=UTC */3 * * * *"
-    assert config["args"][1:5] == ["agentapi", "new-conversation", "--model=pro", "--"]
+    assert "loopx.agy_goal_mode.host_runtime" in config["args"]
+    assert "sidecar-tick" in config["args"]
+    assert "--conversation-id" in config["args"]
+    assert "native-chat" in config["args"]
+    assert "new-conversation" not in config["args"]
     hook = build_antigravity_hooks_template(**kwargs)["loopx"]
     assert hook["enabled"] is True
     # The installed native contract consumes one event on stdin and one native
@@ -198,6 +205,259 @@ def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {}
+
+
+def test_sidecar_tick_checks_session_liveness_syncs_stateful_backoff_and_wakes_in_place(
+    tmp_path, monkeypatch
+):
+    sidecar_path = tmp_path / "sidecar.json"
+    sidecar_template = build_antigravity_sidecar_template(
+        goal_id="work",
+        agent_id="worker",
+        conversation_id="native-chat",
+    )
+    sidecar_path.write_text(json.dumps(sidecar_template["sidecar_json"], indent=2))
+
+    args = bound(tmp_path)
+    args.sidecar_config = str(sidecar_path)
+    args.agy_home = str(tmp_path)
+
+    # 1. Language server not running -> noop, never calls quota or agentapi
+    monkeypatch.setattr(
+        runtime,
+        "_inspect_conversation_liveness",
+        lambda _cid: {
+            "alive": False,
+            "running": False,
+            "idle": False,
+            "user_canceled": False,
+            "reason": "language_server_not_running",
+        },
+    )
+    res = runtime.sidecar_tick(args)
+    assert res["decision"] == "noop"
+    assert res["reason"] == "language_server_not_running"
+
+    # 2. Session is actively RUNNING -> noop, do not disturb or double-trigger
+    monkeypatch.setattr(
+        runtime,
+        "_inspect_conversation_liveness",
+        lambda _cid: {
+            "alive": True,
+            "running": True,
+            "idle": False,
+            "user_canceled": False,
+            "reason": "session_running",
+        },
+    )
+    res = runtime.sidecar_tick(args)
+    assert res["decision"] == "noop"
+    assert res["reason"] == "session_already_running"
+
+    # 3. Session was stopped by user (USER_CANCELED) -> noop, respect user cancellation
+    monkeypatch.setattr(
+        runtime,
+        "_inspect_conversation_liveness",
+        lambda _cid: {
+            "alive": True,
+            "running": False,
+            "idle": True,
+            "user_canceled": True,
+            "reason": "session_user_canceled",
+        },
+    )
+    res = runtime.sidecar_tick(args)
+    assert res["decision"] == "noop"
+    assert res["reason"] == "session_user_canceled"
+
+    # 4. Session is IDLE, quota should-run=False with stateful backoff interval=12m ->
+    #    updates sidecar.json cron to */12 * * * *, executes ack_cli_args, and does not wake
+    monkeypatch.setattr(
+        runtime,
+        "_inspect_conversation_liveness",
+        lambda _cid: {
+            "alive": True,
+            "running": False,
+            "idle": True,
+            "user_canceled": False,
+            "reason": "session_idle",
+        },
+    )
+    ack_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        runtime,
+        "_run_cli_raw",
+        lambda _a, cli_args: (ack_calls.append(cli_args) or True),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_run_core_json",
+        lambda _a, _cmd: {
+            "should_run": False,
+            "effective_action": "waiting_external",
+            "scheduler_hint": {
+                "app_automation": {
+                    "action": "keep_or_update_current_heartbeat",
+                    "apply_needed": True,
+                    "recommended_interval_minutes": 12,
+                    "recommended_rrule": "FREQ=MINUTELY;INTERVAL=12",
+                    "stateful_backoff": {"consecutive_noops": 2},
+                    "ack_hint": {
+                        "cli_args": [
+                            "quota",
+                            "scheduler-ack-current",
+                            "--goal-id",
+                            "work",
+                            "--agent-id",
+                            "worker",
+                            "--antigravity_app",
+                            "--applied-rrule",
+                            "FREQ=MINUTELY;INTERVAL=12",
+                            "--execute",
+                        ]
+                    },
+                }
+            },
+        },
+    )
+    res = runtime.sidecar_tick(args)
+    assert res["decision"] == "noop"
+    assert res["reason"] == "quota_should_not_run"
+    assert res["cron_updated"] is True
+    assert res["ack_executed"] is True
+    assert len(ack_calls) == 1
+    assert "--antigravity_app" in ack_calls[0]
+    updated_sidecar = json.loads(sidecar_path.read_text())
+    assert updated_sidecar["args"][0] == "CRON_TZ=UTC */12 * * * *"
+
+    # 5. Session is IDLE and quota should-run=True -> resets backoff to */3 * * * * and wakes bound session in-place via agentapi send-message
+    wake_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        wake_cmds.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runtime,
+        "_run_core_json",
+        lambda _a, _cmd: {
+            "should_run": True,
+            "effective_action": "normal_run",
+            "scheduler_hint": {
+                "app_automation": {
+                    "action": "keep_or_update_current_heartbeat",
+                    "apply_needed": True,
+                    "recommended_interval_minutes": 3,
+                    "recommended_rrule": "FREQ=MINUTELY;INTERVAL=3",
+                    "stateful_backoff": {"consecutive_noops": 0},
+                    "ack_hint": {
+                        "cli_args": [
+                            "quota",
+                            "scheduler-ack-current",
+                            "--goal-id",
+                            "work",
+                            "--agent-id",
+                            "worker",
+                            "--antigravity_app",
+                            "--applied-rrule",
+                            "FREQ=MINUTELY;INTERVAL=3",
+                            "--execute",
+                        ]
+                    },
+                }
+            },
+        },
+    )
+    res = runtime.sidecar_tick(args)
+    assert res["ok"] is True
+    assert res["decision"] == "woke_bound_session"
+    assert res["conversation_id"] == "native-chat"
+    assert res["cron_updated"] is True
+    assert json.loads(sidecar_path.read_text())["args"][0] == "CRON_TZ=UTC */3 * * * *"
+    assert len(wake_cmds) == 1
+    assert wake_cmds[0][:4] == [
+        "agentapi",
+        "send-message",
+        "--title=LoopX Heartbeat",
+        "native-chat",
+    ]
+    assert "new-conversation" not in wake_cmds[0]
+
+
+def test_discover_active_conversation_id_and_bind_session_for_new_session_startup(
+    tmp_path, monkeypatch
+):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", "127.0.0.1:4321")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "token-xyz")
+
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    ws_uri = workspace.resolve().as_uri()
+
+    def fake_rpc(_url, _token, method, _payload, **_):
+        assert method == "GetAllCascadeTrajectories"
+        return {
+            "trajectorySummaries": {
+                "subagent-cid": {
+                    "status": "CASCADE_RUN_STATUS_RUNNING",
+                    "lastModifiedTime": "2026-11-02T10:05:00Z",
+                    "stepCount": 10,
+                    "trajectoryMetadata": {"parentConversationId": "active-root-cid"},
+                    "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+                },
+                "active-root-cid": {
+                    "status": "CASCADE_RUN_STATUS_RUNNING",
+                    "lastModifiedTime": "2026-11-02T10:04:00Z",
+                    "stepCount": 25,
+                    "trajectoryMetadata": {},
+                    "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+                },
+                "other-idle-cid": {
+                    "status": "CASCADE_RUN_STATUS_IDLE",
+                    "lastModifiedTime": "2026-11-02T10:06:00Z",
+                    "stepCount": 99,
+                    "trajectoryMetadata": {},
+                    "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+                },
+            }
+        }
+
+    monkeypatch.setattr(provider, "_rpc_post", fake_rpc)
+    discovered = runtime.discover_active_conversation_id(workspace=workspace)
+    assert discovered == "active-root-cid"
+
+    agy_cfg = tmp_path / "agy-config"
+    bind_res = runtime.bind_session(
+        Namespace(
+            cli_bin="loopx",
+            registry="/tmp/reg.json",
+            runtime_root="/tmp/rt",
+            goal_id="loopx-goal",
+            agent_id="antigravity-app",
+            conversation_id=None,
+            workspace=str(workspace),
+            agy_home=str(agy_cfg),
+        )
+    )
+    assert bind_res["ok"] is True
+    assert bind_res["conversation_id"] == "active-root-cid"
+    hooks_data = json.loads((agy_cfg / "hooks.json").read_text())
+    assert hooks_data["loopx"]["enabled"] is True
+    assert "--conversation-id active-root-cid" in hooks_data["loopx"]["Stop"][0]["command"]
+    sidecar_data = json.loads(
+        (
+            agy_cfg
+            / "sidecars"
+            / "loopx-antigravity-heartbeat"
+            / "sidecar.json"
+        ).read_text()
+    )
+    assert "sidecar-tick" in sidecar_data["args"]
+    assert "active-root-cid" in sidecar_data["args"]
 
 
 def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(tmp_path):

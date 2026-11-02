@@ -720,6 +720,46 @@ def handle_registry_admin_command(
                 payload["ok"] = bool(payload["global_sync"].get("ok")) and readback_verified
                 if not payload["ok"]:
                     payload["error_kind"] = "thread_agent_binding_readback_failed"
+                elif (
+                    args.command == "bind-agent-thread"
+                    and args.host_surface in {"antigravity-app", "antigravity_app"}
+                ):
+                    try:
+                        from ..agy_goal_mode import antigravity_config_home
+                        from ..agy_goal_mode.host_runtime import (
+                            bind_antigravity_session_configs,
+                        )
+                        from ..slash_command_install import (
+                            ANTIGRAVITY_HOOKS_MARKER_NAME,
+                        )
+
+                        cfg_root = antigravity_config_home()
+                        has_managed_hooks = (
+                            cfg_root / ANTIGRAVITY_HOOKS_MARKER_NAME
+                        ).exists()
+                        has_managed_sidecar = (
+                            cfg_root
+                            / "sidecars"
+                            / "loopx-antigravity-heartbeat"
+                            / "sidecar.json"
+                        ).exists()
+                        if has_managed_hooks or has_managed_sidecar:
+                            payload["antigravity_host_config_sync"] = (
+                                bind_antigravity_session_configs(
+                                    goal_id=args.goal_id,
+                                    agent_id=args.agent_id,
+                                    conversation_id=args.thread_id,
+                                    registry=str(source_path),
+                                    runtime_root=str(global_path.parent),
+                                    write_hooks=has_managed_hooks,
+                                    write_sidecar=has_managed_sidecar,
+                                )
+                            )
+                    except Exception as sync_exc:
+                        payload["antigravity_host_config_sync"] = {
+                            "ok": False,
+                            "error": str(sync_exc),
+                        }
             else:
                 payload["global_sync"] = {"enabled": bool(args.execute), "wrote": False}
         except Exception as exc:

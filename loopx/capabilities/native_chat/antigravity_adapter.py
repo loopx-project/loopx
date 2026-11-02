@@ -174,9 +174,10 @@ def discover_antigravity_language_server(
         except (CodexChatAgentError, ValueError):
             return None
 
+    ps_bin = shutil.which("ps") or ("/bin/ps" if Path("/bin/ps").exists() else "ps")
     try:
         ps_out = subprocess.check_output(
-            ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
+            [ps_bin, "-u", str(os.getuid()), "-o", "pid=,command="],
             text=True,
             stderr=subprocess.DEVNULL,
             timeout=3.0,
@@ -198,13 +199,16 @@ def discover_antigravity_language_server(
         if token_match:
             candidates.append((pid, token_match.group(1)))
 
+    lsof_bin = shutil.which("lsof") or (
+        "/usr/sbin/lsof" if Path("/usr/sbin/lsof").exists() else "lsof"
+    )
     deadline = time.monotonic() + 4.0
     for pid, token in candidates:
         if time.monotonic() >= deadline:
             break
         try:
             lsof_out = subprocess.check_output(
-                ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
+                [lsof_bin, "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
                 text=True,
                 stderr=subprocess.DEVNULL,
                 timeout=max(0.1, deadline - time.monotonic()),
