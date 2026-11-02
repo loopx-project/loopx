@@ -1077,7 +1077,10 @@ T3 完成，也不授予 amendment commit／整 Goal promotion 权限。
 
 Standing decision consumer 收口：`todos/standing_decision.ts` 统一可复用决策的
 资格与先后关系，供 status/quota 读取和 archive selection 共用。Python 只解码旧
-metadata 并批量调用，删除旧 receipt selector 与 TS archive 内的重复资格判断。
+metadata 并交给组合后的 `todo.read` 批量调用，删除旧 receipt selector 与 TS archive
+内的重复资格判断。现已删除无调用方的 `build_standing_decision_authority` 包装及其
+独立 `todo.standing_decision.project` handler／请求解码器；测试与示例改用组合读取，
+共享 TS owner 保留。
 Canonical 读取在生成展示 index 前使用完整 Todo 快照，包括保留的归档决策。
 后续拒绝／取消按决策时间覆盖旧批准，不再依赖 Todo ID；矛盾历史无法定序时给出
 诊断且不提供 active receipt。此授权面必须有显式 user-gate metadata，不再借用

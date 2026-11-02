@@ -1493,9 +1493,12 @@ migrate all T3 consumers or grant amendment commit/whole-Goal promotion authorit
 
 Standing-decision consumer closure: `todos/standing_decision.ts` owns reusable
 receipt eligibility and chronology, shared by status/quota reads and archive
-selection. Python decodes legacy metadata and submits one batch; its old receipt
-selector and the archive-local TS eligibility copy are removed. Canonical reads
-use the complete Todo snapshot, including retained archived decisions, before
+selection. Python decodes legacy metadata for the composed `todo.read` batch;
+its old receipt selector and the archive-local TS eligibility copy are removed.
+The unused `build_standing_decision_authority` wrapper and its standalone
+`todo.standing_decision.project` handler/request decoder are now removed; tests
+and the example use the composed read, while the shared TS owner remains.
+Canonical reads use the complete Todo snapshot, including retained archived decisions, before
 assigning display indexes. Later rejection/cancellation is ordered by decision
 time, not Todo ID; contradictory unresolved chronology yields a diagnostic and
 no active receipt. Explicit user-gate metadata replaces notification heuristics
