@@ -13,6 +13,7 @@ from loopx.cli_commands.quota_capture import native_context_capture_view, read_c
 from loopx.cli_commands.quota_capture import handle_native_context_command
 from loopx.control_plane.turn_driver import codex_context
 from loopx.control_plane.turn_driver.decision_capture import capture_page_range
+from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
 
 @pytest.fixture
@@ -68,7 +69,73 @@ def read_selection(command):
         offset=0, page_bytes=64000, max_page_output_bytes=64000)
     page = read_context_capture(args)
     assert page["ok"] and page["eof"]
-    return page, {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
+    return page, selected_context_values(page["content"])
+
+
+def test_initial_read_coalesces_whole_contract_with_exact_values_and_unknown_obligations(tmp_path, decision):
+    cli = decision["interaction_contract"]["cli_channel"]
+    cli["settlement_plan"]["ordered_steps"] = [{
+        "kind": "durable_writeback", "precondition": "Keep the original identity and final stop.",
+        "unknown_obligation": {"allowed": False, "empty": [], "a/b~c": "Preserve this selected constraint."},
+        "measurement": [2**60 + 1, 1.0, -0.0],
+    }]
+    view = native_context_capture_view(decision, tmp_path)
+    page, values = read_selection(view["first_read_command"])
+    assert values["/interaction_contract/cli_channel"] == cli
+    pointers = [item["pointer"] for item in json.loads(page["content"])["selections"]]
+    assert "/interaction_contract/cli_channel" in pointers
+    assert not any(pointer.startswith("/interaction_contract/cli_channel/") for pointer in pointers)
+    assert str(2**60 + 1) in page["content"] and "1.0,-0.0" in page["content"]
+    # The complete source, including unrelated deferred evidence, is unchanged.
+    raw = Path(view["recovery"]["path"]).read_bytes()
+    assert json.loads(raw) == decision
+    assert hashlib.sha256(raw).hexdigest() == page["sha256"]
+    assert "older-evidence-" not in page["content"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_advertised_native_reader_keeps_the_complete_current_contract_across_pages(tmp_path, monkeypatch, provider):
+    from test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, _heartbeat_receipt_count, _initialize_fixture_authority,
+        _run_cli, _spend_run_count, _write_fixture,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+    state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    original_state = state.read_bytes()
+    turn_id = "native-first-read"
+    code, view = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        "--context-delivery", "on", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", turn_id, cwd=project)
+    assert code == 0 and view["mode"] == "full", view
+    _, reference = read_context_read_reference(view["recovery"]["reference_file"])
+    raw = Path(reference["path"]).read_bytes()
+    source = json.loads(raw)
+    words = shlex.split(view["first_read_command"])
+    for option in ("--page-bytes", "--max-page-output-bytes"):
+        words[words.index(option) + 1] = "4500"
+    content = []
+    for _ in range(20):
+        code, page = _run_cli(registry, runtime, *words[words.index("quota"):], cwd=project)
+        assert code == 0 and page["ok"], page
+        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= 4500
+        assert capture_page_range(page, raw=raw, digest=reference["sha256"]) is None
+        content.append(page["content"])
+        if page["eof"]:
+            break
+        words = shlex.split(page["next_command"])
+    assert page["eof"] and len(content) > 1
+    values = selected_context_values("".join(content))
+    assert values["/interaction_contract/cli_channel"] == source["interaction_contract"]["cli_channel"]
+    assert values["/heartbeat_receipt"] == source["heartbeat_receipt"]
+    assert values["/selected_todo"] == source["selected_todo"]
+    assert _heartbeat_receipt_count(runtime, turn_id) == 1 and _spend_run_count(runtime) == 0
+    assert Path(reference["path"]).read_bytes() == raw and state.read_bytes() == original_state
 
 
 def test_initial_read_keeps_current_constraints_whole_and_history_reachable(tmp_path, decision):
