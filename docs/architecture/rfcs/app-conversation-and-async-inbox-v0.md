@@ -1847,6 +1847,10 @@ card cannot substitute for final-message readback.
 
 ### Recovering a native result after Core failure
 
+Historical native-result discovery waits while the same Core Session is busy
+or has an active Turn, leaving shared reply workers available for current
+progress. Already verified result metadata keeps its existing correlation owner.
+
 An Antigravity owner request can finish natively while Core retains a transport
 failure. The original reply worker may adopt that existing answer, without
 admitting another Turn, sending native input or cancelling an invocation. The
