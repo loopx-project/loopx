@@ -154,7 +154,12 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Native Windows paired base/head both emit 40,701 JSON chars.
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
-            "crowded": {"json": 42_000, "markdown": 10_500},
+            # Inherited Stride adds its complete decision/axis/source contract:
+            # the same native fixture measures 35,597 -> 42,281 characters.
+            # Preserve the original 42,000 failure and the required semantics;
+            # calibrate this regression allowance only, with 219 chars headroom.
+            # No production hard limit or line/collection-growth guard changes.
+            "crowded": {"json": 42_500, "markdown": 10_500},
             # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
             # this candidate both emit 25,836 JSON characters (96 matched
             # surface/mode measurements, no semantic or route differences).
@@ -214,7 +219,11 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         # 35*60 = 2,100 as the per-Todo allowance; the advice adds 673 fixed
         # chars, so 5,400 leaves 154 of headroom without widening per-Todo growth.
         # This is a regression budget, not authority.
-        max_json_fixed_semantic_growth_chars=5_400,
+        # Inherited Stride adds a fixed required-review decision contract;
+        # matched small/crowded output is 10,560/15,492 -> 10,560/21,856.
+        # Keep 35*60 collection growth; 9,300 covers 9,196 fixed chars with
+        # 104 headroom. Retain the earlier 5,400 failure, not a size reduction.
+        max_json_fixed_semantic_growth_chars=9_300,
     ),
     CliOutputBudgetSpec(
         surface_id="status",

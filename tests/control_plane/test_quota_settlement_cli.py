@@ -2404,6 +2404,12 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         _initialize_git_checkout(project)
         todo_id = SELECTED_REPLAN_TODO_ID
     _initialize_fixture_authority(project, runtime, provider=provider)
+    if writeback_kind == "replan":
+        # This replay fixture supplies the ordinary typed replan delta. Keep
+        # its strategy explicit; Stride decision followthrough is tested separately.
+        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                                  "--execution-stride-strategy", "off", "--execute")
+        assert rc == 0, configured
     turn_id = "turn-same-todo-writeback"
     host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
     guard_args = (
