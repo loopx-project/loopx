@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-from loopx.control_plane.turn_driver import codex_context as context
-from tests.control_plane.test_codex_context_lifecycle import setup, project, read_pages
 from loopx.control_plane.quota.turn_envelope import restore_context_delivery
+from loopx.control_plane.turn_driver import codex_context as context
+from tests.control_plane.test_codex_context_lifecycle import project, read_pages, setup
 
 
 def assert_file_delta(wire, previous, expected):
@@ -81,8 +81,49 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
     return event, history, payload
 
 
+@pytest.mark.parametrize("version", ["0.163.0-alpha.11.2", "0.166.0-alpha.5.1"])
+def test_failed_tool_result_cannot_qualify_new_native_writer(tmp_path, monkeypatch, version):
+    """A successful page nested in a failed tool result is not replay evidence."""
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": version, "history_mode": "paginated"})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
+    _, first = project(tmp_path, payload={"ok": True,
+        "plan_summary": {"requirements": "Keep original evidence. " * 1000},
+        "heartbeat_receipt": {"turn_instance_id": "first"}})
+
+    repo = Path(__file__).resolve().parents[2]
+    command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota",
+        "context-hook", "--context-delivery", "on", "--codex-app",
+        "--codex-context-dir", str(tmp_path)]
+    environment = {**os.environ, "PYTHONPATH": str(repo), "CODEX_THREAD_ID": "session"}
+    for index, page in enumerate(read_pages(tmp_path, first)):
+        call = f"failed-reader-{index}"
+        response = {"isError": True,
+            "content": [{"type": "text", "text": json.dumps(page)}]}
+        append(history, "response_item", {"type": "function_call_output", "call_id": call,
+            "output": json.dumps(response)})
+        result = subprocess.run(command, input=json.dumps({**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": call, "tool_response": response}), capture_output=True, text=True,
+            cwd=tmp_path, env=environment, timeout=20, check=False)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {}
+
+    before = context._state(tmp_path)
+    assert "candidate" not in before
+    resumed = subprocess.run(command, input=json.dumps({**event, "source": "resume"}),
+        capture_output=True, text=True, cwd=tmp_path, env=environment, timeout=20, check=False)
+    assert resumed.returncode == 0, resumed.stderr
+    recovery = json.loads(resumed.stdout)
+    assert "quota context-read" in recovery["hookSpecificOutput"]["additionalContext"]
+    assert "candidate" not in context._state(tmp_path)
+
+
 @pytest.mark.parametrize("shell_wrapper", [False, True])
-@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])
+@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2", "0.166.0-alpha.5.1"])
 def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_path, monkeypatch, shell_wrapper, version):
     event, history, payload = observed_read(tmp_path, monkeypatch, shell_wrapper=shell_wrapper, version=version)
     before = context._state(tmp_path)
@@ -102,6 +143,7 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
 @pytest.mark.parametrize("code_mode", [False, True])
 def test_compact_recovery_preserves_turn_but_next_turn_starts_new_file_baseline(tmp_path, monkeypatch, single_page, lose_first, code_mode):
     from argparse import Namespace
+
     from loopx.cli_commands.quota_capture import read_context_capture
 
     event, history, payload = observed_read(tmp_path, monkeypatch)
@@ -160,7 +202,7 @@ def test_compact_recovery_preserves_turn_but_next_turn_starts_new_file_baseline(
 
 @pytest.mark.parametrize("change", ["compact", "rollback", "retained", "unknown", "truncate",
     "replace", "rewrite", "missing", "output", "duplicate", "model", "workspace", "session", "permission", "writable", "malformed"])
-@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1"])
+@pytest.mark.parametrize("version", ["0.162.1", "0.163.0-alpha.11.1", "0.163.0-alpha.11.2", "0.166.0-alpha.5.1"])
 def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, monkeypatch, change, version):
     event, history, payload = observed_read(tmp_path, monkeypatch, version=version)
     before = context._state(tmp_path)
@@ -201,7 +243,7 @@ def test_resume_loss_or_unknown_continuity_falls_back_to_current_full(tmp_path, 
         assert wire["mode"] == "full" and wire["context"] == payload
 
 
-@pytest.mark.parametrize("version", ["0.163.0", "0.163.0-alpha.11.2", "unknown"])
+@pytest.mark.parametrize("version", ["0.163.0", "0.163.0-alpha.11.3", "0.166.0-alpha.5.2", "unknown"])
 def test_unqualified_native_version_cannot_retain_resume_baseline(tmp_path, monkeypatch, version):
     event, _, payload = observed_read(tmp_path, monkeypatch, version=version)
     before = context._state(tmp_path)
@@ -252,7 +294,7 @@ def test_real_hook_rejects_fifo_history_without_waiting_for_a_writer(tmp_path, m
 
     def hook(values):
         result = subprocess.run(cli, input=json.dumps({**event, **values}), capture_output=True,
-            text=True, timeout=5, cwd=Path(__file__).resolve().parents[2])
+            text=True, timeout=5, cwd=Path(__file__).resolve().parents[2], check=False)
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
@@ -301,6 +343,7 @@ def test_complete_eof_cannot_hide_a_prior_page_missing_from_native_replay(tmp_pa
 @pytest.mark.parametrize("prefix_mib", [0, 96])
 def test_unrelated_history_size_does_not_change_replay_or_decode_cost(tmp_path, monkeypatch, prefix_mib):
     import tracemalloc
+
     from loopx.control_plane.turn_driver import codex_context_history as history_io
 
     event, history, payload = observed_read(tmp_path, monkeypatch, history_prefix_mib=prefix_mib)
@@ -313,7 +356,7 @@ def test_unrelated_history_size_does_not_change_replay_or_decode_cost(tmp_path, 
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert peak < 4 * 1024 * 1024  # no history-sized allocation, including above the former 64 MiB cutoff
+    assert peak < 1024 * 1024  # bounded by observed files, not the transport ceiling or history size
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == "delta"

@@ -1,5 +1,7 @@
 """Real receipt/store journeys: a Turn agenda does not complete or replay work."""
 import json
+import os
+import shlex
 
 import pytest
 
@@ -92,7 +94,9 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("delivery", ["host_envelope", pytest.param("native_files",
+    marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
+def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider, delivery):
     from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
@@ -121,17 +125,52 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
     acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Continue the linked work", registry=registry)
     from loopx.control_plane.collaboration.links import link
     link(root, registry, "research", "worker", receipt["request_id"], ["todo_artifact"], [])
+    before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
+    if delivery == "native_files":
+        from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
+        (tmp_path / "captures").mkdir()
+        (tmp_path / "context").mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", "agenda-session")
+        directory = codex_context_directory(root=str(tmp_path / "context"), create=True)
+        codex_context_hook(directory, {"session_id": "agenda-session", "cwd": str(tmp_path),
+            "hook_event_name": "SessionStart", "source": "startup"})
     for turn_id in ("agenda-turn-one", "agenda-turn-two"):
+        presentation = ["--turn-envelope"] if delivery == "host_envelope" else [
+            "--codex-app", "--context-delivery", "on", "--decision-output-root", str(tmp_path / "captures"),
+            "--codex-context-root", str(tmp_path / "context")]
         code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "research",
             "--agent-id", "worker",  "--turn-instance-id", turn_id,
-            "--turn-envelope", registry_path=registry, runtime_root=root)
-        assert code == 0, packet
-        source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
-        assert source["content"]["unfinished_delegations"]["items"][0]["request_id"] == receipt["request_id"]
-        assert any("manager-inbox read" in row["command"] for row in packet["required_reads"])
-        assert packet["work_context"]["complete"] is True
-        assert "Continue the linked work" not in json.dumps(source)
-        assert source["content"]["unfinished_delegations"]["items"][0]["todo_ids"] == ["todo_artifact"]
+            *presentation, registry_path=registry, runtime_root=root)
+        assert code == 0, (packet.get("error_code"), packet.get("reason"), packet.get("recovery"))
+        if delivery == "native_files":
+            if turn_id == "agenda-turn-one":
+                assert packet["mode"] == "full" and "first_read_command" in packet
+                command = packet["first_read_command"]
+            else:
+                # Warm delivery retains its delta reader; recover this Turn's
+                # complete current capture, never prefetch an older baseline.
+                assert packet["mode"] == "delta"
+                command = packet["recovery"]["command"] + " --initial-read"
+            words = shlex.split(command)
+            assert words[0] == "loopx"
+            code, page = run_json_cli_result(*words[1:], registry_path=registry, runtime_root=root)
+            assert code == 0 and page["ok"] and page["eof"], page
+            values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+            pointer = next(key for key in values if key.endswith("/content/unfinished_delegations"))
+            content = {"unfinished_delegations": values[pointer],
+                "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
+            required_reads = values["/interaction_contract/agent_channel/required_reads"]
+        else:
+            source = next(row for row in packet["work_context"]["sources"] if row.get("hook_id") == "manager.context_inbox")
+            content, required_reads = source["content"], packet["required_reads"]
+            assert packet["work_context"]["complete"] is True
+        assert content["read_complete"] is False
+        row = content["unfinished_delegations"]["items"][0]
+        assert row["request_id"] == receipt["request_id"]
+        assert row["todo_ids"] == ["todo_artifact"] and row["step"] == "review_request_work"
+        assert any("manager-inbox read" in item["command"] for item in required_reads)
+        assert "Continue the linked work" not in json.dumps(content)
+    assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
 
 
 def test_real_overflow_keeps_total_and_full_read_route(flow):

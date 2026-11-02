@@ -1,10 +1,10 @@
 """The Chat capabilities route is decided once, by the server that dispatches on it.
 
 ``/api/chat/capabilities`` is a wire identity: the server routes on it, the
-dashboard launcher probes it before a server exists, and the shipped web client
-fetches it. A second Python binding can drift from the first while every test
-that uses its own copy keeps passing, so the census here is the only thing that
-connects the three spellings.
+dashboard launcher uses it for capability checks and legacy readiness fallback,
+and the shipped web client fetches it. A second Python binding can drift from
+the first while every test that uses its own copy keeps passing, so the census
+here is the only thing that connects the three spellings.
 
 Two copies are deliberately *not* folded into the owner. The web client is a
 separate runtime whose literal is declared below rather than ignored, and
@@ -146,21 +146,23 @@ def test_web_client_restatements_are_declared_not_ignored() -> None:
     )
 
 
-def test_launcher_probes_the_owners_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The probe is the consumer, so it must ask for the owner's path."""
-    requested: dict[str, str] = {}
+@pytest.mark.parametrize("readiness_status", [599, 404])
+def test_launcher_probes_the_owners_routes(
+    monkeypatch: pytest.MonkeyPatch, readiness_status: int,
+) -> None:
+    """Readiness is primary; only its absence permits the legacy owner route."""
+    requested: list[tuple[str, str]] = []
 
     class RecordingConnection:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
         def request(self, method: str, path: str, headers: object = None) -> None:
-            requested["method"] = method
-            requested["path"] = path
+            requested.append((method, path))
 
         def getresponse(self) -> object:
             class Response:
-                status = 599
+                status = readiness_status if len(requested) == 1 else 599
 
                 def read(self, _limit: int) -> bytes:
                     return b"{}"
@@ -172,10 +174,10 @@ def test_launcher_probes_the_owners_route(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(http.client, "HTTPConnection", RecordingConnection)
     assert dashboard_launcher._probe_existing_chat("127.0.0.1", 1) == "foreign"
-    assert requested == {
-        "method": "GET",
-        "path": chat_server.CHAT_CAPABILITIES_PATH,
-    }
+    expected = [("GET", chat_server.CHAT_READINESS_PATH)]
+    if readiness_status == 404:
+        expected.append(("GET", chat_server.CHAT_CAPABILITIES_PATH))
+    assert requested == expected
 
 
 def test_launcher_holds_no_private_copy_of_the_route() -> None:

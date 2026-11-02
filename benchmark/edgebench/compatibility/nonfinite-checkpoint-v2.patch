@@ -1,5 +1,5 @@
 diff --git a/docs/en/reference/judge-api.md b/docs/en/reference/judge-api.md
-index 3b2b23fcf6b29770905be3cf24669cc83f0b144a..4209f8c6ac20c1de5c79495e56ad096649eb3499 100644
+index f0033a8a5dc31dc373272ae8affe157911b782bb..9f17a4966bef3a9f5560ee4e815c4d687de0a1d1 100644
 --- a/docs/en/reference/judge-api.md
 +++ b/docs/en/reference/judge-api.md
 @@ -83,2 +83,19 @@ Content-Type: application/json
@@ -32,7 +32,7 @@ index 3b2b23fcf6b29770905be3cf24669cc83f0b144a..4209f8c6ac20c1de5c79495e56ad0966
 +
  If the restore response is lost, call `POST /api/v1/checkpoint/restore-result` with the **same** JSON body (`checkpoint_id`, `manifest_sha256`, `run_id`, and current `admin_secret`). It returns the original response shape and the already published submission token. It does not allocate another registration, replay grading, or restart cooldown. Readback also remains valid after subsequent submissions and preserves their consumed opportunities. The existing origin marker must match and the registration must still be live; a missing, mismatched, partial or lost registration returns 409. Wrong admin authority returns 403, and malformed bodies return 422. A persisted origin marker alone cannot recreate credentials after a judge process restart. This recovery does not recover a runner's phase deadline: its controller must retain the original activation-time deadline and must not initialize a new duration on retry. A new `run_id` represents a different branch, not recovery of this response.
 diff --git a/docs/zh/reference/judge-api.md b/docs/zh/reference/judge-api.md
-index 19f9be961ddcf385b0639986c5434601318e2fad..6cb4d4bf36748ec212211f57b234ab4a8e2887e4 100644
+index 9eb2e7d2a6f1cb2be4d27c29c9941cbb0f46da58..b4a0dff68bd1d49a3fd585f418c7cc0dca17fa13 100644
 --- a/docs/zh/reference/judge-api.md
 +++ b/docs/zh/reference/judge-api.md
 @@ -77,2 +77,20 @@ Token 是一个 32 字符的十六进制字符串，内部维护任务 ID、运
@@ -57,7 +57,7 @@ index 19f9be961ddcf385b0639986c5434601318e2fad..6cb4d4bf36748ec212211f57b234ab4a
 +
  恢复不会评测或多消费一轮。后续提交仍由原生 `consume_round`、预算、冷却及选优规则决定。冷却在新注册发布时，从捕获时剩余的**时长**重新计时；离线等待和 capsule 物化既不会补发机会，也不会消耗这段时长；旧 capsule 不包含来源后来取得的提升。
 diff --git a/sforge/harness/checkpoint.py b/sforge/harness/checkpoint.py
-index 31d62ed85f68bea5bd2565f72b3b630d260e8a7a..42e46cd23ea329b099a99d2a32abb3dd9e7020b8 100644
+index 9a83144706ae2bddb067a4f89f989f288dafe974..d89ac61f4b26d837686b165e873da825652b5e63 100644
 --- a/sforge/harness/checkpoint.py
 +++ b/sforge/harness/checkpoint.py
 @@ -45,3 +45,5 @@ if TYPE_CHECKING:
@@ -199,12 +199,12 @@ index 31d62ed85f68bea5bd2565f72b3b630d260e8a7a..42e46cd23ea329b099a99d2a32abb3dd
 -                )
 +                ))
              ):
-@@ -413,3 +528,3 @@ class JudgeCheckpoints:
+@@ -418,3 +533,3 @@ class JudgeCheckpoints:
              self._validate(packet)
 -            encoded = _encode(
 +            encoded = _encode_manifest(
                  packet
-@@ -530,3 +645,8 @@ class JudgeCheckpoints:
+@@ -535,3 +650,8 @@ class JudgeCheckpoints:
                          folder.mkdir(parents=True)
 -                        _write(folder / "report.json", _encode(report))
 +                        # Native report.json uses json.dumps' Inf/NaN spelling
@@ -215,7 +215,7 @@ index 31d62ed85f68bea5bd2565f72b3b630d260e8a7a..42e46cd23ea329b099a99d2a32abb3dd
 +                        ).encode())
                  incumbent = packet["incumbent"]
 diff --git a/tests/test_judge_checkpoint.py b/tests/test_judge_checkpoint.py
-index be90734f9ec7939a8b7a89fafb6532e2a6e1e677..f991fd8c80501e50ab59738f156ced950373ce80 100644
+index 608effc16c9c032dd2a44b3375b5ea57c502e0fa..7dbdc68e47021c6ad42fac1462ac52647412eadc 100644
 --- a/tests/test_judge_checkpoint.py
 +++ b/tests/test_judge_checkpoint.py
 @@ -20,2 +20,3 @@ import copy
@@ -229,7 +229,7 @@ index be90734f9ec7939a8b7a89fafb6532e2a6e1e677..f991fd8c80501e50ab59738f156ced95
 +    CheckpointUnavailable, _decode_manifest, _encode, _encode_manifest, _sha,
 +)
  from sforge.harness.config import SForgeConfig
-@@ -777 +780,244 @@ def test_restore_materialization_does_not_spend_remaining_cooldown(
+@@ -810 +813,244 @@ def test_restore_materialization_does_not_spend_remaining_cooldown(
      assert submit(client, fresh, 12).status_code == 429
 +
 +

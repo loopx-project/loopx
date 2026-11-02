@@ -6,6 +6,29 @@ Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
+Changing a previously prepared private steward to an executor without native
+scheduled-work support keeps its original configuration readable in connection
+settings. The monitor deadline, report schedule, retained window and delivery
+state remain visible with an explicit execution-unavailable notice. Configuration
+controls are disabled; inspecting retained state neither re-enables the old host
+nor retries a failed window. Native admission still owns every execution and
+configuration change. Restoring a supported executor restores the existing
+configuration view rather than creating a replacement identity or subscription.
+
+The disposable `steward_report_fixture.py --retained-executor` journey prepares
+one original synthetic steward and calendar window. With baseline assets the
+section is absent; current packaged assets expose the retained state at 1200
+and 390 pixels. Its `restore-supported-executor` control restores the same
+configuration. No wake owner is started, no model Turn is requested and no
+provider write is added during inspection or restoration. This qualifies UI
+readback and executor compatibility, not scheduled generation or live delivery.
+
+| Baseline: retained section hidden | Current: original schedule remains readable |
+| --- | --- |
+| ![Baseline packaged settings hide the retained schedule](../assets/personal-workspace/steward-reports/retained-executor-before.png) | ![Current packaged settings retain the schedule with unavailable execution](../assets/personal-workspace/steward-reports/retained-executor-desktop.png) |
+
+![The same retained schedule at 390 pixels](../assets/personal-workspace/steward-reports/retained-executor-narrow.png)
+
 Markdown, the HTML report and its copied full text use the same source-link
 rule. An unchanged, well-formed HTTP(S) address is a link. Opaque evidence
 digests, native Task/artifact references and private relative paths stay source
@@ -38,6 +61,16 @@ Turn, its complete original conversation return, then the existing answer
 reader. The six source links retain the recorded Task address in both formats.
 The fixed synthetic prose qualifies transport and reading mechanics, not live
 editorial quality or the address's availability. No layout or editor changed.
+
+New portfolio and local-Session editorial requests share the same time and
+content requirements. A Task completed after the period end remains a later
+state observation; only timestamped evidence inside `[start, end)` supports
+period progress. Older history, later changes, unknown times and unavailable
+views remain distinct. The author is asked to retain concrete outcomes,
+quantified comparisons, counterevidence and the responsible owner's next
+action, while stating shared limitations once. These are authoring requirements,
+not a semantic validator or proof of model compliance. Existing frozen requests
+and reports retain their original requirements and bytes.
 
 The public browser fixture also keeps the original private outbound owner
 running through its periodic source-history check. Its shared synthetic
@@ -411,6 +444,25 @@ account acceptance.
 | Partial coverage, narrow viewport | Recovered worker, narrow viewport |
 | --- | --- |
 | ![Partial notification coverage in a narrow viewport](../assets/personal-workspace/owner-attention-source/partial-phone.png) | ![Recovered notification worker in a narrow viewport](../assets/personal-workspace/owner-attention-source/recovered-phone.png) |
+
+### Terminal-failure notices
+
+A blocked Todo that is neither done nor superseded and has a `reject` or `cancel`
+in its typed `decision_scope_outcomes` becomes a separate owner-attention subject,
+`<goal>/<todo>/terminal`, independent of its ordinary owner-action subject.
+The notice uses the latest terminal outcome by recorded time when all terminal
+outcomes have timestamps; otherwise it uses the last terminal outcome in the list.
+Its digest includes the terminal outcome count, so a second outcome starts a new
+notice generation even when the latest terms are unchanged. Clearing the terminal
+outcomes, leaving blocked status, completing or superseding the Todo withdraws
+unsent notices; delivered receipts remain unchanged. A missing `decision_scope`
+does not suppress a terminal notice. These notices reuse **Automatically notify
+new owner tasks**, its first-enable baseline and the existing outbound worker;
+they add no setting, scheduler or message consumer.
+
+未完成、未被替代的阻塞待办若有 `reject` 或 `cancel` 结果，会成为独立的所有者关注项；缺少 `decision_scope` 也不会漏报。
+终止结果均有时间戳时取最新一项，否则取列表最后一项；计数变化会产生新一代通知。结果清除或待办离开阻塞、完成、被替代时撤回未发送通知，已送达回执不变。
+此通知复用“自动通知新增所有者任务”、首次启用时的历史基线和现有出站工作器，不新增设置、调度器或消息消费者。
 
 The intended flow is:
 
@@ -1051,6 +1103,24 @@ owner; removing it resumes the same stored state through a new wake-service
 instance. `observed.json` records artifact, completion, retained history and
 actual post-setup model calls. This qualifies neither live-model understanding,
 complete Chat-process restart nor production delivery.
+
+For a controller-restart check, stop that wake owner, await accepted work, then
+write a unique operation token to `restart-runtime` in the same output directory.
+The fixture closes the old controller and reconstructs the normal controller,
+Chat store and transport over the original physical state, keeping its HTTP URL.
+`restart-readback.json` verifies the original Session, actor and message history
+and that restarting itself added no model or delivery effect. The wake owner
+remains stopped until `stop-existing-wake` is removed. Reusing a token within
+that fixture lifetime does not restart again. Missing stop or pending original
+work writes `restart-rejected.json` and leaves the controller running; that
+token cannot apply later after the condition changes. This is an isolated controller
+restart inside the fixture process, not an OS-process or installed-service test.
+
+`test_same_calendar_task_lifecycle_retains_results_and_rejects_late_dispatch`
+joins settings changes, pause/cancel, restart, original result readback,
+withdrawn Agent registration, late dispatch and three distinct calendar windows
+in one File/SQLite journey. Paused and withdrawn stages must add no model call
+or reply; each admitted window must have exactly one original Core result.
 
 Callers can discover eligible references on demand with
 `GET /api/chat/sessions/<original-session-id>/native-turn?calendar_task_sources=true`.

@@ -111,7 +111,9 @@ For managed review, pass `--goal-id GOAL` and execute the packet's current
 `failure_attribution` (including `evidence_scope`) own CI observation and failure
 judgment. With `wait_for_ci=false`, never fetch, poll or wait for CI. Keep review
 verdict and merge readiness separate; do not substitute CI metadata for decisive
-changed-invariant evidence. Configure one Goal with `configure-goal --goal-id GOAL
+changed-invariant evidence. Follow the packet's diagnostic-row rule for unknown
+or red CI; do not invent a CI-success or exhaustive attribution requirement.
+Configure one Goal with `configure-goal --goal-id GOAL
 --no-pr-review-wait-for-ci --execute`; clear with
 `--clear-pr-review-configuration --execute`.
 
@@ -132,10 +134,12 @@ and return its URL. After APPROVE (incl. existing approval), execute
 owner/GitHub authority, preserving discussion and unresolved reviews. Merge routes through
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
-Immediately before every merge, run `loopx --format json pr-review --goal-id GOAL
---repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Its compact
-Goal observation suppresses only unchanged requalification; material change reopens it, admin
-bypass never overrides this gate, and author fallback needs user authority.
+Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
+--check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Pass `--goal-id GOAL`
+when the work is already Goal-managed; its compact observation suppresses only unchanged
+requalification. Standalone work requires no Goal and writes no Goal observation.
+Material change reopens qualification, admin bypass never overrides this gate, and author
+fallback needs user authority.
 
 ## Full PR Review And Bilingual Format
 

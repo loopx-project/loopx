@@ -29,7 +29,7 @@ from sforge.harness.constants import get_admin_secret
 from sforge.harness.run_agent import run_agent
 from sforge.harness.task_spec import make_task_spec
 
-from benchmark.runtime.codex import TASK_ENTRIES, turn_envelope_receipt
+from benchmark.runtime.codex import Execution, TASK_ENTRIES, turn_envelope_receipt
 from loopx.reasoning_effort import REASONING_EFFORTS
 from loopx.control_plane.work_items.stride_policy_codec import stride_strategy_options
 from benchmark.runtime.sforge import (
@@ -44,6 +44,7 @@ from benchmark.edgebench.prompts import (
 from benchmark.edgebench.online_sampling import OnlineSampler
 from benchmark.edgebench.feedback import BestOnlyFeedback, FEEDBACK_MODES, validate_best_only
 from benchmark.edgebench.feedback_hook import FEEDBACK_PAYLOAD
+from benchmark.edgebench.result_publication import write_native_result as _write_native_final_result
 
 
 def _observe_run(call):
@@ -85,25 +86,6 @@ def _result_status(*, interrupted, started, runtime_seconds, exit_code, timed_ou
     return "terminal"
 
 
-def _write_native_final_result(trial, result, *, status, agent, task, run_id, model, effort,
-                               feedback="native", native_goal_outcome=None):
-    """Retain partial native scores without publishing a completion marker."""
-    if status != "terminal" and not (native_goal_outcome and result.runtime_seconds > 0):
-        return
-    final = dict(agent=agent, task=task, run_id=run_id, model=model, effort=effort,
-                 **result.to_dict())
-    if native_goal_outcome is not None:
-        final.update(runtime_status=status, native_goal_outcome=native_goal_outcome)
-    if feedback == "best-only":
-        final["evaluation_coverage"] = "online_only"
-        final["offline_scoring_complete"] = False
-    # SForge consumers treat final_result.json itself as a completed run.
-    destination = trial / ("final_result.json" if status == "terminal" else "partial_result.json")
-    pending = destination.with_suffix(".json.tmp")
-    pending.write_text(json.dumps(final, indent=2, ensure_ascii=False))
-    pending.replace(destination)
-
-
 def _task_default(task_id: str, key: str, explicit: int | None, fallback: int) -> int:
     """Resolve EdgeBench task settings; explicit values retain runtime semantics."""
     if explicit is not None:
@@ -139,8 +121,10 @@ def main(argv=None):
                         help="New-run default: native public feedback; blind/best-only are explicit controls")
     parser.add_argument("--turn-envelope", action="store_true",
                         help="Opt-in short heartbeat context with same-invocation full captures")
-    parser.add_argument("--context-delivery", choices=("off", "on"), default="off",
-                        help="Experimental native Codex benchmark heartbeat reuse only; off by default")
+    parser.add_argument("--context-delivery", choices=("off", "on"),
+                        help="Native Codex context delivery: on by default for heartbeat workers; pass off to disable")
+    parser.add_argument("--provider-request-admission", action="store_true",
+                        help="Opt-in canonical admission before each heartbeat custom Responses request")
     parser.add_argument("--native-goal-continue", action="store_true",
                         help="Opt-in: when a native Goal declares completion with budget left, start "
                              "continuation Goals until the budget edge (native-goal worker only)")
@@ -194,6 +178,9 @@ def main(argv=None):
                         help="Native default: 3600s between accepted submissions; other modes retain 120s")
     parser.add_argument("--judge-url", required=True)
     parser.add_argument("--api-proxy-url", help="Operator-owned, OpenAI-only CONNECT proxy")
+    parser.add_argument("--docker-host-bridge", action="store_true",
+                        help="Host services run on Docker's default bridge (e.g. runner inside a VM); "
+                             "pin host.docker.internal there instead of Docker's host-gateway alias")
     args = parser.parse_args(argv)
     api_base_url = os.environ.get("OPENAI_BASE_URL") or None
     api_key = os.environ.get("OPENAI_API_KEY") if api_base_url else None
@@ -210,8 +197,17 @@ def main(argv=None):
         parser.error("--task-entry loopx-planned requires a heartbeat worker")
     if args.turn_envelope and args.worker not in {"heartbeat-resume", "heartbeat-explore"}:
         parser.error("--turn-envelope requires a heartbeat worker")
+    if args.context_delivery is None:
+        args.context_delivery = Execution(mode="heartbeat" if args.worker.startswith("heartbeat-") else "plain").context_delivery
     if args.context_delivery != "off" and not args.worker.startswith("heartbeat-"):
         parser.error("--context-delivery requires a heartbeat worker")
+    if args.provider_request_admission:
+        if not args.worker.startswith("heartbeat-"):
+            parser.error("--provider-request-admission requires a heartbeat worker")
+        if not (api_base_url or "").strip() or not (api_key or "").strip():
+            parser.error("--provider-request-admission requires OPENAI_BASE_URL and OPENAI_API_KEY")
+        if (os.environ.get("CODEX_WIRE_API") or "responses") != "responses":
+            parser.error("--provider-request-admission requires CODEX_WIRE_API=responses")
     if args.native_goal_continue and args.worker != "native-goal":
         parser.error("--native-goal-continue requires --worker native-goal")
     if (args.replan_after_turns is not None or args.replan_after_todos is not None
@@ -360,6 +356,7 @@ def main(argv=None):
                          task_entry=args.task_entry,
                          turn_envelope=args.turn_envelope,
                          context_delivery=args.context_delivery,
+                         **({"provider_request_admission": True} if args.provider_request_admission else {}),
                          native_goal_continue=args.native_goal_continue,
                          replan_after_turns=args.replan_after_turns,
                          replan_after_todos=args.replan_after_todos,
@@ -396,6 +393,7 @@ def main(argv=None):
     backend = RecordingDockerBackend(log_dir=trial / "collected", logger=logger,
                                      oauth_proxy=bool(args.api_proxy_url or api_base_url),
                                      blind_api_endpoint=blind_endpoint, feedback=feedback,
+                                     docker_host_bridge=args.docker_host_bridge,
                                      **({"checkpoint": checkpoint} if checkpoint is not None else {}))
     for image in (task.work_image_key, task.judge_image_key):
         if not backend.image_exists(image):
@@ -421,10 +419,12 @@ def main(argv=None):
            if agent.task_entry == "loopx-planned" else {}),
         "model": args.model, "effort": args.effort, "timeout_seconds": args.timeout,
         "provider_rate_limit_retry_seconds": args.provider_rate_limit_retry_seconds,
+        **({"docker_host_bridge": True} if args.docker_host_bridge else {}),
         "loopx_commit": pins[0], "runner_commit": pins[1],
         "sforge_source": active_source_receipt(),
         **turn_envelope_receipt(explicit=args.turn_envelope),
         **({"context_delivery": "on"} if args.context_delivery != "off" else {}),
+        **({"provider_request_admission": "on"} if args.provider_request_admission else {}),
         **({"native_goal_continue": True} if args.native_goal_continue else {}),
         "task_sha256": hashlib.sha256(task_file.read_bytes()).hexdigest(),
         "feedback": args.feedback, "internet": task.internet,

@@ -156,6 +156,18 @@ def normalize_request(value: Any) -> dict | None:
         raise ValueError(str(exc)) from exc
 
 
+def normalize_handoff(value: Any) -> dict | list[dict] | None:
+    """Adapt the typed multi-recipient contract without enabling ordinary IO."""
+    if value is None:
+        return None
+    from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+
+    try:
+        return effect_runtime_result("collaboration.handoff.normalize", {"handoff": value})["handoff"]
+    except EffectRuntimeRejected as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def normalize_source_context(value: str) -> str:
     """The shared typed owner qualifies source text before persistence."""
     from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result

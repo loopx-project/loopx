@@ -882,11 +882,14 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
     )
     assert preview_payload["write"]["status"] == "preview_inserted"
     assert preview_payload["write"]["write_performed"] is False
+    assert preview_payload["row"] == normalize_benchmark_experiment_board_row(_baseline())
+    assert "runs" not in preview_payload
     assert not ledger.exists()
 
     executed = run_source_cli([*command, "--execute"], check=True)
     executed_payload = json.loads(executed.stdout)
     assert executed_payload["write"]["status"] == "inserted"
+    assert executed_payload["row"] == preview_payload["row"]
     assert executed_payload["path_recorded"] is False
     assert str(tmp_path) not in executed.stdout
     assert ledger.exists()
@@ -909,6 +912,60 @@ def test_cli_previews_then_writes_and_reads_board(tmp_path: Path) -> None:
     assert shown_payload["agent_guidance"]["next_action"] == (
         "close_running_rows_or_review_matched_comparisons"
     )
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_cli_upsert_returns_exact_row_without_board_growth(tmp_path: Path, execute: bool) -> None:
+    ledger = default_benchmark_experiment_board_path(project=tmp_path, goal_id="fixture-goal")
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    # Run ids may repeat across cases. Preserve an uncountable zero exactly.
+    candidate = _baseline()
+    candidate["countability"] = {
+        "integrity_qualified": False, "official_result_present": True, "score_countable": False,
+    }
+    rows = [_baseline(case_id=f"case-{index}") for index in range(1000)]
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    original = ledger.read_bytes()
+    row_path = tmp_path / "candidate.json"
+    row_path.write_text(json.dumps(candidate), encoding="utf-8")
+    command = ["benchmark", "experiment-board-upsert", "--goal-id", "fixture-goal",
+               "--project", str(tmp_path), "--row-json", str(row_path), "--format", "json"]
+    if execute:
+        command.append("--execute")
+    result = run_source_cli(command)
+    payload = json.loads(result.stdout)
+    assert payload["row"] == normalize_benchmark_experiment_board_row(candidate)
+    assert payload["write"]["row_count"] == 1000
+    assert payload["write"]["write_performed"] is execute
+    assert "experiment-board-show" in payload["read_hint"]
+    assert "runs" not in payload and "summary" not in payload
+    assert len(result.stdout.encode()) < 6000  # One complete row, not 1000 rows.
+    if execute:
+        observed = read_benchmark_experiment_board_rows(ledger)
+        assert len(observed) == 1000
+        assert all(row["countability"]["score_countable"] is (row["case_id"] != "case-12")
+                   for row in observed)
+    else:
+        assert ledger.read_bytes() == original
+    full = json.loads(run_source_cli([*command, "--include-board"]).stdout)
+    assert full["summary"]["run_count"] == 1000
+    assert len(full["runs"]) == 1000
+    assert full["write"]["write_performed"] is execute
+
+
+def test_cli_compact_upsert_rejects_invalid_transition_without_writing(tmp_path: Path) -> None:
+    ledger = default_benchmark_experiment_board_path(project=tmp_path, goal_id="fixture-goal")
+    upsert_benchmark_experiment_board_row(ledger, _baseline())
+    before = ledger.read_bytes()
+    row_path = tmp_path / "row.json"
+    row_path.write_text(json.dumps(_running_baseline()), encoding="utf-8")
+    result = run_source_cli([
+        "benchmark", "experiment-board-upsert", "--goal-id", "fixture-goal",
+        "--project", str(tmp_path), "--row-json", str(row_path), "--execute", "--format", "json",
+    ], check=False)
+    assert result.returncode != 0
+    assert "invalid benchmark experiment board input" in result.stderr
+    assert ledger.read_bytes() == before
 
 
 def test_cli_show_projects_factorial_contrast_from_explicit_contract(
@@ -1031,7 +1088,7 @@ def test_cli_omitted_project_routes_board_to_registered_goal_repo(
         goal_id="fixture-goal",
     )
 
-    assert payload["summary"]["run_count"] == 1
+    assert payload["write"]["row_count"] == 1
     assert ledger.is_file()
     assert not (unrelated / ".loopx").exists()
 

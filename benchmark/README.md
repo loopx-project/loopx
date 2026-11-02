@@ -146,11 +146,32 @@ still owns endpoint access, actual model/tool qualification and private evidence
 
 With `OPENAI_BASE_URL` unset, login-file behavior is unchanged, including the
 required `CODEX_AUTH_JSON_PATH`; an ambient API key alone does not select the
-custom route. Change routes only between fresh attempts. Checkpoint continuation
-must retain the captured endpoint/configuration and supply fresh credentials
-externally. This routing repair enables matched experiments under the
+custom route. Change providers only between separately admitted attempts.
+Checkpoint continuation retains the sealed source configuration and supplies
+fresh credentials externally. For a fresh SForge receiver, the Host binds its
+current credential-gateway URL before native session admission; an ephemeral
+gateway port is transport, not a reason to reuse a dead source route. The runner
+renders the destination with the ordinary worker's settings owner and verifies
+that only this route and any explicitly selected model/effort differ. Both full
+configuration digests and session profiles remain bound to the new receiver.
+Ordinary within-trial configuration changes still reject. Endpoint access and
+the same upstream provider remain the operator's separately verified contract;
+a URL or configuration digest does not prove provider identity or quality.
+This routing repair enables matched experiments under the
 [long-horizon research contract](../docs/architecture/rfcs/long-horizon-harness-benchmark-research-program-v0.md);
 it establishes neither sustained operation nor a solver-quality improvement.
+
+When the runner, native judge and credential gateway run **inside the Docker
+VM**, pass `--docker-host-bridge` to every matched arm. Some VM runtimes map
+Docker's `host-gateway` alias to the desktop host, where that gateway is not
+listening. This explicit option pins `host.docker.internal` to the default
+bridge's inspected IPv4 gateway, matching the native firewall's host-service
+endpoints. A missing or ambiguous IPv4 gateway fails before container creation;
+it never guesses a fixed subnet. All services using that alias must be reachable
+on the bridge. Omit the option when services run on the desktop host or another
+topology; omitted behavior is unchanged. Select it only for new attempts and
+retain the setting in each arm's runtime receipt. It changes routing, not
+credentials, allowed ports, task input or feedback policy.
 
 ## Inert checkpoint capture
 
@@ -398,8 +419,8 @@ python -m benchmark.edgebench.checkpoint_judge --checkpoint-capture \
 
 Select the checkpoint provider through the same
 [shared EdgeBench source protocol](edgebench/README.md#select-and-freeze-the-native-provider)
-as the workers and judge. A new qualification cohort resolves the canonical
-integration branch and applies the reviewed native compatibility patch under
+as the workers and judge. A new default qualification cohort fetches the reviewed
+integration commit paired with the native compatibility patch under
 that protocol; its `.edgebench-source/receipt.json` records the effective provider
 commit, upstream revision and patch digest. Existing cohorts remain frozen.
 Patch representation changes receive a new digest and effective commit even
@@ -498,6 +519,18 @@ and a matching capture digest; source movement requires a new owned boundary.
 The local `sforge_checkpoint_opportunity_v0`
 artifact records these facts; it grants no restored admission. Disabling capture
 means omitting both the judge flag and worker declaration option on a new run.
+
+Finite opportunity responses and saved participants keep that existing JSON
+shape. Released history/results containing non-finite numbers use the explicit
+[`sforge_nonfinite_json: 1` envelope](edgebench/README.md#feedback-protocol-new-run-default-native)
+over the same logical artifact. The client decodes it before checking the
+incumbent; checkpoint capture saves it through the same lossless codec.
+Only released result fields may contain encoded numbers: opportunity clocks,
+round counters and authority fields retain their original strict representation.
+The archive binding covers the canonical encoded state, including numeric kinds,
+so repeated NaN reads retain a binding and changed released data invalidates it.
+Use `benchmark.runtime.sforge_json.loads` for saved participant readback. This
+transport neither changes native selection nor qualifies continued execution.
 
 For an isolated single-Goal trial, `"loopx_state": true` adds the existing
 state-backup owner's inventory: registered active state, project research state,
@@ -717,6 +750,13 @@ later files with an older native point. Missing paths, archive links, traversal 
 Declare only the intended private code/state stores: a whole home can contain
 credentials, and neither archive filtering nor a freeze is privacy certification.
 
+Supervisor failure receipts retain the exception-class `error_kind`. Failures
+from the managed Effect runtime additionally expose `runtime_failure.error_kind`
+and `runtime_failure.diagnostic_code`, without copying the error message or raw
+provider response into the worker reply. An expired artifact capture window is
+`request_rejected` / `checkpoint_capture_window_closed`. These diagnostics do not
+retry the capture, extend its deadline or grant execution authority.
+
 This explicit command produces an **inert joint file snapshot**, still
 `research_point_qualified=false`. It does not snapshot process memory, freeze
 external writers or activate canonical research state. Ordinary native restore
@@ -813,12 +853,24 @@ docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
 # Set these to the explicitly prepared Linux amd64 binaries.
 CKPT_GUEST_CODEX=/absolute/path/to/codex
 CKPT_GUEST_NODE=/absolute/path/to/node
+# Freeze this explicit pin in the qualification plan before invocation.
+CKPT_LOOPX_REVISION=$(git rev-parse HEAD)
 "$CKPT_PROVIDER_ROOT/venv/bin/python" -m benchmark.tests.qualify_checkpoint_joint \
+  --source-revision "$CKPT_LOOPX_REVISION" \
   --provider-source "$CKPT_PROVIDER_ROOT/provider" \
   --native-binary "$CKPT_GUEST_CODEX" --guest-node "$CKPT_GUEST_NODE" \
   --guest-dependencies "$CKPT_PROVIDER_ROOT/guest-deps" \
   --output "$CKPT_PROVIDER_ROOT/joint-result"
 ```
+
+The command requires the caller's full LoopX commit SHA and verifies the actual
+import origins of LoopX, benchmark and test modules before creating output or
+contacting Docker, and again before writing a passing result. Run from the
+intended checkout: setting `PYTHONPATH` alone cannot override Python's current
+working directory or replace modules already loaded from another worktree.
+A rejected pin, dirty tree or mixed import is an unqualified attempt; it must
+not be attributed to the intended revision. These checks do not qualify the
+native provider, receiver behavior or scientific outcomes by themselves.
 
 Pass `--context-delivery on` with a supported native hook host (Codex CLI
 `0.162.1`) to qualify the opt-in transport in the same joint path. The source
@@ -826,7 +878,10 @@ must actually deliver a complete full packet and later deltas across worker
 wakes; every fresh receiver must begin with a complete current full packet.
 The static inference follows model-visible page cursors, and a separate byte-map
 oracle checks complete delivery and retained delta bases before candidate work.
-The default remains `off`. Neither mode measures paid inference, task quality or
+This joint qualifier deliberately retains its explicit `off` control by default;
+new benchmark heartbeat workers default on and can select `--context-delivery off`.
+Do not mutate a frozen trial to adopt that changed default.
+Neither qualifier mode measures paid inference, task quality or
 fees; reusing a point still does not count its source test as passed in this run.
 
 The public fixture runs six actual native work wakes, captures the pending
@@ -1099,7 +1154,14 @@ also match `--model`/`--effort`. The native session participant records both
 configuration digests, verifies the original session profile and full retained
 history, then binds the new profile to a distinct destination session. Retry
 uses that same source/destination intent; it cannot switch an already running
-receiver. Without the option, exact-configuration admission is unchanged.
+receiver. Direct Host admission without the option still requires exact configuration.
+The SForge Host may additionally rebind its existing custom provider's
+credential-gateway URL from the current launch environment. This applies only
+to a fresh checkpoint receiver: the provider name, wire API, credential source,
+tools and permission settings must stay fixed. It adds no operator option or
+permission to edit an active receiver. The original source configuration stays
+sealed; admission records the full source/destination configuration and profile
+digests through the existing transition provenance.
 The host controller exposes the same explicit transition as
 `--destination-model-config`; this remains a CLI/Host journey, with frontend
 restore support still open. Changing the model changes the experiment treatment:
@@ -1114,6 +1176,12 @@ It grants no extra native submissions, cooldown relief, permission or time.
 配置完全一致，不增加评测机会、豁免冷却、权限或预算。宿主 CLI 对应选项为
 `--destination-model-config`；frontend restore 旅程仍未交付。模型变化是新的实验因素，
 共享 checkpoint 本身不能证明机制收益。
+
+SForge 宿主可在全新 checkpoint 接收端准入前，将既有自定义 provider 的凭据网关
+URL 绑定到当前启动环境；临时端口变化不应迫使接收端继续使用已失效的源网关。
+Provider 名称、wire API、凭据来源、工具和权限保持一致，完整源配置仍封存，
+既有 transition 记录保留源与目标配置和 session profile 摘要。此处没有新增操作选项，
+也不允许修改活动接收端；同一上游 provider 的资格仍需独立核验。
 
 Warm verification hashes the complete checkpoint with a read window of up to
 60 seconds, capped by the original execution deadline. It rejects a read that

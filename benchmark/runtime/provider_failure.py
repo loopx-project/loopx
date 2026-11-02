@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
+from benchmark.runtime.session_observation import (
+    CodexSessionObservationError,
+    iter_codex_session_tail_records,
+)
 
 _DEFAULT_TAIL_BYTES = 2 * 1024 * 1024
 _DEFAULT_MAX_FILES = 32
@@ -26,25 +29,9 @@ def _jsonl_tail(path: Path, *, tail_bytes: int) -> Iterator[Mapping[str, object]
     if tail_bytes <= 0 or path.is_symlink():
         return
     try:
-        with path.open("rb") as stream:
-            stream.seek(0, 2)
-            size = stream.tell()
-            start = max(0, size - tail_bytes)
-            stream.seek(start)
-            data = stream.read(tail_bytes)
-    except OSError:
+        yield from iter_codex_session_tail_records(path, max_bytes=tail_bytes)
+    except (CodexSessionObservationError, ValueError):
         return
-    if start:
-        _, separator, data = data.partition(b"\n")
-        if not separator:
-            return
-    for line in data.splitlines():
-        try:
-            value = json.loads(line)
-        except (UnicodeDecodeError, ValueError):
-            continue
-        if isinstance(value, Mapping):
-            yield value
 
 
 def _http_status(value: Mapping[str, object]) -> int | None:

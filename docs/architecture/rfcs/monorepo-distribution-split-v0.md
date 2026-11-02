@@ -312,6 +312,13 @@ decision. Missing or unsupported Core defers the service restart. The no-service
 path remains independent of Core. This one supported public edge is pinned;
 it grants no authority to stop a service or add other kernel imports.
 
+The guard's refusal is exactly as narrow as that observation. It holds the
+ingress admission lock and refuses to continue while a non-terminal Turn
+exists. A pending ingress receipt reserves external input before the provider
+delivers it, so it is not a Turn, and the guard does not read the ingress
+receipt ledger. A pending `loopx_queue` or `loopx_inbox` receipt therefore
+passes through, while a queued Turn is refused with `chat_work_pending`.
+
 The stdio relay cancels its owned process group on parent EOF, SIGTERM or
 SIGINT and waits for the existing supervisor's cleanup before exiting. POSIX
 process-group behavior and Windows best-effort tree cleanup retain their
@@ -705,6 +712,29 @@ Approval needs a reviewed decision, not implementation progress or silence.
   sealing, retaining the byte witness rather than reopening its history writer.
 - **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
   is not closed; D1–D4 stay open. No packaging or authority decision changes.
+
+### 2026-10-30 — Codex provider-routing activation guard boundary
+
+- **Baseline:** `10c84d1c0c`.
+- **Delivered:** the Section 5 seam for the Codex provider-routing host now
+  states what its guard actually refuses. It holds the ingress admission lock
+  and refuses to continue while a non-terminal Turn exists. A pending ingress
+  receipt reserves external input before the provider delivers it, so it is not
+  a Turn, and the guard does not read the ingress receipt ledger.
+- **Boundary repair:** a pending `loopx_queue` or `loopx_inbox` receipt passes
+  through, while a queued Turn is refused with `chat_work_pending`. The
+  package's supported edge stays the single pinned
+  `loopx.extensions.chat_service_guard` import; this entry changes no import,
+  permission, default or persisted format.
+- **Evidence:** `tests/test_chat_runtime_activation.py::
+  test_a_pending_ingress_receipt_alone_does_not_defer_the_restart` and
+  `test_a_queued_turn_still_defers_the_restart_with_a_pending_ingress_receipt`
+  read both sides of the boundary through a real temporary Session and ingress
+  store, against the real guard.
+- **Remaining:** the wider M1–M5 distribution and zero-private-import acceptance
+  is not closed; D1–D4 stay open. A pending ingress receipt remains uncovered
+  by the guard, and covering it would be a runtime change with its own
+  acceptance, not a documentation change.
 
 ## Appendix B: Decision log
 

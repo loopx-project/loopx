@@ -461,12 +461,13 @@ def test_first_reentry_does_not_overwrite_concurrently_created_receipt(tmp_path,
     assert _spend_run_count(runtime) == 0
 
 
-def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, monkeypatch, provider):
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selected_todo_replan_fixture(project, registry)
-    _initialize_fixture_authority(project, runtime, provider="sqlite")
+    _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "turn-native-first-selection"
     capture = tmp_path / "capture"
     native = tmp_path / "native"
@@ -481,11 +482,31 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
         "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
         "--max-page-output-bytes", "4096")
     assert rc == 0 and presented["ok"], presented
+    assert len(json.dumps(presented, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 4096
     original = json.loads((capture / "decision.json").read_text())
     assert original["ok"] and original["effective_action"] == "autonomous_replan_required"
     assert original["heartbeat_receipt"]["status"] == "committed"
     assert original["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
     assert original["heartbeat_receipt"]["pending_action_selection"]["todo_id"] == "todo_chain_000000000001"
     assert not original["interaction_contract"]["cli_channel"].get("selection_required")
+    assert _heartbeat_receipt_count(runtime, turn) == 1
+    assert _spend_run_count(runtime) == 0
+    # The bounded reference reaches the original receipt without another
+    # admission. Reading a selected section does not certify the whole input.
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver.decision_capture import CONTEXT_CAPTURE_PAGE_GUIDANCE
+
+    reader = shlex.split(presented["recovery"]["command"])[1:]
+    first = read_context_capture(build_parser().parse_args(reader))
+    assert first["ok"] and first["offset"] == 0
+    assert first["read_instruction"] == CONTEXT_CAPTURE_PAGE_GUIDANCE
+    assert len(json.dumps(first, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 4096
+    args = build_parser().parse_args(reader
+        + ["--select", "/heartbeat_receipt"])
+    read = read_context_capture(args)
+    assert read["ok"] and read["eof"]
+    assert read["sha256"] == presented["recovery"]["sha256"]
+    assert json.loads(read["content"])["selections"][0]["value"] == original["heartbeat_receipt"]
     assert _heartbeat_receipt_count(runtime, turn) == 1
     assert _spend_run_count(runtime) == 0

@@ -211,6 +211,7 @@ def resolve_todo_replan_cadence_goal(
     machine = (
         read_machine_configuration(
             runtime_root, registry=build_builtin_machine_configuration_registry(),
+            namespace_ids=("todo_replan_cadence",),
         ) if runtime_root is not None else None
     )
     return apply_todo_replan_cadence_machine_default(goal, machine)

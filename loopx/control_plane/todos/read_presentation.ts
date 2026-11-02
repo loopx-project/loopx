@@ -31,6 +31,10 @@ function compactThinValue(value: unknown): unknown {
   return value;
 }
 
+function displayItems(items: unknown[], hideDone: boolean): unknown[] {
+  return hideDone ? items.filter(row => !dict(row) || row.status !== "done") : items;
+}
+
 export function compactTodoReadSummary(summary: JsonObject, role: string, limit: number | null): JsonObject {
   const result: JsonObject = {}, lanes: JsonObject = {};
   let omittedLanes = 0, omittedDicts = 0;
@@ -38,7 +42,7 @@ export function compactTodoReadSummary(summary: JsonObject, role: string, limit:
     if (Array.isArray(value)) {
       const cap = limit ?? (layout._RETAINED_LANE_LIMITS as Record<string, number>)[key];
       if (cap === undefined) {omittedLanes += Number(nonempty(value)); continue;}
-      const retained = limit === null && key === "items" ? value.filter(row => !dict(row) || row.status !== "done") : value;
+      const retained = displayItems(value, limit === null && key === "items");
       result[key] = retained.slice(0, cap).map(row => compactItem(row));
       if (retained.length > cap) lanes[key] = {shown: cap, total: retained.length};
     } else if (dict(value)) {
@@ -113,4 +117,37 @@ export function compactThinTodoReadSummary(summary: JsonObject, details: {
       compacted_lanes: omitted ? {items: {shown: details.items_returned, total}} : {}, omitted_nonempty_lane_count: omittedLanes,
       omitted_nonempty_dict_count: omittedDicts, full_detail_cold_path: "todo list without --thin or active state"};
     return fields;
+}
+
+/** An opt-in queue overview; selection, full requirements and admission stay upstream. */
+export function compactTodoQueueSummary(payload: JsonObject, hot: boolean): JsonObject {
+  const limit = Math.min(8, typeof payload.explicit_limit === "number" ? payload.explicit_limit : 8);
+  const projection = dict(payload.todo_list_projection) ? payload.todo_list_projection : {};
+  const matched = Number(projection.matched_todo_count ?? payload.todo_count ?? 0);
+  const todos: JsonObject[] = [];
+  for (const role of ["user", "agent"]) {
+    const group = payload[`${role}_todos`];
+    if (!dict(group) || !Array.isArray(group.items)) continue;
+    for (const row of displayItems(group.items, hot).filter(dict).slice(0, limit)) {
+      const full = stripPythonWhitespace(String(row.title || row.text || ""));
+      todos.push({todo_id: row.todo_id, role, title: compactText(full), status: row.status,
+        priority: row.priority ?? null, claimed_by: row.claimed_by ?? null,
+        title_truncated: Array.from(full).length > 180});
+    }
+  }
+  const authority = dict(payload.authority_read) ? payload.authority_read : {};
+  return {ok: payload.ok, dry_run: payload.dry_run, read_only: payload.read_only,
+    command: payload.command, goal_id: payload.goal_id, role: payload.role,
+    status_filter: payload.status_filter, source: payload.source,
+    ...(payload.agent_id_filter === undefined ? {} : {agent_id_filter: payload.agent_id_filter}),
+    ...(payload.unfiltered_todo_count === undefined ? {} : {unfiltered_todo_count: payload.unfiltered_todo_count}),
+    todo_count: matched, matched_todo_count: matched, returned_todo_count: todos.length,
+    omitted_todo_count: Math.max(0, matched - todos.length), summary: true, todos,
+    authority_read: {source_authority: authority.source_authority, provider_revision: authority.provider_revision,
+      cursor: authority.cursor, decision_read_from_provider: authority.decision_read_from_provider,
+      legacy_fallback_used: authority.legacy_fallback_used},
+    todo_list_summary_projection: {schema_version: "todo_list_summary_v0", item_limit_per_role: limit,
+      item_text_limit: 180, counts_cover_full_match: true,
+      full_detail_cold_paths: ["todo list --goal-id <goal-id> --todo-id <todo-id>", "todo list without --summary"],
+      readback: "Queue overview only. Read the exact Todo for complete requirements; quota owns execution admission."}};
 }

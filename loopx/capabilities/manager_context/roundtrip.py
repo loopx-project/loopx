@@ -12,6 +12,8 @@ from itertools import islice
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 
+from ...extensions.background_runtime import HostedWorker
+
 from . import _root, _read, _write, _hash, authority, target_authority
 from .tracking import _entry, _now
 from ...file_lock import (
@@ -136,10 +138,14 @@ def _route(root, row, *, scope=None):
                     # An unrelated damaged/oversized historical turn cannot
                     # prevent recovery of this exact request's return receipt.
                     continue
-                receipt = (turn.get("response") or {}).get(
-                    "context_handoff_receipt"
-                ) or {}
-                if receipt.get("request_id") == row["request_id"]:
+                response = turn.get("response") or {}
+                receipts = response.get("context_handoff_receipts")
+                if receipts is None:
+                    receipts = [response.get("context_handoff_receipt") or {}]
+                if isinstance(receipts, list) and sum(
+                    isinstance(receipt, dict) and receipt.get("request_id") == row["request_id"]
+                    for receipt in receipts
+                ) == 1:
                     matches.append((session, turn))
         if len(matches) != 1:
             raise ReturnResolutionBlocked(
@@ -492,7 +498,7 @@ def _pending_return_paths(host, paths):
 
 
 @effect_runtime_request_scope()
-def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False):
+def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None):
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
@@ -505,6 +511,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     host = {"root": root, "registry": registry, "store": store, "now": now, "exact": exact, "cancelled": cancelled}
     paths = iter_result_paths(_root(root) / "replies")
     for path in _pending_return_paths(host, paths):
+        progress()
         if cancelled():
             break
         if not _belongs_to_chat_host(root, store, path):
@@ -584,45 +591,50 @@ class ReturnService:
     def __init__(self, root, registry, store, external_sender):
         self.args = (root, registry, store, external_sender)
         self.stop = threading.Event()
-        self.thread = threading.Thread(
-            target=self.run, daemon=True, name="loopx-manager-returns"
-        )
-        self.execution_thread = threading.Thread(
-            target=self.run_executions, daemon=True, name="loopx-manager-executions"
-        )
+        self._execution_pump = None
+        self._return_worker = HostedWorker(target=self.run, stop=self.stop,
+                                          name="loopx-manager-returns", retry_seconds=3)
+        self._execution_worker = HostedWorker(target=self.run_executions, stop=self.stop,
+                                             name="loopx-manager-executions", retry_seconds=3)
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def start(self) -> None:
-        self.thread.start()
-        self.execution_thread.start()
+        self._return_worker.start()
+        self._execution_worker.start()
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def run(self):
         try:
             recover_source_chat_provenance(*self.args[:3], cancelled=self.stop.is_set)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             logging.getLogger(__name__).warning("Source Chat provenance recovery unavailable")
-        while not self.stop.is_set():
-            try:
-                drain(*self.args, cancelled=self.stop.is_set)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning(
-                    "Manager return receipts unavailable; retrying"
-                )
-            self.stop.wait(3)
+        self._return_worker.repeat(
+            self._return_step, interval_seconds=3,
+            on_error=lambda: logging.getLogger(__name__).warning(
+                "Manager return receipts unavailable; retrying"),
+        )
+
+    def _return_step(self) -> None:
+        drain(*self.args, cancelled=self.stop.is_set, progress=self._return_worker.checkpoint)
 
     def run_executions(self) -> None:
         # Native previews may wait on a subprocess. Keep result publication
         # independent, using the same server lifetime and one serial probe.
         from .execution import QueuedSourcePump
-        execution_pump = QueuedSourcePump(*self.args[:3])
-        while not self.stop.is_set():
-            try:
-                execution_pump.tick(cancelled=self.stop.is_set)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning("Queued source execution unavailable; retrying")
-            self.stop.wait(3)
+        if self._execution_pump is None:
+            self._execution_pump = QueuedSourcePump(*self.args[:3])
+        execution_pump = self._execution_pump
+
+        def step() -> None:
+            execution_pump.tick(cancelled=self.stop.is_set)
+
+        self._execution_worker.repeat(step, interval_seconds=3,
+            on_error=lambda: logging.getLogger(__name__).warning(
+                "Queued source execution unavailable; retrying"))
 
     def close(self) -> None:
         self.stop.set()
-        for thread in (self.thread, self.execution_thread):
-            if thread.ident is not None:
-                thread.join(timeout=1.5)
+        self._return_worker.close(timeout=1.5)
+        self._execution_worker.close(timeout=1.5)

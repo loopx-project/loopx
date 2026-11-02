@@ -103,6 +103,10 @@ def main():
                 scope = dict(runtime_root=runtime, owner_goal_id=capture["goal_id"])
                 registered = register_pack(**scope, input_path=input_path, source_root=source_root, title=analysis["title"],
                                            config=analysis.get("config", fixture_config),
+                                           usage_jsonl=analysis.get("usage_jsonl"),
+                                           usage_session_id=analysis.get("usage_session_id"),
+                                           include_incomplete_usage=analysis.get("include_incomplete_usage", False),
+                                           include_tool_context=analysis.get("include_tool_context", False),
                                            native_outcomes_json=analysis.get("native_outcomes_json"))
                 for language, output in analysis["outputs"].items():
                     provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",
@@ -142,7 +146,7 @@ def main():
                     metrics["history_reads"] += 1
                 if path in {"/healthz", "/status.json", "/api/chat/explore-results",
                     "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
-                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation",
+                    "/api/chat/research-analysis", "/api/chat/research-analysis/citation", "/api/chat/research-analysis/usage-turn",
                     "/api/actions", "/api/chat/goals/contexts", "/api/chat/goal-results",
                     "/api/chat/sidebar-goal-order", "/api/chat/usage-statistics", "/api/chat/todo/detail",
                     "/api/chat/delivery-review", "/api/chat/goal-acceptance", "/api/chat/projects",

@@ -34,6 +34,47 @@ Keep the policy private (0600); do not commit it. A read grant without a sender
 grant is insufficient. This does not grant remote delivery, evidence reads,
 worker launch, Todo/lease changes or protected operations.
 
+### Several recipients in one conversation Turn
+
+`context_handoff` retains the single-request object and also accepts an array
+of up to 32 `{goal_id, agent_id, brief, execution_binding_id?}` objects. Each
+array entry needs its own complete `collaboration_brief_v0`; the exact Goal/Agent
+pair must be unique. An empty array means no handoff. Invalid syntax rejects the
+whole envelope before effects. This is targeted delivery, not a broadcast list
+or a team assignment. The model resolves every recipient from current authorized
+responsibilities and work; it must not make one recipient relay a multi-party
+question just because the transport formerly admitted one object.
+
+The host uses the same per-recipient source policy, Goal lifetime fence, inbox,
+request identity and original-conversation return. Live authorization is checked
+for each entry; cancellation or revocation can therefore leave a partial result.
+Successful entries appear in `context_handoff_receipts`, refusals in
+`context_handoff_failures`, and each independent execution selection in
+`context_executions`. There is no all-or-nothing transaction or new scheduler.
+Retrying the same source/recipient reuses its original request, including after
+a lost answer; it does not resend completed effects or reset a receiver's work.
+
+The conversation renders each recipient's own brief, controls, read/adoption and
+return state. One conclusion cannot settle the remaining recipients. Each reply
+returns to the original source through the existing outbox; a peer does not gain
+access to another recipient's private reply. A batch grants no Todo, lease,
+priority, worker launch, protected operation or extra audience access. Existing
+single-request receipts and callers remain readable without migration. Model
+recipient selection, real worker completion, installed App and provider delivery
+still need their respective qualification; deterministic transport tests alone
+do not establish them.
+
+In the conversation, read each recipient card separately: a delivered inbox
+request is not receiver adoption, and adoption is not a returned conclusion.
+Expand **View delegation details** for that recipient's brief and existing
+request controls. The desktop example keeps both recipients visible; the narrow
+example shows a selected brief with vertical scrolling. These are synthetic
+packaged-browser examples, not evidence of installed or real-model completion.
+
+![One request, two independent recipient cards](../../../docs/assets/personal-workspace/multi-recipient/conversation.png)
+
+![Recipient detail in the narrow conversation](../../../docs/assets/personal-workspace/multi-recipient/recipient-detail.png)
+
 ### Executing already bound work
 
 An operator may separately authorize an external audience to select existing
@@ -182,12 +223,27 @@ Goal visibility are checked before and after reading. Original-Chat delivery
 and explicit peer-return consumption remain different receipt paths. The list
 does not mark reads, accept work, start an Agent or certify an overall outcome.
 Unreadable/missing sources and incomplete scans keep counts visibly partial.
+Within one inventory read, requests sharing an exact Goal lifetime reuse its
+held guard in batches of at most 12 requests, independently of the response
+window size. Every request retains its own lock,
+source/Turn read, grant and typed receipt/lifecycle checks; each new batch
+observes the current Goal lifetime. Core linked-work IO runs after those guards
+are released. This reduces repeated fence IO without caching authorization
+between requests or pages; pagination and search still scan the bounded history.
+The pure conversation-identity projection is reused only while the complete
+host Session facts are identical within that read. Changed facts are classified
+again; live provider, grant, receipt and closing-source checks are not cached.
+
 When the typed lifecycle proves a matching original source/route but finds a
 conflicting handoff receipt, coverage includes at most 12 diagnostic
 request/Goal/Agent identities. This is a refusal readback, not a readable brief,
 cancellation or completion. The App's warning glyph exposes that cause on demand;
 other unreadable sources remain unknown. Refresh rechecks the original owners;
 the read neither repairs historical receipts nor grants execution/return authority.
+Pages default to 12 rows. An explicit `limit` of 1–48 lets the App refresh up to
+four already loaded pages with one verified scan; larger loaded views use more
+bounded windows. Refresh publishes only matching snapshots. No cross-request
+content/authorization cache is added; this does not qualify a faster initial read.
 
 For native-bound steward inventory, one fresh provider selection supplies both
 Session validation and Goal visibility at each opening/closing check. The read
@@ -197,9 +253,18 @@ checks or requests. Custom scope resolvers keep their existing validation path.
 管家标题栏提供常驻委派入口，按接收方查看待跟进请求，并可展开当前交办内容、关联
 工作和原对话。同一来源的较早会话不会因重开会话而丢失；其它用户、来源、群聊和
 项目会话不混入。结论已回传与成果已验收不是同一事实，历史记录仍可回看。
+同一次读取中，相同 Goal 实例按至多一页大小复用持有中的生命周期锁；逐请求锁、
+来源与 Turn 读回、授权及 typed 回执检查保留，每批重新观察当前实例。关联 Core 工作
+在释放这些锁后读取，不跨请求或分页缓存授权；分页与搜索仍扫描有界历史。
+同一次读取中，完整宿主 Session 字段相同时复用纯身份分类；字段变化即重新分类，
+provider、授权、回执及结束时的来源检查仍实时执行。
+
 来源与原路匹配但发送回执冲突时，保留不完整计数，以警示小符号按需提供至多 12 条
 具体请求身份和原因；不展示未获读取资格的交办正文，不推定已取消或完成。刷新重新
 核验原 owner，不修改历史回执，也不解除执行或返回权限；其它读取缺口继续保持未知。
+默认每页 12 条；显式 `limit`（1–48）让刷新在一次核验中读取至多四个已加载页，更长列表
+分批读取，快照一致后一起展示。生命周期/请求锁每批仍至多 12 条，不随响应窗口扩大。
+不新增跨请求内容或授权缓存，也不据此宣称首次读取已提速。
 
 原生绑定管家的每次读取，在开始和结束时各验证一次 provider 身份，同一检查点的
 会话和 Goal 范围复用该次选择；检查点及请求之间不缓存权限。自定义范围解析器沿用

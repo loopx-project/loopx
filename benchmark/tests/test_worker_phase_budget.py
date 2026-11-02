@@ -54,6 +54,7 @@ pathlib.Path('pid').write_text(str(os.getpid()))
 with pathlib.Path('native-starts').open('a') as marker: marker.write('native\\n')
 if {output!r} != 'missing_identity':
     print(json.dumps({{'type':'thread.started','thread_id':'original-native'}}),flush=True)
+    pathlib.Path('native-ready').write_text('ready', encoding='utf-8')
 sys.stdin.read()
 if {output!r} in ('auth_failure','capacity_failure'):
     code = 'invalid_api_key' if {output!r} == 'auth_failure' else 'model_at_capacity'
@@ -123,6 +124,13 @@ def test_preparation_and_admission_consume_original_phase_budget(tmp_path, monke
     @contextmanager
     def admitted(*a, **kw):
         with original(*a, **kw) as process:
+            # Native fixture startup is independent of this test's virtual
+            # admission cost and the original .5s communication allowance.
+            ready_deadline = time.monotonic() + 5
+            while not (project / "native-ready").exists():
+                assert process.poll() is None
+                assert time.monotonic() < ready_deadline, "native fixture did not start"
+                time.sleep(.01)
             clock[0] += .3
             communicate = process.communicate
             def wait(**kwargs):

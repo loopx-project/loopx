@@ -1,6 +1,7 @@
-// Packaged Chat and real SQLite/Inbox; synthetic data, no model or external effects.
+// Packaged Chat and real File/SQLite Inbox; synthetic data, no model or external effects.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {createInterface} from 'node:readline';
@@ -12,8 +13,10 @@ await mkdir(output, {recursive: true});
 const fixturePath = resolve(repo, 'examples/personal-workspace-browser/steward_requests_fixture.py');
 const command = testPythonCommand(`import runpy; runpy.run_path(${JSON.stringify(fixturePath)}, run_name="__main__")`, {repoRoot: repo});
 const child = spawn(command.command, [...command.args, '--status-file', resolve(repo, 'examples/status.example.json'),
+  '--long-history', '--canonical-storage', process.env.LOOPX_REQUEST_STORAGE ?? 'sqlite',
   ...(process.env.LOOPX_SEARCH_ASSETS ? ['--assets-dir', process.env.LOOPX_SEARCH_ASSETS] : [])],
   {cwd: repo, env: {...process.env, LOOPX_USAGE_PING: '0'}, stdio: ['pipe', 'pipe', 'pipe']});
+const exited = once(child, 'exit');
 let stderr = '';
 child.stderr.on('data', value => stderr += value);
 const queue = [], waiting = [];
@@ -37,15 +40,38 @@ try {
   await page.addInitScript(() => {if (!localStorage.getItem('loopx-pw-locale')) localStorage.setItem('loopx-pw-locale', 'zh-CN');});
   const writes = []; page.on('request', request => {if (request.method() !== 'GET') writes.push(new URL(request.url()).pathname);});
   const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const inventoryRequests = [];
+  page.on('request', request => {if (new URL(request.url()).pathname === '/api/chat/request-inventory') inventoryRequests.push(request);});
   // The fixture serves the conversation source owner, so the page reads the
   // real answer. An interception here would hide the later source refusal.
   await page.goto(ready.origin + '/chat/');
   await page.getByRole('navigation', {name: '管家视图'}).getByRole('button', {name: /^(Chat|对话)$/}).click();
   await page.getByText('复核迁移说明中的示例', {exact: true}).filter({visible: true}).first().waitFor();
+  assert.equal(inventoryRequests.length, 0, 'A closed delegation reader must not scan the whole history');
   const trigger = page.getByRole('button', {name: /委派，.*条待跟进/});
+  let releaseFirst, sawFirst;
+  const firstSeen = new Promise(resolve => sawFirst = resolve);
+  let firstRead = true;
+  await page.route('**/api/chat/request-inventory?*', async route => {
+    if (!firstRead) return route.continue();
+    firstRead = false;
+    const response = await route.fetch(); sawFirst();
+    await new Promise(resolve => releaseFirst = resolve);
+    return route.fulfill({response}).catch(() => {});
+  });
   await trigger.click();
   const dialog = page.getByRole('dialog', {name: '委派', exact: true});
+  await firstSeen;
+  const loadingNext = dialog.getByRole('button', {name: '加载下一页', exact: true});
+  assert.equal(await loadingNext.getAttribute('aria-disabled'), 'true');
+  assert.ok(await loadingNext.evaluate(node => {const box = node.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight;}));
+  await page.screenshot({path: resolve(output, 'loading-pagination.png')});
+  await fixture('conversation-arrival');
+  await page.getByText('新的委派阅读测试消息。', {exact: true}).waitFor({state: 'attached'});
+  assert.equal(inventoryRequests.length, 1, 'A conversation arrival cannot cancel and restart an in-flight inventory');
+  releaseFirst();
   await dialog.locator('.conversation-request-row').first().waitFor();
+  await page.unroute('**/api/chat/request-inventory?*');
   if (process.env.LOOPX_SEARCH_BEFORE === '1') {
     await page.screenshot({path: resolve(output, 'before-desktop.png')});
     await page.setViewportSize({width: 390, height: 844});
@@ -57,20 +83,70 @@ try {
     const settled = () => page.waitForFunction(() => document.querySelector('.conversation-requests-body')?.getAttribute('aria-busy') === 'false');
     await settled(); await page.screenshot({path: resolve(output, 'after-desktop.png')});
     await rows(12);
+    assert.ok(inventoryRequests.every(request => new URL(request.url()).searchParams.get('include_work') === 'false'),
+      'Collapsed lists must not read Core linked work');
     await search('核对账单导出的字段映射'); await rows(1);
     await search('核对账单导出的字段映射'); await settled();
     await rows(1);
     assert.equal(await trigger.getAttribute('aria-label'), '委派，13 条待跟进');
     await dialog.locator('.conversation-request-row > summary').click();
-    await dialog.getByText('原对话', {exact: true}).click();
-    await dialog.locator('.conversation-request-detail article').first().waitFor();
+    const workRead = page.waitForRequest(request => new URL(request.url()).searchParams.get('include_work') === 'true');
+    await dialog.getByText('关联工作与记录', {exact: true}).click();
+    assert.equal(new URL((await workRead).url()).searchParams.get('limit'), '1');
+    await dialog.getByText(/请求版本 1 ·/).waitFor();
+    const original = dialog.getByText('原对话', {exact: true});
+    const articles = dialog.locator('.conversation-request-detail article');
+    // Workspace startup may attempt Session admission with this synthetic
+    // executor. It is rejected by the fixture. The original reader must add
+    // no writes of its own; keep that boundary distinct from startup.
+    const beforeOriginal = await fixture('inspect'), originalWrites = writes.length;
+    await fixture('history-corrupt'); await original.click();
+    await dialog.getByRole('alert').waitFor();
+    assert.equal(await articles.count(), 0, 'A damaged original must not look like a complete conversation');
+    await page.screenshot({path: resolve(output, 'original-unavailable.png')});
+    await fixture('history-recover'); await original.click();
+    let releaseHistory, sawHistory;
+    let historyMode = 'hold';
+    const seenHistory = new Promise(resolve => sawHistory = resolve);
+    await page.route(`**/api/chat/sessions/${ready.session_id}?*`, async route => {
+      if (!new URL(route.request().url()).searchParams.has('message_cursor')) return route.continue();
+      if (historyMode === 'fault') return route.fulfill({status: 503, json: {ok: false}});
+      const response = await route.fetch();
+      if (historyMode === 'hold') {sawHistory(); await new Promise(resolve => releaseHistory = resolve);}
+      return route.fulfill({response}).catch(() => {});
+    });
+    await original.click(); await seenHistory;
+    assert.equal(await articles.count(), 0, 'Do not show the first-page question before reading its second-page answer');
+    releaseHistory(); historyMode = 'normal';
+    await articles.nth(1).waitFor();
+    const body = '核对账单导出的字段映射\n\n' + '完整原始要求。Original evidence. '.repeat(600) + '完整正文结束。';
+    assert.equal(await articles.first().locator(':scope > .personal-md').innerText(), body);
+    assert.equal(await articles.count(), 2, 'Both original messages appear once, without unrelated Turns');
     await page.screenshot({path: resolve(output, 'search-original.png')});
+    await page.setViewportSize({width: 390, height: 844});
+    await articles.nth(1).scrollIntoViewIfNeeded();
+    assert.ok(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    await page.screenshot({path: resolve(output, 'original-narrow-end.png')});
+    await page.setViewportSize({width: 1440, height: 1000});
+    await original.click(); historyMode = 'fault'; await original.click();
+    await dialog.getByRole('alert').waitFor(); assert.equal(await articles.count(), 0);
+    await original.click(); historyMode = 'normal'; await original.click(); await articles.nth(1).waitFor();
+    await original.click(); historyMode = 'hold';
+    const lateHistory = new Promise(resolve => sawHistory = resolve);
+    await original.click(); await lateHistory; await original.click();
+    releaseHistory(); historyMode = 'normal';
+    assert.equal(await articles.count(), 0, 'Closing cancels the full read, including its held later page');
+    await original.click(); await articles.nth(1).waitFor();
+    await page.unroute(`**/api/chat/sessions/${ready.session_id}?*`);
+    const afterOriginal = await fixture('inspect');
+    assert.equal(afterOriginal.posts, beforeOriginal.posts);
+    assert.deepEqual(writes.slice(originalWrites), [], 'Reading, retrying and closing originals cannot submit an operation');
     await search('no matching request'); await settled();
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();
     await dialog.getByRole('button', {name: '清空', exact: true}).click(); await settled();
     await rows(12);
     await page.setViewportSize({width: 390, height: 844});
-    const more = dialog.getByRole('button', {name: '更多记录', exact: true});
+    const more = dialog.getByRole('button', {name: '加载下一页', exact: true});
     assert.ok(await more.evaluate(node => {
       const box = node.getBoundingClientRect();
       return box.top >= 0 && box.bottom <= innerHeight;
@@ -86,6 +162,29 @@ try {
     await page.screenshot({path: resolve(output, 'read-failure.png')});
     await fixture('recover'); await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
     await rows(4);
+    const inspected = await fixture('inspect');
+    assert.equal(inspected.source_unchanged, true);
+    assert.equal(inspected.chat_unchanged, true, 'History recovery restored the fixture journal; browsing leaves it unchanged');
+    assert.equal(inspected.posts, beforeOriginal.posts);
+    assert.equal(inspected.turn_count, 13, 'Reading original pages cannot execute another Turn');
+
+    await fixture('local-source-unavailable');
+    const denied = await fetch(`${ready.origin}/api/chat/request-inventory?session_id=${ready.session_id}`);
+    assert.equal(denied.status, 400);
+    assert.equal((await denied.json()).error_code, 'request_inventory_unavailable');
+    await dialog.getByRole('button', {name: '刷新委派', exact: true}).click(); await settled();
+    await dialog.getByRole('alert').waitFor(); await rows(0);
+    assert.equal(await trigger.getAttribute('aria-label'), '委派，— 条待跟进');
+    await dialog.getByText('记录数量未知', {exact: true}).waitFor();
+    assert.equal(await dialog.getByRole('button', {name: '加载下一页', exact: true}).getAttribute('aria-disabled'), 'true');
+    // Changing the filter must not turn the same missing source into a new
+    // empty workspace, nor may an unsuccessful retry lose that distinction.
+    await search('builder'); await settled(); await dialog.getByRole('alert').waitFor();
+    await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled();
+    await dialog.getByRole('alert').waitFor(); await rows(0);
+    await fixture('local-source-recover');
+    await dialog.getByRole('button', {name: '重试', exact: true}).click(); await settled(); await rows(9);
+    await search('reviewer'); await rows(4);
     assert.equal((await fixture('inspect')).source_unchanged, true);
     await fixture('deliver'); await search('复核迁移说明中的示例'); await settled();
     await dialog.getByText('未找到匹配的委派。', {exact: true}).waitFor();
@@ -126,11 +225,35 @@ try {
     await fixture('source-recover'); await page.getByRole('button', {name: 'Retry history', exact: true}).click();
     await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).click();
     await page.getByRole('searchbox', {name: 'Search delegations'}).waitFor();
+    const english = page.getByRole('dialog', {name: 'Delegations', exact: true});
+    await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(12);
+    // A real return changes ordering and the snapshot while More is reading.
+    // Rebuild from the beginning, but fulfill this click's requested extent;
+    // the parent message refresh must not replace it with the old page count.
+    await fixture('report-window');
+    const nextPage = english.getByRole('button', {name: 'Load next page', exact: true});
+    // A parent refresh can temporarily aria-disable paging after the fixture
+    // returns. Click waits for actionability; raw Enter can be ignored while
+    // busy. Keyboard activation and result focus are exercised above.
+    await nextPage.click(); await rows(13);
+    assert.equal(await english.getByRole('button', {name: 'Load next page', exact: true}).count(), 0);
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), '13 / 13 shown');
+    await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, original conversation, clear/paging, failure/retry, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts.');
+    console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts; original-reader POST delta zero, Chat/receipt state unchanged and no new Turns.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}
   throw error;
-} finally {await browser?.close(); child.stdin.write('stop\n'); child.stdin.end();}
+} finally {
+  await page?.unrouteAll({behavior: 'ignoreErrors'});
+  await browser?.close(); child.stdin.end('stop\n');
+  let timer;
+  try {
+    const [code] = await Promise.race([exited, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error('Owned fixture did not stop')), 15000);
+    })]);
+    assert.equal(code, 0, stderr);
+  } finally {clearTimeout(timer);}
+}

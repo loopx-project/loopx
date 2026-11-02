@@ -38,6 +38,16 @@ no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
 configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)
 for configuration precedence, rollback and independent review triggers.
 
+When `stride_strategy=evidence_conditioned_v1` is enabled, receipt-backed cadence
+uses the configured count as a baseline for the next interval. A settled fresh
+review can scale it by 1.5 (supported grow with evidence-linked improved goal
+gain) or 0.5 (verify or uncertainty/gap/failure); switch keeps the baseline.
+Counts round up to at least one, never compound across reads, and do not cross a
+newer autonomous ACK to reuse older feedback. Missing/unsettled/historical
+decisions and off mode keep the baseline. Stall triggers and settlement remain
+independent. This feedback uses source-validated Agent claims, not certified gain;
+see the [strategy boundary](../../architecture/rfcs/hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control).
+
 ## Replan ACK freshness
 
 An accepted ACK with a legal vision outcome covers gaps at or before its
@@ -1007,7 +1017,7 @@ configured, the current agent vision, and the local source binding. A replan
 obligation covers the full Todo frontier. Archived dependencies remain inputs.
 Large local bases use digest-checked private files across the Python/TypeScript
 runtime boundary, including the response; the CLI still returns the complete
-basis. The 2 MiB default RPC guard remains for other effects. File size is
+basis. Other effects retain the shared [8 MiB RPC guard](../canonical-snapshot-pagination.md#shared-rpc-byte-budget). File size is
 bounded and an unverifiable response after a possible commit is ambiguous,
 so the caller reads the exact receipt before retrying any mutation. Neither
 transport nor a future paged presentation may silently omit a basis component.
@@ -1086,6 +1096,12 @@ in its durable-writeback step, the replan contract uses a same-response
 Different schemas remain separate, and progress-only replan does not acquire a
 Vision requirement. TurnEnvelope preserves the ordinary plan's guidance.
 
+`checkpoint_context_not_missing` is an inapplicable recovery, not a request to
+repeat that read. Its `reread_required` is false. Preserve the committed writeback
+and quota receipt; inspect later authorized work through the normal guard with
+a fresh Turn identity. A stale, missing or replaced read receipt still requires
+the original scoped reread. Neither rejection grants execution or completion.
+
 Shared `todo plan` and guided-start authoring steps also provide a routed exact
 readback command for each authored or reused Todo id. Inventory text is a bounded
 excerpt. Verify `todo_detail_projection.source_complete=true`, compare `.todo.text`
@@ -1102,6 +1118,11 @@ calls, but lower model cost or better outcomes still require live measurement.
 Turn 写回后的恢复。规划与接续指引提供逐条精确读回命令，用完整 `.todo.text` 核对
 需求和当前状态，不能拿列表摘要判断正文丢失。读取不授予执行权限；准入、租约、
 恢复和单次记账规则保持不变。包体增量与模型效率、效果收益须分别测量。
+
+`checkpoint_context_not_missing` 表示这条恢复路径不适用，`reread_required=false`，
+不应重复同一读取。保留已提交写回与记账回执；后续获授权的工作通过正常 guard 和新
+Turn 身份检查。陈旧、缺失或被替换的读取回执仍须按原范围重读。拒绝不授予执行或
+完成权限。
 
 A satisfied checkpoint is protocol-complete, but a material closeout also has
 to qualify its relationship to the final outcome. A patched checkpoint must
@@ -1357,6 +1378,20 @@ quota admission must select its work before quiet waiting. A material poll then
 advances the original generation fence so the successor can resume. Goal stop,
 user gates and independently runnable advancement retain their existing
 priority.
+
+For multiple automatic successors, the existing TypeScript wait owner checks
+every canonical witness before display compaction and exposes
+`pending_resume_count`. Only a complete match to `waiting_todo_count` can extend
+the positively qualified quiet path beyond one successor. The displayed ids
+remain bounded; they are not used to count or certify unseen sources. A
+clock-only frontier selects its earliest pending deadline for rechecks; a
+pending dependency retains periodic source rechecks. Missing or unsupported
+source proof, a foreign actor, pending action selection and an existing
+settlement binding retain supervision. An optional `user_action` notice does
+not turn this proven automatic wait into a user gate; actual gates retain
+their existing behavior. An unbound heartbeat is not told to execute
+`monitor-poll`, whose Todo-binding checks remain unchanged. Replaying that
+heartbeat preserves its original receipt without creating work or a debit.
 
 This is a read model, not a stored vision or todo lifecycle state. When the
 condition becomes ready, normal open-todo or deferred-successor routing resumes

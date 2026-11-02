@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -46,7 +45,8 @@ class TurnControllerInput:
         raise TypeError("Use build_turn_controller_input with the original quota source")
 
     def envelope(self) -> dict[str, Any]:
-        return json.loads(self.envelope_json)
+        envelope: dict[str, Any] = json.loads(self.envelope_json)
+        return envelope
 
 
 def _turn_envelope_result(
@@ -57,45 +57,13 @@ def _turn_envelope_result(
 
     request = {"operation": operation, **params}
     if operation in {"context_delivery", "context_recovery"}:
-        tokens = _source_number_tokens(params)
+        tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
-    try:
-        result = effect_runtime_result("quota.turn_envelope.evaluate", request)
-    except EffectRuntimeRejected as error:
-        if error.diagnostic_code != "request_too_large":
-            raise
-        # The client refused before sending this pure projection. Reuse the
-        # existing bounded local-snapshot transport, never truncate the source
-        # or re-enter quota admission. Small packets retain their normal path.
-        result = effect_runtime_result("quota.turn_envelope.evaluate", request, large_local_snapshot=True)
+    result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)
-
-
-def _source_number_tokens(value: object) -> list[list[Any]]:
-    """Transport sparse numeric source identity; no carrier or sharing policy."""
-    tokens: list[list[Any]] = []
-
-    def visit(item: object, path: list[str | int]) -> None:
-        if isinstance(item, float) and not math.isfinite(item):
-            raise ValueError("Context source numbers must be finite")
-        # Fractional doubles retain their identity through JSON/JavaScript.
-        # Only integral floats (including signed zero) and unsafe integers
-        # can become indistinguishable from a different Python source number.
-        if (isinstance(item, float) and item.is_integer()
-                or type(item) is int and abs(item) > 2**53 - 1):
-            tokens.append([path, json.dumps(item, allow_nan=False)])
-        elif isinstance(item, Mapping):
-            for key, child in item.items():
-                visit(child, [*path, key])
-        elif isinstance(item, (list, tuple)):
-            for index, child in enumerate(item):
-                visit(child, [*path, index])
-
-    visit(value, [])
-    return tokens
 
 
 def assert_turn_envelope_consumer_version(envelope: Mapping[str, Any]) -> None:
@@ -174,7 +142,7 @@ def build_turn_controller_input(
 
 
 def _build_turn_projection(
-    payload: Mapping[str, Any], *, scheduler_execution_context: object = None,
+    payload: Mapping[str, Any], *, scheduler_execution_context: Any = None,
     captured_decision_path: str | None = None, operation: str = "build",
 ) -> dict[str, Any]:
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -206,17 +174,12 @@ def bind_turn_decision_capture(
     )
 
 
-def plan_progressive_context(payload: Mapping[str, Any], *, surface: str) -> dict[str, Any]:
-    """Typed presentation edits; the source JSON and all work authority stay intact."""
-    return _turn_envelope_result("progressive_context_plan", payload=dict(payload), surface=surface)
-
-
 def prepare_context_delivery(
     context: Mapping[str, Any], *, scope: Mapping[str, str], capture_id: str,
     baseline: Mapping[str, Any] | None = None,
     retained: Mapping[str, Any] | None = None,
     continuity: Mapping[str, Any] | None = None,
-    surface: str = "work_context",
+    surface: str = "work_context", native_projection: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Prepare under the Host's explicit continuity basis, not a model assertion.
 
@@ -231,6 +194,8 @@ def prepare_context_delivery(
         baseline=dict(baseline) if baseline is not None else None,
         retained=dict(retained) if retained is not None else None,
         continuity=dict(continuity) if continuity is not None else None)
+    if native_projection is not None:
+        source["native_projection"] = dict(native_projection)
     result = _turn_envelope_result("context_delivery", **source, source_edits=True)
     return _apply_context_projection_changes(source, result)
 

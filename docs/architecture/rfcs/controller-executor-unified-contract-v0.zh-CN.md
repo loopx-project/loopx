@@ -5,7 +5,7 @@
 - **交付成熟度：** Proposal；本文不交付新运行时、schema 或默认行为。
 - **作者 / 负责人：** LoopX 维护者、控制面与运行时 owner
 - **创建日期：** 2026-10-27
-- **最近规范性修订：** 2026-10-29
+- **最近规范性修订：** 2026-11-02
 - **实现基线：** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **相关契约：** [Effect interpreter](agent-loop-effect-interpreter-v0.zh-CN.md)、[会话执行模式](agent-session-execution-modes-v0.zh-CN.md)、[语义交接](capable-manager-semantic-handoff-v0.zh-CN.md)、[整体路线图](loopx-overall-roadmap-v0.zh-CN.md)
 - **语言镜像：** [English](controller-executor-unified-contract-v0.md)
@@ -32,8 +32,9 @@
 3. Executor 接收自然语言任务对话、原始材料和普通宿主工具，返回发现、产物、证据与问题。
    它不消费第二份 Core packet 视图，不编写 quota、Vision、lease 或 settlement 字段。
    任务正文之外的小型机器载体负责记录路由与因果关系。
-4. 完整首包、精确差分上下文与自动全量恢复属于统一契约的能力。Controller 与 executor
-   分别证明各自上下文连续性，不能借用对方的基线。
+4. 先保存完整上下文，再组合两个独立交付层：**跨 Host 默认 Progressive**，以及
+   **仅在已资格化 Host 自动使用 Delta**。未读材料仍可从当前 capture 发现。
+   Controller 与 executor 分别证明连续性，不能借用对方的基线；完整恢复始终可用。
 5. 先在现有单会话路径验收契约统一；双会话保持 opt-in，直至可比成果与完整成本证据支持
    采用。本文不启动 benchmark 或特权操作。
 6. Executor 工作期间，controller 仍应面向用户保持可交互：回答问题、主动解释有意义
@@ -103,6 +104,33 @@ Quota capture 与 Turn journal capture 都调用
 中的 `write_decision_capture`。原生上下文交付与显式宿主 handoff 也复用该模块和既有
 context-delivery owner。C1 应收敛剩余的组合逻辑与消费者假设，不另建 capture service，
 也不重写已经共享的差分与 native-resume 逻辑。
+
+可选 host poll 也是该次原始观测的一部分。来源保真切片在 capture 前仅记录一次
+`--record-host-poll`，普通 CLI、envelope 与原生上下文交付复用同一回执；恢复读取不再
+轮询。后续 capture/handoff 失败的错误响应仍携带已记录观测，不表示缺少准入，也不
+授权重放。默认关闭行为和不可读回执诊断不变。这只修复 capture 完整性，不代表统一
+writer/consumer 切换或长程成本收益已取得资格。
+
+独立的原生展示切片复用已提交的完整恢复原件作为 reader 目标，避免再次发布未使用的
+wire 副本。Delta 与未包装输入仍保留各自的不可变文件，reader/lifecycle owner 不变。
+同一 107,289 字节合成来源的 capture 写入从 216,754 降为 107,289 字节；完整 reader
+字节及 3,937 字节的 warm delta 均不变。这只验证重复 capture IO 的消除，不证明模型
+输入减少、完整成本收益、成果验收或 C1 writer/consumer 切换。
+显式小预算下，原生展示还可省略重复的目录/选读快捷命令，保留完整恢复命令；
+在其后追加 `--list` 或 `--select`，无须基线即可发现或读取当前事实。
+原有 4,000 字节冷态、温态及压缩恢复用例保留完整要求、Stop、原身份和完整恢复；
+这属于传输验证。
+
+Journal 持久化是独立的来源保真前置。本次提议由 Python adapter 复用 context
+delivery 的稀疏数值 token 收集器；两个 TypeScript 消费者复用同一来源数值校验器。
+Journal 继续传递 JSON 对象，仅为整值浮点、带符号零和非安全整数增加元数据。
+Journal owner 在原子发布前恢复这些数值，并在重放与不可变 plan 比较中保留其
+区别。普通原生对象保留已有编码，不改写历史回执。
+
+中间的完整 JSON 字符串方案，在合成的 155 万字符带引号正文上超过既有 2 MiB
+请求边界；原对象路径能够接收同一负载。保留这一负面结果：稀疏替代须在相同
+负载与上限下比较，包括数值密集时的元数据开销。该前置或组件字节减少，都不
+构成统一 writer/consumer 切换或长程净收益的资格。
 
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
@@ -322,16 +350,111 @@ role 不是第二个并发业务 executor。Peer 或并行执行仍需既有独�
 
 ### 差分上下文
 
-复用现有 context-delivery owner 与不可变 capture 机制。先完整交付，只有在精确消费
-session、role、epoch、schema、source capture 下证明已完整送达并保留上下文，才能
-发送注册子树的精确 delta。保留删除、数组顺序、null、空值和完整字符串。未知字段在
-注册复用语义前每次完整发送；delta 加元数据更大时发送 full。
+复用现有 context-delivery owner 与不可变 capture 机制。目标包含两个正交层，
+二者都不创建第二个语义 producer：
+
+- **Layer 1 — Progressive：** 面向模型的交付默认跨 LoopX Host 生效，包括没有
+  Session Hooks 的普通 CLI、MCP/HTTP 和外部 worker。当前 Goal、适用的累计验收、
+  失败/未知、权限、停止条件和未履行读取/结算义务保持内联。历史、来源正文和评审证据
+  等重材料，只能经既有 typed composition owner 折叠，提供精确的当前 capture 读取
+  路线，并明确依赖工作前的读取义务。相关性/schema 未知时保留完整必要材料。这是
+  交付默认值，不授予额外采集或持久化权限。调用方没有可用且获授权的 reader 时交付
+  完整内联上下文；本地文件路径不是可用的远端读取路线。Host 硬限制使两种路线都不可用
+  时，明确上下文不可用并阻止依赖工作。
+- **Layer 2 — Delta：** 对组合后实例进行精确编码，仅在 consumer/session、role、
+  epoch、schema 与来源绑定已资格化的 Host 自动选择。Progressive 可以用 full 编码，
+  完整内联实例也可以用 Delta；连同 Progressive + Delta、二者都关闭，共同验收四种
+  组合。Host 没有合格连续性时，对 Layer 1 使用当前 full 编码，不丢失 Progressive，
+  也不虚构 native session。
+
+区分两种已有复用主张。**`captured_file`** 比较已验证且兼容的不可变落盘产物；
+精确重建不要求模型先读旧文件、到达 EOF 或保留其内容。**已保留模型输入的复用**
+只有在精确 consumer binding 下存在可信完整送达和 retention 证据时，才能省略此前
+交付的正文。文件落盘、工具输出回执和模型自我确认不能建立这种证据。Session Hooks
+只观察受支持边界，不授予新权限。保留删除、数组顺序、null、空值、原始数值和完整
+字符串；未知字段在注册复用语义前保持完整。先发布当前完整恢复源，再交付可选视图或
+差分；验证重建，Delta 加元数据不更小时选 full。Layer 1 也将最终序列化 UTF-8 视图、
+读取说明和索引，与同次 capture 的完整替代交付对比；选择更小的有效交付，不能为满足
+体积预算而裁掉必需含义。
 
 当前权限、准入、取消、未完成必读、结算与 scheduler 事实即使未变也新鲜内联交付，温态
-传输不能减弱正文义务。缺失/乱序 delta、截断、压缩、损坏或未知基线自动从同次 capture
-全量恢复，不重新准入/扣额。执行仍检查来源有效性与当前权限；恢复旧 capture 不能复活
-已取消工作。Executor 任务对话独立消费语义材料，不是 controller Core packet 换名后的
-delta。
+传输不能减弱正文义务。Delta 缺失/乱序、基线损坏或未知时，选择当前 full 编码/恢复；
+读取截断或丢失时，从同次 capture 恢复必要范围。上下文压缩使下个工作 Turn 在新基线
+epoch 中的 retention 失效；它不使现有 Turn 失效，也不要求预读旧包或立即全量重读。
+保留原准入、恢复引用和一次结算/扣额。执行仍检查来源有效性与当前权限；恢复旧 capture
+不能复活已取消工作。Executor 任务对话独立消费语义材料，不是 controller Core packet
+换名后的 delta。
+
+#### 跨 Turn 未读材料
+
+当前不可变 capture 已支持精确选读。待补设计是跨交付显式发现未读材料，不是第二个
+reader，也不是先读完整基线。扩展既有 context/readback owner 与原生 `session.json`
+投影；其他 Host 使用相应 consumer binding。区分产物发布、模型可见交付覆盖、
+retention，以及语义采用/验收成果。
+
+`confirmed_read_sections` 是提议的覆盖投影；若保留 `consumed_pointers` 这个名字，
+它必须从同一 owner 派生，不能成为第二本台账或暗示理解。证据绑定精确 source/capture
+digest、revision、consumer/session role、epoch、schema 和选读 pointer/range。
+仅凭可信 Host 对实际模型可见结果的观察确认覆盖。调用 `--select`、文件存在、reader
+EOF、成功工具日志或模型自我 ACK 均不足。部分/截断/丢失输出保持未确认；选择父节点/
+索引不能确认隐藏子节点。没有此类 observer 时覆盖为未知，发现保持保守。这种覆盖
+绝不能成为 `captured_file` Delta 的新增全量读取门。
+
+每次 warm 交付携带 **`unread_context_index`**（提议名称）：列出符合交付范围、未内联且
+当前内容未确认或已变更的材料，包括被 Delta 省略的未变正文。给出精确当前指针、来源
+版本/digest 和必读状态，不能凭摘要推断相关性。已确认范围只适用于观察到的版本；
+内容变化、数组重排或映射不明须重新绑定当前来源并保守发现。确认送达不证明输入已保留
+或语义已采用。
+
+每项通过既有 `quota context-read --select`，绑定精确 capture SHA，从**当前完整不可变
+`projection.json`** 独立读取，不依赖上一包、基线文件、模型记忆或 patch 链。派生的
+`required-context.json` 或 wire 视图保留既有 owner 对规范来源的显式映射，不能混用
+根路径和 digest。历史精确版本回查仍属于单独绑定版本的产物/读取契约，不能虚构路径
+别名或借此静默使用旧事实。前轮材料仍属必需却不在新 projection 中时，由原 owner
+带入当前 capture，或暴露当前获授权的来源/读取义务。合法过期、撤权或移除须显式保留；
+必需材料不可用则阻止依赖工作，不能静默记作已读或永久保留禁止保存的原始数据。
+外部材料仍遵循自己的来源消费契约。
+
+#### 配置与迁移
+
+下表是提议行为，不改变当前限定 Codex 的 `context_delivery` on/off 接口。演进既有
+typed 配置 owner，表达两个层的决定；由 C1 在实现前映射精确名称和版本，不新增平行
+配置存储或 packet 格式开关。
+
+| 配置 / 调用方 | 迁移与生效行为 |
+| --- | --- |
+| 面向模型、没有持久偏好的调用方 | 该调用方 reader/回退及成本验收后使用目标 Layer 1 默认值；Layer 2 仅在连续性已资格化的 Host auto，否则 full 编码。在 rollout 合格前，普通 CLI/其他 Host 仍保持当前 full 行为。 |
+| 显式调用参数/环境 off | 保留当前优先级，本次调用 full/raw 交付，不依赖可选 codec/覆盖台账，不改写持久偏好。 |
+| 已持久化 off | 保留完整 off 路径及原读取/恢复义务，不能借“无偏好”迁移把它变为 Progressive 或 Delta。 |
+| 已有 on、受支持 Host | 映射为 Layer 1 + 已资格化 Layer 2 auto 时，保留合格的原生文件/恢复语义，不增加模型全量读取前置。 |
+| 已有显式 on、不受支持 Host | 兼容期间保留当前校验错误；按版本发布且调用方验收后才可提供受支持的 Layer 1，不能静默重释不受支持请求。 |
+| 新的独立分层配置 | 独立遵守各层，包括 Progressive off + 合格 Delta auto；显式 Delta off 仍保留 Progressive；不受支持的 auto 回退当前 full 编码。 |
+| 内部 raw machine 消费者 | 保留显式 `--context-delivery off` 契约，不把机器 JSON 换为模型文件引用，不修改偏好。 |
+
+冻结已记录版本、实验配置与历史回执。扩大默认值属于行为变更，须验证真实调用方、
+显式 off 隔离与失败/恢复；设计合并本身不改变默认值。
+
+#### 交付验收
+
+复用 C1/C2 真实入口和第 9 节对照，覆盖以下决定性案例：
+
+| 案例 | 必须观察到的结果 |
+| --- | --- |
+| 无 Hook 普通 CLI 及受支持 MCP/HTTP/worker 路线 | Layer 1 经真实获授权 reader 或完整内联回退可用，不留下仅本地可用的悬空引用，不虚构 native epoch。 |
+| 未变的未读末尾在下一 Turn 成为决定性约束 | Warm Delta 可省略其字节，但当前索引须暴露完整来源，后续实际选择/工作遵守恢复的约束；仅索引可见不能算成功。 |
+| 变化/未读正文、数组重排、未知字段或 scope | 绑定当前来源，保留适用跨 Agent 义务及未知范围的完整回退。 |
+| 部分页、工具输出丢失/截断、EOF 但无 Host 见证 | 不确认不可见字节或隐藏子节点；恢复缺失范围，未知覆盖保守进入索引，文件 Delta 仍可用。 |
+| 压缩、role/session/schema/epoch 变化 | 使不兼容 retention/复用失效；恢复当前事实，不重放原准入、effect 或扣额，不预读旧包。 |
+| 来源撤权、reader 不可用、材料合法移除 | 遵守当前权限/来源 owner，暴露丢失并阻止依赖工作，或使用获授权完整回退，不泄露旧数据。 |
+| Full 更便宜、off 与旧配置 | 选择有效 full 交付，保留显式 off 和冻结版本，并观察来源身份及 raw machine 消费者行为一致。 |
+
+正文文件缩减率主指标为 **`1 - V/F`**：`F` 是完整 capture 的实际 UTF-8 文件字节，
+`V` 是同次 capture 所选视图正文文件的实际字节，节省字节为 `F - V`。绑定两个产物及
+digest，wire/索引开销单独报告，不能改换分母；上文交付体积保护仍计入实际呈现开销。
+净收益主张还须计入后续全部读取/恢复、Host/controller/executor 调用与延迟、实际
+tokenizer/cached/output 用量、人工注意力和验收成果。保留不利案例和冻结预算。
+包更小本身不能证明 token 成本更低或成果更好；第 9 节原 quota 单会话对照仍为主，
+双会话成本单独比较。
 
 ### 按决策阶段交付候选上下文
 
@@ -358,8 +481,9 @@ Agent 的 outcomes、让其他成果可发现是有用的；共享要求、依�
 来源、完整性、覆盖与游标。同 Todo 不同版本仍分开。详情缺失、截断、不受支持或变化时
 阻止依赖工作，使用该 capture 的完整恢复；fresh guard 不能充当详情 reader。一次
 读取可交付多个正文，受支持的保留会话内无需重复交付已验证正文。读索引不等于确认隐藏
-正文已读。Delta 基线只包含实际交付给该消费者的材料；新成为必需的详情必须提供正文，
-不能因为机器已经存有它而省略。上下文丢失恢复必需模型产物，范围未知时扩大到完整来源。
+正文已读。已保留模型输入的复用仅覆盖实际送达且保留于该消费者的正文；文件 Delta
+遵循上文独立产物证明。新成为必需的详情必须提供正文，不能因为机器已经存有它而省略。
+上下文丢失恢复必需模型产物，范围未知时扩大到完整来源。
 历史 capture 保留原义务。读取回执证明覆盖，不证明理解、保留、新鲜权限或验收。
 
 单会话 Agent 消费同一管线。Controller/executor profile 中，由 controller 比较备选项
@@ -445,6 +569,9 @@ binding、减少重复指令、有界交付与可靠详情/恢复。Full/delta/d
 | Work context、必读与结算 | 保留既有 `interaction_contract` 路径与 owner。现有根相对引用保持含义；有意搬迁须显式迁移引用与 reader，不能按模式改写正文或命令字符串。 |
 | Host-operation binding | 从真实调用方 execution context 组合，验证与源权限一致；binding 冲突时拒绝，不能选择方便的表示。 |
 | 内容与传输完整性 | 对整个语义实例作完整性承诺，独立于原紧凑 action digest。精确 capture 字节校验和原结算身份仍分别检查；更换传输编码不创建新 effect。 |
+| 完整 capture 与 Progressive 视图 | 区分规范 `projection.json` 与派生 `required-context.json`/wire 视图，盘点精确根路径、版本、digest 和指针映射；先保存完整恢复源，再交付呈现，仅通过可用且获授权 reader 引用。 |
+| 文件复用、交付覆盖与 retention | 分别盘点既有 typed owner 及证据边界。提议的 `confirmed_read_sections`/派生 `consumed_pointers` 只表示观察到的覆盖，不是产物重建证明、理解或文件 Delta 全读前置。 |
+| 未读发现 | 将提议 `unread_context_index` 映射到当前完整 capture 的指针、版本和来源/读取义务，包括未变的未确认材料；变化/未知映射重新绑定，保留显式不可用状态和权限检查。 |
 | 历史回执与 reader | 未结工作按记录版本解码。临时内部 adapter 可以服务既有效果解释器，但不能成为第二份输出契约，也不能用紧凑副本替代模型必需输入。 |
 
 一个合成布局探针使用真实隔离 File/SQLite quota capture 和既有 TypeScript context
@@ -455,8 +582,9 @@ epoch 变化均要求 full。Retention 为合成声明；这衡量 codec 行为�
 一般性的嵌套布局。若映射与消费者收益足以抵偿迁移成本，仍可设计嵌套布局。
 
 因此 C1/C2 须随 wire 迁移显式版本化 context surface 及其 fresh/reuse 路径，不能
-改名冒用旧 surface 或凭 Turn 身份继承基线。迁移后的首次交付使用 full；只有验证了
-兼容的 retained baseline 才可复用。资格覆盖旧 action 投影之外的字段、基线缺失、
+改名冒用旧 surface 或凭 Turn 身份继承基线。迁移时先保存兼容的完整来源，面向模型
+视图可以已使用 Progressive；复用须具备上文相应的文件产物或 retained-model 证明。
+资格覆盖旧 action 投影之外的字段、基线缺失、
 session/epoch 变化和同 capture 恢复。这里消除了具体布局风险；下一步仍是共享 writer
 与最终消费者替换，不能再建设一个布局框架，也不能据此宣布 C1 交付。
 
@@ -618,6 +746,23 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 传输复用掩盖语义退步。Controller/executor 分离是之后独立的对照，不能用来解释或
 抵消 C1 回归。
 
+### 默认采用与退役资格
+
+[上下文交付指南](../../guides/context-delivery.zh-CN.md#默认化与退役的验收) 把此比较落实为
+操作方案。文档可先交付；未来扩大默认采用范围需要明确版本的 DeepSeek 与强模型分别支持
+所声明的效果和完整成本范围。reference 已有的 Codex 范围默认仍是当前行为，不证明
+这些模型对照已通过。记录精确 model/provider/version/effort，固定 task、source、host、
+tools、反馈、evaluator、预算与停止条件。除原生任务成果、约束遗漏、错误动作和
+一次性恢复外，计入实际最终 input/output、cached/uncached tokens、请求、详情／恢复
+补读、墙钟／IO／搭建成本与人工注意力。未知成本不记零，保留重复波动、失败与负例。
+历史最佳优化保持原生排名，终态保留事实另列。仅 Codex adapter 不资格化 DeepSeek 宿主。
+
+顺序留在 C1/C2/C9：解释 → 双模型比较 → 受支持 profile 的可回退采用／发布 → 范围化
+默认 → 点名旧路径退役。结果混合或退步时保留 opt-in 或明确限制。退役须核实际 caller
+替换、历史解码／readback、支持版本与回退覆盖；完整快照、摘要校验、权限／身份／停止
+和恢复继续保留。不长期保留两个同义决策 owner，也不因新路径存在就删除仍受支持的
+reader。这是资格方案，不授予新实验权限，不宣称已交付收益，也不阻塞其他独立获授权工作。
+
 [打包来源对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
 固定 mainline quota 与 C1 候选版本，经真实 File/SQLite CLI 验证交付、文件差分、
 capture 拒绝/恢复及一次结算。本负载来源保真改善，冷态和观察器累计输出字节增加。
@@ -661,6 +806,27 @@ compactor：精确共享、省略和延后读取的信息与失败后果各不�
 | 捕获后的 replan review、验收详情和 writeback reader | 区分决策事实与后续 authoring 格式，同时保留原身份和全部必要含义。读取绑定同一 capture；计入每个必需阶段、错误和恢复。引用缺失／过期不能重新 guard 或授权工作。 |
 | Full/delta/resume 交付 | 在 composition 后复用既有 continuity owner。行动前验证精确语义重建与必要材料可用；计入冷回退及丢失基线的恢复。 |
 | Scheduler、准入与结算身份 | Capture 前只有一份权威实例；传输保留真实 host owner、原 Turn 与一次性 effects。重复表示不构成削弱检查的理由。 |
+
+单独后移验收共享不自动构成有价值的前置切片。以主线
+`99cfa3ac559bfa237f04f36fb7e926672fea44b2` 为基线的 source-level 受控替换，
+只把该规则从本地 CLI compactor 移到已有 `reference_context` 调用。同一份含 100 条
+不同要求的合成 fixture 中，序列化投影输入从 102,680 增至 344,010 字节，调用者可见
+输出仍为相同的 102,189 字节。普通路径仍调用一次；全部 detail 开启时由本地共享变为
+一次请求。这些是投影参数测量，不是带协议包装的流量、延迟、模型计费或完整 C1 对照。
+保留此负结果，不能宣称净效率收益。
+
+兼容 owner 也为验收、Vision audit 和 replan authoring 共享复用一份本地 JSON 序列化
+身份。不能用 Python 普通值相等，把不同布尔／数值、整数／浮点表示或带符号零替换成
+另一条观测的别名。完全相同的副本仍共享同一响应内的 owner，包括键顺序不同的情况；
+不同事实保留全文。这修复来源保真，不增加投影 RPC；不代表统一 writer、最终消费者
+或相对原 quota 的成果／完整成本收益已经合格。
+
+先在当前兼容 owner 修复被迁移的验收引用，不引入上述额外传输。已有别名只跟随本次
+投影实际迁移的内联 owner，包括先访问别名、后迁移 owner 的情况。保留完整值、原始
+数值类型、carrier 顺序和现有大小判断；不推断任意引用链，不重写已存 capture。
+完整 C1 composition 应在持有来源的边界吸收该规则，并随调用方退役 Python 兼容
+算法，不能把所有验收副本反复传过另一条 bridge。Writer／consumer 切换和原 quota
+成果／完整成本门继续保持开放。
 
 候选 `895f38fc5` 的固定 source 合成 replan 审计说明了边界的影响。关闭 stride 且不做
 capture 分阶段时，原始 source 为 21,461 个紧凑 UTF-8 JSON 字节，原 quota CLI
@@ -720,8 +886,8 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 
 | 任务 / 依赖 | Owner 与实际替换内容 | 决定性退出 / 回退 |
 | --- | --- | --- |
-| **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段与指令条款，捕获同一 schema，迁移真实普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节相对 quota 基线的效果/完整成本对照；cutover 合格前保留绑定版本的 reader |
-| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：将 full/delta/detail/recovery 纳入 canonical 契约，按决策阶段替换候选交付，删除 packet 格式分支和重复上下文副本 | 必需详情先于实际选择/工作；正常/replan/resume 保留跨 Agent 约束与精确 role/session 连续性，并测量完整成本；full 回退不重新准入；编码可回退 full |
+| **C1 — 统一契约；首先** | Interaction/work-context + quota/Turn owner：盘点字段/指令、capture/视图/读取证据映射及分版本双层配置；捕获同一 schema，迁移普通 quota/Turn producer 与 thin renderer | 单会话真实入口保留必要信息、动作绑定和一次结算，并完成第 9 节 quota 基线效果/完整成本对照；保留显式 off，cutover 合格前保留绑定版本的 reader |
+| **C2 — 一个上下文交付管线；C1** | Context owner + host observer：组合跨 Host Progressive、独立资格化 Delta、同 capture 详情/恢复和保守未读发现，替换分阶段候选交付及重复 packet 分支 | 未变未读约束抵达下一 Turn 实际工作；按完整成本验收无 Hook reader、精确证据/连续性和四种分层组合；full 回退不重新准入；经既有 owner 回退编码/配置 |
 | **C3 — 会话绑定与原生生命周期；C1** | Session/runtime owner：扩展 role/generation，复用 native create/resume/observe/interrupt 和有序队列 | 两角色不覆盖 Agent native ID、不借用基线、不竞态执行；重试前观察既有 attempt；关闭新角色准入即可开始回退 |
 | **C4 — 共享受治理生命周期；C1** | Effect/Turn owner + 外层 worker adapter：围绕既有 typed 操作与回执合并重复 prepare/dispatch/observe/validate/writeback/settle 编排 | App/Turn/external worker 在部分失败下对准入、原结果与一次扣额一致；scheduler effect 保留真实 host owner；核对回执后才切回旧调用方 |
 | **C5 — Replan 与结果编写边界；C1** | Goal/Vision 与 interaction owner：提供当前事实和 typed controller 操作，移除双会话 profile 中普通 executor 编造 Core 写回字段的义务 | 先看事实保留 default/stride policy 区别、全部证据与必要验证；非法写回拒绝；rollout 期间单会话编写仍合格 |
@@ -730,12 +896,38 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 | **C8 — 产品配置与运行 readback；C3/C6** | 既有 App/settings/Chat 投影：同一 effective configuration owner，按角色展示 activity、失败/恢复、主动循证汇报、适合任务的丰富展现、反馈/readback、Stop 和产物返回 | 第 9 节打包 managed 及受支持 attached heartbeat 旅程，包括 host 不可用、迟到结果、安静/去重汇报、可访问降级、受众拒绝和恢复；安装资格另验；不新增 packet 格式开关 |
 | **C9 — 旧路径退役与采用资格；C1–C8** | Contract/runtime 维护者：删除被替代 producer、格式开关、重复提示/测试，更新 protocol、guide 和 RFC 交付事实 | 调用方/字段/decoder 退役清单、历史 replay 与回退证据；App + benchmark 验收及可比收益成立后再决定默认提升 |
 
+沿既有任务演进这条交付边界，不另立 roadmap：
+
+1. **C1：** 把规范 capture、派生视图、reader 引用、覆盖与 retention 映射到既有
+   owner，版本化两个层的决定及上表旧配置迁移；调用方切换前明确未决映射。
+2. **C2：** 用共享 Progressive composition/reader 和保守未读索引替换真实无 Hook
+   及原生调用方；可用时增加可信 Host 覆盖观察，没有覆盖证明也须可用。随后验收受支持
+   Host 独立的 Delta auto/full 恢复，覆盖第 5 节负例和原 quota 单会话/完整成本对照。
+3. **C9：** 消费者、off 路径、历史 replay 和局部回退合格后，才退役混合开关、重复交付
+   假设与旧 reader。对齐既有 C1/C2 task/PR，保留未通过的体积或采用 gate；不能把这项
+   设计塞入冻结实验 treatment。
+
 现有原生上下文入口增加一个有界 C2 前置改进：完整捕获保存在磁盘，常规响应提供
 文件导航，精确文件差分不依赖模型保留；压缩后下一个新 Turn 建立新的完整文件基线，不要求立即
 全量重读。必要事实仍须在
 依赖性决策前理解；准入、结算不变。这不代表 C1 统一 producer/consumer 切换或
 第 9 节可比效果/完整成本验收完成。沿既有 context-delivery off 路径回滚；材料分阶段
 组合仍由原 owner 独立收敛。
+
+原生交付现在在一次 TypeScript 调用内组合既有渐进交付计划和 full/delta codec，
+退役中间的 Python 计划应用流程及其 dispatch。Python 保留会话锁、Host 观察和
+私有不可变文件发布：先保存当前完整恢复源，再执行可选事务；如需必读视图，
+在返回编码结果前发布该视图。原始数值写法和来源引用身份复用既有投影编辑传输。
+本改动不改变必读义务、准入、结算或关闭路径，也不代表 C1/C2 采用资格或
+模型结果与完整成本收益已经验收。
+
+现有首读还消费与捕获的 Goal/Agent/Todo 及来源版本绑定的完整 acceptance 导航，
+将建议成果正文直接放入起始读取，包括 peer 依赖；其他成果仍可按地址展开。导航缺失
+或错配时保留原详情路线。复用既有关系 owner，不新增按归属/正文猜 scope 的规则；
+不改变启用默认值、落盘视图字节或 Delta。相同首读加必需详情的流量只作独立组件对照，
+不代表原 quota 成果/完整成本验收，也不交付未读台账。
+顶层 decision 字段清单保留在 TurnEnvelope owner，由其传给 Progressive 选读；迁移
+selector 不跨 owner 重复声明该词汇，也不放宽语义模块预算。
 
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余

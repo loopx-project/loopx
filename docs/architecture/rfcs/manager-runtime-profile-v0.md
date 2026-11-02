@@ -43,8 +43,19 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   still bound the work. Protected merge, release, deploy, delete, and payment operations retain
   their typed contracts. Provider permission, audience, and durable LoopX state ownership do
   not change.
-- Codex is currently the only endpoint that enforces `trusted_owner`. Other endpoints fail with
-  an actionable typed error instead of pretending to provide the selected profile.
+- Codex and the local Antigravity Language Server support `trusted_owner`. Antigravity uses
+  its signed-in host's existing tool permissions and native approvals; LoopX never automatically
+  accepts those approvals. A waiting interaction returns an actionable gate. Other endpoints
+  fail with an actionable typed error instead of pretending to provide the selected profile.
+- Antigravity's `restricted` Chat is text-only: each invocation explicitly disables native tool
+  calling and uses the read-only planner mode rather than inheriting a previous invocation's
+  tool configuration. This is a provider tool restriction, not a Codex or operating-system
+  sandbox. Trusted-owner remains limited to the existing verified owner audience. Governed
+  Task execution, workspace filesystem grants and native managed steward identity preparation
+  retain their existing Codex owner; selecting Antigravity does not widen those contracts.
+  Argon tiers must be offered by the local account and match the requested reasoning effort.
+  A missing original cascade fails resume without silently starting a replacement. Stop waits
+  for the native cascade to become idle; timeout or partial output is not successful completion.
 - `trusted_owner` applies to the local private owner-manager and a native private steward
   binding freshly verified by the existing Core conversation owner. That owner checks the
   App, owner principal, private source, current resource grant and frozen Session identity.

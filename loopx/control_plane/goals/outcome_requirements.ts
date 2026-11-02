@@ -181,8 +181,11 @@ export function refineGoalOutcome(head: JsonObject, goalId: string, goalRef: Wir
     requireValue(items.length === outcome.requirements.length && items.every(row => reqs.has(row.id)), "review must address every retained requirement exactly once");
     outcome.review = {basis_digest: reviewBasis(outcome, todos), items};
   }
-  const state: OutcomeState = {schema_version: GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: (previous?.revision ?? 0) + 1,
-    outcomes: [...(previous?.outcomes.filter(o => o.id !== outcomeId) ?? []), outcome]};
+  // Refinement changes one outcome, not the positions of unrelated requirements
+  // in canonical snapshots and their derived full/delta context.
+  const outcomes = previous?.outcomes.map(row => row.id === outcomeId ? outcome : row) ?? [];
+  if (!old) outcomes.push(outcome);
+  const state: OutcomeState = {schema_version: GOAL_OUTCOMES_SCHEMA, goal_id: goalId, goal_ref: goalRef, revision: (previous?.revision ?? 0) + 1, outcomes};
   // Preserve declaration/review limits; diagnostics count the failing
   // envelope, not the combined snapshot or an individual outcome/source list.
   const candidate = outcomeBytes(state);

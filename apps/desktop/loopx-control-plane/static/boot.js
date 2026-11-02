@@ -23,8 +23,15 @@ function renderStartup(result) {
     ready: "本地服务已就绪，正在打开工作区",
     service_error: "本地服务连接失败，正在等待重试",
   };
+  const serviceTitles = {
+    chat_work_pending: "管家正在处理请求，完成后自动连接",
+    chat_state_unverified: "正在核验管家任务状态，稍后自动重试",
+    chat_service_unverified: "正在确认管家服务切换，稍后自动重试",
+  };
   if (Object.hasOwn(titles, state?.phase)) {
-    status.textContent = titles[state.phase];
+    status.textContent = state.phase === "service_error"
+      ? serviceTitles[state.details?.code] || titles.service_error
+      : titles[state.phase];
     panel.dataset.state = "loading";
     panel.setAttribute("aria-busy", "true");
   }
@@ -39,7 +46,9 @@ function updateStartupElapsed() {
   const elapsed = lastTiming === null ? performance.now() - pageStarted : lastTiming + performance.now() - timingObservedAt;
   const seconds = Math.floor(elapsed / 1000);
   bootElapsed.textContent = `${lastTiming === null ? "此页面已等待" : "启动已用时"} ${seconds} 秒`;
-  bootDetail.textContent = bootState?.phase === "installing_runtime"
+  bootDetail.textContent = bootState?.details?.code === "chat_work_pending"
+    ? "已有请求会继续执行，无需反复重开 App。"
+    : bootState?.phase === "installing_runtime"
     ? "正在准备最新可用组件，完成后会自动打开工作区。"
     : bootState?.phase === "service_error"
       ? "启动器会自动重试；可展开「恢复与更新」查看诊断。"
@@ -92,6 +101,9 @@ const labels = {
   error: "更新未完成。请重试检查，或修复当前版本。Goal 数据不会被删除。",
 };
 const errors = {
+  chat_work_pending: "管家正在处理已有请求，完成后会自动切换服务并连接工作区。无需强退或重复发送。",
+  chat_state_unverified: "暂时无法核验管家服务的任务状态。连接会自动重试；请保留诊断信息。",
+  chat_service_unverified: "管家服务切换尚未确认。连接会自动重试；可保留诊断信息，或通过原安装方式更新 LoopX。",
   desktop_status_unavailable: "无法读取 App 诊断状态。请重启 App；若仍失败，请重新安装完整 App。",
   runtime_setup_required: "App 与本机运行时不匹配，或找不到安装身份。请修复当前版本，成功后重启。",
   runtime_bundle_missing: "App 缺少配套运行时文件。请重新下载完整 App。",

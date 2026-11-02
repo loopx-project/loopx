@@ -176,10 +176,7 @@ from .cli_commands.shared_goal_alignment import (
     handle_shared_goal_alignment_command,
     register_shared_goal_alignment_command,
 )
-from .cli_commands.goal_acceptance import (
-    handle_goal_acceptance_command,
-    register_goal_acceptance_command,
-)
+from .cli_commands.goal_acceptance import register_goal_acceptance_command
 from .cli_commands.goal_direction import register_goal_direction, handle_goal_direction
 from .cli_commands.goal_amendment_proposal import (
     handle_goal_amendment_proposal_command,
@@ -843,13 +840,6 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if authority_shadow_result is not None:
         return authority_shadow_result
-
-    goal_acceptance_result = handle_goal_acceptance_command(
-        args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-        output_format=output_format, print_payload=print_payload,
-    )
-    if goal_acceptance_result is not None:
-        return goal_acceptance_result
 
     shared_goal_alignment_result = handle_shared_goal_alignment_command(
         args,

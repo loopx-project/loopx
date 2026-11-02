@@ -3,6 +3,7 @@ import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 import type {TrajectorySolverUsage} from './trajectory_assessment_types.ts';
 import {reconcileTrajectoryRequests, summarizeTrajectoryLoopXInput} from './trajectory_request_usage.ts';
 import {estimateTrajectoryLoopXInput} from './trajectory_input_usage.ts';
+import {summarizeTrajectoryToolContext} from './trajectory_tool_context.ts';
 
 const fail = (message: string): never => { throw new EffectRuntimeRequestError(`trajectory usage: ${message}`); };
 const counterKeys = ['input_tokens', 'cached_input_tokens', 'output_tokens'] as const;
@@ -79,9 +80,11 @@ export function summarizeTrajectoryCodexUsage(params: Record<string, unknown>): 
   const requestCoverage = reconcileTrajectoryRequests(rows, params.session_id);
   const loopxInput = summarizeTrajectoryLoopXInput(rows, params.session_id, requestCoverage)
     ?? estimateTrajectoryLoopXInput(params.loopx_input_trace, params.session_id, params.input_goal_id, rows, requestCoverage);
+  const toolContext = summarizeTrajectoryToolContext(params.tool_context);
   return {session_id: params.session_id, method: observed ? 'codex_observed_session_counters_v1' : 'codex_complete_session_counters_v1',
     ...(requestCoverage ? {request_coverage: requestCoverage} : {}),
     ...(loopxInput ? {loopx_input: loopxInput} : {}),
+    ...(toolContext ? {tool_context: toolContext} : {}),
     ...(observed ? {incomplete_turn: incomplete} : {}),
     start, end, completed_turns: turns.length, counter_observations: samples,
     input_tokens: previous.input_tokens, cached_input_tokens: previous.cached_input_tokens,

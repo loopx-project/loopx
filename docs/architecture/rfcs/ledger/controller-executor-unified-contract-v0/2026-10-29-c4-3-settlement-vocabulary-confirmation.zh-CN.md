@@ -96,7 +96,7 @@ C4.3 结算义务对照列出一个候选后续切片：*词汇统一（小）�
 这是一个独立切片：为 host-adapter 的有序步骤类型给出同一个共享属主，并登记进
 词汇 registry，让 guard/validation 的区别从散文变成机器可读。它必须先调和在途的
 结算工作：#3412、#5677、#7580、#7523。该切片已在
-[#7619](https://github.com/loopx-project/loopx/pull/7619) 中提出：它把 host-adapter
+[#7619](https://github.com/loopx-project/loopx/pull/7619) 中合入：它把 host-adapter
 的有序步骤类型登记为独立词汇，并由两个运行时共同作为属主，于是两个载体在每次
 漂移扫描中都会被比较，而不再靠手工维护。
 

@@ -125,6 +125,8 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
         "pre_existing_unrelated", "external_unrelated",
     ]
     assert "same normalized failing identity" in attribution["rule"]
+    assert "unknown cause stays unresolved" in attribution["rule"]
+    assert "even on a diagnostic row" in attribution["rule"]
     assert "merge readiness remains on hold" in attribution["rule"]
     assert "not the union of all historical" in attribution["evidence_scope"]
     assert "A later green run alone does not resolve intermittency" in attribution["evidence_scope"]
@@ -132,6 +134,7 @@ def test_execution_contract_owns_deep_review_requirements() -> None:
     assert "without making completion" in requirements["validation_matrix"]["validation_source"]
     assert "required means review evidence" in requirements["validation_matrix"]["validation_source"]
     assert "only decisive coverage" in requirements["validation_matrix"]["validation_source"]
+    assert "smallest decisive check" in requirements["validation_matrix"]["validation_source"]
     assert "APPROVE when a required red check" in contract["verdict_policy"][
         "unrelated_validation_failure"
     ]

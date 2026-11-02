@@ -353,6 +353,132 @@ def prepared(steward, tmp_path, monkeypatch, provider="sqlite"):
     return sid, actor, monitor
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("entry", ["resume", "adapter", "http"])
+def test_session_resume_preserves_live_model_free_watch_after_client_restart(steward, tmp_path, monkeypatch, provider, entry):
+    import threading
+    import loopx.chat_manager_context as contexts
+
+    store, runtime, _, _, _, capture, _ = steward
+    sid, _, _ = prepared(steward, tmp_path, monkeypatch, provider)
+    # A restored host can run a model-free watch before ever opening Codex.
+    runtime.adapters.pop(sid).close_session()
+    entered, released = threading.Event(), threading.Event()
+    collect = contexts.collect_manager_turn_context
+
+    def slow_collection(*args, **kwargs):
+        entered.set()
+        assert released.wait(10), "portfolio fixture was not released"
+        return collect(*args, **kwargs)
+
+    monkeypatch.setattr(contexts, "collect_manager_turn_context", slow_collection)
+    calls = capture.read_bytes()
+    turn = pump_steward_monitors(runtime)[0]
+    server, result = None, None
+    try:
+        assert entered.wait(10)
+        original = store.load_turn(sid, turn["turn_id"])
+        assert original["status"] == "starting"
+        if entry == "resume":
+            restored = runtime.resume_session(session_id=sid, work_dir=tmp_path, objective="Open the existing conversation")
+        elif entry == "adapter":
+            with pytest.raises(ValueError, match="worker is still active"):
+                runtime._ensure_adapter(store.load_session(sid), work_dir=tmp_path, objective="Open the existing conversation")
+            restored = store.load_session(sid)
+        else:
+            import http.client
+            import json
+            from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+            server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+            server.runtime_controller, server.chat_store, server.verbose = runtime, store, False
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+            try:
+                connection.request("POST", f"/api/chat/sessions/{sid}/resume", "{}",
+                    headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+                assert response.status == 200, payload
+                restored = payload["session"]
+            finally:
+                connection.close()
+        assert restored["active_turn_id"] == turn["turn_id"]
+        # The live event buffer may publish phase timing while HTTP is open.
+        # Resume must retain the operation/state, not freeze its progress.
+        timing = {"first_event_at", "last_activity_at"}
+        assert {k: v for k, v in store.load_turn(sid, turn["turn_id"]).items() if k not in timing} == {
+            k: v for k, v in original.items() if k not in timing}
+        assert capture.read_bytes() == calls  # Opening history must not start or resume an unrelated model client.
+    finally:
+        released.set()
+        if server is not None:
+            try:
+                result = finish(runtime, turn)
+            finally:
+                # ChatHTTPServer owns its controller. Closing it while the
+                # watch is still collecting would test an intentional stop.
+                server.shutdown()
+                server.server_close()
+    result = result or finish(runtime, turn)
+    assert result["status"] == "completed", result
+    assert result["response"]["native_loopx"]["status"] == "observed"
+    assert not any(row["kind"] == "turn.failed" for row in store.events_after(sid, turn["turn_id"], None))
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("change", ["pause", "binding_scope"])
+def test_monitor_identity_io_leaves_owner_changes_available_and_rechecks_them(steward, tmp_path, monkeypatch, provider, change):
+    import threading
+    from loopx.file_lock import exclusive_file_lock
+
+    store, runtime, identity, transport, binding, capture, _ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    before, calls = monitor.current(actor), capture.read_bytes()
+    entered, released = threading.Event(), threading.Event()
+    commit, observe, committing = StewardMonitor._commit_poll, transport.bindings.observe, []
+
+    def at_commit(self, *args):
+        committing.append(threading.get_ident())
+        return commit(self, *args)
+
+    def blocked_observation(*args, **kwargs):
+        if threading.get_ident() in committing:
+            entered.set()
+            assert released.wait(10), "monitor identity fixture was not released"
+        return observe(*args, **kwargs)
+
+    monkeypatch.setattr(StewardMonitor, "_commit_poll", at_commit)
+    monkeypatch.setattr(transport.bindings, "observe", blocked_observation)
+    turn = pump_steward_monitors(runtime)[0]
+    available = False
+    try:
+        assert entered.wait(10)
+        available = runtime.lock.acquire(timeout=.5)
+        assert available, "provider verification prevented the owner from changing the monitor"
+        with exclusive_file_lock(transport.bindings.path, timeout_seconds=.5):
+            pass
+        if change == "pause":
+            plan = monitor.configure(binding["binding_id"], operation="pause")["plan"]
+            monitor.configure(binding["binding_id"], operation="pause", expected_plan_id=plan["plan_id"], execute=True)
+        else:
+            transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+                executor_endpoint_id="codex", context_kind="steward", goal_scope="selected")
+    finally:
+        if available:
+            runtime.lock.release()
+        else:
+            identity.owner_ready = False
+        released.set()
+    result = finish(runtime, turn)
+    assert result["status"] == "failed", result
+    current = monitor.current(actor)
+    assert current.get("result_hash") == before.get("result_hash")
+    assert current["next_due_at"] == before["next_due_at"]
+    assert not any(row["kind"] == "native_loopx.monitor_poll" for row in store.events_after(turn["session_id"], turn["turn_id"], None))
+    assert capture.read_bytes() == calls
+
+
 def stopped_watch(steward, tmp_path, monkeypatch, provider, audience):
     store, runtime, _, transport, _, capture, _ = steward
     if audience == "managed":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 from collections.abc import Mapping
 from typing import Any
@@ -28,6 +29,7 @@ from ..effect_program import (
 )
 from ..goals.goal_ref_validation import exact_goal_ref
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
+from ..turn_driver.decision_capture import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
 
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",
@@ -53,13 +55,40 @@ __all__ = [
     "settlement_binding_args",
     "settlement_result_payload",
     "settlement_step_command",
+    "turn_instance_arg",
 ]
 
 
+_POSIX_TURN_REF = "${LOOPX_TURN:?}"
+_POWERSHELL_TURN_REF = "$LOOPX_TURN"
+
+
+def _is_windows_host() -> bool:
+    return os.name == "nt"
+
+
+def _default_turn_ref() -> str:
+    return _POWERSHELL_TURN_REF if _is_windows_host() else _POSIX_TURN_REF
+
+
 def _quoted_turn_ref(turn_instance_id_ref: str) -> str:
-    if turn_instance_id_ref == "${LOOPX_TURN:?}":
-        return '"${LOOPX_TURN:?}"'
+    if turn_instance_id_ref == _POSIX_TURN_REF:
+        return _default_turn_ref() if _is_windows_host() else f'"{_POSIX_TURN_REF}"'
+    if turn_instance_id_ref == _POWERSHELL_TURN_REF and _is_windows_host():
+        return turn_instance_id_ref
     return shlex.quote(turn_instance_id_ref)
+
+
+def turn_instance_arg(turn_instance_id: str | None = None) -> str:
+    """Render the ``--turn-instance-id`` argument for the shell that runs it.
+
+    A caller holding a concrete Turn passes it through unchanged. Without one,
+    the argument names the reference the current host shell can expand, so a
+    native Windows host does not receive an empty Turn from POSIX syntax.
+    """
+
+    reference = turn_instance_id or _default_turn_ref()
+    return f"--turn-instance-id {_quoted_turn_ref(reference)}"
 
 
 def _settlement_actor_args(arguments: str, agent_id: str) -> str:
@@ -110,6 +139,7 @@ def build_codex_app_settlement_plan(
     quota_spend_source: str = "heartbeat",
     goal_ref: Mapping[str, object] | None = None,
     autonomous_replan: bool = False,
+    handoff_mode: str | None = None,
 ) -> SettlementPlan:
     return build_turn_scoped_cli_settlement_plan(
         goal_id=goal_id,
@@ -119,12 +149,13 @@ def build_codex_app_settlement_plan(
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
         lifecycle_actor_args=lifecycle_actor_args,
-        turn_instance_id=turn_instance_id_ref or "${LOOPX_TURN:?}",
+        turn_instance_id=turn_instance_id_ref or _default_turn_ref(),
         writeback_path_args=writeback_path_args,
         delivery_boundary=delivery_boundary,
         quota_spend_source=quota_spend_source,
         goal_ref=goal_ref,
         autonomous_replan=autonomous_replan,
+        handoff_mode=handoff_mode,
     )
 
 
@@ -144,6 +175,7 @@ def build_turn_scoped_cli_settlement_plan(
     quota_spend_source: str = "heartbeat",
     goal_ref: Mapping[str, object] | None = None,
     autonomous_replan: bool = False,
+    handoff_mode: str | None = None,
 ) -> SettlementPlan:
     if sum(bool(value) for value in (todo_id, replan_obligation_id, request_subject)) != 1:
         raise ValueError(
@@ -186,6 +218,17 @@ def build_turn_scoped_cli_settlement_plan(
     # Returned settlement commands are machine-readable without caller surgery.
     # Keep this global option before every subcommand, including quota spend-slot.
     cli_prefix = f"{command_prefix.strip() or 'loopx'} --format json"
+    task_claim = (
+        f"{cli_prefix} todo claim --goal-id {shlex.quote(goal_id)}{binding_arg}"
+        f" --agent-id {shlex.quote(agent_id)} --claimed-by {shlex.quote(agent_id)}"
+        f"{goal_ref_arg}"
+    )
+    # Preserve a caller's accepted execution reference or explicit lease proof.
+    # This only renders CLI syntax; the canonical lifecycle still checks it.
+    proof_options = {"--claim-operation-id", "--task-lease-idempotency-key", "--task-lease-expected-version"}
+    completion_proof_supplied = any(
+        token.partition("=")[0] in proof_options for token in shlex.split(lifecycle_actor_args)
+    )
     ordinary_completion = (
         f"{cli_prefix} todo complete --goal-id {shlex.quote(goal_id)}{binding_arg}"
         f"{lifecycle_actor_args}{turn_arg}{goal_ref_arg} --evidence '<validated evidence>'"
@@ -200,14 +243,17 @@ def build_turn_scoped_cli_settlement_plan(
     spend = (
         f"{cli_prefix} quota spend-slot --goal-id {shlex.quote(goal_id)} --slots 1 "
         f"--source {quota_spend_source} --execute{binding_arg}{turn_arg}{goal_ref_arg}"
-        f"{scoped_cli_args}"
+        f"{scoped_cli_args} --max-page-output-bytes {NATIVE_CONTEXT_PAGE_OUTPUT_BYTES}"
     )
     payload = effect_runtime_result("settlement.turn_scoped_cli_plan", {
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
         "autonomous_replan": autonomous_replan,
+        "handoff_mode": handoff_mode,
+        "completion_proof_supplied": completion_proof_supplied,
         "delivery_batch_scale_choices": list(DELIVERY_BATCH_SCALE_INPUT_CHOICES),
         **({"goal_ref": normalized_goal_ref} if normalized_goal_ref is not None else {}),
         "command_templates": {
+            **({"todo_claim": task_claim} if todo_id else {}),
             "todo_completion": ordinary_completion, "durable_writeback": writeback,
             "quota_spend": spend, "terminal_closeout": terminal_closeout,
         },
@@ -270,8 +316,4 @@ def settlement_binding_args(plan: Mapping[str, Any] | None) -> str:
             f" --goal-instance-id "
             f"{shlex.quote(normalized_goal_ref['goal_instance_id'])}"
         )
-    return (
-        binding_arg
-        + f" --turn-instance-id {_quoted_turn_ref(turn_instance_id)}"
-        + goal_ref_arg
-    )
+    return binding_arg + " " + turn_instance_arg(turn_instance_id) + goal_ref_arg

@@ -1,0 +1,20 @@
+.background-settings { display: grid; gap: 16px; max-width: 850px; }
+.background-toolbar, .background-actions, .background-task-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.background-toolbar > div, .background-status { display: inline-flex; align-items: center; gap: 8px; }
+.background-toolbar > .background-actions { flex-wrap: nowrap; flex-shrink: 0; }
+.background-actions .personal-secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 12px; margin: 0; width: auto; min-height: 44px; }
+.background-status { font-size: var(--text-body); white-space: nowrap; color: var(--pw-muted); }
+.background-status[data-state="healthy"] { color: var(--pw-green); }
+.background-status[data-state="overdue"], .background-status[data-state="retrying"] { color: var(--pw-amber); }
+.background-status[data-state="stopped"] { color: var(--pw-red); }
+.background-task-list { display: grid; gap: 12px; }
+.background-task { border: 1px solid var(--pw-line); border-radius: 12px; padding: 18px 20px; min-width: 0; }
+.background-task h2 { font-size: 1rem; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.background-task-times { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 16px 0 0; }
+.background-task-times div { min-width: 0; }
+.background-task-times dt { color: var(--pw-muted); font-size: var(--text-caption); margin-bottom: 4px; }
+.background-task-times dd { margin: 0; overflow-wrap: anywhere; }
+.background-task details { margin-top: 14px; }
+.background-task summary { cursor: pointer; font-size: var(--text-body); color: var(--pw-muted); }
+.background-feature-link { border: 0; padding: 12px 0 0; color: var(--pw-blue-ink); background: transparent; font: inherit; cursor: pointer; }
+@media (max-width: 560px) { .background-task { padding: 16px; } .background-task-times { gap: 12px 20px; } }

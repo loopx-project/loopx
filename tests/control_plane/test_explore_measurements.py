@@ -8,6 +8,8 @@ import pytest
 
 from tests.control_plane.test_explore_result_writeback import fixture, payload
 from loopx.capabilities.explore.result_log import (
+    build_explore_finding_event,
+    build_explore_result_projection,
     explore_history_rows,
     explore_result_log_path,
     load_explore_result_events_strict,
@@ -27,6 +29,36 @@ def measurement(candidate, value, **changes):
 def context(args):
     return explore_turn_context(**{key: args[key] for key in
         ("registry_path", "runtime_root", "goal_id", "agent_id")})
+
+
+@pytest.mark.parametrize("measured", [False, True])
+def test_tied_finding_times_bound_latest_appends_and_corrections(measured):
+    # The production writer records whole seconds. Equal source times must not
+    # let insertion order keep the oldest result in a bounded newest-first view.
+    stamp = "2026-01-01T00:00:00Z"
+
+    def finding(index, *, at=stamp, **changes):
+        return build_explore_finding_event(
+            goal_id="research", finding_id=f"candidate-{index}", node_id="question",
+            title=f"Measured scope {index}", evidence_refs=["validation:counterexample-1"],
+            tags=["writeback-result"] if not measured else [], recorded_at=at,
+            **({"measurements": [measurement(str(index), index)]} if measured else {}), **changes,
+        )
+
+    events = [finding(index) for index in range(4)]
+    initial = build_explore_result_projection(events, goal_id="research", finding_limit=3)
+    assert [row["finding_id"] for row in initial["findings"]] == ["candidate-3", "candidate-2", "candidate-1"]
+    events.append(finding(0, summary="Corrected interpretation on the same source clock."))
+    original = deepcopy(events)
+    view = build_explore_result_projection(events, goal_id="research", finding_limit=3)
+    assert [row["finding_id"] for row in view["findings"]] == ["candidate-0", "candidate-3", "candidate-2"]
+    assert view["findings"][0]["update_count"] == 2
+    assert all(row["last_updated_at"] == stamp for row in view["findings"])
+    # Preserve chronology across distinct timestamps, even for a later append.
+    older = finding(4, at="2025-12-31T23:59:59Z")
+    dated = build_explore_result_projection([*events, older], goal_id="research", finding_limit=5)
+    assert dated["findings"][-1]["finding_id"] == "candidate-4"
+    assert events == original, "ordering is a projection; source timestamps and append history stay unchanged"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -67,6 +99,11 @@ def test_cli_reuses_explicit_context_and_preserves_normalized_history(tmp_path, 
     assert feedback["best"]["value"] == 9
     assert feedback["measured_count"] == 3
     assert feedback["unknown_count"] == 1
+    # Actual File/SQLite CLI writes may share the writer's whole-second clock.
+    # The bounded reader must agree with their append order without sleeps.
+    assert [row["finding_id"] for row in context(args)["graph"]["writeback_results"]] == [
+        "candidate-3", "candidate-2", "candidate-1",
+    ]
     assert conditions.read_text() == json.dumps(shared), "recording cannot rewrite the caller's conditions"
     healthy = log.read_bytes()
     # Even an equal duplicate field must not silently override the shared source.

@@ -23,11 +23,14 @@ def main() -> None:
     parser.add_argument("--baseline-assets-dir", type=Path)
     parser.add_argument("--invalid-editorial", action="store_true", help="Return a known invalid synthetic report to inspect owner cancellation and retained failure.")
     parser.add_argument("--host-failure", action="store_true", help="Fail the synthetic native model before an editorial result; retain the original window without retry authority.")
+    parser.add_argument("--retained-executor", action="store_true", help="Keep an original configured window after selecting an executor without native scheduled-work support; readback only.")
     journey = parser.add_mutually_exclusive_group()
     journey.add_argument("--managed-session", action="store_true", help="Exercise ordinary Goal Session native work with the existing task validator, instead of a scheduled report.")
     journey.add_argument("--managed-report", action="store_true", help="Configure a calendar report for an existing local Agent Session through the packaged Goal settings.")
     journey.add_argument("--managed-calendar-task", choices=("file", "sqlite"), help="Repeat a completed, independently validated Task through the real calendar and packaged Goal settings.")
     args = parser.parse_args()
+    if args.retained_executor and (args.host_failure or args.invalid_editorial or args.managed_session or args.managed_report or args.managed_calendar_task):
+        parser.error("retained executor readback uses the original steward journey alone")
     if args.host_failure and (args.invalid_editorial or args.managed_session or args.managed_calendar_task):
         parser.error("select the pre-editorial report failure journey alone")
     if args.invalid_editorial and (args.managed_session or args.managed_calendar_task):
@@ -117,6 +120,23 @@ def main() -> None:
         if args.invalid_editorial:
             helper = root / "report_model.py"
             helper.write_text(helper.read_text().replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
+        if args.retained_executor:
+            from datetime import datetime, timezone
+            from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window
+            reports = StewardReports(runtime)
+            schedule = {"schema_version": "periodic_report_schedule_v0", "schedule_id": "retained-report",
+                "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}
+            plan = reports.configure(binding["binding_id"], operation="enable", schedule=schedule)["plan"]
+            reports.configure(binding["binding_id"], operation="enable", schedule=schedule,
+                execute=True, expected_plan_id=plan["plan_id"])
+            subscription = reports.subscription(binding["binding_id"])
+            admit_cadence_window(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
+                subscription_resolver=lambda: subscription)
+            current = transport.bindings.read()
+            selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+            selected["executor_endpoint_id"] = "antigravity"
+            transport.bindings.path.write_text(json.dumps(current))
         before_calls, before_messages = capture.read_bytes(), store.messages(sid)
         server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
         server.chat_store, server.runtime_controller = store, runtime
@@ -151,14 +171,75 @@ def main() -> None:
                 "calendar_task_configuration": configuration} if args.managed_calendar_task else {})}))
         wake, outbound, delivery = None, None, None
         owner_start_count = 0
+        restart_tokens = set()
+        restart_refusals = set()
+        executor_restored = False
         try:
             while not stop.wait(.2):
                 server.assets_dir = current_assets if (output / "use-current-assets").exists() else baseline_assets
+                if args.retained_executor and not executor_restored and (output / "restore-supported-executor").exists():
+                    current = transport.bindings.read()
+                    selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+                    selected["executor_endpoint_id"] = "codex"
+                    transport.bindings.path.write_text(json.dumps(current))
+                    executor_restored = True
                 provider.owner_ready = not (output / "provider-unavailable").exists()
                 owners_stopped = (output / "stop-existing-wake").exists()
                 if owners_stopped and wake:
                     wake.close()
                     wake = None
+                restart_file = output / "restart-runtime"
+                restart_token = restart_file.read_text().strip() if restart_file.is_file() else None
+                if (args.managed_calendar_task and restart_token
+                        and restart_token not in restart_tokens | restart_refusals):
+                    with runtime.lock:
+                        restart_busy = (not owners_stopped or store.load_session(sid).get("active_turn_id")
+                            or any(not done.is_set() for done in runtime.turn_done_events.values()))
+                    if restart_busy:
+                        restart_refusals.add(restart_token)
+                        (output / "restart-rejected.json").write_text(json.dumps({
+                            "operation": restart_token, "reason": "stop_wake_and_await_original_work",
+                            "session_id": sid, "runtime_restarted": False, "synthetic_only": True}))
+                if (args.managed_calendar_task and restart_token
+                        and restart_token not in restart_tokens | restart_refusals):
+                    # Disposable QA only: reconstruct the normal controller over
+                    # its original physical state, never reseed the fixture or
+                    # retain a second wake/model owner across the restart.
+                    from loopx.chat_actions import ChatActionService
+                    from loopx.chat_action_store import ChatActionStore
+                    from loopx.chat_runtime import ChatRuntimeController
+                    from loopx.chat_store import ChatSessionStore
+                    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
+                    history, prior_session = store.messages(sid), store.load_session(sid)
+                    prior_calls, prior_writes = capture.read_bytes(), list(provider.writes)
+                    server.shutdown()
+                    old_runtime = runtime
+                    old_runtime.close()
+                    store = ChatSessionStore(store.root.parent)
+                    runtime = ChatRuntimeController(store=store, codex_bin=old_runtime.codex_bin,
+                        project_contexts=old_runtime.project_contexts, registry_path=old_runtime.registry_path)
+                    transport = LarkPrivateConversations(controller=runtime, runtime_root=store.root.parent,
+                        runner=provider, cli_bin="lark-cli")
+                    runtime.manager_scope_resolver = transport.bindings.steward_scope
+                    transport.core.actions = ChatActionService(store=ChatActionStore(store.root / "actions"),
+                        registry_path=runtime.registry_path, chat_store=store, runtime_controller=runtime,
+                        workspace_roots=[workspace])
+                    local_tasks = SessionCalendarTasks(runtime)
+                    local_owner = local_tasks
+                    server.chat_store, server.runtime_controller = store, runtime
+                    server.lark_private_conversations = transport
+                    server.action_service, server.action_store = transport.core.actions, transport.core.actions.store
+                    threading.Thread(target=server.serve_forever, daemon=True).start()
+                    assert old_runtime.closed.is_set()
+                    assert store.load_session(sid) == prior_session and store.messages(sid) == history
+                    assert local_owner.selected(sid)["actor"] == actor
+                    assert capture.read_bytes() == prior_calls and provider.writes == prior_writes
+                    restart_tokens.add(restart_token)
+                    (output / "restart-readback.json").write_text(json.dumps({
+                        "operation": restart_token, "runtime_restarts": len(restart_tokens),
+                        "session_id": sid, "actor": actor, "message_count": len(history),
+                        "prior_runtime_closed": True, "history_and_identity_preserved": True,
+                        "model_or_delivery_replayed": False, "synthetic_only": True}))
                 if wake is None and not owners_stopped and (output / "start-existing-owners").exists():
                     wake = DelegationWakeService(runtime, interval=.1).start()
                     owner_start_count += 1
@@ -181,6 +262,9 @@ def main() -> None:
                     "provider_history_pages": sum("+chat-messages-list" in call for call in provider.calls),
                     "existing_wake_owner_running": wake is not None,
                     "existing_wake_owner_starts": owner_start_count,
+                    "retained_executor_restored": executor_restored,
+                    "runtime_restarts": len(restart_tokens),
+                    "runtime_restart_rejections": len(restart_refusals),
                     **({"managed_source_present": artifact.exists(),
                         "managed_session": store.load_session(managed_session["session_id"])} if args.managed_session else {}),
                     **({"managed_report": True,

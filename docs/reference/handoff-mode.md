@@ -62,6 +62,15 @@ A read-only quota guard never claims or renews. Long-running delegated Hosts ret
 their existing supervision; this CLI path does not supervise an idle external
 process. The App's manual completion boundary described above is unchanged.
 
+For a selected `hard_lease` Todo, the quota settlement plan now gives the ordinary
+claim command before task execution and carries its returned reference in the
+completion template. Quota and TurnEnvelope share that plan. The policy comes
+from the canonical Todo snapshot through `goal_boundary.handoff_mode`, including
+reads that omit lease records; display Markdown does not supply it. `soft_claim` retains its existing completion
+recipe. Supplied explicit proof is preserved, and an unavailable policy is not
+inferred as a new lease requirement. This is caller guidance, not acquisition,
+renewal or a replacement for validation and the existing fences.
+
 Goal-mode MCP uses the same task reference: retain `claim_operation_id` from
 `claim_task` and pass it to `complete_task`, including retries. This is a breaking
 tool-schema change: `complete_task` no longer accepts
@@ -284,8 +293,16 @@ under a fresh operation and current revision. Other execution fences remain:
 | Expired execution matches the retained claim; eligible registered replacement actor | Use ordinary `todo claim` for atomic takeover, then use its new reference. |
 | Active foreign holder, divergent history, or absent claim | Reconcile ownership through its lifecycle; never borrow another holder's proof. |
 | `soft_claim` with released same-owner history, ordinary owner copy edit | Omit lease proof; keep the history. No replacement lease is needed or allowed. |
+| Rejected wait revision on an already deferred Todo | Review and explicitly resume the original Todo, then reapply the reviewed deferral using a separate operation and current provider revision. Neither step grants execution. |
 | Non-open Todo, acceptance hold or conflicting write scopes | Resolve the reported acquisition blocker. No acquire action is offered. |
 | Edit changes retained leased work requirements or status | Use the owning lifecycle transition; acquiring another lease cannot authorize the metadata edit. |
+
+For a deferred wait revision, the returned retry uses `--status open
+--clear-resume-when` with a reviewed reason, fresh update operation and current
+provider CAS. Read that result before submitting the intended deferral with
+another operation and fresh CAS. Do not repeat the rejected same-status request
+or carry its resume condition into the resume command. An active retained lease
+must be released by its holder first; explicit stale proof remains rejected.
 
 The existing `open -> blocked -> open` lifecycle also accepts a typed
 prerequisite wait: use `todo update --status blocked --resume-when
@@ -346,6 +363,12 @@ claim+lease 均不可执行，必须先审核迁移；合并式 claim+lease 仍�
 提示不包含 execution key、不授予权限，也不修改 mode 或 provider。并发造成 version
 变化时重新读取，不能绕过 CAS；dry-run 和拒绝路径不产生 Todo 或租约写入。
 
+修改已 deferred Todo 的等待条件若被拒绝，恢复命令先以 `--status open
+--clear-resume-when`、审核后的 reason、新 update operation 和当前 provider CAS
+显式恢复原任务；读回后，再用另一个 operation 和新的 CAS 提交审核后的延期。
+不重复原同状态请求，也不把其 resume 条件带入恢复命令。两步均不授予执行权，完整
+任务和历史保留；有效的历史 lease 须先由 holder 释放，显式过期 proof 仍被拒绝。
+
 ### Agent 普通 CLI 操作
 
 CLI 由明确的 `--agent-id` 认领给自己时，会在同一 canonical 事务中准备执行；
@@ -360,6 +383,13 @@ CLI 由明确的 `--agent-id` 认领给自己时，会在同一 canonical 事务
 不自动借用或重新取得证明；显式证明不能与引用混用。原操作回执先于维护恢复，重试不
 重复写入或续租。只读 quota guard 不做认领或续租；长期委派 Host 仍走已有监督，
 本 CLI 路径不监督空闲外部进程，也不改变 App 手工完成的现有边界。
+
+选中的 Todo 使用 `hard_lease` 时，quota 结算计划会在执行前给出普通认领命令，完成
+模板携带其返回的原引用；quota 与 TurnEnvelope 共用该计划。策略取自 canonical Todo
+快照，经 `goal_boundary.handoff_mode` 传递；即使读取未请求租约记录，也不从展示
+Markdown 推断。`soft_claim` 保持原完成命令；调用方已有显式证明时原样保留，策略
+不可用时不臆造租约要求。这是调用指引，
+不执行认领或续租，也不替代验收及已有 fence。
 
 Goal-mode MCP 同样传递任务引用：保存 `claim_task` 返回的 `claim_operation_id`，
 在 `complete_task` 及其重试中原样使用。本次为 breaking change，`complete_task`

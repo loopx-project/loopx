@@ -13,7 +13,11 @@ from .control_plane.projects.identity import GoalCreationConflictError
 from .control_plane.coordination.new_goal_storage_transport import initialize_goal_storage_target
 from .chat import apply_todo_review_preview, build_todo_review_preview
 from .chat_action_normalization import ChatActionNormalizationMixin
-from .chat_action_store import ActionConflictError, ChatActionStore
+from .chat_action_store import (
+    ACTION_KINDS as SUPPORTED_ACTION_KINDS,
+    ActionConflictError,
+    ChatActionStore,
+)
 from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat_monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
@@ -40,22 +44,7 @@ from .control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
-SUPPORTED_ACTION_KINDS = {
-    "goal.acceptance.check",
-    "todo.create",
-    "todo.update",
-    "run.correct",
-    "goal.create",
-    "goal.update",
-    "goal.lifecycle",
-    "agent.bind",
-    "heartbeat.bind",
-    "monitor.create",
-    "monitor.update",
-    "gate.resolve",
-    "operation.execute",
-    "team.plan",
-}
+
 # Runtime Endpoint ids and durable Goal agent ids are chosen independently, so
 # a family token collapses both onto the host that produced them: Endpoint
 # `codex` has to resolve to a registered `codex-main-control`. Every host that

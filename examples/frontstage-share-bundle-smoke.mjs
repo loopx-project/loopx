@@ -43,7 +43,7 @@ function assertExists(path) {
 // exported page directory or a shipped static asset. Page references must own
 // an index.html; asset references must resolve to the asset file itself.
 const relativeAssetReferencePattern =
-  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|svg|txt|webm|webp|woff2?|xml|zip)$/i;
+  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|py|svg|txt|webm|webp|woff2?|xml|zip)$/i;
 const nonBundleReferencePattern = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i;
 
 function assertRelativeReferenceExists(pagePath, target) {
@@ -84,6 +84,19 @@ try {
   const probePath = resolve(boundaryProbeDir, "index.html");
   await writeFile(probePath, publicCitation);
   await scanPublicBoundary(boundaryProbeDir);
+  const scriptPath = resolve(boundaryProbeDir, "credential-form.js");
+  await writeFile(scriptPath, "submit({api_key:draft,auth_token:state.value})");
+  await scanPublicBoundary(boundaryProbeDir);
+  for (const unsafeScript of [
+    'submit({api_key:"fixture-private-value"})',
+    'submit({auth_token:`fixture-private-value`})',
+    'submit({api_key:draft,access_token:"fixture-private-value"})',
+    'submit({api_key:draft || "fixture-private-value"})',
+  ]) {
+    await writeFile(scriptPath, unsafeScript);
+    await assert.rejects(scanPublicBoundary(boundaryProbeDir), /Public boundary scan failed/);
+  }
+  await rm(scriptPath);
   for (const unsafe of [
     "byte" + "dance internal workspace",
     '<a href="https://github.com/ByteDance-Seed/private-work">unverified source</a>',

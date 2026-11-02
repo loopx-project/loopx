@@ -928,6 +928,23 @@ def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_up
     restart.assert_not_called()
 
 
+def apply_plan_for_driver(driver):
+    doctor = doctor_payload()
+    archive = driver == "archive_snapshot"
+    if not archive:
+        doctor["package"] = {"install_kind": "python_distribution", "release_root": None}
+        doctor["install_freshness"].update(
+            install_kind="python_distribution",
+            python_distribution_installer=driver.removeprefix("python_"),
+        )
+    payload = build_update_plan(
+        build_from_source=archive, action="apply", doctor_payload=doctor,
+    )
+    assert payload["ok"]
+    assert payload["install_lifecycle"]["execution_driver"] == driver
+    return payload
+
+
 @pytest.mark.parametrize("driver", [
     pytest.param(
         "archive_snapshot",
@@ -938,8 +955,7 @@ def test_failed_authority_upgrade_does_not_activate_services_or_continue_host_up
 ])
 def test_update_preserves_selected_route_through_install_and_readback(tmp_path, monkeypatch, driver):
     registry, runtime = tmp_path / "project/.loopx/registry.json", tmp_path / "selected runtime"
-    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
-    payload["install_lifecycle"].update(execution_driver=driver)
+    payload = apply_plan_for_driver(driver)
     calls, installer_env = [], {}
     monkeypatch.setenv("LOOPX_PYTHON", sys.executable)
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
@@ -1018,8 +1034,7 @@ def test_archive_readback_and_activation_follow_installer_bin_owner(
 @pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
 def test_python_distribution_activation_ignores_archive_bin_override(tmp_path, monkeypatch, driver):
     monkeypatch.setenv("LOOPX_BIN_DIR", str(tmp_path / "custom/bin"))
-    payload = build_update_plan(build_from_source=True, action="apply", doctor_payload=doctor_payload())
-    payload["install_lifecycle"].update(execution_driver=driver)
+    payload = apply_plan_for_driver(driver)
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
     with (
         mock.patch("loopx.self_update.subprocess.run", return_value=passed),

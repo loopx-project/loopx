@@ -126,6 +126,7 @@ def collect_turn_status_payload(
         goal_id=args.goal_id,
         available_capabilities=args.available_capabilities,
         agent_lane_id=args.agent_id,
+        include_presentation_projections=False,
     )
 
 

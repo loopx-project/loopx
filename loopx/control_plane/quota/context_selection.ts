@@ -3,32 +3,48 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 
-export function capturedContextSelection(request: JsonObject): JsonObject {
+export function capturedContextSelection(request: JsonObject, initialPointers: string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "captured context");
-  const selectors = request.select;
+  if (request.initial_read !== undefined && typeof request.initial_read !== "boolean")
+    throw new EffectRuntimeRequestError("initial-read must be boolean");
+  if (request.initial_read === true && (request.select !== undefined || request.list_fields === true || request.list_depth !== undefined))
+    throw new EffectRuntimeRequestError("initial-read cannot be combined with select or list");
+  const selectors = request.initial_read === true ? initialPointers : request.select;
+  if (request.initial_read === true && !(selectors as string[]).length)
+    throw new EffectRuntimeRequestError("initial-read is unavailable for this capture schema; use generic discovery");
   if (!Array.isArray(selectors) || !selectors.length || selectors.some(value => typeof value !== "string"))
     throw new EffectRuntimeRequestError("context selection requires a nonempty array of JSON pointers");
   const depth = request.list_depth === undefined ? 1 : request.list_depth;
   if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 1 || depth > 8
       || request.list_depth !== undefined && request.list_fields !== true)
     throw new EffectRuntimeRequestError("list-depth requires --list and an integer from 1 to 8");
-  const pointers = [...new Set(selectors as string[])].sort();
+  // Keep caller positions before canonical sorting/deduplication. Diagnostics
+  // identify a failed address without echoing possibly sensitive keys or values.
+  const argumentsByPointer = new Map<string, number>();
+  (selectors as string[]).forEach((pointer, index) => {
+    if (!argumentsByPointer.has(pointer)) argumentsByPointer.set(pointer, index + 1);
+  });
+  const pointers = [...argumentsByPointer.keys()].sort();
   const selections = pointers.map(pointer => {
+    const argument = `--select argument ${argumentsByPointer.get(pointer)}`;
     if (pointer !== "" && !pointer.startsWith("/") || /~(?:[^01]|$)/.test(pointer))
-      throw new EffectRuntimeRequestError("context selection requires RFC 6901 pointers");
+      throw new EffectRuntimeRequestError(`context selection requires RFC 6901 pointers (${argument}; positions are 1-based)`,
+        "context_selection_invalid_pointer");
     const tokens = pointer === "" ? [] : pointer.slice(1).split("/").map(token => token.replace(/~1/g, "/").replace(/~0/g, "~"));
     const path: (string | number)[] = [];
     let value: unknown = context;
     for (const token of tokens) {
       if (Array.isArray(value)) {
         if (!/^(0|[1-9][0-9]*)$/.test(token) || !Number.isSafeInteger(Number(token)) || Number(token) >= value.length)
-          throw new EffectRuntimeRequestError("context selection array index is missing or invalid");
+          throw new EffectRuntimeRequestError(`context selection array index is missing or invalid (${argument}, token ${path.length + 1}; positions are 1-based)`,
+            "context_selection_invalid_index");
         path.push(Number(token));
         value = value[Number(token)];
       } else if (value !== null && typeof value === "object" && Object.hasOwn(value, token)) {
         path.push(token);
         value = (value as JsonObject)[token];
-      } else throw new EffectRuntimeRequestError("context selection pointer does not exist");
+      } else throw new EffectRuntimeRequestError(`context selection pointer does not exist (${argument}, token ${path.length + 1}; positions are 1-based)`,
+        "context_selection_missing_pointer");
     }
     // Return the verified address, not a JS-number-coerced copy of the value.
     // The file adapter retains original JSON values and owns byte serialization.
@@ -48,5 +64,7 @@ export function capturedContextSelection(request: JsonObject): JsonObject {
     }
     return {pointer, path};
   });
-  return {selections};
+  const initial = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
+    ? initialPointers : [];
+  return {selections, ...(initial.length ? {initial_read_pointers: initial} : {})};
 }

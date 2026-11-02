@@ -19,6 +19,7 @@ from ..quota.settlement import (
     SettlementStepKind,
     settlement_binding_args,
     settlement_step_command,
+    turn_instance_arg,
 )
 from ..quota.spend_sources import (
     build_quota_spend_action,
@@ -39,7 +40,7 @@ from ..todos.contract import (
     normalize_todo_replan_obligation_id,
 )
 from ..todos.todo_semantics import todo_item_task_class
-from ..todos.user_gate import open_todo_count
+from ..todos.user_gate import has_only_open_user_actions, open_todo_count
 from ..todos.write_hint import build_capability_resolution_writeback_actions
 from .autonomous_replan_obligation import (
     build_autonomous_replan_cli_actions,
@@ -167,6 +168,14 @@ def user_channel_action_required(payload: dict[str, Any]) -> bool:
     if _user_gate_scope_projection_repair_active(payload):
         return False
     if _user_gate_notification_suppressed(payload):
+        return False
+    if (
+        has_only_open_user_actions(payload.get("user_todo_summary"))
+        and exact_blocked_successor_wait_state(payload)
+        and not _blocked_successor_wait_observation_required(payload)
+    ):
+        # A proven automatic wait is existing Agent work, not an empty lane
+        # owned by an unrelated optional notice. Keep actual gates unchanged.
         return False
     obligation = payload.get("autonomous_replan_obligation")
     if isinstance(obligation, dict) and obligation.get("required") is True:
@@ -467,6 +476,7 @@ def _turn_scoped_cli_settlement_context(
         replan_obligation_id=replan_obligation_id,
         scoped_cli_args=scoped_cli_args,
         lifecycle_actor_args=f" --agent-id {shlex.quote(agent_id)}",
+        handoff_mode=(payload.get("goal_boundary") or {}).get("handoff_mode"),
         turn_instance_id=turn_instance_id,
         autonomous_replan=semantic_replan_obligation_id is not None,
         delivery_boundary=(
@@ -688,7 +698,7 @@ def _admitted_interaction_next_cli_actions(
     )
     typed_heartbeat_receipt_retry = (
         f"on missing/write_failed heartbeat_receipt only: {typed_quota_guard} "
-        '--turn-instance-id "${LOOPX_TURN:?}"'
+        f"{turn_instance_arg()}"
         if scheduler_args
         else (
             "on missing/write_failed heartbeat_receipt only: retry the current "

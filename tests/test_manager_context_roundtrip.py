@@ -1257,6 +1257,83 @@ def test_return_service_can_close_before_start(flow):
     assert not service.thread.is_alive()
 
 
+def test_host_recovery_returns_the_original_result_once(flow, monkeypatch):
+    from loopx.capabilities.manager_context import roundtrip
+    root, registry, store, create = flow
+    _, _, receipt = create(True)
+    rid = receipt["request_id"]
+    acknowledge(root, "research", "worker", rid, "no_change", "Reviewed")
+    report(root, "research", "worker", rid, "conclusion", "Original result after host recovery.")
+    original, attempts, sends = roundtrip.drain, [], []
+    sent = threading.Event()
+    provenance = roundtrip.recover_source_chat_provenance
+    starts = []
+
+    def discover(*args, **kwargs):
+        starts.append(True)
+        return provenance(*args, **kwargs)
+
+    def failed_once(*args, **kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise AssertionError("synthetic host failure")
+        return original(*args, **kwargs)
+
+    def transport(*_):
+        sends.append(True)
+        sent.set()
+        return {"reply_verified": True, "idempotency_key": "sha256:synthetic-proof"}
+
+    monkeypatch.setattr(roundtrip, "drain", failed_once)
+    monkeypatch.setattr(roundtrip, "recover_source_chat_provenance", discover)
+    service = ReturnService(root, registry, store, transport)
+    service.start()
+    service.start()
+    try:
+        assert sent.wait(10)
+    finally:
+        service.close()
+    drain(root, registry, store, transport)
+    assert sends == [True]
+    assert starts == [True], "Step recovery must retain its scope instead of replaying startup discovery"
+    state = json.loads((_root(root) / "replies" / rid / "conclusion.delivery.json").read_text())
+    assert state["status"] == "delivered"
+
+
+def test_host_recovery_retains_the_queued_source_probe_backoff(flow, monkeypatch):
+    from loopx.capabilities.manager_context import execution
+    root, registry, store, _ = flow
+    original = execution.QueuedSourcePump
+    created, probes, deadlines = [], [], []
+    recovered = threading.Event()
+
+    def make_pump(*args):
+        pump = original(*args)
+        tick = pump.tick
+        created.append(pump)
+
+        def fail_after_first_probe(**kwargs):
+            tick(**kwargs)
+            probes.append(True)
+            deadlines.append(pump.next_probe)
+            if len(probes) == 1:
+                raise AssertionError("synthetic host failure after a real bounded probe")
+            recovered.set()
+
+        pump.tick = fail_after_first_probe
+        return pump
+
+    monkeypatch.setattr(execution, "QueuedSourcePump", make_pump)
+    service = ReturnService(root, registry, store, lambda *_: pytest.fail("No send is authorized"))
+    service.start()
+    try:
+        assert recovered.wait(10)
+    finally:
+        service.close()
+    assert len(created) == 1 and deadlines[0] == deadlines[1]
+    assert store.list_sessions() == [], "Host recovery cannot enroll a new Turn"
+
+
 @pytest.mark.parametrize("project", [False, True], ids=["steward", "project"])
 def test_registration_revocation_blocks_return_without_retargeting(flow, project):
     root, registry, store, create = flow

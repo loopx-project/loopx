@@ -1,4 +1,5 @@
 import {claimExecutionReference, claimExecutionProof} from "./claim_execution.ts";
+import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -78,11 +79,14 @@ import {
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {todoExecutionDependencyRejection} from "./todo_execution_dependency.ts";
 import {isLifecycleCloseout, prepareTerminalReentry, requiresReentrySettlement} from "./todo_terminal_reentry.ts";
+import {selectCoordinationTodoArchive} from "./todo_archive_selection.ts";
 
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RESULT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_result_v0";
 export const COORDINATION_TODO_TERMINAL_LIFECYCLE_RECEIPT_SCHEMA =
   "loopx_coordination_todo_terminal_lifecycle_receipt_v0";
+export const DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE = 12;
+export const ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE = 10;
 const TERMINAL_COMMANDS = ["complete", "supersede"] as const;
 const TODO_ROLES = ["agent", "user"] as const;
 const DECISION_OUTCOMES = ["approve", "reject", "cancel"] as const;
@@ -132,6 +136,7 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly goal_acceptance_validation_receipts?: unknown;
   readonly completion_result?: JsonObject | null;
   readonly completion_policy_request: JsonObject | null;
+  readonly auto_archive_completed?: boolean;
   readonly dry_run: boolean;
   readonly now: Date;
 }
@@ -539,7 +544,9 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     validation_declaration_sha256: input.user_update !== undefined ? null :
       input.validation_declaration_sha256 ?? (input.validation_declaration === null
         ? null : canonicalAuthoritySha256(input.validation_declaration)),
-    dry_run: input.dry_run,
+    // Preview reads the same intent as a committed command. Only non-preview
+    // operations can persist receipts, whose historical fingerprint is false.
+    dry_run: false,
   });
 }
 
@@ -1199,7 +1206,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
   terminalEvidenceGuard: TodoTerminalEvidenceGuard | null = null,
-  verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<void>,
+  verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<JsonObject>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1229,7 +1236,21 @@ export async function executeCoordinationTodoTerminalLifecycle(
     // Named operation recovery reports history, not present execution authority.
     const receipt = terminalReceipt(input, requestSha);
     const replay = await receipt.read(store);
-    if (replay !== null) return replay;
+    if (replay !== null) {
+      // Older accepted lifecycle receipts lack the original quota binding.
+      // Add it to this response from verified history; never rewrite the receipt.
+      if (replay.status === "replayed" && isLifecycleCloseout(input) &&
+          requiresReentrySettlement(input) && replay.settlement_identity == null &&
+          verifyLifecycleSettlement !== undefined) {
+        try {
+          return {...replay, settlement_identity: await verifyLifecycleSettlement(input)};
+        } catch (error) {
+          return terminalFailure("invalid_todo_completion_transaction",
+            error instanceof Error ? error.message : "Original terminal settlement unavailable", {}, "decision_rejection");
+        }
+      }
+      return replay;
+    }
     if (normalized.operation_identity.kind === "completion_turn" && normalized.requested_no_followup) {
       // Older adapters used the ordinary id for an already accepted closeout.
       // Recover that exact historical request before reading current authority.
@@ -1391,22 +1412,54 @@ export async function executeCoordinationTodoTerminalLifecycle(
     );
   }
   if (authority.outcome === "rejected" || authority.outcome === "conflict") {
+    // Missing execution is ordinary task preparation. Reuse the real claim
+    // preview instead of guessing from lease expiry or teaching callers to
+    // copy internal key/version fields. Explicit stale proof remains rejected.
+    let recovery: JsonObject | undefined;
+    if (input.command === "complete" && handoffMode === "hard_lease" && authorityTodo.role === "agent" &&
+        input.actor_agent_id !== null && normalized.claim_operation_id === undefined &&
+        input.lease_idempotency_key === null && input.lease_expected_version === null &&
+        ["handoff_mode_requires_lease", "lease_fence_required"].includes(authority.code)) {
+      const preview = await executeCoordinationTodoClaim(store, {
+        goal_id: input.goal_id, todo_id: input.todo_id, actor_agent_id: input.actor_agent_id,
+        claimed_by: input.actor_agent_id, expected_role: input.expected_role,
+        registered_agents: input.registered_agents, manage_execution: true, dry_run: true,
+        operation_id: `terminal-claim-preview-${canonicalAuthoritySha256({operation_id: input.operation_id,
+          goal_id: input.goal_id, todo_id: input.todo_id, actor_agent_id: input.actor_agent_id}).slice(0, 32)}`,
+        now: input.now,
+      }, authoritySourcesCurrent).catch(() => null);
+      // Optional guidance cannot replace the already established rejection
+      // with an unrelated provider/read failure.
+      if (preview?.dry_run === true && ["planned", "no_change"].includes(String(preview.status))) {
+        recovery = {action: "claim_task", execution_authority_granted: false,
+          reason: "Prepare this task with ordinary todo claim, then retry this original operation using the returned claim_operation_id. The claim rechecks current ownership and eligibility; this preview grants no execution authority.",
+          claim: {command: "loopx todo claim", cli_args: ["todo", "claim", "--goal-id", input.goal_id,
+            "--todo-id", input.todo_id, "--agent-id", input.actor_agent_id, "--claimed-by", input.actor_agent_id]},
+          retry: {command: `loopx todo ${input.command}`, requires_flags: ["--claim-operation-id"],
+            reference_source: "claim_operation_id_from_claim"}};
+      } else if (preview !== null && typeof preview.reason_code === "string") {
+        recovery = {action: "resolve_acquire_rejection", execution_authority_granted: false,
+          reason_code: preview.reason_code, reason: typeof preview.reason === "string"
+            ? preview.reason : "Task preparation is not currently available."};
+      }
+    }
     return terminalFailure(
       authority.code,
       authority.code === "handoff_mode_retired" ? HANDOFF_MODE_RETIRED_REASON
         : `canonical Todo terminal lifecycle rejected the request: ${authority.code}`,
-      {terminal_decision: authority},
+      {terminal_decision: authority, ...(recovery === undefined ? {} : {recovery, handoff_mode: handoffMode})},
       "decision_rejection",
     );
   }
   if (isLifecycleCloseout(input)) {
     let closed: JsonObject | null;
+    let settlement: JsonObject | null = null;
     try {
       closed = prepareTerminalReentry(todo, input, activeLease(projection.leases.get(input.todo_id), input.now));
-      if (closed !== null && requiresReentrySettlement(input)) {
+      if (requiresReentrySettlement(input)) {
         if (verifyLifecycleSettlement === undefined) throw new AuthorityStoreProtocolError(
           "Lifecycle closeout requires original quota settlement verification");
-        await verifyLifecycleSettlement(input);
+        settlement = await verifyLifecycleSettlement(input);
       }
     } catch (error) {
       return terminalFailure("invalid_todo_completion_transaction",
@@ -1425,6 +1478,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
       completion_recovery: target.completion_recovery ?? null,
       completion_receipt_id: target.completion_receipt_id ?? null,
       completed_at: target.completed_at ?? null,
+      ...(settlement === null ? {} : {settlement_identity: settlement}),
     }, closed === null ? [] : [{kind: "todo_upsert", todo: closed}], authoritySourcesCurrent);
   }
   let untypedCompletionRepair: UntypedCompletionRepairPlan | null;
@@ -1639,7 +1693,9 @@ export async function executeCoordinationTodoTerminalLifecycle(
         requested_has_successor:
           input.successor_intents.length > 0 || input.linked_successor_todo_ids.length > 0,
         dry_run: input.dry_run,
-        validation_receipt: implicitMonitorNoChange ? null : terminalUpgradeReceipt !== null
+        // Preview never declares a validation effect. The parent receipt above
+        // already proves the original check; retain it in the returned result.
+        validation_receipt: input.dry_run || implicitMonitorNoChange ? null : terminalUpgradeReceipt !== null
           ? terminalUpgradeReceipt.validation_receipt : input.validation_receipt,
         // Link ids are caller intent; role/status are facts owned by this head.
         // Receipt recovery above preserves the originally accepted policy.
@@ -1877,6 +1933,45 @@ export async function executeCoordinationTodoTerminalLifecycle(
     ? projection.todos.get(String(todo.unblocks_todo_id)) : undefined;
   const changed = authority.outcome === "apply" || edit?.changed === true ||
     terminalUpgradeReceipt !== null;
+  const targetRole = (todo.role === "user" ? "user" : "agent") as TodoRole;
+  const postTerminalTodos = changed && target.todo.status === "done"
+    ? projection.todo_ids.map((todoId) => {
+        if (todoId === input.todo_id) return target.todo;
+        if (dependent && followthrough && todoId === String(todo.unblocks_todo_id)) {
+          return {...dependent, ...followthrough.updates, updated_at: target.todo.updated_at};
+        }
+        return projection.todos.get(todoId)!;
+      })
+    : [];
+  const activeDoneCount = postTerminalTodos.filter(
+    (item) => item.role === targetRole && item.archive_state === "active" && item.status === "done",
+  ).length;
+  const autoArchiveSelection = input.auto_archive_completed === true &&
+    activeDoneCount > DEFAULT_MAX_ACTIVE_DONE_TODOS_BEFORE_ARCHIVE
+    ? selectCoordinationTodoArchive({
+        role: targetRole,
+        max_active_done: ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE,
+        todos: postTerminalTodos,
+      })
+    : null;
+  const autoArchivedIds = new Set(autoArchiveSelection?.moved_todo_ids ?? []);
+  const finalTargetTodo = autoArchivedIds.has(input.todo_id)
+    ? {...target.todo, archive_state: "archive"}
+    : target.todo;
+  const autoArchiveMutations: CoordinationProjectionMutation[] = autoArchiveSelection === null
+    ? []
+    : autoArchiveSelection.moved_todo_ids
+        .filter((todoId) => todoId !== input.todo_id)
+        .map((todoId) => ({
+          kind: "todo_upsert" as const,
+          todo: {
+            ...(dependent && followthrough && todoId === String(todo.unblocks_todo_id)
+              ? {...dependent, ...followthrough.updates}
+              : projection.todos.get(todoId)!),
+            archive_state: "archive",
+            updated_at: target.todo.updated_at,
+          },
+        }));
   const result: JsonObject = {
     todo_id: input.todo_id,
     command: input.command,
@@ -1907,6 +2002,17 @@ export async function executeCoordinationTodoTerminalLifecycle(
     ...(completionResult === null ? {} : {completion_result: completionResult}),
     ...(acceptanceEvidence === null ? {} : {goal_acceptance_completion: acceptanceEvidence}),
     ...(capabilityCompletionEvidence === null ? {} : {capability_completion_evidence: capabilityCompletionEvidence}),
+    ...(autoArchiveSelection !== null && autoArchiveSelection.moved_count > 0 ? {
+      auto_archive: {
+        role: autoArchiveSelection.role,
+        active_done_before: autoArchiveSelection.active_done_before,
+        active_done_after: autoArchiveSelection.active_done_after,
+        max_active_done: autoArchiveSelection.max_active_done,
+        moved_count: autoArchiveSelection.moved_count,
+        moved_todo_ids: autoArchiveSelection.moved_todo_ids,
+        retained_standing_decision_count: autoArchiveSelection.retained_standing_decision_count,
+      },
+    } : {}),
     // A preview that omits this would show an unconditional close for work the
     // real call still gates. Name the criteria the real call must run; never
     // their argv, which stays out of every projection.
@@ -1917,9 +2023,10 @@ export async function executeCoordinationTodoTerminalLifecycle(
       : {}),
   };
   const mutations: CoordinationProjectionMutation[] = changed ? [
-    {kind: "todo_upsert", todo: target.todo, clear_fields: target.clear_fields},
-    ...(dependent && followthrough ? [{kind: "todo_upsert" as const,
+    {kind: "todo_upsert", todo: finalTargetTodo, clear_fields: target.clear_fields},
+    ...(dependent && followthrough && !autoArchivedIds.has(String(todo.unblocks_todo_id)) ? [{kind: "todo_upsert" as const,
       todo: {...dependent, ...followthrough.updates, updated_at: target.todo.updated_at}}] : []),
+    ...autoArchiveMutations,
     ...successorCandidates.map((successor) => ({kind: "todo_upsert" as const, todo: successor})),
     ...(released === null ? [] : [{kind: "lease_upsert" as const, lease: released}]),
   ] : [];

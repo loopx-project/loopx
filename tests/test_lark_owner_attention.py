@@ -26,9 +26,11 @@ def publish_tasks(runtime, path, rows, *, goal, provider="file", initial=True):
     from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     todos = [{"schema_version": "todo_item_v0", "todo_id": row["id"], "role": "user",
-              "status": "done" if row.get("done") else "open", "done": bool(row.get("done")),
+              "status": row.get("status", "done" if row.get("done") else "open"), "done": bool(row.get("done")),
               "text": row["text"], "task_class": "user_action", "archive_state": "active",
-              "source_section": "User Todo", "index": i + 1} for i, row in enumerate(rows)]
+              "source_section": "User Todo", "index": i + 1,
+              **{key: row[key] for key in ("role", "reason", "evidence", "decision_scope_outcomes", "superseded_by")
+                 if key in row}} for i, row in enumerate(rows)]
     projection = build_todo_runtime_shadow_projection(goal_id=goal, todos=todos, handoff_mode="soft_claim")
     if initial:
         return initialize_canonical_authority(runtime.coordination_runtime_root, goal, projection,
@@ -117,6 +119,9 @@ def test_service_discovers_new_native_tasks_without_model_or_agent_poll(owner):
 
 def test_disabled_notifications_preserve_all_four_existing_delivery_slots(owner, monkeypatch):
     o = owner
+    o.tasks([{"id": "todo_failed", "text": "Declined work", "role": "agent", "status": "blocked",
+              "decision_scope_outcomes": [{"outcome": "reject", "source_todo_id": "todo_review",
+                  "decision_scope": {"kind": "direction", "granularity": "action", "scope_key": "preview"}}]}])
     entered, release, all_started = [], threading.Event(), threading.Event()
     def existing_reply(path):
         entered.append(path)
@@ -507,3 +512,94 @@ def test_readback_of_frozen_send_does_not_require_current_todo_terms(owner, chan
     assert saved["intent"] == unknown["intent"]
     assert restarted.reconcile() == 0
     assert len(o.provider.writes) == before + (2 if change == "terms_changed" else 1)
+
+
+@pytest.mark.parametrize("outcome", ["reject", "cancel"])
+def test_terminal_agent_failure_pushes_once_and_restart_does_not_resend(owner, outcome):
+    o = owner
+    o.configure()
+    scope = {"schema_version": "decision_scope_v0", "kind": "direction", "granularity": "action",
+             "scope_key": "preview"}
+    o.tasks([{"id": "todo_failed", "text": "Build the reviewed preview", "role": "agent", "status": "blocked",
+              "reason": "The recorded review declined this step", "evidence": "https://example.org/review",
+              "decision_scope_outcomes": [{"outcome": outcome, "decision_scope": scope,
+                                            "source_todo_id": "todo_review"}]}])
+    before = len(o.provider.writes)
+    assert o.attention.reconcile() == 1
+    assert len(o.provider.writes) == before + 1
+    row = receipt(o)
+    assert row["key"] == "alpha/todo_failed/terminal" and row["status"] == "delivered"
+    for text in ("Build the reviewed preview", outcome, "The recorded review declined this step", "需要所有者决定"):
+        assert text in o.provider.writes[-1][1]
+    restarted = LarkPrivateConversations(controller=o.runtime, runtime_root=o.store.root.parent,
+                                         runner=o.provider, cli_bin="lark-cli").owner_attention
+    assert restarted.reconcile() == 0 and len(o.provider.writes) == before + 1
+
+
+def test_terminal_snapshot_latest_timestamp_or_list_order_and_count(owner, monkeypatch):
+    from loopx.extensions.lark import owner_attention as module
+    todo = {"todo_id": "todo_failed", "text": "Build preview", "status": "blocked", "role": "agent",
+            "decision_scope_outcomes": [
+                {"outcome": "reject", "recorded_at": "2026-10-02T00:00:00Z", "reason": "Newer reason", "evidence": "review-a"},
+                {"outcome": "cancel", "recorded_at": "2026-10-01T00:00:00Z", "reason": "Older reason", "evidence": "review-b"}]}
+    def read(**args):
+        return {"ok": True, "matched": True, "todo": todo} if args.get("todo_id") else {
+            "ok": True, "todo_count": 1, "todos": [{"todo_id": todo["todo_id"]}]}
+    monkeypatch.setattr(module, "list_goal_todos", read)
+    assert owner.attention._goal_failures("alpha") == [{"todo_id": "todo_failed", "text": "Build preview",
+        "outcome": "reject", "reason": "Newer reason", "evidence": "review-a", "terminal_outcome_count": 2,
+        "terminal_outcome_identities": [{"outcome": "cancel"}, {"outcome": "reject"}]}]
+    del todo["decision_scope_outcomes"][1]["recorded_at"]
+    assert owner.attention._goal_failures("alpha")[0]["outcome"] == "cancel"
+
+
+@pytest.mark.parametrize("resolution", ["done", "deferred", "superseded", "cleared"])
+def test_terminal_snapshot_withdraws_unsent_and_second_outcome_renotifies(owner, resolution):
+    o = owner
+    o.configure()
+    first = {"outcome": "reject", "source_todo_id": "todo_review",
+             "decision_scope": {"kind": "direction", "granularity": "action", "scope_key": "preview"}}
+    task = {"id": "todo_failed", "text": "Build preview", "role": "agent", "status": "blocked",
+            "reason": "Review declined", "decision_scope_outcomes": [first]}
+    o.tasks([task])
+    path = o.attention._path(o.binding["binding_id"])
+    state = o.attention._plan(o.attention._read(path), o.attention._snapshot(o.binding))
+    assert len(state["outbox"]) == 1
+    second = {**first, "outcome": "cancel", "decision_scope": {**first["decision_scope"], "scope_key": "publish"}}
+    task = {**task, "decision_scope_outcomes": [first, second]}
+    o.tasks([task])
+    state = o.attention._plan(state, o.attention._snapshot(o.binding))
+    assert [row["status"] for row in state["outbox"]] == ["superseded", "pending"]
+    assert state["outbox"][1]["generation"] == 2
+    assert "cancel" in state["outbox"][1]["body"] and "2 项" in state["outbox"][1]["body"]
+    if resolution in {"done", "deferred"}:
+        task = {**task, "status": resolution, "done": resolution == "done"}
+    elif resolution == "superseded":
+        task = {**task, "superseded_by": "todo_replacement"}
+    else:
+        task = {**task, "decision_scope_outcomes": []}
+    o.tasks([task])
+    state = o.attention._plan(state, o.attention._snapshot(o.binding))
+    assert all(row["status"] == "superseded" for row in state["outbox"])
+    assert state["subjects"][0]["active"] is False
+
+
+def test_terminal_scope_replacement_changes_generation_without_changing_latest_or_count(owner):
+    o = owner
+    o.configure()
+    scope = {"kind": "direction", "granularity": "action", "scope_key": "preview"}
+    first = {"outcome": "reject", "source_todo_id": "todo_review_a", "decision_scope": scope}
+    second = {**first, "source_todo_id": "todo_review_b",
+              "decision_scope": {**scope, "scope_key": "publish"}}
+    task = {"id": "todo_failed", "text": "Build preview", "role": "agent", "status": "blocked",
+            "decision_scope_outcomes": [first, second]}
+    o.tasks([task])
+    path = o.attention._path(o.binding["binding_id"])
+    state = o.attention._plan(o.attention._read(path), o.attention._snapshot(o.binding))
+    assert state["outbox"][-1]["generation"] == 1
+    o.tasks([{**task, "decision_scope_outcomes": [{**first, "outcome": "cancel"}, second]}])
+    changed = o.attention._plan(state, o.attention._snapshot(o.binding))
+    assert [row["generation"] for row in changed["outbox"]] == [1, 2]
+    assert changed["outbox"][0]["digest"] != changed["outbox"][1]["digest"]
+    assert changed["outbox"][0]["body"] == changed["outbox"][1]["body"]
+    assert o.attention._plan(changed, o.attention._snapshot(o.binding)) == changed

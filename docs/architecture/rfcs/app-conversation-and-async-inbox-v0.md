@@ -282,6 +282,26 @@ a started write without a provider locator stays unconfirmed after restart.
 Revocation or changed identity prevents further delivery. Disable the existing
 connection to revoke it; rollback must preserve its private delivery journals.
 
+Newly verified App user mirrors also reuse the existing reaction journals:
+`Get` acknowledges receipt; only an observed starting/running Core Turn adds
+`OnIt`. Terminal completion, failure or interruption removes processing feedback
+while retaining receipt feedback. A queued input never claims to be processing,
+and assistant mirrors receive neither reaction. Long inputs use their last
+verified concrete post, not the composite parts locator. Turn-only changes are
+discovered within the existing five-second scan even without a transcript append.
+Before each effect, the worker rechecks the canonical input/Turn, current source
+and grants, and frozen provider message. Feedback failures retain recoverable
+receipts without blocking message delivery or starting work. Unknown provider
+writes are not retried. Optional App feedback runs on at most one slot of the
+existing reply pool, outside the body outbox lock. Its final write merges only
+feedback fields, preserving concurrently delivered current and later answers.
+No synthetic incoming event or original-request
+settlement is used. Existing finished mirrors are not backfilled; current active
+mirrors can adopt the feedback path. `loopx chat --no-private-reactions` keeps
+feedback disabled without changing the message path. The isolated HTTP/Core and
+synthetic-provider checks qualify source behavior; installed Lark reactions and
+actual provider presentation remain separate acceptance work.
+
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
 This checkpoint covers text and bounded App image projection, not reply/thread
@@ -858,6 +878,14 @@ receipt → observed work or actionable failure → readable answer in the same 
   upstream observations; never simulate phases, expose hidden reasoning, or
   infer progress from elapsed time. A period without new events has an explicit
   waiting caption, not an invented failure or continually changing animation.
+- The original private Lark owner can read the latest qualified public reasoning
+  summary (up to 1,200 characters) and four redacted activity titles alongside
+  the existing answer stream. Recent steps precede a potentially long summary.
+  Group and unqualified projections retain coarse
+  labels. Antigravity reports observed thinking spans and native command/tool
+  steps through the shared activity contract; its raw `thinking` field is not a
+  public summary, and planner completion is not tool completion. Final answers
+  still replace the draft on the original source-bound post.
 - Generate the visible answer once, then append a complete hidden review envelope
   with `message: ""`. The production parser reuses the preceding Markdown and
   applies the same redaction and typed metadata normalization. Legacy nonempty
@@ -1626,6 +1654,21 @@ acceptance. GQ06's material entry and GQ07–09's continuity remain subject to t
 full delivery and recovery acceptance.
 
 
+### Local text document attachments
+
+Local managed Codex conversations also accept UTF-8 `.md` and `.txt` source
+attachments. The existing four-attachment limit and 64,000-byte serialized
+message/metadata budget apply; text data does not use the image allowance.
+The original bytes remain in the accepted Session request and queue, reach the
+native input as labelled source text, and can be previewed/downloaded from the
+original conversation. Busy-session FIFO, replay identity and restart recovery
+remain owned by the existing queue. Invalid encoding, mismatched type/name,
+binary NUL data and excess size reject the entire request without truncation.
+Attached hosts, other executors and linked/Lark conversations reject this new
+input before admission; this is not a file-sync or arbitrary-path grant. Images
+retain their existing routes. Source delivery does not prove comprehension,
+automatic material adoption, full GQ06 qualification or lower model cost.
+
 ### Default Lark private images reuse native Turn attachments
 
 Ordinary project and steward private conversations accept images and image/text
@@ -1787,3 +1830,48 @@ explicit quota refusal, unknown failure, lost post-write receipt, unavailable
 readback, recovery of older failed journals and two-App isolation. Live provider
 delivery remains separate. Model completion, material intake and an intermediate
 card cannot substitute for final-message readback.
+
+### Recovering a native result after Core failure
+
+An Antigravity owner request can finish natively while Core retains a transport
+failure. The original reply worker may adopt that existing answer, without
+admitting another Turn, sending native input or cancelling an invocation. The
+typed conversation owner requires the original private steward binding, source,
+failed Turn and current grant, with no attachments, steering, stop/new command
+or attached-host routing. The provider read must cover a stable, idle trajectory,
+its latest input and one fully settled native execution ending in a normal final
+response. Correlation requires the exact Core source context, original message
+and input time inside the failed Turn. New inputs additionally persist the
+pre-send prompt hash and native start index in the existing `turn.started` event.
+Missing, conflicting or stream-error evidence keeps the request pending.
+
+The existing request journal freezes the adopted result and rendered message before appending one
+deterministic canonical Chat message. The original failed Turn, events and
+delivered failure notice remain unchanged. Lark uses a distinct phase in the
+same Inbox intent/readback path; a crash resumes the same message and receipt.
+An unknown post-write acknowledgement remains owed and cannot cause a blind
+resend. Invalid action metadata preserves the answer with an explicit gate and
+submits none of its actions. Recovery itself does not execute even valid action
+metadata. Such work remains pending after the recovered prose is delivered;
+answer restoration does not certify the requested business or handoff complete.
+Cancellation failure retains the primary provider error and unconfirmed cleanup.
+
+After the recovered answer is independently delivered, a malformed batch whose
+only actions are string-brief handoffs can reserve one **format review** through
+the original Session queue. Fresh original native input/answer hashes, current
+binding, source readback and an idle queue are required. The review sends no
+business request again: that invocation disables native tools and user hooks,
+requires exact normal text-only completion, and withholds model prose until
+validation. Each normalized brief must retain its original context text and the
+same ordered recipients. Other actions, changed targets, unknown completion,
+new input, steering, stop or revoked authority admit no handoff.
+
+The existing ingress preserves the original source id, so ordinary publication
+uses the same recipient-specific request identity and fresh grants. The normal
+handoff owner supplies actual receipts; receiver conclusions remain separate.
+The original reply worker returns those receipts in a distinct presentation
+phase alongside the immutable failed Turn, failure notice and recovered answer.
+Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
+unknown review stays pending and cannot become another review or business retry.
+Other malformed actions and completed Turns without a recovered native result
+remain explicit holds; this path is not a generic action or execution replayer.

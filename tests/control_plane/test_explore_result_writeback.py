@@ -185,7 +185,7 @@ def test_partial_link_failure_replays_without_duplicate_or_primary_rollback(
     assert second["ok"] and second["graph"]["appended_event_count"] == 0
 
 
-@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "blank-status", "conflict", "off-without-result",
+@pytest.mark.parametrize("case", ["disabled", "null", "invalid", "blank-status", "conflict", "cross-result", "off-without-result",
                                 "path-disabled", "path-missing", "path-no-evidence", "path-overflow"])
 def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     from canonical_authority_fixture import initialize_canonical_authority
@@ -230,6 +230,22 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
         packet["explore_result"]["evidence_refs"] = []
     if case == "blank-status":
         packet["explore_result"]["status"] = ""
+    if case == "cross-result":
+        attachment = packet["explore_result"]
+        attachment["evidence_refs"] = ["result:a", "result:b"]
+        attachment["execution_observation"] = {
+            "schema_version": "explore_execution_observation_v0",
+            "candidate_sha256": "a" * 64, "input_revision": attachment["input_revision"],
+            "planned_method_id": "probe", "executed_method_id": "probe", "change_reason": None,
+            "elapsed_seconds": 1, "limit_seconds": 10, "search_iterations": None,
+            "stop_reason": "process_exit:0", "evidence_refs": ["result:a"],
+            "result_ref": "result:a", "result_candidate_sha256": "a" * 64,
+        }
+        attachment["measurements"] = [{
+            "metric": "quality", "value": 8, "unit": "points", "higher_is_better": True,
+            "comparison_scope": "validation:budget", "input_revision": attachment["input_revision"],
+            "evaluation_ref": "evaluator:v1", "candidate_ref": "candidate:b", "evidence_ref": "result:b",
+        }]
     if case.startswith("path-"):
         packet["explore_result"] = {
             key: ATTACHMENT[key] for key in
@@ -270,6 +286,8 @@ def test_real_cli_inline_validation_precedes_primary_commit(tmp_path, case):
     else:
         assert rc == 1 and not result["appended"], result
         assert (index.read_bytes() if index.exists() else b"") == before
+        if case == "cross-result":
+            assert "executed candidate's result reference" in result["error"]
     assert not explore_result_log_path(runtime, GOAL_ID).exists()
 
 

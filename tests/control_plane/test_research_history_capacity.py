@@ -222,9 +222,23 @@ def test_bounded_lineage_transport_preserves_the_typed_join(tmp_path: Path, monk
         restart_effect_runtime()
 
 
-def test_oversized_active_lineage_is_a_capacity_error_not_an_invalid_graph(
+def test_original_client_capacity_refusal_is_not_an_invalid_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from loopx.capabilities.explore import research_evidence
+    from loopx.control_plane import effect_runtime
+
+    original = research_evidence.effect_runtime_result
+
+    def original_request_budget(method, params):
+        # Freeze this regression's original 2 MiB client refusal. Enlarging the
+        # default wire must not relabel capacity errors as invalid graph data.
+        # Canonical reads outside this research call retain their real budget.
+        with monkeypatch.context() as budget:
+            budget.setattr(effect_runtime, "MAX_REQUEST_BYTES", 2 * 1024 * 1024)
+            return original(method, params)
+
+    monkeypatch.setattr(research_evidence, "effect_runtime_result", original_request_budget)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     try:
         state, runtime, registry = goal_fixture(tmp_path, HARNESS)

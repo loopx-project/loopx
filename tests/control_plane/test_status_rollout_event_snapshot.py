@@ -372,16 +372,16 @@ def test_collect_status_scans_effect_runtime_sources_once_per_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry_path, runtime_root, _goal = _write_fixture(tmp_path)
-    original_scan = effect_runtime._scan_runtime_source_files
+    original_scan = effect_runtime._scan_runtime_source_snapshot
     scanned_roots: list[Path] = []
 
-    def counted_scan(root: Path) -> tuple[str, ...]:
+    def counted_scan(root: Path) -> effect_runtime._RuntimeSourceSnapshot:
         scanned_roots.append(root)
         return original_scan(root)
 
     monkeypatch.setattr(
         effect_runtime,
-        "_scan_runtime_source_files",
+        "_scan_runtime_source_snapshot",
         counted_scan,
     )
 

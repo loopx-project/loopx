@@ -441,7 +441,7 @@ loopx-canary heartbeat-prompt \
 
 ### Opt-in native context delivery
 
-`--context-delivery {off,on}` is experimental and defaults to `off`. It reuses
+`--context-delivery {off,on}` defaults to `on` for supported native Codex App/SSH and benchmark heartbeat entries; save the machine setting as off or pass `--context-delivery off` to disable. An explicitly saved off is preserved. Other hosts and ordinary CLI keep full delivery. It reuses
 existing scheduler-owned host declarations and the benchmark worker's explicit
 execution settings; it does not guess a host from process names or ambient native
 session variables. These declared run modes can activate it:
@@ -466,6 +466,16 @@ use the explicit original capture reference. If preparation fails before that
 can be established, or invalidation also fails, the CLI reports
 `quota_decision_transport_failed` with the saved decision and receipt. Do not
 rerun admission to recover a presentation failure.
+
+When the caller also selects `--record-host-poll`, the existing liveness owner
+records that observation once before the original capture. The saved decision,
+ordinary/envelope output and native recovery view retain the same
+`host_poll_receipt`, including an unreadable-receipt diagnostic. A capture or
+handoff failure still reports an already-recorded poll; its count can advance
+even when presentation fails. Reading the original evidence never records
+another poll, launches work or spends quota. Without this flag, capture and
+context delivery do not create a liveness receipt.
+
 `off` creates no native journal, hook configuration or input
 observation; directories alone never turn it on. This declaration check is not
 host authentication, execution authority or proof of retained input. Native

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from .decision_summary import compact_quota_decision
 from .should_run_packet import reference_duplicate_fallback_guidance
@@ -92,6 +92,16 @@ _RETAINED_MONITOR_POLL_FOLLOW_UP_SUMMARY_FIELDS = (
     "effective_action",
     "state",
 )
+
+
+def _json_content_key(value: Any) -> str:
+    """Compare original JSON values for sharing, including types and signed zero.
+
+    This is local serialization IO, not another quota or context-selection rule.
+    Python equality merges booleans with integers and integral floats; those
+    distinct source facts must not borrow each other's in-response owner.
+    """
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
 def _compact_monitor_poll_interaction_contract(
@@ -254,10 +264,11 @@ def _reference_inline_replan_authoring(
     steps = plan.get("ordered_steps") if isinstance(plan, dict) else None
     if not isinstance(steps, list):
         return packet
+    authoring_key = _json_content_key(writeback["vision_authoring"])
     index = next(
         (index for index, step in enumerate(steps)
          if isinstance(step, dict) and step.get("kind") == "durable_writeback"
-         and step.get("vision_authoring") == writeback["vision_authoring"]),
+         and _json_content_key(step.get("vision_authoring")) == authoring_key),
         None,
     )
     if index is None:
@@ -304,10 +315,11 @@ def _replace_nested_vision_continuation_audits(
     source_audit: dict[str, Any],
     audit_ref: dict[str, Any],
 ) -> None:
+    source_key = _json_content_key(source_audit)
     frontier = payload.get("goal_frontier_projection")
     if (
         isinstance(frontier, dict)
-        and frontier.get("vision_continuation_audit") == source_audit
+        and _json_content_key(frontier.get("vision_continuation_audit")) == source_key
     ):
         compact_frontier = dict(frontier)
         compact_frontier["vision_continuation_audit"] = dict(audit_ref)
@@ -321,7 +333,7 @@ def _replace_nested_vision_continuation_audits(
         channel = compact_interaction.get(channel_name)
         if (
             not isinstance(channel, dict)
-            or channel.get("vision_continuation_audit") != source_audit
+            or _json_content_key(channel.get("vision_continuation_audit")) != source_key
         ):
             continue
         compact_channel = dict(channel)
@@ -504,7 +516,21 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
         ("agent_todo_summary", "goal_acceptance_contract"),
     ])
     carriers: dict[str, str] = {}
+    relocated: dict[str, str] = {}
+    references: list[tuple[tuple[str | int, ...], str]] = []
     result = payload
+
+    def writable_parent(path: tuple[str | int, ...]) -> dict[str, Any]:
+        nonlocal result
+        # Copy only the affected spine; never mutate caller-owned facts.
+        result = dict(result)
+        target: Any = result
+        for part in path[:-1]:
+            child = target[part]
+            target[part] = list(child) if isinstance(child, list) else dict(child)
+            target = target[part]
+        return cast(dict[str, Any], target)
+
     for path in paths:
         parent: Any = result
         for part in path[:-1]:
@@ -516,28 +542,32 @@ def _reference_inline_goal_acceptance(payload: dict[str, Any]) -> dict[str, Any]
                 parent = None
                 break
         field = str(path[-1])
+        existing = parent.get(field + "_ref") if isinstance(parent, dict) else None
+        if isinstance(existing, str):
+            references.append((path, existing))
         value = parent.get(field) if isinstance(parent, dict) else None
         if not isinstance(value, dict) or not value or field + "_ref" in parent:
             continue
-        # Python equality conflates True/1 and False/0. Compare JSON types and
-        # the complete content, including revision, scope, failures and sources.
-        encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        # Keep complete revision, scope, failures and sources in the identity.
+        encoded = _json_content_key(value)
         reference = carriers.get(encoded)
+        own_ref = "$" + "".join(
+            f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
         if reference is None:
-            carriers[encoded] = "$" + "".join(
-                f"[{part}]" if isinstance(part, int) else f".{part}" for part in path)
+            carriers[encoded] = own_ref
             continue
         if len(encoded) <= len(reference) + 8:
             continue
-        # Copy only the affected spine, so callers retain their original facts.
-        result = dict(result)
-        target: Any = result
-        for part in path[:-1]:
-            child = target[part]
-            target[part] = list(child) if isinstance(child, list) else dict(child)
-            target = target[part]
+        target = writable_parent(path)
         del target[field]
         target[field + "_ref"] = reference
+        relocated[own_ref] = reference
+    # Retarget only references to owners actually moved by this projection.
+    # A later owner can move after an earlier alias was visited; a second pass
+    # keeps both directions direct without following arbitrary input chains.
+    for path, reference in references:
+        if reference in relocated:
+            writable_parent(path)[str(path[-1]) + "_ref"] = relocated[reference]
     return result
 
 

@@ -19,6 +19,7 @@ import { MachineConfigurationSettings } from "./machine-configuration-settings";
 import { ConfigurationBackupSettings } from "./configuration-backup-settings";
 import { OperatorCredentialSettings } from "./operator-credential-settings";
 import { CodexAccountSettings } from "./codex-account-settings";
+import { BackgroundServicesSettings } from "./background-services-settings";
 import type { PersonalWorkspaceCallbacks, WorkspaceGoal, WorkspaceGoalNotification } from "./personal-workspace-model";
 import type { WorkspaceTheme } from "./workspace-theme";
 import type { AttentionNotificationSupport } from "./attention-notifications";
@@ -30,11 +31,12 @@ const attentionNotificationSupportCopy = {
   unsupported: "settings.attentionNotificationsUnsupported",
 } as const;
 
-type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language";
+type WorkspaceSettingsTab = "ownership" | "steward" | "conversation" | "provider" | "machine" | "capabilities" | "cadence" | "lark" | "appearance" | "language" | "background";
 
 type SettingsPage = Exclude<WorkspaceSettingsTab, "machine">;
 
 const tabIcons: Record<SettingsPage, typeof Settings2> = {
+  background: ServerCog,
   ownership: KeyRound,
   appearance: Palette,
   capabilities: ServerCog,
@@ -85,6 +87,7 @@ export function WorkspaceSettingsPage({
     { key: "conversation", label: locale === "zh-CN" ? "对话与模型" : "Conversations and models" },
     { key: "provider", label: t("settings.modelProvider") },
     { key: "capabilities", label: t("settings.globalCapabilities") },
+    { key: "background", label: locale === "zh-CN" ? "后台服务" : "Background services" },
     { key: "lark", label: "Lark" },
     { key: "appearance", label: t("settings.appearance") },
     { key: "language", label: t("settings.language") },
@@ -118,6 +121,7 @@ export function WorkspaceSettingsPage({
     },
   ];
   const headings: Record<SettingsPage, { title: string }> = {
+    background: {title: locale === "zh-CN" ? "后台服务" : "Background services"},
     conversation: {title: locale === "zh-CN" ? "Goal 对话默认值" : "Goal conversation defaults"},
     ownership: {title: t("ownership.title")},
     appearance: {
@@ -146,6 +150,7 @@ export function WorkspaceSettingsPage({
   const bodyRef = useRef<HTMLElement>(null);
   useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [scope, initialGoalId, tab]);
   const scopeHint = scope === "machine" ? {
+    background: "",
     steward: "",
     conversation: t("settings.effect.conversation"),
     provider: t("settings.effect.provider"),
@@ -176,7 +181,7 @@ export function WorkspaceSettingsPage({
         </fieldset>
         <label className="personal-settings-mobile-category">
           <span>{t("settings.categories")}</span>
-          <select value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
+          <select aria-label={t("settings.categories")} value={tab} onChange={event => navigate(scope, initialGoalId ?? undefined, event.target.value as SettingsPage)}>
             {tabs.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
           </select>
         </label>
@@ -237,6 +242,7 @@ export function WorkspaceSettingsPage({
           </div>
         ) : null}
 
+        {tab === "background" ? <BackgroundServicesSettings onOpenSettings={tab => navigate("machine", undefined, tab)} /> : null}
         {tab === "steward" ? <MachineConfigurationSettings
           onChanged={onChanged}
           section="steward"

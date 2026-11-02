@@ -100,6 +100,44 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
         assert state.read_text() == state_text
         return
 
+    # The old implementation performs inventory plus one whole-source read per
+    # scoped User Todo. The optimized path must return identical exact bodies
+    # from one read, without changing scope or canonical authority.
+    from loopx.control_plane.work_items import context_readback
+    original_read = context_readback.list_goal_todos
+    expected_users = [original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a",
+        todo_id=todo)["todo"] for todo in ("todo_gate", "todo_user_action", "todo_global_action")]
+    bounded = original_read(registry_path=registry, runtime_root_arg=str(runtime),
+        goal_id="requirements-goal", role="user", status="open", agent_id="agent-a")
+    assert bounded["todos"][0]["text"] != gate_text, "ordinary inventories remain bounded"
+    reads = []
+
+    def counted_read(**options):
+        reads.append(options)
+        return original_read(**options)
+
+    monkeypatch.setattr(context_readback, "list_goal_todos", counted_read)
+    direct = context_readback._user_context(registry_path=registry, runtime_root=runtime,
+        goal_id="requirements-goal", agent_id="agent-a")
+    assert direct["todos"] == expected_users
+    assert len(reads) == 1, "scoped full User bodies need one canonical query, not N+1"
+    assert direct["authority_read"]["decision_read_from_provider"] is True
+    from loopx.control_plane.todos import goal_todo_projection
+    typed_read = goal_todo_projection.project_todo_read
+
+    def old_delivery(options):
+        result = typed_read(options)
+        if "payload" in result:
+            result["payload"].pop("full_text", None)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(goal_todo_projection, "project_todo_read", old_delivery)
+        with pytest.raises(ValueError, match="unsupported by this runtime"):
+            context_readback._user_context(registry_path=registry, runtime_root=runtime,
+                goal_id="requirements-goal", agent_id="agent-a")
+
     packet = guard()
     channel = packet["interaction_contract"]["agent_channel"]
     users = channel["work_context"]["user_todos"]["todos"]

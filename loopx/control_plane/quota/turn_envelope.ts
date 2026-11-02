@@ -1,5 +1,5 @@
 import {capturedContextSelection} from "./context_selection.ts";
-import {progressiveContextPlan} from "./progressive_context.ts";
+import {initialContextReadPointers, prepareProgressiveContextDelivery} from "./progressive_context.ts";
 import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
@@ -1405,12 +1405,23 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
   return action.quiet_noop_allowed === true ? "wait" : "blocked";
 }
 
+/** Navigation over captured facts, never a summary or a source-read receipt. */
+// Quota field vocabulary stays with its decision owner; the RFC 6901 reader
+// receives addresses and remains independent of Goal/permission policy.
+function capturedDecisionSelection(request: JsonObject): JsonObject {
+  const initial = request.initial_read === true || request.list_fields === true
+    && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
+  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
+    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
+    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
+    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"]) : []);
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
-  if (operation === "progressive_context_plan") return progressiveContextPlan(request);
   if (operation === "replan_view") return replanView(request);
-  if (operation === "context_select") return capturedContextSelection(request);
+  if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
     const reads = replanReadCommands(payload);
@@ -1470,7 +1481,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return contextProjectionChanges(source, payload);
   }
   if (operation === "build") return buildTurnEnvelope(request);
-  if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+  if (operation === "context_delivery") return request.native_projection === undefined
+    ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
+    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);

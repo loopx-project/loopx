@@ -659,6 +659,7 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   }
 
   const [pathDelta, pathDeltaUsage] = normalizeGoalPathDelta(updatePacket.path_delta);
+  const visionUsage = Object.values(fieldUsage).reduce((total, used) => total + used, 0);
   Object.assign(fieldUsage, pathDeltaUsage);
   const [strideDecision, strideUsage] = normalizeStrideDecision(updatePacket.stride_decision, boundedPublicText);
   const allowedStridePaths = request.allow_terminal_stride_path
@@ -675,11 +676,12 @@ function prepareVisionRefresh(request: VisionRefreshPrepareRequest): JsonObject 
   Object.assign(fieldUsage, fallbackUsage);
   const totalUsage = Object.values(fieldUsage).reduce((total, used) => total + used, 0);
   if (totalUsage > GOAL_VISION_TOTAL_LIMIT) {
-    throw visionBudgetError(
-      "total_agent_vision",
-      totalUsage,
-      GOAL_VISION_TOTAL_LIMIT,
-    );
+    const sections = {vision_patch: visionUsage, path_delta: pathDeltaUsage,
+      stride_decision: strideUsage, fallback_declarations: fallbackUsage};
+    const usage = Object.entries(sections).map(([name, fields]) => name + "=" +
+      (typeof fields === "number" ? fields : Object.values(fields).reduce((total, used) => total + used, 0))).join(", ");
+    throw new EffectRuntimeRequestError(`${GOAL_VISION_BUDGET_ERROR}: total_agent_vision uses ${totalUsage} chars; ` +
+      `limit is ${GOAL_VISION_TOTAL_LIMIT}; usage: ${usage}; shorten counted text`, GOAL_VISION_BUDGET_ERROR);
   }
 
   const todoDelta: string[] = [];

@@ -17,6 +17,7 @@ import pytest
 
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope, prepare_context_delivery, restore_context_delivery,
 )
@@ -192,6 +193,7 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
     before = state.read_bytes()
     code, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
+        "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
@@ -225,6 +227,7 @@ def test_cli_capture_exact_delta_and_same_capture_recovery(tmp_path: Path, monke
     before_source = state.read_bytes()
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
+        "--context-delivery", "off",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "context-presentation", cwd=project)
     assert rc == 0 and guard["should_run"] is True, guard
@@ -495,12 +498,13 @@ def test_native_context_cli_without_retention_exposes_files_and_preserves_receip
         args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
         assert args.max_page_output_bytes == limit
         observed = consume(read_context_capture(args))
-        assert hashlib.sha256(observed).hexdigest() == wire["recovery"]["sha256"]
+        recovery = read_context_read_reference(wire["recovery"]["reference_file"])[1]
+        assert hashlib.sha256(observed).hexdigest() == recovery["sha256"]
         assert json.loads(observed)["heartbeat_receipt"]["turn_instance_id"] == "native-full"
         if output_limit is not None:
             rc, projected = _run_cli(registry, runtime, "quota", "context-project", "--codex-app",
                 "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", "native-full",
-                "--capture-file", wire["recovery"]["path"], "--capture-sha256", wire["recovery"]["sha256"],
+                "--capture-file", recovery["path"], "--capture-sha256", recovery["sha256"],
                 "--decision-output-root", str(projection_root), "--context-delivery", "on",
                 "--codex-context-dir", str(root), "--max-page-output-bytes", str(limit), cwd=project)
             assert rc == 0 and projected["ok"], projected
@@ -552,7 +556,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
             if page["eof"]:
                 break
             page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
-        assert hashlib.sha256(observed).hexdigest() == view["recovery"]["sha256"]
+        recovery = read_context_read_reference(view["recovery"]["reference_file"])[1]
+        assert hashlib.sha256(observed).hexdigest() == recovery["sha256"]
         return json.loads(observed)
 
     first = guard("native-work-first")
@@ -571,7 +576,8 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         "--agent-id", AGENT_ID, "--todo-id", TODO_ID, "--turn-instance-id", "native-work-first",
         "--source", "heartbeat", "--execute", cwd=project)
     assert rc == 0 and spent["ok"], spent
-    original = Path(first["recovery"]["path"]).read_bytes()
+    original_reference = read_context_read_reference(first["recovery"]["reference_file"])[1]
+    original = Path(original_reference["path"]).read_bytes()
     context.codex_context_hook(str(root), {**event, "hook_event_name": "PreCompact"})
     context.codex_context_hook(str(root), {**event, "source": "compact"})
     assert "candidate" not in context._state(root)
@@ -580,22 +586,24 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
     assert current["mode"] == "full" and "candidate" not in context._state(root)
     body = consume(current)
     assert body["heartbeat_receipt"]["turn_instance_id"] == "native-work-next"
-    assert context._state(root)["candidate"]["target"] == current["target"]
-    assert Path(first["recovery"]["path"]).read_bytes() == original
+    current_machine = read_context_read_reference(current["reference_file"])[1]["navigation"]
+    assert context._state(root)["candidate"]["target"] == current_machine["target"]
+    assert Path(original_reference["path"]).read_bytes() == original
     command_workspace = tmp_path / "independent-checkout"
     command_workspace.mkdir()
     warm = guard("native-work-next", cwd=command_workspace)
-    assert warm["mode"] == "delta" and warm["target"] != current["target"]
+    warm_machine = read_context_read_reference(warm["reference_file"])[1]["navigation"]
+    assert warm["mode"] == "delta" and warm_machine["target"] != current_machine["target"]
     assert context._state(root)["cwd"] == str(project)
     assert _heartbeat_receipt_count(runtime, "native-work-first") == 1
     assert _heartbeat_receipt_count(runtime, "native-work-next") == 1
     assert _spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("native_failure", [None, "projection", "directory"])
+@pytest.mark.parametrize("native_failure", [None, "projection", "directory", "reader_reference"])
 def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, native_failure):
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota
+    from loopx.cli_commands import quota, quota_capture
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
@@ -619,10 +627,15 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     def unavailable_directory(**kwargs):
         raise OSError("native directory unavailable")
 
+    def unavailable_reference(*args, **kwargs):
+        raise OSError("synthetic reader metadata unavailable")
+
     monkeypatch.setattr(quota, "project_captured_context", competing)
     monkeypatch.setattr(codex_context, "project_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)
+    elif native_failure == "reader_reference":
+        monkeypatch.setattr(quota_capture, "write_context_read_reference", unavailable_reference)
     printed = []
     assert quota._emit_quota_result(original, args, context=None, registry_path=tmp_path / "absent.json",
         heartbeat_turn_id=None, usage_quota_started=0, capture_directory=tmp_path,
@@ -634,7 +647,8 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
         assert printed[0]["captured_decision"] == {"path": str(tmp_path / "decision.json")}
     else:
         assert len(printed) == 1 and "content" not in printed[0]
-        assert json.loads(Path(printed[0]["path"]).read_text()) == {"native_projection": original}
+        reference = read_context_read_reference(printed[0]["reference_file"])[1]
+        assert json.loads(Path(reference["path"]).read_text()) == {"native_projection": original}
     assert json.loads((tmp_path / "decision.json").read_text()) == original
 
 
@@ -883,7 +897,7 @@ def test_context_nonfinite_numbers_are_rejected_before_rpc(monkeypatch, number):
     def unexpected(*args, **kwargs):
         pytest.fail("Non-finite evidence must not enter the codec")
 
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", unexpected)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", unexpected)
     with pytest.raises(ValueError, match="finite"):
         prepare_context_delivery({"nested": [{"measurement": number}]},
             scope={}, capture_id="invalid")
@@ -894,7 +908,7 @@ def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path,
     from loopx.control_plane.quota import turn_envelope
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    original_rpc = turn_envelope.effect_runtime_result
+    original_rpc = turn_envelope.effect_runtime_projection_result
     costs = []
 
     def size(value):
@@ -906,7 +920,7 @@ def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path,
         costs.append(size(params) + size(result))
         return result
 
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", measured_rpc)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", measured_rpc)
     totals, source_sizes = [], []
     for fraction in (False, True):
         costs.clear()

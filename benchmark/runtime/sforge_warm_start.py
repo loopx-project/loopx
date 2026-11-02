@@ -16,6 +16,7 @@ import shlex
 import shutil
 import tempfile
 import time
+import tomllib
 
 from loopx.control_plane.effect_runtime import effect_runtime_result
 from benchmark.runtime.layout import _CODEX_HOME, _CONTROL, _SRC
@@ -96,14 +97,41 @@ class WarmStart:
             raise ValueError("Original warm start deadline expired during checkpoint verification")
         return metadata
 
-    async def stage(self, environment, workspace: str) -> list[str]:
+    async def stage(self, environment, workspace: str, *,
+                    effective_config: bytes | None = None,
+                    provider_base_url: str | None = None) -> list[str]:
         from loopx.hosts.checkpoint_retention import checkpoint_bank_use
         with checkpoint_bank_use(self.root):
-            return await self._stage(environment, workspace)
+            return await self._stage(environment, workspace,
+                effective_config=effective_config, provider_base_url=provider_base_url)
 
-    async def _stage(self, environment, workspace: str) -> list[str]:
+    async def _stage(self, environment, workspace: str, *,
+                     effective_config: bytes | None = None,
+                     provider_base_url: str | None = None) -> list[str]:
         metadata = self._verify(workspace)
         research = _research_components(self.root, metadata, Path(workspace), self.research_component_ids)
+        requested = self.destination_config or self.config
+        transport_config = None
+        if effective_config is not None:
+            from loopx.hosts.codex_checkpoint import checkpoint_destination_config
+
+            # The runner renders its actual launch through the ordinary worker's
+            # settings owner. Never change the operator's model/effort selection
+            # merely because a destination was rendered successfully.
+            before = tomllib.loads(requested.read_text(encoding="utf-8"))
+            after = tomllib.loads(effective_config.decode("utf-8"))
+            if any(before.get(key) != after.get(key) for key in ("model", "model_reasoning_effort")):
+                raise ValueError("Checkpoint launch differs from its declared model and reasoning effort")
+            with tempfile.TemporaryDirectory(prefix="checkpoint-route-") as folder:
+                target = Path(folder).resolve() / "config.toml"
+                target.write_bytes(effective_config)
+                checkpoint_destination_config(self.config,
+                    metadata["native_session"]["config_sha256"], target,
+                    provider_base_url=provider_base_url)
+            if effective_config != requested.read_bytes():
+                transport_config = effective_config
+        elif provider_base_url is not None and effective_config is None:
+            raise ValueError("Checkpoint Host route requires its rendered destination settings")
         # Install tools first without creating the native home. Stage inert
         # participants outside the workspace so restoring its bytes cannot
         # replace the active controller, registry or installed executable.
@@ -115,7 +143,16 @@ class WarmStart:
                        source_todo_id=self.source_todo_id, deadline_epoch=self.deadline_epoch,
                        normal_cadence=self.normal_cadence)
         protected_files = [config, f"{_CONTROL}/warm-start.json"]
-        if self.destination_config is not None:
+        if transport_config is not None:
+            target = f"{_CONTROL}/restored-model-config.toml"
+            with tempfile.TemporaryDirectory(prefix="checkpoint-route-") as folder:
+                path = Path(folder) / "config.toml"
+                path.write_bytes(transport_config)
+                await environment.upload_file(path, target)
+            payload["destination_config"] = target
+            payload["provider_base_url"] = provider_base_url
+            protected_files.append(target)
+        elif self.destination_config is not None:
             target = f"{_CONTROL}/restored-model-config.toml"
             await environment.upload_file(self.destination_config, target)
             payload["destination_config"] = target
@@ -302,7 +339,9 @@ def admit_warm_session(env: dict[str, str], declaration: dict) -> dict:
     result = admit_native_checkpoint_session(env, Path(declaration["root"]), declaration["sha256"],
         Path(declaration["config"]), sandbox=env["LOOPX_CODEX_SANDBOX"], timeout=timeout,
         **({"destination_config": Path(declaration["destination_config"])}
-           if declaration.get("destination_config") is not None else {}))
+           if declaration.get("destination_config") is not None else {}),
+        **({"provider_base_url": declaration["provider_base_url"]}
+           if declaration.get("provider_base_url") is not None else {}))
     _phase_read_timeout(declaration, 90)
     return result
 

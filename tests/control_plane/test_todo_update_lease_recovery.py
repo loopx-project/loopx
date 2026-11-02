@@ -9,10 +9,113 @@ from pathlib import Path
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, promoted_create_fixture
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.todos.markdown import render_todo_markdown
+from loopx.control_plane.todos.completion_validation_store import read_completion_validation_declaration
+from loopx.todos import add_goal_todo
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_validator_revision_uses_current_claim_through_public_cli(tmp_path, monkeypatch, provider):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry, runtime, state = promoted_create_fixture(
+        tmp_path, provider=provider, handoff_mode="hard_lease",
+        registered_agents=["agent-a", "agent-b"],
+    )
+    created = add_goal_todo(
+        registry_path=registry, goal_id="goal-a", role="agent", agent_id="agent-a",
+        text="Validate the delivered behavior", claimed_by="agent-a",
+        validation_command_json=json.dumps([sys.executable, "-c", "raise SystemExit(4)"]),
+    )
+    todo_id = created["todo_id"]
+    state.unlink()  # The canonical provider must own revision and claim decisions.
+
+    def cli(*args, ok=True):
+        process = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry", str(registry),
+             "--runtime-root", str(runtime), *args, "--goal-id", "goal-a", "--todo-id", todo_id],
+            capture_output=True, text=True, timeout=45,
+        )
+        assert (process.returncode == 0) is ok, process.stdout + process.stderr
+        return json.loads(process.stdout)
+
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id="goal-a", include_leases=True)
+
+    claim = cli("todo", "claim", "--agent-id", "agent-a", "--claimed-by", "agent-a",
+                "--claim-operation-id", "validator-execution")
+    proof = ("--claim-operation-id", claim["claim_operation_id"])
+    before = snapshot()
+    old_digest = before["todos"][0]["completion_validation_sha256"]
+    marker = tmp_path / "validator-executed"
+    argv = [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch(); raise SystemExit(4)"]
+
+    def revision(operation, provider_revision, *, actor="agent-a", extra=(), ok=True):
+        return cli("todo", "update", "--agent-id", actor, "--update-operation-id", operation,
+                   "--update-expected-provider-revision", provider_revision,
+                   "--validation-command-json", json.dumps(argv), *extra, ok=ok)
+
+    # Proof is required independently of the validator's provider CAS witness.
+    missing = revision("missing-proof", before["provider_revision"], ok=False)
+    assert missing["error_code"] == "lease_fence_required"
+    assert snapshot() == before
+    preview = revision("revise-validator", before["provider_revision"], extra=(*proof, "--dry-run"))
+    assert preview["status"] == "planned"
+    assert snapshot() == before
+    assert not marker.exists()
+    assert revision("revise-validator", before["provider_revision"], extra=proof)["status"] == "applied"
+    updated = snapshot()
+    todo = updated["todos"][0]
+    assert todo["status"] == "open" and todo["completion_validation_required"] is True
+    assert todo["completion_validation_sha256"] != old_digest
+    history = todo["completion_validation_revision_history"]
+    assert len(history) == 1
+    assert history[0]["previous_declaration_sha256"] == old_digest
+    assert history[0]["declaration_sha256"] == todo["completion_validation_sha256"]
+    assert history[0]["actor_agent_id"] == "agent-a"
+    stored = read_completion_validation_declaration(runtime_root=runtime, goal_id="goal-a", todo_id=todo_id)
+    assert stored["validation_command_argv"] == argv
+    assert updated["leases"] == before["leases"]
+    assert revision("revise-validator", before["provider_revision"], extra=proof)["status"] == "replayed"
+    assert snapshot() == updated
+    assert not marker.exists(), "revision, preview and replay must not run the validator"
+
+    for operation, provider_revision, actor, error in [
+        ("stale-revision", before["provider_revision"], "agent-a", "provider_revision_mismatch"),
+        ("foreign-claim", updated["provider_revision"], "agent-b", "claim_execution_unavailable"),
+    ]:
+        rejected = revision(operation, provider_revision, actor=actor, extra=proof, ok=False)
+        assert rejected["error_code"] == error
+        assert snapshot() == updated
+        assert read_completion_validation_declaration(runtime_root=runtime, goal_id="goal-a", todo_id=todo_id) == stored
+
+    failed = cli("todo", "complete", "--agent-id", "agent-a", *proof, "--evidence", "evidence:checked", ok=False)
+    assert failed["validation_blocked_completion"] is True
+    assert failed["validation_failure"]["validation_receipt"]["validation_declaration_sha256"] == todo["completion_validation_sha256"]
+    assert marker.exists() and snapshot()["todos"][0]["status"] == "open"
+
+    lease = cli("task-lease", "inspect")["lease"]
+    cli("task-lease", "release", "--owner", "agent-a", "--idempotency-key", lease["idempotency_key"],
+        "--expected-version", str(lease["version"]))
+    retired = snapshot()
+    assert revision("released-claim", retired["provider_revision"], extra=proof, ok=False)["error_code"] == "claim_execution_unavailable"
+    assert snapshot() == retired
+    cli("todo", "claim", "--agent-id", "agent-a", "--claimed-by", "agent-a", "--claim-operation-id", "next-execution")
+    current = snapshot()
+    assert revision("old-generation", current["provider_revision"], extra=proof, ok=False)["error_code"] == "claim_execution_unavailable"
+    assert snapshot() == current
+    # Existing explicit proof remains a legitimate transport for the same fence.
+    lease = cli("task-lease", "inspect")["lease"]
+    explicit = ("--task-lease-idempotency-key", lease["idempotency_key"], "--task-lease-expected-version", str(lease["version"]))
+    argv = [sys.executable, "-c", "raise SystemExit(0)"]
+    assert revision("explicit-proof", current["provider_revision"], extra=explicit)["status"] == "applied"
+    completed = cli("todo", "complete", "--agent-id", "agent-a", "--claim-operation-id", "next-execution",
+                    "--evidence", "evidence:validated")
+    assert completed["validation_receipt"]["passed"] is True
+    assert snapshot()["todos"][0]["status"] == "done"
+    assert cli("task-lease", "inspect")["lease"]["status"] == "released"
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

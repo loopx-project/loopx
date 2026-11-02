@@ -18,11 +18,11 @@ if [[ "${LOOPX_ENABLE_GOAL_SUBAGENT_CONFIGURATION:-0}" = "1" ]]; then
 fi
 
 node_is_supported() {
-  "$1" -e '
-const [major, minor] = process.versions.node.split(".").map(Number);
-const supported = (major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22;
-process.exit(supported ? 0 : 1);
-' 2>/dev/null
+  "$1" --no-warnings --experimental-strip-types --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const { isSupportedNodeVersion } = await import(pathToFileURL(process.argv[1]).href);
+process.exit(isSupportedNodeVersion(process.versions.node) ? 0 : 1);
+' "${REPO_ROOT}/loopx/control_plane/runtime/node_version.ts" 2>/dev/null
 }
 
 select_node_runtime() {
@@ -45,8 +45,8 @@ select_node_runtime() {
     fi
   done
 
-  echo "LoopX dashboard requires Node.js 20.19+ or 22.12+. Node.js 22 is recommended." >&2
-  echo "Install Node.js 22, then retry: loopx dashboard" >&2
+  echo "LoopX dashboard requires Node.js 22.22.3 or newer for its control plane." >&2
+  echo "Activate a compatible Node.js runtime, then retry: loopx dashboard" >&2
   return 1
 }
 

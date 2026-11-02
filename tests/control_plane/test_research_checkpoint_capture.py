@@ -134,6 +134,7 @@ def test_worker_keeps_work_running_when_staged_capture_declaration_fails(
 @pytest.mark.parametrize("opportunity,corrupt,collisions", [
     (False, False, False), (True, False, False), (True, True, False),
     (True, False, True), (True, True, True), ("empty", False, True),
+    ("nonfinite", False, False),
 ])
 def test_real_cli_settlement_capture_verification_and_inert_materialization(
         tmp_path, monkeypatch, opportunity, corrupt, collisions):
@@ -155,6 +156,9 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
         "round": "agent-1", "archive_sha256": hashlib.sha256(incumbent_bytes).hexdigest(), "archive_bytes": len(incumbent_bytes)}}
     if opportunity == "empty":
         opportunity_packet["native_incumbent"] = None
+    if opportunity == "nonfinite":
+        opportunity_packet["released_results"] = {"synthetic": {"report": {
+            "score": float("inf"), "metrics": {"nested": [float("nan"), float("-inf")]}}}}
     def export(env, *, timeout, incumbent_path):
         assert 0 < timeout <= 30
         observed.append(True)
@@ -214,7 +218,19 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
     assert goal_state.read_bytes() == retained_goal
     if opportunity:
         mapping = json.loads((target / "checkpoint.json").read_text())["point_metadata"]["evaluation_opportunity"]
-        assert json.loads((target / "components" / mapping["component_id"]).read_text()) == opportunity_packet
+        retained_opportunity = (target / "components" / mapping["component_id"]).read_text()
+        if opportunity == "nonfinite":
+            import math
+            from benchmark.runtime import sforge_json
+            restored_opportunity = sforge_json.loads(retained_opportunity)
+            report = restored_opportunity["released_results"]["synthetic"]["report"]
+            assert report["score"] == float("inf")
+            assert math.isnan(report["metrics"]["nested"][0])
+            assert report["metrics"]["nested"][1] == float("-inf")
+            assert restored_opportunity["native_incumbent"] == opportunity_packet["native_incumbent"]
+            assert json.loads(retained_opportunity)["sforge_nonfinite_json"] == 1
+        else:
+            assert json.loads(retained_opportunity) == opportunity_packet
         if opportunity == "empty":
             assert mapping["incumbent_component_id"] is None
             assert not (wake / cli.TURN_ID / "checkpoint-incumbent.tar.gz").exists()
@@ -229,6 +245,7 @@ def test_real_cli_settlement_capture_verification_and_inert_materialization(
     assert restored["activation_performed"] is False
     assert (tmp_path / "inert/components/code").read_text() == "retained_candidate = 7\n"
     if opportunity:
+        assert (tmp_path / "inert/components" / mapping["component_id"]).read_text() == retained_opportunity
         if opportunity != "empty":
             assert (tmp_path / "inert/components" / mapping["incumbent_component_id"]).read_bytes() == incumbent_bytes
         for member in caller_components:

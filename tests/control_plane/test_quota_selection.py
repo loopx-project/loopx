@@ -98,6 +98,21 @@ def test_quota_returned_records_do_not_alias_source_or_other_lanes(entrypoint):
     assert other["resume_condition"]["target_status"] == "open"
 
 
+def test_fitting_request_preserves_a_pending_payload_in_an_expanded_response():
+    from loopx.control_plane.todos.quota_selection import project_quota_planning
+
+    # This currently fits the request wire but expands beyond the response wire.
+    row = item("todo_wait", role="agent", task_class="advancement_task", text="x" * 600_000,
+        required_capabilities=["shell"], resume_when="todo_done:todo_dependency", resume_ready=False,
+        resume_condition={"kind": "todo_done", "satisfied": False,
+            "target_todo_id": "todo_dependency", "target_status": "open",
+            "target_task_class": "advancement_task"})
+    result = project_quota_planning(summary([row]), all_open_items=[row], source_open_count=1,
+        agent_identity={"agent_id": "agent-b"}, filter_user_gate_blocks_agent=False,
+        available_capabilities=[], current_time="2026-10-01T00:00:00Z")
+    assert result["resume_planning"]["blocked_successor_items"][0]["text"] == row["text"]
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_large_history_completes_public_quota_through_vision_wait(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -129,7 +144,7 @@ def test_large_history_completes_public_quota_through_vision_wait(tmp_path, monk
 
 
 @pytest.mark.parametrize("gate_scope", [False, True])
-def test_large_quota_history_uses_snapshot_without_losing_scope(
+def test_large_quota_history_retains_complete_scope(
     monkeypatch, gate_scope,
 ):
     from loopx.control_plane import effect_runtime
@@ -177,10 +192,9 @@ def test_large_quota_history_uses_snapshot_without_losing_scope(
         filter_user_gate_blocks_agent=gate_scope,
     )
 
-    # Unique historical payloads cannot be reduced below the inline wire limit
-    # without dropping facts. Use the existing digest-verified local snapshot
-    # transport rather than raising or truncating.
-    assert observed_sizes and max(observed_sizes) > effect_runtime.MAX_REQUEST_BYTES
+    # Retain the original over-2-MiB history and its scoped tail. A larger wire
+    # may carry it inline; either route must preserve the same facts.
+    assert observed_sizes and max(observed_sizes) > 2 * 1024 * 1024
     assert [row["todo_id"] for row in result["gate_open_items"]] == [
         "todo_tail_gate"
     ]

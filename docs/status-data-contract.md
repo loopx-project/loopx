@@ -51,6 +51,9 @@ todos, quota, soft claims, compact run events, source warnings, and an explicit
 truth contract. It is not a write API. Dashboards may render it as a channel
 card or timeline, but project truth still comes from the registry, active
 state, quota guard, and append-only run history.
+Decision reads (`loopx quota ...` and Turn decisions) omit this row field and
+the top-level `promotion_gate`; only display consumers read them, and their
+status projection cache entries are keyed separately from `loopx status`.
 
 Rows may also include an optional `task_graph_projection` object with
 `schema_version=task_graph_projection_v0`. The default `status` hot path omits
@@ -280,6 +283,20 @@ For spend accounting, status derives `spent_slots` from compact
 `quota_slot_spent` runtime events in the current quota window. The registry
 remains the policy source for compute share and window size, not the spend
 ledger.
+An indexed quota event whose artifact cannot be read back is a ledger
+integrity failure, not a spend of zero: status reports it through
+`quota.unreadable_event_count` (with `quota.unreadable_event_reasons` naming
+the cause), keeps the quota state at `blocked_health`, and blocks automatic
+agent turns until the artifact is readable again.
+An indexed quota event that reads back but does not name a known event type,
+or that names a known type without the fields that type requires, is the same
+integrity failure: the reason is `event_invalid`, and the event is never read
+as a zero spend. A readable event that names a known type and spends zero
+slots is a legal zero contribution, not an unreadable one.
+The legacy `from loopx.quota import quota_slot_contribution` export stays an
+identity alias of `loopx.control_plane.quota.ledger_readback.quota_slot_contribution`;
+it reports the contribution of one readable event only, and it is not the
+surface that carries the unreadable count.
 `quota_slot_spent` is status-neutral accounting: it must remain visible in run
 history for quota audit, but status and attention queues should use the latest
 non-accounting run as the current work state.
@@ -2512,6 +2529,17 @@ The summary currently reports:
   clamped against the spend it names. A spend whose `quota_event` cannot be
   read contributes no slot, and a void that targets a spend outside the window
   does not reduce that window.
+- `unreadable_event_count_24h` / `unreadable_event_count_7d`: optional; omitted
+  when no unreadable event was observed. When present, they count indexed quota
+  events (`quota_slot_spent` / `quota_slot_voided`) in that sample whose
+  artifact cannot be read back, or whose slot count is missing or unparseable.
+  The real slot count is unknown, so these events are counted instead of being
+  silently read as a zero spend (an explicitly written `slots: 0` stays a legal
+  zero, not an unreadable event), and the
+  quota projection fails closed while the count is non-zero. The counters only
+  appear when they describe a real integrity failure, so a healthy summary
+  keeps its original shape and the agent-facing status output stays inside its
+  growth budget.
 - `automation_run_count_24h` / `automation_run_count_7d`: quota spend events
   whose compact `quota_event.source` is `heartbeat`, `automation`, or `cron`.
   If the compact run index does not retain a source, `quota_slot_spent` is
@@ -2772,3 +2800,37 @@ The public examples under `examples/` are sanitized and can be used for demos.
 - Consumers should handle missing `run_history` as unavailable.
 - Consumers should treat `contract.ok=false` as a stronger signal than an empty
   attention queue.
+## Explicit Todo queue overview
+
+`loopx todo list --goal-id <goal-id> --summary` selects the versioned
+`todo_list_summary_v0` overview. It leaves ordinary list output and the existing
+`--thin` view unchanged. The overview is available in JSON and Markdown and
+helps a reader choose which Todo to inspect; it is not execution admission.
+
+The view reuses the canonical Todo query's role, status, Agent scope and stable
+ordering. It shows at most eight records per role (sixteen for both roles).
+`--limit` may lower that per-role cap. Agent-scoped hot reads retain their
+existing omission of done records; explicit status/role reads retain their
+existing selection. Blocked/deferred work and Monitors do not become runnable
+merely because they appear in the overview.
+
+One `todos` array contains `todo_id`, `role`, `title`, `status`, `priority`,
+`claimed_by` and `title_truncated`. Titles are bounded to 180 Unicode code
+points; canonical identities are retained. Markdown marks truncated titles
+with `*`. `todo list --goal-id <goal-id> --todo-id <todo-id>` restores complete
+requirements through the existing exact-read owner. `--summary` is mutually
+exclusive with `--thin` and `--todo-id`.
+
+`todo_count` and `matched_todo_count` cover the complete query match before
+display limits, `returned_todo_count` is the number displayed, and
+`omitted_todo_count` is their difference. `todo_list_summary_projection`
+declares the version, per-role/text limits and full-detail routes. The compact
+`authority_read` retains provider identity/revision/cursor and the canonical
+read/fallback facts. The existing `projection_envelope` distinguishes complete
+source coverage from display truncation. An unavailable source remains an
+error, never a successful empty queue.
+
+The new `todo_list_summary` output-budget variant has separate JSON/Markdown
+ceilings. Existing default and thin budgets remain unchanged. App and Lark
+callers keep their current full/exact views; this opt-in CLI projection does
+not switch consumers, create writes, or replace quota/lease/acceptance checks.

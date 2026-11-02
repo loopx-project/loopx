@@ -1,6 +1,7 @@
 """Receipt-backed cadence over an open Todo, through the real CLI and runtime."""
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -332,8 +333,10 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("changed_context", [False, True])
+@pytest.mark.parametrize("stride_action,followthrough_count", [("verify", 1), ("switch", 2)])
 def test_due_stride_review_survives_successor_transition_until_decision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, changed_context: bool,
+    stride_action: str, followthrough_count: int,
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -416,7 +419,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         "schema_version": "stride_decision_v2", "strategy_version": "evidence_conditioned_v1",
         "reference_context_id": control["reference_context_id"],
         "reference_obligation_id": obligation["obligation_id"],
-        "basis": "uncertain_evidence", "action": "verify",
+        "basis": "uncertain_evidence", "action": stride_action,
         "axes": {
             "work_slice": {"plan": "Complete the independent source validation.",
                            "reason": "One complete check resolves the pending evidence question."},
@@ -431,6 +434,9 @@ def test_due_stride_review_survives_successor_transition_until_decision(
                        "cost_bound": "One source and its contrary case before replanning.",
                        "minimum_evidence": "A checked result and a contrary-case result."},
     }
+    if stride_action == "switch":
+        decision["axes"]["route_distance"]["plan"] = "Replace the original source with an independent source; retain the objective."
+        decision["axes"]["route_distance"]["reason"] = "The independent source changes the limiting evidence mechanism."
     vision_packet = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed",
@@ -469,7 +475,20 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert transition["reason_code"] == "stride_review_basis_mismatch"
     assert transition["host_action"] == "read_current_replan_context"
     assert transition["next_cli_actions"] == []  # No unbound repeat of the rejected write.
-    recovery = transition["context_recovery"]
+    reference = transition["context_recovery"]
+    # A rejected write must not eagerly import historical acceptance/evidence
+    # into the model. Its exact write-time basis remains independently readable.
+    if os.name == "posix":
+        assert len(json.dumps(foreign, ensure_ascii=False).encode()) < 4096
+        from loopx.control_plane.turn_driver.decision_capture import read_context_capture_file
+        saved, _, recovery = read_context_capture_file(reference["path"], reference["sha256"], private=True)
+        assert saved.stat().st_mode & 0o077 == 0
+        selected = call("quota", "context-read", "--capture-file", reference["path"],
+            "--capture-sha256", reference["sha256"], "--select", "/replan_context/core_goal/objective")
+        assert selected["ok"] and selected["eof"]
+        assert json.loads(selected["content"])["selections"][0]["value"] == recovery["replan_context"]["core_goal"]["objective"]
+    else:
+        recovery = reference
     current = recovery["replan_context"]
     assert recovery["received_context_id"] == rejected_reference
     assert current["obligation_id"] == obligation["obligation_id"]
@@ -508,7 +527,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
 
     # Continue through real authority/history, rather than injecting a crafted
     # context. The next periodic review must see the accepted autonomous decision.
-    for index in range(2):
+    for index in range(followthrough_count):
         turn = f"stride-followthrough-{index}"
         call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
              "--agent-id", AGENT_ID, "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
@@ -526,7 +545,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
              "--delivery-outcome", "outcome_progress", "--delivery-boundary", "in_flight_continuation",
              "--recommended-action", "The candidate regressed (error 5 versus reference 2); retain the reference and compare another source.",
              *(["--progress-result-class", "unchanged", "--progress-evidence-id", f"fixture:negative-result-{index}"]
-               if index == 0 else []),
+               if stride_action == "switch" and index == 0 else []),
              "--no-global-sync", "--suppress-external-sinks")
         call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
              "--todo-id", successor["todo_id"], "--turn-instance-id", turn,
@@ -537,13 +556,16 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         "--agent-id", AGENT_ID,
         "--turn-instance-id", "stride-next-review", )
     next_obligation = next_guard["autonomous_replan_obligation"]
+    periodic_trigger = next(row for row in next_obligation["triggers"] if row["kind"] == "periodic_review_due")
+    assert periodic_trigger["threshold"] == periodic_trigger["run_count"] == followthrough_count
     delivered_result = next_obligation["replan_context"]["decision_followthrough"]["ordinary_work"]["evidence"][0]
     observed_result = call("history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
                           "--evidence-ref", delivered_result["evidence_ref"])["evidence"]
     assert "regressed (error 5 versus reference 2)" in observed_result["recommended_action"]
     # The actor can now discover the actual ordinary result from the review,
     # retain the reference, and choose a successor through the existing owner.
-    measurement = json.loads((project / "candidate-result-1.json").read_text())
+    result_path = project / f"candidate-result-{followthrough_count - 1}.json"
+    measurement = json.loads(result_path.read_text())
     next_task = "Compare another source while retaining the reference" if measurement["candidate_error"] > measurement["reference_error"] else "Adopt the candidate"
     next_successor = call("todo", "add", "--goal-id", GOAL_ID, "--role", "agent",
         "--claimed-by", AGENT_ID, "--text", next_task,
@@ -567,7 +589,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     assert len(planned) == 1 and planned[0]["todo_id"] == successor["todo_id"]
     assert planned[0]["current"]["claimed_by"] == AGENT_ID
     assert planned[0]["current"]["status"] == "done", "A negative experiment can end while the Goal continues"
-    assert len(planned[0]["observation_refs"]) == 1
+    assert len(planned[0]["observation_refs"]) == (1 if stride_action == "switch" else 0)
     assert follow["unresolved_planned_work_count"] == 1
     last_work = json.loads(Path(work["json_path"]).read_text())
     assert "progress_observation" not in last_work
@@ -652,7 +674,7 @@ def test_due_stride_review_survives_successor_transition_until_decision(
             "import json,sys; from pathlib import Path; "
             "old=json.loads(Path(sys.argv[1]).read_text()); "
             "Path(sys.argv[2]).write_text(json.dumps({'retained_error':old['reference_error'],'alternative_error':1}))",
-            str(project / "candidate-result-1.json"), str(project / f"adopted-probe-{index}.json")], check=True)
+            str(result_path), str(project / f"adopted-probe-{index}.json")], check=True)
         call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
             "--classification", "validated_progress", "--delivery-batch-scale", "implementation",
@@ -662,6 +684,28 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
             "--slots", "1", "--source", "heartbeat", "--execute")
+        if index == 0:
+            from loopx.history import load_index_snapshot
+
+            runs = load_index_snapshot(runtime / "goals" / GOAL_ID / "runs/index.jsonl",
+                                       include_artifact_status=False).records
+            cadence = effective_turn_cadence_context(resolve_todo_replan_cadence_goal(
+                json.loads(registry.read_text())["goals"][0], runtime,
+            ), runtime, registry_path=registry)
+            # Real settled verify/switch A, then switch ACK B, then one work
+            # Turn: baseline 2 is not due. A late neutral observation reusing
+            # A's identity has neither ACK nor Vision and must not revive A.
+            # Mutate only the projection request, never provider state/receipts.
+            for classification in ("replan_noop", "repair_noop", "quota_slot_spent"):
+                alias = {**({"goal_ref": persisted["goal_ref"]} if "goal_ref" in persisted else {}),
+                         "agent_id": AGENT_ID,
+                         "turn_instance_id": "stride-due-review",
+                         "generated_at": datetime.now(timezone.utc).isoformat(),
+                         "classification": classification}
+                assert project_replan_history(
+                    [alias, *reversed(runs)], operation="periodic", agent_id=AGENT_ID,
+                    effective_turn_cadence=cadence,
+                ) is None, classification
     final = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "review-adopted-probe", )
     use = final["autonomous_replan_obligation"]["replan_context"]["decision_followthrough"]["work_result_use"]

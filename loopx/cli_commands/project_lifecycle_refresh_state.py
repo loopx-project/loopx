@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -663,6 +664,17 @@ def handle_refresh_state_command(
                 agent_id=args.agent_id,
                 runtime_root=args.runtime_root,
             )
+            recovery = transition.get("context_recovery")
+            if fmt == "json" and os.name == "posix" and isinstance(recovery, dict):
+                from .context_machine import capture_context_recovery
+
+                reference = capture_context_recovery(recovery,
+                    runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root))
+                transition["context_recovery"] = {
+                    "received_context_id": recovery["received_context_id"],
+                    "current_context_id": recovery["replan_context"]["context_id"],
+                    "instruction": recovery["instruction"], **reference,
+                }
             payload["replan_transition"] = transition
             if transition["next_cli_actions"]:
                 payload["error"] += " Required transition: " + "; ".join(
