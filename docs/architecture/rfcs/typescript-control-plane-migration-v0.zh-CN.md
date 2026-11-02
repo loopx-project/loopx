@@ -2108,3 +2108,4 @@ SQLite 中位数略升，收益不能外推为全面加速。这只资格化本�
 - 完整全局摘要与门禁读取事务：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.zh-CN.md)。
 - 完整全局风险读取所有权：[2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.zh-CN.md)。
 - 完整 durable-completion 证据读取：[2026-11-02 owner 与调用边界记录](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.zh-CN.md)。
+- 完整 status 任务图组合：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-status-task-graph.zh-CN.md)。

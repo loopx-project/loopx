@@ -1,6 +1,7 @@
+import {compactTodoReadText} from "../../loopx/control_plane/todos/read_codec.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GOAL_TASK_MAP_REQUEST, projectGoalTaskMap, projectGoalTaskGraphTopology, projectTaskGraphTopology, TASK_GRAPH_GOAL_TOPOLOGY_REQUEST,
+import { projectStatusTaskGraph, STATUS_TASK_GRAPH_REQUEST, GOAL_TASK_MAP_REQUEST, projectGoalTaskMap, projectGoalTaskGraphTopology, projectTaskGraphTopology, TASK_GRAPH_GOAL_TOPOLOGY_REQUEST,
   TASK_GRAPH_TOPOLOGY_REQUEST } from "../../loopx/control_plane/work_items/task_graph.ts";
 import { projectRelations, todoRef } from "../../loopx/control_plane/work_items/planning_relations.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
@@ -309,5 +310,156 @@ test("goal map rejects malformed wire types at each consumed boundary", () => {
   for (const extra of [{todo_id: 1}, {todo_id: null}, {todo_id: ""}, {todo_id: undefined},
     {done: "false"}, {successor_todo_ids: [1]}, {unblocks_todo_id: true}, {is_user: "false"}, {is_monitor: 0}]) {
     assert.throws(() => goalMap([mapRow("todo_invalid", extra)]));
+  }
+});
+
+function statusGraph(extra: JsonObject = {}): JsonObject {
+  const publicTexts: JsonObject = {};
+  const collect = (value: unknown): void => {
+    if (typeof value === "string") {
+      publicTexts[value] = Object.fromEntries([80, 120, 160, 180, 240].map(cap =>
+        [String(cap), compactTodoReadText(value, cap)]));
+    } else if (value && typeof value === "object") {
+      for (const child of Object.values(value)) collect(child);
+    }
+  };
+  collect(extra);
+  const overrides = extra.public_texts as JsonObject | undefined;
+  extra = {...extra, public_texts: Array.isArray(overrides) ? overrides : {...publicTexts, ...overrides}};
+  return projectStatusTaskGraph({schema_version: STATUS_TASK_GRAPH_REQUEST, goal_id: "synthetic-goal",
+    summaries: {agent: {items: [], total_count: 0}, user: {items: [], total_count: 0}},
+    max_status_todos_per_role: 8, latest_runs: [], public_texts: {},
+    fallback_time: "2026-11-02T12:00:00Z", ...extra});
+}
+const statusTodo = (todo_id: string, extra: JsonObject = {}): JsonObject =>
+  ({todo_id, text: `Review ${todo_id}`, status: "open", ...extra});
+const statusNodes = (result: JsonObject): JsonObject[] => (result.projection as JsonObject).nodes as JsonObject[];
+const statusEdges = (result: JsonObject): JsonObject[] => (result.projection as JsonObject).edges as JsonObject[];
+
+test("status empty snapshot has no graph, while gate and run evidence survive without a selected Todo", () => {
+  assert.deepEqual(statusGraph(), {schema_version: "status_task_graph_result_v0", projection: null});
+  const result = statusGraph({summaries: {agent: {}, user: {items: [statusTodo("todo_gate", {task_class: "user_gate"})]}},
+    latest_runs: [{run_id: "run_checked", classification: "checked"}]});
+  assert.deepEqual(statusNodes(result).map(node => [node.kind, node.state]), [["gate", "waiting"], ["validation", "ready"]]);
+  assert.deepEqual(statusEdges(result), []);
+  assert.deepEqual((result.projection as JsonObject).limits, {user_gate_node_limit: 2, user_gate_open_count: 1, user_gate_truncated_count: 0});
+});
+
+test("status owns selection before sorting and caps gates independently of predecessor expansion", () => {
+  const result = statusGraph({summaries: {agent: {items: [statusTodo("todo_first", {priority: "P4", claimed_by: "builder"}),
+    statusTodo("todo_later", {priority: "P0"})]}, user: {open_count: 9,
+      gate_open_items: Array.from({length: 5}, (_, i) => statusTodo(`todo_gate_${i}`, {task_class: "user_gate"}))}}});
+  assert.deepEqual(statusNodes(result).map(node => node.kind), ["deliverable", "lease", "gate", "gate", "gate_summary"]);
+  assert.deepEqual(statusNodes(result)[0].refs, {todo_ids: ["todo_first"]});
+  assert.deepEqual(statusEdges(result).map(edge => edge.relation), ["depends_on", "blocks", "blocks", "blocks"]);
+  assert.equal(statusNodes(result)[4].title, "7 more open user gates not expanded");
+});
+
+test("status retains parallel lineage and condition edges, done evidence and predecessor handoff", () => {
+  const result = statusGraph({summaries: {agent: {items: [statusTodo("todo_root", {resume_when: "todo_done:todo_parent"}),
+    statusTodo("todo_parent", {status: "done", done: true, successor_todo_ids: ["todo_root"], evidence: "Checked result",
+      handoff_note: {from_agent: "builder", to_agent: "reviewer"}})]}, user: {}}});
+  assert.deepEqual(statusNodes(result).map(node => [node.kind, node.state]), [
+    ["deliverable", "open"], ["deliverable", "done"], ["evidence", "done"], ["handoff", "done"]]);
+  assert.deepEqual(statusEdges(result).map(edge => edge.relation), ["depends_on", "continues", "validates", "hands_off_to", "continues"]);
+  assert.deepEqual(statusNodes(result)[2].refs, {todo_ids: ["todo_parent"]});
+});
+
+test("status limits expansion at open predecessors, reports missing targets and source truncation", () => {
+  const result = statusGraph({summaries: {agent: {total_count: 8, items: [statusTodo("todo_root", {resume_when: "todo_done:todo_missing"}),
+    statusTodo("todo_parent", {successor_todo_ids: ["todo_root"], evidence: "Not delivered"}),
+    statusTodo("todo_ancestor", {status: "done", successor_todo_ids: ["todo_parent"]})]}, user: {}}});
+  assert.deepEqual(statusNodes(result).map(node => node.refs), [{todo_ids: ["todo_root"]}, {todo_ids: ["todo_parent"]}]);
+  assert.deepEqual((result.projection as JsonObject).limits, {user_gate_node_limit: 2, user_gate_open_count: 0, user_gate_truncated_count: 0,
+    predecessor_node_limit: 4, emitted_predecessor_count: 1, predecessor_truncated: false, source_truncated: true,
+    missing_predecessor_count: 1, topology_complete: false});
+});
+
+test("status run node and lineage independently select first useful facts, repair remains display only", () => {
+  const result = statusGraph({summaries: {agent: {items: [statusTodo("todo_root")]}, user: {}},
+    latest_runs: [{run_id: "run_identity_only"}, {classification: "audit continued", generated_at: "2026-11-01T00:00:00Z"}],
+    warning_updated_at: "2026-11-02T00:00:00Z", state_updated_at: "2026-10-31T00:00:00Z",
+    replan: {kind: "synthetic_repair", recommended_action: "Recover selected work"}});
+  assert.deepEqual(statusEdges(result).map(edge => edge.relation), ["validates", "audits", "continues", "repairs"]);
+  const projection = result.projection as JsonObject;
+  assert.equal(projection.generated_at, "2026-11-01T00:00:00Z");
+  assert.equal((projection.derived_from as JsonObject).active_state_updated_at, "2026-11-02T00:00:00Z");
+  assert.equal((projection.truth_contract as JsonObject).write_api, false);
+});
+
+test("status deduplicates display identities and honors codec rejection without selecting a replacement", () => {
+  const gate = statusTodo("todo_gate", {task_class: "user_gate"});
+  const result = statusGraph({summaries: {agent: {items: [statusTodo("todo_root"), statusTodo("todo_other")]},
+    user: {items: [{...gate, index: 1}, {...gate, index: 2}]}},
+    public_texts: {"Review todo_root": {"160": null}}});
+  assert.deepEqual(statusNodes(result).map(node => node.kind), ["gate"]);
+  assert.deepEqual(statusEdges(result), []);
+});
+
+test("status refuses malformed consumed facts and has no native fallback", () => {
+  for (const extra of [{schema_version: "unknown"}, {goal_id: ""}, {summaries: []},
+    {latest_runs: {}}, {max_status_todos_per_role: 0}, {public_texts: []}]) assert.throws(() => statusGraph(extra));
+});
+
+test("status gate order preserves typed legacy coordinates and Python whitespace status", () => {
+  const result = statusGraph({summaries: {agent: {items: [statusTodo("todo_root", {status: "\ufeffdone"})]},
+    user: {items: [statusTodo("todo_gate_b", {schema_version: "todo_item_v0", index: 2, task_class: "user_gate"}),
+      statusTodo("todo_gate_a", {schema_version: "todo_item_v0", index: 1, task_class: "user_gate"})]}}});
+  assert.equal(statusNodes(result)[0].state, "open");
+  assert.deepEqual(statusNodes(result).slice(1).map(node => node.refs), [{gate_ids: ["todo_gate_a"]}, {gate_ids: ["todo_gate_b"]}]);
+});
+
+test("retired topology RPC cannot recreate a Python-led status composition", async () => {
+  const {createEffectRuntimeHandlers, dispatchEffectRuntimeMethod} = await import("../../loopx/control_plane/effect_runtime_handlers.ts");
+  const handlers = createEffectRuntimeHandlers({fingerprint: "status-graph-test", requestShutdown: () => undefined});
+  await assert.rejects(dispatchEffectRuntimeMethod(handlers, "work_item.task_graph.topology", {}), {code: "unsupported_method"});
+  const result = await dispatchEffectRuntimeMethod(handlers, "work_item.task_graph.status", {
+    schema_version: STATUS_TASK_GRAPH_REQUEST, goal_id: "synthetic-goal", summaries: {agent: {}, user: {}},
+    max_status_todos_per_role: 8, public_texts: {}, latest_runs: [], fallback_time: "2026-11-02T12:00:00Z"});
+  assert.deepEqual(result, {schema_version: "status_task_graph_result_v0", projection: null});
+});
+
+test("status deduplicates actual legacy hashes, including evidence identities truncated before hashing", () => {
+  const long = "todo_" + "a".repeat(130);
+  const result = statusGraph({summaries: {agent: {items: [statusTodo("todo_root"),
+    statusTodo(long + "x", {status: "done", successor_todo_ids: ["todo_root"], evidence: "First evidence"}),
+    statusTodo(long + "y", {status: "done", successor_todo_ids: ["todo_root"], evidence: "Later evidence"})]}, user: {}}});
+  const nodes = statusNodes(result), edges = statusEdges(result);
+  assert.deepEqual(nodes.map(node => node.kind), ["deliverable", "deliverable", "evidence"]);
+  assert.equal(nodes[2].title, "First evidence");
+  assert.equal(new Set(nodes.map(node => node.node_id)).size, nodes.length);
+  assert.equal(new Set(edges.map(edge => edge.edge_id)).size, edges.length);
+});
+
+
+test("status compaction fallback refuses unqualified source text", () => {
+  assert.throws(() => projectStatusTaskGraph({schema_version: STATUS_TASK_GRAPH_REQUEST,
+    goal_id: "synthetic-goal", summaries: {agent: {items: [statusTodo("todo_unqualified")]}, user: {}},
+    max_status_todos_per_role: 8, latest_runs: [], public_texts: {},
+    fallback_time: "2026-11-02T12:00:00Z"}), /Missing public text facts/);
+});
+
+test("status compaction fallback enumerates composed titles, identities, references and reasons", () => {
+  const result = statusGraph({summaries: {
+    agent: {items: [statusTodo("todo_root", {claimed_by: "builder"}),
+      statusTodo("todo_parent", {status: "done", successor_todo_ids: ["todo_root"],
+        evidence: "Checked public evidence", handoff_note: {from_agent: "builder", to_agent: "reviewer"}})]},
+    user: {open_count: 6, items: [{text: "Review gate", task_class: "user_gate"}]},
+  }, latest_runs: [{run_id: "run_checked", classification: "audit continued"}], replan: {}});
+  assert.deepEqual(statusNodes(result).map(node => [node.kind, node.title]), [
+    ["deliverable", "Review todo_root"], ["lease", "Claimed by builder"],
+    ["deliverable", "Review todo_parent"], ["evidence", "Checked public evidence"],
+    ["handoff", "Handoff from builder to reviewer"], ["gate", "Review gate"],
+    ["gate_summary", "5 more open user gates not expanded"],
+    ["validation", "Latest compact run: audit continued"], ["repair", "autonomous_replan_obligation"],
+  ]);
+  assert.deepEqual(statusEdges(result).map(edge => edge.relation), [
+    "depends_on", "continues", "validates", "hands_off_to", "continues", "blocks", "blocks",
+    "validates", "audits", "continues", "repairs",
+  ]);
+  assert.deepEqual(statusNodes(result)[5].refs, {gate_ids: ["gate:synthetic-goal:user:1"]});
+  for (const edge of statusEdges(result)) {
+    assert.equal(typeof edge.reason, "string");
+    assert.match(String(edge.edge_id), /^edge_[a-z0-9_]+$/);
   }
 });
