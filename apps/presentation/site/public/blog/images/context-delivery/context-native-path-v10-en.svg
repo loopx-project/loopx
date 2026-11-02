@@ -138,15 +138,15 @@
 
   <rect x="938" y="631" width="364" height="84" rx="8" class="card"/>
   <text x="952" y="653" font-size="12.5" font-weight="700">② Batch-select known pointers (3 facts, 1,362 B)</text>
-  <text x="952" y="675" font-size="10.3" class="emerald mono"><tspan x="952" dy="0">--reference-file "$REC" --select /goal/objective</tspan><tspan x="952" dy="16"> --select /goal/constraints</tspan></text>
+  <text x="952" y="675" font-size="10.3" class="emerald mono"><tspan x="952" dy="0">quota context-read --reference-file "$REC" \</tspan><tspan x="952" dy="16">  --select /goal/objective --select /goal/constraints</tspan></text>
 
   <rect x="938" y="725" width="364" height="84" rx="8" class="card"/>
   <text x="952" y="747" font-size="12.5" font-weight="700">③ Discover unknown subtree (2-level TOC, 1,283 B)</text>
-  <text x="952" y="769" font-size="10.4" class="accent mono"><tspan x="952" dy="0">--reference-file "$REC" --select /providers --list</tspan><tspan x="952" dy="16"> --list-depth 2</tspan></text>
+  <text x="952" y="769" font-size="10.4" class="accent mono"><tspan x="952" dy="0">quota context-read --reference-file "$REC" \</tspan><tspan x="952" dy="16">  --select /providers --list --list-depth 2</tspan></text>
 
   <rect x="938" y="819" width="364" height="102" rx="8" class="card"/>
   <text x="952" y="841" font-size="12.5" font-weight="700"><tspan x="952" dy="0">④ Follow supporting_material_pointer to raw</tspan><tspan x="952" dy="18"> evidence</tspan></text>
-  <text x="952" y="881" font-size="10.1" class="amber mono"><tspan x="952" dy="0">--capture-file projection.json --select</tspan><tspan x="952" dy="16"> "$PTR/requirements/2/agent_review/note"</tspan></text>
+  <text x="952" y="881" font-size="10.1" class="amber mono"><tspan x="952" dy="0">quota context-read --capture-file projection.json \</tspan><tspan x="952" dy="16">  --select "$PTR/requirements/2/agent_review/note"</tspan></text>
 
   <text x="40" y="973" font-size="14.5" font-weight="600" class="muted">Path Invariant: even when delivery.json is mode: "delta", recovery.reference_file points to current required-context.json for direct --select; context_details links to raw projection.json.</text>
 </svg>

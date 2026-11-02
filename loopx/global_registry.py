@@ -278,9 +278,15 @@ def merge_goal_entries(
     incoming: list[dict[str, Any]],
     *,
     allow_route_replacement: bool = False,
+    unchanged_siblings: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Any], list[str], list[str], list[dict[str, Any]]]:
     merged: list[Any] = []
     seen_incoming = {str(goal.get("id")) for goal in incoming if goal.get("id")}
+    sibling_by_id = {
+        str(goal.get("id")): goal
+        for goal in (unchanged_siblings or [])
+        if isinstance(goal, dict) and goal.get("id")
+    }
     actions: list[str] = []
     synced_ids: list[str] = []
     collisions: list[dict[str, Any]] = []
@@ -294,6 +300,15 @@ def merge_goal_entries(
     for item in existing:
         if isinstance(item, dict) and str(item.get("id")) in seen_incoming:
             continue
+        if isinstance(item, dict):
+            sibling = sibling_by_id.get(str(item.get("id") or ""))
+            if (
+                sibling is not None
+                and same_source_registry(item, sibling)
+                and preserve_attention_override({}, {**item, "synced_at": ""})
+                == preserve_attention_override(item, {**sibling, "synced_at": ""})
+            ):
+                item = {**item, "synced_at": sibling["synced_at"]}
         merged.append(item)
 
     for goal in incoming:
@@ -372,6 +387,7 @@ def _merge_global_registry_payload(
     schema_version_fallback: str,
     runtime_root: Path,
     synced_at: str,
+    unchanged_siblings: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[Any], list[str], list[str], list[dict[str, Any]]]:
     """Reduce one global-registry snapshot with sanitized incoming goals."""
 
@@ -382,6 +398,7 @@ def _merge_global_registry_payload(
         existing_goals,
         incoming,
         allow_route_replacement=allow_route_replacement,
+        unchanged_siblings=unchanged_siblings,
     )
     existing_projects = existing.get("projects")
     if existing_projects is None:
@@ -417,6 +434,7 @@ def _sync_global_registry_reduction(
     schema_version_fallback: str,
     runtime_root: Path,
     synced_at: str,
+    unchanged_siblings: list[dict[str, Any]] | None = None,
 ) -> GlobalRegistryReduction:
     payload, merged_goals, actions, synced_ids, collisions = (
         _merge_global_registry_payload(
@@ -427,6 +445,7 @@ def _sync_global_registry_reduction(
             schema_version_fallback=schema_version_fallback,
             runtime_root=runtime_root,
             synced_at=synced_at,
+            unchanged_siblings=unchanged_siblings,
         )
     )
     return GlobalRegistryReduction(
@@ -698,9 +717,10 @@ def _sync_project_registry_to_global_once(
             "actions": [],
         }
 
-    goals = registry_goals(project_registry)
+    all_source_goals = registry_goals(project_registry)
+    goals = all_source_goals
     if goal_id:
-        goals = [goal for goal in goals if str(goal.get("id")) == goal_id]
+        goals = [goal for goal in all_source_goals if str(goal.get("id")) == goal_id]
     if goal_id and not goals:
         raise ValueError(f"goal id not found in source registry: {goal_id}")
 
@@ -711,6 +731,17 @@ def _sync_project_registry_to_global_once(
         )
         for goal in goals
     ]
+    unchanged_siblings = (
+        [
+            sanitize_goal_for_global(
+                sibling, source_registry=registry_path, synced_at=synced_at
+            )
+            for sibling in all_source_goals
+            if str(sibling.get("id")) != goal_id
+        ]
+        if goal_id
+        else []
+    )
     source_projects = project_registry.get("projects")
     if source_projects is None:
         source_projects = []
@@ -736,6 +767,7 @@ def _sync_project_registry_to_global_once(
         "schema_version_fallback": str(project_registry.get("schema_version") or "0.1"),
         "runtime_root": runtime_root,
         "synced_at": synced_at,
+        "unchanged_siblings": unchanged_siblings,
     }
     preview = _sync_global_registry_reduction(
         _load_global_registry(global_path),

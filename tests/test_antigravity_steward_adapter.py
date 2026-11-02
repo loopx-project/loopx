@@ -519,6 +519,45 @@ def _native_clock(monkeypatch, language_server, frames):
     monkeypatch.setattr(provider, "time", SimpleNamespace(monotonic=lambda: language_server["now"], sleep=time.sleep))
 
 
+def test_native_http_progress_reaches_owner_before_final_without_hidden_reasoning(
+    tmp_path, language_server, monkeypatch
+):
+    from loopx.extensions.lark.private_progress import project_progress
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    think = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING",
+             "plannerResponse": {"thinking": "hidden native reasoning"}}
+    command = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_GENERATING",
+               "runCommand": {"commandLine": f"cat {tmp_path}/source.txt --token private-value",
+                              "combinedOutput": "private stdout"}}
+    final = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+             "plannerResponse": {"response": "verified final", "stopReason": "STOP_REASON_STOP_PATTERN"}}
+    frames = [{"at": 1, "steps": [user, think], "status": "CASCADE_RUN_STATUS_RUNNING"},
+              {"at": 2, "steps": [user, think, command], "status": "CASCADE_RUN_STATUS_RUNNING"},
+              {"at": 3, "steps": [user, think, command], "status": "CASCADE_RUN_STATUS_RUNNING"},
+              {"at": 4, "steps": [user, dict(think, status="CORTEX_STEP_STATUS_DONE"),
+                  {**command, "status": "CORTEX_STEP_STATUS_DONE", "runCommand": {**command["runCommand"], "exitCode": 0}}, final],
+               "status": "CASCADE_RUN_STATUS_IDLE"}]
+    _native_clock(monkeypatch, language_server, frames)
+    adapter = adapter_for(tmp_path, runtime_profile="trusted_owner")
+    state, events, views = {}, [], []
+
+    def observed(kind, payload):
+        event = {"event_id": str(len(events)), "kind": kind, "payload": payload}
+        events.append(event)
+        views.append((language_server["now"], project_progress(state, [event], owner_private=True)))
+
+    result = adapter.start_turn("read the source", observed)
+    assert result["message"] == "verified final"
+    assert any(at < 4 and view and "正在思考" in view for at, view in views)
+    assert any(at < 4 and view and "source.txt" in view for at, view in views)
+    assert not any(secret in json.dumps(events) for secret in (
+        "hidden native reasoning", "private-value", "private stdout", str(tmp_path)))
+    command_events = [event for event in events if event["payload"].get("step", {}).get("kind") == "command"]
+    assert [event["payload"]["method"] for event in command_events] == ["item/started", "item/completed"]
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+
+
 def test_default_core_keeps_an_original_progressing_invocation_past_five_minutes(tmp_path, language_server, monkeypatch):
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore

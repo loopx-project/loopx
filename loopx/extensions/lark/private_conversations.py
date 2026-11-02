@@ -1213,7 +1213,9 @@ class LarkPrivateConversations:
         stream = presentation_stream(record)
         events = self.core.controller.store.events_after(session_id or record["session_id"],
             turn_id or record["turn_id"], stream.get("cursor"))
-        text = project_progress(stream, events)
+        text = project_progress(stream, events, owner_private=(
+            record.get("source", {}).get("private_human_message") is True
+            and record.get("event", {}).get("chat_type") == "p2p"))
         if text:
             # Journal the exact presentation the sender freezes, not the raw
             # Core text. The same conversion also recovers older draft proofs.
