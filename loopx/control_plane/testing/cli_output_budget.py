@@ -196,11 +196,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 14_000, "markdown": 600},
-            # Pinned formatter base/head both emit 21,238 chars / 477 lines
-            # with complete vision authoring on the unchanged 36-Todo fixture.
-            # Keep executable evidence/continuation rules; 1,262 chars of
-            # headroom covers presentation variation, not extra Todo growth.
-            "crowded": {"json": 22_500, "markdown": 600},
+            # With an existing vision, the same 36-Todo fixture grows from
+            # 18,955 to 25,319 chars when inheriting the complete Stride contract
+            # (+6,364, identical to the no-vision route). Preserve the 22,500
+            # failure; 26,000 leaves 681 chars without relaxing collection,
+            # line or other-route limits. The earlier formatter observation
+            # was 21,238 chars / 477 lines, before these semantic changes.
+            "crowded": {"json": 26_000, "markdown": 600},
             "multi_agent": {"json": 15_500, "markdown": 600},
         },
         max_lines={

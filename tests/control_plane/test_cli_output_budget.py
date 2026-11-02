@@ -1299,13 +1299,18 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
 
 
 @pytest.mark.parametrize("surface", ["quota_should_run", "loopx_turn_plan"])
-def test_native_stride_projection_rejects_each_missing_decision_field(tmp_path: Path, surface: str) -> None:
+@pytest.mark.parametrize("include_agent_vision", [False, True])
+def test_native_stride_projection_rejects_each_missing_decision_field(
+    tmp_path: Path, surface: str, include_agent_vision: bool,
+) -> None:
     import copy
 
     from loopx.control_plane.testing.cli_output_differential import _turn_projection_migration
 
     with _stable_budget_fixture_root(tmp_path / "stride-projection") as stable_root:
-        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[1])
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root, SCENARIOS[1], include_agent_vision=include_agent_vision,
+        )
         import_fixture_authority(registry_path, GOAL_ID)
         command = _surface_commands(
             project=project, runtime=runtime, registry_path=registry_path,
