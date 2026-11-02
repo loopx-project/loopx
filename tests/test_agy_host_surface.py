@@ -327,7 +327,7 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         "runtime_profile": "antigravity_app"
     }
 
-    from loopx.agy_goal_mode import build_antigravity_backoff_schedule_action
+    from loopx.agy_goal_mode import cron_for_interval_minutes
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_context import validate_quota_command_context_request
     from loopx.control_plane.scheduler.state import (
@@ -432,19 +432,10 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
     assert "--surface" in ack_cli_args
     assert "antigravity_app" in ack_cli_args
 
-    schedule_action = build_antigravity_backoff_schedule_action(
-        hint,
-        current_task_id="task-1750",
-        prompt="LoopX managed heartbeat bootstrap v2",
+    assert (
+        cron_for_interval_minutes(app_hint["recommended_interval_minutes"])
+        == "*/3 * * * *"
     )
-    assert schedule_action["action"] == "update_current_heartbeat_rrule"
-    assert schedule_action["cron_expression"] == "*/3 * * * *"
-    assert schedule_action["manage_task_kill"] == {
-        "Action": "kill",
-        "TaskId": "task-1750",
-    }
-    assert schedule_action["schedule_call"]["CronExpression"] == "*/3 * * * *"
-    assert "--antigravity_app" in schedule_action["ack_cli_args"]
 
     # Verify quota scheduler follow-up parser defaults to antigravity_app + app_automation state key
     followup_args = build_parser().parse_args(

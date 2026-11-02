@@ -229,16 +229,21 @@ def _antigravity_provider_args(
     conversation_id: str | None,
     runtime_root: str | None,
     registry: str | None = None,
+    resolve_local_executable: bool = True,
 ) -> list[str]:
+    python_bin = sys.executable if resolve_local_executable else "python3"
+    resolved_cli_bin = (
+        (shutil.which(cli_bin) or cli_bin) if resolve_local_executable else cli_bin
+    )
     args = [
-        sys.executable,
+        python_bin,
         "-E",
         "-P",
         "-m",
         "loopx.agy_goal_mode.host_runtime",
         operation,
         "--cli-bin",
-        shutil.which(cli_bin) or cli_bin,
+        resolved_cli_bin,
         "--goal-id",
         goal_id or "<goal-id>",
         "--agent-id",
@@ -261,90 +266,6 @@ def cron_for_interval_minutes(interval_minutes: int) -> str:
     return f"*/{minutes} * * * *"
 
 
-def build_antigravity_backoff_schedule_action(
-    scheduler_hint: dict[str, Any],
-    *,
-    current_task_id: str | None = None,
-    prompt: str = "",
-) -> dict[str, Any]:
-    """Translate ``scheduler_hint.app_automation`` stateful backoff into Antigravity ``schedule`` / ``manage_task`` actions."""
-    app = (
-        scheduler_hint.get("app_automation")
-        if isinstance(scheduler_hint.get("app_automation"), dict)
-        else {}
-    )
-    backoff = (
-        app.get("stateful_backoff")
-        if isinstance(app.get("stateful_backoff"), dict)
-        else {}
-    )
-    host_action = str(app.get("host_action") or "none")
-    if host_action == "pause_or_delete_current_heartbeat":
-        return {
-            "action": "pause_or_delete_current_heartbeat",
-            "apply_needed": bool(app.get("host_action_required", True)),
-            "ack_needed": False,
-            "manage_task_kill": (
-                {"Action": "kill", "TaskId": current_task_id}
-                if current_task_id
-                else None
-            ),
-            "schedule_call": None,
-            "ack_cli_args": None,
-            "failure_cli_args": None,
-        }
-    apply_needed = bool(backoff.get("apply_needed"))
-    ack_needed = bool(backoff.get("ack_needed"))
-    interval = int(
-        app.get("recommended_interval_minutes")
-        or backoff.get("current_interval_minutes")
-        or 3
-    )
-    cron_expr = cron_for_interval_minutes(interval)
-    ack_hint = app.get("ack_hint") if isinstance(app.get("ack_hint"), dict) else {}
-    failure_hint = (
-        app.get("failure_hint") if isinstance(app.get("failure_hint"), dict) else {}
-    )
-    return {
-        "action": (
-            "update_current_heartbeat_rrule"
-            if apply_needed
-            else "ack_current_heartbeat_rrule"
-            if ack_needed
-            else "noop"
-        ),
-        "apply_needed": apply_needed,
-        "ack_needed": ack_needed,
-        "recommended_interval_minutes": interval,
-        "recommended_rrule": app.get("recommended_rrule"),
-        "cron_expression": cron_expr,
-        "manage_task_kill": (
-            {"Action": "kill", "TaskId": current_task_id}
-            if apply_needed and current_task_id
-            else None
-        ),
-        "schedule_call": (
-            {
-                "CronExpression": cron_expr,
-                "IsDaemon": True,
-                "Prompt": prompt,
-            }
-            if apply_needed
-            else None
-        ),
-        "ack_cli_args": (
-            list(ack_hint.get("cli_args", []))
-            if isinstance(ack_hint.get("cli_args"), list)
-            else None
-        ),
-        "failure_cli_args": (
-            list(failure_hint.get("cli_args", []))
-            if isinstance(failure_hint.get("cli_args"), list)
-            else None
-        ),
-    }
-
-
 def build_antigravity_hooks_template(
     *,
     cli_bin: str = "loopx",
@@ -353,6 +274,7 @@ def build_antigravity_hooks_template(
     runtime_root: str | None = None,
     conversation_id: str | None = None,
     registry: str | None = None,
+    resolve_local_executable: bool = True,
 ) -> dict[str, Any]:
     """Native Stop hook; installation alone never binds an arbitrary chat."""
     conversation_id = conversation_id or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
@@ -364,6 +286,7 @@ def build_antigravity_hooks_template(
         conversation_id=conversation_id,
         runtime_root=runtime_root,
         registry=registry,
+        resolve_local_executable=resolve_local_executable,
     )
     return {
         "loopx": {
@@ -455,6 +378,7 @@ def antigravity_app_activation_extras(
         goal_id=goal_id,
         agent_id=agent_id,
         runtime_root=runtime_root,
+        resolve_local_executable=False,
     )
     wake_prompt = sidecar_template["sidecar"]["loopx-heartbeat"]["bootstrap_prompt"]
     return {
