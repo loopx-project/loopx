@@ -154,6 +154,7 @@ def register_quota_command(
             "codex_app_ssh",
             "codex_cli",
             "trae_app",
+            "antigravity_app",
             "generic_cli",
             "claude_code",
             "kiro_cli",
