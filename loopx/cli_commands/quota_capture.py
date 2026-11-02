@@ -137,6 +137,29 @@ def _context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]
     return fields
 
 
+def _context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep address structure without retransmitting unused scalar prose.
+
+    The TS owner validates pointers; selected values still come from the fully
+    digest-checked original. Initial navigation and discovery need real scalar
+    values and do not use this adapter. JSON null takes four bytes, so replacing
+    only strings longer than two characters cannot increase request bytes.
+    Iteration preserves the original JSON reader's supported nesting depth.
+    """
+    result: dict[str, Any] = {}
+    pending: list[tuple[Any, Any]] = [(payload, result)]
+    while pending:
+        source, target = pending.pop()
+        for key, value in source.items() if isinstance(source, dict) else enumerate(source):
+            if isinstance(value, (dict, list)):
+                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                target[key] = child
+                pending.append((value, child))
+            else:
+                target[key] = None if isinstance(value, str) and len(value) > 2 else value
+    return result
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None) -> dict[str, Any]:
@@ -231,7 +254,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
 
             depth_options = {"list_depth": list_depth} if list_depth is not None else {}
             selection_options = {"initial_read": True} if initial_read else {"select": selectors}
-            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields, **selection_options, **depth_options)
+            planning_context = payload if initial_read or list_fields else _context_selection_transport(payload)
+            plan = _turn_envelope_result("context_select", context=planning_context, list_fields=list_fields, **selection_options, **depth_options)
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload
