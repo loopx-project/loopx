@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..control_plane.work_items.local_lease_record import TaskLeaseError
 from ..control_plane.work_items.task_lease import (
     inspect_task_lease,
@@ -40,16 +42,14 @@ def render_task_lease_markdown(payload: dict[str, object]) -> str:
         lines.append(f"- error_code: `{payload.get('error_code')}`")
     inspection = payload.get("inspection")
     if isinstance(inspection, dict):
-        import shlex
-        lines.append(f"- inspect current state: `{shlex.join(['loopx', *inspection['cli_args']])}`")
+        lines.append(f"- inspect current state: `{shlex.join([loopx_cli_argv()[0], *inspection['cli_args']])}`")
         lines.append(f"- {inspection['reason']}")
     recovery = payload.get("recovery")
     if isinstance(recovery, dict) and payload.get("error_code") == "canonical_authority_required":
         lines.append(f"- recovery: `{recovery['action']}`")
         lines.append(f"- backup_required: `{recovery['backup_required']}`")
     elif isinstance(recovery, dict):
-        import shlex
-        lines.append(f"- repair: `{shlex.join(['loopx', *recovery['cli_args']])}`")
+        lines.append(f"- repair: `{shlex.join([loopx_cli_argv()[0], *recovery['cli_args']])}`")
         lines.append(f"- supply: `{', '.join(recovery['requires_flags']) or 'none'}`")
         lines.append(f"- remove: `{', '.join(recovery['remove_flags']) or 'none'}`")
         lines.append(f"- {recovery['reason']}")
@@ -256,7 +256,7 @@ def handle_task_lease_command(
         # Presentation only: retain every native refusal and explicit proof.
         # An exact read is useful for both grammar and semantic failures; it
         # neither chooses another owner nor retries a mutation with new proof.
-        inspection_args = [f"--registry={registry_path}", "--format", "json"]
+        inspection_args = [*loopx_cli_argv()[1:], f"--registry={registry_path}", "--format", "json"]
         if runtime_root_arg is not None:
             inspection_args.append(f"--runtime-root={runtime_root_arg}")
         inspection_args.extend(["task-lease", "inspect", f"--goal-id={args.goal_id}", f"--todo-id={args.todo_id}"])

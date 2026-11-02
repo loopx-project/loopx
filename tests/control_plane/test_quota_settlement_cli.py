@@ -2244,14 +2244,20 @@ def test_blocked_wait_transports_complete_lifecycle_facts_without_prose(
 
 
 def test_settlement_read_snapshot_is_explicit_and_preserves_complete_facts() -> None:
-    from loopx.control_plane.effect_runtime import EffectRuntimeRejected, effect_runtime_result
+    from loopx.control_plane.effect_runtime import (
+        MAX_REQUEST_BYTES,
+        EffectRuntimeRejected,
+        effect_runtime_result,
+    )
 
+    note_unit = "Complete source. "
     request = {"schema_version": "loopx_quota_blocked_wait_request_v0",
                "todos": [{"todo_id": TODO_ID, "role": "agent", "status": "open",
-                          "task_class": "advancement_task", "note": "Complete source. " * 150_000}],
+                          "task_class": "advancement_task",
+                          "note": note_unit * (MAX_REQUEST_BYTES // len(note_unit.encode()) + 1)}],
                "todo_id": TODO_ID, "observed_at": "2026-01-01T00:00:00Z",
                "allow_turn_settlement_retry": True}
-    assert len(json.dumps(request).encode()) > 2 * 1024 * 1024
+    assert len(json.dumps(request).encode()) > MAX_REQUEST_BYTES
     with pytest.raises(EffectRuntimeRejected, match="request is oversized"):
         effect_runtime_result("quota.settlement.read", request)
     result = effect_runtime_result("quota.settlement.read", request, large_local_snapshot=True)

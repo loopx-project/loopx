@@ -1157,11 +1157,14 @@ def build_explore_result_projection(
         _edge_view(event) for event in _fold_by_result_id(scoped, event_kind=EVENT_KIND_EDGE)
     ]
     edges = [*edges, *_materialized_parent_edges(nodes, edges)]
-    findings = sorted(
-        (_finding_view(event) for event in folded_findings),
-        key=lambda item: chronology_key(item["last_updated_at"]),
+    # Whole-second source clocks can tie. Folding retains creation order, so
+    # break equal chronology keys with the existing latest-append ordinal
+    # before bounding any consumer; do not rewrite the stored evidence clock.
+    findings = [_finding_view(event) for event in sorted(
+        folded_findings,
+        key=lambda item: (chronology_key(item["last_updated_at"]), item["_recorded_order"]),
         reverse=True,
-    )
+    )]
 
     nodes_by_status: dict[str, int] = {status: 0 for status in sorted(NODE_STATUSES)}
     for node in nodes:
