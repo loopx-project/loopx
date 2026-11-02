@@ -234,6 +234,10 @@ export function initialContextReadPointers(context: JsonObject): string[] {
     for (const field of ["ok", "status", "reason", "error", "recovery", "revision", "provider_revision", "source_authority",
       "decision_read_from_provider", "legacy_fallback_used", "graph_enabled", "harness_enabled", "boundary", "authority_read"])
       include(...source, "content", field);
+    // The capability already bounds this agenda. Keep pending returns and
+    // incomplete observations visible without expanding full request bodies.
+    include(...source, "content", "read_complete");
+    include(...source, "content", "unfinished_delegations");
     include(...source, "content", "current", "revision");
     include(...source, "content", "current", "instruction");
     include(...source, "content", "outcome_context");

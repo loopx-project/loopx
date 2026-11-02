@@ -18,6 +18,7 @@ from loopx.extensions.lark.presentation import explore_results
 from loopx.extensions.runtime import install_extension
 from loopx.global_registry import sync_project_registry_to_global
 from loopx.state_refresh import render_state_refresh_markdown
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 from tests.control_plane.test_refresh_checkpoint_recovery import first_refresh as first_refresh
 from tests.control_plane.test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, REPO_ROOT, TODO_ID, TURN_ID,
@@ -123,7 +124,7 @@ def test_stdout_recovery_requires_confirmation_to_resume_external_delivery(
         rc = cli.main(["--format", output, *argv])
         stdout = capsys.readouterr().out
         assert rc == expected_rc, stdout
-        return json.loads(stdout) if output == "json" else stdout
+        return read_cli_policy_payload(stdout, returncode=rc) if output == "json" else stdout
 
     if baseline:
         run([*prefix, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,

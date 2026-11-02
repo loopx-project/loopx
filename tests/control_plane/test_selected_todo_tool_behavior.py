@@ -12,6 +12,7 @@ from loopx.control_plane.testing.doubao_model_behavior_actor import (
     DoubaoActorTransportError,
 )
 from loopx.control_plane.testing.model_tool_behavior import (
+    QuotaToolContext,
     DoubaoExecToolClient,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     scripted_exec_tool_response as _tool_response,
@@ -165,7 +166,7 @@ def test_real_tool_loop_executes_action_selected_by_real_quota(
     assert "todo_portfolio001" not in first["messages"][1]["content"]
     assert "use selection_command when required" in first["messages"][1]["content"]
 
-    quota_result = json.loads(requests[2]["messages"][-1]["content"])
+    quota_result = QuotaToolContext.from_output(requests[2]["messages"][-1]["content"]).packet
     assert quota_result["selected_todo"]["todo_id"] == "todo_portfolio001"
     assert "fixture/selected-lane.json" in quota_result["selected_todo"]["text"]
 
@@ -209,11 +210,11 @@ def test_model_resumes_in_flight_todo_on_the_next_heartbeat(tmp_path: Path) -> N
         "quota_action_selection",
         "selected_action",
     ]
-    first_quota_result = json.loads(requests[1]["messages"][-1]["content"])
+    first_quota_result = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
     assert first_quota_result["interaction_contract"]["cli_channel"][
         "selection_required"
     ] is True
-    quota_result = json.loads(requests[2]["messages"][-1]["content"])
+    quota_result = QuotaToolContext.from_output(requests[2]["messages"][-1]["content"]).packet
     assert quota_result["selected_todo"]["todo_id"] == "todo_portfolio001"
     assert quota_result["selected_todo"]["selection_binding"] == (
         "heartbeat_receipt"
@@ -248,7 +249,7 @@ def test_model_can_bind_eligible_todo_outside_non_exhaustive_suggestions(
                 '"${LOOPX_TURN:?}"', "turn-004"
             )
         elif call_index == 2:
-            first_quota = json.loads(requests[1]["messages"][-1]["content"])
+            first_quota = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
             selection = first_quota["interaction_contract"]["cli_channel"][
                 "selection_command"
             ]
@@ -285,7 +286,7 @@ def test_model_can_bind_eligible_todo_outside_non_exhaustive_suggestions(
         "quota_action_selection",
         "selected_action",
     ]
-    first_quota = json.loads(requests[1]["messages"][-1]["content"])
+    first_quota = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
     suggested_ids = {
         item["todo_id"]
         for item in first_quota["action_portfolio"]["suggested_actions"]
@@ -301,9 +302,9 @@ def test_model_can_bind_eligible_todo_outside_non_exhaustive_suggestions(
         "candidate_scope": "current_authoritative_eligible_todos",
         "suggestions_exhaustive": False,
     }
-    discovery = json.loads(requests[2]["messages"][-1]["content"])
+    discovery = QuotaToolContext.from_output(requests[2]["messages"][-1]["content"]).packet
     assert "todo_portfolio001" in json.dumps(discovery, sort_keys=True)
-    selected_quota = json.loads(requests[3]["messages"][-1]["content"])
+    selected_quota = QuotaToolContext.from_output(requests[3]["messages"][-1]["content"]).packet
     assert selected_quota["selected_todo"]["todo_id"] == "todo_portfolio001"
     assert selected_quota["selected_todo"]["selection_binding"] == (
         "heartbeat_receipt"
@@ -349,7 +350,7 @@ def test_stale_done_primary_exposes_successor_without_preselecting_it_for_model(
     assert receipt["selected_todo_id"] == SELECTED_TODO_TOOL_FIXTURE_TODO_ID
     initial_prompt = json.dumps(requests[0]["messages"], ensure_ascii=False)
     assert SELECTED_TODO_TOOL_FIXTURE_TODO_ID not in initial_prompt
-    first_quota = json.loads(requests[1]["messages"][-1]["content"])
+    first_quota = QuotaToolContext.from_output(requests[1]["messages"][-1]["content"]).packet
     assert first_quota["action_portfolio"]["primary"]["todo_id"] == (
         STALE_DONE_PRIMARY_TODO_ID
     )

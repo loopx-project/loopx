@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from loopx.control_plane.testing.model_tool_behavior import (
+    QuotaToolContext,
     QUOTA_FIRST_TOOL_INSTRUCTION,
     ScriptedAssistantAction,
     ScriptedDoubaoExecTransport,
@@ -31,7 +32,7 @@ def _latest_quota_packet(request: Mapping[str, Any]) -> dict[str, Any]:
         if message.get("role") != "tool":
             continue
         try:
-            payload = json.loads(message["content"])
+            payload = QuotaToolContext.from_output(message["content"]).packet
         except (json.JSONDecodeError, TypeError):
             continue
         if isinstance(payload, dict) and "interaction_contract" in payload:
@@ -46,7 +47,7 @@ def _writeback_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
         if message["role"] != "tool":
             continue
         try:
-            result = json.loads(message["content"])
+            result = QuotaToolContext.from_output(message["content"]).packet
         except json.JSONDecodeError:
             continue
         if isinstance(result, dict) and result.get("settlement_plan") and result.get("next_cli_actions"):
@@ -95,7 +96,7 @@ def _latest_reentry_transition(request: Mapping[str, Any]) -> dict[str, Any]:
         if message.get("role") != "tool":
             continue
         try:
-            payload = json.loads(message["content"])
+            payload = QuotaToolContext.from_output(message["content"]).packet
         except (json.JSONDecodeError, TypeError):
             continue
         transition = (
@@ -209,7 +210,7 @@ def test_real_tool_loop_settles_final_todo_after_spend(
         TERMINAL_SETTLEMENT_FIXTURE_TODO_ID
     )
     if ordinary_completion:
-        results = [json.loads(message["content"]) for message in transport.requests[-1]["messages"]
+        results = [QuotaToolContext.from_output(message["content"]).packet for message in transport.requests[-1]["messages"]
                    if message["role"] == "tool" and message["content"].startswith("{")]
         completed = next(result for result in results if result.get("status") == "done")
         assert completed["settlement_progress"]["next_step"] == "durable_writeback"
@@ -386,7 +387,7 @@ def test_terminal_native_draft_preserves_proof_and_authority(
 
     def writeback(request, *, omit_scope=False):
         if correct_input and not omit_scope:
-            rejected = json.loads(request["messages"][-1]["content"])
+            rejected = QuotaToolContext.from_output(request["messages"][-1]["content"]).packet
             assert rejected["ok"] is False and rejected["appended"] is False
             assert rejected["error_code"] == "progress_observation_invalid_arguments"
             assert "--progress-coverage-scope-id" in rejected["error"]
@@ -446,7 +447,7 @@ def test_terminal_corrects_rejected_vision_within_original_budget(tmp_path: Path
 
     def draft(request, *, corrected=False):
         if corrected:
-            rejected = json.loads(request["messages"][-1]["content"])
+            rejected = QuotaToolContext.from_output(request["messages"][-1]["content"]).packet
             assert rejected["ok"] is False and rejected["appended"] is False
             assert authority_files() == before_rejection
         vision = {

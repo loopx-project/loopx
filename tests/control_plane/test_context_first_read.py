@@ -119,6 +119,42 @@ def test_initial_read_keeps_settlement_obligations_and_optional_routes(tmp_path,
     assert exact["selected_pointers"] == ["/goal_boundary"]
 
 
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_initial_read_preserves_unfinished_requests_and_incomplete_observation(tmp_path, decision, unavailable):
+    summary = {
+        "count_unit": "request", "incoming_count": 2, "outgoing_count": 1,
+        "items": [] if unavailable else [
+            {"request_id": "incoming", "direction": "incoming", "decision": "adopt",
+             "todo_ids": ["todo_finished"], "step": "review_request_work"},
+            {"request_id": "outgoing", "direction": "outgoing", "step": "await_peer_result"},
+            {"request_id": "return", "direction": "incoming", "step": "await_return_delivery",
+             "returns": [{"status": "queued", "consumed": False}]},
+        ],
+        "omitted_count": 3 if unavailable else 0,
+        "scan_complete": not unavailable, "unavailable_count": int(unavailable),
+        "instruction": "A done Todo or a queued return does not complete the request.",
+        "read_command": "read the full current request before acting",
+    }
+    sources = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    sources.append({"source": "turn_start_capability_hook", "kind": "operator_inbox",
+        "content": {"ok": not unavailable, "read_complete": False, "unfinished_delegations": summary,
+            "items": [{"brief": {"context": "FULL-REQUEST-DETAIL-ON-DEMAND"}}]}})
+    before = json.loads(json.dumps(decision))
+    view = native_context_capture_view(decision, tmp_path)
+    page, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/3/content/"
+    assert values[prefix + "unfinished_delegations"] == summary
+    assert values[prefix + "read_complete"] is False
+    assert values[prefix + "ok"] is not unavailable
+    assert "FULL-REQUEST-DETAIL-ON-DEMAND" not in page["content"]
+    # The starting view does not consume, complete or rewrite any request.
+    assert decision == before == json.loads(Path(view["recovery"]["path"]).read_bytes())
+    detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", select=[prefix + "items"],
+        offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert detail["ok"] and "FULL-REQUEST-DETAIL-ON-DEMAND" in detail["content"]
+
+
 def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
     plan = {"schema_version": "future", "new_stop": "Stop before every new effect."}
     decision["interaction_contract"]["cli_channel"]["settlement_plan"] = plan

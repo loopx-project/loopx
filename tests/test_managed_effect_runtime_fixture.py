@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -12,6 +14,44 @@ import pytest
 
 from managed_effect_runtime_fixture import capture_disposable_effect_runtimes, stop_disposable_effect_runtimes
 from loopx.control_plane import effect_runtime
+
+
+def test_capture_continues_after_a_runtime_directory_disappears(tmp_path, monkeypatch):
+    disappearing = tmp_path / "retiring"
+    removed = disappearing / "loopx-effect-runtime-gone" / "runtime-gone.json"
+    retained = tmp_path / "remaining" / "loopx-effect-runtime-live" / "runtime-live.json"
+    for locator in (removed, retained):
+        locator.parent.mkdir(parents=True)
+        locator.write_text("synthetic locator", encoding="utf-8")
+    scandir = os.scandir
+    removals = []
+
+    def retire_before_scan(path):
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path) == disappearing:
+            if not removals:
+                shutil.rmtree(disappearing)
+                removals.append(disappearing)
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", retire_before_scan)
+    captured = capture_disposable_effect_runtimes(tmp_path)
+    assert removals == [disappearing]
+    assert captured == [(retained, "synthetic locator")]
+    assert retained.read_text(encoding="utf-8") == "synthetic locator"
+
+
+def test_capture_preserves_unexpected_directory_read_errors(tmp_path, monkeypatch):
+    scandir = os.scandir
+
+    def unreadable(path):
+        if isinstance(path, (str, bytes, os.PathLike)) and Path(path) == tmp_path:
+            raise OSError(errno.EIO, "synthetic directory read failure")
+        return scandir(path)
+
+    with monkeypatch.context() as failing:
+        failing.setattr(os, "scandir", unreadable)
+        with pytest.raises(OSError, match="synthetic directory read failure"):
+            capture_disposable_effect_runtimes(tmp_path)
 
 
 @pytest.fixture

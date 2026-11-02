@@ -108,6 +108,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/capabilities/trajectory_input_usage.ts",
   "control_plane/capabilities/trajectory_tool_context.ts",
   "control_plane/collaboration/chat_mode.ts",
+  "control_plane/collaboration/conversation_binding.ts",
   "control_plane/collaboration/delegation.ts",
   "control_plane/collaboration/delegation_result_use.ts",
   "control_plane/collaboration/goal_instance_lifecycle.ts",

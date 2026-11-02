@@ -26,10 +26,6 @@ from loopx.control_plane.quota.settlement_validation import (
 )
 from loopx.control_plane.quota.settlement import render_settlement_progress_markdown
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from loopx.control_plane.turn_driver.decision_capture import (
-    read_context_capture_file,
-    read_context_read_reference,
-)
 from loopx.control_plane.scheduler.state import (
     APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
     load_scheduler_state,
@@ -41,6 +37,7 @@ from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_source_fixture,
     read_fixture_todos,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOAL_ID = "settlement-cli-fixture"
@@ -281,16 +278,7 @@ def _run_generated_cli(
         text=True,
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
     )
-    payload = json.loads(result.stdout)
-    if payload.get("mode") in {"full", "delta"} and isinstance(payload.get("recovery"), dict):
-        # Execute the generated default-on command unchanged. These policy
-        # oracles inspect its current immutable capture without another guard,
-        # admission or retention claim; native reader coverage lives separately.
-        recovery = payload["recovery"]
-        if "reference_file" in recovery:
-            recovery = read_context_read_reference(recovery["reference_file"])[1]
-        _, _, payload = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)
-    return result.returncode, payload
+    return result.returncode, read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
 
 def _spend_run_count(runtime: Path) -> int:
@@ -6877,13 +6865,14 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
     assert replay.get("unsettled_host_turn_recovery") is None
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
-    tmp_path: Path,
+    tmp_path: Path, provider: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
 
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     unbound_rc, unbound = _run_cli(
         registry_path,
         runtime,
@@ -6920,11 +6909,42 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
     assert identity["replan_obligation_id"] == obligation_id
     assert identity["turn_instance_id"].startswith("guided-start:")
     cli_channel = bound["interaction_contract"]["cli_channel"]
-    assert cli_channel["settlement_plan"]["identity"] == identity
-    assert len(cli_channel["next_cli_actions"]) == 2
-    for command in cli_channel["next_cli_actions"]:
+    assert cli_channel["settlement_identity"] == identity
+    assert cli_channel["settlement_read_ref"] == "$.replan_action_packet.writeback"
+    assert "settlement_plan" not in cli_channel
+    # Native admission defers the plan; consume its exact captured reader
+    # without another guard or a second guided-start Turn.
+    reader_argv = shlex.split(bound["replan_action_packet"]["writeback"])
+    source_paths = (
+        registry_path,
+        project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md",
+        runtime / "goals" / GOAL_ID / "runs/index.jsonl",
+        Path(reader_argv[reader_argv.index("--decision-file") + 1]),
+    )
+    original_files = {path: path.read_bytes() for path in source_paths}
+    reader = subprocess.run(
+        reader_argv,
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert reader.returncode == 0, (reader.stdout, reader.stderr)
+    writeback = json.loads(reader.stdout)
+    assert writeback["obligation_id"] == obligation_id
+    plan = writeback["writeback"]["settlement_plan"]
+    assert plan["identity"] == identity
+    assert [step["kind"] for step in plan["ordered_steps"]] == [
+        "validation", "durable_writeback", "quota_spend",
+    ]
+    commands = [step["command_template"] for step in plan["ordered_steps"][1:]]
+    for command in commands:
         assert f"--replan-obligation-id {obligation_id}" in command
         assert f"--turn-instance-id {identity['turn_instance_id']}" in command
+    assert "--source visible-goal" in commands[1]
+    assert _spend_run_count(runtime) == 0
+    assert {path: path.read_bytes() for path in source_paths} == original_files
 
 
 def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(

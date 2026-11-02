@@ -146,6 +146,90 @@ test("an ambiguous expired external admission never dispatches another send", as
   } finally { await f.close(); }
 });
 
+const deadlineCases = [
+  {label: "offset before", now: "2026-01-02T04:00:00+01:00", deadline: "2026-01-02T03:30:00+00:00", due: false},
+  {label: "offset due", now: "2026-01-02T03:30:00Z", deadline: "2026-01-02T04:00:00+01:00", due: true},
+  {label: "microsecond before", now: "2026-01-02T03:30:00Z", deadline: "2026-01-02T03:30:00.000001+00:00", due: false},
+  {label: "fraction precision before", now: "2026-01-02T03:30:00.1Z", deadline: "2026-01-02T03:30:00.100001+00:00", due: false},
+  {label: "equal instant", now: "2026-01-02T03:30:00+01:00", deadline: "2026-01-02T02:30:00Z", due: true},
+  {label: "offset seconds due", now: "2026-01-02T03:30:00.123457Z", deadline: "2026-01-02T04:30:30.123456+01:00:30", due: true},
+];
+
+for (const clock of deadlineCases) {
+  for (const exact of [false, true]) {
+    test(`return retry clock uses instants: ${clock.label} (${exact})`, async () => {
+      const f = await fixture(exact, true);
+      try {
+        await f.put(f.statePath, {status: "retry_pending", retry_at: clock.deadline});
+        const bytes = await readFile(f.statePath);
+        const scanned = await f.run("scan", {now: clock.now,
+          candidates: [{request_id: id, result_key: "conclusion"}]});
+        assert.deepEqual(scanned.candidates, clock.due ? [{request_id: id, result_key: "conclusion"}] : []);
+        assert.equal(scanned.unavailable_count, 0);
+        assert.deepEqual(await readFile(f.statePath), bytes);
+        assert.equal((await f.run("prepare", {now: clock.now})).action, clock.due ? "send" : "skip");
+        if (!clock.due) assert.deepEqual(await readFile(f.statePath), bytes);
+      } finally { await f.close(); }
+    });
+  }
+
+  test(`return admission clock retains the original attempt: ${clock.label}`, async () => {
+    const f = await fixture(true, true);
+    try {
+      await f.put(f.statePath, {status: "admitted", goal_ref: ref, attempt,
+        admission: {token: "prior-send", prior_status: "verification_required", expires_at: clock.deadline}});
+      const bytes = await readFile(f.statePath);
+      const scanned = await f.run("scan", {now: clock.now,
+        candidates: [{request_id: id, result_key: "conclusion"}]});
+      assert.deepEqual(scanned.candidates, clock.due ? [{request_id: id, result_key: "conclusion"}] : []);
+      assert.deepEqual(await readFile(f.statePath), bytes);
+      const plan = await f.run("prepare", {now: clock.now});
+      assert.equal(plan.action, clock.due ? "verify" : "skip");
+      if (clock.due) {
+        assert.deepEqual(plan.attempt, attempt);
+        await f.run("settle", {...plan, now: clock.now, outcome: {kind: "verified",
+          verification: {verification_performed: true, reply_verified: true}}});
+        assert.equal((await f.state()).status, "delivered");
+        assert.equal((await f.state()).provider_receipt, attempt.provider_receipt);
+      } else {
+        assert.deepEqual(await readFile(f.statePath), bytes);
+      }
+    } finally { await f.close(); }
+  });
+}
+
+for (const field of ["retry_at", "expires_at"]) {
+  for (const malformed of ["not-a-clock", "2026-02-30T03:04:05Z", 42, {}]) {
+    test(`return clock damage is unavailable without rewriting ${field}: ${JSON.stringify(malformed)}`, async () => {
+      const f = await fixture(true, true);
+      try {
+        await f.put(f.statePath, field === "retry_at"
+          ? {status: "retry_pending", retry_at: malformed}
+          : {status: "admitted", admission: {expires_at: malformed}, attempt});
+        const bytes = await readFile(f.statePath);
+        const scanned = await f.run("scan", {candidates: [{request_id: id, result_key: "conclusion"}]});
+        assert.deepEqual(scanned.candidates, []);
+        assert.equal(scanned.unavailable_count, 1);
+        assert.equal((await f.run("prepare")).action, "skip");
+        assert.deepEqual(await readFile(f.statePath), bytes);
+      } finally { await f.close(); }
+    });
+  }
+}
+
+test("return clock admission rechecks a due scan after another writer defers it", async () => {
+  const f = await fixture(true, true);
+  try {
+    const candidates = [{request_id: id, result_key: "conclusion"}];
+    await f.put(f.statePath, {status: "retry_pending", retry_at: "2026-01-02T03:00:00Z"});
+    assert.deepEqual((await f.run("scan", {candidates})).candidates, candidates);
+    await f.put(f.statePath, {status: "retry_pending", retry_at: "2026-01-02T04:04:05.123457+01:00"});
+    const bytes = await readFile(f.statePath);
+    assert.equal((await f.run("prepare")).action, "skip");
+    assert.deepEqual(await readFile(f.statePath), bytes);
+  } finally { await f.close(); }
+});
+
 test("invalid transaction addresses and phases refuse before changing evidence", async () => {
   const f = await fixture(false);
   try {
