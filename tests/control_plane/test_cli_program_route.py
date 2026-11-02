@@ -1,7 +1,6 @@
 """An explicitly selected runtime must execute its own generated control loop."""
 from __future__ import annotations
 
-import json
 import os
 import shlex
 import subprocess
@@ -10,6 +9,8 @@ from pathlib import Path
 
 import pytest
 import test_quota_authority_settlement_journey as journey
+
+from codex_checkpoint_fixture import read_cli_policy_payload
 
 cli = journey.cli
 
@@ -54,7 +55,7 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
     def run(argv, *, expected_code=0):
         result = subprocess.run(argv, cwd=project, capture_output=True, text=True, timeout=60)
         assert result.returncode == expected_code, (result.returncode, result.stdout, result.stderr)
-        return json.loads(result.stdout)
+        return read_cli_policy_payload(result.stdout, returncode=result.returncode)
 
     prefix = [program, "--cli-bin", program, "--format", "json", "--registry", str(registry),
               "--runtime-root", str(runtime)]
@@ -71,12 +72,12 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
         "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID,
         "--todo-id", "todo_not_projected",
     ], expected_code=1)
-    assert rejected["state"] == "quota_action_selection_rejected"
+    assert rejected["error_code"] == "quota_action_selection_rejected"
     assert not rejected["ok"] and not rejected["should_run"]
     assert rejected["heartbeat_receipt"]["status"] == "not_committed"
     assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 0
     assert cli._spend_run_count(runtime) == 0
-    [recovery] = rejected["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    [recovery] = rejected["next_cli_actions"]
     recovery_args = shlex.split(recovery)
     # Execute the returned recovery unchanged; a lost route must hit the
     # poisoned global executable instead of being repaired by the test.
