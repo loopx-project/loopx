@@ -96,7 +96,8 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("delivery", ["host_envelope", pytest.param("native_files",
     marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
-def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider, delivery):
+@pytest.mark.parametrize("partial", [False, True], ids=["unanswered", "partial"])
+def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider, delivery, partial):
     from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
     from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
@@ -125,6 +126,10 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
     acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Continue the linked work", registry=registry)
     from loopx.control_plane.collaboration.links import link
     link(root, registry, "research", "worker", receipt["request_id"], ["todo_artifact"], [])
+    remaining_work = {"summary": "Validate the packaged repair", "resume_when": "The isolated package is available"}
+    if partial:
+        report(root, "research", "worker", receipt["request_id"], "conclusion", "The implementation is ready.",
+            remaining_work=remaining_work, registry=registry)
     before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
     if delivery == "native_files":
         from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
@@ -168,6 +173,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
         row = content["unfinished_delegations"]["items"][0]
         assert row["request_id"] == receipt["request_id"]
         assert row["todo_ids"] == ["todo_artifact"] and row["step"] == "review_request_work"
+        assert row.get("remaining_work") == (remaining_work if partial else None)
         assert any("manager-inbox read" in item["command"] for item in required_reads)
         assert "Continue the linked work" not in json.dumps(content)
     assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before
