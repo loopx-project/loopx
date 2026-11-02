@@ -797,12 +797,46 @@ ANTIGRAVITY_SIDECAR_MARKER_NAME = ".loopx-managed-sidecar.json"
 ANTIGRAVITY_SIDECAR_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_sidecar_v0"
 
 
+def _is_loopx_structured_heartbeat_args(existing_args: list[Any]) -> bool:
+    """Return True only when `args` is a policy-only cron entry or a canonical LoopX heartbeat argv."""
+    if not existing_args:
+        return True
+    tokens = [str(item) for item in existing_args]
+    if not tokens[0].startswith("CRON_TZ="):
+        return False
+    if len(tokens) == 1:
+        return True
+    for idx in range(1, len(tokens) - 2):
+        if tokens[idx : idx + 3] == [
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            "sidecar-tick",
+        ]:
+            return True
+    if (
+        len(tokens) >= 4
+        and tokens[1] == "agentapi"
+        and tokens[2] == "new-conversation"
+        and any(
+            token.startswith("LoopX periodic quota-gated heartbeat for goal ")
+            for token in tokens[3:]
+        )
+    ):
+        return True
+    return False
+
+
 def _is_loopx_compatible_sidecar(
     existing_data: dict[str, Any],
     marker_payload: dict[str, Any] | None = None,
 ) -> bool:
     """Return True when an existing sidecar.json belongs to LoopX or is a user policy overlay on LoopX's heartbeat sidecar."""
-    if isinstance(marker_payload, dict) and existing_data == marker_payload.get("sidecar"):
+    if (
+        isinstance(marker_payload, dict)
+        and marker_payload.get("schema_version")
+        == ANTIGRAVITY_SIDECAR_MARKER_SCHEMA_VERSION
+        and existing_data == marker_payload.get("sidecar")
+    ):
         return True
     if any(key in existing_data for key in ("command", "script", "entrypoint")):
         return False
@@ -813,14 +847,8 @@ def _is_loopx_compatible_sidecar(
     if existing_args is not None:
         if not isinstance(existing_args, list):
             return False
-        if len(existing_args) > 1:
-            joined = " ".join(str(item) for item in existing_args)
-            if "loopx" not in joined and "host_runtime" not in joined:
-                return False
-        elif len(existing_args) == 1:
-            first = str(existing_args[0])
-            if not first.startswith("CRON_TZ=") and "loopx" not in first:
-                return False
+        if not _is_loopx_structured_heartbeat_args(existing_args):
+            return False
     return True
 
 

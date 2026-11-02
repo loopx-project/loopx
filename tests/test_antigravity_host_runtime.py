@@ -718,23 +718,89 @@ def test_bind_session_and_bind_agent_thread_preserve_sidecar_policy_and_reject_f
     )
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. Existing user-owned non-LoopX sidecar is rejected without modification
-    foreign_sidecar = {
-        "builtin": "schedule",
-        "args": ["CRON_TZ=UTC */5 * * * *", "/usr/local/bin/custom-user-job"],
-        "enabled": True,
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
+    # 1. Existing user-owned non-LoopX sidecars (including script names/paths mentioning
+    #    `loopx` or `host_runtime` without a managed marker) are rejected via CLI with exit 1
+    for foreign_args in (
+        ["CRON_TZ=UTC */5 * * * *", "/usr/local/bin/custom-user-job"],
+        ["CRON_TZ=UTC */5 * * * *", "python export_notes.py"],
+        ["CRON_TZ=UTC */5 * * * *", "python export_loopx_notes.py"],
+        ["CRON_TZ=UTC */5 * * * *", "python /opt/host_runtime/export_notes.py"],
+    ):
+        foreign_sidecar = {
+            "builtin": "schedule",
+            "args": list(foreign_args),
+            "enabled": True,
+        }
+        raw_before = json.dumps(foreign_sidecar, indent=2)
+        sidecar_path.write_text(raw_before)
+        marker_path = sidecar_path.parent / runtime.ANTIGRAVITY_SIDECAR_MARKER_NAME
+        if marker_path.exists():
+            marker_path.unlink()
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.agy_goal_mode.host_runtime",
+                "bind-session",
+                "--goal-id",
+                "work",
+                "--agent-id",
+                "worker",
+                "--conversation-id",
+                "cid-1",
+                "--agy-home",
+                str(agy_cfg),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 1
+        conflict_res = json.loads(proc.stdout)
+        assert conflict_res["ok"] is False
+        assert conflict_res["error_kind"] == "sidecar_ownership_conflict"
+        assert conflict_res["sidecar_status"] == "skipped_user_owned_sidecar_entry"
+        assert sidecar_path.read_text() == raw_before
+        assert not marker_path.exists()
+
+    # 1b. Policy-only overlay (no `args` field, user-chosen id/model, disabled, empty grants)
+    #     is accepted by CLI `bind-session` and preserves all user policy fields
+    policy_only_overlay = {
+        "id": "policy-only-id",
+        "enabled": False,
+        "model": "gemini-2.5-pro-policy",
+        "agent_permissions": {"access_grants": []},
     }
-    sidecar_path.write_text(json.dumps(foreign_sidecar, indent=2))
-    conflict_res = runtime.bind_antigravity_session_configs(
-        goal_id="work",
-        agent_id="worker",
-        conversation_id="cid-1",
-        agy_home=str(agy_cfg),
+    sidecar_path.write_text(json.dumps(policy_only_overlay, indent=2))
+    proc_overlay = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            "bind-session",
+            "--goal-id",
+            "work",
+            "--agent-id",
+            "worker",
+            "--conversation-id",
+            "cid-overlay",
+            "--agy-home",
+            str(agy_cfg),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    assert conflict_res["ok"] is False
-    assert conflict_res["error_kind"] == "sidecar_ownership_conflict"
-    assert conflict_res["sidecar_status"] == "skipped_user_owned_sidecar_entry"
-    assert json.loads(sidecar_path.read_text()) == foreign_sidecar
+    assert proc_overlay.returncode == 0
+    overlay_res = json.loads(proc_overlay.stdout)
+    assert overlay_res["ok"] is True
+    overlay_written = json.loads(sidecar_path.read_text())
+    assert overlay_written["id"] == "policy-only-id"
+    assert overlay_written["enabled"] is False
+    assert overlay_written["model"] == "gemini-2.5-pro-policy"
+    assert overlay_written["agent_permissions"] == {"access_grants": []}
+    assert "cid-overlay" in overlay_written["args"]
 
     # 2. Existing LoopX heartbeat sidecar with user policy overrides (enabled=False,
     #    custom id, custom model, empty access_grants, custom cron) preserves all
