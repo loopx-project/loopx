@@ -907,9 +907,26 @@ def _turn_projection_migration(
         required = {f"{control}.{key}" for key in (
             "schema_version", "strategy_version", "reference_context_id",
             "reference_obligation_id", "required_fields", "rule",
-            "minimal_example.axes.work_slice.plan", "minimal_example.axes.route_distance.plan",
-            "minimal_example.axes.validation_scope.plan", "minimal_example.next_probe.minimum_evidence",
+            "minimal_example.schema_version", "minimal_example.strategy_version",
+            "minimal_example.reference_context_id", "minimal_example.reference_obligation_id",
+            "minimal_example.basis", "minimal_example.action",
+            *[f"minimal_example.axes.{axis}.{field}"
+              for axis in ("work_slice", "route_distance", "validation_scope")
+              for field in ("plan", "reason")],
+            *[f"minimal_example.next_probe.{field}" for field in (
+                "scope", "prediction", "adoption_criterion", "cost_bound", "minimum_evidence",
+            )],
         )}
+        # Optional review blocks are required in full once projected. Presence
+        # of representative leaves cannot qualify a truncated decision example.
+        for review, fields in (
+            ("previous_review", ("reference_decision_ref", "adoption", "information_gain",
+                                 "goal_gain", "evidence_refs", "lesson")),
+            ("explore_review", ("revision", "disposition", "considered_refs", "reason")),
+        ):
+            prefix = f"{control}.minimal_example.{review}"
+            if any(path == prefix or path.startswith(prefix + ".") for path in new_paths):
+                required.update(f"{prefix}.{field}" for field in fields)
         added = new_paths - old_paths
         if (base.get("format") == candidate.get("format") == "json"
             and control not in old_paths and required <= new_paths and old_paths <= new_paths
