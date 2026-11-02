@@ -191,6 +191,9 @@ def handle_slash_commands_command(
             agy_home=getattr(args, "agy_home", None),
             pi_project=args.pi_project,
             pi_scope=args.pi_scope,
+            goal_id=getattr(args, "goal_id", None),
+            agent_id=getattr(args, "agent_id", None),
+            runtime_root=getattr(args, "runtime_root", None),
         )
         print_payload(payload, output_format(args), render_slash_command_install_markdown)
         return 0 if payload.get("ok") is True else 1

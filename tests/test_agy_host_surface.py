@@ -642,3 +642,125 @@ def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
         )
         is None
     )
+
+
+def test_antigravity_hooks_continuation_gate_ready_user_gate_quota0_and_unbound_advisory(
+    tmp_path: Path,
+) -> None:
+    """Verify落盘 hooks.json continuation gate executes actual quota should-run argv
+    across ready, user_gate, and quota0 conditions, rejecting continuation when blocked,
+    and remaining explicitly unavailable/advisory when installed without a goal."""
+    import json
+    from examples.control_plane.quota_plan_fixtures import (
+        SCOPED_AGENT_ID,
+        write_cli_fixture,
+    )
+    from loopx.control_plane.testing.canary_harness import run_json_cli
+
+    # 1. Write an isolated CLI fixture with multiple canonical goals
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+
+    # 2. Modify throttled-half in the fixture to have allowed_slots=0
+    reg_data = json.loads(registry_path.read_text(encoding="utf-8"))
+    for g in reg_data["goals"]:
+        if g["id"] == "throttled-half":
+            g["quota"]["allowed_slots"] = 0
+            break
+    registry_path.write_text(json.dumps(reg_data, indent=2), encoding="utf-8")
+
+    # 3. Test bound hooks installation for ready condition (full-speed goal)
+    custom_agy_home_ready = tmp_path / "agy-ready"
+    install_slash_commands(
+        execute=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home_ready),
+        with_agy_hooks=True,
+        goal_id="full-speed",
+        agent_id=SCOPED_AGENT_ID,
+        runtime_root=str(runtime_root),
+    )
+    hooks_file = custom_agy_home_ready / "hooks.json"
+    assert hooks_file.is_file()
+    ready_entry = json.loads(hooks_file.read_text(encoding="utf-8"))["hooks"]["loopx"]
+    assert ready_entry["status"] == "bound"
+    assert ready_entry["require_json_field_true"] == "should_run"
+    assert "--goal-id" in ready_entry["args"]
+    assert "full-speed" in ready_entry["args"]
+
+    # Execute the落盘 argv directly: runnable goal must evaluate should_run=True (continuation permitted)
+    argv = list(ready_entry["args"]) + ["--turn-instance-id", "2026-11-02T05:00:00Z"]
+    res_ready = run_json_cli(
+        *argv,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert res_ready.get("should_run") is True
+
+    # 4. Test bound hooks installation for user_gate condition (needs-operator goal)
+    custom_agy_home_gate = tmp_path / "agy-gate"
+    install_slash_commands(
+        execute=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home_gate),
+        with_agy_hooks=True,
+        goal_id="needs-operator",
+        agent_id=SCOPED_AGENT_ID,
+        runtime_root=str(runtime_root),
+    )
+    gate_entry = json.loads((custom_agy_home_gate / "hooks.json").read_text(encoding="utf-8"))["hooks"]["loopx"]
+    argv_gate = list(gate_entry["args"]) + ["--turn-instance-id", "2026-11-02T05:00:01Z"]
+    res_gate = run_json_cli(
+        *argv_gate,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # User gate must refuse continuation (should_run=False)
+    assert res_gate.get("should_run") is False
+    assert res_gate.get("decision") in {"operator_gate", "skip", "unsettled_host_turn_recovery"}
+
+    # 5. Test bound hooks installation for quota0 condition (allowed_slots=0)
+    custom_agy_home_q0 = tmp_path / "agy-q0"
+    install_slash_commands(
+        execute=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home_q0),
+        with_agy_hooks=True,
+        goal_id="throttled-half",
+        agent_id=SCOPED_AGENT_ID,
+        runtime_root=str(runtime_root),
+    )
+    q0_entry = json.loads((custom_agy_home_q0 / "hooks.json").read_text(encoding="utf-8"))["hooks"]["loopx"]
+    argv_q0 = list(q0_entry["args"]) + ["--turn-instance-id", "2026-11-02T05:00:02Z"]
+    res_q0 = run_json_cli(
+        *argv_q0,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    # Quota 0 must refuse continuation (should_run=False)
+    assert res_q0.get("should_run") is False
+    assert res_q0.get("decision") in {"throttled_skip", "skip"}
+
+    # 6. Test unbound hooks installation without project/goal context
+    custom_agy_home_unbound = tmp_path / "agy-unbound"
+    empty_dir = tmp_path / "empty-dir"
+    empty_dir.mkdir(parents=True, exist_ok=True)
+    install_slash_commands(
+        execute=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home_unbound),
+        with_agy_hooks=True,
+        pi_project=str(empty_dir),
+    )
+    unbound_file = custom_agy_home_unbound / "hooks.json"
+    assert unbound_file.is_file()
+    unbound_entry = json.loads(unbound_file.read_text(encoding="utf-8"))["hooks"]["loopx"]
+    assert unbound_entry["status"] == "unavailable"
+    assert unbound_entry["mode"] == "advisory"
+    assert unbound_entry["advisory"] is True
+    assert unbound_entry.get("require_json_field_true") is None

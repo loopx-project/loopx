@@ -917,6 +917,9 @@ def _merge_managed_hooks_json(
     cli_bin: str,
     uninstall: bool,
     execute: bool,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
 ) -> str:
     """Add or remove the ``loopx`` continuation gate in Antigravity ``hooks.json``."""
     marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
@@ -963,7 +966,12 @@ def _merge_managed_hooks_json(
 
     if existing is not None and not loopx_owned:
         return "skipped_user_owned_hooks_entry"
-    entry = build_antigravity_hooks_template(cli_bin=cli_bin)[MANAGED_MCP_KEY]
+    entry = build_antigravity_hooks_template(
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+    )[MANAGED_MCP_KEY]
     if not execute:
         return "unchanged" if existing == entry else "would_write"
     if existing == entry:
@@ -1003,6 +1011,9 @@ def install_slash_commands(
     pi_project: str | None = None,
     pi_scope: str = "project",
     pi_user_home: str | None = None,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
 ) -> dict[str, Any]:
     facade_specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=True)
     canonical_specs = [spec for spec in facade_specs if "alias_for" not in spec]
@@ -1293,12 +1304,27 @@ def install_slash_commands(
         )
 
     if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_hooks:
+        effective_goal_id = goal_id
+        effective_agent_id = agent_id
+        if not effective_goal_id:
+            try:
+                from .goal_mode_context import resolve_goal_context
+
+                resolved_ctx = resolve_goal_context(pi_project_root)
+                if resolved_ctx and resolved_ctx.get("goal_id"):
+                    effective_goal_id = resolved_ctx["goal_id"]
+                    effective_agent_id = effective_agent_id or resolved_ctx.get("agent_id")
+            except Exception:
+                pass
         agy_hooks_path = agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
         hooks_status = _merge_managed_hooks_json(
             config_path=agy_hooks_path,
             cli_bin=cli_bin,
             uninstall=uninstall,
             execute=execute,
+            goal_id=effective_goal_id,
+            agent_id=effective_agent_id,
+            runtime_root=runtime_root,
         )
         installed.append(
             {
@@ -1308,6 +1334,9 @@ def install_slash_commands(
                 "command": "loopx",
                 "path": str(agy_hooks_path),
                 "status": hooks_status,
+                "goal_id": effective_goal_id,
+                "agent_id": effective_agent_id,
+                "gate_status": "bound" if effective_goal_id else "unavailable",
                 "invoke_as": [],
             }
         )

@@ -319,15 +319,16 @@ def build_antigravity_hooks_template(
 ) -> dict[str, Any]:
     """Build a public-safe ``hooks.json`` continuation gate entry for Antigravity 2.0.
 
-    When bound to a concrete ``goal_id``, invokes ``quota should-run --goal-id ...``;
-    when installed globally without a goal binding, invokes ``quota plan --runtime-profile antigravity_app``
-    so the command succeeds without ``--goal-id``.
+    When bound to a concrete ``goal_id``, invokes ``quota should-run --goal-id ...``
+    and requires ``should_run=true``;
+    when installed without a goal binding, marks the gate as explicitly advisory
+    and unavailable rather than substituting an unbounded health check.
     """
-    args: list[str] = ["--format", "json"]
-    if runtime_root:
-        args.extend(["--runtime-root", runtime_root])
     bound_goal = bool(goal_id and goal_id != "<goal-id>")
     if bound_goal:
+        args: list[str] = ["--format", "json"]
+        if runtime_root:
+            args.extend(["--runtime-root", runtime_root])
         args.extend(
             [
                 "quota",
@@ -340,25 +341,27 @@ def build_antigravity_hooks_template(
         )
         if agent_id:
             args.extend(["--agent-id", str(agent_id)])
-        require_field = "should_run"
-    else:
-        args.extend(
-            [
-                "quota",
-                "plan",
-                "--runtime-profile",
-                "antigravity_app",
-            ]
-        )
-        require_field = "ok"
+        return {
+            "loopx": {
+                "schema_version": "loopx_antigravity_hooks_gate_v0",
+                "event": "before_continuation",
+                "status": "bound",
+                "goal_id": str(goal_id),
+                "agent_id": str(agent_id) if agent_id else None,
+                "command": cli_bin,
+                "args": args,
+                "require_json_field_true": "should_run",
+                "on_waiting_external": "suspend_via_schedule_timer",
+            }
+        }
     return {
         "loopx": {
             "schema_version": "loopx_antigravity_hooks_gate_v0",
             "event": "before_continuation",
-            "command": cli_bin,
-            "args": args,
-            "require_json_field_true": require_field,
-            "on_waiting_external": "suspend_via_schedule_timer",
+            "status": "unavailable",
+            "mode": "advisory",
+            "advisory": True,
+            "reason": "continuation gate unavailable without a bound goal_id",
         }
     }
 
