@@ -1640,13 +1640,16 @@ def test_quota_cli_codex_app_profile_is_explicit_and_applicable(
                 "loopx-turn-fixture",
                 "--agent-id",
                 "codex-fixture",
+                # Inspect the raw scheduler contract, independent of native presentation.
+                "--context-delivery",
+                "off",
                 *profile_args,
             ]
         )
 
     payload = json.loads(output.getvalue())
-    hint = payload["scheduler_hint"]
     assert exit_code == 0, payload
+    hint = payload["scheduler_hint"]
     assert "execution_context" not in hint
     assert "execution_phase" not in hint
     assert hint["codex_app"]["applicability"] == "applicable"
