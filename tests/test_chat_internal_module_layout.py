@@ -10,6 +10,8 @@ from loopx.chat.event_cache import ChatEventCache
 from loopx.chat.monitor_actions import ChatMonitorActionMixin
 from loopx.chat.todo_actions import ChatTodoActionMixin
 from loopx.chat.todo_detail import TodoDetailRequestMixin
+from loopx.chat.usage_statistics_api import UsageStatisticsRequestMixin
+from loopx.chat.workspace_directory import workspace_goal_directory
 
 
 def test_chat_internal_helpers_load_below_the_public_chat_namespace() -> None:
@@ -19,6 +21,8 @@ def test_chat_internal_helpers_load_below_the_public_chat_namespace() -> None:
     assert ChatMonitorActionMixin.__module__ == "loopx.chat.monitor_actions"
     assert ChatTodoActionMixin.__module__ == "loopx.chat.todo_actions"
     assert TodoDetailRequestMixin.__module__ == "loopx.chat.todo_detail"
+    assert UsageStatisticsRequestMixin.__module__ == "loopx.chat.usage_statistics_api"
+    assert workspace_goal_directory.__module__ == "loopx.chat.workspace_directory"
 
 
 def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
@@ -27,5 +31,7 @@ def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
         "loopx.chat_monitor_actions",
         "loopx.chat_todo_actions",
         "loopx.chat_todo_detail",
+        "loopx.chat_usage_statistics_api",
+        "loopx.chat_workspace_directory",
     ):
         assert importlib.util.find_spec(old_module) is None

@@ -6,11 +6,11 @@ from typing import Any
 import hashlib
 import json
 
-from .chat import redact_local_paths
-from .control_plane.goals.activation import goal_activation_state
-from .control_plane.status.collection import registry_activation_revision
-from .registry import registry_goals
-from .control_plane.presentation.goal_metadata import goal_parent_fields
+from ..chat import redact_local_paths
+from ..control_plane.goals.activation import goal_activation_state
+from ..control_plane.status.collection import registry_activation_revision
+from ..registry import registry_goals
+from ..control_plane.presentation.goal_metadata import goal_parent_fields
 
 
 def workspace_goal_directory(
@@ -35,7 +35,7 @@ def workspace_goal_directory(
         )
     links = registry.get("goal_source_links", [])
     if links:
-        from .control_plane.status.goal_source import linked_source_goals
+        from ..control_plane.status.goal_source import linked_source_goals
         goals.extend(goal for goal in linked_source_goals(registry)
                      if not selected_goal_id or goal["id"] == selected_goal_id)
     revision = registry_activation_revision(registry)
