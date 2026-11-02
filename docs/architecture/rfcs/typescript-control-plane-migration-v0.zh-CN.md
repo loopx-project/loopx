@@ -844,8 +844,9 @@ promotion 的 Goal 继续使用旧 writer。这是有边界的 T1 闭合，不�
 
 已闭合的前置项：`todos/public_update.ts` 在同一锁内快照上组合 authoring scope、
 external-wait 拓扑和 Monitor/field 规划。公开 Python writer 不再逐个调用这些
-leaf RPC，也不推导 Monitor 等待基线。`update_source.py` 只输送完整、紧凑的
-active/archive 事实，不使用受展示条数限制的 inventory。局部拓扑修改必须验证
+leaf RPC，也不推导 Monitor 等待基线。更正（2026-11-02）：`update_source.py`
+已无剩余调用方，现已删除；规划仍要求完整、紧凑的 active/archive 事实，
+不使用受展示条数限制的 inventory。局部拓扑修改必须验证
 保留的等待条件；纯文案修改保留原 fence，不重新设置等待。显式清除条件后，仍可
 修改原来的拓扑。锁内 completion proof 先于纯规划检查，因此 proof 已过期时，
 优先返回该失败而非其他非法字段诊断；两种失败均不写入。
