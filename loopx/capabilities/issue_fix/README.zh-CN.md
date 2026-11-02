@@ -769,6 +769,11 @@ repo-relative source ref。当前 checkout 证据保持最高权威；memory/exp
 [OpenViking pilot handoff](docs/openviking-pilot-handoff.md) 展示真实 pilot 如何应用该证据
 顺序，同时不引入仓库特判控制路径。
 
+可选的[仓库上下文实验](../../../examples/repository-context-pilot/README.md)在固定版本的
+公开 issue 源码上，对照 Rune 的无模型 MCP 检索与直接搜索。经过源码核验的 advisory
+证据复用同一输入，并通过 `workflow-plan` 读回。这是可复现实验，不启用 Rune、
+不改变默认上下文，也不代表生产 provider 已验收。
+
 两者既接受 `--repository-memory-json <compact-search-read-result.json>`，也可以调用已配置的
 context provider。这里采用明确分层：LoopX 通用 context-provider module 负责 OpenViking
 CLI/版本/服务 preflight、有上限的显式 `search -> read`、超时与结果 cap、fail-open，
