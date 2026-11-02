@@ -281,7 +281,7 @@ def _external_manager_request(root: Path, registry: Path):
         "adopt",
         "Work in A.",
         registry=registry,
-        caller_goal_ref=receipt["goal_ref"],
+        caller_goal_ref=receipt.get("goal_ref"),
     )
     report(
         root,
@@ -291,9 +291,87 @@ def _external_manager_request(root: Path, registry: Path):
         "conclusion",
         "A completed its bounded review.",
         registry=registry,
-        caller_goal_ref=receipt["goal_ref"],
+        caller_goal_ref=receipt.get("goal_ref"),
     )
     return store, session, receipt
+
+
+@pytest.mark.parametrize("exact", [False, True])
+@pytest.mark.parametrize("external", [False, True], ids=["private", "external"])
+def test_original_receipt_conflict_readback_recovers_the_same_result(tmp_path, exact, external):
+    if exact:
+        registry = _create_source_registry(tmp_path)
+    else:
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"goals": [{
+            "id": "delivery", "repo": str(tmp_path), "status": "active",
+            "coordination": {"registered_agents": ["builder", "reviewer"]},
+        }]}), encoding="utf-8")
+    if external:
+        store, session, receipt = _external_manager_request(tmp_path, registry)
+    else:
+        store, session, receipt = _manager_request(tmp_path, registry)
+        acknowledge(tmp_path, "delivery", "builder", receipt["request_id"], "adopt",
+                    "Checking the public input.", registry=registry,
+                    caller_goal_ref=receipt.get("goal_ref"))
+        report(tmp_path, "delivery", "builder", receipt["request_id"], "conclusion",
+               "A completed its bounded review.", registry=registry,
+               caller_goal_ref=receipt.get("goal_ref"))
+    rid = receipt["request_id"]
+    original = store.turn_for_client(session["session_id"], "owner-request")
+    store.append_message(session["session_id"], role="user", text=original["message"],
+                         turn_id=original["turn_id"], message_id="original-owner-request")
+    original_response = original["response"]
+    store.update_turn(session["session_id"], original["turn_id"], response={
+        **original_response, "context_handoff_receipt": {
+            **receipt, "request_id": "f" * 64, "agent_id": "reviewer",
+        },
+    })
+    result_path = _root(tmp_path) / "replies" / rid / "conclusion.json"
+    result_bytes = result_path.read_bytes()
+    sends = []
+
+    def sender(route, source_session, source_turn, text):
+        sends.append((route, source_session, source_turn, text))
+        return {"reply_verified": True, "idempotency_key": "sha256:" + "a" * 64}
+
+    admitted_at = datetime(2026, 9, 28, tzinfo=timezone.utc)
+    assert drain(tmp_path, registry, store, sender, now=admitted_at) == (0 if exact else 1)
+    assert sends == []
+    state_path = result_path.with_name("conclusion.delivery.json")
+    if exact:
+        assert not state_path.exists(), "an unproved exact request grants no receipt mutation"
+    else:
+        state = json.loads(state_path.read_text())
+        assert state["status"] == "retry_pending"
+        assert state["error"] == "initial_delivery_receipt_unavailable"
+        before = state_path.read_bytes()
+        assert drain(tmp_path, registry, store, sender,
+                     now=admitted_at + timedelta(seconds=1)) == 0
+        assert state_path.read_bytes() == before
+    assert not any(m.get("origin") == "manager_followup"
+                   for m in store.session_snapshot(session["session_id"])["messages"])
+    # Only this disposable host fixture restores its original committed source.
+    store.update_turn(session["session_id"], original["turn_id"], response=original_response)
+    if not exact and not external:
+        snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+        request = next(m["collaboration"] for m in snapshot["messages"]
+                       if m.get("collaboration", {}).get("request_id") == rid)
+        assert request["returns"][0]["error"] == "initial_delivery_receipt_unavailable"
+    assert drain(tmp_path, registry, store, sender,
+                 now=admitted_at + timedelta(seconds=11)) == 1
+    assert len(sends) == int(external)
+    if external:
+        assert sends[0][0]["request_id"] == rid
+        assert sends[0][1]["session_id"] == session["session_id"]
+        assert sends[0][2]["turn_id"] == original["turn_id"]
+    assert result_path.read_bytes() == result_bytes
+    assert drain(tmp_path, registry, store, sender,
+                 now=admitted_at + timedelta(days=1)) == 0
+    messages = [m for m in _http_snapshot(tmp_path, registry, session["session_id"])["messages"]
+                if m.get("origin") == "manager_followup"]
+    assert len(messages) == 1 and messages[0]["turn_id"] == original["turn_id"]
+    assert messages[0]["return_delivery"]["status"] == "delivered"
 
 
 def test_recreated_goal_cannot_observe_or_mutate_prior_instance_requests(

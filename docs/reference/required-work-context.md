@@ -1,5 +1,9 @@
 # Required work context
 
+For a task example, supported setup, recovery and evaluation plan, start with the
+[context-delivery guide](../guides/context-delivery.md). This reference remains
+the owner of current delivery semantics.
+
 This page specifies current delivery behavior. The
 [unified-contract RFC](../architecture/rfcs/controller-executor-unified-contract-v0.md)
 proposes one full/delta/detail/recovery pipeline across entrypoints. Its
@@ -693,6 +697,9 @@ not restart stopped Goals, alter quota/leases or qualify installed Desktop,
 all-Goal adoption, actual solver costs or outcome benefit.
 
 ## 中文
+
+任务示例、受支持设置、恢复与验收方案见[上下文交付指南](../guides/context-delivery.zh-CN.md)。
+当前交付语义仍由本 reference 定义。
 
 本页规定当前交付行为。[统一契约提案](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 拟让所有入口复用 full/delta/detail/recovery 流程。controller 编写的工作说明必须

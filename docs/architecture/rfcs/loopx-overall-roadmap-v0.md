@@ -221,6 +221,19 @@ larger cold/output bytes and an open standalone numeric hash boundary. Preserve
 that counterevidence and the original outcome/full-cost gate; a working saved-file
 delta or once-only receipt does not establish long-horizon benefit.
 
+The [context-delivery guide](../../guides/context-delivery.md) explains current
+behavior and a minimum two-model comparison. Deliver documentation first;
+within C1/C2/C9, qualify a declared DeepSeek model and a declared strong model
+against the original quota path under matched conditions and complete costs.
+Then qualify reversible adoption and release of a supported profile before a
+broader default recommendation. The reference's existing Codex-scoped default
+remains current behavior, not proof of model benefit. Mixed or regressed model results retain scoped opt-in
+or explicit limitations. Retire only named replaced producers/consumers after
+actual migration, historical-reader compatibility and rollback evidence; keep
+full snapshots, integrity, authority, identity, stops and recovery. A guide,
+Codex-only adapter or shorter output does not pass the model/default gate.
+This sequence neither blocks independent authorized work nor starts experiments.
+
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,
 replan/result authoring, executor exchange, benchmark reuse, packaged App

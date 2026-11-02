@@ -294,7 +294,9 @@ function admitReturnLifetime(command: ReturnCommand, operation: string): void {
     initial_delivery: facts.initial_delivery,
   });
   if (decision.kind === "reject" || decision.kind === "omit") {
-    throw new EffectRuntimeRequestError("return Goal lifetime admission rejected");
+    throw new EffectRuntimeRequestError("return Goal lifetime admission rejected",
+      decision.kind === "reject" && decision.code === "initial_delivery_unproved"
+        ? "initial_delivery_receipt_unavailable" : "invalid_request");
   }
 }
 
@@ -396,6 +398,9 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
     if (requireJsonObject(command.facts.route, "source route").kind === "peer") return returnResponse();
     admitReturnLifetime(command, "original_return_admit");
   } catch (error) {
+    if (error instanceof EffectRuntimeRequestError && error.code === "initial_delivery_receipt_unavailable") {
+      return sourceFailure(command, state, error.code);
+    }
     if (error instanceof EffectRuntimeRequestError || error instanceof SyntaxError
         || (error as NodeJS.ErrnoException).code) return sourceFailure(command, state);
     throw error;

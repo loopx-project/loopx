@@ -101,7 +101,7 @@ export type CollaborationReadback = {
   };
   read_status: string;
   decision: string;
-  returns: { phase: string; status: string; request_revision?: number | null }[];
+  returns: { phase: string; status: string; error?: string | null; request_revision?: number | null }[];
 };
 
 export type ChatRouteCandidate = {
