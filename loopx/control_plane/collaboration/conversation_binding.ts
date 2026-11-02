@@ -1,6 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {isDeepStrictEqual} from "node:util";
 import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
@@ -611,7 +612,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       && Number.isFinite(created) && created >= start && created <= end
       && Number.isSafeInteger(proof.start_step_index) && Number(proof.start_step_index) >= 0
       && Number.isSafeInteger(proof.total_steps) && Number(proof.total_steps) > Number(proof.start_step_index) + 1
-      && [proof.input_sha256, proof.answer_sha256].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
+      && [proof.input_sha256, proof.answer_sha256].every(value => typeof value === "string" && BARE_SHA256_PATTERN.test(value))
       && response?.schema_version === "loopx_chat_agent_response_v0"
       && typeof response.message === "string" && response.message.trim().length > 0
       && (adopted === null || adopted.turn_id === failed.turn_id
