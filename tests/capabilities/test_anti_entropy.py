@@ -29,6 +29,11 @@ def test_catalog_registration() -> None:
     assert record["status"] == "experimental"
     assert record["default_enabled"] is False
     assert "delete-first" in record["real_world_anchor"] or "refactoring" in record["real_world_anchor"]
+    tool = next(t for t in record["agent_tools"] if t["name"] == "anti_entropy_inspect")
+    assert "not" in tool["purpose"] and "host-registered" in tool["purpose"]
+    boundaries = " ".join(record["boundaries"])
+    assert "retirement_basis" in boundaries
+    assert "availability, not activation" in boundaries
 
 
 def _make_workspace(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -1242,3 +1247,180 @@ def test_typescript_computed_member_migrated_and_harmless_strings_pass(
     receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
     assert receipt.verdict == "passed", f"findings: {receipt.findings}"
     assert receipt.retired_symbols == ("old_api",)
+
+
+_ESCAPED_CALLER_FORMS = (
+    r"old\u005fapi",
+    r"old\u{5f}api",
+    r"old\x5fapi",
+    r"old\137api",
+    r"old\_api",
+)
+
+
+@pytest.mark.parametrize("escaped_name", _ESCAPED_CALLER_FORMS)
+def test_typescript_escaped_static_computed_member_blocks_retirement(
+    tmp_path: Path, escaped_name: str
+) -> None:
+    """An escaped static member name is the same executable reference."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_escaped_member",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api['{escaped_name}']();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize("escaped_name", _ESCAPED_CALLER_FORMS)
+def test_typescript_escaped_bare_identifier_blocks_retirement(
+    tmp_path: Path, escaped_name: str
+) -> None:
+    """Escapes in a bare identifier reference are equally executable."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_escaped_identifier",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import { old_api } from './service.mjs';\n"
+                f"const value = {escaped_name}();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    (r"old\u12api", r"old\u{110000}api", r"old\x5papi"),
+)
+def test_typescript_malformed_escape_requires_insufficient_evidence(
+    tmp_path: Path, malformed: str
+) -> None:
+    """A malformed executable escape cannot be certified as absent evidence."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_malformed_escape",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api['{malformed}']();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE004") for f in receipt.findings)
+    assert "old_api" not in receipt.retired_symbols
+
+
+def test_typescript_escaped_member_migrated_and_harmless_text_pass(
+    tmp_path: Path,
+) -> None:
+    """Migrated escaped calls and ordinary escaped strings stay non-blocking."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_escaped_harmless",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                r"const value = api['new\u005fapi']();" + "\n"
+                r"const message = 'old\u005fapi has been removed';" + "\n"
+                r"const names = ['old\u005fapi'];" + "\n"
+                "export function allNames() { return ['old_api']; }\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+def test_typescript_escaped_call_real_cli_exit_code(tmp_path: Path) -> None:
+    """The real CLI rejects the escaped caller with a non-zero exit code."""
+    import subprocess
+    import sys
+
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    workspace = _make_workspace(
+        tmp_path / "ws_cli_escaped",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                r"const value = api['old\u005fapi']();" + "\n"
+            ),
+        },
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "anti-entropy",
+            "verify",
+            "--diff-file",
+            "-",
+            "--basis-json",
+            '{"target_symbols": ["old_api"]}',
+            "--workspace",
+            str(workspace),
+            "--format",
+            "json",
+        ],
+        input=diff.encode("utf-8"),
+        capture_output=True,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr

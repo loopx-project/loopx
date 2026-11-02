@@ -308,17 +308,203 @@ def _extract_ts_defs(lines: list[str]) -> set[str]:
 
 _TS_IDENTIFIER_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*\Z")
 _TS_QUOTE_CHARS = ("\"", "'", chr(96))
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_JS_SIMPLE_ESCAPES = {
+    "\"": "\"",
+    "'": "'",
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "0": "\0",
+}
+_JS_ESCAPE_HINT_RE = re.compile(r"\\(?:u\{?[0-9a-fA-F]|x[0-9a-fA-F]|[0-7]|[_$A-Za-z])")
+_JS_ESCAPE_SEQUENCE_RE = re.compile(
+    r"\\(?:u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0-7]{1,3}|[_$A-Za-z])"
+)
+_TS_ESCAPED_IDENTIFIER_RE = re.compile(
+    r"(?:[A-Za-z_$]|\\u\{[0-9a-fA-F]{1,6}\}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}|\\[_$A-Za-z])"
+    r"(?:[A-Za-z0-9_$]|\\u\{[0-9a-fA-F]{1,6}\}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}|\\[_$A-Za-z])*"
+)
+_TS_MEMBER_KEYWORDS = frozenset(
+    {
+        "return",
+        "throw",
+        "case",
+        "yield",
+        "await",
+        "typeof",
+        "void",
+        "delete",
+        "new",
+        "in",
+        "instanceof",
+        "export",
+        "default",
+        "const",
+        "let",
+        "var",
+        "import",
+    }
+)
+
+
+def _decode_js_escape_text(raw: str) -> str | None:
+    """Decode a JS/TS quoted-string body, including identifier escapes.
+
+    Returns ``None`` when the escape sequence is malformed or truncated. Callers
+    treat that as insufficient evidence, never as an absent reference.
+    """
+    output: list[str] = []
+    index = 0
+    length = len(raw)
+    while index < length:
+        char = raw[index]
+        if char != "\\":
+            output.append(char)
+            index += 1
+            continue
+        if index + 1 >= length:
+            return None
+        nxt = raw[index + 1]
+        if nxt == "u":
+            if index + 2 < length and raw[index + 2] == "{":
+                end = raw.find("}", index + 3)
+                if end == -1:
+                    return None
+                digits = raw[index + 3 : end]
+                if not 1 <= len(digits) <= 6 or not set(digits) <= _HEX_DIGITS:
+                    return None
+                code = int(digits, 16)
+                if code > 0x10FFFF or 0xD800 <= code <= 0xDFFF:
+                    return None
+                output.append(chr(code))
+                index = end + 1
+                continue
+            digits = raw[index + 2 : index + 6]
+            if len(digits) != 4 or not set(digits) <= _HEX_DIGITS:
+                return None
+            code = int(digits, 16)
+            if 0xD800 <= code <= 0xDFFF:
+                return None
+            output.append(chr(code))
+            index += 6
+            continue
+        if nxt == "x":
+            digits = raw[index + 2 : index + 4]
+            if len(digits) != 2 or not set(digits) <= _HEX_DIGITS:
+                return None
+            output.append(chr(int(digits, 16)))
+            index += 4
+            continue
+        if nxt in _JS_SIMPLE_ESCAPES:
+            output.append(_JS_SIMPLE_ESCAPES[nxt])
+            index += 2
+            continue
+        if nxt == "\n":
+            index += 2
+            continue
+        if nxt == "\r":
+            index += 3 if index + 2 < length and raw[index + 2] == "\n" else 2
+            continue
+        if nxt in "01234567":
+            # Legacy octal escape (non-strict JS strings); \0 alone is NUL.
+            if nxt == "0" and (
+                index + 2 >= length or raw[index + 2] not in "01234567"
+            ):
+                output.append("\0")
+                index += 2
+                continue
+            cursor = index + 1
+            digits = ""
+            while cursor < length and len(digits) < 3 and raw[cursor] in "01234567":
+                digits += raw[cursor]
+                cursor += 1
+            code = int(digits, 8)
+            if code > 0xFF:
+                return None
+            output.append(chr(code))
+            index = cursor
+            continue
+        # NonEscapeCharacter: the escaped character has no special meaning.
+        output.append(nxt)
+        index += 2
+    return "".join(output)
+
+
+def _decode_js_escapes_lenient(text: str) -> str:
+    """Decode JS escapes where possible; leave malformed sequences unchanged."""
+
+    def replace(match: re.Match[str]) -> str:
+        decoded = _decode_js_escape_text(match.group(0))
+        return match.group(0) if decoded is None else decoded
+
+    return _JS_ESCAPE_SEQUENCE_RE.sub(replace, text)
+
+
+def _normalize_identifier_escapes(code: str) -> str:
+    """Decode escapes embedded in code identifiers so ``old\\u005fapi`` is visible."""
+
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if "\\" not in token:
+            return token
+        decoded = _decode_js_escape_text(token)
+        return token if decoded is None else decoded
+
+    return _TS_ESCAPED_IDENTIFIER_RE.sub(replace, code)
+
+
+@dataclass(frozen=True, slots=True)
+class _ComputedMember:
+    """Result of parsing a static computed member access in value position."""
+
+    name: str
+    next_index: int
+    resolved: bool
+
+
+
+def _previous_identifier_word(out: list[str]) -> str:
+    """Return the identifier word immediately before the current position."""
+    chars: list[str] = []
+    seen = False
+    for position in range(len(out) - 1, -1, -1):
+        for char in reversed(out[position]):
+            if char.isspace():
+                if seen:
+                    return "".join(reversed(chars))
+                continue
+            if char.isalnum() or char in "_$":
+                chars.append(char)
+                seen = True
+                continue
+            return "".join(reversed(chars))
+    return "".join(reversed(chars))
+
+
+def _previous_code_char(out: list[str]) -> str:
+    for position in range(len(out) - 1, -1, -1):
+        stripped = out[position].rstrip()
+        if stripped:
+            return stripped[-1]
+    return ""
 
 
 def _static_computed_member(
     text: str, start: int, out: list[str]
-) -> tuple[str, int] | None:
+) -> _ComputedMember | None:
     """Preserve a statically named computed member access (api[name]).
 
     Only a member name in a value position is preserved. Array literals,
     declarations, and dynamic expressions stay string-literal text and never
-    become executable references; unparseable forms keep the normal string
-    handling so they cannot be certified as absent evidence.
+    become executable references. A quoted member body that cannot be decoded
+    (malformed escape) is reported as unresolved so the caller can fail closed
+    with AE004 instead of certifying absence.
     """
     index = start + 1
     length = len(text)
@@ -331,31 +517,40 @@ def _static_computed_member(
     content_start = cursor
     while cursor < length:
         char = text[cursor]
-        if char == "\\" or char == "\n":
-            return None
+        if char == "\\":
+            if cursor + 1 >= length:
+                return None
+            cursor += 2
+            continue
         if char == quote:
             break
+        if char == "\n":
+            return None
         cursor += 1
     if cursor >= length:
         return None
-    name = text[content_start:cursor]
-    if not _TS_IDENTIFIER_RE.match(name):
-        return None
+    raw_member = text[content_start:cursor]
     after = cursor + 1
     while after < length and text[after] in " \t":
         after += 1
     if after >= length or text[after] != "]":
         return None
-    previous = ""
-    for position in range(len(out) - 1, -1, -1):
-        token = out[position]
-        stripped = token.rstrip()
-        if stripped:
-            previous = stripped[-1]
-            break
+    previous = _previous_code_char(out)
     if not (previous.isalnum() or previous in "_$)]."):
         return None
-    return name, after + 1
+    if _previous_identifier_word(out) in _TS_MEMBER_KEYWORDS:
+        return None
+    next_index = after + 1
+    if quote == "`" and "${" in raw_member:
+        return _ComputedMember("", next_index, False)
+    decoded = _decode_js_escape_text(raw_member)
+    if decoded is None:
+        return _ComputedMember("", next_index, False)
+    if not _TS_IDENTIFIER_RE.match(decoded):
+        # A statically named key that cannot be an identifier cannot equal a
+        # target symbol; it is a property name, not an active reference.
+        return _ComputedMember("", next_index, True)
+    return _ComputedMember(decoded, next_index, True)
 
 
 def _tokenize_ts_code(text: str) -> tuple[str, bool]:
@@ -378,10 +573,11 @@ def _tokenize_ts_code(text: str) -> tuple[str, bool]:
         if text[i] == "[" and (not stack or stack[-1] != "template"):
             computed = _static_computed_member(text, i, out)
             if computed is not None:
-                name, next_index = computed
+                if not computed.resolved:
+                    return "".join(out), False
                 out.append(" ")
-                out.append(name)
-                i = next_index
+                out.append(computed.name)
+                i = computed.next_index
                 continue
         if not stack:
             # Top-level code
@@ -613,7 +809,7 @@ def _extract_ts_refs_with_syntax_check(
                     defined_on_line = candidate
                 break
 
-        line_for_refs = stripped
+        line_for_refs = _normalize_identifier_escapes(stripped)
         if defined_on_line:
             line_for_refs = re.sub(r"\b" + re.escape(defined_on_line) + r"\b", "", line_for_refs, count=1)
 
@@ -704,6 +900,23 @@ def _extract_python_refs_from_code(code: str) -> set[str] | None:
     return refs
 
 
+def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> bool:
+    """Cheap gate before parsing a workspace file.
+
+    A literal hit always routes the file to the parser. A JS/TS file that spells
+    a target through an escape (``old\\u005fapi``) must also be parsed; if the
+    escape cannot be decoded leniently, route it to the parser so malformed
+    executable forms can fail closed with AE004 rather than be skipped.
+    """
+    if any(symbol in content for symbol in symbols):
+        return True
+    if not is_ts or "\\" not in content:
+        return False
+    if any(symbol in _decode_js_escapes_lenient(content) for symbol in symbols):
+        return True
+    return bool(_JS_ESCAPE_HINT_RE.search(content))
+
+
 def _scan_workspace(workspace: Path, symbols: tuple[str, ...]) -> _WorkspaceEvidence:
     """Scan an explicitly bound workspace for definitions and real references of target symbols.
 
@@ -747,10 +960,12 @@ def _scan_workspace(workspace: Path, symbols: tuple[str, ...]) -> _WorkspaceEvid
                 continue
 
             visited += 1
-            if not any(s in content for s in symbol_set):
+            ext = file_path.suffix.lower()
+            if not _content_may_reference(
+                content, symbol_set, is_ts=ext in _TS_EXTENSIONS
+            ):
                 continue
 
-            ext = file_path.suffix.lower()
             if ext in _PY_EXTENSIONS:
                 defs = _extract_python_defs_from_code(content)
                 refs = _extract_python_refs_from_code(content)
