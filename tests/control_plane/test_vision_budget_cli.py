@@ -5,6 +5,8 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -13,8 +15,9 @@ from loopx.control_plane.testing.canary_harness import import_fixture_authority
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("complete_prior", [False, True])
+@pytest.mark.parametrize("reader", ["status", "history"])
 def test_projected_autonomous_example_updates_evidence_without_changing_goal(
-    tmp_path, monkeypatch, provider, complete_prior,
+    tmp_path, monkeypatch, provider, complete_prior, reader,
 ):
     from canonical_authority_fixture import isolate_sqlite_runtime
 
@@ -54,8 +57,18 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
     if complete_prior:
         # Follow the returned authoring procedure using the complete current
         # Agent packet from a separate read, not fields reconstructed by a model.
-        current = fixture.run_status(registry, runtime)
-        goal = next(g for g in current["run_history"]["goals"] if g["id"] == fixture.GOAL_ID)
+        if reader == "status":
+            history = fixture.run_status(registry, runtime)["run_history"]
+        else:
+            # Compact history is a public readback too. Its index retains null
+            # for absent optional decisions, unlike the full status projection.
+            result = subprocess.run([
+                sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+                "--runtime-root", str(runtime), "--format", "json", "history",
+                "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
+            ], cwd=fixture.REPO_ROOT, capture_output=True, text=True, check=True)
+            history = fixture.payload(result)
+        goal = next(g for g in history["goals"] if g["id"] == fixture.GOAL_ID)
         current_packet = copy.deepcopy(goal["latest_runs"][0]["agent_vision"])
         assert current_packet["agent_id"] == fixture.AGENT_ID
         current_packet["vision_patch"].update(packet["vision_patch"])
@@ -68,6 +81,7 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
     assert result.returncode == 0, accepted.get("error") or accepted
     assert accepted["ok"] and accepted["appended"]
     assert accepted["agent_vision"]["path_delta"]["outcome"] == "replan"
+    assert "stride_decision" not in accepted["agent_vision"]
     assert original_goal in state.read_text()
 
     # A separate CLI read must preserve every existing field, not merely echo
@@ -104,6 +118,20 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
         assert retained["agent_vision"]["vision_patch"] == packet["vision_patch"]
         assert retained["agent_vision"]["path_delta"]["outcome"] == disposition
         assert original_goal in state.read_text()
+
+    if complete_prior and reader == "history":
+        before = index.read_bytes()
+        for invalid in (False, 0, "", [], {}):
+            malformed = copy.deepcopy(packet)
+            malformed["stride_decision"] = invalid
+            fixture.write_json(document, malformed)
+            rejected = fixture.run_cli(registry, runtime, vision_path=document,
+                check=False, dry_run=False, autonomous_replan_recorded=False)
+            failure = fixture.payload(rejected)
+            assert rejected.returncode == 1
+            assert "stride_decision" in failure["error"]
+            assert failure["appended"] is False
+            assert index.read_bytes() == before
 
 
 @pytest.mark.parametrize("character", ["x", "界"])

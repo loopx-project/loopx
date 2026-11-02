@@ -23,6 +23,31 @@ const request = {schema_version: VISION_REFRESH_REQUEST_SCHEMA, phase: "prepare"
   agent_id: "agent-a", merge_patch: false, existing_agent_vision: null,
   require_path_delta_for_durable_change: false, agent_vision_packet: packet};
 
+test("an absent recorded decision roundtrips without satisfying an enabled stride review", () => {
+  for (const value of [undefined, null]) {
+    const vision = buildVisionCheckpoint({...request,
+      agent_vision_packet: {...packet, stride_decision: value}}).agent_vision as Record<string, unknown>;
+    assert.equal(Object.hasOwn(vision, "stride_decision"), false);
+    for (const kind of ["vision_acceptance_gap", ...decisionReviewTriggers]) {
+      const obligation = {obligation_id: proposal.reference_obligation_id,
+        triggers: [{kind}], replan_context: {
+          stride_strategy: "evidence_conditioned_v1", context_id: contextId}};
+      const observation_delta = {delta_kinds: ["new_surface"], evidence_novel: true};
+      const missing = projectReplanSemantics({operation: "qualify", obligation,
+        observation_delta, agent_vision: vision});
+      assert.equal(missing.accepted, false, kind);
+      assert.equal(missing.reason_code, "stride_decision_required", kind);
+      assert.equal(projectReplanSemantics({operation: "qualify", obligation: {
+        ...obligation, replan_context: {stride_strategy: "off"}},
+        observation_delta, agent_vision: vision}).accepted, true, kind);
+    }
+  }
+  for (const value of [false, 0, "", [], {}]) {
+    assert.throws(() => buildVisionCheckpoint({...request,
+      agent_vision_packet: {...packet, stride_decision: value}}));
+  }
+});
+
 test("previous-outcome claims need subsequent evidence; old comparison evidence remains usable", () => {
   const previous = "replan-decision-" + "b".repeat(24);
   const context = {evidence: [{evidence_ref: "evidence:before"}, {evidence_ref: "evidence:after"}],

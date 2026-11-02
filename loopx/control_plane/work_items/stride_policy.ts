@@ -91,7 +91,9 @@ function comparisonCandidates(value: unknown): JsonObject[] {
 /** Agent interpretations are structured claims, not certified evidence or authority. */
 export function normalizeStrideDecision(value: unknown, bounded: BoundedText = text):
   [JsonObject | null, Record<string, number>] {
-  if (value === undefined) return [null, {}];
+  // Compact run history records absent optional decisions as JSON null.
+  // Absence is not a proposal and cannot satisfy an enabled stride review.
+  if (value == null) return [null, {}];
   const input = requireJsonObject(value, "stride_decision");
   // Off-mode transport and historical readback retain both earlier v1 shapes.
   // An enabled fresh review requires the current concrete-plan schema.
@@ -194,7 +196,6 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
 
 /** Historical read codec only, never a selectable strategy or new proposal. */
 export function normalizeRecordedStrideDecision(value: unknown): JsonObject | null {
-  if (value == null) return null;
   return normalizeStrideDecision(value)[0];
 }
 function normalizeHistoricalStrideDecision(value: unknown, bounded: BoundedText): [JsonObject, Record<string, number>] {
