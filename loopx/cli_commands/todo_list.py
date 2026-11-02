@@ -39,6 +39,7 @@ def handle_todo_list_command(
             limit=args.todo_limit,
             thin=bool(args.todo_thin),
             **({"summary": True} if getattr(args, "todo_summary", False) else {}),
+            **({"include_archived": True} if getattr(args, "include_archived", False) else {}),
             project=Path(args.project).expanduser() if args.project else None,
             state_file=Path(args.state_file).expanduser() if args.state_file else None,
             runtime_root_arg=runtime_root_arg,

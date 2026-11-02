@@ -65,6 +65,41 @@ def ordinary(tmp_path, monkeypatch):
     thread.join(timeout=2)
 
 
+def test_http_keeps_native_answer_when_legacy_handoff_metadata_is_invalid(ordinary):
+    store, runtime, contexts, request, capture, fake, workspace = ordinary
+    # Use the real protocol process and HTTP queue, including its completed
+    # upstream Turn; only the provider's final response is a fixture.
+    source = fake.read_text()
+    marker = '            "message": "Runtime response.",'
+    assert marker in source
+    fake.write_text(source.replace(marker,
+        '            "context_handoff": [{"goal_id": "existing-work", '
+        '"agent_id": "existing-worker", "brief": "invalid legacy brief"}],', 1))
+    project = request("/api/chat/projects")[1]["projects"][0]
+    status, opened = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": project["project_ref"]})
+    assert status == 201
+    sid = opened["session_id"]
+    try:
+        status, accepted = request(f"/api/chat/sessions/{sid}/turns", {
+            "message": "Recover the original answer", "client_turn_id": "legacy-answer"})
+        assert status == 202
+        ended = runtime.wait_for_turn(session_id=sid, turn_id=accepted["turn_id"], timeout_sec=10)
+        assert ended["status"] == "completed", ended
+        assert ended["response"]["gate"]["kind"] == "response_metadata_invalid"
+        assert not ended["response"].get("context_handoff")
+        snapshot = request(f"/api/chat/sessions/{sid}")[1]
+        answer = next(m["text"] for m in snapshot["messages"] if m["role"] == "agent")
+        assert answer.startswith("Visible runtime response.\n\n待处理：")
+        assert "相关操作和委派尚未提交" in answer
+        assert "invalid legacy brief" not in answer
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(c.get("method") == "turn/start" for c in calls) == 1
+        assert store.load_session(sid).get("active_turn_id") is None
+    finally:
+        runtime.close()
+
+
 def test_http_ordinary_project_continues_native_session_without_goal_or_portfolio(ordinary):
     store, runtime, contexts, request, capture, fake, workspace = ordinary
     status, projects = request("/api/chat/projects")

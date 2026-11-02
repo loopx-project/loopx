@@ -55,14 +55,6 @@ export {
   LOCAL_AUTHORITY_SHADOW_REQUEST_SCHEMA,
 };
 
-/** Compatibility tombstone for older clients: never open or mint a store. */
-export async function recordLocalAuthorityShadow(_value: unknown): Promise<never> {
-  throw new EffectRuntimeRequestError(
-    "Post-commit observation is retired; configure runtime shadow and explicitly bootstrap its source lineage.",
-    "local_authority_shadow_retired",
-  );
-}
-
 export interface LocalAuthorityShadowDependencies {
   openStore?: (directory: string, goalId: string) => AuthorityStore;
 }

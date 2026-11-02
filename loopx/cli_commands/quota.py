@@ -343,14 +343,15 @@ def _emit_quota_result(
             view = budgeted_settlement_result(payload, runtime_root=context.runtime_root,
                 output_bytes=args.max_page_output_bytes)
         except QuotaDecisionTransportError as exc:
-            view = {"ok": False, "mode": args.quota_command, "goal_id": args.goal_id,
-                "error_code": exc.error_code, "reason": str(exc),
-                "recommended_action": "Result delivery failed after the spend operation was evaluated. "
-                    "Read its original settlement receipt before recovery; do not repeat admission "
-                    "or assume the operation did not commit."}
-            for field in ("appended", "registry_mutated", "settlement", "settlement_progress", "heartbeat_receipt"):
-                if field in payload:
-                    view[field] = payload[field]
+            # Transport failure cannot replace an already evaluated refusal or
+            # committed receipt. Preserve unknown controls as well as identity;
+            # only the bulky diagnostic snapshots are omitted on this fallback.
+            view = {key: value for key, value in payload.items() if key not in ("before", "after")}
+            view["result_delivery_error"] = {"error_code": exc.error_code, "reason": str(exc),
+                "recommended_action": "Preserve the original result controls and Turn identity. "
+                    "Repair capture privacy or remove --max-page-output-bytes and read back the "
+                    "same operation; do not repeat admission or assume it did not commit.",
+                "omitted_diagnostics": [key for key in ("before", "after") if key in payload]}
             print_payload(view, args.format, _quota_renderer(args, failure=True))
             return 1
         print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))

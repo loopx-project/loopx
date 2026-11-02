@@ -109,32 +109,6 @@ def primary_action_instruction_facts(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def protocol_monitor_action(payload: dict[str, Any]) -> str | None:
-    goal_id = str(payload.get("goal_id") or "")
-    work_lane = (
-        payload.get("work_lane_contract")
-        if isinstance(payload.get("work_lane_contract"), dict)
-        else {}
-    )
-    if work_lane.get("obligation") == "quiet_until_material_monitor_transition":
-        return "quiet until a material monitor transition, regression, or concrete blocker appears"
-    monitors = (
-        payload.get("autonomous_monitor_candidates")
-        if isinstance(payload.get("autonomous_monitor_candidates"), dict)
-        else {}
-    )
-    items = monitors.get("items") if isinstance(monitors.get("items"), list) else []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if goal_id and str(item.get("goal_id") or "") != goal_id:
-            continue
-        text = protocol_action_label(item.get("text"), limit=160)
-        if text:
-            return text
-    return None
-
-
 def build_primary_action_projection(
     payload: dict[str, Any], *, mode: str, primary_action: str | None,
 ) -> dict[str, Any]:

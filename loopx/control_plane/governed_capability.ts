@@ -945,9 +945,3 @@ export function validateGovernedCapabilitySettlementCallback(input: {
   }
   return payload;
 }
-
-export function governedCapabilitySettlementStatus(
-  failure: unknown,
-): "settlement_failed" | "committed" {
-  return failure === null ? "committed" : "settlement_failed";
-}

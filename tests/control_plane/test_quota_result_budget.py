@@ -90,3 +90,36 @@ def test_result_capture_rejects_public_or_symlink_root(tmp_path, symlink):
     target = public if symlink else tmp_path / "context-delivery"
     assert not list(target.iterdir())
     assert target.stat().st_mode & 0o777 == (0o700 if symlink else 0o755)
+
+
+@pytest.mark.parametrize("value", ["reader.json", r"C:\private\result.reader.json"])
+def test_reference_without_posix_identity_fails_structurally_before_open(monkeypatch, value):
+    from loopx.control_plane.turn_driver import decision_capture
+
+    monkeypatch.delattr(decision_capture.os, "getuid", raising=False)
+    with pytest.raises(ValueError, match="private.*unsupported"):
+        decision_capture.read_context_read_reference(value)
+
+
+def test_large_result_without_getuid_preserves_private_boundary(tmp_path, monkeypatch):
+    from loopx.control_plane.turn_driver import decision_capture
+
+    monkeypatch.delattr(decision_capture.os, "getuid", raising=False)
+    with pytest.raises(QuotaDecisionTransportError, match="private.*unsupported"):
+        budgeted_settlement_result({"ok": True, "before": "large" * 20000},
+            runtime_root=tmp_path, output_bytes=8192)
+    assert not (tmp_path / "context-delivery").exists()
+
+
+def test_bounded_spend_without_getuid_rejects_before_effect(tmp_path, monkeypatch):
+    from loopx.cli import main
+    from loopx.cli_commands import quota
+    from loopx.control_plane.turn_driver import decision_capture
+
+    monkeypatch.delattr(decision_capture.os, "getuid", raising=False)
+    def forbidden(*args, **kwargs):
+        pytest.fail("unsupported private capture reached effect preparation")
+    monkeypatch.setattr(quota, "_prepare_quota_command_execution", forbidden)
+    assert main(["--format", "json", "--registry", str(tmp_path / "unused.json"),
+        "quota", "spend-slot", "--goal-id", "fixture", "--agent-id", "fixture",
+        "--turn-instance-id", "same-turn", "--execute", "--max-page-output-bytes", "64000"]) == 1
