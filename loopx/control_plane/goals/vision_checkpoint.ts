@@ -1,6 +1,7 @@
-import type { JsonObject } from "../effect_program.ts";
+import {settlementIdentityPayload, type JsonObject, type SettlementIdentity} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
+import {jsonObject} from "../runtime_decode.ts";
+import { isAcceptedProgressWriteback, isBoundedBlockedRetry } from "../quota/settlement_phase.ts";
 import {
   DELIVERY_BOUNDARIES,
   type DeliveryBoundary,
@@ -12,6 +13,7 @@ import {
 } from "../work_items/delivery_outcome.ts";
 
 import {normalizeStrideDecision, STRIDE_DECISION_SCHEMA, RECORDED_STRIDE_SCHEMA, STRIDE_PROBE_LIMITS, STRIDE_AXIS_NAMES, STRIDE_PLAN_LIMIT, STRIDE_REASON_LIMIT, STRIDE_REVIEW_LIMIT} from "../work_items/stride_policy.ts";
+import lifecycle from "../goal_vision_lifecycle.json" with {type: "json"};
 
 export const VISION_REFRESH_REQUEST_SCHEMA = "loopx_vision_refresh_request_v0";
 export const VISION_REFRESH_PREPARED_SCHEMA_VERSION =
@@ -126,6 +128,16 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
         ? `Autonomous review: changing ${GOAL_VISION_DURABLE_FIELDS.join(", ")} requires outcome=replan, even when the Goal objective stays unchanged. Retaining these fields permits continue/no_change. `
         : "Changed mainline: outcome=replan. ") +
       "vision_closed closes a stage, not Goal; no_followup: no scoped work.",
+    // Autonomous planning/Stride and settlement-only recovery carry their own
+    // decision guidance. Keep this reminder at the ordinary checkpoint entry.
+    ...(autonomousReplan ? {} : {
+      continuation_review: "For an explicitly continuing or optimization objective, candidate usability alone does not establish completion. " +
+        "Before stop/no_followup, compare remaining acceptance gaps, plausible headroom, a feasible next experiment " +
+        "and its full marginal cost with the accepted stopping condition. Record the judgment and evidence in path_delta; " +
+        "continue or replan useful authorized work. A submission or unused budget alone proves neither completion nor " +
+        "a need for more work. Preserve explicit Stop, budget/permission limits and genuine waits; never invent a successor, " +
+        "force a pivot or fill time when no useful authorized step remains.",
+    }),
   };
 }
 // Bounded typed fallback declarations survive prepare unchanged so the
@@ -406,6 +418,37 @@ function normalizeGoalVisionState(value: unknown): string {
     );
   }
   return GOAL_VISION_STATE_ALIASES[state] ?? state;
+}
+
+/** The existing lifecycle vocabulary is shared with the Python read model. */
+export function goalVisionStateIsOpen(value: unknown): boolean {
+  try { return !lifecycle.closed_states.includes(normalizeGoalVisionState(value)); }
+  catch { return false; }
+}
+
+/** Qualify an open Todo's evidence checkpoint without accepting its deliverable.
+ * Write-time callers supply the admitted identity and prepared Vision; spend
+ * callers first verify the exact durable receipt. Terminal validation remains
+ * with Todo completion. An unchanged reason alone is not new decision evidence. */
+export function qualifiesOpenTodoSemanticCheckpoint(value: unknown, identity: SettlementIdentity): boolean {
+  const run = jsonObject(value), checkpoint = jsonObject(run?.vision_checkpoint);
+  const persisted = jsonObject(run?.settlement_identity), vision = jsonObject(run?.agent_vision);
+  if (!isAcceptedProgressWriteback(run, identity) || run?.completion_todo_id != null ||
+      checkpoint?.delivery_boundary !== "semantic_closeout" || checkpoint.required !== true ||
+      checkpoint.decision !== "patched" || !persisted ||
+      Object.entries(settlementIdentityPayload(identity)).some(([key, value]) => persisted[key] !== value) ||
+      vision?.schema_version !== "goal_vision_replan_contract_v0" ||
+      // Compact run history omits this redundant Goal field; the exact run
+      // and settlement identity above still bind it. Present conflicts fail.
+      (vision.goal_id != null && vision.goal_id !== identity.goal_id) ||
+      vision.agent_id !== identity.agent_id || typeof vision.state !== "string" || !vision.state.trim() ||
+      !goalVisionStateIsOpen(vision.state)) return false;
+  const acceptance = jsonObject(vision.vision_patch)?.acceptance_summary;
+  let path;
+  try { [path] = normalizeGoalPathDelta(vision.path_delta); } catch { return false; }
+  return typeof acceptance === "string" && !!acceptance.trim() && !!path &&
+    (path.outcome === "continue" || path.outcome === "no_change") &&
+    Array.isArray(path.evidence_refs) && path.evidence_refs.length > 0;
 }
 
 function normalizeAdvancementPolicy(value: unknown): string {
