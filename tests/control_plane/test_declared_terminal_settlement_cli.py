@@ -193,6 +193,16 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
         "todo", "complete", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--agent-id", cli.AGENT_ID, "--completion-identity-key", completed["completion_identity_key"],
         "--no-follow-up")
+    code, before_preview = run("todo", "list", "--goal-id", cli.GOAL_ID)
+    assert code == 0, before_preview
+    code, preview = run(*terminal_args, "--dry-run")
+    assert code == 0, json.dumps(preview, ensure_ascii=False, indent=2)
+    assert preview["dry_run"] is True
+    code, after_preview = run("todo", "list", "--goal-id", cli.GOAL_ID)
+    assert code == 0, after_preview
+    assert after_preview["todos"] == before_preview["todos"]
+    assert marker.read_text() == "run\n"
+    assert cli._spend_run_count(runtime) == 1
     code, terminal = run(*terminal_args)
     assert code == 0, terminal.get("error") or terminal.get("reason") or terminal
     assert terminal["completion_continuation"] == "no_followup"
@@ -200,10 +210,13 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
         "same_turn_terminal_closeout" if closeout_source == "turn" else "lifecycle_reentry_terminal_closeout")
     assert terminal["changed"] is True
     assert terminal["idempotent_replay"] is False
-    if closeout_source == "turn":
-        assert [r["step_kind"] for r in terminal["settlement_result"]["receipts"]] == [
-            "validation", "durable_writeback", "quota_spend", "terminal_closeout",
-        ]
+    assert terminal["settlement_identity"] == completed["settlement_identity"]
+    assert [r["step_kind"] for r in terminal["settlement_result"]["receipts"]] == [
+        "validation", "durable_writeback", "quota_spend", "terminal_closeout",
+    ]
+    code, preview_replay = run(*terminal_args, "--dry-run")
+    assert code == 0, preview_replay
+    assert preview_replay["dry_run"] is True
     for args in (complete_args, refresh_args, spend_args, terminal_args):
         code, replay = run(*args)
         assert code == 0, replay

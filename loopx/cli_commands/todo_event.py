@@ -85,6 +85,11 @@ def append_todo_rollout_event(
     append_cli_rollout_event: RolloutEventAppender,
 ) -> None:
     turn_instance_id = getattr(args, "turn_instance_id", None)
+    identity = payload.get("settlement_identity")
+    if turn_instance_id is None and isinstance(identity, Mapping):
+        # Lifecycle reentry carries the TS-verified historical binding; the
+        # opaque completion key is not a Turn id and must never be parsed.
+        turn_instance_id = identity.get("turn_instance_id")
     terminal_closeout = bool(
         turn_instance_id
         and args.todo_command == "complete"

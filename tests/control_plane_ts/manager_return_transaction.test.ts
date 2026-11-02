@@ -356,3 +356,61 @@ for (const [clock, retry] of [
     } finally { await f.close(); }
   });
 }
+
+for (const exact of [false, true]) {
+  for (const accepted of [false, true]) {
+    test(`initial receipt conflict preserves its cause and original return (${exact}, accepted=${accepted})`, async () => {
+      const f = await fixture(exact, true);
+      try {
+        if (accepted) {
+          const plan = await f.run("prepare");
+          await f.run("attempt", { ...plan, attempt });
+        }
+        const sourcePaths = [
+          f.entryPath, join(f.folder, "roundtrips", id + ".json"),
+          join(f.folder, "replies", id, "conclusion.json"),
+        ];
+        const original = await Promise.all(sourcePaths.map(path => readFile(path)));
+        const before = accepted ? await readFile(f.statePath) : null;
+        const initial = f.facts.initial_delivery as JsonObject;
+        const conflicting = { ...f.facts, initial_delivery: { ...initial,
+          turn: { ...(initial.turn as JsonObject), context_handoff_receipt: {
+            request_id: "f".repeat(64), goal_id: "research", agent_id: "another-worker",
+          } },
+        } };
+        const result = await f.run("prepare", { facts: conflicting,
+          now: "2026-01-02T03:06:05.123456+00:00" });
+        assert.equal(result.action, "skip", "a different receiver's receipt cannot authorize a return");
+        if (exact) {
+          assert.equal(result.source_unavailable, true);
+          if (before) assert.deepEqual(await readFile(f.statePath), before);
+          else await assert.rejects(readFile(f.statePath));
+        } else {
+          const held = await f.state();
+          assert.equal(held.error, "initial_delivery_receipt_unavailable");
+          assert.equal(held.status, accepted ? "explicit_unverified" : "retry_pending");
+          if (accepted) {
+            assert.deepEqual(held.attempt, attempt, "an accepted write is never reset into a fresh send");
+            assert.equal((await f.run("prepare", { now: "2026-01-03T03:06:05Z" })).processed, 0);
+            assert.deepEqual(await f.state(), held);
+          } else {
+            const bytes = await readFile(f.statePath);
+            assert.equal((await f.run("prepare", { now: "2026-01-02T03:06:06Z" })).processed, 0);
+            assert.deepEqual(await readFile(f.statePath), bytes, "unchanged source honors the original backoff");
+            const restored = { ...f.facts, initial_delivery: { ...initial,
+              turn: { ...(initial.turn as JsonObject), context_handoff_receipt: initial.request },
+            } };
+            const plan = await f.run("prepare", { facts: restored, now: "2026-01-02T03:06:16Z" });
+            assert.equal(plan.action, "send");
+            await f.run("settle", { ...plan, facts: restored, now: "2026-01-02T03:06:16Z",
+              outcome: { kind: "sent", reply_verified: true, idempotency_key: attempt.provider_receipt } });
+            assert.equal((await f.state()).message_id, plan.message_id);
+            assert.equal((await f.run("prepare", { facts: restored, now: "2026-01-03T03:06:16Z" })).processed, 0);
+          }
+        }
+        const retained = await Promise.all(sourcePaths.map(path => readFile(path)));
+        assert.deepEqual(retained, original, "diagnosis never rewrites the request, source route or result");
+      } finally { await f.close(); }
+    });
+  }
+}

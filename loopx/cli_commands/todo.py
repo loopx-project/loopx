@@ -792,6 +792,13 @@ def handle_todo_command(
         payload = todo_error_payload(
             args, exc, registry_path=registry_path, runtime_root_arg=runtime_root_arg,
         )
+    if (
+        args.todo_command == "complete"
+        and payload.get("ok")
+        and settlement_identity is None
+        and isinstance(payload.get("settlement_identity"), dict)
+    ):
+        settlement_identity = SettlementIdentity.from_runtime_payload(payload["settlement_identity"])
     append_todo_rollout_event(
         payload,
         args=args,
@@ -802,8 +809,8 @@ def handle_todo_command(
 
     if (
         args.todo_command == "complete"
-        and getattr(args, "turn_instance_id", None)
         and payload.get("ok")
+        and settlement_identity is not None
         and not payload.get("dry_run")
     ):
         runtime_root = resolve_runtime_root(
@@ -815,7 +822,7 @@ def handle_todo_command(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
             todo_id=args.todo_id,
-            turn_instance_id=getattr(args, "turn_instance_id", None),
+            turn_instance_id=settlement_identity.turn_instance_id,
             registry_path=registry_path,
             goal_ref=goal_ref,
         )
@@ -859,6 +866,7 @@ def handle_todo_command(
         and not payload.get("dry_run")
         and post_writeback_hooks
         and settlement_identity is not None
+        and not getattr(args, "completion_identity_key", None)
     ):
         identity = settlement_identity.as_dict()
         committed_at = str(payload.get("updated_at") or "").strip()
