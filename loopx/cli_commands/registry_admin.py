@@ -722,7 +722,8 @@ def handle_registry_admin_command(
                     payload["error_kind"] = "thread_agent_binding_readback_failed"
                 elif (
                     args.command == "bind-agent-thread"
-                    and args.host_surface in {"antigravity-app", "antigravity_app"}
+                    and args.host_surface
+                    in {"agy", "antigravity-app", "antigravity_app"}
                 ):
                     try:
                         from ..agy_goal_mode import antigravity_config_home

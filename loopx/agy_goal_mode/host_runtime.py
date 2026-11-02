@@ -409,6 +409,7 @@ def _resolve_bound_session(
             )
             for item in bindings:
                 if item.get("host_surface") not in {
+                    "agy",
                     "antigravity-app",
                     "antigravity_app",
                 }:

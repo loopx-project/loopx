@@ -17,6 +17,7 @@ HOST_THREAD_ID_ENV: dict[str, str] = {
     "codex-ide-plugin": "CODEX_THREAD_ID",
     "codex-cli-tui": "CODEX_THREAD_ID",
     "trae_app": "TRAECLI_THREAD_ID",
+    "agy": "ANTIGRAVITY_CONVERSATION_ID",
     ANTIGRAVITY_APP_AGENT_TYPE: "ANTIGRAVITY_CONVERSATION_ID",
     "antigravity_app": "ANTIGRAVITY_CONVERSATION_ID",
     KIRO_CLI_AGENT_TYPE: KIRO_CLI_SESSION_ID_ENV,
@@ -37,7 +38,7 @@ def ambient_host_thread_id(
     env_value = (os.environ.get(variable) or None) if variable else None
     if env_value:
         return env_value
-    if host_surface in {ANTIGRAVITY_APP_AGENT_TYPE, "antigravity_app"}:
+    if host_surface in {"agy", ANTIGRAVITY_APP_AGENT_TYPE, "antigravity_app"}:
         if os.environ.get("PYTEST_CURRENT_TEST") and not (
             os.environ.get("ANTIGRAVITY_LS_ADDRESS")
             or os.environ.get("ANTIGRAVITY_LS_URL")
