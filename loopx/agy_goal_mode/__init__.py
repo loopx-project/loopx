@@ -167,12 +167,122 @@ def build_antigravity_sidecar_template(
                 "suspend_on_waiting_external": {
                     "tool": "schedule",
                     "interval_minutes_field": (
+                        "scheduler_hint.app_automation.recommended_interval_minutes"
+                    ),
+                    "fallback_interval_minutes_field": (
                         "scheduler_hint.local_scheduler.recommended_interval_minutes"
                     ),
                     "default_duration_seconds": int(interval_seconds),
                 },
+                "stateful_backoff": {
+                    "state_key": "scheduler_hint.app_automation.stateful_backoff",
+                    "recommended_rrule_field": (
+                        "scheduler_hint.app_automation.recommended_rrule"
+                    ),
+                    "recommended_interval_minutes_field": (
+                        "scheduler_hint.app_automation.recommended_interval_minutes"
+                    ),
+                    "ack_hint_field": (
+                        "scheduler_hint.app_automation.ack_hint.cli_args"
+                    ),
+                    "failure_hint_field": (
+                        "scheduler_hint.app_automation.failure_hint.cli_args"
+                    ),
+                },
             }
         },
+    }
+
+
+def cron_for_interval_minutes(interval_minutes: int) -> str:
+    """Convert a LoopX ``recommended_interval_minutes`` into a 5-field cron expression."""
+    minutes = max(1, int(interval_minutes))
+    if minutes >= 60:
+        return "0 * * * *"
+    return f"*/{minutes} * * * *"
+
+
+def build_antigravity_backoff_schedule_action(
+    scheduler_hint: dict[str, Any],
+    *,
+    current_task_id: str | None = None,
+    prompt: str = "",
+) -> dict[str, Any]:
+    """Translate ``scheduler_hint.app_automation`` stateful backoff into Antigravity ``schedule`` / ``manage_task`` actions."""
+    app = (
+        scheduler_hint.get("app_automation")
+        if isinstance(scheduler_hint.get("app_automation"), dict)
+        else {}
+    )
+    backoff = (
+        app.get("stateful_backoff")
+        if isinstance(app.get("stateful_backoff"), dict)
+        else {}
+    )
+    host_action = str(app.get("host_action") or "none")
+    if host_action == "pause_or_delete_current_heartbeat":
+        return {
+            "action": "pause_or_delete_current_heartbeat",
+            "apply_needed": bool(app.get("host_action_required", True)),
+            "ack_needed": False,
+            "manage_task_kill": (
+                {"Action": "kill", "TaskId": current_task_id}
+                if current_task_id
+                else None
+            ),
+            "schedule_call": None,
+            "ack_cli_args": None,
+            "failure_cli_args": None,
+        }
+    apply_needed = bool(backoff.get("apply_needed"))
+    ack_needed = bool(backoff.get("ack_needed"))
+    interval = int(
+        app.get("recommended_interval_minutes")
+        or backoff.get("current_interval_minutes")
+        or 3
+    )
+    cron_expr = cron_for_interval_minutes(interval)
+    ack_hint = app.get("ack_hint") if isinstance(app.get("ack_hint"), dict) else {}
+    failure_hint = (
+        app.get("failure_hint") if isinstance(app.get("failure_hint"), dict) else {}
+    )
+    return {
+        "action": (
+            "update_current_heartbeat_rrule"
+            if apply_needed
+            else "ack_current_heartbeat_rrule"
+            if ack_needed
+            else "noop"
+        ),
+        "apply_needed": apply_needed,
+        "ack_needed": ack_needed,
+        "recommended_interval_minutes": interval,
+        "recommended_rrule": app.get("recommended_rrule"),
+        "cron_expression": cron_expr,
+        "manage_task_kill": (
+            {"Action": "kill", "TaskId": current_task_id}
+            if apply_needed and current_task_id
+            else None
+        ),
+        "schedule_call": (
+            {
+                "CronExpression": cron_expr,
+                "IsDaemon": True,
+                "Prompt": prompt,
+            }
+            if apply_needed
+            else None
+        ),
+        "ack_cli_args": (
+            list(ack_hint.get("cli_args", []))
+            if isinstance(ack_hint.get("cli_args"), list)
+            else None
+        ),
+        "failure_cli_args": (
+            list(failure_hint.get("cli_args", []))
+            if isinstance(failure_hint.get("cli_args"), list)
+            else None
+        ),
     }
 
 

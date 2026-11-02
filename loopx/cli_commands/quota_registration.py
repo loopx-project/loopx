@@ -146,6 +146,11 @@ def register_quota_command(
         ),
     )
     quota_parser.add_argument(
+        "--antigravity_app",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    quota_parser.add_argument(
         "-H",
         "--host-surface",
         choices=[

@@ -408,7 +408,7 @@ function invalidContextHint(context: JsonObject): JsonObject {
     unchanged_poll: {local_scheduler: "stop_until_context_repaired", codex_cli_tui: "stop_until_context_repaired",
       [SSH]: "stop_until_context_repaired", claude_code_loop: "stop_until_context_repaired", final_quota_replan_check_enabled: false, spend_policy: spend},
     consistency_error: {source: "scheduler_execution_context", errors: context.errors},
-    [stripPythonWhitespace(String(context.host_surface ?? "")) === "trae_app" ? "app_automation" : "codex_app"]: {
+    [["trae_app", "antigravity_app"].includes(stripPythonWhitespace(String(context.host_surface ?? ""))) ? "app_automation" : "codex_app"]: {
       applicability: "blocked_invalid_context", apply: "none", host_action: "none", ack_required: false}};
 }
 

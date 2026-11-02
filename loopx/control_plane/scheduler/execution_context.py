@@ -101,6 +101,7 @@ APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES = frozenset(
     {
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         SchedulerRuntimeProfile.TRAE_APP,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }
 )
 
@@ -133,8 +134,8 @@ _SCHEDULER_RUNTIME_PROFILE_CONTEXTS = {
     ),
     SchedulerRuntimeProfile.ANTIGRAVITY_APP: (
         HostSurface.ANTIGRAVITY_APP,
-        SchedulerOwner.AGENT_CLI_LOOP,
-        ExecutionMode.INTERACTIVE,
+        SchedulerOwner.HOST_AUTOMATION,
+        ExecutionMode.HOSTED_AUTOMATION,
     ),
     SchedulerRuntimeProfile.CLAUDE_CODE_VISIBLE: (
         HostSurface.CLAUDE_CODE,
@@ -194,7 +195,12 @@ class SchedulerExecutionContext:
     @property
     def app_automation_applicable(self) -> bool:
         return (
-            self.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP}
+            self.host_surface
+            in {
+                HostSurface.CODEX_APP,
+                HostSurface.TRAE_APP,
+                HostSurface.ANTIGRAVITY_APP,
+            }
             and self.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
             and self.execution_mode is ExecutionMode.HOSTED_AUTOMATION
         )
@@ -209,10 +215,10 @@ class SchedulerExecutionContext:
             "valid": True,
         }
         # Keep existing non-Trae projections byte-compatible. The neutral App
-        # field is needed to identify Trae's independent automation contract,
-        # but a second negative applicability flag adds no information for CLI
-        # and Goal runtimes.
-        if self.host_surface is HostSurface.TRAE_APP:
+        # field is needed to identify Trae/Antigravity's independent automation
+        # contract, but a second negative applicability flag adds no information
+        # for CLI and Goal runtimes.
+        if self.host_surface in {HostSurface.TRAE_APP, HostSurface.ANTIGRAVITY_APP}:
             projection["app_automation_applicability"] = (
                 "applicable" if self.app_automation_applicable else "not_applicable"
             )
@@ -246,7 +252,10 @@ class SchedulerExecutionContextResolution:
             "valid": False,
             "errors": list(self.errors),
         }
-        if supplied.get("host_surface") == HostSurface.TRAE_APP.value:
+        if supplied.get("host_surface") in {
+            HostSurface.TRAE_APP.value,
+            HostSurface.ANTIGRAVITY_APP.value,
+        }:
             projection["app_automation_applicability"] = "blocked_invalid_context"
         else:
             projection["codex_app_applicability"] = "blocked_invalid_context"
@@ -267,9 +276,12 @@ def _validation_errors(context: SchedulerExecutionContext) -> list[str]:
         HostSurface.CLAUDE_CODE,
         HostSurface.KUNLUNCODE,
         HostSurface.KIRO_CLI,
-        HostSurface.ANTIGRAVITY_APP,
     }
-    if context.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP}:
+    if context.host_surface in {
+        HostSurface.CODEX_APP,
+        HostSurface.TRAE_APP,
+        HostSurface.ANTIGRAVITY_APP,
+    }:
         host_name = context.host_surface.value
         if context.scheduler_owner is not SchedulerOwner.HOST_AUTOMATION:
             errors.append(f"{host_name} requires scheduler_owner=host_automation")
@@ -437,6 +449,8 @@ def _render_scheduler_runtime_profile_args(
         return " --codex-app"
     if profile is SchedulerRuntimeProfile.TRAE_APP:
         return " --trae_app"
+    if profile is SchedulerRuntimeProfile.ANTIGRAVITY_APP:
+        return " --antigravity_app"
     return f" --runtime-profile {shlex.quote(profile.value)}"
 
 
