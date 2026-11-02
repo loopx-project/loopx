@@ -18,7 +18,7 @@ from loopx.capabilities.machine_configuration.store import (
     configure_machine_configuration,
     read_machine_configuration,
 )
-from loopx.chat_machine_configuration_api import (
+from loopx.chat.machine_configuration_api import (
     CHAT_MACHINE_CONFIGURATION_APPLY_PATH,
     CHAT_MACHINE_CONFIGURATION_PATH,
     CHAT_MACHINE_CONFIGURATION_PREVIEW_PATH,
@@ -604,6 +604,7 @@ def test_the_steward_executor_namespace_is_editable_and_read_back(
         "executor_reasoning_effort",
     ]
     assert capability["configuration_editor"]["fields"][1]["options"] == [
+        "antigravity",
         "codex",
         "dsh",
     ]

@@ -18,7 +18,7 @@ from loopx.capabilities.explore.result_log import (
     explore_result_log_path,
 )
 from loopx.configure_goal import configure_goal
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.control_plane.effect_runtime import (
     effect_runtime_result,
     EffectRuntimeRejected,
