@@ -78,6 +78,7 @@ def format_sqlite_archive_pointer_comment(
 
 BOUNDED_ACTIVE_VIEW_TEXT_LIMIT = 160
 BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS = 120
+BOUNDED_ACTIVE_VIEW_MAX_ACTIVE_NOTE_CHARS = 512
 BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS = frozenset(
     {"note", "evidence", "reason", "completion_result"}
 )
@@ -488,11 +489,23 @@ def _select_bounded_active_role_records(
 def _compact_record_for_bounded_active_view(
     record: Mapping[str, object],
 ) -> dict[str, object]:
-    compacted: dict[str, object] = {
-        key: value
-        for key, value in record.items()
-        if key not in BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS
-    }
+    is_done_or_archived = (
+        normalize_todo_status(record.get("status")) == "done"
+        or record.get("done") is True
+        or record.get("archive_state") == "archive"
+    )
+    compacted: dict[str, object] = {}
+    for key, value in record.items():
+        if key in BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS:
+            if (
+                not is_done_or_archived
+                and key == "note"
+                and isinstance(value, str)
+                and len(value) <= BOUNDED_ACTIVE_VIEW_MAX_ACTIVE_NOTE_CHARS
+            ):
+                compacted[key] = value
+            continue
+        compacted[key] = value
     scopes = compacted.get("required_write_scopes")
     if (
         isinstance(scopes, list)
