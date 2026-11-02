@@ -144,6 +144,7 @@ def project_current_canonical_todos(
                 bounded_active_view=(
                     authority_read.get("source_authority") == "sqlite_v0"
                 ),
+                goal_id=goal_id,
             )
             if execute and projection.changed:
                 # The projection is a primary-state write: it must respect the
@@ -202,6 +203,8 @@ def project_current_canonical_todos(
         "rendered_sha256": projection.rendered_sha256,
         "narrative_sha256": projection.narrative_sha256,
         "section_record_sha256": projection.section_record_sha256,
+        "active_fields_omitted": projection.active_fields_omitted,
+        "omitted_active_records": list(projection.omitted_active_records),
         "parse_render_parity": True,
         "narrative_preserved": not recovered_missing,
         **({"recovery_scope": "todo_sections_only"} if recovered_missing else {}),

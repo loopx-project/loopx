@@ -67,12 +67,58 @@ def format_sqlite_archive_pointer_comment(
     *,
     archived_count: int,
     active_done_omitted: int = 0,
+    active_fields_omitted: int = 0,
+    omitted_fields: Sequence[str] = (),
+    omitted_todo_ids: Sequence[str] = (),
+    goal_id: str | None = None,
 ) -> str:
+    resolved_goal = (
+        goal_id.strip()
+        if isinstance(goal_id, str) and goal_id.strip()
+        else "<goal-id>"
+    )
+    extra_parts: list[str] = []
+    if active_fields_omitted > 0:
+        extra_parts.append(f"active_fields_omitted={active_fields_omitted}")
+    if omitted_todo_ids:
+        extra_parts.append(f"omitted_todo_ids={','.join(omitted_todo_ids)}")
+    if omitted_fields:
+        extra_parts.append(f"omitted_fields={','.join(omitted_fields)}")
+    if goal_id and isinstance(goal_id, str) and goal_id.strip():
+        extra_parts.append(f"goal_id={resolved_goal}")
+    if omitted_todo_ids:
+        extra_parts.append(
+            f'todo_query="loopx todo list --goal-id {resolved_goal} '
+            f'--todo-id {omitted_todo_ids[0]}"'
+        )
+    extra_suffix = (" " + " ".join(extra_parts)) if extra_parts else ""
     return (
         f"<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
         f"archived_count={archived_count} "
-        f"active_done_omitted={active_done_omitted} "
-        f'query="loopx todo list --goal-id <goal-id> --include-archived" -->'
+        f"active_done_omitted={active_done_omitted}"
+        f"{extra_suffix} "
+        f'query="loopx todo list --goal-id {resolved_goal} --include-archived" -->'
+    )
+
+
+def format_sqlite_active_omission_pointer_comment(
+    *,
+    goal_id: str | None,
+    role: str,
+    todo_id: str,
+    omitted_fields: Sequence[str],
+) -> str:
+    resolved_goal = (
+        goal_id.strip()
+        if isinstance(goal_id, str) and goal_id.strip()
+        else "<goal-id>"
+    )
+    fields_token = ",".join(omitted_fields)
+    return (
+        f"<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
+        f"scope=active_todo goal_id={resolved_goal} role={role} "
+        f"todo_id={todo_id} omitted_fields={fields_token} "
+        f'query="loopx todo list --goal-id {resolved_goal} --todo-id {todo_id}" -->'
     )
 
 
@@ -104,6 +150,8 @@ class TodoSectionProjectionResult:
     provider_revision: str
     todo_count: int
     section_record_sha256: dict[str, str]
+    active_fields_omitted: int = 0
+    omitted_active_records: tuple[dict[str, object], ...] = ()
 
 
 def _sha256_text(value: str) -> str:
@@ -264,6 +312,7 @@ def _render_section(
     newline: str,
     private_validation: Mapping[str, Mapping[str, object]],
     archive_pointer_comment: str | None = None,
+    pointer_comments: Sequence[str] = (),
 ) -> tuple[str, str]:
     digest = _sha256_text(_canonical_json(records))
     heading = (
@@ -271,12 +320,16 @@ def _render_section(
         if role == "archive"
         else TODO_SECTION_HEADINGS[role]
     )
+    comments = [
+        *([archive_pointer_comment] if archive_pointer_comment else []),
+        *[comment for comment in pointer_comments if comment],
+    ]
     lines = [
         f"## {heading}",
         todo_region_marker(role, "begin"),
         f"<!-- loopx:todo-section-projection-v0 role={role} "
         f"provider_revision={provider_revision} records_sha256={digest} -->",
-        *([archive_pointer_comment] if archive_pointer_comment else []),
+        *comments,
         "",
     ]
     for record in records:
@@ -486,15 +539,16 @@ def _select_bounded_active_role_records(
     return selected, omitted_done
 
 
-def _compact_record_for_bounded_active_view(
+def _compact_record_for_bounded_active_view_with_omissions(
     record: Mapping[str, object],
-) -> dict[str, object]:
+) -> tuple[dict[str, object], tuple[str, ...]]:
     is_done_or_archived = (
         normalize_todo_status(record.get("status")) == "done"
         or record.get("done") is True
         or record.get("archive_state") == "archive"
     )
     compacted: dict[str, object] = {}
+    omitted_fields: list[str] = []
     for key, value in record.items():
         if key in BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS:
             if (
@@ -504,6 +558,8 @@ def _compact_record_for_bounded_active_view(
                 and len(value) <= BOUNDED_ACTIVE_VIEW_MAX_ACTIVE_NOTE_CHARS
             ):
                 compacted[key] = value
+            elif value not in (None, "", []):
+                omitted_fields.append(key)
             continue
         compacted[key] = value
     scopes = compacted.get("required_write_scopes")
@@ -512,12 +568,14 @@ def _compact_record_for_bounded_active_view(
         and sum(len(str(item)) for item in scopes) > BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS
     ):
         compacted.pop("required_write_scopes", None)
+        omitted_fields.append("required_write_scopes")
     raw_text = " ".join(str(compacted.get("text") or "").strip().split())
     if len(raw_text) > BOUNDED_ACTIVE_VIEW_TEXT_LIMIT:
         truncated_text = (
             raw_text[: BOUNDED_ACTIVE_VIEW_TEXT_LIMIT - 3].rstrip() + "..."
         )
         compacted["text"] = truncated_text
+        omitted_fields.append("text")
         priority, title = todo_priority_parts(truncated_text)
         if priority:
             compacted["priority"] = priority
@@ -525,7 +583,42 @@ def _compact_record_for_bounded_active_view(
         else:
             compacted.pop("priority", None)
             compacted.pop("title", None)
+    ordered_omitted = tuple(
+        field
+        for field in (
+            "text",
+            "note",
+            "evidence",
+            "reason",
+            "completion_result",
+            "required_write_scopes",
+        )
+        if field in omitted_fields
+    )
+    return compacted, ordered_omitted
+
+
+def _compact_record_for_bounded_active_view(
+    record: Mapping[str, object],
+) -> dict[str, object]:
+    compacted, _ = _compact_record_for_bounded_active_view_with_omissions(record)
     return compacted
+
+
+def _extract_frontmatter_goal_id(markdown: str) -> str | None:
+    lines = markdown.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:40]:
+        stripped = line.strip()
+        if stripped in {"---", "..."}:
+            break
+        for prefix in ("goal_id:", "adapter_id:"):
+            if stripped.startswith(prefix):
+                candidate = stripped.partition(":")[2].strip().strip("\"'")
+                if candidate and re.fullmatch(r"[A-Za-z0-9_.:-]+", candidate):
+                    return candidate
+    return None
 
 
 def render_canonical_todo_sections(
@@ -535,6 +628,7 @@ def render_canonical_todo_sections(
     provider_revision: str,
     private_validation_declarations: Mapping[str, Mapping[str, Any]] | None = None,
     bounded_active_view: bool = False,
+    goal_id: str | None = None,
 ) -> TodoSectionProjectionResult:
     """Replace only Todo sections and verify deterministic parse/render parity."""
 
@@ -614,8 +708,18 @@ def render_canonical_todo_sections(
             and record.get("done") is not True
         ]
     )
+    resolved_goal_id = (
+        goal_id.strip()
+        if isinstance(goal_id, str) and goal_id.strip()
+        else _extract_frontmatter_goal_id(markdown)
+    )
+    query_goal_id = resolved_goal_id or "<goal-id>"
     omitted_done_total = 0
     by_role: dict[str, list[dict[str, object]]] = {}
+    omitted_active_by_role: dict[str, list[dict[str, object]]] = {
+        role: [] for role in TODO_SECTION_HEADINGS
+    }
+    omitted_active_records: list[dict[str, object]] = []
     for role in TODO_SECTION_HEADINGS:
         role_records = raw_active_by_role[role]
         if bounded_active_view:
@@ -624,10 +728,26 @@ def render_canonical_todo_sections(
                 referenced_ids=referenced_active_ids,
             )
             omitted_done_total += omitted_count
-            by_role[role] = [
-                _compact_record_for_bounded_active_view(record)
-                for record in selected_role_records
-            ]
+            compacted_role_records: list[dict[str, object]] = []
+            for record in selected_role_records:
+                compacted, omitted_fields = (
+                    _compact_record_for_bounded_active_view_with_omissions(record)
+                )
+                compacted_role_records.append(compacted)
+                if omitted_fields:
+                    todo_id = str(record.get("todo_id") or "")
+                    entry: dict[str, object] = {
+                        "todo_id": todo_id,
+                        "role": role,
+                        "omitted_fields": list(omitted_fields),
+                        "query": (
+                            f"loopx todo list --goal-id {query_goal_id} "
+                            f"--todo-id {todo_id}"
+                        ),
+                    }
+                    omitted_active_by_role[role].append(entry)
+                    omitted_active_records.append(entry)
+            by_role[role] = compacted_role_records
         else:
             by_role[role] = role_records
     canonical_archived = sorted(
@@ -643,32 +763,83 @@ def render_canonical_todo_sections(
     rendered_sections: dict[str, str] = {}
     section_digests: dict[str, str] = {}
     for role in TODO_SECTION_HEADINGS:
+        role_pointer_comments = (
+            [
+                format_sqlite_active_omission_pointer_comment(
+                    goal_id=resolved_goal_id,
+                    role=role,
+                    todo_id=str(item["todo_id"]),
+                    omitted_fields=tuple(str(f) for f in item["omitted_fields"]),  # type: ignore[index]
+                )
+                for item in omitted_active_by_role[role]
+            ]
+            if bounded_active_view
+            else []
+        )
         rendered_sections[role], section_digests[role] = _render_section(
             role=role,
             records=by_role[role],
             provider_revision=provider_revision,
             newline=newline,
             private_validation=private_validation,
+            pointer_comments=role_pointer_comments,
         )
     if (
         archived
         or "archive" in source_document.spans
-        or (bounded_active_view and (canonical_archived or omitted_done_total > 0))
+        or (
+            bounded_active_view
+            and (
+                canonical_archived
+                or omitted_done_total > 0
+                or bool(omitted_active_records)
+            )
+        )
     ):
+        unique_omitted_fields = tuple(
+            field
+            for field in (
+                "text",
+                "note",
+                "evidence",
+                "reason",
+                "completion_result",
+                "required_write_scopes",
+            )
+            if any(
+                field in item["omitted_fields"]  # type: ignore[operator]
+                for item in omitted_active_records
+            )
+        )
+        omitted_todo_ids = tuple(
+            str(item["todo_id"]) for item in omitted_active_records
+        )
+        archive_pointer_comments: list[str] = []
+        if bounded_active_view:
+            archive_pointer_comments.append(
+                format_sqlite_archive_pointer_comment(
+                    archived_count=len(canonical_archived),
+                    active_done_omitted=omitted_done_total,
+                )
+            )
+            if omitted_active_records or resolved_goal_id:
+                archive_pointer_comments.append(
+                    format_sqlite_archive_pointer_comment(
+                        archived_count=len(canonical_archived),
+                        active_done_omitted=omitted_done_total,
+                        active_fields_omitted=len(omitted_active_records),
+                        omitted_fields=unique_omitted_fields,
+                        omitted_todo_ids=omitted_todo_ids,
+                        goal_id=resolved_goal_id,
+                    )
+                )
         rendered_sections["archive"], section_digests["archive"] = _render_section(
             role="archive",
             records=archived,
             provider_revision=provider_revision,
             newline=newline,
             private_validation=private_validation,
-            archive_pointer_comment=(
-                format_sqlite_archive_pointer_comment(
-                    archived_count=len(canonical_archived),
-                    active_done_omitted=omitted_done_total,
-                )
-                if bounded_active_view
-                else None
-            ),
+            pointer_comments=archive_pointer_comments,
         )
 
     try:
@@ -710,7 +881,18 @@ def render_canonical_todo_sections(
         provider_revision=provider_revision,
         todo_count=len(canonical),
         section_record_sha256=section_digests,
+        active_fields_omitted=len(omitted_active_records),
+        omitted_active_records=tuple(omitted_active_records),
     )
+
+
+_ACTIVE_OMISSION_POINTER_PATTERN = re.compile(
+    r"^<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
+    r"scope=active_todo goal_id=(?P<goal_id>[^ ]+) role=(?P<role>user|agent) "
+    r"todo_id=(?P<todo_id>[A-Za-z0-9_.:-]+) "
+    r"omitted_fields=(?P<omitted_fields>[a-z_,]+) "
+    r'query="(?P<query>[^"]+)" -->$'
+)
 
 
 def inspect_todo_section_projection(markdown: str) -> dict[str, object]:
@@ -718,15 +900,34 @@ def inspect_todo_section_projection(markdown: str) -> dict[str, object]:
 
     document = TodoProjectionDocument.parse(markdown)
     markers = []
+    omitted_active_records: list[dict[str, object]] = []
     for region in document.regions:
         for line in document.lines[region.start:region.body_end]:
-            match = _MARKER_PATTERN.fullmatch(line.rstrip("\r\n"))
+            stripped = line.rstrip("\r\n")
+            match = _MARKER_PATTERN.fullmatch(stripped)
             if match is not None and match["role"] == region.role:
                 markers.append(match.groupdict())
+            omission = _ACTIVE_OMISSION_POINTER_PATTERN.fullmatch(stripped)
+            if omission is not None and omission["role"] == region.role:
+                omitted_active_records.append(
+                    {
+                        "todo_id": omission["todo_id"],
+                        "role": omission["role"],
+                        "goal_id": omission["goal_id"],
+                        "omitted_fields": [
+                            item
+                            for item in omission["omitted_fields"].split(",")
+                            if item
+                        ],
+                        "query": omission["query"],
+                    }
+                )
     return {
         "schema_version": TODO_SECTION_PROJECTION_SCHEMA_VERSION,
         "section_count": len(markers),
         "sections": markers,
+        "active_fields_omitted": len(omitted_active_records),
+        "omitted_active_records": omitted_active_records,
     }
 
 
@@ -739,6 +940,7 @@ __all__ = [
     "TODO_SECTION_PROJECTION_SCHEMA_VERSION",
     "TodoSectionProjectionError",
     "TodoSectionProjectionResult",
+    "format_sqlite_active_omission_pointer_comment",
     "format_sqlite_archive_pointer_comment",
     "inspect_todo_section_projection",
     "render_canonical_todo_sections",

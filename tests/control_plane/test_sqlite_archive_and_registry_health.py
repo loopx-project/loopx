@@ -519,3 +519,203 @@ def test_multi_goal_source_registry_sync_and_health_prevent_sibling_false_positi
         if finding.get("kind") == "stale_source_registry"
     ]
     assert stale_goal_ids == ["goal-drifted"]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "todo_payload", "expected_omitted_fields", "expect_inline_note"),
+    [
+        (
+            "zero_archive_long_text_and_note",
+            {
+                "todo_id": "todo_open_both",
+                "text": "[P0] " + ("Acceptance requirement and stop condition " * 11)[:454],
+                "note": "stop-gate-detail-" * 50 + "end853",
+            },
+            ["text", "note"],
+            False,
+        ),
+        (
+            "zero_archive_long_text_only",
+            {
+                "todo_id": "todo_open_long_text",
+                "text": "[P1] " + ("Long body with acceptance tail " * 12).strip(),
+                "note": "Short stop condition retained inline.",
+            },
+            ["text"],
+            True,
+        ),
+        (
+            "zero_archive_long_note_and_scopes_only",
+            {
+                "todo_id": "todo_open_long_meta",
+                "text": "[P1] Compact title preserved in full.",
+                "note": "extended-note-stop-condition-" * 30,
+                "required_write_scopes": [
+                    f"loopx/control_plane/module_{idx}/**/*.py" for idx in range(10)
+                ],
+            },
+            ["note", "required_write_scopes"],
+            False,
+        ),
+    ],
+)
+def test_sqlite_project_markdown_zero_archive_active_field_omission_and_cold_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    scenario: str,
+    todo_payload: dict[str, object],
+    expected_omitted_fields: list[str],
+    expect_inline_note: bool,
+) -> None:
+    from loopx import cli
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime_root = tmp_path / "runtime"
+    project = tmp_path / "project"
+    state_file = project / ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md"
+    state_file.parent.mkdir(parents=True)
+    # Intentionally omit "## Completed Work Archive" and keep zero done/archived items.
+    state_file.write_text(
+        "# Goal\n\n## User Todo / Owner Review Reading Queue\n\n## Agent Todo\n",
+        encoding="utf-8",
+    )
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime_root),
+                "goals": [
+                    {
+                        "id": "goal-a",
+                        "status": "active",
+                        "repo": str(project),
+                        "state_file": ".codex/goals/goal-a/ACTIVE_GOAL_STATE.md",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    todo_id = str(todo_payload["todo_id"])
+    full_text = str(todo_payload["text"])
+    full_note = str(todo_payload["note"])
+    projection = build_todo_runtime_shadow_projection(
+        goal_id="goal-a",
+        todos=[
+            {
+                "schema_version": "todo_item_v0",
+                "role": "agent",
+                "status": "open",
+                "done": False,
+                "archive_state": "active",
+                "source_section": "Agent Todo",
+                "index": 1,
+                "task_class": "advancement_task",
+                **todo_payload,
+            }
+        ],
+        handoff_mode="soft_claim",
+    )
+    initialize_canonical_authority(
+        runtime_root, "goal-a", projection, state_path=state_file, provider="sqlite"
+    )
+    loaded = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id="goal-a")
+    assert loaded is not None
+    provider_revision = str(loaded["provider_revision"])
+
+    rc = cli.main(
+        [
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "todo",
+            "project-markdown",
+            "--goal-id",
+            "goal-a",
+            "--provider-revision",
+            provider_revision,
+            "--execute",
+        ]
+    )
+    assert rc == 0, scenario
+    projection_out = json.loads(capsys.readouterr().out)
+    assert projection_out["active_fields_omitted"] == 1
+    assert projection_out["omitted_active_records"] == [
+        {
+            "todo_id": todo_id,
+            "role": "agent",
+            "omitted_fields": expected_omitted_fields,
+            "query": f"loopx todo list --goal-id goal-a --todo-id {todo_id}",
+        }
+    ]
+
+    rendered = state_file.read_text(encoding="utf-8")
+    expected_comment = (
+        "<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
+        f"scope=active_todo goal_id=goal-a role=agent todo_id={todo_id} "
+        f"omitted_fields={','.join(expected_omitted_fields)} "
+        f'query="loopx todo list --goal-id goal-a --todo-id {todo_id}" -->'
+    )
+    assert expected_comment in rendered
+    parsed_active, _, _ = parse_todo_source(rendered)
+    assert len(parsed_active["agent"]) == 1
+    if expect_inline_note:
+        assert parsed_active["agent"][0].get("note") == full_note
+    else:
+        assert "note=" not in rendered
+        assert parsed_active["agent"][0].get("note") is None
+
+    # Repeated rendering via project-markdown must be idempotent.
+    rc_repeat = cli.main(
+        [
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "todo",
+            "project-markdown",
+            "--goal-id",
+            "goal-a",
+            "--provider-revision",
+            provider_revision,
+            "--execute",
+        ]
+    )
+    assert rc_repeat == 0
+    repeat_out = json.loads(capsys.readouterr().out)
+    assert repeat_out["changed"] is False
+    assert state_file.read_text(encoding="utf-8") == rendered
+
+    # Execute the bound cold-read query from the pointer comment and verify full requirements.
+    rc_list = cli.main(
+        [
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "todo",
+            "list",
+            "--goal-id",
+            "goal-a",
+            "--todo-id",
+            todo_id,
+        ]
+    )
+    assert rc_list == 0
+    cold_read = json.loads(capsys.readouterr().out)
+    item = cold_read["todo"]
+    assert item is not None
+    assert item["todo_id"] == todo_id
+    assert item["text"] == full_text
+    assert item["note"] == full_note
+    if "required_write_scopes" in todo_payload:
+        assert item["required_write_scopes"] == todo_payload["required_write_scopes"]
