@@ -369,7 +369,7 @@ def build_antigravity_hooks_template(
             "enabled": bool(
                 conversation_id and agent_id and goal_id and goal_id != "<goal-id>"
             ),
-            "Stop": [{"type": "command", "command": shlex.join(args), "timeout": 20}],
+            "Stop": [{"type": "command", "command": shlex.join(args), "timeout": 30}],
         }
     }
 

@@ -33,7 +33,10 @@ conversation when Core later selects a quiet no-op; no lower model cost is claim
 handlers, not `hooks.loopx` or a `before_continuation` event. Global
 `--with-agy-hooks` installation is disabled until a concrete Goal, Agent and
 native conversation are bound. Bound recovery handles only the native `ERROR`
-event with a recognized Google model transport failure and fresh admission;
+event with a recognized Google model transport failure and fresh admission.
+The latest native input must match before and after admission; its index and
+creation time distinguish repeated identical messages. Missing native readback
+does not admit a continuation;
 it reserves at most two additional continuations per original input, at least
 60 seconds apart. Normal completion, user cancellation, permission/auth/quota
 failures and unrelated conversations remain untouched. The hook uses its

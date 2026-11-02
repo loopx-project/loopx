@@ -66,7 +66,7 @@ def _admitted(args: argparse.Namespace) -> bool:
         _core_args(args, ["quota", "should-run"]),
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=10,
         check=True,
         env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
     )
@@ -114,6 +114,70 @@ def _reserve_retry(state: dict[str, Any], input_key: str) -> bool:
     return True
 
 
+def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] | None:
+    """Freeze the native input identity, including repeated identical messages."""
+    from ..capabilities.native_chat.antigravity_adapter import (
+        _local_url,
+        _observed_turn_steps,
+        _rpc_post,
+        discover_antigravity_language_server,
+    )
+
+    address = os.environ.get("ANTIGRAVITY_LS_ADDRESS")
+    token = os.environ.get("ANTIGRAVITY_CSRF_TOKEN")
+    if not address and not token:
+        endpoint = discover_antigravity_language_server()
+        if endpoint is None:
+            return None
+        address, token = endpoint["url"], endpoint["csrf_token"]
+    elif not address or not token:
+        return None
+    url = _local_url(address if "://" in address else "http://" + address)
+    payload = {"cascadeId": args.conversation_id}
+    before = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
+    total = before.get("numTotalSteps")
+    status = before.get("status")
+    if (
+        type(total) is not int
+        or total < 1
+        or status not in {"CASCADE_RUN_STATUS_IDLE", "CASCADE_RUN_STATUS_RUNNING"}
+        or (before.get("trajectory") or {}).get("cascadeId") != args.conversation_id
+    ):
+        return None
+    raw = _rpc_post(
+        url,
+        token,
+        "GetCascadeTrajectorySteps",
+        {**payload, "startIndex": 0, "endIndex": total},
+        timeout=2,
+    ).get("steps")
+    indexed, covered = _observed_turn_steps(raw, 0, total)
+    inputs = [
+        (index, step)
+        for index, step in indexed
+        if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"
+    ]
+    after = _rpc_post(url, token, "GetCascadeTrajectory", payload, timeout=2)
+    if (
+        not inputs
+        or covered != total
+        or after.get("status") != status
+        or after.get("numTotalSteps") != total
+        or (after.get("trajectory") or {}).get("cascadeId") != args.conversation_id
+    ):
+        return None
+    index, user = inputs[-1]
+    created = (user.get("metadata") or {}).get("createdAt")
+    if (
+        not isinstance(created, str)
+        or not created
+        or (user.get("userInput") or {}).get("userResponse") != text
+    ):
+        return None
+    anchor = json.dumps([args.conversation_id, index, created, text])
+    return hashlib.sha256(anchor.encode()).hexdigest(), status, total
+
+
 def stop_hook(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]:
     if (
         event.get("conversationId") != args.conversation_id
@@ -123,10 +187,13 @@ def stop_hook(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]
     ):
         return {}
     text = event.get("lastUserInput")
-    if not isinstance(text, str) or not text or not _admitted(args):
+    if not isinstance(text, str) or not text:
+        return {}
+    native = _native_input(args, text)
+    if native is None or not _admitted(args) or _native_input(args, text) != native:
         return {}
     with _state(args) as state:
-        if not _reserve_retry(state, hashlib.sha256(text.encode()).hexdigest()):
+        if not _reserve_retry(state, native[0]):
             return {}
     # Reservation is durable before returning the native continuation decision.
     return {"decision": "continue", "reason": bootstrap_prompt(args)}

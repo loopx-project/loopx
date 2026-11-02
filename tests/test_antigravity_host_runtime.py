@@ -74,6 +74,7 @@ def test_native_retry_requires_fresh_admission_and_is_bounded_per_input(
     tmp_path, monkeypatch
 ):
     args = bound(tmp_path)
+    monkeypatch.setattr(runtime, "_native_input", lambda _, text: (text, "RUNNING", 5))
     monkeypatch.setattr(runtime, "_admitted", lambda _: False)
     assert runtime.stop_hook(args, event()) == {}
     monkeypatch.setattr(runtime, "_admitted", lambda _: True)
@@ -92,6 +93,69 @@ def test_native_retry_requires_fresh_admission_and_is_bounded_per_input(
         ]
         == "continue"
     )
+
+
+def test_repeated_identical_native_inputs_get_distinct_retry_budgets(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(runtime, "_admitted", lambda _: True)
+    native = ["first-input", "RUNNING", 5]
+    monkeypatch.setattr(runtime, "_native_input", lambda *_: tuple(native))
+    clock = [1000]
+    monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
+    for _ in range(2):
+        assert runtime.stop_hook(bound(tmp_path), event())["decision"] == "continue"
+        clock[0] += 61
+    assert runtime.stop_hook(bound(tmp_path), event()) == {}
+    native[:] = ["second-identical-input", "RUNNING", 8]
+    assert runtime.stop_hook(bound(tmp_path), event())["decision"] == "continue"
+
+
+def test_native_input_change_or_missing_evidence_cannot_continue(tmp_path, monkeypatch):
+    monkeypatch.setattr(runtime, "_admitted", lambda _: True)
+    monkeypatch.setattr(runtime, "_native_input", lambda *_: None)
+    assert runtime.stop_hook(bound(tmp_path), event()) == {}
+    snapshots = iter([("input", "RUNNING", 5), ("input", "IDLE", 5)])
+    monkeypatch.setattr(runtime, "_native_input", lambda *_: next(snapshots))
+    assert runtime.stop_hook(bound(tmp_path), event()) == {}
+
+
+def test_native_input_anchor_survives_retry_steps_and_distinguishes_identical_inputs(
+    tmp_path, monkeypatch
+):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", "127.0.0.1:1234")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "synthetic-token")
+    text = "Continue"
+    user = {
+        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+        "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"createdAt": "2026-01-01T00:00:00Z"},
+        "userInput": {"userResponse": text},
+    }
+    steps = [user]
+
+    def read(url, token, method, payload, **_):
+        assert payload["cascadeId"] == "native-chat"
+        if method == "GetCascadeTrajectorySteps":
+            return {"steps": steps}
+        return {
+            "trajectory": {"cascadeId": "native-chat"},
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "numTotalSteps": len(steps),
+        }
+
+    monkeypatch.setattr(provider, "_rpc_post", read)
+    first = runtime._native_input(bound(tmp_path), text)
+    assert first is not None
+    steps.append(
+        {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE"}
+    )
+    assert runtime._native_input(bound(tmp_path), text)[0] == first[0]
+    steps.append({**user, "metadata": {"createdAt": "2026-01-01T00:00:05Z"}})
+    assert runtime._native_input(bound(tmp_path), text)[0] != first[0]
+    assert runtime._native_input(bound(tmp_path), "A changed message") is None
 
 
 def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
