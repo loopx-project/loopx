@@ -178,6 +178,8 @@ def discover_antigravity_language_server(
         ps_out = subprocess.check_output(
             ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stderr=subprocess.DEVNULL,
             timeout=3.0,
         )
@@ -206,6 +208,8 @@ def discover_antigravity_language_server(
             lsof_out = subprocess.check_output(
                 ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stderr=subprocess.DEVNULL,
                 timeout=max(0.1, deadline - time.monotonic()),
             )
