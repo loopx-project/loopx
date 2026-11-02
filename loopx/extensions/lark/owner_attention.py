@@ -195,7 +195,12 @@ class LarkOwnerAttention:
                     datetime.fromisoformat(pair[1]["recorded_at"].replace("Z", "+00:00")).timestamp(), pair[0]))[1]
             failure = {"todo_id": todo["todo_id"], "text": todo["text"], "outcome": latest["outcome"],
                        "reason": latest.get("reason", todo.get("reason", "")),
-                       "terminal_outcome_count": len(outcomes)}
+                       "terminal_outcome_count": len(outcomes),
+                       # Only typed identity fields participate; never copy private outcome prose.
+                       "terminal_outcome_identities": sorted(
+                           [{key: row[key] for key in ("decision_scope", "outcome", "source_todo_id")
+                             if key in row} for row in outcomes],
+                           key=lambda row: json.dumps(row, sort_keys=True))}
             evidence = latest.get("evidence", todo.get("evidence"))
             if evidence is not None:
                 failure["evidence"] = evidence

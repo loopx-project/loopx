@@ -144,6 +144,13 @@ export function planOwnerAttention(input: JsonObject): JsonObject {
       if (count < 1) throw new Error("invalid terminal outcome count");
       const terms: JsonObject = {text: requireNonEmptyString(failure.text, "failure.text"),
         note: failure.outcome, reason: failure.reason ?? "", terminal_outcome_count: count};
+      if (failure.terminal_outcome_identities != null) {
+        // Canonical hashes ignore object key order; sorting ignores outcome list order.
+        terms.terminal_outcome_identities = records(failure.terminal_outcome_identities, "terminal_outcome_identities")
+          .map(row => Object.fromEntries(["decision_scope", "outcome", "source_todo_id"]
+            .filter(key => row[key] != null).map(key => [key, row[key]])))
+          .sort((a, b) => digest(a).localeCompare(digest(b)));
+      }
       if (failure.evidence != null && failure.evidence !== "") terms.evidence = failure.evidence;
       const key = `${goalId}/${todoId}/terminal`;
       if (current.has(key)) throw new Error("duplicate terminal Todo");

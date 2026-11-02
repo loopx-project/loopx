@@ -547,7 +547,8 @@ def test_terminal_snapshot_latest_timestamp_or_list_order_and_count(owner, monke
             "ok": True, "todo_count": 1, "todos": [{"todo_id": todo["todo_id"]}]}
     monkeypatch.setattr(module, "list_goal_todos", read)
     assert owner.attention._goal_failures("alpha") == [{"todo_id": "todo_failed", "text": "Build preview",
-        "outcome": "reject", "reason": "Newer reason", "evidence": "review-a", "terminal_outcome_count": 2}]
+        "outcome": "reject", "reason": "Newer reason", "evidence": "review-a", "terminal_outcome_count": 2,
+        "terminal_outcome_identities": [{"outcome": "cancel"}, {"outcome": "reject"}]}]
     del todo["decision_scope_outcomes"][1]["recorded_at"]
     assert owner.attention._goal_failures("alpha")[0]["outcome"] == "cancel"
 
@@ -581,3 +582,24 @@ def test_terminal_snapshot_withdraws_unsent_and_second_outcome_renotifies(owner,
     state = o.attention._plan(state, o.attention._snapshot(o.binding))
     assert all(row["status"] == "superseded" for row in state["outbox"])
     assert state["subjects"][0]["active"] is False
+
+
+def test_terminal_scope_replacement_changes_generation_without_changing_latest_or_count(owner):
+    o = owner
+    o.configure()
+    scope = {"kind": "direction", "granularity": "action", "scope_key": "preview"}
+    first = {"outcome": "reject", "source_todo_id": "todo_review_a", "decision_scope": scope}
+    second = {**first, "source_todo_id": "todo_review_b",
+              "decision_scope": {**scope, "scope_key": "publish"}}
+    task = {"id": "todo_failed", "text": "Build preview", "role": "agent", "status": "blocked",
+            "decision_scope_outcomes": [first, second]}
+    o.tasks([task])
+    path = o.attention._path(o.binding["binding_id"])
+    state = o.attention._plan(o.attention._read(path), o.attention._snapshot(o.binding))
+    assert state["outbox"][-1]["generation"] == 1
+    o.tasks([{**task, "decision_scope_outcomes": [{**first, "outcome": "cancel"}, second]}])
+    changed = o.attention._plan(state, o.attention._snapshot(o.binding))
+    assert [row["generation"] for row in changed["outbox"]] == [1, 2]
+    assert changed["outbox"][0]["digest"] != changed["outbox"][1]["digest"]
+    assert changed["outbox"][0]["body"] == changed["outbox"][1]["body"]
+    assert o.attention._plan(changed, o.attention._snapshot(o.binding)) == changed

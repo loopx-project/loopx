@@ -1,3 +1,4 @@
+import {planUserCompletion} from "../../loopx/control_plane/todos/user_completion.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {observeOwnerAttention, ownerAttentionHealth, ownerAttentionReferences, planOwnerAttention} from "../../loopx/control_plane/presentation/owner_attention.ts";
@@ -297,4 +298,28 @@ test("absent failures preserves the ordinary plan byte for byte", () => {
     assert.equal(JSON.stringify(legacy), JSON.stringify(explicit));
     assert.ok(!JSON.stringify(legacy).includes("/terminal"));
   }
+});
+
+
+test("native in-place terminal scope replacement advances generation and identical identities stay stable", () => {
+  const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: "preview"};
+  const gate = {todo_id: "todo_review_a", role: "user", task_class: "user_gate", status: "open",
+    unblocks_todo_id: terminal.todo_id, decision_scope: scope};
+  let target: JsonObject = {todo_id: terminal.todo_id, role: "agent", status: "blocked"};
+  target = {...target, ...planUserCompletion(gate, [target], "reject").updates};
+  target = {...target, ...planUserCompletion({...gate, todo_id: "todo_review_b",
+    decision_scope: {...scope, scope_key: "publish"}}, [target], "reject").updates};
+  const project = (row: JsonObject): JsonObject => ({...terminal, terminal_outcome_count: 2,
+    terminal_outcome_identities: row.decision_scope_outcomes});
+  const first = failurePlan(failurePlan(empty(), []), [project(target)]);
+  assert.equal(rows(first)[0].generation, 1);
+  target = {...target, ...planUserCompletion(gate, [target], "cancel").updates};
+  assert.deepEqual((target.decision_scope_outcomes as JsonObject[]).map(row => row.outcome), ["cancel", "reject"]);
+  const second = failurePlan(first, [project(target)]);
+  assert.equal(rows(second)[1].generation, 2);
+  assert.notEqual(rows(second)[0].digest, rows(second)[1].digest);
+  assert.equal(rows(second)[0].body, rows(second)[1].body);
+  assert.deepEqual(failurePlan(second, [project(target)]), second);
+  const reordered = {...project(target), terminal_outcome_identities: [...target.decision_scope_outcomes as JsonObject[]].reverse()};
+  assert.deepEqual(failurePlan(second, [reordered]), second);
 });
