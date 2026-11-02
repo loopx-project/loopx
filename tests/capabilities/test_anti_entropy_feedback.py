@@ -635,7 +635,7 @@ def test_turn_context_extracts_native_route_and_envelope_selected_todos() -> Non
     assert res_dec["readback"]["anti_entropy_guidance"]["status"] == "active"
     assert res_dec["readback"]["anti_entropy_guidance"]["target_paths"] == ["old_dec.py"]
 
-    # 4. Route selected_todo with JSON string in note
+    # 4. A bare target mapping in a note is ordinary task metadata, never an opt-in.
     payload_note = {
         "route": {
             "selected_todo": {
@@ -645,8 +645,322 @@ def test_turn_context_extracts_native_route_and_envelope_selected_todos() -> Non
         }
     }
     res_note = anti_entropy_context_result(payload_note, goal_id="g1", decision={})
-    assert res_note["readback"]["anti_entropy_guidance"]["status"] == "active"
-    assert res_note["readback"]["anti_entropy_guidance"]["target_symbols"] == ["old_note_func"]
+    assert res_note["readback"] == {}
+    assert res_note["context_fields"] == {}
+
+@pytest.mark.parametrize(
+    "container",
+    ("params", "metadata", "task_spec", "task_parameters", "config", "options", "foo"),
+)
+def test_generic_container_target_fields_never_authorize_retirement(
+    container: str,
+) -> None:
+    """Only the reserved basis namespace authorizes retirement (review R9 P1)."""
+    payload = {
+        "route": {
+            "selected_todo": {
+                "todo_id": "todo-generic-1",
+                container: {
+                    "target_paths": ["src/current.py"],
+                    "target_symbols": ["old_api"],
+                    "operation": "read_and_summarize",
+                },
+            }
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+    assert result["instructions"] == []
+
+
+def test_nested_generic_containers_never_authorize_retirement() -> None:
+    """Deep nesting does not turn generic target fields into a declaration."""
+    payload = {
+        "turn_envelope": {
+            "work_context": {
+                "sources": [
+                    {
+                        "content": {
+                            "todo": {
+                                "note": json.dumps(
+                                    {
+                                        "params": {
+                                            "nested": {
+                                                "metadata": {
+                                                    "target_paths": ["src/current.py"]
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+
+
+@pytest.mark.parametrize(
+    "container", ("params", "metadata", "task_spec", "task_parameters")
+)
+def test_explicit_namespace_inside_generic_containers_still_authorizes(
+    container: str,
+) -> None:
+    """The reserved namespace remains a valid carrier inside generic containers."""
+    payload = {
+        "route": {
+            "selected_todo": {
+                "todo_id": "todo-ns-1",
+                container: {
+                    "retirement_basis": {"target_symbols": ["old_api"]},
+                    "target_paths": ["unrelated.py"],
+                },
+            }
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    guidance = result["readback"]["anti_entropy_guidance"]
+    assert guidance["status"] == "active"
+    assert guidance["target_symbols"] == ["old_api"]
+    assert guidance["target_paths"] == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"anti_entropy": {"target_symbols": ["old_api"]}},
+        {"anti_entropy": {"target_paths": ["legacy.py"]}},
+        {"turn_envelope": {"boundary": {"anti_entropy": {"target_symbols": ["old_api"]}}}},
+    ),
+)
+def test_anti_entropy_wrapper_bare_targets_do_not_authorize(payload: dict) -> None:
+    """The enablement wrapper is not a basis declaration."""
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+
+
+def test_malformed_declared_basis_stays_inert() -> None:
+    """A malformed explicit declaration must not inject partial policy."""
+    payload = {
+        "route": {
+            "selected_todo": {
+                "note": '{"retirement_basis": {"target_symbols": 5}}',
+            }
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+
+
+def test_evidence_and_rationale_fields_are_not_activation_carriers() -> None:
+    """Reporting fields do not opt a turn into retirement governance."""
+    declared = {"retirement_basis": {"target_symbols": ["old_api"]}}
+    payload = {
+        "route": {
+            "selected_todo": {
+                "evidence": json.dumps(declared),
+                "rationale": json.dumps(declared),
+            }
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+
+
+def test_goal_capability_declaration_does_not_activate(tmp_path: Path) -> None:
+    """Goal availability is not task activation: unrelated turns stay off."""
+    from loopx.capabilities.anti_entropy.turn_context import (
+        _load_goal,
+        anti_entropy_context_registration,
+    )
+    from loopx.control_plane.capability_hooks import dispatch_turn_context_hooks
+
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "goals": [
+                    {
+                        "id": "g1",
+                        "repo": str(tmp_path),
+                        "available_capabilities": ["anti-entropy-governance"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    goal = _load_goal(registry, "g1")
+    assert goal is not None
+    assert goal.get("available_capabilities") == ["anti-entropy-governance"]
+
+    payload = {"goal_id": "g1", "agent_id": "a1"}
+    registration = anti_entropy_context_registration(
+        payload,
+        registry_path=registry,
+        goal_id="g1",
+        agent_id="a1",
+        decision={},
+        turn_instance_id="t1",
+    )
+    assert registration.readback_slots == ()
+    dispatched = dict(payload)
+    dispatch_turn_context_hooks(dispatched, (registration,))
+    assert "anti_entropy_guidance" not in dispatched
+    assert "turn_context_contributions" not in dispatched
+
+
+def test_shared_turn_context_composition_still_injects_explicit_task(
+    tmp_path: Path,
+) -> None:
+    """Removing the Goal gate must not remove the turn-context hook itself."""
+    from loopx.capabilities.turn_context import attach_turn_context
+
+    payload = {
+        "goal_id": "g1",
+        "agent_id": "a1",
+        "retirement_basis": {"target_symbols": ["old_api"]},
+        "workspace": str(tmp_path),
+    }
+    attach_turn_context(
+        payload,
+        registry_path=tmp_path,
+        goal_id="g1",
+        agent_id="a1",
+        decision={},
+        turn_instance_id="turn-1",
+    )
+    assert payload["anti_entropy_guidance"]["status"] == "active"
+    contributions = payload.get("turn_context_contributions", [])
+    assert any(
+        "anti_entropy_context" in item.get("context_fields", {})
+        for item in contributions
+    )
+
+
+def test_heartbeat_should_run_routes_into_shared_turn_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The heartbeat production path still calls the shared turn-context owner."""
+    from loopx.cli_commands import quota_reward_memory
+
+    captured: dict[str, object] = {}
+
+    def fake_attach(payload: dict, **kwargs: object) -> None:
+        captured["payload"] = payload
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(quota_reward_memory, "attach_turn_context", fake_attach)
+    payload = {
+        "ok": True,
+        "should_run": True,
+        "heartbeat_receipt": {"status": "committed"},
+        "retirement_basis": {"target_symbols": ["old_api"]},
+    }
+    quota_reward_memory.attach_reward_memory_recall_after_should_run(
+        payload,
+        quota_command="should-run",
+        heartbeat_turn_id="hb-1",
+        registry_path=tmp_path,
+        goal_id="g1",
+        agent_id="a1",
+    )
+    assert captured["payload"] is payload
+    assert captured["kwargs"] == {
+        "registry_path": tmp_path,
+        "goal_id": "g1",
+        "agent_id": "a1",
+        "decision": payload,
+        "turn_instance_id": "hb-1",
+    }
+
+
+def test_heartbeat_without_should_run_does_not_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The heartbeat routing guard is unchanged by this fix."""
+    from loopx.cli_commands import quota_reward_memory
+
+    called = False
+
+    def fake_attach(payload: dict, **kwargs: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(quota_reward_memory, "attach_turn_context", fake_attach)
+    quota_reward_memory.attach_reward_memory_recall_after_should_run(
+        {"ok": True, "should_run": False, "heartbeat_receipt": {"status": "committed"}},
+        quota_command="should-run",
+        heartbeat_turn_id="hb-1",
+        registry_path=tmp_path,
+        goal_id="g1",
+        agent_id="a1",
+    )
+    assert called is False
+
+
+def test_stale_recommended_action_from_another_todo_does_not_activate() -> None:
+    """A selected Todo's own text governs; a stale action recommendation does not."""
+    payload = {
+        "turn_envelope": {
+            "action": {
+                "recommended_action": (
+                    "Replace old_api with new_api. "
+                    '{"retirement_basis": {"target_symbols": ["old_api"]}}'
+                ),
+                "selected_todo": {
+                    "todo_id": "todo-later",
+                    "text": "Summarize the remaining files without retiring anything.",
+                },
+            }
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+
+
+def test_unselected_sibling_todo_basis_does_not_activate_selected_todo() -> None:
+    """Only the selected Todo's record contributes intent to this turn."""
+    payload = {
+        "turn_envelope": {
+            "action": {
+                "selected_todo": {
+                    "todo_id": "todo-selected",
+                    "text": "Summarize the remaining files without retiring anything.",
+                },
+            },
+            "work_context": {
+                "sources": [
+                    {
+                        "content": {
+                            "todo": {
+                                "todo_id": "todo-retirement",
+                                "note": (
+                                    '{"retirement_basis": '
+                                    '{"target_symbols": ["old_api"]}}'
+                                ),
+                            }
+                        }
+                    }
+                ]
+            },
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    assert result["readback"] == {}
+    assert result["context_fields"] == {}
+
 
 def test_turn_context_reads_native_work_context_todo_note() -> None:
     """The hook reads the selected Todo's canonical note from the native work context."""

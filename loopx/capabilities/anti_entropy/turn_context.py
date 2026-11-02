@@ -19,8 +19,6 @@ _TEXT_CARRIER_KEYS = (
     "text",
     "description",
     "instruction",
-    "evidence",
-    "rationale",
 )
 _ENABLE_CAPABILITY_IDS = frozenset(
     {"anti-entropy-governance", "anti_entropy_governance", "anti_entropy"}
@@ -76,9 +74,30 @@ def _embedded_json_objects(text: str):
             index += 1
 
 
-def _extract_basis_candidate(candidate: Any) -> RetirementBasis | None:
-    """Recursively search a task carrier for an explicit retirement basis."""
-    if candidate is None:
+def _basis_from_declared_value(value: Any) -> RetirementBasis | None:
+    """Parse an explicitly declared basis value; malformed declarations stay inert."""
+    if isinstance(value, RetirementBasis):
+        return value if (value.target_symbols or value.target_paths) else None
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        basis = RetirementBasis.from_dict(value)
+    except Exception:  # noqa: BLE001 - a malformed declaration is not an opt-in
+        return None
+    return basis if (basis.target_symbols or basis.target_paths) else None
+
+
+def _extract_basis_candidate(candidate: Any, *, _depth: int = 0) -> RetirementBasis | None:
+    """Find an explicitly declared retirement basis inside a task carrier.
+
+    Task text, notes, and generic metadata are carriers, never authorization:
+    a mapping is a basis only when it is reached through the reserved
+    ``retirement_basis`` / ``anti_entropy_basis`` namespace. A mapping that merely
+    contains ``target_symbols`` / ``target_paths`` is ordinary task metadata and
+    must stay inert, otherwise an unrelated task's path parameters would
+    activate delete-first governance (review R9 P1).
+    """
+    if candidate is None or _depth > 8:
         return None
     if isinstance(candidate, RetirementBasis):
         return (
@@ -88,42 +107,41 @@ def _extract_basis_candidate(candidate: Any) -> RetirementBasis | None:
         )
     if isinstance(candidate, str):
         for embedded in _embedded_json_objects(candidate):
-            parsed = _extract_basis_candidate(embedded)
+            parsed = _extract_basis_candidate(embedded, _depth=_depth + 1)
             if parsed is not None:
                 return parsed
         return None
     if not isinstance(candidate, Mapping):
         return None
+
     for key in _BASIS_KEYS:
         if key in candidate:
-            parsed = _extract_basis_candidate(candidate[key])
-            if parsed is not None:
-                return parsed
+            return _basis_from_declared_value(candidate[key])
+
+    # An ``anti_entropy`` wrapper may hold an explicit basis namespace, but its
+    # bare target fields are an enablement/config surface, not a declaration.
     anti_entropy = candidate.get("anti_entropy")
     if isinstance(anti_entropy, Mapping):
-        parsed = _extract_basis_candidate(anti_entropy)
-        if parsed is not None:
-            return parsed
+        for key in _BASIS_KEYS:
+            if key in anti_entropy:
+                return _basis_from_declared_value(anti_entropy[key])
+
+    # Generic containers are traversed only to locate the reserved namespace.
     for container_key in _BASIS_CONTAINER_KEYS:
         if container_key in candidate:
-            parsed = _extract_basis_candidate(candidate[container_key])
+            parsed = _extract_basis_candidate(
+                candidate[container_key], _depth=_depth + 1
+            )
             if parsed is not None:
                 return parsed
-    # A dedicated basis object (not arbitrary task metadata) carries the
-    # declared targets directly.
-    if "target_symbols" in candidate or "target_paths" in candidate:
-        try:
-            parsed = RetirementBasis.from_dict(candidate)
-        except Exception:
-            parsed = None
-        if parsed is not None and (parsed.target_symbols or parsed.target_paths):
-            return parsed
+
     for text_key in _TEXT_CARRIER_KEYS:
         text_value = candidate.get(text_key)
         if isinstance(text_value, str):
-            parsed = _extract_basis_candidate(text_value)
+            parsed = _extract_basis_candidate(text_value, _depth=_depth + 1)
             if parsed is not None:
                 return parsed
+
     return None
 
 
@@ -190,6 +208,49 @@ def _selected_todo_records(
     return records
 
 
+def _selected_todo_ids(
+    payload: Mapping[str, Any],
+    decision: Mapping[str, Any],
+) -> set[str]:
+    """Return the explicit selected-Todo ids for this turn, if any."""
+    ids: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, Mapping):
+            todo_id = value.get("todo_id")
+            if isinstance(todo_id, str) and todo_id.strip():
+                ids.add(todo_id.strip())
+
+    envelope = payload.get("turn_envelope")
+    if isinstance(envelope, Mapping):
+        action = envelope.get("action")
+        if isinstance(action, Mapping):
+            add(action.get("selected_todo"))
+        add(envelope.get("selected_todo"))
+    route = payload.get("route")
+    if isinstance(route, Mapping):
+        add(route.get("selected_todo"))
+    add(payload.get("selected_todo"))
+    if isinstance(decision, Mapping):
+        add(decision.get("selected_todo"))
+        action = decision.get("action")
+        if isinstance(action, Mapping):
+            add(action.get("selected_todo"))
+        route = decision.get("route")
+        if isinstance(route, Mapping):
+            add(route.get("selected_todo"))
+    return ids
+
+
+def _record_matches_selection(
+    record: Mapping[str, Any], selected_ids: set[str]
+) -> bool:
+    if not selected_ids:
+        return True
+    todo_id = record.get("todo_id")
+    return isinstance(todo_id, str) and todo_id.strip() in selected_ids
+
+
 def _resolve_retirement_basis(
     payload: Mapping[str, Any],
     decision: Mapping[str, Any],
@@ -202,12 +263,8 @@ def _resolve_retirement_basis(
     key is accepted for direct callers but is never the only source.
     """
     candidates: list[Any] = [
-        payload.get("retirement_basis"),
-        payload.get("anti_entropy_basis"),
-        payload.get("anti_entropy"),
-        decision.get("retirement_basis"),
-        decision.get("anti_entropy_basis"),
-        decision.get("anti_entropy"),
+        payload,
+        decision,
         payload.get("route", {}).get("selected_todo")
         if isinstance(payload.get("route"), Mapping)
         else None,
@@ -226,7 +283,15 @@ def _resolve_retirement_basis(
         else None,
         decision.get("task"),
     ]
+    selected_ids = _selected_todo_ids(payload, decision)
     for candidate in candidates:
+        if (
+            selected_ids
+            and isinstance(candidate, Mapping)
+            and candidate.get("todo_id") is not None
+            and not _record_matches_selection(candidate, selected_ids)
+        ):
+            continue
         basis = _extract_basis_candidate(candidate)
         if basis is not None:
             return basis
@@ -234,11 +299,28 @@ def _resolve_retirement_basis(
     if isinstance(envelope, Mapping):
         action = envelope.get("action")
         if isinstance(action, Mapping):
-            for text_key in ("recommended_action", "text"):
-                basis = _extract_basis_candidate(action.get(text_key))
-                if basis is not None:
-                    return basis
+            selected = action.get("selected_todo")
+            text_ref = (
+                str(selected.get("text_ref") or "")
+                if isinstance(selected, Mapping)
+                else ""
+            )
+            selected_text = (
+                selected.get("text") if isinstance(selected, Mapping) else None
+            )
+            text_ref_names_action = text_ref.endswith(
+                ("recommended_action", "action.text")
+            ) or text_ref in {"recommended_action", "text"}
+            if not selected_ids or text_ref_names_action or not (
+                isinstance(selected_text, str) and selected_text.strip()
+            ):
+                for text_key in ("recommended_action", "text"):
+                    basis = _extract_basis_candidate(action.get(text_key))
+                    if basis is not None:
+                        return basis
     for record in _selected_todo_records(payload, decision):
+        if not _record_matches_selection(record, selected_ids):
+            continue
         basis = _extract_basis_candidate(record)
         if basis is not None:
             return basis
@@ -252,24 +334,8 @@ def _load_goal(registry_path: Path | str | None, goal_id: str | None) -> Mapping
         from ...agent_registry import load_goal_from_registry
 
         return load_goal_from_registry(Path(registry_path), goal_id)
-    except Exception:  # noqa: BLE001 - optional read-only enablement hint
+    except Exception:  # noqa: BLE001 - optional read-only workspace hint
         return None
-
-
-def _declared_capability_ids(goal: Mapping[str, Any]) -> set[str]:
-    declared: set[str] = set()
-    for container in (
-        goal,
-        goal.get("control_plane"),
-        goal.get("coordination"),
-    ):
-        if not isinstance(container, Mapping):
-            continue
-        for key in ("available_capabilities", "required_capabilities"):
-            value = container.get(key)
-            if isinstance(value, (list, tuple, set)):
-                declared.update(str(item).strip() for item in value if isinstance(item, str))
-    return declared
 
 
 def _record_required_capabilities(record: Mapping[str, Any]) -> set[str]:
@@ -283,15 +349,14 @@ def _is_anti_entropy_enabled(
     payload: Mapping[str, Any],
     decision: Mapping[str, Any],
     basis: RetirementBasis | None,
-    *,
-    registry_path: Path | str | None = None,
-    goal_id: str | None = None,
 ) -> bool:
     """Determine whether anti-entropy is enabled for this turn.
 
-    A declared retirement basis is the task-scoped opt-in. The explicit
-    capability id in the selected Todo's required capabilities and a Goal-level
-    available-capability declaration are the typed enablement paths.
+    Every enablement source is task-scoped: a declared retirement basis, the
+    selected Todo's typed ``required_capabilities``, or a direct typed flag on
+    the Turn/Todo/envelope. A Goal-level capability declaration is availability,
+    not activation: it must not switch unrelated or later-added Todos in the same
+    Goal into retirement governance (review R9 scope requirement).
     """
     if basis is not None and (basis.target_symbols or basis.target_paths):
         return True
@@ -319,19 +384,15 @@ def _is_anti_entropy_enabled(
                 if capability is True:
                     return True
 
+    selected_ids = _selected_todo_ids(payload, decision)
     for record in _selected_todo_records(payload, decision):
+        if not _record_matches_selection(record, selected_ids):
+            continue
         if record.get("anti_entropy_enabled") is True:
             return True
-        for key in ("metadata", "params"):
-            value = record.get(key)
-            if isinstance(value, Mapping) and value.get("anti_entropy_enabled") is True:
-                return True
         if _record_required_capabilities(record) & _ENABLE_CAPABILITY_IDS:
             return True
 
-    goal = _load_goal(registry_path, goal_id)
-    if goal is not None and _declared_capability_ids(goal) & _ENABLE_CAPABILITY_IDS:
-        return True
     return False
 
 
@@ -495,13 +556,7 @@ def anti_entropy_context_registration(
         payload, registry_path=registry_path, goal_id=goal_id
     )
     basis = _resolve_retirement_basis(payload, decision)
-    enabled = _is_anti_entropy_enabled(
-        payload,
-        decision,
-        basis,
-        registry_path=registry_path,
-        goal_id=goal_id,
-    )
+    enabled = _is_anti_entropy_enabled(payload, decision, basis)
 
     def produce() -> Mapping[str, Any]:
         return anti_entropy_context_result(

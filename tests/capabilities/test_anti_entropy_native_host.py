@@ -147,3 +147,228 @@ def test_real_turn_host_stdin_carries_anti_entropy_guidance(tmp_path: Path) -> N
     assert "loopx anti-entropy inspect" in host_input
     assert '"anti_entropy_context"' in host_input
     assert '"inspect_tool"' in host_input
+
+
+def _prepare_goal(
+    tmp_path: Path,
+    goal_id: str,
+    *,
+    available_capabilities: tuple[str, ...] = (),
+) -> tuple[Path, Path]:
+    fixture = _load_canonical_fixture()
+    registry, runtime, _state = fixture.promoted_create_fixture(
+        tmp_path, goal_id=goal_id, registered_agents=["codex-fixture"]
+    )
+    registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+    registry_payload["goals"][0].update(
+        {
+            "status": "active",
+            "domain": "software-development",
+            "adapter": {"kind": "generic_project_goal_v0", "status": "connected"},
+        }
+    )
+    if available_capabilities:
+        registry_payload["goals"][0]["available_capabilities"] = list(
+            available_capabilities
+        )
+    registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    return registry, runtime
+
+
+def _add_todo(
+    registry: Path,
+    runtime: Path,
+    goal_id: str,
+    *,
+    text: str,
+    note: str,
+) -> str:
+    added = _run_cli(
+        registry,
+        runtime,
+        "todo",
+        "add",
+        "--goal-id",
+        goal_id,
+        "--role",
+        "agent",
+        "--text",
+        text,
+        "--note",
+        note,
+        "--execute",
+        "--format",
+        "json",
+    )
+    assert added.returncode == 0, added.stdout + added.stderr
+    payload = json.loads(added.stdout)
+    assert payload["status"] == "applied", payload
+    return str(payload["todo_id"])
+
+
+def _make_capture_host(tmp_path: Path) -> tuple[Path, Path]:
+    capture = tmp_path / "host_capture.txt"
+    fake_codex = tmp_path / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        "{\n"
+        "  echo '=== ARGV ==='\n"
+        "  printf '%s\\n' \"$@\"\n"
+        "  echo '=== STDIN ==='\n"
+        "  cat\n"
+        f'}} > "{capture}"\n'
+        "exit 9\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    return capture, fake_codex
+
+
+def _capture_turn_stdin(
+    registry: Path,
+    runtime: Path,
+    goal_id: str,
+    *,
+    todo_id: str | None,
+    capture: Path,
+    fake_codex: Path,
+    project: Path,
+) -> str:
+    args = [
+        "turn",
+        "run-once",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        "codex-fixture",
+        "--host",
+        "codex-cli",
+        "--project",
+        str(project),
+        "--codex-bin",
+        str(fake_codex),
+        "--timeout-seconds",
+        "30",
+        "--execute",
+        "--format",
+        "json",
+    ]
+    if todo_id is not None:
+        args += ["--todo-id", todo_id]
+    capture.unlink(missing_ok=True)
+    turn = _run_cli(registry, runtime, *args)
+    payload = json.loads(turn.stdout)
+    assert payload["effects"]["host_invoked"] is True, turn.stdout + turn.stderr
+    assert payload["result_kind"] == "host_failure", turn.stdout + turn.stderr
+    assert capture.is_file(), turn.stdout + turn.stderr
+    return capture.read_text(encoding="utf-8", errors="replace")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the synthetic Host fixture is a POSIX shell script",
+)
+def test_native_turn_activation_scope_matrix(tmp_path: Path) -> None:
+    """Ordinary tasks stay off; explicit retirement stays on; scope is per-Todo."""
+    if shutil.which("node") is None:
+        pytest.skip("canonical File authority fixture requires node")
+
+    goal_id = "anti-entropy-native-scope"
+    registry, runtime = _prepare_goal(
+        tmp_path,
+        goal_id,
+        available_capabilities=("anti-entropy-governance",),
+    )
+    capture, fake_codex = _make_capture_host(tmp_path)
+    project = tmp_path / "project"
+
+    plain_text = (
+        "Check these files and summarize their responsibilities; "
+        "do not retire symbols or delete files."
+    )
+    ordinary_note = json.dumps(
+        {
+            "params": {
+                "target_paths": ["src/current.py"],
+                "operation": "read_and_summarize",
+            }
+        }
+    )
+    plain_todo = _add_todo(
+        registry, runtime, goal_id, text=plain_text, note=ordinary_note
+    )
+    host_input = _capture_turn_stdin(
+        registry,
+        runtime,
+        goal_id,
+        todo_id=plain_todo,
+        capture=capture,
+        fake_codex=fake_codex,
+        project=project,
+    )
+    assert '"anti_entropy_context"' not in host_input
+    assert "Anti-entropy code governance is active" not in host_input
+    assert "delete-first" not in host_input.lower()
+    assert "anti_entropy_guidance" not in host_input
+    assert plain_text[:20] in host_input
+
+    symbol_note = json.dumps({"params": {"target_symbols": ["old_api"]}})
+    symbol_todo = _add_todo(
+        registry,
+        runtime,
+        goal_id,
+        text="Inspect src/current.py and list its exported symbols; do not retire anything.",
+        note=symbol_note,
+    )
+    host_input = _capture_turn_stdin(
+        registry,
+        runtime,
+        goal_id,
+        todo_id=symbol_todo,
+        capture=capture,
+        fake_codex=fake_codex,
+        project=project,
+    )
+    assert '"anti_entropy_context"' not in host_input
+    assert "Anti-entropy code governance is active" not in host_input
+
+    basis = {"retirement_basis": {"target_symbols": ["old_api"]}}
+    retirement_todo = _add_todo(
+        registry,
+        runtime,
+        goal_id,
+        text="Replace old_api with new_api and delete the legacy export. "
+        + json.dumps(basis),
+        note=json.dumps(basis),
+    )
+    host_input = _capture_turn_stdin(
+        registry,
+        runtime,
+        goal_id,
+        todo_id=retirement_todo,
+        capture=capture,
+        fake_codex=fake_codex,
+        project=project,
+    )
+    assert "Anti-entropy code governance is active for this task" in host_input
+    assert '"anti_entropy_context"' in host_input
+    assert "loopx anti-entropy inspect" in host_input
+
+    later_todo = _add_todo(
+        registry,
+        runtime,
+        goal_id,
+        text="Summarize the remaining files without retiring anything.",
+        note=ordinary_note,
+    )
+    host_input = _capture_turn_stdin(
+        registry,
+        runtime,
+        goal_id,
+        todo_id=later_todo,
+        capture=capture,
+        fake_codex=fake_codex,
+        project=project,
+    )
+    assert '"anti_entropy_context"' not in host_input
+    assert "Anti-entropy code governance is active" not in host_input
