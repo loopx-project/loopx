@@ -606,6 +606,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     if (adopted?.delivery_verified === true) {
       return planNativeMetadataReview(recovery, row, current, failed, adopted, version);
     }
+    // A fresh native result requires an idle, stable trajectory. Do not spend
+    // shared reply workers probing older results while this Session is busy.
+    if (current.active_turn_id != null || current.status !== "ready") return no;
     if (row.context_recovery != null) return no;
     const candidate = {...no, operation: "adopt_native_result", recovery_candidate: true,
       recover_native_result: true, failed_turn_id: failed.turn_id, session_id: current.session_id};
