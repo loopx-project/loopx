@@ -748,3 +748,67 @@ def test_agent_scope_skips_goals_where_agent_is_not_registered_without_warning(
 
     assert [todo["todo_id"] for todo in payload["todos"]] == ["todo-registered"]
     assert payload["source_warnings"] == []
+
+
+def test_unscoped_peer_v1_goal_fans_out_past_eighth_registered_agent_and_records_lane_failures(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    agents = [f"agent-{idx}" for idx in range(1, 10)]
+    status = {
+        "ok": True,
+        "attention_queue": {
+            "items": [{"goal_id": "goal-nine-agents"}],
+        },
+        "run_history": {
+            "goals": [
+                {
+                    "id": "goal-nine-agents",
+                    "coordination": {
+                        "registered_agents": agents,
+                    },
+                }
+            ]
+        },
+    }
+    unscoped_quota = {
+        "ok": True,
+        "goal_id": "goal-nine-agents",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+    }
+    ninth_quota = runnable_quota(
+        "goal-nine-agents",
+        "todo-agent-9",
+        priority="P0",
+        action_kind="implement",
+        agent_id="agent-9",
+    )
+
+    def build_quota(_status_payload, *, goal_id, agent_id=None):
+        assert goal_id == "goal-nine-agents"
+        if agent_id is None:
+            return unscoped_quota
+        if agent_id == "agent-9":
+            return ninth_quota
+        if agent_id == "agent-2":
+            return {"ok": False, "error": "lane-2 state corrupted"}
+        return {
+            "ok": True,
+            "goal_id": "goal-nine-agents",
+            "normal_delivery_allowed": False,
+            "agent_identity": {"agent_id": agent_id, "registered": True},
+        }
+
+    monkeypatch.setattr(global_todos, "collect_status", lambda **_: status)
+    monkeypatch.setattr(global_todos, "build_quota_should_run", build_quota)
+
+    payload = build_payload(tmp_path)
+
+    assert [todo["todo_id"] for todo in payload["todos"]] == ["todo-agent-9"]
+    assert payload["summary"]["runnable_count"] == 1
+    assert len(payload["source_warnings"]) == 1
+    assert payload["source_warnings"][0]["reason_code"] == "quota_unavailable"
+    assert (
+        payload["projection_envelope"]["sources"][1]["unreadable_count"] == 1
+    )

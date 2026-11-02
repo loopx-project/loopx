@@ -9,6 +9,10 @@ from .control_plane.projection_envelope_facts import (
     seal_projection_envelope,
     source_fact,
 )
+from .control_plane.quota.error_codes import (
+    QuotaIdentityPrecondition,
+    QuotaIdentityPreconditionError,
+)
 from .control_plane.runtime.time import now_utc_iso
 from .control_plane.todos.decision_scope import todo_gate_relations
 from .control_plane.todos.user_gate import open_user_gate_todo_items
@@ -114,29 +118,76 @@ def _warning(
     return warning
 
 
-def _is_unscoped_peer_v1_quota(payload: dict[str, Any]) -> bool:
-    heartbeat = as_dict(payload.get("heartbeat_recommendation"))
-    if heartbeat.get("recommended_mode") == "automation_prompt_upgrade":
-        return True
-    reason = str(payload.get("reason") or "")
-    return "configured for peer_v1" in reason and "without --agent-id" in reason
-
-
-def _is_unregistered_agent_scope_miss(
-    payload: dict[str, Any],
+def is_unregistered_agent_scope_miss(
+    payload: dict[str, Any] | BaseException,
     *,
     agent_id: str | None,
 ) -> bool:
-    if not agent_id or payload.get("ok") is not False:
+    if not agent_id:
         return False
+    if isinstance(payload, QuotaIdentityPreconditionError):
+        return payload.precondition in {
+            QuotaIdentityPrecondition.REQUESTED_AGENT_REGISTERED,
+            QuotaIdentityPrecondition.REGISTERED_AGENT_ROSTER_PRESENT,
+        }
+    if not isinstance(payload, dict) or payload.get("ok") is not False:
+        return False
+    if payload.get("error_code") in {
+        "quota_agent_not_registered",
+        "quota_agent_registry_roster_missing",
+    }:
+        return True
     detail = str(payload.get("error") or payload.get("reason") or "")
-    return "is not registered in the selected registry goal" in detail
+    expected_messages = {
+        str(
+            QuotaIdentityPreconditionError(
+                QuotaIdentityPrecondition.REQUESTED_AGENT_REGISTERED,
+                agent_id=agent_id,
+            )
+        ),
+        str(
+            QuotaIdentityPreconditionError(
+                QuotaIdentityPrecondition.REGISTERED_AGENT_ROSTER_PRESENT,
+                agent_id=agent_id,
+            )
+        ),
+    }
+    return detail in expected_messages
 
 
-def _registered_goal_agents(
+def registered_goal_agents(
     status_payload: dict[str, Any],
     goal_id: str,
+    quota_payload: dict[str, Any] | None = None,
+    *,
+    prefer_queue_recommendation: bool = False,
 ) -> list[str]:
+    registered: list[str] = []
+    seen_registered: set[str] = set()
+
+    def add_registered(value: object) -> None:
+        candidate = str(value or "").strip()
+        if candidate and candidate not in seen_registered:
+            seen_registered.add(candidate)
+            registered.append(candidate)
+
+    run_history = as_dict(status_payload.get("run_history"))
+    for goal in as_list(run_history.get("goals")):
+        if not isinstance(goal, dict) or str(goal.get("id") or "").strip() != goal_id:
+            continue
+        coordination = as_dict(goal.get("coordination"))
+        for candidate in as_list(coordination.get("registered_agents")):
+            add_registered(candidate)
+
+    if isinstance(quota_payload, dict):
+        for container_key in ("automation_prompt_upgrade", "agent_identity"):
+            container = as_dict(quota_payload.get(container_key))
+            for candidate in as_list(container.get("registered_agents")):
+                add_registered(candidate)
+
+    if not registered:
+        return []
+
     agents: list[str] = []
     seen: set[str] = set()
 
@@ -146,21 +197,25 @@ def _registered_goal_agents(
             seen.add(candidate)
             agents.append(candidate)
 
-    run_history = as_dict(status_payload.get("run_history"))
-    for goal in as_list(run_history.get("goals")):
-        if not isinstance(goal, dict) or str(goal.get("id") or "").strip() != goal_id:
-            continue
-        coordination = as_dict(goal.get("coordination"))
-        for registered in as_list(coordination.get("registered_agents")):
-            add_agent(registered)
-
     queue = as_dict(status_payload.get("attention_queue"))
-    for item in as_list(queue.get("items")):
-        if not isinstance(item, dict) or str(item.get("goal_id") or "").strip() != goal_id:
-            continue
-        add_agent(as_dict(item.get("agent_lane_recommendation")).get("agent_id"))
-        add_agent(as_dict(as_dict(item.get("project_asset")).get("owner")).get("agent_id"))
-    return agents[:8]
+    if prefer_queue_recommendation:
+        for item in as_list(queue.get("items")):
+            if not isinstance(item, dict) or str(item.get("goal_id") or "").strip() != goal_id:
+                continue
+            add_agent(as_dict(item.get("agent_lane_recommendation")).get("agent_id"))
+            add_agent(as_dict(as_dict(item.get("project_asset")).get("owner")).get("agent_id"))
+
+    for candidate in registered:
+        add_agent(candidate)
+
+    if not prefer_queue_recommendation:
+        for item in as_list(queue.get("items")):
+            if not isinstance(item, dict) or str(item.get("goal_id") or "").strip() != goal_id:
+                continue
+            add_agent(as_dict(item.get("agent_lane_recommendation")).get("agent_id"))
+            add_agent(as_dict(as_dict(item.get("project_asset")).get("owner")).get("agent_id"))
+
+    return agents
 
 
 def _quotas_for_goal(
@@ -177,6 +232,8 @@ def _quotas_for_goal(
             agent_id=agent_id,
         )
     except Exception as exc:
+        if is_unregistered_agent_scope_miss(exc, agent_id=agent_id):
+            return [], False
         warnings.append(
             _warning(
                 "quota_unavailable",
@@ -186,7 +243,7 @@ def _quotas_for_goal(
         )
         return [], True
     if payload.get("ok") is False:
-        if _is_unregistered_agent_scope_miss(payload, agent_id=agent_id):
+        if is_unregistered_agent_scope_miss(payload, agent_id=agent_id):
             return [], False
         warnings.append(
             _warning(
@@ -196,22 +253,49 @@ def _quotas_for_goal(
             )
         )
         return [], True
-    if agent_id is None and _is_unscoped_peer_v1_quota(payload):
-        registered_agents = _registered_goal_agents(status_payload, goal_id)
-        scoped_payloads: list[dict[str, Any]] = []
-        for candidate_agent_id in registered_agents:
-            try:
-                scoped = build_quota_should_run(
-                    status_payload,
-                    goal_id=goal_id,
-                    agent_id=candidate_agent_id,
-                )
-            except Exception:
-                continue
-            if isinstance(scoped, dict) and scoped.get("ok") is True:
+    if agent_id is None:
+        registered_agents = registered_goal_agents(
+            status_payload,
+            goal_id,
+            payload,
+        )
+        if registered_agents:
+            scoped_payloads: list[dict[str, Any]] = []
+            scoped_failed = False
+            for candidate_agent_id in registered_agents:
+                try:
+                    scoped = build_quota_should_run(
+                        status_payload,
+                        goal_id=goal_id,
+                        agent_id=candidate_agent_id,
+                    )
+                except Exception as exc:
+                    scoped_failed = True
+                    warnings.append(
+                        _warning(
+                            "quota_unavailable",
+                            goal_id=goal_id,
+                            detail=exc,
+                        )
+                    )
+                    continue
+                if not isinstance(scoped, dict) or scoped.get("ok") is not True:
+                    scoped_failed = True
+                    warnings.append(
+                        _warning(
+                            "quota_unavailable",
+                            goal_id=goal_id,
+                            detail=(scoped.get("error") or scoped.get("reason"))
+                            if isinstance(scoped, dict)
+                            else "scoped quota payload unavailable",
+                        )
+                    )
+                    continue
                 scoped_payloads.append(scoped)
-        if scoped_payloads:
-            return scoped_payloads, False
+            if scoped_payloads:
+                return scoped_payloads, scoped_failed
+            if scoped_failed:
+                return [], True
     return [payload], False
 
 

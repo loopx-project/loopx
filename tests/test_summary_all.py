@@ -709,3 +709,140 @@ def test_summary_all_resolves_registered_agent_for_unscoped_peer_v1_goal(
     assert payload["lanes"][0]["agent_id"] == "review-b"
     assert payload["lanes"][0]["top_todo_id"] == "todo-review-b"
     assert payload["lanes"][0]["next_safe_action"] == "Review exact PR queue."
+
+
+def test_summary_all_and_global_gates_preserve_scoped_user_gate_alongside_runnable_peer_lane(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    agents = [f"agent-{idx}" for idx in range(1, 10)]
+    status_payload = {
+        "ok": True,
+        "attention_queue": {
+            "items": [
+                {
+                    "goal_id": "peer-mixed-goal",
+                    "status": "eligible",
+                    "waiting_on": "user",
+                    "agent_lane_recommendation": {
+                        "agent_id": "agent-1",
+                        "recommended_action": "Run agent-1 delivery.",
+                    },
+                }
+            ]
+        },
+        "global_registry": {"findings": []},
+        "run_history": {
+            "goals": [
+                {
+                    "id": "peer-mixed-goal",
+                    "coordination": {
+                        "registered_agents": agents,
+                    },
+                }
+            ],
+            "recent_runs": [],
+        },
+    }
+    unscoped_quota = {
+        "ok": True,
+        "goal_id": "peer-mixed-goal",
+        "state": "eligible",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+    }
+    runnable_lane_quota = {
+        "ok": True,
+        "goal_id": "peer-mixed-goal",
+        "state": "eligible",
+        "should_run": True,
+        "normal_delivery_allowed": True,
+        "agent_identity": {"agent_id": "agent-1", "registered": True},
+        "selected_todo": {
+            "todo_id": "todo-agent-1",
+            "status": "open",
+            "priority": "P1",
+            "text": "Run agent-1 delivery.",
+        },
+        "agent_lane_next_action": {
+            "todo_id": "todo-agent-1",
+            "status": "open",
+            "agent_id": "agent-1",
+            "text": "Run agent-1 delivery.",
+        },
+        "recommended_action": "Run agent-1 delivery.",
+    }
+    gated_ninth_quota = {
+        "ok": True,
+        "goal_id": "peer-mixed-goal",
+        "state": "operator_gate",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+        "agent_identity": {"agent_id": "agent-9", "registered": True},
+        "gate_id": "gate-agent-9",
+        "user_todo_summary": {
+            "open_count": 1,
+            "first_open_items": [
+                {
+                    "todo_id": "user-gate-9",
+                    "task_class": "user_gate",
+                    "text": "Approve agent-9 schema migration?",
+                }
+            ],
+            "gate_open_items": [
+                {
+                    "todo_id": "user-gate-9",
+                    "task_class": "user_gate",
+                    "text": "Approve agent-9 schema migration?",
+                }
+            ],
+        },
+        "interaction_contract": {
+            "user_channel": {
+                "action_required": True,
+                "question": "Approve agent-9 schema migration?",
+            }
+        },
+        "recommended_action": "Wait for user approval on agent-9.",
+    }
+
+    def build_quota(_status, *, goal_id, agent_id=None):
+        assert goal_id == "peer-mixed-goal"
+        if agent_id is None:
+            return unscoped_quota
+        if agent_id == "agent-1":
+            return runnable_lane_quota
+        if agent_id == "agent-9":
+            return gated_ninth_quota
+        return {
+            "ok": True,
+            "goal_id": "peer-mixed-goal",
+            "state": "eligible",
+            "should_run": False,
+            "normal_delivery_allowed": False,
+            "agent_identity": {"agent_id": agent_id, "registered": True},
+        }
+
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", build_quota)
+
+    summary_payload = summary_all.build_summary_all(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        agent_id=None,
+        time_range="24h",
+        limit=5,
+    )
+    gates_payload = build_global_gates(tmp_path)
+
+    assert len(summary_payload["lanes"]) == 1
+    assert summary_payload["lanes"][0]["agent_id"] == "agent-1"
+    assert summary_payload["lanes"][0]["top_todo_id"] == "todo-agent-1"
+    assert len(summary_payload["gates"]) == 1
+    assert summary_payload["gates"][0]["gate_id"] == "gate-agent-9"
+    assert (
+        summary_payload["gates"][0]["question"]
+        == "Approve agent-9 schema migration?"
+    )
+    assert len(gates_payload["gates"]) == 1
+    assert gates_payload["gates"][0]["gate_id"] == "gate-agent-9"

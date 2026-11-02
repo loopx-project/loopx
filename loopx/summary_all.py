@@ -12,6 +12,7 @@ from .control_plane.projection_envelope_facts import (
 from .control_plane.runtime.time import now_utc, now_utc_iso
 from .control_plane.todos.decision_scope import todo_gate_relations
 from .control_plane.todos.user_gate import open_user_gate_todo_items
+from .global_todos import is_unregistered_agent_scope_miss, registered_goal_agents
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
 from .presentation.public_safety import public_safe_boundary, redact_public_text
@@ -115,80 +116,71 @@ def _goal_agent_id(item: dict[str, Any], quota_payload: dict[str, Any]) -> str |
     return None
 
 
-def _candidate_goal_agents(
-    status_payload: dict[str, Any],
-    goal_id: str,
-) -> list[str]:
-    agents: list[str] = []
-    seen: set[str] = set()
-
-    def add_agent(value: object) -> None:
-        candidate = str(value or "").strip()
-        if candidate and candidate not in seen:
-            seen.add(candidate)
-            agents.append(candidate)
-
-    queue = _as_dict(status_payload.get("attention_queue"))
-    for item in _as_list(queue.get("items")):
-        if not isinstance(item, dict) or str(item.get("goal_id") or "").strip() != goal_id:
-            continue
-        add_agent(_as_dict(item.get("agent_lane_recommendation")).get("agent_id"))
-        add_agent(_as_dict(_as_dict(item.get("project_asset")).get("owner")).get("agent_id"))
-
-    run_history = _as_dict(status_payload.get("run_history"))
-    for goal in _as_list(run_history.get("goals")):
-        if not isinstance(goal, dict) or str(goal.get("id") or "").strip() != goal_id:
-            continue
-        coordination = _as_dict(goal.get("coordination"))
-        for registered in _as_list(coordination.get("registered_agents")):
-            add_agent(registered)
-    return agents[:8]
+def _unavailable_goal_quota(goal_id: str, exc: object) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "goal_id": goal_id,
+        "state": "quota_unavailable",
+        "decision": "quota_unavailable",
+        "reason": _redact_text(exc),
+    }
 
 
-def _is_unscoped_peer_v1_quota(payload: dict[str, Any]) -> bool:
-    heartbeat = _as_dict(payload.get("heartbeat_recommendation"))
-    if heartbeat.get("recommended_mode") == "automation_prompt_upgrade":
-        return True
-    reason = str(payload.get("reason") or "")
-    return "configured for peer_v1" in reason and "without --agent-id" in reason
-
-
-def _build_goal_quota(
+def _build_goal_quotas(
     status_payload: dict[str, Any],
     *,
     goal_id: str,
     agent_id: str | None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     try:
         payload = build_quota_should_run(status_payload, goal_id=goal_id, agent_id=agent_id)
     except Exception as exc:
-        return {
-            "ok": False,
-            "goal_id": goal_id,
-            "state": "quota_unavailable",
-            "decision": "quota_unavailable",
-            "reason": _redact_text(exc),
-        }
-    if agent_id is None and _is_unscoped_peer_v1_quota(payload):
-        first_ok: dict[str, Any] | None = None
-        for candidate_agent_id in _candidate_goal_agents(status_payload, goal_id):
-            try:
-                scoped = build_quota_should_run(
-                    status_payload,
-                    goal_id=goal_id,
-                    agent_id=candidate_agent_id,
-                )
-            except Exception:
-                continue
-            if not isinstance(scoped, dict) or scoped.get("ok") is False:
-                continue
-            if first_ok is None:
-                first_ok = scoped
-            if scoped.get("normal_delivery_allowed") is True or scoped.get("selected_todo"):
-                return scoped
-        if first_ok is not None:
-            return first_ok
-    return payload
+        if is_unregistered_agent_scope_miss(exc, agent_id=agent_id):
+            return []
+        return [_unavailable_goal_quota(goal_id, exc)]
+    if isinstance(payload, dict) and is_unregistered_agent_scope_miss(payload, agent_id=agent_id):
+        return []
+    if agent_id is None:
+        candidate_agents = registered_goal_agents(
+            status_payload,
+            goal_id,
+            payload if isinstance(payload, dict) else None,
+            prefer_queue_recommendation=True,
+        )
+        if candidate_agents:
+            runnable_quotas: list[dict[str, Any]] = []
+            other_ok_quotas: list[dict[str, Any]] = []
+            failed_quotas: list[dict[str, Any]] = []
+            for candidate_agent_id in candidate_agents:
+                try:
+                    scoped = build_quota_should_run(
+                        status_payload,
+                        goal_id=goal_id,
+                        agent_id=candidate_agent_id,
+                    )
+                except Exception as exc:
+                    failed_quotas.append(_unavailable_goal_quota(goal_id, exc))
+                    continue
+                if not isinstance(scoped, dict) or scoped.get("ok") is False:
+                    failed_quotas.append(
+                        scoped
+                        if isinstance(scoped, dict) and _quota_unavailable(scoped)
+                        else _unavailable_goal_quota(
+                            goal_id,
+                            (scoped.get("error") or scoped.get("reason"))
+                            if isinstance(scoped, dict)
+                            else "scoped quota payload unavailable",
+                        )
+                    )
+                    continue
+                if scoped.get("normal_delivery_allowed") is True or scoped.get("selected_todo"):
+                    runnable_quotas.append(scoped)
+                else:
+                    other_ok_quotas.append(scoped)
+            ordered = [*runnable_quotas, *other_ok_quotas, *failed_quotas]
+            if ordered:
+                return ordered
+    return [payload]
 
 
 def _quota_unavailable(quota_payload: dict[str, Any]) -> bool:
@@ -463,32 +455,46 @@ def _collect_global_gate_state(
         if not goal_id or goal_id in seen_goal_ids:
             continue
         seen_goal_ids.add(goal_id)
-        quota_payload = _build_goal_quota(
+        goal_quotas = _build_goal_quotas(
             status_payload,
             goal_id=goal_id,
             agent_id=agent_id,
         )
+        if not goal_quotas:
+            continue
         quota_evaluated += 1
-        quota_unavailable += int(_quota_unavailable(quota_payload))
-        if not _quota_matches_agent_scope(quota_payload, agent_id=agent_id):
-            continue
-        gate = _global_gate_from_item(
-            item,
-            quota_payload=quota_payload,
-            agent_id=agent_id,
-        )
-        if not gate:
-            continue
-        gates.append(gate)
-        lane = _lane_from_item(item, quota_payload=quota_payload)
-        verified_todo_ids = {
-            str(blocked_ref)
-            for blocked_ref in _as_list(gate.get("blocks"))
-            if str(blocked_ref) != goal_id
-        }
-        if str(lane.get("top_todo_id") or "") not in verified_todo_ids:
-            lane.pop("top_todo_id", None)
-        lanes.append(lane)
+        quota_unavailable += int(any(_quota_unavailable(q) for q in goal_quotas))
+        seen_goal_gates: set[tuple[str, str, tuple[str, ...]]] = set()
+        for quota_payload in goal_quotas:
+            if not _quota_matches_agent_scope(quota_payload, agent_id=agent_id):
+                continue
+            gate = _global_gate_from_item(
+                item,
+                quota_payload=quota_payload,
+                agent_id=agent_id,
+            )
+            if not gate:
+                continue
+            gate_key = (
+                str(gate.get("gate_id") or ""),
+                str(gate.get("question") or ""),
+                tuple(str(b) for b in _as_list(gate.get("blocks"))),
+            )
+            if gate_key in seen_goal_gates:
+                continue
+            seen_goal_gates.add(gate_key)
+            gates.append(gate)
+            lane = _lane_from_item(item, quota_payload=quota_payload)
+            verified_todo_ids = {
+                str(blocked_ref)
+                for blocked_ref in _as_list(gate.get("blocks"))
+                if str(blocked_ref) != goal_id
+            }
+            if str(lane.get("top_todo_id") or "") not in verified_todo_ids:
+                lane.pop("top_todo_id", None)
+            lanes.append(lane)
+            if len(gates) >= limit:
+                break
         if len(gates) >= limit:
             break
     unique_goal_count = len({str(item.get("goal_id") or "").strip() for item in queue_items} - {""})
@@ -744,18 +750,35 @@ def build_summary_all(
         if not goal_id or goal_id in seen_goal_ids:
             continue
         seen_goal_ids.add(goal_id)
-        quota_payload = _build_goal_quota(status_payload, goal_id=goal_id, agent_id=agent_id)
-        quota_unavailable += int(_quota_unavailable(quota_payload))
+        goal_quotas = _build_goal_quotas(status_payload, goal_id=goal_id, agent_id=agent_id)
+        if not goal_quotas:
+            continue
+        quota_payload = goal_quotas[0]
+        quota_unavailable += int(any(_quota_unavailable(q) for q in goal_quotas))
         lane = _lane_from_item(item, quota_payload=quota_payload)
         if lane:
             lanes.append(lane)
             quota_states[str(lane.get("status") or "unknown")] = quota_states.get(str(lane.get("status") or "unknown"), 0) + 1
-        gate = _gate_from_item(item, quota_payload=quota_payload)
-        if gate:
-            gates.append(gate)
-        todo = _todo_from_quota(goal_id, quota_payload)
-        if todo:
-            todos.append(todo)
+        seen_gate_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        for candidate_quota in goal_quotas:
+            gate = _gate_from_item(item, quota_payload=candidate_quota)
+            if gate:
+                gate_key = (
+                    str(gate.get("gate_id") or ""),
+                    str(gate.get("question") or ""),
+                    tuple(str(b) for b in _as_list(gate.get("blocks"))),
+                )
+                if gate_key not in seen_gate_keys:
+                    seen_gate_keys.add(gate_key)
+                    gates.append(gate)
+        seen_todo_keys: set[str] = set()
+        for candidate_quota in goal_quotas:
+            todo = _todo_from_quota(goal_id, candidate_quota)
+            if todo:
+                todo_key = str(todo.get("todo_id") or todo.get("title") or "")
+                if todo_key not in seen_todo_keys:
+                    seen_todo_keys.add(todo_key)
+                    todos.append(todo)
     lanes.sort(key=_lane_sort_key)
     envelope = _global_projection_envelope(
         "global_summary",
