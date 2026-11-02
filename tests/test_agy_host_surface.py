@@ -329,6 +329,19 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
     # Verify antigravity_app runtime profile maps to HOST_AUTOMATION + HOSTED_AUTOMATION
     # with first-class app_automation stateful backoff (matching Codex App & Trae App),
     # while emitting --antigravity_app (never -A / --codex-app).
+    from loopx.control_plane.scheduler.execution_context import (
+        APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES,
+        VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES,
+    )
+
+    assert (
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP
+        in APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES
+    )
+    assert (
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP
+        not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES
+    )
     runtime_ctx = scheduler_execution_context_for_runtime_profile(
         SchedulerRuntimeProfile.ANTIGRAVITY_APP
     )
