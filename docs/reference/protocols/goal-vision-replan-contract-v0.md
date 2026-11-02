@@ -38,15 +38,22 @@ no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
 configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)
 for configuration precedence, rollback and independent review triggers.
 
-When `stride_strategy=evidence_conditioned_v1` is enabled, receipt-backed cadence
-uses the configured count as a baseline for the next interval. A settled fresh
-review can scale it by 1.5 (supported grow with evidence-linked improved goal
-gain) or 0.5 (verify or uncertainty/gap/failure); switch keeps the baseline.
-Counts round up to at least one, never compound across reads, and do not cross a
-newer autonomous ACK to reuse older feedback. Missing/unsettled/historical
-decisions and off mode keep the baseline. Stall triggers and settlement remain
-independent. This feedback uses source-validated Agent claims, not certified gain;
-see the [strategy boundary](../../architecture/rfcs/hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control).
+Evidence-conditioned Stride is the capability default when no Goal or saved
+machine configuration overrides it. Explicit `off`, legacy saved cadence-only
+configuration and historical decisions keep their original meaning. Clear the
+cadence/strategy override to inherit the current default, or explicitly select
+`off` for rollback; this does not rewrite prior evidence or frozen workers.
+
+Stride sizes the next coherent Todo/delivery or interpretable experiment, route
+change and validation scope through the existing Todo and Vision owners. Apply
+an evidence-supported `grow` plan to actual Todo scope and acceptance, retain
+unfinished useful work, and record verified Todo IDs in `todo_delta`. Subsequent
+normal admission, execution and evidence-linked review qualify adoption; prose
+and a new Todo alone do not. `verify` resolves a decision-relevant uncertainty
+and need not shrink work. All actions preserve the configured review count,
+stall triggers, dependencies, authority and per-Turn settlement. There are no
+fixed grow/verify cadence multipliers. See the
+[strategy boundary](../../architecture/rfcs/hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control).
 
 ## Replan ACK freshness
 

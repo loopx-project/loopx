@@ -557,3 +557,41 @@ def test_horizon_goal_defaults_on_with_explicit_overrides_and_clear(tmp_path):
         configure_goal(registry_path=registry_path, goal_id=GOAL_ID, execute=True,
                        execution_planning_horizon_goal="true")
     assert registry_path.read_bytes() == before
+
+
+def test_stride_default_preserves_explicit_off_and_saved_legacy_configuration(tmp_path: Path) -> None:
+    from loopx.capabilities.todo_replan_cadence.machine_defaults import (
+        apply_todo_replan_cadence_machine_default, default_replan_cadence_configuration,
+        todo_replan_cadence_machine_configuration_namespace,
+    )
+    from loopx.capabilities.goal_inspection import inspect_goal_capabilities
+    _repo, registry, runtime = _fixture(tmp_path)
+    from loopx.capabilities.machine_configuration.contract import remove_machine_configuration_namespace
+    owner = build_builtin_machine_configuration_registry()
+    removed = remove_machine_configuration_namespace(_machine_configuration(),
+        namespace="todo_replan_cadence", registry=owner)
+    preview = configure_machine_configuration(runtime_root=runtime, registry=owner, configuration=removed)
+    configure_machine_configuration(runtime_root=runtime, registry=owner, configuration=removed,
+        execute=True, expected_plan_revision=preview["plan_revision"])
+    original = registry.read_bytes()
+    assert default_replan_cadence_configuration()["stride_strategy"] == "evidence_conditioned_v1"
+    assert todo_replan_cadence_machine_configuration_namespace().default_configuration["stride_strategy"] == "evidence_conditioned_v1"
+    inherited = _history_goal(registry, runtime)
+    assert inherited["execution_profile"]["stride_strategy"] == "evidence_conditioned_v1"
+    assert registry.read_bytes() == original
+    catalog = inspect_goal_capabilities(registry_path=registry, runtime_root=runtime,
+        goal_id=GOAL_ID)["configuration"]["capability_catalog"]["capabilities"]
+    effective = next(c for c in catalog if c["capability_id"] == "todo_replan_cadence")["effective_configuration"]
+    assert effective["source"] == "capability_default"
+    assert effective["configuration"]["stride_strategy"] == "evidence_conditioned_v1"
+    off = apply_todo_replan_cadence_machine_default({"execution_profile": {"stride_strategy": "off"}}, None)
+    assert off["execution_profile"]["stride_strategy"] == "off"
+    for saved in ({"schema_version": "todo_replan_cadence_machine_defaults_v0", "completed_todos": 2},
+                  {"schema_version": "todo_replan_cadence_machine_defaults_v1", "count_unit": "effective_turns", "count": 4},
+                  {"schema_version": "todo_replan_cadence_machine_defaults_v2", "count_unit": "effective_turns", "count": 4, "stride_strategy": "off"}):
+        machine = _machine_configuration()
+        machine["namespaces"]["todo_replan_cadence"] = saved
+        projected = apply_todo_replan_cadence_machine_default({}, machine)
+        assert projected["execution_profile"].get("stride_strategy", "off") == "off"
+    legacy_goal = {"execution_profile": {"replan_after_effective_turns": 3}}
+    assert apply_todo_replan_cadence_machine_default(legacy_goal, None) == legacy_goal

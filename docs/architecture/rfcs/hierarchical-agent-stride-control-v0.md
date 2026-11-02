@@ -695,7 +695,7 @@ times separately. Check whether later work implemented the proposed mechanism;
 a decision record, saved snapshot or new identifier alone does not establish
 adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
-the strategy remains default-off. Identify the remaining authoritative goal gap, its limiting
+the inherited capability default enables the strategy; explicit off and saved legacy configurations retain their meaning. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with plausible alternatives that change the limiting assumption or
 mechanism, including complete cost. A stalled route calls for a discriminating
@@ -888,23 +888,25 @@ This proves the scripted control path, not model adoption or EdgeBench score gai
 Existing negative-result and later-work followthrough coverage remains necessary.
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
-and Goal/device configuration. Six effective work Turns is the default; enabling
-the stride strategy for one Goal inherits that configured baseline. For the
-enabled strategy with receipt-backed effective-Turn cadence, the latest settled
-fresh stride review through the current Agent's last autonomous ACK adjusts the
-next interval: `grow` with `supported_progress` and an evidence-linked previous
-`goal_gain=improved` uses 1.5 times the baseline; `verify` or an uncertainty/gap/
-failure basis uses 0.5 times; `switch` takes precedence and keeps the baseline.
-Round up to at least one Turn, without compounding repeated reads. An initial,
-unsettled, historical-v1 or missing decision keeps the baseline; do not reach
-through a newer ACK to reuse older feedback. The settled writer validates citation
-provenance; the gain remains an Agent claim, not independent outcome certification.
-Off mode, legacy counting, stall triggers, authority, per-Turn settlement and
-frozen workers retain their behavior. The inline review questions and syntax
-example remain delivered together; shortening repeated prose adds no decision
-fields or gates. Cadence is not Todo size, an experiment boundary or a mandatory
-route switch. Matched continuation must qualify actual
-adoption, target benefit and full cost before promotion or synergy claims.
+and Goal/device configuration; six effective work Turns is the default. Stride
+no longer maps grow/verify to fixed cadence multipliers. It governs work shape:
+apply the three independent plans to actual Todo scope and acceptance through
+existing authoring/update commands, record verified IDs in `todo_delta`, and
+execute the retained or revised work under normal admission. Supported grow
+consolidates fragmented setup, implementation, integration and decisive validation
+into a coherent accepted deliverable or complete interpretable experiment.
+Keep dependencies, acceptance, risk, authority and per-Turn settlement boundaries.
+The next review must distinguish declared scope from actual execution, outcome
+quality and full cost; preserving a plan is not adoption or benefit.
+
+Evidence-conditioned stride is the capability default for inherited configuration.
+Explicit off, saved legacy cadence-only configurations and historical records
+retain their semantics. Clear overrides to inherit, or select off to roll back;
+no installed configuration, frozen worker or historical receipt is rewritten.
+The codec's missing historical strategy remains off. Review questions and syntax
+examples remain together; no extra decision fields, strategy versions or
+machine-enforced semantic classifier are added. Matched continuation must still
+qualify target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
 baselines as descriptive references. A fresh concurrent baseline is not required
