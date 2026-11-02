@@ -3,7 +3,7 @@ import type {JsonObject} from "../effect_program.ts";
 import type {AuthorityStore} from "./authority_store.ts";
 import type {AuthoritySourceCheck} from "./authority_source.ts";
 import {canonicalAuthoritySha256} from "./authority_store_codec.ts";
-import {ClaimExecutionUnavailable} from "./claim_execution.ts";
+import {ClaimExecutionUnavailable, type ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {executeCoordinationTodoClaim, type CoordinationTodoClaimInput} from "./todo_claim.ts";
 
 type RecoveryInput = Pick<CoordinationTodoClaimInput, "goal_id" | "todo_id" | "actor_agent_id" |
@@ -13,7 +13,8 @@ type RecoveryInput = Pick<CoordinationTodoClaimInput, "goal_id" | "todo_id" | "a
 
 export async function claimExecutionRecovery(store: AuthorityStore, input: RecoveryInput,
   command: "update" | "complete", error: unknown,
-  authoritySourcesCurrent: AuthoritySourceCheck): Promise<JsonObject | undefined> {
+  authoritySourcesCurrent: AuthoritySourceCheck,
+  observeWorkspace?: ClaimWorkspaceObserver): Promise<JsonObject | undefined> {
   if (!(error instanceof ClaimExecutionUnavailable)) return undefined;
   if (!error.sameExecutionExpired || input.actor_agent_id === null) {
     return {action: "reconcile_lease_owner", execution_authority_granted: false,
@@ -30,7 +31,7 @@ export async function claimExecutionRecovery(store: AuthorityStore, input: Recov
     operation_id: `claim-recovery-preview-${canonicalAuthoritySha256({operation_id: input.operation_id,
       claim_operation_id: input.claim_operation_id, command}).slice(0, 32)}`,
     expected_provider_revision: input.expected_provider_revision, now: input.now,
-  }, authoritySourcesCurrent).catch(() => null);
+  }, authoritySourcesCurrent, observeWorkspace).catch(() => null);
   // An optional observation failure must not hide the original proof refusal.
   if (preview === null) return undefined;
   if (preview.dry_run === true && ["planned", "no_change"].includes(String(preview.status))) {

@@ -17,6 +17,7 @@ from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityRejection,
     LocalCoordinationAuthorityUnavailable,
+    claim_worktree_candidate,
     read_canonical_todos_if_promoted,
     require_canonical_authority,
     raise_canonical_write_failure,
@@ -363,6 +364,7 @@ def terminal_canonical_todo_if_promoted(
             and completion_turn_key is None
             and target.get("task_class") == "continuous_monitor"
         )
+        worktree = claim_worktree_candidate() if claim_operation_id is not None else None
         request = {
             "schema_version": ("loopx_local_coordination_todo_terminal_lifecycle_request_v4"
                                if claim_operation_id is not None else _TERMINAL_REQUEST_SCHEMA),
@@ -393,6 +395,7 @@ def terminal_canonical_todo_if_promoted(
                 )}
             ),
             **({"claim_operation_id": claim_operation_id} if claim_operation_id is not None else {}),
+            **({"write_worktree": str(worktree)} if worktree is not None else {}),
             "lease_idempotency_key": task_lease_idempotency_key,
             "lease_expected_version": task_lease_expected_version,
             "allow_user_gate_auto_acquire": command == "complete",

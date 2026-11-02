@@ -1,4 +1,4 @@
-import {claimExecutionProof, maintainClaimExecution} from "./claim_execution.ts";
+import {claimExecutionProof, maintainClaimExecution, type ClaimWorkspaceObserver} from "./claim_execution.ts";
 import {claimExecutionRecovery} from "./claim_execution_recovery.ts";
 import {canonicalTaskLease} from "./task_lease_state.ts";
 import {AUTHORITY_SOURCE_CHANGED, uncheckedAuthoritySource, type AuthoritySourceCheck} from "./authority_source.ts";
@@ -150,6 +150,7 @@ function loadUpdateTarget(
 export async function executeCoordinationTodoUpdate(
   store: AuthorityStore, rawInput: CoordinationTodoUpdateInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
+  observeWorkspace?: ClaimWorkspaceObserver,
 ): Promise<CoordinationTodoUpdateResult> {
   let input: CoordinationTodoUpdateInput;
   try { input = normalizeTodoUpdateEnvelope(rawInput); } catch (error) {
@@ -183,7 +184,7 @@ export async function executeCoordinationTodoUpdate(
         ...(completion.source_provider_revision == null ? {} : {
           validation_source_provider_revision: requireAuthorityStoreId(completion.source_provider_revision, "completion source provider revision")}),
       },
-    }, authoritySourcesCurrent);
+    }, authoritySourcesCurrent, null, undefined, observeWorkspace);
     return {...result, schema_version: COORDINATION_TODO_UPDATE_RESULT_SCHEMA};
   }
   const requestSha = updateRequestSha(input);
@@ -224,7 +225,7 @@ export async function executeCoordinationTodoUpdate(
     try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference), claim_operation_id: undefined}; }
     catch (error) {
       const recovery = await claimExecutionRecovery(store, {...input, claim_operation_id: claimReference,
-        expected_provider_revision: head.provider_revision}, "update", error, authoritySourcesCurrent);
+        expected_provider_revision: head.provider_revision}, "update", error, authoritySourcesCurrent, observeWorkspace);
       return {...rejection("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"),
         ...(recovery === undefined ? {} : {handoff_mode: head.head.handoff_mode, recovery})};
     }
