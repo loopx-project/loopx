@@ -1324,6 +1324,7 @@ def build_host_loop_activation_packet(
             cli_bin,
             goal_id=goal_id,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
+            runtime_root=runtime_root,
         )
     elif canonical == "kiro-cli":
         surface = kiro_cli_activation(commands, cli_bin)

@@ -316,15 +316,20 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         "runtime_profile": "antigravity_app"
     }
 
-    # Verify both hosted automation (sidecar.json) and interactive (in-session schedule) execution contexts
-    hosted_ctx = scheduler_execution_context_for_runtime_profile(
+    # Verify antigravity_app runtime profile maps to interactive AGENT_CLI_LOOP
+    # (so todo complete / refresh-state use turn-scoped visible-goal settlement
+    # instead of emitting Codex App -A / --ack-applied-rrule commands).
+    runtime_ctx = scheduler_execution_context_for_runtime_profile(
         SchedulerRuntimeProfile.ANTIGRAVITY_APP
     )
-    assert hosted_ctx.ok
-    assert hosted_ctx.context is not None
-    assert hosted_ctx.context.app_automation_applicable is True
+    assert runtime_ctx.ok
+    assert runtime_ctx.context is not None
+    assert runtime_ctx.context.host_surface is HostSurface.ANTIGRAVITY_APP
+    assert runtime_ctx.context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
+    assert runtime_ctx.context.execution_mode is ExecutionMode.INTERACTIVE
+    assert runtime_ctx.context.app_automation_applicable is False
     assert (
-        hosted_ctx.projection()["app_automation_applicability"] == "applicable"
+        runtime_ctx.projection()["codex_app_applicability"] == "not_applicable"
     )
 
     interactive_ctx = resolve_scheduler_execution_context(
@@ -335,6 +340,19 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         }
     )
     assert interactive_ctx.ok
+
+    # Verify hooks_template includes --goal-id and --agent-id when bound, and sidecar uses
+    # scheduler_hint.local_scheduler.recommended_interval_minutes.
+    assert "--goal-id" in mutation["hooks_template"]["loopx"]["args"]
+    assert "surface-goal" in mutation["hooks_template"]["loopx"]["args"]
+    assert "--agent-id" in mutation["hooks_template"]["loopx"]["args"]
+    assert "probe-agent" in mutation["hooks_template"]["loopx"]["args"]
+    assert (
+        mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"][
+            "suspend_on_waiting_external"
+        ]["interval_minutes_field"]
+        == "scheduler_hint.local_scheduler.recommended_interval_minutes"
+    )
 
 
 def test_antigravity_dual_skills_mcp_hooks_workflow_skills_and_doctor(

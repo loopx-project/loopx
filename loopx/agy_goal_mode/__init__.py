@@ -106,34 +106,39 @@ def build_antigravity_sidecar_template(
     *,
     goal_id: str = "<goal-id>",
     agent_id: str | None = None,
+    runtime_root: str | None = None,
     cli_bin: str = "loopx",
     interval_seconds: int = 300,
 ) -> dict[str, Any]:
     """Build a public-safe Antigravity 2.0 ``sidecar.json`` periodic heartbeat template."""
-    quota_args = [
-        cli_bin,
-        "--format",
-        "json",
-        "quota",
-        "should-run",
-        "--goal-id",
-        goal_id,
-        "--runtime-profile",
-        "antigravity_app",
-    ]
+    quota_args = [cli_bin, "--format", "json"]
+    if runtime_root:
+        quota_args.extend(["--runtime-root", runtime_root])
+    quota_args.extend(
+        [
+            "quota",
+            "should-run",
+            "--goal-id",
+            goal_id,
+            "--runtime-profile",
+            "antigravity_app",
+        ]
+    )
     if agent_id:
         quota_args.extend(["--agent-id", agent_id])
-    heartbeat_args = [
-        cli_bin,
-        "--format",
-        "json",
-        "heartbeat-prompt",
-        "--goal-id",
-        goal_id,
-        "--thin",
-        "--runtime-profile",
-        "antigravity_app",
-    ]
+    heartbeat_args = [cli_bin, "--format", "json"]
+    if runtime_root:
+        heartbeat_args.extend(["--runtime-root", runtime_root])
+    heartbeat_args.extend(
+        [
+            "heartbeat-prompt",
+            "--goal-id",
+            goal_id,
+            "--thin",
+            "--runtime-profile",
+            "antigravity_app",
+        ]
+    )
     if agent_id:
         heartbeat_args.extend(["--agent-id", agent_id])
     return {
@@ -151,7 +156,9 @@ def build_antigravity_sidecar_template(
                 "prompt_json_field": "task_body",
                 "suspend_on_waiting_external": {
                     "tool": "schedule",
-                    "duration_field": "scheduler_hint.poll_after_seconds",
+                    "interval_minutes_field": (
+                        "scheduler_hint.local_scheduler.recommended_interval_minutes"
+                    ),
                     "default_duration_seconds": int(interval_seconds),
                 },
             }
@@ -162,22 +169,51 @@ def build_antigravity_sidecar_template(
 def build_antigravity_hooks_template(
     *,
     cli_bin: str = "loopx",
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
 ) -> dict[str, Any]:
-    """Build a public-safe ``hooks.json`` continuation gate entry for Antigravity 2.0."""
+    """Build a public-safe ``hooks.json`` continuation gate entry for Antigravity 2.0.
+
+    When bound to a concrete ``goal_id``, invokes ``quota should-run --goal-id ...``;
+    when installed globally without a goal binding, invokes ``quota plan --runtime-profile antigravity_app``
+    so the command succeeds without ``--goal-id``.
+    """
+    args: list[str] = ["--format", "json"]
+    if runtime_root:
+        args.extend(["--runtime-root", runtime_root])
+    bound_goal = bool(goal_id and goal_id != "<goal-id>")
+    if bound_goal:
+        args.extend(
+            [
+                "quota",
+                "should-run",
+                "--goal-id",
+                str(goal_id),
+                "--runtime-profile",
+                "antigravity_app",
+            ]
+        )
+        if agent_id:
+            args.extend(["--agent-id", str(agent_id)])
+        require_field = "should_run"
+    else:
+        args.extend(
+            [
+                "quota",
+                "plan",
+                "--runtime-profile",
+                "antigravity_app",
+            ]
+        )
+        require_field = "ok"
     return {
         "loopx": {
             "schema_version": "loopx_antigravity_hooks_gate_v0",
             "event": "before_continuation",
             "command": cli_bin,
-            "args": [
-                "--format",
-                "json",
-                "quota",
-                "should-run",
-                "--runtime-profile",
-                "antigravity_app",
-            ],
-            "require_json_field_true": "should_run",
+            "args": args,
+            "require_json_field_true": require_field,
             "on_waiting_external": "suspend_via_schedule_timer",
         }
     }
@@ -248,17 +284,25 @@ def antigravity_app_activation_extras(
     *,
     goal_id: str = "<goal-id>",
     agent_id: str | None = None,
+    runtime_root: str | None = None,
     cli_bin: str = "loopx",
 ) -> dict[str, Any]:
     """Keyword overrides for ``antigravity_app_activation``'s facade call."""
     sidecar_template = build_antigravity_sidecar_template(
         goal_id=goal_id,
         agent_id=agent_id,
+        runtime_root=runtime_root,
         cli_bin=cli_bin,
     )
-    hooks_template = build_antigravity_hooks_template(cli_bin=cli_bin)
+    hooks_template = build_antigravity_hooks_template(
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+    )
+    runtime_arg = f" --runtime-root {shlex.quote(runtime_root)}" if runtime_root else ""
     wake_prompt = (
-        f"Run `{cli_bin} --format json quota should-run --goal-id {goal_id}"
+        f"Run `{cli_bin} --format json{runtime_arg} quota should-run --goal-id {goal_id}"
         + (f" --agent-id {agent_id}" if agent_id else "")
         + " --runtime-profile antigravity_app` and continue the active LoopX Todo when allowed."
     )
