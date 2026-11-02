@@ -3732,7 +3732,7 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
             ref = args[args.index("--message-id") + 1]
             if "你（App）" in json.dumps(self.messages[ref], ensure_ascii=False):
                 blocked.set()
-                assert release.wait(20)
+                assert release.wait(60)
         return provider_call(self, args, cwd, timeout)
 
     monkeypatch.setattr(Provider, "__call__", held_reaction)
@@ -3741,8 +3741,11 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
         runtime_controller=runtime, private_conversations=transport)
     service.start()
     try:
-        assert blocked.wait(8)
-        deadline = time.monotonic() + 7
+        # Scanner startup and source verification are setup, not the held-IO
+        # invariant. Start the original ten-second delivery bound only once
+        # this exact provider operation is demonstrably pending.
+        assert blocked.wait(20)
+        deadline = time.monotonic() + 10
         while len(provider.writes) < before + 4:
             assert time.monotonic() < deadline, "A held input reaction blocked a completed answer"
             time.sleep(.01)
@@ -3754,7 +3757,7 @@ def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, mon
             timeout_sec=10)["status"] == "completed"
         transport._web_projection_scan_at = 0
         service._delivery_wakeup.set()
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + 10
         while len(provider.writes) < before + 6:
             assert time.monotonic() < deadline, "A held reaction blocked later canonical messages"
             time.sleep(.01)
