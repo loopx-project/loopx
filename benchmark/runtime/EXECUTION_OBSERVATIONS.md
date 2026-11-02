@@ -39,27 +39,24 @@ merely to produce an attachment. Configuration and readback invoke neither a
 probe nor a model. Runtime receipts record the selected producer, which does
 not attest execution, adoption or improvement.
 
-New decision evidence produced or obtained by the current admitted work can
-close its work segment. Prior-feedback readback, bookkeeping and deterministic
-repetition without new information are context, not this Turn's progress; use
-them to advance the original task first. The ordinary settlement plan's
-`durable_writeback.semantic_closeout_command_template` selects that boundary
-with the original Turn, Todo and Goal identity; fill its result and Vision
-placeholders, then follow the same plan's remaining steps and yield to the Host.
-Keep an unfinished Todo open. Record the evaluated artifact/input and the
-decision in the existing Vision/path delta even when the route stays unchanged.
-The next guarded wake can continue the same Goal/session or perform an existing
-due review; neither feedback counts nor this command enable Stride. Repeated
-unchanged polls and bookkeeping alone need no new checkpoint.
+Choose the settlement plan's ordinary `command_template` for in-flight progress
+without new decision evidence. Use `semantic_closeout_command_template` for new
+evidence from this admitted work, a route change or Todo completion; bind the
+evaluated artifact/input and actual decision in a fresh Vision/path_delta,
+including `continue`/`no_change` when retaining the route. Keep the original
+Goal/Todo/Turn, follow the remaining writeback/spend steps and yield for freshly
+guarded Host continuation; an unfinished Todo stays open. Prior-feedback
+readback, bookkeeping and deterministic rechecks without new information are
+context, not new progress: use them to advance the task first. Unchanged polls
+alone need no checkpoint; neither feedback counts nor this command enables Stride.
 
-For an explicitly continuing optimization objective, candidate usability alone
-does not establish completion. Before stopping, review remaining acceptance gaps, plausible
-headroom, feasible experiments, full marginal cost and the accepted stopping
-condition. Stop when justified; do not force a pivot or use the remaining time
-merely because it is available. This is Agent-consumed execution guidance,
-not automatic tool-result classification or proof that a model adopted it.
-Native model adoption, automatic long-Turn supervision and outcome benefit
-remain unqualified; scripted lifecycle checks do not establish them.
+For explicitly continuing optimization, candidate usability alone is not completion: before
+stopping, weigh acceptance gaps, plausible headroom and feasible next work's full marginal
+cost against accepted stops, recording evidence in path_delta. Continue/replan
+useful authorized work; preserve Stop, budget/permission limits and genuine waits,
+and never infer completion or invent work, pivots or successors from submission
+or unused budget alone. This is Agent guidance, not automatic tool-result classification;
+native-model adoption, long-Turn supervision and outcome benefit remain unqualified.
 
 ## Retiring the bundled research treatment
 

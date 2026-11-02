@@ -131,12 +131,10 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
     // Autonomous planning/Stride and settlement-only recovery carry their own
     // decision guidance. Keep this reminder at the ordinary checkpoint entry.
     ...(autonomousReplan ? {} : {
-      continuation_review: "For an explicitly continuing or optimization objective, candidate usability alone does not establish completion. " +
-        "Before stop/no_followup, compare remaining acceptance gaps, plausible headroom, a feasible next experiment " +
-        "and its full marginal cost with the accepted stopping condition. Record the judgment and evidence in path_delta; " +
-        "continue or replan useful authorized work. A submission or unused budget alone proves neither completion nor " +
-        "a need for more work. Preserve explicit Stop, budget/permission limits and genuine waits; never invent a successor, " +
-        "force a pivot or fill time when no useful authorized step remains.",
+      continuation_review: "For explicitly continuing/optimization objectives, candidate usability alone is not completion: before stop/no_followup, " +
+        "weigh acceptance gaps, plausible headroom and feasible next work's full marginal cost against accepted stops in an evidence-linked path_delta; " +
+        "continue/replan useful authorized work, preserve Stop, budget/permission limits and genuine waits, " +
+        "and never infer completion or invent work/pivots/successors from submission or unused budget alone.",
     }),
   };
 }

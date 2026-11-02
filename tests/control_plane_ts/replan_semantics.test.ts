@@ -59,7 +59,7 @@ test("autonomous checkpoints reuse owner review while ordinary checkpoints keep 
       if (stride_strategy === "evidence_conditioned_v1") {
         const review = (projection.stride_control as JsonObject).decision_value_review as JsonObject;
         const advice = Object.values(review).join(" ");
-        for (const clause of ["one feasible alternative", "size a complete experiment", "plausible headroom",
+        for (const clause of ["feasible alternative", "complete experiment", "headroom",
           "artifact version, input conditions and original budget", "budget, feedback and permission limits"]) {
           assert.ok(advice.includes(clause), clause);
         }

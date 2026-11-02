@@ -90,7 +90,7 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
     # Merely obtaining the new executable projection performs no work or writeback.
     assert not (runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl").exists()
     if preexisting_feedback:
-        guidance = plan["ordered_steps"][0]["precondition"]
+        guidance = writeback["precondition"]
         assert "not this Turn's progress; use them to advance the task first" in guidance
         repeated = run_probe(command=[sys.executable, str(validator)], candidate_files=[route],
             output=project / "prior-recheck.json", input_revision="graph-v1", planned_method_id="retained-route",

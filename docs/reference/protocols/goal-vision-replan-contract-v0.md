@@ -913,15 +913,16 @@ with `--delivery-boundary semantic_closeout --agent-vision-json <file>` selected
 It is an alternative for that step, not another plan, claim, debit or admission.
 Material CLI closeout and MCP `complete_task` retain their existing evidence gates.
 
-New decision evidence produced or obtained by the current admitted work can end
-its work segment. Prior-feedback readback, bookkeeping and deterministic
-repetition without new information are context, not this Turn's progress; use
-them to advance the original task first. Bind the new result to the evaluated artifact/input, record the actual
-decision in Vision/path delta even when retaining the route, execute the current
-plan's writeback/spend and yield for a freshly guarded Host continuation. Leave
-an unfinished Todo open. Repeated unchanged polls and bookkeeping alone need no
-new checkpoint. This is Agent execution guidance, not automatic classification
-of tool text, a new Stride trigger, or proof of adoption or useful outcomes.
+Choose `command_template` for ordinary in-flight progress without new decision
+evidence; use `semantic_closeout_command_template` for new evidence from this
+admitted work, a route change or Todo completion. Bind the evaluated artifact/input
+and actual decision in fresh Vision/path_delta, including `continue`/`no_change`
+when retaining the route. Keep the original Goal/Todo/Turn, follow the remaining
+writeback/spend steps and yield for freshly guarded Host continuation; an unfinished
+Todo stays open. Prior-feedback readback, bookkeeping and deterministic rechecks
+without new information are context, not progress: advance the task first.
+Unchanged polls alone need no checkpoint. This is Agent guidance, not automatic
+tool-text classification, a Stride trigger or proof of adoption/benefit.
 
 An open Todo with controller-declared completion validation can use this
 semantic checkpoint for `outcome_progress` with a fresh, open Vision and an
@@ -931,24 +932,26 @@ rule. This closes only the original Turn: the Todo remains open and its final
 completion validator remains pending. Primary-outcome, closed-Vision and
 terminal declarations retain that validator gate.
 
-For an explicitly continuing or optimization objective, candidate usability
-alone does not establish completion. Before stopping, compare unmet acceptance, plausible headroom,
-feasible next work and full marginal cost with the original stopping condition.
-Retain an evidenced no-follow-up, Stop, budget/permission limit or genuine wait;
-neither a submission nor unused budget decides whether further work is useful.
+For explicitly continuing/optimization objectives, candidate usability alone is not completion:
+before stop/no_followup, weigh acceptance gaps, plausible headroom and feasible next work's
+full marginal cost against accepted stops in an evidence-linked path_delta.
+Continue/replan useful authorized work; preserve Stop, budget/permission limits
+and genuine waits. Neither submission nor unused budget alone establishes completion
+or requires invented work, pivots or successors.
 
-普通 CLI Todo 结算在默认 in-flight 边界下也提供既有 Vision 编写结构；写回步骤的
-`semantic_closeout_command_template` 沿用原 Goal、Todo、Turn，只显式选择
-semantic closeout 与 Vision 文件。它是当前步骤的可执行变体，不增加 plan、认领、
-扣额或准入。当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的
-检查点；旧反馈读回、记账与没有新增信息的确定性重验只是上下文，应先用于推进原
-任务。绑定新结果的评估版本与
-输入，即使保留路线也记录实际 Vision/path 决策，再按原计划写回、扣额并让宿主
-以新 guard 接续，未完成 Todo 保持 open。未变化轮询、记账无需新 checkpoint。
-持续优化目标不能仅因已有可用候选就宣布完成；停止前对照剩余验收、改进空间、可行工作、
-完整边际成本和原停止条件，保留有依据的 no-follow-up、Stop、预算/权限限制与真实
-等待。不强制用满预算或换路，也不由工具文本自动分类或新增 Stride trigger；执行
-指导与模型实际采用、结果收益仍须分别验证。
+普通 CLI Todo 的默认 in-flight 结算也提供 Vision 编写结构。无新决策证据的普通
+推进选 `command_template`；本次准入工作产生或取得新证据、改变路线或完成 Todo，
+选 `semantic_closeout_command_template`，以 fresh Vision/path_delta 关联评估产物、
+输入版本和实际决策，保留路线也可用 `continue` / `no_change`。沿用原 Goal、Todo、
+Turn，按原计划继续写回和扣额，再由宿主以新 guard 接续；未完成 Todo 保持 open，
+不另建 plan、认领、扣额或准入。旧反馈读回、记账、无新信息的确定性重验只是上下文，
+应先用于推进任务；未变化轮询不要求新 checkpoint。它是 Agent 指导，不自动分类
+工具文本、不触发 Stride，也不证明模型采用或收益。
+
+持续优化目标不能仅因候选可用就完成：停止前在 path_delta 中用证据对照剩余验收、
+改进空间、可行后续工作的完整边际成本和原停止条件；继续或重规划有用且获授权的工作，
+保留 Stop、预算/权限限制与真实等待。提交或剩余额度均不证明完成，也不要求制造工作、
+换路或后继 Todo。
 
 声明完成验证器的开放 Todo，可以用 fresh、open 的 Vision 和有证据关联的
 `continue` / `no_change` 路径记录 `outcome_progress`；准入写回与精确回执的扣额
