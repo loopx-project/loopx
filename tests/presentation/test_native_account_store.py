@@ -201,6 +201,25 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(cfg['forced_login_method'], 'api')
         self.assertNotIn('openai_base_url', cfg)
 
+    def test_legacy_api_slot_inherits_a_stale_selected_gateway(self):
+        self.current()
+        self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        legacy = json.loads(self.manager.slot('api').read_text())
+        legacy.pop('loopx_model_provider')
+        accounts.atomic(self.manager.slot('api'), accounts.encoded(legacy))
+        gateway = ('model="gateway-model"\nmodel_provider="gateway"\n'
+                   'model_catalog_json="models.json"\n'
+                   '[model_providers.gateway]\n'
+                   'base_url="https://gateway.example/v1"\nwire_api="responses"\n')
+        self.manager.config.write_text(gateway)
+        self.manager.switch('api')
+        bound = json.loads(self.manager.slot('api').read_text())
+        cfg = tomllib.loads(self.manager.config.read_text())
+        self.assertEqual(bound['loopx_model_provider'], 'gateway')
+        self.assertEqual(cfg['model_provider'], 'gateway')
+        self.assertEqual(cfg['model_catalog_json'], 'models.json')
+
     def test_ambiguous_routes_and_profiles_are_not_converted(self):
         for raw in (b'model_provider="optional_http"\n',
                     b'[model_providers.openai]\n',

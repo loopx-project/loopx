@@ -472,8 +472,13 @@ class Accounts:
         if self.pending.exists():
             raise ValueError('Interrupted account operation; run codex app recover with GPT closed')
         raw = read_private(target)
+        config_raw = self.config.read_bytes() if self.config.exists() else b''
+        current_provider = provider_route(tomllib.loads(config_raw.decode()) if config_raw else {})
+        if auth_kind(raw) == 'api' and not json.loads(raw).get('loopx_model_provider'):
+            provider = current_provider if current_provider != 'openai' else 'openai'
+            raw = routed_auth(raw, provider)
         ident = identity(raw)
-        converted = file_config(self.config.read_bytes() if self.config.exists() else b'', raw)
+        converted = file_config(config_raw, raw)
         state, outgoing = self.selected()
         if dry_run:
             return {'preview': True, 'slot': name, 'home': str(self.spec['home']),
