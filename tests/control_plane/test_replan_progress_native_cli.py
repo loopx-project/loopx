@@ -115,6 +115,10 @@ def make_progress_cli_fixture(root: Path, provider: str, scenario: str) -> dict:
 
 
 def call_progress_cli(fixture: dict, *args: str, expected_code: int = 0) -> dict:
+    # These tests inspect the authority decision, independently of machine
+    # presentation defaults. Preserve explicit context delivery overrides.
+    if args[:2] == ("quota", "should-run") and "--context-delivery" not in args:
+        args = (*args, "--context-delivery", "off")
     result = subprocess.run([
         sys.executable, "-m", "loopx.cli", "--registry", str(fixture["registry"]),
         "--runtime-root", str(fixture["runtime"]), "--format", "json", *args,
