@@ -11,6 +11,8 @@ from loopx.chat.event_cache import ChatEventCache
 from loopx.chat.goal_configuration_api import GoalConfigurationRequestMixin
 from loopx.chat.machine_configuration_api import MachineConfigurationRequestMixin
 from loopx.chat.monitor_actions import ChatMonitorActionMixin
+from loopx.chat.session_open import open_chat_session
+from loopx.chat.ssh_source_api import SshSourceRequestMixin
 from loopx.chat.todo_actions import ChatTodoActionMixin
 from loopx.chat.todo_detail import TodoDetailRequestMixin
 from loopx.chat.usage_statistics_api import UsageStatisticsRequestMixin
@@ -31,6 +33,8 @@ def test_chat_internal_helpers_load_below_the_public_chat_namespace() -> None:
         == "loopx.chat.machine_configuration_api"
     )
     assert ChatMonitorActionMixin.__module__ == "loopx.chat.monitor_actions"
+    assert open_chat_session.__module__ == "loopx.chat.session_open"
+    assert SshSourceRequestMixin.__module__ == "loopx.chat.ssh_source_api"
     assert ChatTodoActionMixin.__module__ == "loopx.chat.todo_actions"
     assert TodoDetailRequestMixin.__module__ == "loopx.chat.todo_detail"
     assert UsageStatisticsRequestMixin.__module__ == "loopx.chat.usage_statistics_api"
@@ -44,6 +48,8 @@ def test_chat_internal_helpers_have_no_top_level_compatibility_shims() -> None:
         "loopx.chat_goal_configuration_api",
         "loopx.chat_machine_configuration_api",
         "loopx.chat_monitor_actions",
+        "loopx.chat_session_open",
+        "loopx.chat_ssh_source_api",
         "loopx.chat_todo_actions",
         "loopx.chat_todo_detail",
         "loopx.chat_usage_statistics_api",

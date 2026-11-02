@@ -53,8 +53,8 @@ from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE, is_manager_channel,
     manager_capabilities_projection, manager_workspace,
 )
-from .chat_session_open import open_chat_session
-from .chat_ssh_source_api import SshSourceRequestMixin
+from .chat.session_open import open_chat_session
+from .chat.ssh_source_api import SshSourceRequestMixin
 from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
