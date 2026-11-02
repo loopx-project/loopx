@@ -310,6 +310,12 @@ def merge_goal_entries(
                     raise ValueError(collision_message(collision))
                 action = "replaced-route"
             goal = preserve_attention_override(existing_goal, goal)
+            if (
+                "synced_at" in existing_goal
+                and {k: v for k, v in existing_goal.items() if k != "synced_at"}
+                == {k: v for k, v in goal.items() if k != "synced_at"}
+            ):
+                goal["synced_at"] = existing_goal["synced_at"]
         merged.append(goal)
         actions.append(f"{goal_id}:{action}")
         synced_ids.append(goal_id)
@@ -393,6 +399,12 @@ def _merge_global_registry_payload(
     if merged_projects:
         payload["projects"] = merged_projects
     payload["goals"] = merged_goals
+    if (
+        "updated_at" in existing
+        and {k: v for k, v in payload.items() if k != "updated_at"}
+        == {k: v for k, v in existing.items() if k != "updated_at"}
+    ):
+        payload["updated_at"] = existing["updated_at"]
     return payload, merged_goals, actions, synced_ids, collisions
 
 
