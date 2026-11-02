@@ -150,6 +150,10 @@ def identity(raw):
             if (not isinstance(key, str) or not key.startswith('sk-loopx-relay-')
                     or not 32 <= len(key) <= 512 or any(c.isspace() for c in key) or obj.get('tokens')):
                 raise ValueError()
+            provider = obj.get('loopx_model_provider')
+            if provider is not None and (not isinstance(provider, str) or not provider
+                                         or any(c.isspace() for c in provider)):
+                raise ValueError()
             endpoint = api_endpoint(obj.get('loopx_api_base_url'))
             return digest(encoded(['apikey', key, endpoint]))
         tokens = obj['tokens']
@@ -173,13 +177,22 @@ def identity(raw):
         raise ValueError('Invalid native account cache; inspect the local login or relay configuration') from None
 
 
+def routed_auth(raw, provider):
+    """Bind a relay credential to the provider restored when its slot is selected."""
+    if auth_kind(raw) != 'api' or not isinstance(provider, str) or not provider:
+        raise ValueError('Invalid API gateway account route')
+    obj = json.loads(raw)
+    obj['loopx_model_provider'] = provider
+    return encoded(obj)
+
+
 def file_config(raw, auth=None):
     try:
         text = raw.decode()
         cfg = tomllib.loads(text)
     except (ValueError, UnicodeError):
         raise ValueError('Invalid GPT config; repair locally without printing its contents') from None
-    provider = provider_route(cfg)
+    current_provider = provider_route(cfg)
     # A profile can replace the checked provider at runtime, so account switching
     # cannot safely infer which route the credential transaction owns.
     if cfg.get('profiles') or cfg.get('profile'):
@@ -189,23 +202,30 @@ def file_config(raw, auth=None):
     if cfg.get('forced_login_method') not in (None, 'chatgpt', 'api'):
         raise ValueError('Unsupported account login method')
     mode = 'api' if auth is not None and auth_kind(auth) == 'api' else 'chatgpt'
+    target_provider = 'openai'
     endpoint = None
     if mode == 'api':
         identity(auth)
-        endpoint = api_endpoint(json.loads(auth)['loopx_api_base_url'])
-    # Change auth settings and the owned built-in API endpoint. A selected
-    # gateway owns its own base_url, model catalog and provider identity.
+        auth_obj = json.loads(auth)
+        endpoint = api_endpoint(auth_obj['loopx_api_base_url'])
+        target_provider = auth_obj.get('loopx_model_provider', 'openai')
+        candidate = dict(cfg, model_provider=target_provider)
+        provider_route(candidate)
+    # Subscription slots use the built-in provider. API slots restore the
+    # provider bound to that credential, so a gateway request never inherits a
+    # ChatGPT login and a subscription never inherits a relay endpoint.
     section = re.search(r'^\s*\[', text, re.M)
     head, tail = (text[:section.start()], text[section.start():]) if section else (text, '')
     settings = [('cli_auth_credentials_store', 'file'), ('forced_login_method', mode)]
-    if mode == 'api' and provider == 'openai':
+    if target_provider != current_provider:
+        settings.insert(0, ('model_provider', target_provider))
+    if mode == 'api' and target_provider == 'openai':
         if cfg.get('openai_base_url') and cfg.get('forced_login_method') != 'api':
             raise ValueError('An existing OpenAI base URL must not be replaced by API fallback')
         if cfg.get('openai_base_url'):
             api_endpoint(cfg['openai_base_url'])
         settings.append(('openai_base_url', endpoint))
-    elif (mode == 'chatgpt' and provider == 'openai'
-          and cfg.get('forced_login_method') == 'api' and cfg.get('openai_base_url')):
+    elif mode == 'chatgpt' and cfg.get('openai_base_url'):
         api_endpoint(cfg['openai_base_url'])
         pattern = r'^openai_base_url\s*=.*(?:\n|$)'
         if len(re.findall(pattern, head, re.M)) != 1:
@@ -382,8 +402,12 @@ class Accounts:
 
     def enroll_api(self, name, *, api_key, base_url):
         """Enroll an explicit local relay credential without selecting it."""
+        provider = 'openai'
+        if self.config.exists():
+            provider = provider_route(tomllib.loads(self.config.read_text()))
         raw = encoded({'auth_mode': 'apikey', 'OPENAI_API_KEY': api_key,
-                       'loopx_api_base_url': api_endpoint(base_url)})
+                       'loopx_api_base_url': api_endpoint(base_url),
+                       'loopx_model_provider': provider})
         ident = identity(raw)
         target = self.slot(name)
         with self.lock(enrollment=True):
@@ -459,9 +483,20 @@ class Accounts:
             # Reread under the lock: retain refresh-token rotation from the last use.
             state, outgoing = self.selected()
             raw = outgoing if state and state['slot'] == name else read_private(target)
+            config_raw = self.config.read_bytes() if self.config.exists() else b''
+            current_provider = provider_route(tomllib.loads(config_raw.decode()) if config_raw else {})
+            if state and state['slot'] == 'openai-api' and auth_kind(outgoing) == 'api':
+                outgoing = routed_auth(outgoing, current_provider)
+            if auth_kind(raw) == 'api' and not json.loads(raw).get('loopx_model_provider'):
+                provider = current_provider if current_provider != 'openai' else 'openai'
+                raw = routed_auth(raw, provider)
             ident = identity(raw)
-            converted = file_config(self.config.read_bytes() if self.config.exists() else b'', raw)
-            updates = [('slot:' + state['slot'], outgoing)] if state else []
+            converted = file_config(config_raw, raw)
+            updates = []
+            if state:
+                updates.append(('slot:' + state['slot'], outgoing))
+            if not state or state['slot'] != name:
+                updates.append(('slot:' + name, raw))
             updates += [('config', converted), ('auth', raw),
                         ('active', encoded({'slot': name, 'identity': ident, 'binding': self.binding}))]
             return dict(self.transaction(updates, 'switch'), slot=name,

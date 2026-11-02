@@ -44,11 +44,13 @@ dotfiles adapter imports this owner; it contains no second credential writer.
 The native owner uses the official `openai_base_url` override on the built-in
 `openai` provider and removes that override on subscription return. The provider
 identity stays stable for existing conversations; other custom providers remain
-launchable when they define a top-level Responses API gateway. Account switching
-preserves that provider, its model catalog and its gateway URL while changing
-only the native login mode and credential files. A custom provider must not
-shadow the built-in `openai` provider, and profile overrides remain ineligible
-because their effective provider cannot be bound safely to the transaction.
+launchable when they define a top-level Responses API gateway. An API account
+slot records its selected gateway provider; selection restores that provider and
+its model catalog, while a subscription slot selects the built-in `openai`
+provider and removes the managed API endpoint. API and subscription logins are
+therefore never sent to the other route. A custom provider must not shadow the
+built-in `openai` provider, and profile overrides remain ineligible because their
+effective provider cannot be bound safely to the transaction.
 
 A local authenticated transport sends the original selected model and Responses
 body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
@@ -89,9 +91,9 @@ incomplete credential transaction.
 空闲、重启、冷却和恢复边界返回。扩展内置唯一原生账号 owner，dotfiles 只导入并映射
 旧配置；LoopX 不依赖 dotfiles。API 上游 Key 留在扩展私有存储，原生槽位只保存本地
 中转凭据，不绕过原事务或复制会话历史。
-顶层 Responses API 网关可以直接启动并参与账号切换；切换保留 provider、模型目录和网关
-地址，只更新原生登录模式与凭据。自定义 provider 不得覆盖内置 `openai`，profile 覆写
-仍不参与账号事务。
+顶层 Responses API 网关可以直接启动并参与账号切换。API 槽位记录所选网关，重新选中时
+恢复该 provider 与模型目录；订阅槽位改用内置 `openai`，并移除受管的 API 地址，避免把
+订阅凭据发往网关。自定义 provider 不得覆盖内置 `openai`，profile 覆写仍不参与账号事务。
 Key 轮换依据输出前收到的明确额度、认证、权限或限流错误，每次请求每把 Key 最多
 尝试一次；网络效果不明、普通请求错误和已开始输出的流不会重放，不替换模型，也不做
 后台付费探测。关闭后停止新请求并等待已接收请求结束。App 显示实际请求结果和上次
