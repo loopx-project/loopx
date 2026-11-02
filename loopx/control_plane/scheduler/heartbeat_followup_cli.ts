@@ -302,6 +302,8 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
           Object.hasOwn(values, "--codex-app-current-rrule")
         )
           ? { observed_host_rrule: neutralObservedRrule || legacyCodexObservedRrule }
+          : expectedOperation === "ack" && facts.surface !== "codex_app"
+          ? { observed_host_rrule: values["--applied-rrule"] ?? facts.applied_rrule }
           : {}),
         operation: expectedOperation,
         runtime_root: parsed.runtime_root,
