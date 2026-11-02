@@ -15,7 +15,7 @@ from loopx.domain_packs.issue_fix import default_issue_fix_domain_state_ledger_p
 from loopx.control_plane.collaboration.inbox import acknowledge
 from loopx.control_plane.collaboration.peers import request as peer_request
 from loopx.control_plane.collaboration.request_control_source import execute_request_control
-from loopx.capabilities.issue_fix.cli import _settle_maintainer_correction_entries
+from loopx.capabilities.issue_fix.correction_settlement import _settle_maintainer_correction_entries
 
 
 ORIGIN_GOAL_ID = "steward-goal"
@@ -136,7 +136,7 @@ def test_stored_goal_ref_mismatch(h):
 
 
 @pytest.mark.parametrize("owner,name", [
-    ("loopx.capabilities.issue_fix.cli", "_resolve_origin_request_identity"),
+    ("loopx.capabilities.issue_fix.correction_settlement", "_resolve_origin_request_identity"),
     ("loopx.control_plane.collaboration.request_control_source", "execute_request_control"),
 ])
 def test_programming_error_propagates(h, monkeypatch, owner, name):
