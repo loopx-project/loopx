@@ -192,7 +192,7 @@ metadata, test, example or narrow-cleanup PRs (and the bounded benchmark
 seam/helper exceptions) only when all conditions in
 [self-merge eligibility](skills/loopx-pr-merge/SKILL.md#self-merge-eligibility-and-benchmark-exceptions)
 hold and `uv run --extra test loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`
-passes. After merging, sync local `main`, preserve unrelated untracked artifacts
+(or equivalent risk-based validation) passes. After merging, sync local `main`, preserve unrelated untracked artifacts
 and continue the next safe project batch.
 
 ### Named Public Releases
