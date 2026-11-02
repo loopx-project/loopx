@@ -1,6 +1,6 @@
 {
   "schema": "loopx_top_level_module_budget_v0",
   "baseline_commit": "a4483aaece5bc74ec3f969fd067229487022401b",
-  "max_top_level_modules": 136,
+  "max_top_level_modules": 134,
   "allowlist": ["__init__.py", "entrypoint.py", "cli.py"]
 }
