@@ -124,5 +124,3 @@ def test_removed_material_does_not_keep_a_predecessor_discovery_route(tmp_path, 
         capture_sha256=recovery["sha256"], select=["/context_details/unread_context_index"],
         offset=0, page_bytes=12000, max_page_output_bytes=18000, format="json"))
     assert missing["ok"] is False
-
-
