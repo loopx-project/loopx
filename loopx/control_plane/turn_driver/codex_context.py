@@ -40,7 +40,8 @@ def context_delivery_for_arguments(args: Any, *, codex_machine_preference: bool 
     fields = {key: getattr(args, key, None) for key in ("host_surface", "scheduler_owner", "execution_mode")}
     profiles = [value for value in (getattr(args, "runtime_profile", None),
         "codex_app_heartbeat" if getattr(args, "codex_app", False) else None,
-        "trae_app" if getattr(args, "trae_app", False) else None) if value is not None]
+        "trae_app" if getattr(args, "trae_app", False) else None,
+        "antigravity_app" if getattr(args, "antigravity_app", False) else None) if value is not None]
     setting = getattr(args, "context_delivery", None)
     setting = "off" if setting is None else setting
     if len(profiles) > 1:
@@ -80,8 +81,9 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
             # rejects them. Unknown/conflicting declarations never bypass this
             # adapter, and generic_cli still needs the benchmark declaration.
             if codex_machine_preference and context.host_surface in {
-                HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.CLAUDE_CODE,
-                HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI, HostSurface.LOCAL_SCHEDULER,
+                HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.ANTIGRAVITY_APP,
+                HostSurface.CLAUDE_CODE, HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI,
+                HostSurface.LOCAL_SCHEDULER,
             }:
                 return context_delivery_activation("off")
             if (context.host_surface is HostSurface.CODEX_APP

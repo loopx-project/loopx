@@ -28,6 +28,16 @@ from loopx.host_loop_activation import (
     scheduler_command_binding_for_agent_type,
 )
 from loopx.slash_command_install import install_slash_commands
+from loopx.workflow_skill_install import workflow_skill_install
+from loopx.doctor import collect_doctor
+from loopx.control_plane.scheduler.execution_context import (
+    ExecutionMode,
+    HostSurface,
+    SchedulerOwner,
+    SchedulerRuntimeProfile,
+    resolve_scheduler_execution_context,
+    scheduler_execution_context_for_runtime_profile,
+)
 from loopx.agy_goal_mode import (
     AGY_GOAL_CANCELLED_TOKEN,
     AGY_GOAL_COMMAND,
@@ -35,6 +45,7 @@ from loopx.agy_goal_mode import (
     AGY_GOAL_COMPLETE_TOKEN,
     AGY_NATIVE_WAKE_FACTS,
     AGY_NATIVE_WAKE_TOOLS,
+    ANTIGRAVITY_APP_AGENT_TYPE,
     agy_home,
 )
 
@@ -251,3 +262,370 @@ def test_native_goal_and_wake_facts_match_the_live_probes() -> None:
         "send_message",
         "manage_inbox",
     }
+
+
+def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Antigravity 2.0 (antigravity-app) is a first-class host surface alongside agy."""
+    start_dir = tmp_path / "start"
+    start_dir.mkdir()
+    payload = start_goal_accepts_surface(ANTIGRAVITY_APP_AGENT_TYPE, start_dir)
+    assert (
+        payload["command_pack"]["host_loop_activation"]["host_surface"]
+        == "antigravity_app_loop"
+    )
+    activation = build_host_loop_activation_packet(
+        agent_type=ANTIGRAVITY_APP_AGENT_TYPE,
+        goal_id="surface-goal",
+        agent_id="probe-agent",
+        registered_agents=["probe-agent"],
+    )
+    assert activation["host_surface"] == "antigravity_app_loop"
+    assert (
+        activation["activation_method"]
+        == "bind_antigravity_schedule_loop_and_sidecar"
+    )
+    mutation = activation["host_mutation"]
+    assert mutation["host_loop_primitive"] == "antigravity-schedule-tool-and-sidecar"
+    assert mutation["in_session_schedule_call"]["tool"] == "schedule"
+    assert "DurationSeconds" in mutation["in_session_schedule_call"]["arguments"]
+    assert "waiting_external" in mutation["in_session_schedule_call"]["when_to_use"]
+    assert (
+        mutation["sidecar_template"]["schema_version"]
+        == "loopx_antigravity_sidecar_template_v0"
+    )
+    assert (
+        "antigravity_app"
+        in mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"]["gate_command"]
+    )
+    assert (
+        mutation["hooks_template"]["loopx"]["schema_version"]
+        == "loopx_antigravity_hooks_gate_v0"
+    )
+
+    gate_dir = tmp_path / "gate"
+    gate_dir.mkdir()
+    selection_gate_offers_surface(ANTIGRAVITY_APP_AGENT_TYPE, gate_dir)
+
+    assert normalize_agent_type("antigravity-app") == ANTIGRAVITY_APP_AGENT_TYPE
+    assert normalize_agent_type("agy-app") == ANTIGRAVITY_APP_AGENT_TYPE
+    assert normalize_agent_type("antigravity 2.0") == ANTIGRAVITY_APP_AGENT_TYPE
+    assert scheduler_command_binding_for_agent_type(ANTIGRAVITY_APP_AGENT_TYPE) == {
+        "runtime_profile": "antigravity_app"
+    }
+
+    from loopx.agy_goal_mode import build_antigravity_backoff_schedule_action
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_context import validate_quota_command_context_request
+    from loopx.control_plane.scheduler.state import (
+        APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    )
+    from tests.control_plane.scheduler_arbitration_fixture import (
+        build_native_scheduler_hint,
+    )
+
+    # Verify antigravity_app runtime profile maps to HOST_AUTOMATION + HOSTED_AUTOMATION
+    # with first-class app_automation stateful backoff (matching Codex App & Trae App),
+    # while emitting --antigravity_app (never -A / --codex-app).
+    from loopx.control_plane.scheduler.execution_context import (
+        APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES,
+        VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES,
+    )
+
+    assert (
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP
+        in APP_HEARTBEAT_SETTLEMENT_RUNTIME_PROFILES
+    )
+    assert (
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP
+        not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES
+    )
+    runtime_ctx = scheduler_execution_context_for_runtime_profile(
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP
+    )
+    assert runtime_ctx.ok
+    assert runtime_ctx.context is not None
+    assert runtime_ctx.context.host_surface is HostSurface.ANTIGRAVITY_APP
+    assert runtime_ctx.context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
+    assert runtime_ctx.context.execution_mode is ExecutionMode.HOSTED_AUTOMATION
+    assert runtime_ctx.context.app_automation_applicable is True
+    assert "codex_app_applicability" not in runtime_ctx.projection()
+    assert (
+        runtime_ctx.projection()["app_automation_applicability"] == "applicable"
+    )
+
+    # Invalid owner/mode combinations on antigravity_app are rejected cleanly
+    invalid_ctx = resolve_scheduler_execution_context(
+        {
+            "host_surface": HostSurface.ANTIGRAVITY_APP.value,
+            "scheduler_owner": SchedulerOwner.AGENT_CLI_LOOP.value,
+            "execution_mode": ExecutionMode.INTERACTIVE.value,
+        }
+    )
+    assert not invalid_ctx.ok
+    assert (
+        invalid_ctx.projection()["app_automation_applicability"]
+        == "blocked_invalid_context"
+    )
+
+    # Verify build_scheduler_hint projects scheduler_hint.app_automation with
+    # --antigravity_app and --surface antigravity_app (and no -A / codex_app)
+    hint = build_native_scheduler_hint(
+        {
+            "goal_id": "surface-goal",
+            "agent_identity": {"agent_id": "probe-agent"},
+            "should_run": True,
+            "effective_action": "normal_run",
+            "recommended_action": "Advance the public fixture.",
+            "heartbeat_recommendation": {
+                "recommended_mode": "normal_run",
+                "spend_policy": "spend only after validated writeback",
+            },
+            "execution_obligation": {
+                "must_attempt_work": True,
+                "spend_policy": "spend only after validated writeback",
+            },
+            "automation_liveness": {
+                "automation_action": "execute_bounded_work",
+                "spend_policy": "spend only after validated writeback",
+            },
+            "interaction_contract": {
+                "schema_version": "loopx_interaction_contract_v0",
+                "mode": "normal_run",
+                "user_channel": {"action_required": False, "notify": "DONT_NOTIFY"},
+                "agent_channel": {
+                    "must_attempt": True,
+                    "delivery_allowed": True,
+                    "quiet_noop_allowed": False,
+                },
+                "cli_channel": {"next_cli_actions": [], "spend_allowed_now": False},
+            },
+        },
+        include_detail=True,
+        scheduler_execution_context=runtime_ctx,
+    )
+    assert "codex_app" not in hint
+    app_hint = hint["app_automation"]
+    assert app_hint["host_surface"] == "antigravity_app"
+    assert (
+        app_hint["stateful_backoff"]["state_key"]
+        == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    )
+    assert app_hint["recommended_interval_minutes"] == 3
+    ack_cli_args = app_hint["ack_hint"]["cli_args"]
+    assert "--antigravity_app" in ack_cli_args
+    assert "-A" not in ack_cli_args
+    assert "--codex-app" not in ack_cli_args
+    assert "--surface" in ack_cli_args
+    assert "antigravity_app" in ack_cli_args
+
+    schedule_action = build_antigravity_backoff_schedule_action(
+        hint,
+        current_task_id="task-1750",
+        prompt="LoopX managed heartbeat bootstrap v2",
+    )
+    assert schedule_action["action"] == "update_current_heartbeat_rrule"
+    assert schedule_action["cron_expression"] == "*/3 * * * *"
+    assert schedule_action["manage_task_kill"] == {
+        "Action": "kill",
+        "TaskId": "task-1750",
+    }
+    assert schedule_action["schedule_call"]["CronExpression"] == "*/3 * * * *"
+    assert "--antigravity_app" in schedule_action["ack_cli_args"]
+
+    # Verify quota scheduler follow-up parser defaults to antigravity_app + app_automation state key
+    followup_args = build_parser().parse_args(
+        [
+            "quota",
+            "scheduler-fail-current",
+            "--goal-id",
+            "surface-goal",
+            "--agent-id",
+            "probe-agent",
+            "--antigravity_app",
+            "--failed-rrule",
+            "FREQ=MINUTELY;INTERVAL=3",
+            "--execute",
+        ]
+    )
+    validate_quota_command_context_request(followup_args)
+    assert followup_args.surface == "antigravity_app"
+    assert followup_args.state_key == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+
+    # Verify hooks_template includes --goal-id and --agent-id when bound, and sidecar uses
+    # scheduler_hint.app_automation.recommended_interval_minutes.
+    assert "--goal-id" in mutation["hooks_template"]["loopx"]["args"]
+    assert "surface-goal" in mutation["hooks_template"]["loopx"]["args"]
+    assert "--agent-id" in mutation["hooks_template"]["loopx"]["args"]
+    assert "probe-agent" in mutation["hooks_template"]["loopx"]["args"]
+    assert (
+        mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"][
+            "suspend_on_waiting_external"
+        ]["interval_minutes_field"]
+        == "scheduler_hint.app_automation.recommended_interval_minutes"
+    )
+    assert (
+        mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"][
+            "stateful_backoff"
+        ]["state_key"]
+        == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    )
+
+
+def test_antigravity_dual_skills_mcp_hooks_workflow_skills_and_doctor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ~/.gemini/config/skills/<name>/SKILL.md dual compatibility,
+    --agy-home override, optional mcp_config.json + hooks.json registration,
+    workflow-skills --install, and doctor checks."""
+    import loopx.slash_command_install as sci
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("AGY_HOME", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_HOME", raising=False)
+    monkeypatch.setattr(
+        sci,
+        "_loopx_mcp_command",
+        lambda: ("/usr/bin/python3", "/opt/loopx/mcp_server.py"),
+    )
+
+    # 1. Default `agy` surface installs BOTH legacy flat ~/.gemini/antigravity-cli/skills/<name>.md
+    #    AND Antigravity 2.0 ~/.gemini/config/skills/<name>/SKILL.md
+    dual_payload = install_slash_commands(
+        execute=True,
+        surfaces=["agy"],
+    )
+    assert dual_payload["ok"] is True
+    assert (
+        tmp_path / "home" / ".gemini" / "antigravity-cli" / "skills" / "loopx.md"
+    ).is_file()
+    assert (
+        tmp_path / "home" / ".gemini" / "config" / "skills" / "loopx" / "SKILL.md"
+    ).is_file()
+
+    # 2. Explicit --agy-home with --with-agy-mcp and --with-agy-hooks
+    custom_agy_home = tmp_path / "custom-agy-config"
+    app_payload = install_slash_commands(
+        execute=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home),
+        with_agy_mcp=True,
+        with_agy_hooks=True,
+    )
+    assert app_payload["ok"] is True
+    assert (custom_agy_home / "skills" / "loopx" / "SKILL.md").is_file()
+    assert (custom_agy_home / "mcp_config.json").is_file()
+    assert (custom_agy_home / "hooks.json").is_file()
+
+    # Uninstall retires managed MCP, hooks, and skill files cleanly
+    uninstall_payload = install_slash_commands(
+        execute=True,
+        uninstall=True,
+        surfaces=["antigravity-app"],
+        agy_home=str(custom_agy_home),
+        with_agy_mcp=True,
+        with_agy_hooks=True,
+    )
+    assert uninstall_payload["ok"] is True
+    assert not (custom_agy_home / "skills" / "loopx" / "SKILL.md").exists()
+
+    # 3. workflow-skills --install --host-surface antigravity-app --agy-home
+    wf_payload = workflow_skill_install(
+        execute=True,
+        host_surface="antigravity-app",
+        agy_home=str(custom_agy_home),
+    )
+    assert wf_payload["ok"] is True
+    assert (custom_agy_home / "skills" / "loopx-project" / "SKILL.md").is_file()
+    assert (custom_agy_home / "skills" / "loopx" / "SKILL.md").is_file()
+
+    # 4. doctor --agent-type antigravity-app checks the Antigravity config home
+    monkeypatch.setenv("AGY_HOME", str(custom_agy_home))
+    doc = collect_doctor(agent_type="antigravity-app")
+    assert "antigravity" in doc
+    assert doc["antigravity"]["config_home"] == str(custom_agy_home)
+    assert doc["antigravity"]["workflow_skills_readback"]["ready"] is True
+    agy_check = next(
+        c for c in doc["checks"] if c["id"] == "antigravity_host_surface_ready"
+    )
+    assert agy_check["ok"] is True
+
+
+def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
+    tmp_path: Path,
+) -> None:
+    """Verify Antigravity App (`--antigravity_app`) runs real CLI `quota should-run`,
+    `quota scheduler-ack-current`, and `quota scheduler-fail-current` with independent
+    `antigravity_app` state persistence and zero `-A` / `--codex-app` leakage."""
+    from examples.control_plane.quota_plan_fixtures import (
+        SCOPED_AGENT_ID,
+        write_cli_fixture,
+    )
+    from loopx.control_plane.scheduler.state import (
+        APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+        load_scheduler_state,
+    )
+    from loopx.control_plane.testing.canary_harness import (
+        run_json_cli,
+        run_json_cli_result,
+    )
+
+    goal_id = "needs-operator"
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+    _returncode, first = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--antigravity_app",
+        "--turn-instance-id",
+        "2026-11-02T04:00:00Z",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert "codex_app" not in first["scheduler_hint"]
+    app = first["scheduler_hint"]["app_automation"]
+    assert app["host_surface"] == "antigravity_app"
+    assert (
+        app["stateful_backoff"]["state_key"]
+        == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    )
+    assert "--antigravity_app" in app["ack_hint"]["cli_args"]
+    assert "-A" not in app["ack_hint"]["cli_args"]
+
+    ack = run_json_cli(
+        *app["ack_hint"]["cli_args"],
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["surface"] == "antigravity_app"
+    assert ack["state_key"] == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    persisted = load_scheduler_state(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=SCOPED_AGENT_ID,
+        surface="antigravity_app",
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    )
+    assert persisted is not None
+    assert (
+        load_scheduler_state(
+            runtime_root,
+            goal_id=goal_id,
+            agent_id=SCOPED_AGENT_ID,
+            surface="codex_app",
+            state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+        )
+        is None
+    )

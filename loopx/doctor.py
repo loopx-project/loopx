@@ -772,6 +772,23 @@ def collect_doctor(
             "loopx slash-commands --install --surface zcode "
             f"--zcode-home {home_arg}"
         )
+    elif canonical_agent_type in {"agy", "antigravity-app"}:
+        from .agy_goal_mode import antigravity_config_home
+        from .slash_command_install import inspect_skill_facades
+
+        agy_cfg_skills = antigravity_config_home() / "skills"
+        if (agy_cfg_skills / "loopx-project" / "SKILL.md").exists():
+            skill_roots = (agy_cfg_skills,)
+            skills = installed_skill_summary(skill_roots)
+            project_skill = skills["loopx-project"]
+        elif (agy_cfg_skills / "loopx" / "SKILL.md").exists():
+            skill_roots = (agy_cfg_skills,)
+            skills = inspect_skill_facades(agy_cfg_skills)
+            project_skill = skills["loopx"]
+        else:
+            skill_roots = (agy_cfg_skills, *codex_skill_roots())
+            skills = installed_skill_summary(skill_roots)
+            project_skill = skills["loopx-project"]
     else:
         skill_roots = codex_skill_roots()
         skills = installed_skill_summary(skill_roots)
@@ -1242,6 +1259,74 @@ def collect_doctor(
             payload["fix"] = skill_fix
         else:
             payload["fix"] += "\nAfter restoring the LoopX installation/runtime, " + skill_fix
+    if canonical_agent_type in {"agy", "antigravity-app"}:
+        from .agy_goal_mode import (
+            ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
+            ANTIGRAVITY_MCP_CONFIG_FILENAME,
+            ANTIGRAVITY_SIDECAR_FILENAME,
+            agy_home,
+            antigravity_config_home,
+        )
+        from .slash_command_install import inspect_skill_facades
+
+        agy_cfg_home = antigravity_config_home()
+        legacy_agy_home = agy_home()
+        agy_workflow_readback = inspect_skill_install_readback(
+            skills_dir=agy_cfg_home / "skills",
+            required_skill_ids=ARK_MANAGED_AGENT_REQUIRED_SKILL_IDS,
+            source_root=repo_root,
+        )
+        agy_facades = inspect_skill_facades(agy_cfg_home / "skills")
+        workflow_skill_ids = set(
+            agy_workflow_readback.get("materialized_skill_ids") or ()
+        )
+        agy_facades_ready = all(
+            item.get("required_phrases") or name in workflow_skill_ids
+            for name, item in agy_facades.items()
+        )
+        legacy_loopx_exists = (legacy_agy_home / "skills" / "loopx.md").is_file()
+        agy_ready = bool(
+            agy_workflow_readback.get("ready")
+            or agy_facades_ready
+            or legacy_loopx_exists
+        )
+        payload["antigravity"] = {
+            "config_home": str(agy_cfg_home),
+            "legacy_cli_home": str(legacy_agy_home),
+            "skills_dir": str(agy_cfg_home / "skills"),
+            "legacy_skills_dir": str(legacy_agy_home / "skills"),
+            "workflow_skills_readback": agy_workflow_readback,
+            "command_facades": agy_facades,
+            "command_facades_ready": agy_facades_ready,
+            "legacy_cli_loopx_skill_exists": legacy_loopx_exists,
+            "mcp_config_path": str(agy_cfg_home / ANTIGRAVITY_MCP_CONFIG_FILENAME),
+            "mcp_config_exists": (
+                agy_cfg_home / ANTIGRAVITY_MCP_CONFIG_FILENAME
+            ).is_file(),
+            "hooks_config_path": str(agy_cfg_home / ANTIGRAVITY_HOOKS_CONFIG_FILENAME),
+            "hooks_config_exists": (
+                agy_cfg_home / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
+            ).is_file(),
+            "sidecar_config_path": str(agy_cfg_home / ANTIGRAVITY_SIDECAR_FILENAME),
+            "sidecar_config_exists": (
+                agy_cfg_home / ANTIGRAVITY_SIDECAR_FILENAME
+            ).is_file(),
+            "repair_commands": [
+                "loopx workflow-skills --install --host-surface antigravity-app",
+                "loopx slash-commands --install --surface antigravity-app --with-agy-mcp --with-agy-hooks",
+            ],
+        }
+        checks.append(
+            {
+                "id": "antigravity_host_surface_ready",
+                "required": False,
+                "ok": agy_ready,
+                "applicable": True,
+                "detail": (
+                    f"{agy_cfg_home / 'skills'} (ready={agy_ready})"
+                ),
+            }
+        )
     if deep_validation:
         payload["release_candidate"] = deep_validation
     return payload

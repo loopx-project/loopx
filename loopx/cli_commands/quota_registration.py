@@ -146,6 +146,11 @@ def register_quota_command(
         ),
     )
     quota_parser.add_argument(
+        "--antigravity_app",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    quota_parser.add_argument(
         "-H",
         "--host-surface",
         choices=[
@@ -154,6 +159,7 @@ def register_quota_command(
             "codex_app_ssh",
             "codex_cli",
             "trae_app",
+            "antigravity_app",
             "generic_cli",
             "claude_code",
             "kiro_cli",

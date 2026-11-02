@@ -11,7 +11,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .agy_goal_mode import agy_home as _agy_home
+from .agy_goal_mode import (
+    ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
+    ANTIGRAVITY_MCP_CONFIG_FILENAME,
+    agy_home as _agy_home,
+    antigravity_config_home as _antigravity_config_home,
+    build_antigravity_hooks_template,
+)
 from .kiro_cli_goal_mode import (
     KIRO_CLI_MCP_CONFIG_SUBPATH as _KIRO_MCP_CONFIG_SUBPATH,
     SKILLS_ROOT_LABEL as _KIRO_SKILLS_ROOT_LABEL,
@@ -422,6 +428,8 @@ def materialize_loopx_entry_skill(
         None,
         "ark-managed-agent",
         "deepseek-harness-native",
+        "agy",
+        "antigravity-app",
     }:
         raise ValueError(f"unsupported fixed LoopX entry host surface: {host_surface}")
     spec = next(
@@ -701,6 +709,8 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
             candidates = ["zcode"]
         elif surface in {"agy", "antigravity", "antigravity-cli"}:
             candidates = ["agy"]
+        elif surface in {"antigravity-app", "antigravity_app", "agy-app", "agy_app"}:
+            candidates = ["antigravity-app"]
         elif surface in {"kiro", "kiro-cli", "kirocli"}:
             candidates = ["kiro-cli"]
         else:
@@ -718,6 +728,9 @@ MANAGED_MCP_KEY = "loopx"
 CURSOR_MCP_MARKER_NAME = ".loopx-managed-mcp.json"
 CURSOR_MCP_MARKER_SCHEMA_VERSION = "loopx_managed_cursor_mcp_v0"
 KIRO_CLI_MCP_MARKER_SCHEMA_VERSION = "loopx_managed_kiro_cli_mcp_v0"
+ANTIGRAVITY_MCP_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_mcp_v0"
+ANTIGRAVITY_HOOKS_MARKER_NAME = ".loopx-managed-hooks.json"
+ANTIGRAVITY_HOOKS_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_hooks_v0"
 
 McpCommandFactory = Callable[[], tuple[str, str] | None]
 
@@ -830,11 +843,8 @@ def _merge_managed_mcp_json(
     """
     marker_path = config_path.parent / CURSOR_MCP_MARKER_NAME
     try:
-        raw = (
-            json.loads(config_path.read_text(encoding="utf-8"))
-            if config_path.exists()
-            else {}
-        )
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        raw = json.loads(text) if text.strip() else {}
     except (OSError, json.JSONDecodeError):
         return invalid_status
     if not isinstance(raw, dict):
@@ -901,11 +911,83 @@ def _merge_managed_mcp_json(
     return "written"
 
 
+def _merge_managed_hooks_json(
+    *,
+    config_path: Path,
+    cli_bin: str,
+    uninstall: bool,
+    execute: bool,
+) -> str:
+    """Add or remove the ``loopx`` continuation gate in Antigravity ``hooks.json``."""
+    marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
+    try:
+        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        raw = json.loads(text) if text.strip() else {}
+    except (OSError, json.JSONDecodeError):
+        return "blocked_invalid_antigravity_hooks_json"
+    if not isinstance(raw, dict):
+        return "blocked_invalid_antigravity_hooks_json"
+    hooks = raw.get("hooks")
+    if hooks is None:
+        hooks = {}
+    if not isinstance(hooks, dict):
+        return "blocked_invalid_antigravity_hooks_json"
+
+    existing = hooks.get(MANAGED_MCP_KEY)
+    try:
+        marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        marker_payload = {}
+    recorded_hooks = (
+        marker_payload.get("hooks")
+        if isinstance(marker_payload, dict) and isinstance(marker_payload.get("hooks"), dict)
+        else {}
+    )
+    recorded = recorded_hooks.get(MANAGED_MCP_KEY)
+    loopx_owned = existing is not None and existing == recorded
+    if execute and recorded is not None and not loopx_owned:
+        marker_path.unlink(missing_ok=True)
+
+    if uninstall:
+        if existing is None:
+            return "absent"
+        if not loopx_owned:
+            return "skipped_user_owned_hooks_entry"
+        if not execute:
+            return "would_retire"
+        hooks.pop(MANAGED_MCP_KEY, None)
+        raw["hooks"] = hooks
+        _write_json_atomic(config_path, raw)
+        marker_path.unlink(missing_ok=True)
+        return "retired"
+
+    if existing is not None and not loopx_owned:
+        return "skipped_user_owned_hooks_entry"
+    entry = build_antigravity_hooks_template(cli_bin=cli_bin)[MANAGED_MCP_KEY]
+    if not execute:
+        return "unchanged" if existing == entry else "would_write"
+    if existing == entry:
+        return "unchanged"
+    hooks[MANAGED_MCP_KEY] = entry
+    raw["hooks"] = hooks
+    _write_json_atomic(config_path, raw)
+    _write_json_atomic(
+        marker_path,
+        {
+            "schema_version": ANTIGRAVITY_HOOKS_MARKER_SCHEMA_VERSION,
+            "hooks": {MANAGED_MCP_KEY: entry},
+        },
+    )
+    return "written"
+
+
 def install_slash_commands(
     *,
     execute: bool,
     uninstall: bool = False,
     with_goal_bridge: bool = False,
+    with_agy_mcp: bool = False,
+    with_agy_hooks: bool = False,
     surfaces: list[str] | None = None,
     cli_bin: str = "loopx",
     include_legacy_aliases: bool = True,
@@ -934,6 +1016,7 @@ def install_slash_commands(
     cursor_root = _cursor_home(cursor_home)
     zcode_root = _zcode_home(zcode_home or zcode_agents_home)
     agy_root = _agy_home(agy_home)
+    agy_config_root = _antigravity_config_home(agy_home)
     kiro_root = _kiro_home(kiro_home)
     if pi_scope not in {"project", "user"}:
         raise ValueError("pi_scope must be 'project' or 'user'")
@@ -1146,10 +1229,10 @@ def install_slash_commands(
     if "agy" in effective_surfaces:
         # Antigravity CLI discovers global skills from the fixed
         # ~/.gemini/antigravity-cli/skills root using the documented flat
-        # layout (one <name>.md per skill). The official docs describe no home
-        # override, so LoopX offers none: installs target exactly that path,
-        # and the root belongs to agy alone (Gemini CLI reads ~/.gemini/skills),
-        # so the managed skill surfaces never collide across different hosts.
+        # layout (one <name>.md per skill). When --agy-home is not explicitly
+        # overriding the root, also populate Antigravity 2.0's directory-based
+        # ~/.gemini/config/skills/<name>/SKILL.md root so both Antigravity App
+        # and legacy CLI work out of the box.
         _install_skill_facade(
             specs=facade_specs,
             installed=installed,
@@ -1160,6 +1243,73 @@ def install_slash_commands(
             execute=execute,
             uninstall=uninstall,
             flat=True,
+        )
+        if agy_home is None and "antigravity-app" not in effective_surfaces:
+            _install_skill_facade(
+                specs=facade_specs,
+                installed=installed,
+                skills_dir=agy_config_root / "skills",
+                surface="antigravity-app",
+                host_surfaces=["antigravity-app", "agy"],
+                mechanism="antigravity_app_skills",
+                execute=execute,
+                uninstall=uninstall,
+                invoke_prefix="/",
+            )
+
+    if "antigravity-app" in effective_surfaces:
+        _install_skill_facade(
+            specs=facade_specs,
+            installed=installed,
+            skills_dir=agy_config_root / "skills",
+            surface="antigravity-app",
+            host_surfaces=["antigravity-app", "agy"],
+            mechanism="antigravity_app_skills",
+            execute=execute,
+            uninstall=uninstall,
+            invoke_prefix="/",
+        )
+
+    if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_mcp:
+        agy_mcp_path = agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME
+        mcp_status = _merge_managed_mcp_json(
+            config_path=agy_mcp_path,
+            marker_schema_version=ANTIGRAVITY_MCP_MARKER_SCHEMA_VERSION,
+            invalid_status="blocked_invalid_antigravity_mcp_json",
+            command_factory=lambda: _loopx_mcp_command(),
+            uninstall=uninstall,
+            execute=execute,
+        )
+        installed.append(
+            {
+                "surface": "antigravity-app",
+                "host_surfaces": ["antigravity-app", "agy"],
+                "mechanism": "antigravity_mcp_server",
+                "command": "loopx",
+                "path": str(agy_mcp_path),
+                "status": mcp_status,
+                "invoke_as": [],
+            }
+        )
+
+    if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_hooks:
+        agy_hooks_path = agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
+        hooks_status = _merge_managed_hooks_json(
+            config_path=agy_hooks_path,
+            cli_bin=cli_bin,
+            uninstall=uninstall,
+            execute=execute,
+        )
+        installed.append(
+            {
+                "surface": "antigravity-app",
+                "host_surfaces": ["antigravity-app", "agy"],
+                "mechanism": "antigravity_hooks_gate",
+                "command": "loopx",
+                "path": str(agy_hooks_path),
+                "status": hooks_status,
+                "invoke_as": [],
+            }
         )
 
     if "kiro-cli" in effective_surfaces:
@@ -1562,6 +1712,26 @@ def install_slash_commands(
             "cursor_mcp_path": str(cursor_root / "mcp.json") if "cursor" in effective_surfaces else None,
             "zcode_skill_dir": str(zcode_root / "skills") if "zcode" in effective_surfaces else None,
             "agy_skill_dir": str(agy_root / "skills") if "agy" in effective_surfaces else None,
+            "antigravity_app_skill_dir": (
+                str(agy_config_root / "skills")
+                if (
+                    "antigravity-app" in effective_surfaces
+                    or ("agy" in effective_surfaces and agy_home is None)
+                )
+                else None
+            ),
+            "antigravity_mcp_path": (
+                str(agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME)
+                if with_agy_mcp
+                and ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces)
+                else None
+            ),
+            "antigravity_hooks_path": (
+                str(agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME)
+                if with_agy_hooks
+                and ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces)
+                else None
+            ),
             "kiro_cli_skill_dir": str(kiro_root / "skills") if "kiro-cli" in effective_surfaces else None,
             "kiro_cli_mcp_path": str(kiro_root / _KIRO_MCP_CONFIG_SUBPATH) if "kiro-cli" in effective_surfaces else None,
             "opencode_skill_dir": str(opencode_root / "skills") if "opencode" in effective_surfaces else None,
