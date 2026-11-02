@@ -136,7 +136,10 @@ function decode(value: unknown): Request {
     retryObservedAt: optionalNonEmptyString(raw.retry_observed_at, "retry_observed_at"),
     agent: optionalNonEmptyString(raw.agent_id, "agent_id"),
     monitorAgent: optionalNonEmptyString(raw.monitor_agent_id, "monitor_agent_id"),
-    neutral: new Set(requireStringArray(raw.neutral_classifications, "neutral_classifications")),
+    // Older callers may omit canonical no-change writebacks. They are neutral
+    // for lane selection, work counting and feedback selection alike.
+    neutral: new Set([...requireStringArray(raw.neutral_classifications, "neutral_classifications"),
+      "replan_noop", "repair_noop"]),
     stall: integer(raw.stall_threshold, "stall_threshold", 2),
     periodic: integer(raw.periodic_threshold, "periodic_threshold", 1),
     stride: normalizeStrideStrategy(raw.stride_strategy),
@@ -187,20 +190,15 @@ function decode(value: unknown): Request {
 /** Scope before ACK: a peer's acknowledgement cannot discharge this lane. */
 function historyLane(request: Request): string | null {
   return request.agent ?? (request.operation === "all"
-    ? request.runs.find(run => !request.neutral.has(run.classification) &&
-      !["replan_noop", "repair_noop"].includes(run.classification) && run.agent)?.agent ?? null : null);
+    ? request.runs.find(run => !request.neutral.has(run.classification) && run.agent)?.agent ?? null : null);
 }
 function historyWindow(request: Request): Run[] {
-  // These canonical writeback classes carry no accepted replan work. Older
-  // callers may omit them from their neutral inventory; neither their repeated
-  // observations nor their timestamps can create a replacement review duty.
-  const neutral = new Set([...request.neutral, "replan_noop", "repair_noop"]);
   const agent = historyLane(request);
   const result: Run[] = [];
   for (const run of request.runs) {
     if (agent && run.agent && run.agent !== agent) continue;
     if (run.ack) break;
-    if (neutral.has(run.classification)) continue;
+    if (request.neutral.has(run.classification)) continue;
     result.push(run);
   }
   return result;
@@ -216,7 +214,10 @@ function periodicThreshold(request: Request, decisions: ReadonlyMap<string, Json
   if (request.stride === "off" || !lane) return request.periodic;
   for (const run of request.runs) {
     if (run.agent && run.agent !== lane) continue;
-    const decision = run.agent === lane && run.turn
+    // A later observation can reuse an older Turn id without being its
+    // writeback. Only the current ACK may select its settled feedback.
+    if (!run.ack) continue;
+    const decision = !request.neutral.has(run.classification) && run.agent === lane && run.turn
       ? decisions.get(JSON.stringify([lane, run.turn])) : undefined;
     if (decision) {
       // Switching starts a new route at the configured baseline even if its
@@ -233,7 +234,7 @@ function periodicThreshold(request: Request, decisions: ReadonlyMap<string, Json
       }
       return request.periodic;
     }
-    if (run.ack) break;
+    return request.periodic;
   }
   return request.periodic;
 }

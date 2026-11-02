@@ -684,6 +684,28 @@ def test_due_stride_review_survives_successor_transition_until_decision(
         call("quota", "spend-slot", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
             "--todo-id", next_successor["todo_id"], "--turn-instance-id", turn,
             "--slots", "1", "--source", "heartbeat", "--execute")
+        if index == 0:
+            from loopx.history import load_index_snapshot
+
+            runs = load_index_snapshot(runtime / "goals" / GOAL_ID / "runs/index.jsonl",
+                                       include_artifact_status=False).records
+            cadence = effective_turn_cadence_context(resolve_todo_replan_cadence_goal(
+                json.loads(registry.read_text())["goals"][0], runtime,
+            ), runtime, registry_path=registry)
+            # Real settled verify/switch A, then switch ACK B, then one work
+            # Turn: baseline 2 is not due. A late neutral observation reusing
+            # A's identity has neither ACK nor Vision and must not revive A.
+            # Mutate only the projection request, never provider state/receipts.
+            for classification in ("replan_noop", "repair_noop", "quota_slot_spent"):
+                alias = {**({"goal_ref": persisted["goal_ref"]} if "goal_ref" in persisted else {}),
+                         "agent_id": AGENT_ID,
+                         "turn_instance_id": "stride-due-review",
+                         "generated_at": datetime.now(timezone.utc).isoformat(),
+                         "classification": classification}
+                assert project_replan_history(
+                    [alias, *reversed(runs)], operation="periodic", agent_id=AGENT_ID,
+                    effective_turn_cadence=cadence,
+                ) is None, classification
     final = call("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "review-adopted-probe", )
     use = final["autonomous_replan_obligation"]["replan_context"]["decision_followthrough"]["work_result_use"]

@@ -88,6 +88,37 @@ test("cadence feedback cannot borrow a peer, unsettled decision or a decision be
   assert.deepEqual(project(stalled, decisions), before, "typed stalls retain their original priority and threshold");
 });
 
+test("late observations cannot revive an older settled stride decision by reusing its Turn", () => {
+  const key = (turn: string) => JSON.stringify(["worker-a", turn]);
+  const old = run(0, {accepted_ack: true});
+  const current = run(4, {accepted_ack: true});
+  const decisions = new Map<string, JsonObject>([
+    [key("turn-0"), {action: "verify", basis: "uncertain_evidence"}],
+    [key("turn-4"), {action: "switch", basis: "useful_new_route"}],
+  ]);
+  const qualified = new Set([key("turn-1"), key("turn-2")]);
+  const project = (rows: JsonObject[], feedback = decisions, patch: JsonObject = {}) =>
+    projectReplanHistory(request(rows, {operation: "periodic", periodic_threshold: 2,
+      stride_strategy: "evidence_conditioned_v1", ...patch}), qualified, feedback).trigger as JsonObject | null;
+  // These are request-local history observations, not synthetic settlements.
+  // Neutral inventory omitted by an older caller must retain the same rule.
+  for (const classification of ["replan_noop", "repair_noop", ...neutral, "status_readback"]) {
+    const alias = run(9, {turn_id: "turn-0", classification});
+    assert.equal(project([alias, run(1), current, old]), null, classification);
+    assert.equal(project([alias, run(2), run(1), current, old])?.threshold, 2, classification);
+    assert.equal(project([alias, run(1), current, old],
+      new Map([[key("turn-0"), decisions.get(key("turn-0"))!]])), null,
+    "the newer ACK stops lookup even when it has no settled decision");
+    assert.equal(project([alias, run(1), current, old], decisions, {stride_strategy: "off"}), null);
+  }
+  // A neutral ACK still cuts the existing window, but cannot supply feedback.
+  assert.equal(project([run(1), {...old, classification: "replan_noop"}],
+    new Map([[key("turn-0"), decisions.get(key("turn-0"))!]])), null);
+  assert.equal(project([run(1), old],
+    new Map([[key("turn-0"), decisions.get(key("turn-0"))!]]))?.threshold, 1,
+  "the genuine latest ACK remains inclusive");
+});
+
 test("effective cadence uses qualified lane identities, independent of Todo completion", () => {
   const qualified = new Set([1, 2].map(n => JSON.stringify(["worker-a", `turn-${n}`])));
   const project = (runs: JsonObject[]) => projectReplanHistory(request(runs, {
