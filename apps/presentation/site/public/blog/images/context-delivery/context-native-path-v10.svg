@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="820" viewBox="0 0 1360 820" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="1020" viewBox="0 0 1360 1020" role="img">
   <title>Context Delivery 标准交付路径与 JSON Pointer 结构</title>
   <desc>展示 ~/.loopx/context-delivery/decision-&lt;id&gt;/ 标准目录树、required-context.json 内部 JSON Pointer 分层结构、以及 context_capture_navigation_v1 默认交付包络。</desc>
-  
+
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif; fill: #0f172a; }
   .mono { font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace; }
@@ -22,23 +22,9 @@
     <stop offset="0%" stop-color="#f8fafc"/>
     <stop offset="100%" stop-color="#f1f5f9"/>
   </linearGradient>
-  <linearGradient id="blueBar" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#2563eb"/>
-    <stop offset="100%" stop-color="#1d4ed8"/>
-  </linearGradient>
-  <linearGradient id="slateBar" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#64748b"/>
-    <stop offset="100%" stop-color="#475569"/>
-  </linearGradient>
-  <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-    <path d="M1,1 L9,5 L1,9 Z" fill="#2563eb"/>
-  </marker>
-  <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-    <path d="M1,1 L9,5 L1,9 Z" fill="#64748b"/>
-  </marker>
 </defs>
 
-  <rect width="1360" height="820" fill="url(#bgGrad)"/>
+  <rect width="1360" height="1020" fill="url(#bgGrad)"/>
   <rect x="40" y="28" width="480" height="32" rx="16" class="pill"/>
   <text x="60" y="49" font-size="14" font-weight="700" class="accent mono">LOOPX 2.2 · CONTEXT DELIVERY 标准路径与指针结构 (V10)</text>
   <text x="40" y="100" font-size="34" font-weight="800">Context Delivery 标准交付路径与 JSON Pointer 结构</text>
@@ -47,120 +33,120 @@
   <!-- Column Headers -->
   <text x="40" y="176" font-size="17" font-weight="700" class="accent">A. 标准落盘目录树 (decision-&lt;id&gt;/)</text>
   <text x="430" y="176" font-size="17" font-weight="700" class="accent">B. required-context.json 标准内部路径结构</text>
-  <text x="920" y="176" font-size="17" font-weight="700" class="emerald">C. 模型交付包络 (navigation_v1) 与选读入口</text>
+  <text x="920" y="176" font-size="17" font-weight="700" class="emerald">C. 模型交付包络与选读入口</text>
 
   <!-- COLUMN A: Standard On-Disk Directory Tree -->
-  <rect x="40" y="192" width="366" height="556" rx="16" class="card"/>
-  <rect x="58" y="212" width="330" height="44" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
-  <text x="72" y="239" font-size="13.5" font-weight="700" class="mono">~/.loopx/context-delivery/decision-&lt;id&gt;/</text>
+  <rect x="40" y="192" width="366" height="677" rx="16" class="card"/>
+  <rect x="58" y="212" width="330" height="63" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="72" y="239" font-size="13.5" font-weight="700" class="mono"><tspan x="72" dy="0">~/.loopx/context-delivery</tspan><tspan x="72" dy="19">/decision-&lt;id&gt;/</tspan></text>
 
   <!-- Tree branch lines in Col A -->
-  <line x1="78" y1="256" x2="78" y2="672" stroke="#94a3b8" stroke-width="2"/>
-  <line x1="78" y1="298" x2="98" y2="298" stroke="#94a3b8" stroke-width="2"/>
-  <line x1="78" y1="406" x2="98" y2="406" stroke="#94a3b8" stroke-width="2"/>
-  <line x1="78" y1="514" x2="98" y2="514" stroke="#94a3b8" stroke-width="2"/>
-  <line x1="78" y1="622" x2="98" y2="622" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="275" x2="78" y2="743" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="317" x2="98" y2="317" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="425" x2="98" y2="425" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="550" x2="98" y2="550" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="693" x2="98" y2="693" stroke="#94a3b8" stroke-width="2"/>
 
   <!-- File 1: projection.json -->
-  <rect x="98" y="268" width="290" height="86" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
-  <text x="112" y="295" font-size="15" font-weight="700" class="mono">├─ projection.json</text>
-  <text x="112" y="319" font-size="12.5" class="muted">完整当前来源先落盘 (57,014 B)</text>
-  <text x="112" y="340" font-size="12" class="subtle mono">Goal · Todos · Outcomes · Sources</text>
+  <rect x="98" y="287" width="290" height="86" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="112" y="314" font-size="15" font-weight="700" class="mono">├─ projection.json</text>
+  <text x="112" y="338" font-size="12.5" class="muted">完整当前来源先落盘 (57,014 B)</text>
+  <text x="112" y="359" font-size="12" class="subtle mono">Goal · Todos · Outcomes · Sources</text>
 
   <!-- File 2: required-context.json -->
-  <rect x="98" y="376" width="290" height="86" rx="10" class="card-accent"/>
-  <text x="112" y="403" font-size="15" font-weight="700" class="accent mono">├─ required-context.json</text>
-  <text x="112" y="427" font-size="12.5" class="muted">保留 10 条要求与风险状态 (5,107 B)</text>
-  <text x="112" y="448" font-size="12" class="subtle mono">+ supporting_material_pointer + context_ref</text>
+  <rect x="98" y="395" width="290" height="103" rx="10" class="card-accent"/>
+  <text x="112" y="422" font-size="15" font-weight="700" class="accent mono">├─ required-context.json</text>
+  <text x="112" y="446" font-size="12.5" class="muted">保留 10 条要求与风险状态 (5,107 B)</text>
+  <text x="112" y="467" font-size="12" class="subtle mono"><tspan x="112" dy="0">+ supporting_material_pointer +</tspan><tspan x="112" dy="17"> context_ref</tspan></text>
 
   <!-- File 3: delivery.json -->
-  <rect x="98" y="484" width="290" height="86" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
-  <text x="112" y="511" font-size="15" font-weight="700" class="mono">├─ delivery.json</text>
-  <text x="112" y="535" font-size="12.5" class="muted">context_delivery_v1 (5,543B full → 2,164B delta)</text>
-  <text x="112" y="556" font-size="12" class="subtle mono">mode: "full" | "delta" (captured_file)</text>
+  <rect x="98" y="520" width="290" height="121" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="112" y="547" font-size="15" font-weight="700" class="mono">├─ delivery.json</text>
+  <text x="112" y="571" font-size="12.5" class="muted"><tspan x="112" dy="0">context_delivery_v1 (5,543B full → 2,164B</tspan><tspan x="112" dy="18"> delta)</tspan></text>
+  <text x="112" y="610" font-size="12" class="subtle mono"><tspan x="112" dy="0">mode: "full" | "delta"</tspan><tspan x="112" dy="17"> (captured_file)</tspan></text>
 
   <!-- File 4: *.reader.json -->
-  <rect x="98" y="592" width="290" height="104" rx="10" class="card-emerald"/>
-  <text x="112" y="619" font-size="14.5" font-weight="700" class="emerald mono">└─ *.reader.json</text>
-  <text x="112" y="642" font-size="11.2" class="muted">context_capture_read_reference_v1 (私有完整摘要)</text>
-  <text x="112" y="663" font-size="11.8" class="subtle mono">• required-context.reader.json (recovery)</text>
-  <text x="112" y="682" font-size="11.8" class="subtle mono">• delivery.&lt;hash16&gt;.reader.json (nav)</text>
+  <rect x="98" y="663" width="290" height="154" rx="10" class="card-emerald"/>
+  <text x="112" y="690" font-size="14.5" font-weight="700" class="emerald mono">└─ *.reader.json</text>
+  <text x="112" y="713" font-size="11.2" class="muted"><tspan x="112" dy="0">context_capture_read_reference_v1</tspan><tspan x="112" dy="16"> (私有完整摘要)</tspan></text>
+  <text x="112" y="750" font-size="11.8" class="subtle mono"><tspan x="112" dy="0">• required-context.reader.json</tspan><tspan x="112" dy="17"> (recovery)</tspan></text>
+  <text x="112" y="786" font-size="11.8" class="subtle mono"><tspan x="112" dy="0">• delivery.&lt;hash16&gt;.reader.json</tspan><tspan x="112" dy="17"> (nav)</tspan></text>
 
   <!-- Arrow Col A -> Col B -->
-  <line x1="388" y1="418" x2="424" y2="418" stroke="#2563eb" stroke-width="2.4"/><polygon points="422,412 432,418 422,424" fill="#2563eb"/>
+  <line x1="388" y1="445.5" x2="424" y2="445.5" stroke="#2563eb" stroke-width="2.4"/><polygon points="422,439.5 432,445.5 422,451.5" fill="#2563eb"/>
 
   <!-- COLUMN B: Standard JSON Pointer Hierarchy inside required-context.json -->
-  <rect x="430" y="192" width="466" height="556" rx="16" class="card-accent"/>
-  <rect x="448" y="212" width="430" height="516" rx="12" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.4"/>
+  <rect x="430" y="192" width="466" height="676" rx="16" class="card-accent"/>
+  <rect x="448" y="212" width="430" height="636" rx="12" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.4"/>
 
   <text x="464" y="242" font-size="14" font-weight="700" class="accent mono">/ (required-context.json root)</text>
 
   <!-- Carrier 1: Outcome Requirements -->
-  <text x="464" y="270" font-size="12.5" font-weight="700" class="mono">├─ /interaction_contract/agent_channel/work_context/sources/0</text>
-  <text x="464" y="292" font-size="12.5" font-weight="700" class="mono">│  └─ /content/goal_acceptance_contract/outcome_requirements</text>
-  <text x="464" y="314" font-size="12.5" font-weight="700" class="accent mono">│     └─ /outcomes/0</text>
+  <text x="464" y="270" font-size="12.5" font-weight="700" class="mono"><tspan x="464" dy="0">├─ /interaction_contract/agent_channel</tspan><tspan x="464" dy="18">/work_context/sources/0</tspan></text>
+  <text x="464" y="310" font-size="12.5" font-weight="700" class="mono"><tspan x="464" dy="0">│  └─ /content/goal_acceptance_contract</tspan><tspan x="464" dy="18">/outcome_requirements</tspan></text>
+  <text x="464" y="350" font-size="12.5" font-weight="700" class="accent mono">│     └─ /outcomes/0</text>
 
-  <rect x="488" y="324" width="374" height="72" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-  <text x="500" y="346" font-size="12" font-weight="700" class="mono">├─ objective, status, requirements/2/description</text>
-  <text x="500" y="366" font-size="10.4" font-weight="700" class="amber mono">├─ requirements/2/agent_review: {"conclusion":"unmet","basis_current":false}</text>
-  <text x="500" y="386" font-size="11.5" class="muted">← 决策层常驻：完整要求 + 未通过/过期标记</text>
+  <rect x="488" y="360" width="374" height="105" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="500" y="382" font-size="12" font-weight="700" class="mono"><tspan x="500" dy="0">├─ objective, status,</tspan><tspan x="500" dy="17"> requirements/2/description</tspan></text>
+  <text x="500" y="419" font-size="10.4" font-weight="700" class="amber mono"><tspan x="500" dy="0">├─ requirements/2/agent_review:</tspan><tspan x="500" dy="16"> {"conclusion":"unmet","basis_current":false}</tspan></text>
+  <text x="500" y="455" font-size="11.5" class="muted">← 决策层常驻：完整要求 + 未通过/过期标记</text>
 
-  <rect x="488" y="404" width="374" height="86" rx="8" fill="#fffbeb" stroke="#fcd34d"/>
-  <text x="500" y="426" font-size="12" font-weight="700" class="amber mono">└─ supporting_material_pointer: "/.../outcomes/0"</text>
-  <text x="500" y="446" font-size="11.5" class="muted">← 延迟展开指针：指向 projection.json 原位置</text>
-  <text x="500" y="466" font-size="11.5" class="subtle mono">   • &lt;ptr&gt;/sources   • &lt;ptr&gt;/requirements/2/agent_review/note</text>
-  <text x="500" y="482" font-size="11.5" class="subtle mono">   • &lt;ptr&gt;/requirements/2/agent_review/evidence_refs</text>
+  <rect x="488" y="473" width="374" height="120" rx="8" fill="#fffbeb" stroke="#fcd34d"/>
+  <text x="500" y="495" font-size="12" font-weight="700" class="amber mono"><tspan x="500" dy="0">└─ supporting_material_pointer:</tspan><tspan x="500" dy="17"> "/.../outcomes/0"</tspan></text>
+  <text x="500" y="532" font-size="11.5" class="muted">← 延迟展开指针：指向 projection.json 原位置</text>
+  <text x="500" y="552" font-size="11.5" class="subtle mono"><tspan x="500" dy="0">   • &lt;ptr&gt;/sources   •</tspan><tspan x="500" dy="17"> &lt;ptr&gt;/requirements/2/agent_review/note</tspan></text>
+  <text x="500" y="585" font-size="11.5" class="subtle mono">   • &lt;ptr&gt;/requirements/2/agent_review/evidence_refs</text>
 
   <!-- Carrier 2: Todo Deduplication via context_ref -->
-  <text x="464" y="516" font-size="12.5" font-weight="700" class="mono">├─ /agent_todo_summary/first_open_items/0</text>
-  <text x="484" y="535" font-size="11.5" class="muted">← 完整 Todo 唯一主位置 (1,052 B)</text>
+  <text x="464" y="619" font-size="12.5" font-weight="700" class="mono">├─ /agent_todo_summary/first_open_items/0</text>
+  <text x="484" y="638" font-size="11.5" class="muted">← 完整 Todo 唯一主位置 (1,052 B)</text>
 
-  <rect x="464" y="546" width="398" height="60" rx="8" fill="#f0fdf4" stroke="#86efac"/>
-  <text x="476" y="568" font-size="12" font-weight="700" class="emerald mono">├─ /selected_todo: {"todo_id": "todo_voice",</text>
-  <text x="476" y="586" font-size="12" font-weight="700" class="emerald mono">│    "context_ref": "/agent_todo_summary/first_open_items/0"}</text>
-  <text x="476" y="601" font-size="11.2" class="muted">← 同视图精确共享引用 (80 B)</text>
+  <rect x="464" y="649" width="398" height="77" rx="8" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="476" y="671" font-size="12" font-weight="700" class="emerald mono">├─ /selected_todo: {"todo_id": "todo_voice",</text>
+  <text x="476" y="689" font-size="12" font-weight="700" class="emerald mono"><tspan x="476" dy="0">│    "context_ref":</tspan><tspan x="476" dy="17"> "/agent_todo_summary/first_open_items/0"}</tspan></text>
+  <text x="476" y="721" font-size="11.2" class="muted">← 同视图精确共享引用 (80 B)</text>
 
   <!-- Carrier 3: context_details -->
-  <rect x="464" y="618" width="398" height="94" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
-  <text x="476" y="640" font-size="12.5" font-weight="700" class="accent mono">└─ /context_details</text>
-  <text x="476" y="660" font-size="11.5" class="mono">   ├─ path: ".../decision-&lt;id&gt;/projection.json"</text>
-  <text x="476" y="678" font-size="11.5" class="mono">   ├─ sha256: "&lt;64-hex&gt;"</text>
-  <text x="476" y="698" font-size="11.2" class="muted">   ← 原文回读入口 (path + sha256 + command_template)</text>
+  <rect x="464" y="738" width="398" height="94" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="476" y="760" font-size="12.5" font-weight="700" class="accent mono">└─ /context_details</text>
+  <text x="476" y="780" font-size="11.5" class="mono">   ├─ path: ".../decision-&lt;id&gt;/projection.json"</text>
+  <text x="476" y="798" font-size="11.5" class="mono">   ├─ sha256: "&lt;64-hex&gt;"</text>
+  <text x="476" y="818" font-size="11.2" class="muted">   ← 原文回读入口 (path + sha256 + command_template)</text>
 
   <!-- Arrow Col A/B -> Col C -->
-  <line x1="896" y1="636" x2="916" y2="636" stroke="#059669" stroke-width="2.4"/><polygon points="914,630 924,636 914,642" fill="#059669"/>
+  <line x1="896" y1="756" x2="916" y2="756" stroke="#059669" stroke-width="2.4"/><polygon points="914,750 924,756 914,762" fill="#059669"/>
 
   <!-- COLUMN C: Standard Model Reference Envelope & CLI Read Commands -->
-  <rect x="920" y="192" width="400" height="556" rx="16" class="card-emerald"/>
+  <rect x="920" y="192" width="400" height="725" rx="16" class="card-emerald"/>
 
   <!-- Top Box: context_capture_navigation_v1 JSON -->
-  <rect x="938" y="212" width="364" height="206" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.4"/>
-  <text x="952" y="236" font-size="13" font-weight="700" class="emerald mono">{ "schema_version": "context_capture_navigation_v1",</text>
-  <text x="952" y="258" font-size="12.5" font-weight="700" class="mono">  "mode": "full" | "delta",</text>
-  <text x="952" y="278" font-size="12" class="mono">  "reference_file": ".../delivery.&lt;h16&gt;.reader.json",</text>
-  <text x="952" y="298" font-size="12" class="accent mono">  "first_read_command": "loopx ... --initial-read",</text>
-  <text x="952" y="320" font-size="12.5" font-weight="700" class="emerald mono">  "recovery": {</text>
-  <text x="952" y="340" font-size="11.8" class="emerald mono">    "reference_file": ".../required-context.reader.json",</text>
-  <text x="952" y="358" font-size="11.8" class="mono">    "command": "loopx --format json quota context-read ..."</text>
-  <text x="952" y="376" font-size="12.5" font-weight="700" class="emerald mono">  },</text>
-  <text x="952" y="396" font-size="11.8" class="subtle mono">  "baseline_reference": { ... } // when mode="delta" }</text>
+  <rect x="938" y="212" width="364" height="310" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.4"/>
+  <text x="952" y="236" font-size="13" font-weight="700" class="emerald mono"><tspan x="952" dy="0">{ "schema_version":</tspan><tspan x="952" dy="19"> "context_capture_navigation_v1",</tspan></text>
+  <text x="952" y="277" font-size="12.5" font-weight="700" class="mono">  "mode": "full" | "delta",</text>
+  <text x="952" y="297" font-size="12" class="mono"><tspan x="952" dy="0">  "reference_file":</tspan><tspan x="952" dy="17"> ".../delivery.&lt;h16&gt;.reader.json",</tspan></text>
+  <text x="952" y="334" font-size="12" class="accent mono"><tspan x="952" dy="0">  "first_read_command": "loopx ...</tspan><tspan x="952" dy="17"> --initial-read",</tspan></text>
+  <text x="952" y="373" font-size="12.5" font-weight="700" class="emerald mono">  "recovery": {</text>
+  <text x="952" y="393" font-size="11.8" class="emerald mono"><tspan x="952" dy="0">    "reference_file":</tspan><tspan x="952" dy="17"> ".../required-context.reader.json",</tspan></text>
+  <text x="952" y="428" font-size="11.8" class="mono"><tspan x="952" dy="0">    "command": "loopx --format json quota</tspan><tspan x="952" dy="17"> context-read ..."</tspan></text>
+  <text x="952" y="463" font-size="12.5" font-weight="700" class="emerald mono">  },</text>
+  <text x="952" y="483" font-size="11.8" class="subtle mono"><tspan x="952" dy="0">  "baseline_reference": { ... } // when</tspan><tspan x="952" dy="17"> mode="delta" }</tspan></text>
 
   <!-- 4 Progressive CLI Commands -->
-  <rect x="938" y="432" width="364" height="68" rx="8" class="card"/>
-  <text x="952" y="454" font-size="12.5" font-weight="700">① 起始必读导航 (--initial-read)</text>
-  <text x="952" y="476" font-size="11.5" class="accent mono">quota context-read --reference-file "$REF" --initial-read</text>
+  <rect x="938" y="536" width="364" height="85" rx="8" class="card"/>
+  <text x="952" y="558" font-size="12.5" font-weight="700">① 起始必读导航 (--initial-read)</text>
+  <text x="952" y="580" font-size="11.5" class="accent mono"><tspan x="952" dy="0">quota context-read --reference-file "$REF"</tspan><tspan x="952" dy="17"> --initial-read</tspan></text>
 
-  <rect x="938" y="510" width="364" height="68" rx="8" class="card"/>
-  <text x="952" y="532" font-size="12.5" font-weight="700">② 已知 Pointer 单次批量读取 (3 处 1,362 B)</text>
-  <text x="952" y="554" font-size="10.3" class="emerald mono">--reference-file "$REC" --select /goal/objective --select /goal/constraints</text>
+  <rect x="938" y="631" width="364" height="84" rx="8" class="card"/>
+  <text x="952" y="653" font-size="12.5" font-weight="700">② 已知 Pointer 单次批量读取 (3 处 1,362 B)</text>
+  <text x="952" y="675" font-size="10.3" class="emerald mono"><tspan x="952" dy="0">--reference-file "$REC" --select /goal/objective</tspan><tspan x="952" dy="16"> --select /goal/constraints</tspan></text>
 
-  <rect x="938" y="588" width="364" height="68" rx="8" class="card"/>
-  <text x="952" y="610" font-size="12.5" font-weight="700">③ 陌生子树先展开两层目录 (1,283 B)</text>
-  <text x="952" y="632" font-size="10.4" class="accent mono">--reference-file "$REC" --select /providers --list --list-depth 2</text>
+  <rect x="938" y="725" width="364" height="84" rx="8" class="card"/>
+  <text x="952" y="747" font-size="12.5" font-weight="700">③ 陌生子树先展开两层目录 (1,283 B)</text>
+  <text x="952" y="769" font-size="10.4" class="accent mono"><tspan x="952" dy="0">--reference-file "$REC" --select /providers --list</tspan><tspan x="952" dy="16"> --list-depth 2</tspan></text>
 
-  <rect x="938" y="666" width="364" height="68" rx="8" class="card"/>
-  <text x="952" y="688" font-size="12.5" font-weight="700">④ 沿 supporting_material_pointer 追回原证据</text>
-  <text x="952" y="710" font-size="10.1" class="amber mono">--capture-file projection.json --select "$PTR/requirements/2/agent_review/note"</text>
+  <rect x="938" y="819" width="364" height="84" rx="8" class="card"/>
+  <text x="952" y="841" font-size="12.5" font-weight="700">④ 沿 supporting_material_pointer 追回原证据</text>
+  <text x="952" y="863" font-size="10.1" class="amber mono"><tspan x="952" dy="0">--capture-file projection.json --select</tspan><tspan x="952" dy="16"> "$PTR/requirements/2/agent_review/note"</tspan></text>
 
-  <text x="40" y="786" font-size="14.5" font-weight="600" class="muted">核心路径不变量：即使 delivery.json 为 mode: "delta"，recovery.reference_file 仍直指当前 required-context.json，支持直接 --select 任意当前事实；context_details 直通原始 projection.json。</text>
+  <text x="40" y="955" font-size="14.5" font-weight="600" class="muted"><tspan x="40" dy="0">核心路径不变量：即使 delivery.json 为 mode: "delta"，recovery.reference_file 仍直指当前 required-context.json，支持直接 --select 任意当前事实；context_details 直通原始</tspan><tspan x="40" dy="21"> projection.json。</tspan></text>
 </svg>

@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img">
   <title>Differential：同一有效周期内复用，失效即完整恢复</title>
   <desc>在有效周期 A 内，完整基线后仅传递经哈希核验的 Δ1、Δ2；一旦发生上下文压缩或连续性失效，新周期 B 自动重置为完整来源。</desc>
-  
+
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif; fill: #0f172a; }
   .mono { font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace; }
@@ -22,20 +22,6 @@
     <stop offset="0%" stop-color="#f8fafc"/>
     <stop offset="100%" stop-color="#f1f5f9"/>
   </linearGradient>
-  <linearGradient id="blueBar" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#2563eb"/>
-    <stop offset="100%" stop-color="#1d4ed8"/>
-  </linearGradient>
-  <linearGradient id="slateBar" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#64748b"/>
-    <stop offset="100%" stop-color="#475569"/>
-  </linearGradient>
-  <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-    <path d="M1,1 L9,5 L1,9 Z" fill="#2563eb"/>
-  </marker>
-  <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-    <path d="M1,1 L9,5 L1,9 Z" fill="#64748b"/>
-  </marker>
 </defs>
 
   <rect width="1200" height="620" fill="url(#bgGrad)"/>
