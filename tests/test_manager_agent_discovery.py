@@ -77,17 +77,20 @@ def test_repeated_roles_expose_scoped_binding_context_without_host_access(tmp_pa
     result = reader.read(TOOL_NAME, {"view": "agents", "query": "operations"})
     assert result["matched"] == 2
     rows = {row["goal_id"]: row for row in result["rows"]}
+    assert rows["research"]["host_surfaces"] == ["codex-app"]
     assert rows["research"]["registered_host_binding"] == {
         "outcome": "single_candidate", "candidate_count": 1,
         "address_shared": False, "scope": "goals_supplied",
     }
+    assert rows["new-work"]["host_surfaces"] == []
     assert rows["new-work"]["registered_host_binding"]["outcome"] == "no_candidate"
     assert rows["new-work"]["registered_host_binding"]["candidate_count"] == 0
+    assert reader.read(TOOL_NAME, {"view": "agents", "query": "codex-app"})["matched"] == 1
     assert all(row["execution_readiness"] == "not_checked" for row in rows.values())
     assert all(row["context_delivery"] == "not_granted" for row in rows.values())
     assert "private-host-address" not in json.dumps(result)
     assert "hidden-worker" not in json.dumps(result)
-    assert records == [result]
+    assert records[0] == result
     assert not (tmp_path / "manager-context").exists()
 
 
@@ -183,8 +186,12 @@ def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_
     home = tmp_path / "host"
     home.mkdir()
     rollout = home / "current.jsonl"
-    rollout.write_text(json.dumps({"type": "session_meta", "payload": {"id": "current"}}) + "\n" + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
-        "payload": {"type": "task_complete"}}) + "\n")
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "current", "model_provider": "openai"}}) + "\n"
+        + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1"}}) + "\n"
+        + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "turn_context", "payload": {"turn_id": "turn-1", "model": "gpt-6.1-sol", "effort": "max"}}) + "\n"
+        + json.dumps({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1"}}) + "\n"
+    )
     db = home / "state_5.sqlite"
     with sqlite3.connect(db) as connection:
         connection.execute("CREATE TABLE threads(id TEXT, rollout_path TEXT, archived INTEGER)")
@@ -195,6 +202,11 @@ def test_conversation_resolves_existing_peer_from_real_read_only_host_store(tmp_
     assert result["status"] == "resolved"
     assert result["selected_route"] == {"host_surface": "codex-app", "thread_id": "current"}
     assert result["host_observation"]["state"] == "idle"
+    assert result["execution_identity"]["status"] == "runtime_reported"
+    assert result["execution_identity"]["model"] == "gpt-6.1-sol"
+    assert result["execution_identity"]["provider"] == "OpenAI"
+    assert result["execution_identity"]["reasoning_effort"] == "max"
+    assert result["execution_identity"]["active_turn_verified"] is False
     assert result["host_delivery"] == "not_attempted" and result["authority"] == "locator_only"
     assert records == [result]
     assert before == [p.read_bytes() for p in (registry, db, rollout)]

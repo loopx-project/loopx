@@ -457,10 +457,14 @@ not a missing Agent; delivery still rechecks the existing authority. Stopped
 identities are available with `include_stopped=true` for historical questions.
 Unreadable/ambiguous inventory remains unknown, not an empty successful search.
 
-Each included row also exposes `registered_host_binding`: the existing binding
+Each included row also exposes `host_surfaces` (the sorted public-safe host
+surface kinds bound in that Goal, without thread addresses) and
+`registered_host_binding`: the existing binding
 owner's `outcome`, `candidate_count`, `address_shared` and `scope` for that Goal.
 The page does not expose host addresses or read host stores; `view=agent_route`
-remains the exact-identity, current-observation path. A registration or binding
+remains the exact-identity, current-observation path (which also reports
+`execution_identity` from the selected Codex rollout's latest recorded Turn
+when available, without reading mutable store preferences). A registration or binding
 does not prove presence, execution readiness or delivery authority.
 
 Repeated role names alone do not require an owner question. Resolve the subject,

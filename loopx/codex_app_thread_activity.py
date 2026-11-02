@@ -159,6 +159,54 @@ def current_codex_execution_identity(
         return {"status": "unavailable", "reason": "host_runtime_unavailable"}
 
 
+def observe_codex_thread_execution_identity(
+    thread_id: str,
+    *,
+    homes: list[Path] | None = None,
+) -> dict[str, Any]:
+    """Read the latest recorded Turn identity for a bound Codex thread across homes."""
+    from .control_plane.effect_runtime import effect_runtime_result
+
+    normalized = str(thread_id or "").strip()
+    if not normalized:
+        return {"status": "unavailable", "reason": "session_not_bound"}
+    search_homes = codex_homes() if homes is None else homes
+    fallback = "session_not_found"
+    for home in search_homes:
+        try:
+            db = _state_db(home)
+            if db is None:
+                continue
+            rows = _thread_rows(db, [normalized])
+        except _UnrecognizedStore:
+            fallback = "host_store_unavailable"
+            continue
+        except (OSError, sqlite3.Error):
+            if fallback == "session_not_found":
+                fallback = "host_store_unavailable"
+            continue
+        row = rows.get(normalized)
+        if row is None:
+            continue
+        path, archived = row
+        if archived != 0 or not isinstance(path, str) or not path:
+            return {"status": "unavailable", "reason": "session_record_unavailable"}
+        try:
+            result: dict[str, Any] = effect_runtime_result(
+                "runtime.execution_identity.codex",
+                {
+                    "home": str(home.expanduser().resolve()),
+                    "path": path,
+                    "thread_id": normalized,
+                    "allow_completed_turn": True,
+                },
+            )
+            return result
+        except RuntimeError:
+            return {"status": "unavailable", "reason": "host_runtime_unavailable"}
+    return {"status": "unavailable", "reason": fallback}
+
+
 def _rollout_activity(
     rollout_path: Any, home: Path, *, thread_id: str, cache_root: Path | None = None,
 ) -> HostThreadActivity:
