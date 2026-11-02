@@ -142,6 +142,7 @@ interface ReturnCommand {
   key: string;
   path: string;
   now: string;
+  nowMicros: bigint;
   exact: boolean;
   facts: JsonObject;
 }
@@ -150,6 +151,13 @@ function returnAddress(value: unknown): {request_id: string; result_key: string}
   const row = requireJsonObject(value, "return candidate");
   return {request_id: matchingString(row.request_id, "request_id", BARE_SHA256_PATTERN),
     result_key: matchingString(row.result_key, "result_key", RESULT_KEY)};
+}
+
+function returnClockMicros(value: unknown): bigint {
+  const instant = typeof value === "string" && value.length <= 64
+    ? parseTodoTimestampMicros(value) : null;
+  if (instant === null) throw new EffectRuntimeRequestError("invalid return clock");
+  return instant;
 }
 
 function returnCommand(value: unknown): ReturnCommand {
@@ -161,10 +169,10 @@ function returnCommand(value: unknown): ReturnCommand {
   if (!isAbsolute(root)) throw new EffectRuntimeRequestError("return runtime root must be absolute");
   const {request_id: id, result_key: key} = returnAddress(request);
   const now = requireNonEmptyString(request.now, "now");
-  if (now.length > 64 || parseTodoTimestampMicros(now) === null) throw new EffectRuntimeRequestError("invalid return clock");
+  const nowMicros = returnClockMicros(now);
   requireStringLiteral(request.phase, ["prepare", "attempt", "settle"], "return delivery phase");
   const folder = join(root, ".local", "manager-context");
-  return { request, folder, key, now,
+  return { request, folder, key, now, nowMicros,
     path: join(folder, "replies", id, `${key}.delivery.json`),
     exact: requireBoolean(request.exact, "exact"),
     facts: requireJsonObject(request.facts, "return source facts") };
@@ -207,12 +215,12 @@ function unavailableRecord(error: unknown): boolean {
 function pendingDelivery(command: ReturnCommand, state: JsonObject): boolean {
   if (TERMINAL.has(String(state.status))) return false;
   if (!command.exact || state.status !== "admitted") {
-    if (state.retry_at && command.now < String(state.retry_at)) return false;
+    if (state.retry_at && command.nowMicros < returnClockMicros(state.retry_at)) return false;
   }
   const admission = state.admission;
   return !(command.exact && admission && typeof admission === "object"
     && (admission as JsonObject).expires_at
-    && command.now < String((admission as JsonObject).expires_at));
+    && command.nowMicros < returnClockMicros((admission as JsonObject).expires_at));
 }
 
 function deliveryState(value: unknown): JsonObject {
@@ -251,7 +259,7 @@ async function scanReturns(request: JsonObject): Promise<JsonObject> {
 }
 
 function shiftedClock(now: string, seconds: number): string {
-  // Preserve Python's offset/fraction representation, used by existing lexical retry fences.
+  // Preserve Python's offset/fraction representation; eligibility compares instants.
   const match = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d(?::\d\d(?:\.\d+)?)?)?$/.exec(now);
   if (!match) throw new EffectRuntimeRequestError("invalid return clock representation");
   return new Date(Date.parse(`${match[1]}Z`) + seconds * 1000).toISOString().slice(0, 19)
@@ -379,7 +387,6 @@ function returnAuthorityBlocker(command: ReturnCommand): string | null {
 }
 
 async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {
-  if (!pendingDelivery(command, state)) return returnResponse();
   if (command.facts.error) return sourceFailure(command, state);
   let source: Awaited<ReturnType<typeof inspectReturnPublication>>;
   try {
@@ -529,7 +536,10 @@ export async function transactManagerReturnDelivery(value: unknown): Promise<Jso
   const command = returnCommand(value);
   return withFileMutationLock(command.path, async () => {
     let state: JsonObject;
-    try { state = deliveryState(await readReturnRecord(command.path, {})); }
+    try {
+      state = deliveryState(await readReturnRecord(command.path, {}));
+      if (command.request.phase === "prepare" && !pendingDelivery(command, state)) return returnResponse();
+    }
     catch (error) {
       if (command.request.phase === "prepare" && unavailableRecord(error)) return returnResponse();
       throw error;
