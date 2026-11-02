@@ -44,6 +44,8 @@ def _render_settlement_plan(plan: object) -> list[str]:
         lines.append(f"- {step.get('kind')}: {step.get('precondition')}")
         if step.get("command_template"):
             lines.append(f"  - command{f' ({condition})' if condition else ''}: `{step['command_template']}`")
+        if step.get("semantic_closeout_command_template"):
+            lines.append(f"  - semantic closeout: `{step['semantic_closeout_command_template']}`")
     return lines
 
 

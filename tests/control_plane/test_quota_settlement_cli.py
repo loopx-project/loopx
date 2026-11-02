@@ -2522,7 +2522,10 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     ]
     assert "--delivery-boundary <boundary>" in first_writeback
     writeback_step = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
-    assert "vision_authoring" not in writeback_step
+    assert writeback_step["vision_authoring"]["schema_version"] == "goal_vision_replan_contract_v0"
+    checkpoint = writeback_step["semantic_closeout_command_template"]
+    assert "--delivery-boundary semantic_closeout" in checkpoint and "<boundary>" not in checkpoint
+    assert f"--turn-instance-id {first_turn_id}" in checkpoint
     assert "outcome_gap requires semantic_closeout" in writeback_step["precondition"]
     offered = writeback_step["precondition"].split("; outcome=", 1)[1].split(".", 1)[0].split("|")
     blocked = {
