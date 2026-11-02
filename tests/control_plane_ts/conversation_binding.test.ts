@@ -45,6 +45,16 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   assert.equal(plan.operation, "adopt_native_result");
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.client_turn_id, undefined);
+  for (const field of ["input_sha256", "answer_sha256"]) {
+    for (const invalid of [null, false, 1, [], {}, "", "1".repeat(63), "1".repeat(65),
+      "A".repeat(64), `sha256:${"1".repeat(64)}`]) {
+      assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+        native_observation: {...proof, [field]: invalid}}}).recovery_eligible, false,
+      `${field} must reject ${JSON.stringify(invalid)}`);
+    }
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+      native_observation: {...proof, [field]: "abcdef0123456789".repeat(4)}}}).recovery_eligible, true);
+  }
   for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
     {attachments_present: true}, {native_observation: {...proof, thread_id: "other"}},
     {native_observation: {...proof, request_ref: "a".repeat(24)}},
