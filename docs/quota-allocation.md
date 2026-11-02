@@ -1001,6 +1001,19 @@ settlement still closes this resume path. This differs from executable work
 which became deferred after admission: that existing no-execution/no-spend
 boundary remains intact, and independent work is selected under a fresh Turn.
 
+For a Todo-bound resume, the generated CLI sequence therefore places the
+original Turn's guard immediately after reopening, rather than instructing
+the worker to settle and wait for another wake. Read that guard before
+delivery and acquire the required fresh execution claim/lease; only admission
+of the same Todo permits continued work. Validate and settle that original
+binding once after the authorized work. A refusal, changed wait, supersession
+or no-follow-up decision still follows its own recovery/closeout contract.
+
+Todo 绑定的恢复命令因此在重开后直接给出原 Turn 的 guard，而非要求先结算再等一次
+唤醒。执行前须读取 guard 并取得所需的新执行 claim/lease；仅同一 Todo 获得准入后
+才能继续工作，完成授权工作后验证并结算原绑定一次。拒绝、新等待、替代或无需后续
+的决定仍遵循对应的恢复／关闭契约；重开本身不授予执行权限。
+
 Priority remains authoritative across the resume boundary. When a ready
 current-agent or unclaimed deferred successor has strictly higher priority than
 the selected open advancement todo, quota also returns
