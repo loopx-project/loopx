@@ -148,7 +148,7 @@ function resultObservation(key: string, reply: JsonObject): JsonObject {
   if (/[\uD800-\uDFFF]/u.test(text)) fail("invalid reply text encoding");
   return {key, value: Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref", "phase",
     "decision", "result_key", "previous_result_key", "update_id", "attachments", "request_revision",
-    "request_revision_digest", "recipient", "requester"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
+    "request_revision_digest", "recipient", "requester", "remaining_work"].filter(field => Object.hasOwn(reply, field)).map(field => [field, reply[field]])),
   text_chars: [...text].length, text_sha256: createHash("sha256").update(text).digest("hex")};
 }
 function receiptState(root: string, row: JsonObject): JsonObject {
@@ -160,11 +160,17 @@ function receiptState(root: string, row: JsonObject): JsonObject {
   if (Object.hasOwn(row, "request_control")) {
     observation.request = row;
     observation.read = observe(join(root, "reads", id + ".json"));
-    observation.results = resultKeys(folder).map(key => {
-      try { return resultObservation(key, readRecord(join(folder, key + ".json"))); }
-      catch (error) { if (!recordFailure(error)) throw error; return {unavailable: true}; }
-    });
   }
+  // Later conclusions may retain an explicit remainder, also on legacy requests.
+  // Read their existing immutable chain; never infer scope from reply prose or Todos.
+  observation.results = resultKeys(folder).map(key => {
+    try {
+      const initial = jsonObject(observation.conclusion);
+      return resultObservation(key, key === "conclusion" && initial?.state === "read"
+        ? requireJsonObject(initial.value, "initial conclusion") : readRecord(join(folder, key + ".json")));
+    }
+    catch (error) { if (!recordFailure(error)) throw error; return {unavailable: true}; }
+  });
   return (inspectCollaborationInboxReceipts({observations: [observation]}).items as JsonObject[])[0];
 }
 function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
@@ -175,6 +181,7 @@ function inboxItem(row: JsonObject, state: JsonObject): JsonObject {
     request_revision: view.revision, request_revision_digest: view.revision_digest,
     source_request: {request_id: row.request_id, request_revision: view.revision, request_digest: view.revision_digest}});
   item.recorded_decision = state.recorded_decision;
+  if (state.remaining_work) item.remaining_work = state.remaining_work;
   if (state.recorded_decision !== null) Object.assign(item, {receiver_decision_recorded: true,
     next_action: "Review this request's recorded decision and linked work before returning its actual result. A recorded adoption is not a completed task; preserve the current owner and do not reprioritize unrelated work."});
   if ((state.warnings as unknown[]).length) Object.assign(item, {warnings: state.warnings,
@@ -227,6 +234,7 @@ function inspectResult(root: string, row: JsonObject, key: string, reply: JsonOb
       ? observe(join(root, "decisions", String(row.request_id) + ".json")) : {};
     const inspected = planCollaborationResult({request: row, phase: reply.phase, text: reply.text,
       decision: reply.decision, update_id: reply.update_id, attachments: reply.attachments,
+      remaining_work: reply.remaining_work,
       request_revision: reply.request_revision, legacy_assessment: legacy.value, results});
     return (reply.result_key ?? reply.phase) === key ? inspected : null;
   } catch (error) { if (!recordFailure(error)) throw error; return null; }
@@ -281,7 +289,8 @@ async function collectReturns(source: InboxSource): Promise<{view: JsonObject; d
         brief: inspected.request_brief ?? row.brief,
         ...(Object.hasOwn(inspected, "request_revision") ? {request_revision: inspected.request_revision,
           current_request_revision: inspected.current_request_revision} : {}),
-        text: reply.text, decision: reply.decision, created_at: reply.created_at});
+        text: reply.text, ...(reply.remaining_work ? {remaining_work: reply.remaining_work} : {}),
+        decision: reply.decision, created_at: reply.created_at});
       if (items.length > 20) break;
       deliveries.push({key, request: Object.fromEntries(["request_id", "goal_id", "agent_id", "goal_ref", "recipient", "requester"]
         .filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]])),
@@ -364,6 +373,7 @@ async function turnContext(source: InboxSource, params: JsonObject): Promise<Jso
       catch (error) { if (!recordFailure(error)) throw error; evidenceUnavailable = true; }
       const view = jsonObject(state.request_control_view);
       const receipt: JsonObject = {kind: state.kind, recorded_decision: state.recorded_decision};
+      if (state.remaining_work) receipt.remaining_work = state.remaining_work;
       if (view) receipt.request_control_view = {control_state: view.control_state, active_reservation: view.active_reservation,
         revision: view.revision, revision_digest: view.revision_digest, brief: {purpose: (view.brief as JsonObject).purpose}};
       observations.push({direction, request: {...Object.fromEntries(["request_id", "agent_id", "source_kind", "source_agent_id", "goal_ref", "recipient"]

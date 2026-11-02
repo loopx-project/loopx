@@ -7,6 +7,7 @@ routing, receiver-authored replies, and publication receipts. No model polling.
 from __future__ import annotations
 
 import logging
+import json
 import threading
 from itertools import islice
 from contextlib import contextmanager, ExitStack
@@ -179,6 +180,7 @@ def report(
     attachment_refs=None,
     workspace=None,
     request_revision=None,
+    remaining_work=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -204,13 +206,15 @@ def report(
                 attachment_refs=attachment_refs,
                 workspace=workspace,
                 request_revision=request_revision,
+                remaining_work=remaining_work,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
     if route.get("kind") == "peer" and phase != "conclusion":
         raise ValueError("peer replies require a conclusion; report a concrete result or blocker")
+    audience_text = text + ("\n" + json.dumps(remaining_work, ensure_ascii=False) if remaining_work is not None else "")
     if (route["channel_id"] != "peer" and not conversation_scope(route)["private_conversation"]
-            and not scan_public_boundary_text(text)["ok"]):
+            and not scan_public_boundary_text(audience_text)["ok"]):
         raise ValueError("reply contains private boundary material; write an audience-safe conclusion")
     from ...control_plane.collaboration.inbox import record_result
     attachments = None
@@ -234,6 +238,7 @@ def report(
             update_id=update_id,
             attachments=attachments,
             request_revision=request_revision,
+            remaining_work=remaining_work,
         ),
         "status": (
             "queued_for_requester"
