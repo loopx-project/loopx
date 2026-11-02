@@ -231,7 +231,22 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
 
             depth_options = {"list_depth": list_depth} if list_depth is not None else {}
             selection_options = {"initial_read": True} if initial_read else {"select": selectors}
-            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields, **selection_options, **depth_options)
+            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields,
+                recover_selection_errors=not initial_read, **selection_options, **depth_options)
+            if rejection := plan.get("rejected_selection"):
+                # TS alone resolves the nearest container. Reuse the original
+                # escaped tokens, without parsing diagnostic prose or traversing
+                # the payload again in Python. A failed batch delivers no body.
+                pointer = selectors[rejection["argument_index"] - 1]
+                parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
+                command = context_capture_read_command(path, digest, select=[parent], list_fields=True,
+                    page_bytes=next_page_bytes or size,
+                    max_page_output_bytes=next_page_output_bytes or output_limit)
+                return {"ok": False, "schema_version": "context_capture_page_v1",
+                    "error_kind": "request_rejected", "diagnostic_code": rejection["code"],
+                    "reason": rejection["message"], "recovery_command": command,
+                    "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
+                        "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload

@@ -133,3 +133,30 @@ test("unknown decision schemas and ordinary selections keep generic discovery", 
   for (const options of [{select: [""]}, {list_fields: true}, {list_depth: 2}])
     assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context, initial_read: true, ...options}), /cannot be combined/);
 });
+
+
+test("recoverable lookups return only caller positions and nearest container counts, never partial values", () => {
+  const context = {z: "private-value", "a/b": {"~": [{leaf: null}]}};
+  for (const [pointer, parentCount] of [
+    ["/a~1b/~0/8", 2], ["/a~1b/~0/01", 2], ["/a~1b/~0/0/absent", 3],
+    ["/a~1b/~0/0/leaf/deeper", 3], ["/z/deeper", 0], ["/absent/deeper", 0],
+  ] as const) {
+    const result = evaluateTurnEnvelope({operation: "context_select", context,
+      select: ["/z", "/z", pointer], recover_selection_errors: true});
+    assert.equal(result.selections, undefined);
+    assert.deepEqual(Object.keys(result), ["rejected_selection"]);
+    const failure = result.rejected_selection as Record<string, unknown>;
+    assert.equal(failure.argument_index, 3);
+    assert.equal(failure.parent_token_count, parentCount);
+    assert.ok(!JSON.stringify(result).includes("private-value"));
+    assert.ok(!JSON.stringify(result).includes("a~1b"));
+  }
+  for (const options of [{recover_selection_errors: false}, {}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context, select: ["/missing"], ...options}));
+  assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context,
+    select: ["/~2"], recover_selection_errors: true}), /RFC 6901/);
+  assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context,
+    select: ["/z"], recover_selection_errors: "true"}), /must be boolean/);
+  assert.deepEqual(evaluateTurnEnvelope({operation: "context_select", context,
+    select: ["/z"], recover_selection_errors: true}), select(context, ["/z"]));
+});
