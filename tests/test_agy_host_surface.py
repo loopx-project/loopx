@@ -297,6 +297,19 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         == "loopx_antigravity_sidecar_template_v0"
     )
     assert (
+        mutation["sidecar_template"]["sidecar_config_path"]
+        == "~/.gemini/config/sidecars/loopx-antigravity-heartbeat/sidecar.json"
+    )
+    sidecar_json = mutation["sidecar_template"]["sidecar_json"]
+    assert sidecar_json["builtin"] == "schedule"
+    assert sidecar_json["restart_policy"] == "always"
+    assert sidecar_json["args"][1:5] == [
+        "agentapi",
+        "new-conversation",
+        "--model=pro",
+        "--",
+    ]
+    assert (
         "antigravity_app"
         in mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"]["gate_command"]
     )
