@@ -19,7 +19,17 @@ def manager_turn_input(adapter: object, message: str, evidence_json: str) -> str
     from .antigravity_adapter import AntigravityAdapter
 
     if isinstance(adapter, AntigravityAdapter):
-        return _USER_PREFIX + json.dumps(message, ensure_ascii=False) + "\n\n" + _EVIDENCE_PREFIX + evidence_json
+        from .manager_context import NATIVE_MANAGER_READ_INSTRUCTION
+
+        try:
+            read = json.loads(evidence_json).get("context_read")
+        except (ValueError, AttributeError):
+            read = None
+        instruction = NATIVE_MANAGER_READ_INSTRUCTION if (
+            adapter.runtime_profile == "trusted_owner" and isinstance(read, dict)
+            and all(isinstance(read.get(key), str) for key in ("reference_file", "recovery_command", "index_command"))
+        ) else ""
+        return instruction + _USER_PREFIX + json.dumps(message, ensure_ascii=False) + "\n\n" + _EVIDENCE_PREFIX + evidence_json
     return _EVIDENCE_PREFIX + evidence_json + "\n\nCurrent user message:\n" + message
 
 
