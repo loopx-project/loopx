@@ -263,7 +263,7 @@ def test_source_bound_report_keeps_complete_facts_and_original_artifacts(tmp_pat
 def test_recorded_citation_reaches_frozen_facts_and_both_artifacts_without_public_access_claim(
         tmp_path, legacy):
     from loopx.capabilities.manager_context.report_source import collect_manager_report_source
-    from loopx.chat_manager_history import _recorded_details
+    from loopx.chat.manager_history import _recorded_details
 
     root, window, response = _prepared_report(tmp_path / "template")
     root = tmp_path / "citation-runtime"

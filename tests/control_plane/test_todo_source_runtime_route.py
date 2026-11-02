@@ -10,7 +10,7 @@ from canonical_authority_fixture import (
     initialize_canonical_authority,
     isolate_sqlite_runtime,
 )
-from loopx.chat_manager_details import read_manager_goal_details
+from loopx.chat.manager_details import read_manager_goal_details
 from loopx.contract import check_contract
 from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection

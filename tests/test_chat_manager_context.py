@@ -798,7 +798,7 @@ def test_prompt_only_transport_receives_the_source_read_instead_of_a_tool(
 def test_unread_window_keeps_its_bounds_and_unchanged_seam_default(
     monkeypatch, tmp_path
 ):
-    from loopx.chat_manager_history import read_manager_delivery_history
+    from loopx.chat.manager_history import read_manager_delivery_history
 
     now = datetime.now(timezone.utc)
     _write_delivery_index(
