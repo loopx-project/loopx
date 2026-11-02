@@ -256,7 +256,7 @@ try {
     await english.getByText('Returned', {exact: true}).waitFor();
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts; original-reader POST delta zero, Chat/receipt state unchanged and no new Turns.');
+    console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, partial/final returned history, stale response, Escape/focus, workspace isolation, narrow layout, English and source refusal/recovery; explicit fixture reports update return state, original-reader POST delta zero and no new Turns.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}

@@ -747,8 +747,9 @@ When the remaining scope is actually resolved, append a conclusion using a stabl
 `--update-id` and omit `--remaining-work`/`--resume-when`. This resolves the reply
 obligation after normal return processing, not independent acceptance. Retry with
 the same text and remainder: changing either under a committed result key is a
-conflict. Legacy unmarked results keep their existing behavior and unknown
-qualification; this path neither reclassifies old answers nor batch-closes work.
+conflict. Valid unmarked legacy results retain their ordinary reply state and
+unknown fulfillment qualification; unreadable or conflicting result chains stay
+unavailable. This path does not batch-close old work.
 Before rolling back to a reader without remainder support, stop new partial
 publications and reconcile the retained result chains with the compatible
 reader. Do not rewrite their receipts or treat an older reader's empty queue as
