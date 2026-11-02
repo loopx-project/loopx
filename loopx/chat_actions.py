@@ -19,9 +19,9 @@ from .chat_action_store import (
     ChatActionStore,
 )
 from .chat_goal_lifecycle_actions import ChatGoalLifecycleActionMixin
-from .chat_monitor_actions import ChatMonitorActionMixin
+from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore
-from .chat_todo_actions import ChatTodoActionMixin
+from .chat.todo_actions import ChatTodoActionMixin
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal

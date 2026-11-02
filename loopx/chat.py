@@ -16,6 +16,11 @@ from .control_plane.work_items.governed_transition_proposal import (
     STEWARD_TEAM_PLAN_PREVIEW_KIND,
 )
 
+# Keep the established ``loopx.chat`` public module while M1 moves its
+# internal-only companions below the same import namespace.  The directory
+# intentionally has no ``__init__.py``: this module remains the public owner.
+__path__ = [str(Path(__file__).with_suffix(""))]
+
 
 CHAT_AGENT_RESPONSE_SCHEMA_VERSION = "loopx_chat_agent_response_v0"
 CHAT_TODO_PREVIEW_SCHEMA_VERSION = "loopx_chat_todo_preview_v0"
