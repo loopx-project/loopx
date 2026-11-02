@@ -126,6 +126,12 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
         ? `Autonomous review: changing ${GOAL_VISION_DURABLE_FIELDS.join(", ")} requires outcome=replan, even when the Goal objective stays unchanged. Retaining these fields permits continue/no_change. `
         : "Changed mainline: outcome=replan. ") +
       "vision_closed closes a stage, not Goal; no_followup: no scoped work.",
+    continuation_review: "For an explicitly continuing or optimization objective, a usable candidate is a checkpoint. " +
+      "Before stop/no_followup, compare remaining acceptance gaps, plausible headroom, a feasible next experiment " +
+      "and its full marginal cost with the accepted stopping condition. Record the judgment and evidence in path_delta; " +
+      "continue or replan useful authorized work. A submission or unused budget alone proves neither completion nor " +
+      "a need for more work. Preserve explicit Stop, budget/permission limits and genuine waits; never invent a successor, " +
+      "force a pivot or fill time when no useful authorized step remains.",
   };
 }
 // Bounded typed fallback declarations survive prepare unchanged so the
