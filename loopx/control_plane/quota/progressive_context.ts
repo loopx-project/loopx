@@ -194,7 +194,7 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected}, sourceValues);
 }
 
-export function initialContextReadPointers(context: JsonObject): string[] {
+export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
   const object = (value: unknown): JsonObject | undefined =>
     value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
   const interaction = object(context.interaction_contract);
@@ -209,11 +209,7 @@ export function initialContextReadPointers(context: JsonObject): string[] {
     }
     pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
   };
-  for (const field of ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
-    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
-    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
-    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"])
-    include(field);
+  for (const field of decisionFields) include(field);
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");

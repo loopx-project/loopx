@@ -1227,6 +1227,9 @@ This reuses the relationship owner rather than adding an ownership/prose scope
 rule. It changes neither activation defaults nor saved-view bytes or Delta;
 matched initial-plus-required-detail traffic is a separate component comparison,
 not the original quota outcome/full-cost qualification or an unread ledger.
+The TurnEnvelope owner retains the top-level decision-field vocabulary and
+supplies it to Progressive selection. Moving the selector does not duplicate
+that vocabulary across owners or relax its semantic module budget.
 
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
