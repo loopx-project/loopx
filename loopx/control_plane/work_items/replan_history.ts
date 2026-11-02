@@ -9,6 +9,7 @@ import { projectTodoResumePlanning } from "../todos/resume_planning.ts";
 import { monitorIsActive } from "../todos/summary_lanes.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
 import { qualifySettlementHistory } from "../quota/settlement_phase.ts";
+import { normalizeStrideStrategy } from "./stride_policy.ts";
 
 export const PROGRESS_RESULT_CLASSES = [
   "advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup",
@@ -64,6 +65,7 @@ interface Request {
   neutral: ReadonlySet<string>;
   stall: number;
   periodic: number;
+  stride: string;
   monitor: number;
   streak: number;
   monitorSchema: string;
@@ -137,6 +139,7 @@ function decode(value: unknown): Request {
     neutral: new Set(requireStringArray(raw.neutral_classifications, "neutral_classifications")),
     stall: integer(raw.stall_threshold, "stall_threshold", 2),
     periodic: integer(raw.periodic_threshold, "periodic_threshold", 1),
+    stride: normalizeStrideStrategy(raw.stride_strategy),
     monitor: integer(raw.monitor_threshold, "monitor_threshold", 1),
     streak: integer(raw.streak_threshold, "streak_threshold", 1),
     monitorSchema: requireNonEmptyString(raw.monitor_schema, "monitor_schema"),
@@ -182,13 +185,17 @@ function decode(value: unknown): Request {
 }
 
 /** Scope before ACK: a peer's acknowledgement cannot discharge this lane. */
+function historyLane(request: Request): string | null {
+  return request.agent ?? (request.operation === "all"
+    ? request.runs.find(run => !request.neutral.has(run.classification) &&
+      !["replan_noop", "repair_noop"].includes(run.classification) && run.agent)?.agent ?? null : null);
+}
 function historyWindow(request: Request): Run[] {
   // These canonical writeback classes carry no accepted replan work. Older
   // callers may omit them from their neutral inventory; neither their repeated
   // observations nor their timestamps can create a replacement review duty.
   const neutral = new Set([...request.neutral, "replan_noop", "repair_noop"]);
-  const agent = request.agent ?? (request.operation === "all"
-    ? request.runs.find(run => !neutral.has(run.classification) && run.agent)?.agent : null);
+  const agent = historyLane(request);
   const result: Run[] = [];
   for (const run of request.runs) {
     if (agent && run.agent && run.agent !== agent) continue;
@@ -197,6 +204,38 @@ function historyWindow(request: Request): Run[] {
     result.push(run);
   }
   return result;
+}
+
+/** Feedback changes only the next periodic count, never work/stall/authority.
+ * Decisions come from the settled writeback, not projected history or Vision's
+ * carried-forward value. Include the last ACK itself; otherwise a decision made
+ * at that boundary could never affect its following interval. Never cross it.
+ */
+function periodicThreshold(request: Request, decisions: ReadonlyMap<string, JsonObject>): number {
+  const lane = historyLane(request);
+  if (request.stride === "off" || !lane) return request.periodic;
+  for (const run of request.runs) {
+    if (run.agent && run.agent !== lane) continue;
+    const decision = run.agent === lane && run.turn
+      ? decisions.get(JSON.stringify([lane, run.turn])) : undefined;
+    if (decision) {
+      // Switching starts a new route at the configured baseline even if its
+      // basis names a gap. Uncertainty does not silently veto that action.
+      if (decision.action === "switch") return request.periodic;
+      if (decision.action === "verify" ||
+          ["uncertain_evidence", "unexplained_gap", "decision_failure"].includes(String(decision.basis))) {
+        return Math.max(1, Math.ceil(request.periodic / 2));
+      }
+      const review = jsonObject(decision.previous_review);
+      if (decision.action === "grow" && decision.basis === "supported_progress" &&
+          review?.goal_gain === "improved" && Array.isArray(review.evidence_refs) && review.evidence_refs.length) {
+        return Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(request.periodic * 1.5));
+      }
+      return request.periodic;
+    }
+    if (run.ack) break;
+  }
+  return request.periodic;
 }
 
 /** De-duplicate accepted evidence, not arbitrary records sharing its turn.
@@ -349,8 +388,10 @@ function monitorStreak(request: Request): Trigger | null {
   };
 }
 
-export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>): JsonObject {
-  const request = decode(value);
+export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>,
+    settledDecisions: ReadonlyMap<string, JsonObject> = new Map()): JsonObject {
+  const decoded = decode(value);
+  const request = {...decoded, periodic: periodicThreshold(decoded, settledDecisions)};
   const runs = historyWindow(request);
   let trigger: Trigger | null;
   switch (request.operation) {
