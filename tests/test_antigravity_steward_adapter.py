@@ -155,10 +155,12 @@ def language_server(monkeypatch):
                     answer = f"Argon answer {index + 1}"
                     if not state.get("plain_text"):
                         answer = '<loopx-review-json>' + json.dumps({"message": answer,
-                            "proposals": [], "context_handoff": ([{"goal_id": "work", "agent_id": "worker", "brief": "invalid"}]
+                            "proposals": [], "context_handoff": (state.get("original_handoffs") or [{"goal_id": "work", "agent_id": "worker", "brief": "invalid"}]
                                 if state.get("invalid_handoff") else []), "gate": None,
                             **({"unfinished_work": {"remaining": "Original work still owed", "dependency": "Original worker",
                                 "effects_settled": True}} if state.get("unfinished") else {})}) + '</loopx-review-json>'
+                    if index > 0 and state.get("review_response") is not None:
+                        answer = '<loopx-review-json>' + json.dumps(state["review_response"]) + '</loopx-review-json>'
                     native = state["inputs"][index]
                     meta = {"createdAt": native["created_at"], "executionId": f"execution-{index}"}
                     response["steps"].extend([
@@ -170,6 +172,17 @@ def language_server(monkeypatch):
                          "status": "CORTEX_STEP_STATUS_WAITING" if state["mode"] == "waiting" else "CORTEX_STEP_STATUS_DONE",
                          "plannerResponse": {"thinking": "synthetic status", "response": answer,
                                              "stopReason": "STOP_REASON_STOP_PATTERN"}}])
+                    if index > 0:
+                        final = response["steps"][-1]
+                        fault = state.get("review_native_fault")
+                        if fault == "tool-call":
+                            final["plannerResponse"]["toolCalls"] = [{"name": "run_command"}]
+                        elif fault == "tool-step":
+                            final["type"] = "CORTEX_STEP_TYPE_RUN_COMMAND"
+                        elif fault == "mixed-execution":
+                            final["metadata"]["executionId"] = "another-execution"
+                        elif fault == "missing-stop":
+                            final["plannerResponse"]["stopReason"] = None
                 if state.get("native_indices"):
                     for offset, step in enumerate(response["steps"]):
                         step["metadata"] = {"sourceTrajectoryStepInfo": {"stepIndex": offset}}

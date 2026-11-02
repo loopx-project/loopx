@@ -1855,7 +1855,8 @@ class ChatRuntimeController:
                     if attachments:
                         response = start_attachment_turn(adapter, session, current_turn, message, event_sink, attachments)
                     else:
-                        response = adapter.start_turn(message, event_sink)
+                        from .capabilities.native_chat.external_conversations import ChatExternalConversations
+                        response = ChatExternalConversations.execute_turn(self, adapter, session, current_turn, message, event_sink)
             if execution_ended():
                 event_buffer.close()
                 return

@@ -1827,3 +1827,23 @@ submits none of its actions. Recovery itself does not execute even valid action
 metadata. Such work remains pending after the recovered prose is delivered;
 answer restoration does not certify the requested business or handoff complete.
 Cancellation failure retains the primary provider error and unconfirmed cleanup.
+
+After the recovered answer is independently delivered, a malformed batch whose
+only actions are string-brief handoffs can reserve one **format review** through
+the original Session queue. Fresh original native input/answer hashes, current
+binding, source readback and an idle queue are required. The review sends no
+business request again: that invocation disables native tools and user hooks,
+requires exact normal text-only completion, and withholds model prose until
+validation. Each normalized brief must retain its original context text and the
+same ordered recipients. Other actions, changed targets, unknown completion,
+new input, steering, stop or revoked authority admit no handoff.
+
+The existing ingress preserves the original source id, so ordinary publication
+uses the same recipient-specific request identity and fresh grants. The normal
+handoff owner supplies actual receipts; receiver conclusions remain separate.
+The original reply worker returns those receipts in a distinct presentation
+phase alongside the immutable failed Turn, failure notice and recovered answer.
+Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
+unknown review stays pending and cannot become another review or business retry.
+Other malformed actions and completed Turns without a recovered native result
+remain explicit holds; this path is not a generic action or execution replayer.
