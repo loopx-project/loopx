@@ -26,6 +26,7 @@ from ...chat import (
     parse_agent_response,
 )
 from ...chat_agent import CodexChatAgentError, _turn_prompt
+from ...presentation.codex_activity import CodexActivitySteps
 
 
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-argon-high"
@@ -82,6 +83,155 @@ def _check_hard_timeout(value: float | None) -> None:
         raise ValueError("Antigravity hard timeout must be finite and positive")
 
 
+_ITEM_STARTED_LABELS: dict[str, str] = {
+    "reasoning": "Agent 正在思考",
+    "contextCompaction": "Agent 正在压缩会话上下文",
+    "commandExecution": "Agent 正在执行命令",
+    "mcpToolCall": "Agent 正在调用工具",
+    "dynamicToolCall": "Agent 正在调用工具",
+    "webSearch": "Agent 正在检索",
+    "fileChange": "Agent 正在修改文件",
+}
+
+_NATIVE_TOOL_STEP_TYPES = frozenset({
+    "CORTEX_STEP_TYPE_RUN_COMMAND",
+    "CORTEX_STEP_TYPE_VIEW_FILE",
+    "CORTEX_STEP_TYPE_CODE_ACTION",
+    "CORTEX_STEP_TYPE_GENERIC",
+})
+
+
+def _parse_tool_args(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except (TypeError, ValueError):
+            pass
+    return {}
+
+
+def _antigravity_tool_item(
+    item_id: str,
+    tool_name: str,
+    args: Mapping[str, Any],
+    *,
+    step: Mapping[str, Any] | None = None,
+    status: str = "inProgress",
+) -> dict[str, Any]:
+    step_type = str((step or {}).get("type") or "")
+    name = tool_name.strip()
+    if name == "run_command" or step_type == "CORTEX_STEP_TYPE_RUN_COMMAND":
+        run_cmd = (step or {}).get("runCommand")
+        run_cmd = run_cmd if isinstance(run_cmd, Mapping) else {}
+        command = str(
+            run_cmd.get("commandLine")
+            or args.get("CommandLine")
+            or args.get("command")
+            or args.get("toolSummary")
+            or "run_command"
+        ).strip()
+        combined = run_cmd.get("combinedOutput")
+        output = (
+            str(combined.get("full") or "")
+            if isinstance(combined, Mapping)
+            else (str(combined) if isinstance(combined, str) else "")
+        )
+        exit_code = (
+            run_cmd.get("exitCode")
+            if type(run_cmd.get("exitCode")) is int
+            else (0 if status == "completed" else None)
+        )
+        return {
+            "id": item_id,
+            "type": "commandExecution",
+            "command": command,
+            "commandActions": [{"type": "run", "command": command}],
+            "status": status,
+            **({"exitCode": exit_code} if exit_code is not None else {}),
+            **({"aggregatedOutput": output} if output else {}),
+        }
+    if name == "read_file" or step_type == "CORTEX_STEP_TYPE_VIEW_FILE":
+        view_file = (step or {}).get("viewFile")
+        view_file = view_file if isinstance(view_file, Mapping) else {}
+        uri = str(view_file.get("absolutePathUri") or "")
+        path = str(
+            args.get("Path")
+            or (uri[7:] if uri.startswith("file://") else uri)
+            or ""
+        ).strip()
+        filename = Path(path).name if path else "file"
+        command = path or filename
+        return {
+            "id": item_id,
+            "type": "commandExecution",
+            "command": command,
+            "commandActions": [
+                {"type": "read", "path": path or filename, "name": filename, "command": command}
+            ],
+            "status": status,
+            **({"exitCode": 0} if status == "completed" else {}),
+        }
+    if name in {"edit_file", "write_file"} or step_type == "CORTEX_STEP_TYPE_CODE_ACTION":
+        code_action = (step or {}).get("codeAction")
+        code_action = code_action if isinstance(code_action, Mapping) else {}
+        action_spec = code_action.get("actionSpec")
+        spec_uri = ""
+        if isinstance(action_spec, Mapping):
+            for key in ("createFile", "editFile", "deleteFile"):
+                sub = action_spec.get(key)
+                if isinstance(sub, Mapping):
+                    spec_uri = str(sub.get("absoluteUri") or sub.get("path") or "")
+                    if spec_uri:
+                        break
+        path = str(
+            args.get("Path")
+            or (spec_uri[7:] if spec_uri.startswith("file://") else spec_uri)
+            or name
+            or "file"
+        ).strip()
+        return {
+            "id": item_id,
+            "type": "fileChange",
+            "status": status,
+            "changes": [{"path": path}],
+        }
+    if name == "search_web":
+        query = str(args.get("query") or args.get("domain") or "search_web").strip()
+        return {
+            "id": item_id,
+            "type": "webSearch",
+            "query": query,
+            "action": {"type": "search", "query": query},
+            "status": status,
+        }
+    if name == "call_mcp_tool":
+        server = str(args.get("ServerName") or "").strip()
+        mcp_tool = str(args.get("ToolName") or "mcp").strip()
+        return {
+            "id": item_id,
+            "type": "mcpToolCall",
+            "server": server,
+            "tool": mcp_tool,
+            "arguments": (
+                dict(args["Arguments"])
+                if isinstance(args.get("Arguments"), Mapping)
+                else dict(args)
+            ),
+            "status": status,
+        }
+    return {
+        "id": item_id,
+        "type": "dynamicToolCall",
+        "tool": name or step_type.removeprefix("CORTEX_STEP_TYPE_").lower() or "tool",
+        "arguments": dict(args),
+        "status": status,
+    }
+
+
 class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
                          headers: Any, newurl: str) -> None:
@@ -133,10 +283,16 @@ def _rpc_post(
             data = json.loads(raw) if raw.strip() else {}
             return data if isinstance(data, dict) else {}
     except urllib.error.HTTPError as exc:
+        err_code = (
+            "antigravity_transport_error"
+            if exc.code in {499, 502, 503, 504}
+            and method in {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
+            else "antigravity_rpc_error"
+        )
         raise CodexChatAgentError(
             f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}",
             gate=None,
-            error_code="antigravity_rpc_error",
+            error_code=err_code,
         ) from exc
     except Exception as exc:
         raise CodexChatAgentError(
@@ -567,6 +723,13 @@ class AntigravityAdapter:
                         history_lines.append(f"{role}: {content}")
                 if len(history_lines) > 1:
                     parts.append("\n".join(history_lines))
+        if self.runtime_profile == "trusted_owner" and not self._read_only_review:
+            parts.append(
+                "When calling tools across multiple steps, include a brief one-sentence Chinese progress note "
+                "in your visible response alongside each tool-call batch (without <loopx-review-json>) so the "
+                "user sees live progress; then write the complete self-contained final answer and single "
+                "<loopx-review-json> envelope in your final tool-free response."
+            )
         parts.append(
             _turn_prompt(
                 message,
@@ -664,10 +827,16 @@ class AntigravityAdapter:
             self._system_primed = True
             self._pending_history.clear()
 
-        stream_filter = VisibleResponseStreamFilter()
+        stream_filters_by_step: dict[int, VisibleResponseStreamFilter] = {}
+        flushed_planner_steps: set[int] = set()
         emitted_visible_delta = False
         emitted_text_by_step: dict[int, str] = {}
+        emitted_thinking_by_step: dict[int, str] = {}
+        emitted_cmd_output_by_step: dict[int, str] = {}
         announced_phases: set[tuple[int, str]] = set()
+        completed_step_ids: set[str] = set()
+        active_tool_items: list[dict[str, Any]] = []
+        activity_steps = CodexActivitySteps(protected_paths=[self.work_dir])
         latest_response_text = ""
         last_progress_at = time.monotonic()
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
@@ -757,35 +926,142 @@ class AntigravityAdapter:
                             pr = step.get("plannerResponse") or {}
                             if not isinstance(pr, dict):
                                 continue
+                            if event_sink is not None and active_tool_items:
+                                for prev_item in list(active_tool_items):
+                                    prev_id = str(prev_item.get("id") or "")
+                                    if prev_id and prev_id not in completed_step_ids:
+                                        completed_step_ids.add(prev_id)
+                                        done_item = dict(prev_item, status="completed")
+                                        done_step = activity_steps.completed(done_item)
+                                        if done_step:
+                                            event_sink(
+                                                "agent.phase",
+                                                {
+                                                    "phase": "tool_call",
+                                                    "label": "Agent 返回了处理状态",
+                                                    "method": "item/completed",
+                                                    "step": done_step,
+                                                },
+                                            )
+                                active_tool_items.clear()
                             thinking = str(pr.get("thinking") or "").strip()
-                            if thinking and (step_idx, "thinking") not in announced_phases:
-                                announced_phases.add((step_idx, "thinking"))
-                                if event_sink is not None:
-                                    event_sink(
-                                        "agent.phase",
-                                        {
-                                            "phase": "thinking",
-                                            "label": f"Gemini 4 Argon 思考中 ({self.model_id})",
-                                        },
+                            think_item_id = f"agy_think_{step_idx}"
+                            if thinking:
+                                if (step_idx, "thinking") not in announced_phases:
+                                    announced_phases.add((step_idx, "thinking"))
+                                    started_step = activity_steps.started(
+                                        {"id": think_item_id, "type": "reasoning", "summary": []}
                                     )
+                                    if event_sink is not None:
+                                        event_sink(
+                                            "agent.phase",
+                                            {
+                                                "phase": "thinking",
+                                                "label": _ITEM_STARTED_LABELS["reasoning"],
+                                                "method": "item/started",
+                                                **({"step": started_step} if started_step else {}),
+                                            },
+                                        )
+                                prev_think = emitted_thinking_by_step.get(step_idx, "")
+                                think_delta = (
+                                    thinking[len(prev_think) :]
+                                    if thinking.startswith(prev_think)
+                                    else thinking
+                                )
+                                emitted_thinking_by_step[step_idx] = thinking
+                                if think_delta and event_sink is not None:
+                                    delta_step = activity_steps.reasoning_delta(
+                                        think_item_id, think_delta, summary=True
+                                    )
+                                    if delta_step:
+                                        event_sink(
+                                            "agent.phase",
+                                            {
+                                                "phase": "thinking",
+                                                "label": "Agent 正在思考",
+                                                "method": "item/reasoning/summaryTextDelta",
+                                                "step": delta_step,
+                                            },
+                                        )
+                                if (
+                                    step_status == "CORTEX_STEP_STATUS_DONE"
+                                    and think_item_id not in completed_step_ids
+                                ):
+                                    completed_step_ids.add(think_item_id)
+                                    done_step = activity_steps.completed(
+                                        {"id": think_item_id, "type": "reasoning", "summary": [thinking]}
+                                    )
+                                    if done_step and event_sink is not None:
+                                        event_sink(
+                                            "agent.phase",
+                                            {
+                                                "phase": "thinking",
+                                                "label": "Agent 返回了处理状态",
+                                                "method": "item/completed",
+                                                "step": done_step,
+                                            },
+                                        )
                             tool_calls = pr.get("toolCalls") or []
                             if tool_calls and (self.runtime_profile == "restricted" or self._read_only_review):
                                 raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
                                                           gate=None, error_code="unsupported_configuration")
                             if isinstance(tool_calls, list) and tool_calls and (step_idx, "tool") not in announced_phases:
                                 announced_phases.add((step_idx, "tool"))
-                                first_tool = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
-                                tool_name = str(first_tool.get("name") or "tool")
-                                if event_sink is not None:
-                                    event_sink(
-                                        "agent.phase",
-                                        {
-                                            "phase": "tool_call",
-                                            "label": f"正在调用 {tool_name}",
-                                        },
-                                    )
+                                for tc_idx, tc in enumerate(tool_calls):
+                                    if not isinstance(tc, dict):
+                                        continue
+                                    tool_name = str(tc.get("name") or "tool")
+                                    tool_id = str(tc.get("id") or f"agy_tool_{step_idx}_{tc_idx}")
+                                    raw_args = tc.get("argumentsJson")
+                                    parsed_args: dict[str, Any] = {}
+                                    if isinstance(raw_args, str) and raw_args.strip():
+                                        try:
+                                            loaded = json.loads(raw_args)
+                                            if isinstance(loaded, dict):
+                                                parsed_args = loaded
+                                        except ValueError:
+                                            pass
+                                    if tool_name == "run_command":
+                                        cmd_str = str(
+                                            parsed_args.get("CommandLine")
+                                            or parsed_args.get("toolSummary")
+                                            or "run_command"
+                                        )
+                                        item_obj: dict[str, Any] = {
+                                            "id": tool_id,
+                                            "type": "commandExecution",
+                                            "command": cmd_str,
+                                            "status": "inProgress",
+                                        }
+                                        phase_label = _ITEM_STARTED_LABELS["commandExecution"]
+                                    else:
+                                        server_name = str(parsed_args.get("ServerName") or "antigravity")
+                                        inner_tool = str(parsed_args.get("ToolName") or tool_name)
+                                        item_obj = {
+                                            "id": tool_id,
+                                            "type": "mcpToolCall",
+                                            "server": server_name,
+                                            "tool": inner_tool,
+                                            "status": "inProgress",
+                                        }
+                                        phase_label = f"正在调用 {inner_tool}"
+                                    active_tool_items.append(item_obj)
+                                    started_step = activity_steps.started(item_obj)
+                                    if event_sink is not None:
+                                        event_sink(
+                                            "agent.phase",
+                                            {
+                                                "phase": "tool_call",
+                                                "label": phase_label,
+                                                "method": "item/started",
+                                                **({"step": started_step} if started_step else {}),
+                                            },
+                                        )
                             text = str(pr.get("modifiedResponse") or pr.get("response") or "")
                             if text:
+                                step_filter = stream_filters_by_step.setdefault(
+                                    step_idx, VisibleResponseStreamFilter()
+                                )
                                 prev_text = emitted_text_by_step.get(step_idx, "")
                                 if text.startswith(prev_text):
                                     delta_chunk = text[len(prev_text) :]
@@ -794,10 +1070,102 @@ class AntigravityAdapter:
                                 emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
-                                    visible_delta = stream_filter.feed(delta_chunk)
+                                    visible_delta = step_filter.feed(delta_chunk)
                                     if visible_delta:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
+                                if (
+                                    step_status == "CORTEX_STEP_STATUS_DONE"
+                                    and tool_calls
+                                    and step_idx not in flushed_planner_steps
+                                ):
+                                    flushed_planner_steps.add(step_idx)
+                                    if event_sink is not None:
+                                        step_tail = step_filter.finish()
+                                        if step_tail:
+                                            emitted_visible_delta = True
+                                            event_sink("answer.delta", {"text": step_tail + "\n\n"})
+                        elif step_type == "CORTEX_STEP_TYPE_RUN_COMMAND":
+                            rc = step.get("runCommand") or {}
+                            if not isinstance(rc, dict):
+                                continue
+                            cmd_item_id = f"agy_cmd_{step_idx}"
+                            cmd_str = str(rc.get("commandLine") or rc.get("command") or "command")
+                            if (step_idx, "run_command") not in announced_phases:
+                                announced_phases.add((step_idx, "run_command"))
+                                if not active_tool_items:
+                                    started_step = activity_steps.started(
+                                        {
+                                            "id": cmd_item_id,
+                                            "type": "commandExecution",
+                                            "command": cmd_str,
+                                            "status": "inProgress",
+                                        }
+                                    )
+                                    if event_sink is not None:
+                                        event_sink(
+                                            "agent.phase",
+                                            {
+                                                "phase": "tool_call",
+                                                "label": _ITEM_STARTED_LABELS["commandExecution"],
+                                                "method": "item/started",
+                                                **({"step": started_step} if started_step else {}),
+                                            },
+                                        )
+                            target_id = (
+                                str(active_tool_items[0].get("id"))
+                                if active_tool_items
+                                else cmd_item_id
+                            )
+                            combined_out = str(rc.get("combinedOutput") or "")
+                            if combined_out:
+                                prev_out = emitted_cmd_output_by_step.get(step_idx, "")
+                                out_delta = (
+                                    combined_out[len(prev_out) :]
+                                    if combined_out.startswith(prev_out)
+                                    else combined_out
+                                )
+                                emitted_cmd_output_by_step[step_idx] = combined_out
+                                if out_delta and event_sink is not None:
+                                    delta_step = activity_steps.activity_delta(
+                                        target_id, out_delta, kind="command"
+                                    )
+                                    if delta_step:
+                                        event_sink(
+                                            "agent.phase",
+                                            {
+                                                "phase": "tool_call",
+                                                "label": "Agent 收到命令新输出",
+                                                "method": "item/commandExecution/outputDelta",
+                                                "step": delta_step,
+                                            },
+                                        )
+                            if (
+                                step_status == "CORTEX_STEP_STATUS_DONE"
+                                and target_id not in completed_step_ids
+                            ):
+                                completed_step_ids.add(target_id)
+                                exit_code = rc.get("exitCode")
+                                done_step = activity_steps.completed(
+                                    {
+                                        "id": target_id,
+                                        "type": "commandExecution",
+                                        "command": cmd_str,
+                                        "status": "completed",
+                                        "exitCode": exit_code if isinstance(exit_code, int) else 0,
+                                        "aggregatedOutput": combined_out,
+                                    }
+                                )
+                                if done_step and event_sink is not None:
+                                    event_sink(
+                                        "agent.phase",
+                                        {
+                                            "phase": "tool_call",
+                                            "label": "Agent 返回了处理状态",
+                                            "method": "item/completed",
+                                            "step": done_step,
+                                        },
+                                    )
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
                             # The native trajectory also records recoverable
                             # API attempts and cleared errors. The native host
@@ -851,10 +1219,13 @@ class AntigravityAdapter:
                 break
 
         if event_sink is not None:
-            tail = stream_filter.finish()
-            if tail:
-                emitted_visible_delta = True
-                event_sink("answer.delta", {"text": tail})
+            for s_idx, sf in sorted(stream_filters_by_step.items()):
+                if s_idx in flushed_planner_steps:
+                    continue
+                tail = sf.finish()
+                if tail:
+                    emitted_visible_delta = True
+                    event_sink("answer.delta", {"text": tail})
 
         if not latest_response_text.strip():
             raise CodexChatAgentError(
