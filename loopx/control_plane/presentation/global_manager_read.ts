@@ -50,7 +50,9 @@ function laneFrom(item: JsonObject, quota: JsonObject): JsonObject {
 const waitAction = "Wait for the projected user/controller decision before running the blocked path.";
 function foreignTodoGateOnly(quota: JsonObject): boolean {
   const scope = object(object(quota.user_todo_summary).agent_scope_filter);
-  return typeof scope.agent_id === "string" && scope.current_agent_blocking_open_count === 0
+  // Scope counts describe Todo gates, not decisions from another or unknown source.
+  return quota.source === "active_state" && quota.status === "active_state_user_gate" && !truth(quota.gate_id)
+    && typeof scope.agent_id === "string" && scope.current_agent_blocking_open_count === 0
     && typeof scope.other_agent_scoped_open_count === "number" && scope.other_agent_scoped_open_count > 0;
 }
 function summaryGate(item: JsonObject, quota: JsonObject): JsonObject | null {

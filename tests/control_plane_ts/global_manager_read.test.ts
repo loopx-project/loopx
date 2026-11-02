@@ -106,11 +106,50 @@ test("foreign-only Todo notifications do not duplicate gates; applicable and unk
     [{agent_id: "peer-a", current_agent_blocking_open_count: 1, other_agent_scoped_open_count: 1}, 1],
     [{agent_id: "peer-a", other_agent_scoped_open_count: 1}, 1],
   ] as const) {
-    const quota = {interaction_contract: {user_channel: {action_required: true}},
+    const quota = {source: "active_state", status: "active_state_user_gate",
+      interaction_contract: {user_channel: {action_required: true}},
       user_todo_summary: {agent_scope_filter: scope}};
     const sample = {item: {goal_id: "synthetic"}, quota, gate_source_facts: {formal_gate: null, eligible: true}};
     const input = {...request(), samples: [sample]};
     assert.equal((projectGlobalSummary(input).gates as JsonObject[]).length, expected);
     assert.equal((projectGlobalGates(input).gates as JsonObject[]).length, expected);
+  }
+});
+
+for (const [name, origin] of [
+  ["unknown source", {}],
+  ["ordinary user Todo", {source: "active_state", status: "active_state_user_todo"}],
+  ["another source", {source: "latest_run", status: "active_state_user_gate"}],
+  ["explicit decision", {source: "active_state", status: "active_state_user_gate", gate_id: "distinct-decision"}],
+] as const) {
+  test(`foreign Todo counts preserve a required decision from ${name}`, () => {
+    const question = "Confirm independent recovery?";
+    const quota = {...origin, interaction_contract: {user_channel: {
+      action_required: true, question, _display: {question},
+    }}, user_todo_summary: {agent_scope_filter: {
+      agent_id: "peer-a", current_agent_blocking_open_count: 0, other_agent_scoped_open_count: 1,
+    }}};
+    const sample = {item: {goal_id: "synthetic"}, quota}, before = structuredClone(sample);
+    const input = {...request(), samples: [{...sample, gate_source_facts: {formal_gate: null, eligible: true}}]};
+    for (const result of [projectGlobalSummary(input), projectGlobalGates(input),
+      projectGlobalSummary({...request(), samples: [sample]})]) {
+      const gates = result.gates as JsonObject[];
+      assert.equal(gates.length, 1);
+      assert.equal(gates[0].question, question);
+    }
+    assert.deepEqual(sample, before);
+  });
+}
+
+test("a formal gate survives foreign Todo scope counts", () => {
+  const gate = {todo_id: "todo_current_gate", task_class: "user_gate", unblocks_todo_id: "todo_current_work"};
+  const sample = {item: {goal_id: "synthetic"}, gate_source_facts: {formal_gate: gate, eligible: true},
+    quota: {source: "active_state", status: "active_state_user_gate", user_todo_summary: {agent_scope_filter: {
+      agent_id: "peer-a", current_agent_blocking_open_count: 0, other_agent_scoped_open_count: 1,
+    }}}};
+  for (const project of [projectGlobalSummary, projectGlobalGates]) {
+    const gates = project({...request(), samples: [sample]}).gates as JsonObject[];
+    assert.equal(gates.length, 1);
+    assert.deepEqual(gates[0].blocks, ["todo_current_work"]);
   }
 });

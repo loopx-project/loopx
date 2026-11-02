@@ -861,6 +861,36 @@ def test_summary_all_and_global_gates_preserve_scoped_user_gate_alongside_runnab
     assert gates_payload["gates"][0]["gate_id"] == "gate-agent-9"
 
 
+@pytest.mark.parametrize("origin", [
+    {},
+    {"source": "active_state", "status": "active_state_user_gate", "gate_id": "distinct-decision"},
+])
+@pytest.mark.parametrize("command", ["global-summary", "global-gates"])
+def test_foreign_todo_counts_preserve_an_independent_decision_through_native_projection(
+    monkeypatch, tmp_path, origin, command,
+):
+    question = "Confirm independent recovery?"
+    status = {"ok": True, "attention_queue": {"items": [
+        {"goal_id": "synthetic", "waiting_on": "controller"},
+    ]}, "global_registry": {"findings": []}, "run_history": {"recent_runs": []}}
+    quota = {**origin, "ok": True, "agent_identity": {"agent_id": "peer-a"},
+             "interaction_contract": {"user_channel": {"action_required": True, "question": question}},
+             "user_todo_summary": {"agent_scope_filter": {
+                 "agent_id": "peer-a", "current_agent_blocking_open_count": 0,
+                 "other_agent_scoped_open_count": 1,
+             }}}
+    before = json.dumps([status, quota], sort_keys=True)
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", lambda *_, **__: quota)
+    kwargs = {"registry_path": tmp_path / "registry.json", "runtime_root_override": None,
+              "agent_id": "peer-a", "limit": 8}
+    result = (summary_all.build_summary_all(**kwargs, time_range="24h")
+              if command == "global-summary" else summary_all.build_global_gates(**kwargs))
+    assert result["summary"]["open_gate_count"] == 1
+    assert result["gates"][0]["question"] == question
+    assert json.dumps([status, quota], sort_keys=True) == before
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("mixed", [False, True], ids=["ninth-worker", "worker-and-peer-gate"])
