@@ -79,7 +79,6 @@ VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES = frozenset(
         *NATIVE_GOAL_RUNTIME_PROFILES,
         SchedulerRuntimeProfile.CLAUDE_CODE_VISIBLE,
         SchedulerRuntimeProfile.KIRO_CLI_VISIBLE,
-        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }
 )
 
