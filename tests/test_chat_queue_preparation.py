@@ -13,7 +13,7 @@ import urllib.request
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError
-from loopx.chat_coordination import PROJECT_CONTEXT_VERSION
+from loopx.chat.coordination import PROJECT_CONTEXT_VERSION
 from loopx.chat_runtime import ChatRuntimeController, CodexAppServerAdapter
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
@@ -555,7 +555,7 @@ def test_stop_wins_over_late_preparation_failure(tmp_path, monkeypatch):
 @pytest.mark.parametrize("delay_stage", ["context", "provider"])
 def test_http_stop_retains_fence_until_late_worker_acknowledges(tmp_path, monkeypatch, delay_stage):
     """A failed stop retains authority; retry settles only after the worker exits."""
-    import loopx.chat_coordination as coordination
+    import loopx.chat.coordination as coordination
     from loopx.capabilities import manager_context
 
     store, sid, runtime = session_runtime(tmp_path)
