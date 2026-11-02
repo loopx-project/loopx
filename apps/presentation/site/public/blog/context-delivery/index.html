@@ -174,7 +174,7 @@ Restore:  the complete current context
 <h2 id="native-path">When enabled, the default output is a reading entrypoint</h2>
 <p>Connect these operations back to the currently supported native Codex quota path:</p>
 
-<figure class="diagram"><p class="diagram-label">One capture, from saved source to reading</p><pre style="padding:0;margin:0;border:0;background:transparent"><code class="language-text">decision-&lt;id&gt;/
+<figure class="diagram"><p class="diagram-label">One capture, from saved source to reading</p><img src="../images/context-delivery/context-native-path-v10-en.svg" alt="Default Mechanism Path with Context Delivery Enabled: projection.json, required-context.json, compact reference envelope, and progressive readback" width="1200" height="760" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"><pre style="padding:0;margin:0;border:0;background:transparent"><code class="language-text">decision-&lt;id&gt;/
 ├─ projection.json        source
 ├─ required-context.json  facts
 ├─ delivery.json          full/delta
@@ -201,7 +201,7 @@ loopx --format json quota context-read \
 <li><strong>Paged content:</strong> follow <code>next_command</code> with capture digest, selection digest and byte cursor; combine contiguous content in order. Selection EOF covers only that selection.</li>
 <li><strong>Unknown or inapplicable structures:</strong> retain complete content and original read obligations rather than guessing which prose can be hidden.</li>
 </ul>
-<figure class="diagram"><p class="diagram-label">Continuity and recovery</p><p><strong>One valid cycle</strong>: complete baseline → changed facts and delta → exact reconstruction.</p><p><strong>New cycle or known continuity loss</strong>: complete current source → read necessary facts again.</p><figcaption>An unfinished Turn retains its original capture, work and settlement identity. Reading recovery does not repeat external effects.</figcaption></figure>
+<figure class="diagram"><p class="diagram-label">Continuity and recovery</p><img src="../images/context-delivery/context-cycle-v9-en.svg" alt="Differential Delivery: Reuse Within an Epoch, Full Recovery on Break" width="1200" height="620" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"><p><strong>One valid cycle</strong>: complete baseline → changed facts and delta → exact reconstruction.</p><p><strong>New cycle or known continuity loss</strong>: complete current source → read necessary facts again.</p><figcaption>An unfinished Turn retains its original capture, work and settlement identity. Reading recovery does not repeat external effects.</figcaption></figure>
 <h2 id="evidence">What the measurements establish</h2>
 <p>The example separates three mechanisms: <strong>avoid repeatedly moving history not currently needed, combine reads that belong together, and avoid retransmitting unchanged verified structures.</strong> Complete sources, requirements and recovery connect them.</p>
 <p>Reader figures include actual CLI page metadata; local path length affects a small amount of framing. Projection figures compare capture bodies; the cycle table compares codec output. The reproduction script checks these distinct measurements and exact reconstruction.</p>
