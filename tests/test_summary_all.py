@@ -869,6 +869,7 @@ def test_summary_all_and_global_gates_preserve_scoped_user_gate_alongside_runnab
 def test_foreign_todo_counts_preserve_an_independent_decision_through_native_projection(
     monkeypatch, tmp_path, origin, command,
 ):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     question = "Confirm independent recovery?"
     status = {"ok": True, "attention_queue": {"items": [
         {"goal_id": "synthetic", "waiting_on": "controller"},
