@@ -169,3 +169,11 @@ no model runs and measures no agent-runtime behavior.
 - Target paths declared for decommissioning must be cleanly removed in the unified diff.
 - Advisory findings highlight non-blocking hygiene opportunities (such as dead commented code) without causing false positive rejections of documentation or explanations.
 - Delivery acceptance and receipts of record remain owned by the change-quality capability; this capability never writes delivery receipts.
+
+## Known Limitations
+
+- Dynamic computed member access (`api[dynamicKey]`, concatenated keys, template-interpolated keys) is not analyzed. Target-scoped detection needs import/alias provenance and remains a named follow-up; the tool must not claim an absence it cannot prove.
+- Regex-literal detection for escape normalization is heuristic; escape-like text inside a regex literal is treated as pattern text, not a reference.
+- A canonical work-context Todo record without `todo_id` is assumed to be the selected task's own record (the canonical producer emits the goal-state record and the selected Todo record). Direct-caller payloads with multiple id-less records should provide `todo_id`.
+- A malformed explicit `retirement_basis` value is inert and fails closed; it cannot activate partial policy and may shadow a later valid declaration in the same carrier.
+- Escaped definition names and escapes outside value-position member/identifier references are outside the reference model.
