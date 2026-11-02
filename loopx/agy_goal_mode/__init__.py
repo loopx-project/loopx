@@ -233,6 +233,7 @@ def _antigravity_provider_args(
     args = [
         sys.executable,
         "-E",
+        "-P",
         "-m",
         "loopx.agy_goal_mode.host_runtime",
         operation,

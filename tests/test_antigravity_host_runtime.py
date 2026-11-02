@@ -1,9 +1,11 @@
-"""Native host schemas, bounded recovery and once-only wake delivery."""
+"""Native host schemas and bounded recovery of the original input."""
 
 from argparse import Namespace
 import json
+from pathlib import Path
 import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -168,6 +170,11 @@ def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
         'raise RuntimeError("wrong installed release")'
     )
     monkeypatch.setenv("PYTHONPATH", str(foreign.parent))
+    local_package = tmp_path / "loopx"
+    local_package.mkdir()
+    (local_package / "__init__.py").write_text(
+        'raise RuntimeError("wrong working directory")'
+    )
     assert build_antigravity_hooks_template()["loopx"]["enabled"] is False
     assert "sidecar_json" in build_antigravity_sidecar_template()
     kwargs = dict(goal_id="work", agent_id="worker", conversation_id="native-chat")
@@ -191,6 +198,34 @@ def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {}
+
+
+def test_native_hook_admission_uses_real_core_ready_user_gate_and_zero_quota(tmp_path):
+    from examples.control_plane.quota_plan_fixtures import (
+        SCOPED_AGENT_ID,
+        write_cli_fixture,
+    )
+
+    registry, runtime_root, _ = write_cli_fixture(tmp_path / "core", scoped_agents=True)
+    data = json.loads(registry.read_text())
+    for goal in data["goals"]:
+        if goal["id"] == "throttled-half":
+            goal["quota"]["allowed_slots"] = 0
+    registry.write_text(json.dumps(data))
+    args = bound(tmp_path)
+    args.cli_bin = str(Path(sys.executable).with_name("loopx"))
+    args.registry, args.runtime_root, args.agent_id = (
+        str(registry),
+        str(runtime_root),
+        SCOPED_AGENT_ID,
+    )
+    for goal, expected in (
+        ("full-speed", True),
+        ("needs-operator", False),
+        ("throttled-half", False),
+    ):
+        args.goal_id = goal
+        assert runtime._admitted(args) is expected
 
 
 def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):
