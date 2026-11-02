@@ -216,9 +216,9 @@ def test_ordinary_claim_progress_completion_need_no_lease_flags(claim_cli):
     assert snapshot() == before
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable alias and PATH fixture")
-def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, tmp_path, monkeypatch):
-    _, run, snapshot, prefix, claim, _, project, _ = claim_cli
+@pytest.fixture
+def selected_runtime(claim_cli, tmp_path, monkeypatch):
+    _, _, _, _, _, _, project, _ = claim_cli
     program = "candidate's cli"
     binaries = tmp_path / "candidate bin"
     binaries.mkdir()
@@ -238,6 +238,13 @@ def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, tmp
         assert not marker.exists()
         return json.loads(result.stdout)
 
+    return program, execute
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable alias and PATH fixture")
+def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, selected_runtime):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    program, execute = selected_runtime
     before = snapshot()
     rejected = run(["--cli-bin", program, *prefix, *claim, "--note", "invalid"], expected_exit=1)
     assert snapshot() == before
@@ -275,6 +282,108 @@ def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, tmp
     assert snapshot() == completed
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable alias and PATH fixture")
+@pytest.mark.parametrize("command", ["update", "complete"])
+def test_native_refusal_preserves_runtime_and_original_operation(claim_cli, selected_runtime, command):
+    _, run, snapshot, prefix, claim, _, project, state = claim_cli
+    program, execute = selected_runtime
+    if command == "update":
+        # Copy edits need no lease. Clearing a wait retains the execution fence;
+        # exercise omitted proof while this actor owns a current execution.
+        assert run([*prefix, *claim, "--claimed-by", "peer-a",
+                    "--claim-operation-id", "original-execution"])["ok"]
+    original = ["--cli-bin", program, *prefix, "todo", command, "--goal-id", GOAL,
+        "--todo-id", TODO, "--agent-id", "peer-a", "--role", "agent",
+        "--project", str(project), "--state-file", str(state),
+        "--note=--keep the original 中文 'note' and evidence.", "--evidence", "evidence:original-output"]
+    if command == "update":
+        # Preserve the caller's operation across a lost response and replay.
+        original += ["--update-operation-id", "original-native-update", "--clear-resume-when"]
+    before = snapshot()
+    rejected = run(original, expected_exit=1)
+    assert snapshot() == before
+    recovery = rejected["recovery"]
+    assert recovery["action"] == "claim_task"
+    assert recovery["execution_authority_granted"] is False
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    markdown_args = list(original)
+    markdown_args[markdown_args.index("--format") + 1] = "markdown"
+    markdown = subprocess.run([sys.executable, "-m", "loopx.cli", *markdown_args],
+        cwd=REPO, capture_output=True, text=True, timeout=90)
+    assert markdown.returncode == 1, markdown.stdout + markdown.stderr
+    assert snapshot() == before
+    rendered = markdown.stdout.rstrip("\n")
+    assert rendered == render_todo_markdown(rejected)
+
+    def emitted(step):
+        line = next(line for line in rendered.splitlines() if line.startswith(f"- {step}: `"))
+        argv = shlex.split(line.split("`", 2)[1])
+        # JSON and Markdown must carry the same executable arguments.
+        assert argv[1:] == recovery[step]["cli_args"]
+        return argv
+
+    # Execute the emitted claim unchanged from outside the checkout. An ambient
+    # global CLI is poisoned; both route selectors must reach the real backend.
+    claim_argv = emitted("claim")
+    prepared = execute(claim_argv)
+    assert prepared["ok"] and prepared["execution_managed"]
+    claimed = snapshot()
+    assert execute([*claim_argv, "--claim-operation-id", prepared["claim_operation_id"]])["ok"]
+    assert snapshot() == claimed
+    retry = [*emitted("retry"), "--claim-operation-id", prepared["claim_operation_id"]]
+    for flag, value in (("--project", str(project)), ("--state-file", str(state)), ("--role", "agent")):
+        assert retry[retry.index(flag) + 1] == value
+    if command == "update":
+        assert "--clear-resume-when" in retry
+        assert retry[retry.index("--update-operation-id") + 1] == "original-native-update"
+    wrong_actor = ["peer-b" if i and retry[i - 1] == "--agent-id" else part
+                   for i, part in enumerate(retry)]
+    assert execute(wrong_actor, expected_exit=1)["ok"] is False
+    assert snapshot() == claimed
+    assert execute(retry)["ok"]
+    after = snapshot()
+    task = after[0][0]
+    assert task["note"] == "--keep the original 中文 'note' and evidence."
+    assert task["evidence"] == "evidence:original-output"
+    assert task["status"] == ("open" if command == "update" else "done")
+    assert execute(retry)["ok"]
+    assert snapshot() == after
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable alias and PATH fixture")
+def test_native_inspection_keeps_route_and_rejects_stale_proof(claim_cli, selected_runtime):
+    _, run, snapshot, prefix, claim, _, _, _ = claim_cli
+    program, execute = selected_runtime
+    assert run([*prefix, *claim, "--claimed-by", "peer-a",
+                "--claim-operation-id", "before-stale-proof"])["ok"]
+    before = snapshot()
+    rejected = run(["--cli-bin", program, *prefix, "todo", "update", "--goal-id", GOAL,
+        "--todo-id", TODO, "--agent-id", "peer-a", "--note", "Do not weaken CAS.",
+        "--task-lease-idempotency-key", "wrong-key", "--task-lease-expected-version", "0"], expected_exit=1)
+    assert snapshot() == before
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    rendered = render_todo_markdown(rejected)
+    line = next(line for line in rendered.splitlines() if line.startswith("- inspect: `"))
+    inspected = execute(shlex.split(line.split("`", 2)[1]))
+    assert inspected["active"] is True
+    assert inspected["lease"]["version"] == 1
+    assert snapshot() == before
+
+
+def test_native_refusal_preview_preserves_no_write_intent(claim_cli):
+    _, run, snapshot, prefix, _, _, _, _ = claim_cli
+    before = snapshot()
+    rejected = run([*prefix, "todo", "complete", "--goal-id", GOAL, "--todo-id", TODO,
+        "--agent-id", "peer-a", "--evidence", "evidence:preview", "--dry-run"], expected_exit=1)
+    recovery = rejected["recovery"]
+    assert recovery["execution_authority_granted"] is False
+    assert "--dry-run" in recovery["claim"]["cli_args"]
+    assert "--dry-run" in recovery["retry"]["cli_args"]
+    preview = run(recovery["claim"]["cli_args"])
+    assert preview["dry_run"] is True
+    assert snapshot() == before
+
+
 def test_terminal_refusal_recovers_through_ordinary_claim(claim_cli):
     _, run, snapshot, prefix, _, _, _, _ = claim_cli
     complete = [*prefix, "todo", "complete", "--goal-id", GOAL, "--todo-id", TODO,
@@ -288,12 +397,14 @@ def test_terminal_refusal_recovers_through_ordinary_claim(claim_cli):
     assert recovery["execution_authority_granted"] is False
     from loopx.control_plane.todos.markdown import render_todo_markdown
     rendered = render_todo_markdown(rejected)
-    assert "loopx todo claim" in rendered and "--claim-operation-id" in rendered
+    assert recovery["claim"]["command"] == "loopx todo claim"
+    assert "- claim: `loopx " in rendered and "--claim-operation-id" in rendered
+    assert "--cli-bin" not in recovery["claim"]["cli_args"]
     assert "task-lease" not in rendered and "handoff_mode:" not in rendered
-    prepared = run([*prefix, *recovery["claim"]["cli_args"],
+    prepared = run([*recovery["claim"]["cli_args"],
         "--claim-operation-id", "after-terminal-refusal"])
     assert prepared["ok"] and prepared["execution_managed"]
-    retry = [*complete, "--claim-operation-id", prepared["claim_operation_id"]]
+    retry = [*recovery["retry"]["cli_args"], "--claim-operation-id", prepared["claim_operation_id"]]
     assert run(retry)["ok"]
     completed = snapshot()
     assert run(retry)["ok"]
