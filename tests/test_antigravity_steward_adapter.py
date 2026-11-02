@@ -581,6 +581,89 @@ def test_default_core_keeps_an_original_progressing_invocation_past_five_minutes
         controller.close_session(sid)
 
 
+@pytest.mark.parametrize("pause", ["before-input", "input", "planner", "command", "command-done", "earlier-command", "unconfirmed-answer", "tool-call"])
+def test_transient_idle_does_not_finish_or_cancel_the_original_turn(
+    tmp_path, language_server, monkeypatch, pause,
+):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    planner = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING",
+               "plannerResponse": {"thinking": "private native reasoning"}}
+    command = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_GENERATING",
+               "runCommand": {"commandLine": "synthetic-work", "combinedOutput": ""}}
+    final = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+             "plannerResponse": {"response": "original task finished", "stopReason": "STOP_REASON_STOP_PATTERN"}}
+    paused = {
+        "before-input": [], "input": [user], "planner": [user, planner], "command": [user, command],
+        "command-done": [user, {**command, "status": "CORTEX_STEP_STATUS_DONE"}],
+        "earlier-command": [user, command, final],
+        "unconfirmed-answer": [user, {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                                     "plannerResponse": {"response": "intermediate answer"}}],
+        "tool-call": [user, {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                            "plannerResponse": {"response": "working", "toolCalls": [{"name": "run_command"}]}}],
+    }[pause]
+    running = deepcopy(paused) or [user]
+    if not any(step["type"] == "CORTEX_STEP_TYPE_RUN_COMMAND" for step in running):
+        running.append(command)
+    completed = [{**step, "status": "CORTEX_STEP_STATUS_DONE"} for step in running]
+    if completed[-1] != final:
+        completed.append(final)
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1, "steps": [], "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 2, "steps": paused, "status": "CASCADE_RUN_STATUS_IDLE"},
+        {"at": 3, "steps": running, "status": "CASCADE_RUN_STATUS_RUNNING"},
+        {"at": 4, "steps": completed, "status": "CASCADE_RUN_STATUS_IDLE"},
+    ])
+    if pause == "tool-call":
+        # Ordinary Chat is restricted. Exercise native tool continuation only
+        # through the existing trusted-owner provider profile.
+        result = adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("finish the task")
+        assert result["message"] == "original task finished"
+        assert language_server["now"] == 4
+        assert not language_server["cancelled"].is_set()
+        assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+        return
+    store = ChatSessionStore(tmp_path / "runtime" / "chat")
+    controller = ChatRuntimeController(store=store, codex_bin="unused-codex")
+    session, _ = controller.open_session(goal_id="synthetic-goal", agent_id="antigravity", work_dir=tmp_path,
+        objective="Synthetic conversation", mode="new", channel_id="synthetic-argon-chat")
+    sid = session["session_id"]
+    try:
+        turn, _ = controller.submit_turn(session_id=sid, client_turn_id="one-original-input", message="finish the task",
+                                         work_dir=tmp_path, objective="Synthetic conversation")
+        result = controller.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=8)
+        assert result["status"] == "completed"
+        assert result["response"]["message"] == "original task finished"
+        assert language_server["now"] == 4
+        assert not language_server["cancelled"].is_set()
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "agent"] == ["original task finished"]
+        assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+    finally:
+        controller.close_session(sid)
+
+
+@pytest.mark.parametrize("pending", ["command", "unconfirmed-answer"])
+def test_transient_idle_cannot_reset_the_no_progress_deadline(tmp_path, language_server, monkeypatch, pending):
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    command = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_GENERATING"}
+    if pending == "unconfirmed-answer":
+        command = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                   "plannerResponse": {"response": "intermediate answer"}}
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1, "steps": [user, command], "status": "CASCADE_RUN_STATUS_IDLE"},
+        {"at": 302, "steps": [user, command], "status": "CASCADE_RUN_STATUS_IDLE"},
+    ])
+    with pytest.raises(CodexChatAgentError) as error:
+        adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("finish the task")
+    assert error.value.error_code == "response_timeout"
+    assert language_server["cancelled"].is_set()
+    assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+
+
 @pytest.mark.parametrize("hard_limit,stagnant", [(300.0, False), (None, True)])
 def test_explicit_deadline_and_default_no_progress_timeout_still_stop(tmp_path, language_server, monkeypatch, hard_limit, stagnant):
     from loopx.chat_agent import CodexChatAgentError
@@ -603,14 +686,19 @@ def test_invalid_hard_timeout_creates_no_native_invocation(tmp_path, language_se
 
 
 @pytest.mark.parametrize("reason", ["STOP_REASON_CLIENT_STREAM_ERROR", "unrecognized-native-stop"])
-def test_idle_done_with_an_unverified_native_stop_never_becomes_success(tmp_path, language_server, monkeypatch, reason):
+@pytest.mark.parametrize("pending", ["none", "generating", "tool-call"])
+def test_idle_done_with_an_unverified_native_stop_never_becomes_success(tmp_path, language_server, monkeypatch, reason, pending):
     from loopx.chat_agent import CodexChatAgentError
     frames = _native_frames(stopped=reason)
     frames[-1]["at"] = 1.0
+    if pending == "generating":
+        frames[-1]["steps"][-1]["status"] = "CORTEX_STEP_STATUS_GENERATING"
+    elif pending == "tool-call":
+        frames[-1]["steps"][-1]["plannerResponse"]["toolCalls"] = [{"name": "run_command"}]
     _native_clock(monkeypatch, language_server, [frames[-1]])
     events = []
     with pytest.raises(CodexChatAgentError) as error:
-        adapter_for(tmp_path).start_turn("task", lambda kind, data: events.append((kind, data)))
+        adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("task", lambda kind, data: events.append((kind, data)))
     assert error.value.error_code == "upstream_transport_failure"
     assert not any(kind == "answer.final" for kind, _ in events)
     assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
