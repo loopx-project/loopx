@@ -6,6 +6,29 @@ Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
+Changing a previously prepared private steward to an executor without native
+scheduled-work support keeps its original configuration readable in connection
+settings. The monitor deadline, report schedule, retained window and delivery
+state remain visible with an explicit execution-unavailable notice. Configuration
+controls are disabled; inspecting retained state neither re-enables the old host
+nor retries a failed window. Native admission still owns every execution and
+configuration change. Restoring a supported executor restores the existing
+configuration view rather than creating a replacement identity or subscription.
+
+The disposable `steward_report_fixture.py --retained-executor` journey prepares
+one original synthetic steward and calendar window. With baseline assets the
+section is absent; current packaged assets expose the retained state at 1200
+and 390 pixels. Its `restore-supported-executor` control restores the same
+configuration. No wake owner is started, no model Turn is requested and no
+provider write is added during inspection or restoration. This qualifies UI
+readback and executor compatibility, not scheduled generation or live delivery.
+
+| Baseline: retained section hidden | Current: original schedule remains readable |
+| --- | --- |
+| ![Baseline packaged settings hide the retained schedule](../assets/personal-workspace/steward-reports/retained-executor-before.png) | ![Current packaged settings retain the schedule with unavailable execution](../assets/personal-workspace/steward-reports/retained-executor-desktop.png) |
+
+![The same retained schedule at 390 pixels](../assets/personal-workspace/steward-reports/retained-executor-narrow.png)
+
 Markdown, the HTML report and its copied full text use the same source-link
 rule. An unchanged, well-formed HTTP(S) address is a link. Opaque evidence
 digests, native Task/artifact references and private relative paths stay source

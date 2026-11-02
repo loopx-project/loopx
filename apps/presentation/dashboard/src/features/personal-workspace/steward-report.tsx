@@ -5,8 +5,9 @@ import "./steward-report.css";
 
 type Managed = Extract<NonNullable<PrivateConversation["managed_steward"]>, {available: true}>;
 
-export function StewardReport({state, zh, busy, available, goalActive, onChange}: {
+export function StewardReport({state, zh, busy, available, executionAvailable = true, goalActive, onChange}: {
   state: Managed["report"]; zh: boolean; busy: boolean; available: boolean; goalActive: boolean;
+  executionAvailable?: boolean;
   onChange: (operation: "enable" | "pause" | "cancel", schedule?: Record<string, unknown>) => void;
 }) {
   const original = state?.available ? state.schedule : null;
@@ -21,17 +22,18 @@ export function StewardReport({state, zh, busy, available, goalActive, onChange}
   const signature = JSON.stringify(original);
   useEffect(() => {if (original) {setSchedule(original); setZone(String(original.timezone));}}, [signature]);
   if (!state) return null;
-  const disabled = busy || !available;
+  const disabled = busy || !available || !executionAvailable;
   let validZone = true;
   try {new Intl.DateTimeFormat("en", {timeZone: zone}).format();} catch {validZone = false;}
   const stamp = (value?: string | null) => value ? new Date(value).toLocaleString(zh ? "zh-CN" : "en-US") : (zh ? "暂无" : "None");
   return <section className="personal-steward-report">
     <h4>{zh ? "定期详细汇报" : "Detailed periodic reports"}</h4>
     {!state.available ? <p role="status">{zh ? "汇报状态暂不可读；原计划和回执已保留。刷新连接后重试。" : "Report status is unavailable. The original schedule and receipts are retained; refresh the connection."}</p> : <>
-      <p role="status">{state.enabled ? (zh ? "已启用 · 完整中文正文回此私聊" : "Enabled · Full Chinese report returns to this private Chat")
+      <p role="status">{!executionAvailable ? (zh ? "原汇报计划已保留，当前无法运行。" : "Original report configuration retained; execution unavailable.")
+        : state.enabled ? (zh ? "已启用 · 完整中文正文回此私聊" : "Enabled · Full Chinese report returns to this private Chat")
         : state.configured ? (zh ? "已暂停 · 原窗口和回执保留" : "Paused · Original windows and receipts retained")
         : (zh ? "尚未启用" : "Not enabled")}</p>
-      <p>{zh ? "汇总全部获准本机 Goal，包括停止项和读取缺口。每天汇报前24小时，生成与实际送达分别核验；状态监控照常运行。" : "Covers every authorized local Goal, including stopped Goals and read gaps. Daily reports cover the previous 24 hours; generation and delivery are verified separately. Monitoring continues."}</p>
+      <p>{zh ? "汇总全部获准本机 Goal，包括停止项和读取缺口。每天汇报前24小时，生成与实际送达分别核验；监控与汇报分别配置。" : "Covers every authorized local Goal, including stopped Goals and read gaps. Daily reports cover the previous 24 hours; generation and delivery are verified separately. Monitoring and reports are configured separately."}</p>
       {state.configured ? <p>{zh ? "下次日历计划：" : "Next calendar deadline: "}{stamp(state.next_due_at)}<br/>
         {zh ? "最近窗口：" : "Latest window: "}{stamp(state.retained_window_due_at)} · {state.delivery_status === "delivered"
           ? (zh ? "原私聊全文已核验送达" : "Full private reply verified")

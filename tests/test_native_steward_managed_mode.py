@@ -174,7 +174,8 @@ def test_preparation_recovers_native_creation_after_registration_loses_response(
     assert capture.read_bytes() == before
 
 
-def test_http_preparation_requires_current_preview_and_reads_original_binding(steward, tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_http_preparation_requires_current_preview_and_reads_original_binding(steward, tmp_path, monkeypatch, provider):
     import http.client
     import threading
     from types import SimpleNamespace
@@ -183,7 +184,7 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     store, runtime, _, transport, binding, capture, _ = steward
     sid, _ = original(steward)
-    storage(runtime, "sqlite")
+    storage(runtime, provider)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller = store, runtime
     server.registry_path, server.runtime_root_override = runtime.registry_path, store.root.parent
@@ -257,6 +258,60 @@ def test_http_preparation_requires_current_preview_and_reads_original_binding(st
         assert row["managed_steward"]["scheduling_enabled"] is False
         assert row["managed_steward"]["monitor"]["status"] == "blocked"
         assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
+        # Retained configuration remains inspectable after an executor change.
+        # Reading it never supplies the original Codex execution authority.
+        from datetime import datetime, timezone
+        from loopx.capabilities.native_chat.steward_reports import StewardReports
+        from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, cadence_journal_path
+
+        report_route = route + "/report"
+        report_setting = {"binding_id": binding["binding_id"], "operation": "enable",
+            "schedule": {"schema_version": "periodic_report_schedule_v0", "schedule_id": "retained-report",
+                "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}}
+        code, report_preview = request(report_route, report_setting)
+        assert code == 200
+        assert request(report_route, {**report_setting, "execute": True,
+            "plan_id": report_preview["plan"]["plan_id"]})[0] == 200
+        reports = StewardReports(runtime)
+        subscription = reports.subscription(binding["binding_id"])
+        actor = applied["actor"]
+        admitted = admit_cadence_window(runtime_root=runtime.coordination_runtime_root,
+            goal_id=actor["goal_id"], agent_id=actor["agent_id"], subscription=subscription,
+            now=datetime.now(timezone.utc), subscription_resolver=lambda: subscription)
+        assert admitted["status"] == "pending"
+        journal_path = cadence_journal_path(runtime.coordination_runtime_root, actor["goal_id"])
+        journal = journal_path.read_bytes()
+        expected = next(row for row in request(base)[1]["connections"]
+            if row["binding_id"] == binding["binding_id"])["managed_steward"]
+        current = transport.bindings.read()
+        selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+        selected["executor_endpoint_id"] = "antigravity"
+        transport.bindings.path.write_text(json.dumps(current))
+        original_binding, registry = transport.bindings.path.read_bytes(), runtime.registry_path.read_bytes()
+        row = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        state = row["managed_steward"]
+        assert state.pop("execution_available") is False
+        assert state.pop("execution_error_code") == "unsupported_executor"
+        assert state == expected
+        assert state["report"]["retained_window_due_at"] == admitted["window"]["due_at"]
+        for endpoint, body in [(route, {"binding_id": binding["binding_id"]}),
+                (monitor_route, setting), (report_route, report_setting),
+                (report_route, {"binding_id": binding["binding_id"], "operation": "pause"}),
+                (report_route, {"binding_id": binding["binding_id"], "operation": "cancel"})]:
+            assert request(endpoint, body)[0] == 409
+        assert journal_path.read_bytes() == journal
+        assert transport.bindings.path.read_bytes() == original_binding
+        assert runtime.registry_path.read_bytes() == registry
+        assert store.messages(sid) == before_history and capture.read_bytes() == before_calls
+        selected["executor_endpoint_id"] = "codex"
+        transport.bindings.path.write_text(json.dumps(current))
+        restored = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        assert restored["managed_steward"] == expected
+        selected["executor_endpoint_id"] = "antigravity"
+        selected.pop("managed_actor")
+        transport.bindings.path.write_text(json.dumps(current))
+        unprepared = next(row for row in request(base)[1]["connections"] if row["binding_id"] == binding["binding_id"])
+        assert "managed_steward" not in unprepared
     finally:
         server.shutdown()
         server.server_close()

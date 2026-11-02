@@ -23,11 +23,14 @@ def main() -> None:
     parser.add_argument("--baseline-assets-dir", type=Path)
     parser.add_argument("--invalid-editorial", action="store_true", help="Return a known invalid synthetic report to inspect owner cancellation and retained failure.")
     parser.add_argument("--host-failure", action="store_true", help="Fail the synthetic native model before an editorial result; retain the original window without retry authority.")
+    parser.add_argument("--retained-executor", action="store_true", help="Keep an original configured window after selecting an executor without native scheduled-work support; readback only.")
     journey = parser.add_mutually_exclusive_group()
     journey.add_argument("--managed-session", action="store_true", help="Exercise ordinary Goal Session native work with the existing task validator, instead of a scheduled report.")
     journey.add_argument("--managed-report", action="store_true", help="Configure a calendar report for an existing local Agent Session through the packaged Goal settings.")
     journey.add_argument("--managed-calendar-task", choices=("file", "sqlite"), help="Repeat a completed, independently validated Task through the real calendar and packaged Goal settings.")
     args = parser.parse_args()
+    if args.retained_executor and (args.host_failure or args.invalid_editorial or args.managed_session or args.managed_report or args.managed_calendar_task):
+        parser.error("retained executor readback uses the original steward journey alone")
     if args.host_failure and (args.invalid_editorial or args.managed_session or args.managed_calendar_task):
         parser.error("select the pre-editorial report failure journey alone")
     if args.invalid_editorial and (args.managed_session or args.managed_calendar_task):
@@ -117,6 +120,23 @@ def main() -> None:
         if args.invalid_editorial:
             helper = root / "report_model.py"
             helper.write_text(helper.read_text().replace('"request_digest": request["request_digest"]', '"request_digest": "known-invalid"'))
+        if args.retained_executor:
+            from datetime import datetime, timezone
+            from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window
+            reports = StewardReports(runtime)
+            schedule = {"schema_version": "periodic_report_schedule_v0", "schedule_id": "retained-report",
+                "timezone": "UTC", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}
+            plan = reports.configure(binding["binding_id"], operation="enable", schedule=schedule)["plan"]
+            reports.configure(binding["binding_id"], operation="enable", schedule=schedule,
+                execute=True, expected_plan_id=plan["plan_id"])
+            subscription = reports.subscription(binding["binding_id"])
+            admit_cadence_window(runtime_root=runtime.coordination_runtime_root, goal_id=actor["goal_id"],
+                agent_id=actor["agent_id"], subscription=subscription, now=datetime.now(timezone.utc),
+                subscription_resolver=lambda: subscription)
+            current = transport.bindings.read()
+            selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+            selected["executor_endpoint_id"] = "antigravity"
+            transport.bindings.path.write_text(json.dumps(current))
         before_calls, before_messages = capture.read_bytes(), store.messages(sid)
         server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
         server.chat_store, server.runtime_controller = store, runtime
@@ -153,9 +173,16 @@ def main() -> None:
         owner_start_count = 0
         restart_tokens = set()
         restart_refusals = set()
+        executor_restored = False
         try:
             while not stop.wait(.2):
                 server.assets_dir = current_assets if (output / "use-current-assets").exists() else baseline_assets
+                if args.retained_executor and not executor_restored and (output / "restore-supported-executor").exists():
+                    current = transport.bindings.read()
+                    selected = next(row for row in current["bindings"] if row["binding_id"] == binding["binding_id"])
+                    selected["executor_endpoint_id"] = "codex"
+                    transport.bindings.path.write_text(json.dumps(current))
+                    executor_restored = True
                 provider.owner_ready = not (output / "provider-unavailable").exists()
                 owners_stopped = (output / "stop-existing-wake").exists()
                 if owners_stopped and wake:
@@ -235,6 +262,7 @@ def main() -> None:
                     "provider_history_pages": sum("+chat-messages-list" in call for call in provider.calls),
                     "existing_wake_owner_running": wake is not None,
                     "existing_wake_owner_starts": owner_start_count,
+                    "retained_executor_restored": executor_restored,
                     "runtime_restarts": len(restart_tokens),
                     "runtime_restart_rejections": len(restart_refusals),
                     **({"managed_source_present": artifact.exists(),
