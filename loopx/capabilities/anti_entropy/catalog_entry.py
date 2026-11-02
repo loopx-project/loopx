@@ -66,8 +66,11 @@ ANTI_ENTROPY_CATALOG_ENTRY: dict[str, Any] = {
             "descriptor": "loopx.capabilities.anti_entropy.feedback.ANTI_ENTROPY_INSPECT_TOOL_DESCRIPTOR",
             "entrypoint": "loopx.capabilities.anti_entropy.agent_tool.anti_entropy_inspect",
             "purpose": (
-                "Agent-callable inspection returning actionable findings as "
-                "progress facts plus an immutable receipt."
+                "Descriptor metadata for the read-only inspection entry; the "
+                "descriptor is projected as turn-context data and the callable "
+                "route is `loopx anti-entropy inspect`. LoopX has no "
+                "capability-owned host tool registry, so this is not a "
+                "host-registered tool."
             ),
             "write_boundary": "read-only verification; no host state mutation",
         },
@@ -91,8 +94,8 @@ ANTI_ENTROPY_CATALOG_ENTRY: dict[str, Any] = {
     "docs": [_README],
     "boundaries": [
         "The capability is default-off and task-scoped: a turn receives the retirement context only when the task explicitly declares a retirement basis or enables the capability; disabled turns get zero injection.",
-        "The turn-context hook projects declared targets, the inspect descriptor, and delete-first guidance into host input via the shared attach_turn_context composition; it grants no execution authority.",
-        "Task intent comes from the selected Todo's own instruction/note text or an explicit capability id in its required capabilities; the post-change workspace is the Goal repository, never the process working directory.",
+        "The turn-context hook is composed unconditionally into the shared attach_turn_context owner (turn run-once --execute and heartbeat quota should-run paths) and injects declared targets, the inspect descriptor, and delete-first guidance only for a task that opted in; it grants no execution authority.",
+        "Task intent is an explicit retirement_basis / anti_entropy_basis namespace in the selected task's own text/note/description/instruction carriers, or a task-scoped typed enable (Todo required_capabilities / direct flag); generic target_paths or target_symbols in metadata/params are not intent, and a Goal-level available-capabilities declaration is availability, not activation.",
         "LoopX has no capability-owned host tool registry: the inspect descriptor is projected as turn-context data, and the CLI (or the Python entry it wraps) remains the callable route.",
         "The CLI (verify/inspect) remains the shared verification entry for humans and agents; final delivery acceptance is owned by the existing change-quality prepare/record/verify owner.",
         "Delete-first requires target old logic to be cleanly decommissioned in the diff without re-introducing wrappers or zombie symbols.",

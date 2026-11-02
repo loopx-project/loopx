@@ -30,10 +30,12 @@ The Anti-Entropy capability addresses this through:
 4. **Ghost Code Auditing (`audit_ghost_code`)**:
    Identifies commented-out code blocks left behind, surfacing them as advisory
    quality findings without blocking legitimate documentation or explanatory comments.
-5. **Durable Receipt Generation (`AntiEntropyReceipt`)**:
-   Runs deterministic hygiene oracles against the exact git diff and produces
-   an immutable receipt recording verified retired symbols, findings, and the
-   evidence provenance (`basis_hash`, `source_root`, `source_evidence`).
+5. **Deterministic Receipt Construction (`AntiEntropyReceipt`)**:
+   Runs deterministic hygiene oracles against the exact git diff and returns a
+   per-run receipt recording verified retired symbols, findings, and the
+   evidence provenance (`basis_hash`, `source_root`, `source_evidence`). The
+   capability does not persist a receipt store; delivery receipts of record are
+   owned by change-quality.
 
 ## Source Binding And Evidence Rules
 
@@ -69,12 +71,19 @@ task is an explicit choice. When enabled, one closed loop per task is:
      (its `note` / instruction text, `required_capabilities`, and the full
      task body when the compact display text was truncated), plus
      `turn_envelope.action.selected_todo.text` / `action.recommended_action`;
-   - a task opts in by declaring an explicit `retirement_basis` /
-     `anti_entropy_basis` JSON object in that text. A Todo may also list
-     `anti-entropy-governance` in `required_capabilities`, but only when the
-     Goal already declares that capability available: otherwise routing treats
-     the Todo as requiring an unavailable capability and the Turn stops before
-     the hook, so the explicit task declaration is the primary path;
+   - a task opts in only by declaring an explicit `retirement_basis` /
+     `anti_entropy_basis` JSON object in a task-intent carrier (`text`, `note`,
+     `description`, `instruction`, including inside `metadata` / `params`).
+     Generic `target_paths` / `target_symbols` keys outside that reserved
+     namespace are ordinary task metadata and never authorize retirement;
+   - a Todo may also list `anti-entropy-governance` in `required_capabilities`;
+     that is a task-scoped typed enable, not a Goal-wide switch. A Goal-level
+     `available_capabilities` declaration is availability only and does not
+     activate unrelated or later-added Todos in the same Goal;
+   - the turn-context hook itself is composed unconditionally in the shared
+     `attach_turn_context` owner and is called by both `turn run-once
+     --execute` and the heartbeat `quota should-run` path; it decides
+     off/applicable per task and injects nothing when the task has not opted in;
    - the post-change workspace is the Goal repository from the registry
      (`load_goal_from_registry`), never the process working directory.
 
@@ -152,7 +161,7 @@ no model runs and measures no agent-runtime behavior.
 
 ## Boundaries
 
-- The capability is default-off and task-scoped: turns receive the retirement context only when the selected task explicitly declares a retirement basis or enables the capability in its own canonical input; the CLI (verify/inspect) remains the shared verification entry.
+- The capability is default-off and task-scoped: a turn receives the retirement context only when its own task input declares a `retirement_basis` / `anti_entropy_basis` namespace or a task-scoped typed enable. The turn-context hook stays composed on the real turn and heartbeat paths; the CLI (verify/inspect) remains the shared verification entry.
 - The selected Todo is the intent source. The hook reads the native work context and the Goal registry; it never infers targets from unrelated business fields and never reads the process working directory as source evidence.
 - Delete-first requires target old logic to be cleanly decommissioned in the diff without re-introducing wrappers or zombie symbols.
 - Symbol retirement certification requires an explicitly bound workspace; diff-only evidence can reject but never certifies.
