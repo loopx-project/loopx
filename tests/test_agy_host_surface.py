@@ -573,6 +573,8 @@ def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
         "--agent-id",
         SCOPED_AGENT_ID,
         "--antigravity_app",
+        "--turn-instance-id",
+        "2026-11-02T04:00:00Z",
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=project,
