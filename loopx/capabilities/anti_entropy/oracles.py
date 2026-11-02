@@ -322,9 +322,12 @@ _JS_SIMPLE_ESCAPES = {
     "v": "\v",
     "0": "\0",
 }
-_JS_ESCAPE_HINT_RE = re.compile(r"\\(?:u\{?[0-9a-fA-F]|x[0-9a-fA-F]|[0-7]|[_$A-Za-z])")
+_JS_ESCAPE_HINT_RE = re.compile(
+    r"\\(?:u\{?[0-9a-fA-F]|x[0-9a-fA-F]|[0-7]|[_$A-Za-z]|\r?\n)"
+)
 _JS_ESCAPE_SEQUENCE_RE = re.compile(
-    r"\\(?:u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0-7]{1,3}|[_$A-Za-z])"
+    r"\\(?:u\{[0-9a-fA-F]{1,6}\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0-7]{1,3}"
+    r"|[_$A-Za-z]|\r?\n)"
 )
 _TS_ESCAPED_IDENTIFIER_RE = re.compile(
     r"(?:[A-Za-z_$]|\\u\{[0-9a-fA-F]{1,6}\}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}|\\[_$A-Za-z])"
@@ -446,12 +449,86 @@ def _decode_js_escapes_lenient(text: str) -> str:
     return _JS_ESCAPE_SEQUENCE_RE.sub(replace, text)
 
 
+_REGEX_ALLOWED_AFTER = frozenset("=([{,:;!&|?+-*%^~<>")
+_REGEX_ALLOWED_AFTER_WORDS = frozenset(
+    {
+        "return",
+        "throw",
+        "case",
+        "typeof",
+        "delete",
+        "void",
+        "new",
+        "in",
+        "instanceof",
+        "yield",
+        "await",
+        "do",
+        "else",
+    }
+)
+
+
+def _regex_literal_spans(code: str) -> list[tuple[int, int]]:
+    """Return heuristic regex-literal spans in stripped code.
+
+    Only used to keep identifier-escape normalization out of pattern text; a
+    slash after an identifier, literal, ``)`` or ``]`` is division and stays code.
+    """
+    spans: list[tuple[int, int]] = []
+    index = 0
+    length = len(code)
+    while index < length:
+        if code[index] != "/":
+            index += 1
+            continue
+        prefix = code[:index].rstrip()
+        previous_char = prefix[-1] if prefix else ""
+        word_match = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)$", prefix)
+        previous_word = word_match.group(1) if word_match else ""
+        starts_regex = (
+            not prefix
+            or previous_char in _REGEX_ALLOWED_AFTER
+            or previous_word in _REGEX_ALLOWED_AFTER_WORDS
+        )
+        if not starts_regex:
+            index += 1
+            continue
+        cursor = index + 1
+        in_class = False
+        closed = False
+        while cursor < length:
+            char = code[cursor]
+            if char == "\\":
+                cursor += 2
+                continue
+            if char == "\n":
+                break
+            if char == "[":
+                in_class = True
+            elif char == "]":
+                in_class = False
+            elif char == "/" and not in_class:
+                closed = True
+                break
+            cursor += 1
+        if not closed:
+            index += 1
+            continue
+        spans.append((index, cursor + 1))
+        index = cursor + 1
+    return spans
+
+
 def _normalize_identifier_escapes(code: str) -> str:
     """Decode escapes embedded in code identifiers so ``old\\u005fapi`` is visible."""
+    spans = _regex_literal_spans(code)
 
     def replace(match: re.Match[str]) -> str:
         token = match.group(0)
         if "\\" not in token:
+            return token
+        if any(start <= match.start() < end for start, end in spans):
             return token
         decoded = _decode_js_escape_text(token)
         return token if decoded is None else decoded

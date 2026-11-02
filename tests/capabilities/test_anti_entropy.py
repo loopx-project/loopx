@@ -1249,16 +1249,23 @@ def test_typescript_computed_member_migrated_and_harmless_strings_pass(
     assert receipt.retired_symbols == ("old_api",)
 
 
-_ESCAPED_CALLER_FORMS = (
+_ESCAPED_MEMBER_FORMS = (
     r"old\u005fapi",
     r"old\u{5f}api",
     r"old\x5fapi",
     r"old\137api",
     r"old\_api",
+    "old_\
+api",
+    "old_\
+api",
+)
+_ESCAPED_IDENTIFIER_FORMS = tuple(
+    name for name in _ESCAPED_MEMBER_FORMS if "\n" not in name
 )
 
 
-@pytest.mark.parametrize("escaped_name", _ESCAPED_CALLER_FORMS)
+@pytest.mark.parametrize("escaped_name", _ESCAPED_MEMBER_FORMS)
 def test_typescript_escaped_static_computed_member_blocks_retirement(
     tmp_path: Path, escaped_name: str
 ) -> None:
@@ -1288,7 +1295,7 @@ def test_typescript_escaped_static_computed_member_blocks_retirement(
     assert receipt.retired_symbols == ()
 
 
-@pytest.mark.parametrize("escaped_name", _ESCAPED_CALLER_FORMS)
+@pytest.mark.parametrize("escaped_name", _ESCAPED_IDENTIFIER_FORMS)
 def test_typescript_escaped_bare_identifier_blocks_retirement(
     tmp_path: Path, escaped_name: str
 ) -> None:
@@ -1424,3 +1431,29 @@ def test_typescript_escaped_call_real_cli_exit_code(tmp_path: Path) -> None:
         capture_output=True,
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+def test_typescript_escaped_regex_pattern_is_not_a_reference(tmp_path: Path) -> None:
+    """Escape-like text inside a regex literal is pattern text, not a call."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_regex_pattern",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                r"const pattern = /old\u005fapi/;" + "\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
