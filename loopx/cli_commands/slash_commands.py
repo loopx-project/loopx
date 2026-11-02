@@ -132,7 +132,7 @@ def register_slash_commands_command(
     parser.add_argument(
         "--with-agy-hooks",
         action="store_true",
-        help="Optionally register the LoopX continuation gate in Antigravity hooks.json.",
+        help="Optionally install a disabled Antigravity Stop recovery hook; bind a Goal, Agent and native conversation before enabling it.",
     )
     parser.add_argument(
         "--opencode-home",
