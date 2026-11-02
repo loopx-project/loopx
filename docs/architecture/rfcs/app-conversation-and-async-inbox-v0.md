@@ -1702,6 +1702,20 @@ without provider identity IO for every historical failure. This is a queue hint;
 admission still re-resolves current App/owner/grant and exact source/native proof
 under the existing fences before reserving or enqueueing any continuation.
 
+A steward request that fails locally with `manager_authorization_unavailable`
+can also qualify on Codex or Antigravity. Core must record exactly the queued,
+manager-context phase, context snapshot and failed events, with distinct IDs,
+no upstream Turn, response, deltas, steering or attachments. Missing events alone
+do not prove safety. Current source and binding verification remain mandatory.
+The original worker reserves at most three deterministic continuations, after
+one, two and four minutes from each failure, through the existing Session queue.
+A stop, pending newer input, an equivalent later human resubmission, another
+recovery kind or contradictory native evidence blocks new work. Repairing the
+correlation of an already admitted continuation does not dispatch it again.
+The original failure and its delivery remain recorded; a qualified private
+steward notice describes conditional recovery rather than promising a replay.
+Unknown failures after native dispatch remain holds.
+
 Source verification accepts both ordinary text and text-only rich posts. A post
 must retain its original provider rendering, an explicit empty attachment
 inventory and the same admitted text after intake whitespace normalization.
