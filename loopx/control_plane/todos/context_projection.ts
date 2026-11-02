@@ -238,7 +238,7 @@ function compactSummaryRecord(item: JsonObject, body: unknown): JsonObject {
 }
 
 /** Standalone compatibility display, also composed inside quota planning. */
-export function projectTodoSummaryDisplay(input: JsonObject): JsonObject[] {
+export function projectTodoSummaryDisplay(input: JsonObject, onSource?: (key: string, index: number) => void): JsonObject[] {
   const planning = input.include_terminal !== undefined, terminal = input.include_terminal === true;
   const source = input.source === undefined ? null : decodeTodoReadSource(requireJsonObject(input.source, "summary source"));
   const ready = new Set((Array.isArray(input.handoff_gates) ? input.handoff_gates : []).flatMap(value => {
@@ -248,7 +248,7 @@ export function projectTodoSummaryDisplay(input: JsonObject): JsonObject[] {
   const selected: {item: JsonObject; text: unknown}[] = [], seen = new Set<string>();
   if (source) {
     for (const key of planning ? PLANNING_SOURCES : SUMMARY_SOURCES) {
-      for (const value of Array.isArray(source[key]) ? source[key] as unknown[] : []) {
+      for (const [index, value] of (Array.isArray(source[key]) ? source[key] as unknown[] : []).entries()) {
         if (!value || typeof value !== "object" || Array.isArray(value)) continue;
         const item = value as JsonObject, body = stripPythonWhitespace(pythonFieldText(item, "text"));
         let todo = id(item.todo_id);
@@ -257,6 +257,7 @@ export function projectTodoSummaryDisplay(input: JsonObject): JsonObject[] {
         if (!planning && selected.some(({item: prior, text}) => item.todo_id && prior.todo_id ? item.todo_id === prior.todo_id : prior.index === item.index && text === body)) continue;
         if (todo) seen.add(todo);
         selected.push({item, text: body});
+        onSource?.(key, index);
       }
     }
   } else {
