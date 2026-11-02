@@ -216,10 +216,15 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
             cli("todo", "archive-completed", "--goal-id", "goal-a",
                 "--max-active-done", "0", "--execute")
             resumed = (await call("read_context", {}))["items"][0]["receiver_followthrough"]
-            assert resumed["step"] == "return_answer" and resumed["answer_owed"]
+            assert resumed["step"] == "review_request_work" and resumed["answer_owed"]
             assert [(t["todo_id"], t["status"]) for t in resumed["linked_todos"]] == [(own, "done")]
             assert path.read_bytes() == original
-            await call("return_result", {"request_id": rid, "text": conclusion})
+            remainder = {"summary": "Check the installed repair", "resume_when": "The isolated package is ready"}
+            await call("return_result", {"request_id": rid, "text": "Implementation ready", "remaining_work": remainder})
+            pending = (await call("read_context", {}))["items"][0]
+            assert pending["remaining_work"] == remainder
+            assert pending["receiver_followthrough"]["step"] == "review_request_work"
+            await call("return_result", {"request_id": rid, "text": conclusion, "update_id": "checked-repair"})
             assert (await call("read_context", {}))["items"] == []
             # A short factual answer requires neither a fabricated task nor a link.
             quick = request(root, registry, "goal-a", "agent-b", "agent-a", "short-answer", brief)["request_id"]
@@ -239,7 +244,7 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
 
     asyncio.run(exercise())
     received = read_inbox(root, registry, "goal-a", "agent-b")["peer_returns"]["items"]
-    assert len(received) == 2
-    assert next(item for item in received if item["request_id"] == rid)["text"] == conclusion
+    assert len(received) == 3
+    assert next(item for item in received if item.get("result_key") == "conclusion-00000001")["text"] == conclusion
     assert [row["todo_id"] for row in cli("todo", "list", "--goal-id", "goal-a")["todos"]] == [foreign]
     assert cli("todo", "list", "--goal-id", "goal-a", "--todo-id", own)["todo"]["archive_state"] == "archive"
