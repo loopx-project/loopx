@@ -115,6 +115,12 @@ def make_progress_cli_fixture(root: Path, provider: str, scenario: str) -> dict:
 
 
 def call_progress_cli(fixture: dict, *args: str, expected_code: int = 0) -> dict:
+    # These tests inspect the authority decision, independently of machine
+    # presentation defaults. Preserve explicit context delivery overrides.
+    if args[:2] == ("quota", "should-run") and not any(
+        arg == "--context-delivery" or arg.startswith("--context-delivery=") for arg in args
+    ):
+        args = (*args, "--context-delivery", "off")
     result = subprocess.run([
         sys.executable, "-m", "loopx.cli", "--registry", str(fixture["registry"]),
         "--runtime-root", str(fixture["runtime"]), "--format", "json", *args,
@@ -122,6 +128,40 @@ def call_progress_cli(fixture: dict, *args: str, expected_code: int = 0) -> dict
         capture_output=True, text=True, timeout=60)
     assert result.returncode == expected_code, (result.stdout, result.stderr)
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("context_args,navigation", [
+    ((), False),
+    (("--context-delivery", "on"), True),
+    (("--context-delivery=on",), True),
+    (("--context-delivery", "off"), False),
+    (("--context-delivery=off",), False),
+], ids=["omitted", "on-split", "on-equals", "off-split", "off-equals"])
+def test_progress_cli_context_delivery_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+    context_args: tuple[str, ...], navigation: bool,
+) -> None:
+    tmp_path = tmp_path.resolve()
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
+    try:
+        result = call_progress_cli(
+            fixture, "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+            "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--codex-context-dir", str(native),
+            "--decision-output-root", str(captures), *context_args,
+        )
+        assert (result.get("schema_version") == "context_capture_navigation_v1") is navigation
+        if not navigation:
+            assert result["decision"] == "autonomous_replan_required", result
+    finally:
+        restart_effect_runtime(wait_for_exit=True)
 
 
 def _authority(fixture: dict) -> dict:

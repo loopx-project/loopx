@@ -1170,3 +1170,55 @@ def test_concurrent_project_syncs_do_not_drop_goals(tmp_path: Path) -> None:
     assert {
         str(goal.get("id")): str(goal.get("project_id")) for goal in payload["goals"]
     } == {f"goal-{name}": f"project-{name}" for name in names}
+
+
+def test_redundant_sync_does_not_rewrite_unchanged_global_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Routine refresh-state syncs must not churn global registry timestamps when nothing changed."""
+    runtime_root = tmp_path / "runtime"
+    registry_path = _project_registry(tmp_path, "alpha", runtime_root)
+    global_path = global_registry_path(runtime_root)
+
+    ticks = iter(["2026-11-02T07:41:00+00:00", "2026-11-02T07:41:53+00:00", "2026-11-02T07:42:10+00:00"])
+    monkeypatch.setattr(global_registry, "now_local", lambda: next(ticks))
+
+    first = sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+    assert first["ok"] is True
+    before_bytes = global_path.read_bytes()
+
+    writes: list[Path] = []
+    real_write = global_registry.write_json
+
+    def tracking_write(path: Path, payload: dict[str, Any]) -> None:
+        writes.append(path)
+        real_write(path, payload)
+
+    monkeypatch.setattr(global_registry, "write_json", tracking_write)
+
+    second = sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+    assert second["ok"] is True
+    assert writes == []
+    assert global_path.read_bytes() == before_bytes
+
+    source_payload = json.loads(registry_path.read_text(encoding="utf-8"))
+    source_payload["goals"][0]["objective"] = "updated objective"
+    registry_path.write_text(json.dumps(source_payload), encoding="utf-8")
+
+    third = sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )
+    assert third["ok"] is True
+    assert writes == [global_path]
+    assert global_path.read_bytes() != before_bytes
+

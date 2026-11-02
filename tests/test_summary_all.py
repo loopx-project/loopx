@@ -1,6 +1,19 @@
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+from control_plane.canonical_authority_fixture import (
+    initialize_canonical_source_fixture,
+    isolate_sqlite_runtime,
+)
+
 import loopx.summary_all as summary_all
+from loopx.paths import global_registry_path
 
 
 def patch_manager_reads(
@@ -846,3 +859,80 @@ def test_summary_all_and_global_gates_preserve_scoped_user_gate_alongside_runnab
     )
     assert len(gates_payload["gates"]) == 1
     assert gates_payload["gates"][0]["gate_id"] == "gate-agent-9"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("mixed", [False, True], ids=["ninth-worker", "worker-and-peer-gate"])
+def test_real_peer_manager_reads_preserve_work_gates_and_authority(
+    tmp_path, monkeypatch, provider, reverse, mixed,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "synthetic project"
+    project.mkdir()
+    state, runtime = project / "state.md", tmp_path / "runtime"
+    runtime.mkdir()
+    registry = global_registry_path(runtime)
+    goal = "synthetic-peer-manager"
+    worker = "agent-1" if mixed else "agent-9"
+    gate = (
+        "- [ ] Approve synthetic peer output?\n"
+        "  <!-- loopx:todo todo_id=todo_peer_gate status=open task_class=user_gate "
+        "blocks_agent=agent-9 unblocks_todo_id=todo_held -->\n"
+    ) if mixed else ""
+    held = (
+        "- [ ] Verify held peer output.\n"
+        "  <!-- loopx:todo todo_id=todo_held status=open task_class=advancement_task "
+        "claimed_by=agent-9 action_kind=verify task_domain=validation -->\n"
+    ) if mixed else ""
+    state.write_text(
+        "---\nstatus: active\nobjective: Read synthetic peer work without executing it.\n---\n"
+        "# Synthetic Goal\n\n## Objective\n\nRead synthetic peer work without executing it.\n"
+        "\n## Operating Contract\n\n- Read-only synthetic qualification.\n"
+        "\n## User Todo\n\n" + gate + "\n## Agent Todo\n\n"
+        "- [ ] Verify runnable synthetic output.\n"
+        f"  <!-- loopx:todo todo_id=todo_ready status=open task_class=advancement_task "
+        f"claimed_by={worker} action_kind=verify task_domain=validation -->\n" + held
+        + "\n## Completed Work Archive\n"
+    )
+    agents = [f"agent-{i}" for i in range(1, 10)]
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": goal, "repo": str(project), "state_file": state.name, "status": "active",
+        "objective": "Read synthetic peer work without executing it.", "domain": "test",
+        "adapter": {"kind": "read_only_project_map_v0", "status": "connected-read-only"},
+        "coordination": {"agent_model": "peer_v1", "registered_agents": agents[::-1] if reverse else agents},
+    }]}))
+    initialize_canonical_source_fixture(runtime, goal, state_path=state, provider=provider)
+    repo = Path(__file__).resolve().parents[1]
+    prefix = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+              "--runtime-root", str(runtime), "--format", "json"]
+
+    def read(*args):
+        result = subprocess.run([*prefix, *args], cwd=repo, text=True, capture_output=True,
+                                env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=45)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is True
+        return payload
+
+    before = read("todo", "list", "--goal-id", goal)
+    source_bytes, registry_bytes = state.read_bytes(), registry.read_bytes()
+    todos = read("global-todos")
+    summary = read("global-summary")
+    gates = read("global-gates")
+    assert "todo_ready" in {row["todo_id"] for row in todos["groups"]["runnable"]}
+    assert len(summary["lanes"]) == 1
+    assert summary["lanes"][0]["agent_id"] == worker
+    assert summary["lanes"][0]["top_todo_id"] == "todo_ready"
+    assert summary["summary"]["open_gate_count"] == gates["summary"]["open_gate_count"] == int(mixed)
+    if mixed:
+        assert gates["gates"][0]["blocks"] == ["todo_held"]
+        assert "Approve synthetic peer output?" in gates["gates"][0]["question"]
+        explicit = read("global-gates", "--agent-id", "agent-1")
+        assert explicit["gates"] == []
+    after = read("todo", "list", "--goal-id", goal)
+    assert before["todos"] == after["todos"]
+    assert before["authority_read"] == after["authority_read"]
+    assert state.read_bytes() == source_bytes and registry.read_bytes() == registry_bytes
+    for payload in (todos, summary, gates):
+        assert str(tmp_path) not in json.dumps(payload)

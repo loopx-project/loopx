@@ -102,8 +102,11 @@ def actor(request):
 
 
 def guard(request, turn, *, todo=True):
+    # This actor consumes the full decision, not the independently tested
+    # file-backed context reader projection or host's inherited reader default.
     return cli(request, "quota", "should-run", *actor(request), "--codex-app",
-        "--turn-instance-id", turn, *(("--todo-id", request["todo_id"]) if todo else ()))
+        "--context-delivery", "off", "--turn-instance-id", turn,
+        *(("--todo-id", request["todo_id"]) if todo else ()))
 
 
 def vision(request, evidence, *, outcome="continue"):

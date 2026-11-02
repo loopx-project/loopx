@@ -34,6 +34,7 @@ def list_goal_todos(
     thin: bool = False,
     full_text: bool = False,
     summary: bool = False,
+    include_archived: bool = False,
     read_scope: Literal["active", "completed_history"] = "active",
     json_references: bool = False,
 ) -> dict[str, Any]:
@@ -97,6 +98,7 @@ def list_goal_todos(
             "todo_id": normalized_todo_id, "agent_id": normalized_agent_id, "limit": limit,
             "read_scope": read_scope, "json_references": json_references, "thin": thin,
             **({"full_text": True} if full_text else {}),
+            **({"include_archived": True} if include_archived else {}),
             "state_file": str(resolved_state_file), "project": str(resolved_project) if resolved_project else None}}
     if summary:
         params["query"]["summary"] = True

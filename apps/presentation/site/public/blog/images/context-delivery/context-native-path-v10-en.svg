@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="1020" viewBox="0 0 1360 1020" role="img">
+  <title>Context Delivery: Standard Path Tree &amp; JSON Pointer Structure</title>
+  <desc>Standard on-disk capture directory decision-&lt;id&gt;/, progressive JSON Pointer hierarchy in required-context.json, and context_capture_navigation_v1 envelope.</desc>
+
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif; fill: #0f172a; }
+  .mono { font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  .muted { fill: #475569; }
+  .subtle { fill: #64748b; }
+  .accent { fill: #1d4ed8; }
+  .emerald { fill: #047857; }
+  .amber { fill: #b45309; }
+  .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+  .card-accent { fill: #f8fafc; stroke: #93c5fd; stroke-width: 1.8; }
+  .card-emerald { fill: #f0fdf4; stroke: #86efac; stroke-width: 1.8; }
+  .card-amber { fill: #fffbeb; stroke: #fcd34d; stroke-width: 1.8; }
+  .pill { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1.2; }
+  .divider { stroke: #e2e8f0; stroke-width: 1.5; }
+</style>
+<defs>
+  <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#f8fafc"/>
+    <stop offset="100%" stop-color="#f1f5f9"/>
+  </linearGradient>
+</defs>
+
+  <rect width="1360" height="1020" fill="url(#bgGrad)"/>
+  <rect x="40" y="28" width="480" height="32" rx="16" class="pill"/>
+  <text x="60" y="49" font-size="14" font-weight="700" class="accent mono">LOOPX 2.2 · STANDARD DELIVERY PATH &amp; POINTER TREE (V10)</text>
+  <text x="40" y="100" font-size="34" font-weight="800">Context Delivery: Standard Path Tree &amp; JSON Pointer Structure</text>
+  <text x="40" y="134" font-size="17.5" class="muted">From the on-disk decision-&lt;id&gt;/ directory tree, to the required-context.json pointer hierarchy, to the navigation_v1 model entry</text>
+
+  <!-- Column Headers -->
+  <text x="40" y="176" font-size="17" font-weight="700" class="accent">A. On-Disk Capture Tree (decision-&lt;id&gt;/)</text>
+  <text x="430" y="176" font-size="17" font-weight="700" class="accent">B. Standard JSON Pointer Tree in required-context.json</text>
+  <text x="920" y="176" font-size="17" font-weight="700" class="emerald">C. Navigation envelope &amp; reading</text>
+
+  <!-- COLUMN A: Standard On-Disk Directory Tree -->
+  <rect x="40" y="192" width="366" height="661" rx="16" class="card"/>
+  <rect x="58" y="212" width="330" height="63" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="72" y="239" font-size="13.5" font-weight="700" class="mono"><tspan x="72" dy="0">~/.loopx/context-delivery</tspan><tspan x="72" dy="19">/decision-&lt;id&gt;/</tspan></text>
+
+  <!-- Tree branch lines in Col A -->
+  <line x1="78" y1="275" x2="78" y2="743" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="317" x2="98" y2="317" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="425" x2="98" y2="425" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="550" x2="98" y2="550" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="78" y1="693" x2="98" y2="693" stroke="#94a3b8" stroke-width="2"/>
+
+  <!-- File 1: projection.json -->
+  <rect x="98" y="287" width="290" height="86" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="112" y="314" font-size="15" font-weight="700" class="mono">├─ projection.json</text>
+  <text x="112" y="338" font-size="12.5" class="muted">Full raw source persisted first (57,014 B)</text>
+  <text x="112" y="359" font-size="12" class="subtle mono">Goal · Todos · Outcomes · Sources</text>
+
+  <!-- File 2: required-context.json -->
+  <rect x="98" y="395" width="290" height="103" rx="10" class="card-accent"/>
+  <text x="112" y="422" font-size="15" font-weight="700" class="accent mono">├─ required-context.json</text>
+  <text x="112" y="446" font-size="12.5" class="muted">Keeps requirements &amp; risk states (5,107 B)</text>
+  <text x="112" y="467" font-size="12" class="subtle mono"><tspan x="112" dy="0">+ supporting_material_pointer +</tspan><tspan x="112" dy="17"> context_ref</tspan></text>
+
+  <!-- File 3: delivery.json -->
+  <rect x="98" y="520" width="290" height="121" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.4"/>
+  <text x="112" y="547" font-size="15" font-weight="700" class="mono">├─ delivery.json</text>
+  <text x="112" y="571" font-size="12.5" class="muted"><tspan x="112" dy="0">context_delivery_v1 (5,543B full → 2,164B</tspan><tspan x="112" dy="18"> delta)</tspan></text>
+  <text x="112" y="610" font-size="12" class="subtle mono"><tspan x="112" dy="0">mode: "full" | "delta"</tspan><tspan x="112" dy="17"> (captured_file)</tspan></text>
+
+  <!-- File 4: *.reader.json -->
+  <rect x="98" y="663" width="290" height="138" rx="10" class="card-emerald"/>
+  <text x="112" y="690" font-size="14.5" font-weight="700" class="emerald mono">└─ *.reader.json</text>
+  <text x="112" y="713" font-size="11.2" class="muted">context_capture_read_reference_v1 (full digest)</text>
+  <text x="112" y="734" font-size="11.8" class="subtle mono"><tspan x="112" dy="0">• required-context.reader.json</tspan><tspan x="112" dy="17"> (recovery)</tspan></text>
+  <text x="112" y="770" font-size="11.8" class="subtle mono"><tspan x="112" dy="0">• delivery.&lt;hash16&gt;.reader.json</tspan><tspan x="112" dy="17"> (nav)</tspan></text>
+
+  <!-- Arrow Col A -> Col B -->
+  <line x1="388" y1="445.5" x2="424" y2="445.5" stroke="#2563eb" stroke-width="2.4"/><polygon points="422,439.5 432,445.5 422,451.5" fill="#2563eb"/>
+
+  <!-- COLUMN B: Standard JSON Pointer Hierarchy inside required-context.json -->
+  <rect x="430" y="192" width="466" height="676" rx="16" class="card-accent"/>
+  <rect x="448" y="212" width="430" height="636" rx="12" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.4"/>
+
+  <text x="464" y="242" font-size="14" font-weight="700" class="accent mono">/ (required-context.json root)</text>
+
+  <!-- Carrier 1: Outcome Requirements -->
+  <text x="464" y="270" font-size="12.5" font-weight="700" class="mono"><tspan x="464" dy="0">├─ /interaction_contract/agent_channel</tspan><tspan x="464" dy="18">/work_context/sources/0</tspan></text>
+  <text x="464" y="310" font-size="12.5" font-weight="700" class="mono"><tspan x="464" dy="0">│  └─ /content/goal_acceptance_contract</tspan><tspan x="464" dy="18">/outcome_requirements</tspan></text>
+  <text x="464" y="350" font-size="12.5" font-weight="700" class="accent mono">│     └─ /outcomes/0</text>
+
+  <rect x="488" y="360" width="374" height="105" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="500" y="382" font-size="12" font-weight="700" class="mono"><tspan x="500" dy="0">├─ objective, status,</tspan><tspan x="500" dy="17"> requirements/2/description</tspan></text>
+  <text x="500" y="419" font-size="10.4" font-weight="700" class="amber mono"><tspan x="500" dy="0">├─ requirements/2/agent_review:</tspan><tspan x="500" dy="16"> {"conclusion":"unmet","basis_current":false}</tspan></text>
+  <text x="500" y="455" font-size="11.5" class="muted">← Inline at decision layer: requirements &amp; unmet/stale flags</text>
+
+  <rect x="488" y="473" width="374" height="120" rx="8" fill="#fffbeb" stroke="#fcd34d"/>
+  <text x="500" y="495" font-size="12" font-weight="700" class="amber mono"><tspan x="500" dy="0">└─ supporting_material_pointer:</tspan><tspan x="500" dy="17"> "/.../outcomes/0"</tspan></text>
+  <text x="500" y="532" font-size="11.5" class="muted">← Deferred pointer back to projection.json:</text>
+  <text x="500" y="552" font-size="11.5" class="subtle mono"><tspan x="500" dy="0">   • &lt;ptr&gt;/sources   •</tspan><tspan x="500" dy="17"> &lt;ptr&gt;/requirements/2/agent_review/note</tspan></text>
+  <text x="500" y="585" font-size="11.5" class="subtle mono">   • &lt;ptr&gt;/requirements/2/agent_review/evidence_refs</text>
+
+  <!-- Carrier 2: Todo Deduplication via context_ref -->
+  <text x="464" y="619" font-size="12.5" font-weight="700" class="mono">├─ /agent_todo_summary/first_open_items/0</text>
+  <text x="484" y="638" font-size="11.5" class="muted">← Canonical full Todo record (1,052 B)</text>
+
+  <rect x="464" y="649" width="398" height="77" rx="8" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="476" y="671" font-size="12" font-weight="700" class="emerald mono">├─ /selected_todo: {"todo_id": "todo_voice",</text>
+  <text x="476" y="689" font-size="12" font-weight="700" class="emerald mono"><tspan x="476" dy="0">│    "context_ref":</tspan><tspan x="476" dy="17"> "/agent_todo_summary/first_open_items/0"}</tspan></text>
+  <text x="476" y="721" font-size="11.2" class="muted">← Exact same-view pointer share (80 B)</text>
+
+  <!-- Carrier 3: context_details -->
+  <rect x="464" y="738" width="398" height="94" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="476" y="760" font-size="12.5" font-weight="700" class="accent mono">└─ /context_details</text>
+  <text x="476" y="780" font-size="11.5" class="mono">   ├─ path: ".../decision-&lt;id&gt;/projection.json"</text>
+  <text x="476" y="798" font-size="11.5" class="mono">   ├─ sha256: "&lt;64-hex&gt;"</text>
+  <text x="476" y="818" font-size="11.2" class="muted">   ← Raw capture entry (path + sha256 + command_template)</text>
+
+  <!-- Arrow Col A/B -> Col C -->
+  <line x1="896" y1="756" x2="916" y2="756" stroke="#059669" stroke-width="2.4"/><polygon points="914,750 924,756 914,762" fill="#059669"/>
+
+  <!-- COLUMN C: Standard Model Reference Envelope & CLI Read Commands -->
+  <rect x="920" y="192" width="400" height="743" rx="16" class="card-emerald"/>
+
+  <!-- Top Box: context_capture_navigation_v1 JSON -->
+  <rect x="938" y="212" width="364" height="310" rx="10" fill="#ffffff" stroke="#86efac" stroke-width="1.4"/>
+  <text x="952" y="236" font-size="13" font-weight="700" class="emerald mono"><tspan x="952" dy="0">{ "schema_version":</tspan><tspan x="952" dy="19"> "context_capture_navigation_v1",</tspan></text>
+  <text x="952" y="277" font-size="12.5" font-weight="700" class="mono">  "mode": "full" | "delta",</text>
+  <text x="952" y="297" font-size="12" class="mono"><tspan x="952" dy="0">  "reference_file":</tspan><tspan x="952" dy="17"> ".../delivery.&lt;h16&gt;.reader.json",</tspan></text>
+  <text x="952" y="334" font-size="12" class="accent mono"><tspan x="952" dy="0">  "first_read_command": "loopx ...</tspan><tspan x="952" dy="17"> --initial-read",</tspan></text>
+  <text x="952" y="373" font-size="12.5" font-weight="700" class="emerald mono">  "recovery": {</text>
+  <text x="952" y="393" font-size="11.8" class="emerald mono"><tspan x="952" dy="0">    "reference_file":</tspan><tspan x="952" dy="17"> ".../required-context.reader.json",</tspan></text>
+  <text x="952" y="428" font-size="11.8" class="mono"><tspan x="952" dy="0">    "command": "loopx --format json quota</tspan><tspan x="952" dy="17"> context-read ..."</tspan></text>
+  <text x="952" y="463" font-size="12.5" font-weight="700" class="emerald mono">  },</text>
+  <text x="952" y="483" font-size="11.8" class="subtle mono"><tspan x="952" dy="0">  "baseline_reference": { ... } // when</tspan><tspan x="952" dy="17"> mode="delta" }</tspan></text>
+
+  <!-- 4 Progressive CLI Commands -->
+  <rect x="938" y="536" width="364" height="85" rx="8" class="card"/>
+  <text x="952" y="558" font-size="12.5" font-weight="700">① Initial orientation read (--initial-read)</text>
+  <text x="952" y="580" font-size="11.5" class="accent mono"><tspan x="952" dy="0">quota context-read --reference-file "$REF"</tspan><tspan x="952" dy="17"> --initial-read</tspan></text>
+
+  <rect x="938" y="631" width="364" height="84" rx="8" class="card"/>
+  <text x="952" y="653" font-size="12.5" font-weight="700">② Batch-select known pointers (3 facts, 1,362 B)</text>
+  <text x="952" y="675" font-size="10.3" class="emerald mono"><tspan x="952" dy="0">quota context-read --reference-file "$REC" \</tspan><tspan x="952" dy="16">  --select /goal/objective --select /goal/constraints</tspan></text>
+
+  <rect x="938" y="725" width="364" height="84" rx="8" class="card"/>
+  <text x="952" y="747" font-size="12.5" font-weight="700">③ Discover unknown subtree (2-level TOC, 1,283 B)</text>
+  <text x="952" y="769" font-size="10.4" class="accent mono"><tspan x="952" dy="0">quota context-read --reference-file "$REC" \</tspan><tspan x="952" dy="16">  --select /providers --list --list-depth 2</tspan></text>
+
+  <rect x="938" y="819" width="364" height="102" rx="8" class="card"/>
+  <text x="952" y="841" font-size="12.5" font-weight="700"><tspan x="952" dy="0">④ Follow supporting_material_pointer to raw</tspan><tspan x="952" dy="18"> evidence</tspan></text>
+  <text x="952" y="881" font-size="10.1" class="amber mono"><tspan x="952" dy="0">quota context-read --capture-file projection.json \</tspan><tspan x="952" dy="16">  --select "$PTR/requirements/2/agent_review/note"</tspan></text>
+
+  <text x="40" y="973" font-size="14.5" font-weight="600" class="muted">Path Invariant: even when delivery.json is mode: "delta", recovery.reference_file points to current required-context.json for direct --select; context_details links to raw projection.json.</text>
+</svg>

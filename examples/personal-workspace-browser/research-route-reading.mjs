@@ -224,11 +224,21 @@ export const researchRouteReadingScenario = {
       await page.reload({waitUntil: "domcontentloaded"});
       await reader.waitFor();
       assert.match(new URL(page.url()).searchParams.get("research_node"), /route-0-end/);
+      await page.waitForFunction(() => new URLSearchParams(location.search).has("research_finding"));
+      const readingBeforeGraph = new URL(page.url());
       await reader.getByRole("button", {name: "Whole graph", exact: true}).click();
       await page.goBack();
       await reader.waitFor();
-      await reader.getByRole("button", {name: "Full research question", exact: true}).click();
-      assert.match(await reader.locator(".research-question-text").innerText(), /末端研究/);
+      // Back restores the expanded question itself, rather than its help trigger.
+      const restoredQuestion = reader.locator(".research-reader-question > summary > span");
+      await restoredQuestion.waitFor();
+      assert.equal(await restoredQuestion.innerText(), capture.events.find(event => event.result_id === "route-0-end" && event.event_kind === "node").title,
+        "Back restores the complete original question without another activation");
+      assert(await reader.locator(".research-reader-question").evaluate(element => element.open), "Back retains expanded-question reading intent");
+      const restoredReading = new URL(page.url());
+      for (const key of ["research_goal", "research_node", "research_finding", "research_question"]) {
+        assert.equal(restoredReading.searchParams.get(key), readingBeforeGraph.searchParams.get(key), `Back retains the original ${key}`);
+      }
       await page.keyboard.press("Escape");
       // A grouped reading context survives the document/URL boundary, rather
       // than living only in an in-memory opener ref. Navigation is a read.

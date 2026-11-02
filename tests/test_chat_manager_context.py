@@ -998,7 +998,7 @@ def test_trusted_manager_profile_rejects_endpoint_that_cannot_enforce_it(
 
     with pytest.raises(
         CodexChatAgentError,
-        match="requires the Codex endpoint",
+        match="requires the Codex or Antigravity endpoint",
     ) as caught:
         runtime._start_adapter(
             agent_id="claude-code",
@@ -1009,7 +1009,7 @@ def test_trusted_manager_profile_rejects_endpoint_that_cannot_enforce_it(
         )
 
     assert caught.value.error_code == "manager_runtime_endpoint_unsupported"
-    assert "Select the Codex Agent" in caught.value.gate["next_action"]
+    assert "Select the Codex or Antigravity Agent" in caught.value.gate["next_action"]
 
 
 @pytest.mark.parametrize("initial_profile,next_profile", [("restricted", "trusted_owner"), ("trusted_owner", "restricted")])
@@ -1652,3 +1652,64 @@ def test_current_external_scope_is_fresh_and_excludes_other_labels(
     )
     assert revoked["goals"] == []
     assert reads == ["currently-authorized"]
+
+
+@pytest.mark.parametrize("mode", ["metadata_touch", "bound_steward_goal_added"])
+def test_remote_evidence_without_ssh_grants_recollects_on_concurrent_registry_update(
+    monkeypatch, tmp_path, mode
+):
+    """Non-Codex stewards pass remote_evidence=True; without SSH grants they still recover once."""
+    registry = tmp_path / "registry.json"
+    payload = {"goals": [{"id": "authorized", "goal_instance_id": "ginst_" + "a" * 32}]}
+    registry.write_text(json.dumps(payload))
+    collect = context.build_goal_portfolio
+    calls = []
+    session = {
+        "goal_id": "loopx-manager",
+        "channel_id": "manager.external.native." + "b" * 24 + "." + "c" * 24,
+        "steward_context": {
+            "kind": "bound_steward",
+            "project_ref": "a" * 24,
+            "workspace_path": str(tmp_path),
+            "audience": "bound_owner",
+            "grant": "portfolio_read",
+            "binding_id": "b" * 24,
+            "source_ref": "c" * 24,
+            "provider_ref": "d" * 24,
+            "operator_ref": "e" * 24,
+            "goal_ids": ["authorized"],
+        },
+    }
+
+    def racing_collection(**kwargs):
+        result = collect(**kwargs)
+        calls.append(result["inventory_revision"])
+        if len(calls) == 1:
+            if mode == "metadata_touch":
+                payload["updated_at"] = "2026-11-02T07:41:53Z"
+            else:
+                payload["goals"].append(
+                    {"id": "newly-registered", "goal_instance_id": "ginst_" + "b" * 32}
+                )
+            registry.write_text(json.dumps(payload))
+        return result
+
+    monkeypatch.setattr(context, "build_goal_portfolio", racing_collection)
+    result = context.collect_manager_turn_context(
+        registry,
+        session,
+        tmp_path,
+        lambda _s: [g["id"] for g in json.loads(registry.read_text())["goals"]],
+        include_details=False,
+        remote_evidence=True,
+    )
+    assert len(calls) == 2
+    assert result.get("warnings") != ["external_authorization_changed"]
+    expected_ids = (
+        ["authorized"]
+        if mode == "metadata_touch"
+        else ["authorized", "newly-registered"]
+    )
+    assert [g["goal_id"] for g in result["goals"]] == expected_ids
+    assert result.get("authorization_scope_id")
+
