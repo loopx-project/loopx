@@ -167,9 +167,22 @@ test("initial navigation coalesces complete branches without changing selected f
 test("ordinary selectors do not inspect initial-navigation data", () => {
   const context = {facts: {allowed: false}};
   const unused = new Proxy<string[]>([], {get() { throw new Error("Initial navigation was not requested"); }});
-  assert.deepEqual(capturedContextSelection({context, select: ["/facts"]}, unused), select(context, ["/facts"]));
-  assert.deepEqual(capturedContextSelection({context, select: ["/facts"], list_fields: true}, unused),
-    evaluateTurnEnvelope({operation: "context_select", context, select: ["/facts"], list_fields: true}));
+  for (const pointers of [["/facts"], ["/facts", "/facts"]]) {
+    assert.deepEqual(capturedContextSelection({context, select: pointers}, unused), select(context, pointers));
+    assert.deepEqual(capturedContextSelection({context, select: pointers, list_fields: true}, unused),
+      evaluateTurnEnvelope({operation: "context_select", context, select: pointers, list_fields: true}));
+  }
+});
+
+test("duplicate root selectors retain the same discovery navigation", () => {
+  const context = {facts: {allowed: false, stop: "Preserve the final boundary."}, unread: "optional material"};
+  const initial = ["/facts/allowed", "/facts/stop"];
+  const single = capturedContextSelection({context, select: [""], list_fields: true}, initial);
+  const repeated = capturedContextSelection({context, select: ["", ""], list_fields: true}, initial);
+  assert.deepEqual(single.initial_read_pointers, ["/facts"]);
+  assert.deepEqual(repeated, single);
+  assert.throws(() => capturedContextSelection({context, select: ["", "", "/missing"], list_fields: true}, initial),
+    /does not exist/);
 });
 
 test("partial coverage never expands unknown or optional facts through a parent", () => {

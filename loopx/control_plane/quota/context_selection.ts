@@ -45,9 +45,7 @@ export function capturedContextSelection(request: JsonObject, initialPointers: s
     throw new EffectRuntimeRequestError("initial-read must be boolean");
   if (request.initial_read === true && (request.select !== undefined || request.list_fields === true || request.list_depth !== undefined))
     throw new EffectRuntimeRequestError("initial-read cannot be combined with select or list");
-  const rootDiscovery = request.list_fields === true && Array.isArray(request.select)
-    && request.select.length === 1 && request.select[0] === "";
-  const initial = request.initial_read === true || rootDiscovery ? coalescedInitialPointers(context, initialPointers) : [];
+  const initial = request.initial_read === true ? coalescedInitialPointers(context, initialPointers) : [];
   const selectors = request.initial_read === true ? initial : request.select;
   if (request.initial_read === true && !(selectors as string[]).length)
     throw new EffectRuntimeRequestError("initial-read is unavailable for this capture schema; use generic discovery");
@@ -103,7 +101,9 @@ export function capturedContextSelection(request: JsonObject, initialPointers: s
     }
     return {pointer, path};
   });
+  // Discovery follows the validated, deduplicated selection. Repeating the root
+  // cannot drop its navigation; ordinary explicit reads need no initial plan.
   const navigation = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
-    ? initial : [];
+    ? coalescedInitialPointers(context, initialPointers) : [];
   return {selections, ...(navigation.length ? {initial_read_pointers: navigation} : {})};
 }
