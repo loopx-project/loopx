@@ -56,11 +56,10 @@ from ..content_digest import BARE_SHA256_PATTERN
 
 
 TODO_SECTION_PROJECTION_SCHEMA_VERSION = "loopx_todo_section_projection_v0"
-DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT = 20
 BOUNDED_ACTIVE_VIEW_MAX_DONE_ITEMS = 5
 SQLITE_ARCHIVE_POINTER_COMMENT = (
     '<!-- loopx:todo-archive-pointer authority=sqlite_v0 '
-    'query="loopx todo list --include-archived" -->'
+    'query="loopx todo list --goal-id <goal-id> --include-archived" -->'
 )
 
 
@@ -73,7 +72,7 @@ def format_sqlite_archive_pointer_comment(
         f"<!-- loopx:todo-archive-pointer authority=sqlite_v0 "
         f"archived_count={archived_count} "
         f"active_done_omitted={active_done_omitted} "
-        f'query="loopx todo list --include-archived" -->'
+        f'query="loopx todo list --goal-id <goal-id> --include-archived" -->'
     )
 
 
@@ -452,38 +451,6 @@ def _active_referenced_todo_ids(
     return referenced
 
 
-def _select_projected_archive_records(
-    archived: list[dict[str, object]],
-    *,
-    active_records: Sequence[Mapping[str, object]],
-    max_projected_archive_records: int | None,
-) -> list[dict[str, object]]:
-    if max_projected_archive_records is None:
-        return archived
-    if isinstance(max_projected_archive_records, bool) or not isinstance(
-        max_projected_archive_records, int
-    ) or max_projected_archive_records < 0:
-        raise TodoSectionProjectionError(
-            "max_projected_archive_records must be a non-negative integer or None"
-        )
-    if len(archived) <= max_projected_archive_records:
-        return archived
-    referenced_ids = _active_referenced_todo_ids(active_records)
-    tail_records = (
-        archived[-max_projected_archive_records:]
-        if max_projected_archive_records > 0
-        else []
-    )
-    retained_ids = referenced_ids | {
-        str(record.get("todo_id") or "") for record in tail_records
-    }
-    return [
-        record
-        for record in archived
-        if str(record.get("todo_id") or "") in retained_ids
-    ]
-
-
 def _select_bounded_active_role_records(
     records: Sequence[dict[str, object]],
     *,
@@ -554,7 +521,6 @@ def render_canonical_todo_sections(
     *,
     provider_revision: str,
     private_validation_declarations: Mapping[str, Mapping[str, Any]] | None = None,
-    max_projected_archive_records: int | None = None,
     bounded_active_view: bool = False,
 ) -> TodoSectionProjectionResult:
     """Replace only Todo sections and verify deterministic parse/render parity."""
@@ -659,15 +625,7 @@ def render_canonical_todo_sections(
         ],
         key=_record_sort_key,
     )
-    archived = (
-        []
-        if bounded_active_view
-        else _select_projected_archive_records(
-            canonical_archived,
-            active_records=raw_all_active,
-            max_projected_archive_records=max_projected_archive_records,
-        )
-    )
+    archived = [] if bounded_active_view else canonical_archived
     newline = "\r\n" if "\r\n" in markdown else "\n"
     rendered_sections: dict[str, str] = {}
     section_digests: dict[str, str] = {}
@@ -764,7 +722,6 @@ __all__ = [
     "BOUNDED_ACTIVE_VIEW_MAX_SCOPE_CHARS",
     "BOUNDED_ACTIVE_VIEW_OMITTED_PROSE_FIELDS",
     "BOUNDED_ACTIVE_VIEW_TEXT_LIMIT",
-    "DEFAULT_SQLITE_PROJECTED_ARCHIVE_LIMIT",
     "SQLITE_ARCHIVE_POINTER_COMMENT",
     "TODO_SECTION_PROJECTION_SCHEMA_VERSION",
     "TodoSectionProjectionError",

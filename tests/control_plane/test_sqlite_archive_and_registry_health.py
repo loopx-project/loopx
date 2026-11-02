@@ -396,6 +396,43 @@ def test_terminal_13th_todo_in_sqlite_auto_archives_in_same_transaction(
     assert len(active_done) == ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
     assert len(archived_done) == 3
 
+    from loopx.cli import main
+    from loopx.control_plane.todos.list_readback import list_goal_todos
+
+    active_list = list_goal_todos(
+        registry_path=registry_path,
+        runtime_root_arg=str(runtime_root),
+        goal_id="goal-a",
+        include_archived=False,
+    )
+    archived_list = list_goal_todos(
+        registry_path=registry_path,
+        runtime_root_arg=str(runtime_root),
+        goal_id="goal-a",
+        include_archived=True,
+    )
+    active_ids = {item["todo_id"] for item in active_list["todos"]}
+    with_archived_ids = {item["todo_id"] for item in archived_list["todos"]}
+    assert "todo_done_00" not in active_ids
+    assert {"todo_done_00", "todo_done_01", "todo_done_02"} <= with_archived_ids
+    assert archived_list.get("include_archived") is True
+    rc = main(
+        [
+            "--registry",
+            str(registry_path),
+            "--runtime-root",
+            str(runtime_root),
+            "--format",
+            "json",
+            "todo",
+            "list",
+            "--goal-id",
+            "goal-a",
+            "--include-archived",
+        ]
+    )
+    assert rc == 0
+
 
 def test_multi_goal_source_registry_sync_and_health_prevent_sibling_false_positives(
     tmp_path: Path,

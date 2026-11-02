@@ -81,6 +81,7 @@ TODO_OPTION_FIELDS = (
     ("--limit", "todo_limit"),
     ("--thin", "todo_thin"),
     ("--summary", "todo_summary"),
+    ("--include-archived", "include_archived"),
     ("--state-file", "state_file"),
     ("--execute", "execute"),
     ("--provider-revision", "provider_revision"),
@@ -143,7 +144,7 @@ _TODO_OPTION_FLAGS = {field: flag for flag, field in TODO_OPTION_FIELDS}
 # Read/claim subsets share validation and help. Update help reuses the mutable
 # field owner; other lifecycle commands retain full help until centralized.
 TODO_ACTION_FIELDS = {
-    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "todo_summary", "state_file", "project", "dry_run"}),
+    "list": frozenset({"role", "todo_id", "status", "agent_id", "todo_limit", "todo_thin", "todo_summary", "include_archived", "state_file", "project", "dry_run"}),
     "receipt": frozenset({"operation_id"}),
     "result-read": frozenset({"todo_id"}),
     "plan": frozenset({"text", "agent_id", "project"}),
@@ -307,8 +308,8 @@ def validate_todo_list_options(args: argparse.Namespace) -> None:
         args,
         TODO_ACTION_FIELDS["list"],
         "todo list only accepts --goal-id, optional --role, --status, --todo-id, "
-        "--agent-id, --limit, --thin, --project, --state-file, --dry-run, and "
-        "--format; "
+        "--agent-id, --limit, --thin, --summary, --include-archived, --project, "
+        "--state-file, --dry-run, and --format; "
         "unsupported: ",
     )
 
