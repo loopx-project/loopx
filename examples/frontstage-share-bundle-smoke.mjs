@@ -43,7 +43,7 @@ function assertExists(path) {
 // exported page directory or a shipped static asset. Page references must own
 // an index.html; asset references must resolve to the asset file itself.
 const relativeAssetReferencePattern =
-  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|svg|txt|webm|webp|woff2?|xml|zip)$/i;
+  /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|mjs|mp4|pdf|png|py|svg|txt|webm|webp|woff2?|xml|zip)$/i;
 const nonBundleReferencePattern = /^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i;
 
 function assertRelativeReferenceExists(pagePath, target) {

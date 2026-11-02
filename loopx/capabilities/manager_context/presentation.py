@@ -74,7 +74,13 @@ def project_collaboration(
                 or not is_source_chat_host(root, route, store)
             ):
                 continue
-            recovered.setdefault(client, []).append(route)
+            request_id = route.get("request_id")
+            if not isinstance(request_id, str):
+                continue
+            candidates = recovered.setdefault(client, {})
+            # A duplicate route cannot establish this request's lost answer.
+            # Other recipients of the same Turn remain independently readable.
+            candidates[request_id] = route if request_id not in candidates else None
         except (OSError, ValueError, TypeError):
             continue
     result = []
@@ -90,7 +96,10 @@ def project_collaboration(
         if receipts is None:
             receipt = response.get("context_handoff_receipt")
             receipts = (
-                [receipt] if receipt else recovered.get(turn.get("client_turn_id"), [])
+                [receipt] if receipt else [
+                    route for route in recovered.get(turn.get("client_turn_id"), {}).values()
+                    if route is not None
+                ]
             )
         collaborations = []
         for receipt in receipts if isinstance(receipts, list) else []:

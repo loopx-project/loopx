@@ -1632,7 +1632,8 @@ class LarkPrivateConversations:
             # the old Turn and every frozen/ambiguous provider attempt.
             recovered = self.core.recover_failed_request(row["request_ref"],
                 source_observation=lambda selected: self._recovery_source_observation(row, selected))
-            if recovered.get("native_result_recovery"):
+            if (recovered.get("native_result_recovery")
+                    and recovered["native_result_recovery"]["turn_id"] == recovered.get("turn_id")):
                 return self._reconcile_native_result(path, recovered)
             if (recovered.get("context_recovery") and not recovered.get("delivery_verified")
                     and recovered.get("turn_id") != row["turn_id"]):

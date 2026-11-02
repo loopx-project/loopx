@@ -6,6 +6,29 @@ Agent Session calendar reports are implemented. Installation,
 an enabled subscription and a natural scheduled delivery require their own
 readback evidence. Preparing an identity enables neither monitoring nor reports.
 
+Changing a previously prepared private steward to an executor without native
+scheduled-work support keeps its original configuration readable in connection
+settings. The monitor deadline, report schedule, retained window and delivery
+state remain visible with an explicit execution-unavailable notice. Configuration
+controls are disabled; inspecting retained state neither re-enables the old host
+nor retries a failed window. Native admission still owns every execution and
+configuration change. Restoring a supported executor restores the existing
+configuration view rather than creating a replacement identity or subscription.
+
+The disposable `steward_report_fixture.py --retained-executor` journey prepares
+one original synthetic steward and calendar window. With baseline assets the
+section is absent; current packaged assets expose the retained state at 1200
+and 390 pixels. Its `restore-supported-executor` control restores the same
+configuration. No wake owner is started, no model Turn is requested and no
+provider write is added during inspection or restoration. This qualifies UI
+readback and executor compatibility, not scheduled generation or live delivery.
+
+| Baseline: retained section hidden | Current: original schedule remains readable |
+| --- | --- |
+| ![Baseline packaged settings hide the retained schedule](../assets/personal-workspace/steward-reports/retained-executor-before.png) | ![Current packaged settings retain the schedule with unavailable execution](../assets/personal-workspace/steward-reports/retained-executor-desktop.png) |
+
+![The same retained schedule at 390 pixels](../assets/personal-workspace/steward-reports/retained-executor-narrow.png)
+
 Markdown, the HTML report and its copied full text use the same source-link
 rule. An unchanged, well-formed HTTP(S) address is a link. Opaque evidence
 digests, native Task/artifact references and private relative paths stay source
@@ -421,6 +444,25 @@ account acceptance.
 | Partial coverage, narrow viewport | Recovered worker, narrow viewport |
 | --- | --- |
 | ![Partial notification coverage in a narrow viewport](../assets/personal-workspace/owner-attention-source/partial-phone.png) | ![Recovered notification worker in a narrow viewport](../assets/personal-workspace/owner-attention-source/recovered-phone.png) |
+
+### Terminal-failure notices
+
+A blocked Todo that is neither done nor superseded and has a `reject` or `cancel`
+in its typed `decision_scope_outcomes` becomes a separate owner-attention subject,
+`<goal>/<todo>/terminal`, independent of its ordinary owner-action subject.
+The notice uses the latest terminal outcome by recorded time when all terminal
+outcomes have timestamps; otherwise it uses the last terminal outcome in the list.
+Its digest includes the terminal outcome count, so a second outcome starts a new
+notice generation even when the latest terms are unchanged. Clearing the terminal
+outcomes, leaving blocked status, completing or superseding the Todo withdraws
+unsent notices; delivered receipts remain unchanged. A missing `decision_scope`
+does not suppress a terminal notice. These notices reuse **Automatically notify
+new owner tasks**, its first-enable baseline and the existing outbound worker;
+they add no setting, scheduler or message consumer.
+
+未完成、未被替代的阻塞待办若有 `reject` 或 `cancel` 结果，会成为独立的所有者关注项；缺少 `decision_scope` 也不会漏报。
+终止结果均有时间戳时取最新一项，否则取列表最后一项；计数变化会产生新一代通知。结果清除或待办离开阻塞、完成、被替代时撤回未发送通知，已送达回执不变。
+此通知复用“自动通知新增所有者任务”、首次启用时的历史基线和现有出站工作器，不新增设置、调度器或消息消费者。
 
 The intended flow is:
 

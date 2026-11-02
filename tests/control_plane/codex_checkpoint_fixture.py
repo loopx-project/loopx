@@ -114,6 +114,26 @@ def reference_metadata_oracle(view):
     return view
 
 
+def read_cli_policy_payload(stdout, *, returncode):
+    """Read the current policy capture for tests, without claiming model retention.
+
+    Preserve failed commands and inline/off output. Successful native full/delta
+    navigation uses its complete current recovery, never a cached or delta body.
+    """
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_capture_file,
+        read_context_read_reference,
+    )
+
+    payload = json.loads(stdout)
+    if returncode == 0 and payload.get("mode") in {"full", "delta"} and isinstance(payload.get("recovery"), dict):
+        recovery = payload["recovery"]
+        if "reference_file" in recovery:
+            recovery = read_context_read_reference(recovery["reference_file"])[1]
+        return read_context_capture_file(recovery["path"], recovery["sha256"], private=True)[2]
+    return payload
+
+
 class NativeContextReader:
     """Static inference which follows only model-visible native reader cursors.
 

@@ -1,5 +1,7 @@
 import type {JsonObject} from "../effect_program.ts";
 import {isDeepStrictEqual} from "node:util";
+import {createHash} from "node:crypto";
+import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {requireInteger, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {requireAutomationCadenceEligibility} from "../quota/automation_cadence.ts";
@@ -465,6 +467,13 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && (gate as JsonObject).kind === "response_metadata_invalid" && typeof (gate as JsonObject).summary === "string";
     const unfinished = turn?.status === "completed" && response !== null
       && (unfinishedProjectWork(response) !== null || quotaGate || invalidMetadata);
+    const metadataReview = reservation?.metadata_review === true
+      && turn?.client_turn_id === reservation.client_turn_id;
+    const metadataReceipts = response?.context_handoff_receipts;
+    const metadataOwed = metadataReview && (turn?.status !== "completed"
+      || !Array.isArray(metadataReceipts) || !Array.isArray(reservation.metadata_handoffs)
+      || metadataReceipts.length !== reservation.metadata_handoffs.length
+      || !Array.isArray(response?.context_handoff_failures) || response.context_handoff_failures.length > 0);
     const recovered = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "recovered native result");
     const native = recovered?.native_observation as JsonObject | undefined;
@@ -476,7 +485,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && Array.isArray(result.proposals) && result.proposals.length === 0;
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
-      && (unfinished || turn?.status === "failed"
+      && (metadataOwed || unfinished || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
@@ -577,14 +586,17 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     // Turn and original failure delivery, even when native tools ran.
     if (!steward || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
         || failed.client_turn_id !== `external-${row.request_ref}` || failed.status !== "failed"
-        || failed.response != null || failed.message !== row.message || row.context_recovery != null
+        || failed.response != null || failed.message !== row.message
         || !["response_timeout", "antigravity_rpc_error", "antigravity_transport_error",
           "upstream_transport_failure", "server_restarted"].includes(String(failed.error_code))
         || recovery.attachments_present !== false || recovery.steering_observed !== false
         || recovery.stop_observed !== false) return no;
     const adopted = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "adopted native result");
-    if (adopted?.delivery_verified === true) return no;
+    if (adopted?.delivery_verified === true) {
+      return planNativeMetadataReview(recovery, row, current, failed, adopted, version);
+    }
+    if (row.context_recovery != null) return no;
     const candidate = {...no, operation: "adopt_native_result", recovery_candidate: true,
       recover_native_result: true, failed_turn_id: failed.turn_id, session_id: current.session_id};
     const proof = recovery.native_observation == null ? null
@@ -600,7 +612,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       && Number.isFinite(created) && created >= start && created <= end
       && Number.isSafeInteger(proof.start_step_index) && Number(proof.start_step_index) >= 0
       && Number.isSafeInteger(proof.total_steps) && Number(proof.total_steps) > Number(proof.start_step_index) + 1
-      && [proof.input_sha256, proof.answer_sha256].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
+      && [proof.input_sha256, proof.answer_sha256].every(value => typeof value === "string" && BARE_SHA256_PATTERN.test(value))
       && response?.schema_version === "loopx_chat_agent_response_v0"
       && typeof response.message === "string" && response.message.trim().length > 0
       && (adopted === null || adopted.turn_id === failed.turn_id
@@ -688,6 +700,70 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     }
   }
   return {...candidate, recovery_eligible: transient};
+}
+
+/** A text-only format review of already returned native prose. This is never
+ * another business attempt, and any failed/unknown review exhausts the route.
+ */
+function planNativeMetadataReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, adopted: JsonObject, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const frozen = requireJsonObject(adopted.native_observation, "adopted native observation");
+  const response = requireJsonObject(frozen.response, "adopted native response");
+  if (adopted.turn_id !== failed.turn_id || adopted.message_id !== `native.${failed.turn_id}.recovered`
+      || typeof adopted.message_text !== "string" || !adopted.message_text
+      || (response.gate as JsonObject | null)?.kind !== "response_metadata_invalid"
+      || frozen.thread_id !== current.upstream_thread_id || frozen.request_ref !== row.request_ref
+      || frozen.normal_terminal_verified !== true || frozen.latest_input_verified !== true) return no;
+  const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-metadata-1`;
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "metadata review reservation");
+  if (previous !== null && (previous.metadata_review !== true || previous.version !== version
+      || previous.failed_turn_id !== failed.turn_id || previous.client_turn_id !== client)) return no;
+  const candidate = {...no, recovery_candidate: true, metadata_review: true, client_turn_id: client,
+    session_id: current.session_id, failed_turn_id: failed.turn_id};
+  if (previous !== null && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted metadata review");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message
+        || admitted.origin !== row.origin || !Array.isArray(admitted.attachments ?? [])
+        || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...candidate, recovery_eligible: recovery.source_verified === true,
+      admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted metadata review"),
+      metadata_handoffs: previous.metadata_handoffs};
+  }
+  if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false) return no;
+  if (recovery.native_observation == null) return candidate;
+  const proof = requireJsonObject(recovery.native_observation, "fresh original native result");
+  const {raw_response: raw, ...observed} = proof;
+  if (!isDeepStrictEqual(observed, frozen) || typeof raw !== "string" || raw.length > 100000
+      || createHash("sha256").update(raw).digest("hex") !== frozen.answer_sha256) return candidate;
+  // The parser retained prose but admitted none of the malformed action batch.
+  // Only string-brief handoffs qualify; other bad/unknown actions stay held.
+  let payload: JsonObject;
+  try {
+    const start = raw.lastIndexOf("<loopx-review-json>"), end = raw.lastIndexOf("</loopx-review-json>");
+    if (start < 0 || end <= start) return candidate;
+    payload = requireJsonObject(JSON.parse(raw.slice(start + "<loopx-review-json>".length, end)), "native action envelope");
+  } catch { return candidate; }
+  if (Object.keys(payload).some(key => !["schema_version", "message", "context_handoff", "proposals", "gate",
+        "goal_draft", "protected_action", "unfinished_work"].includes(key))
+      || [payload.goal_draft, payload.protected_action, payload.gate, payload.unfinished_work].some(v => v != null)
+      || !Array.isArray(payload.proposals ?? []) || (payload.proposals as unknown[] | undefined)?.length
+      || !Array.isArray(payload.context_handoff) || !payload.context_handoff.length
+      || payload.context_handoff.length > 32) return candidate;
+  const targets = new Set<string>();
+  for (const value of payload.context_handoff) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return candidate;
+    const item = value as JsonObject;
+    if (Object.keys(item).sort().join(",") !== "agent_id,brief,goal_id"
+        || [item.goal_id, item.agent_id].some(v => typeof v !== "string" || !/^[A-Za-z0-9._-]{1,160}$/.test(v))
+        || typeof item.brief !== "string" || !item.brief.trim() || item.brief.length > 6000) return candidate;
+    const target = JSON.stringify([item.goal_id, item.agent_id]);
+    if (targets.has(target)) return candidate;
+    targets.add(target);
+  }
+  return {...candidate, recovery_eligible: recovery.source_verified === true,
+    metadata_handoffs: payload.context_handoff};
 }
 
 /** A completed model Turn can explicitly report unfinished business. The

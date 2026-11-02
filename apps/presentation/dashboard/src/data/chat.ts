@@ -2772,6 +2772,7 @@ const privateConversationSchema = z.object({
   ]).optional(),
   managed_steward: z.discriminatedUnion("available", [
     z.object({available: z.literal(true), prepared: z.boolean(), scheduling_enabled: z.boolean(),
+      execution_available: z.boolean().optional(), execution_error_code: z.string().optional(),
       goal_active: z.boolean().optional(), monitor: z.object({todo_id: z.string(), status: z.string(),
         cadence_minutes: z.number().int().nullable(), next_due_at: z.string().nullable(),
         last_checked_at: z.string().nullable()}).nullable().optional(),
@@ -2784,7 +2785,8 @@ const privateConversationSchema = z.object({
         z.object({available: z.literal(false), error_code: z.string()}),
       ]).optional(),
       goal_id: z.string().optional(), agent_id: z.string().optional(), session_id: z.string().optional()}),
-    z.object({available: z.literal(false), error_code: z.string()}),
+    z.object({available: z.literal(false), error_code: z.string(),
+      execution_available: z.boolean().optional(), execution_error_code: z.string().optional()}),
   ]).optional(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });

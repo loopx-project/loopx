@@ -21,6 +21,7 @@ import uuid
 from datetime import datetime
 
 from ...chat import (
+    CHAT_REVIEW_OPEN_TAG, CHAT_REVIEW_CLOSE_TAG,
     VisibleResponseStreamFilter,
     parse_agent_response,
 )
@@ -306,7 +307,8 @@ class AntigravityAdapter:
     @staticmethod
     def completed_result_observation(*, cascade_id: str, request_ref: str, message: str,
                                      started_at: str, completed_at: str,
-                                     work_dir: Path, input_anchor: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                                     work_dir: Path, input_anchor: dict[str, Any] | None = None,
+                                     include_raw_response: bool = False) -> dict[str, Any] | None:
         """Read an existing result; never start, send to or cancel a cascade.
 
         Legacy owner requests require the exact Core-generated source context,
@@ -380,7 +382,8 @@ class AntigravityAdapter:
             return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
                 "input_created_at": metadata["createdAt"], "start_step_index": start, "total_steps": total,
                 "input_sha256": prompt_hash, "answer_sha256": hashlib.sha256(answer.encode()).hexdigest(),
-                "latest_input_verified": True, "normal_terminal_verified": True, "response": response}
+                "latest_input_verified": True, "normal_terminal_verified": True, "response": response,
+                **({"raw_response": answer} if include_raw_response else {})}
         except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
             return None
 
@@ -412,6 +415,7 @@ class AntigravityAdapter:
         self.model_placeholder = model_placeholder
         self.reasoning_effort = reasoning_effort
         self.runtime_profile = runtime_profile
+        self._read_only_review = False
         self.team_plan_context = team_plan_context
         self._pending_history: list[dict[str, str]] = (
             list(initial_history) if initial_history and not resumed else []
@@ -559,7 +563,7 @@ class AntigravityAdapter:
         parts.append(
             _turn_prompt(
                 message,
-                runtime_profile=self.runtime_profile,
+                runtime_profile="restricted" if self._read_only_review else self.runtime_profile,
             )
         )
         return "\n\n".join(parts)
@@ -567,7 +571,7 @@ class AntigravityAdapter:
     def _build_cascade_config(self) -> dict[str, Any]:
         # Never inherit an old cascade's tool permissions or userAgentSpec.
         # Restricted Chat is text-only; trusted_owner retains native host approval.
-        restricted = self.runtime_profile == "restricted"
+        restricted = self.runtime_profile == "restricted" or self._read_only_review
         return {"plannerConfig": {
             "planModel": self.model_placeholder,
             "requestedModel": {"model": self.model_placeholder},
@@ -586,7 +590,9 @@ class AntigravityAdapter:
                 "resume": True, "interrupt": True, "steering": False}
 
     def start_turn(self, message: str,
-                   event_sink: Callable[[str, dict[str, Any]], None] | None = None) -> dict[str, Any]:
+                   event_sink: Callable[[str, dict[str, Any]], None] | None = None,
+                   *, read_only_review: bool = False) -> dict[str, Any]:
+        self._read_only_review = read_only_review
         self._interrupted.clear()
         self._cancel_acknowledged = False
         try:
@@ -604,6 +610,7 @@ class AntigravityAdapter:
             raise
         finally:
             self._active_turn_id = None
+            self._read_only_review = False
 
     def _run_turn(
         self,
@@ -712,6 +719,11 @@ class AntigravityAdapter:
                     for step_idx, step in current_steps:
                         step_type = str(step.get("type") or "")
                         step_status = str(step.get("status") or "")
+                        if self._read_only_review and step_type not in {
+                                "CORTEX_STEP_TYPE_USER_INPUT", "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                                "CORTEX_STEP_TYPE_CHECKPOINT"}:
+                            raise CodexChatAgentError("The format review produced a native tool step; no actions were admitted.",
+                                                      gate=None, error_code="unsupported_configuration")
                         if step_status == "CORTEX_STEP_STATUS_WAITING":
                             raise CodexChatAgentError(
                                 "Antigravity requested native permission; this invocation was cancelled. Review its permissions, then retry.",
@@ -735,7 +747,7 @@ class AntigravityAdapter:
                                         },
                                     )
                             tool_calls = pr.get("toolCalls") or []
-                            if tool_calls and self.runtime_profile == "restricted":
+                            if tool_calls and (self.runtime_profile == "restricted" or self._read_only_review):
                                 raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
                                                           gate=None, error_code="unsupported_configuration")
                             if isinstance(tool_calls, list) and tool_calls and (step_idx, "tool") not in announced_phases:
@@ -797,6 +809,15 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 planner = final.get("plannerResponse") or {}
+                if self._read_only_review:
+                    inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
+                    execution = (inputs[0].get("metadata") or {}).get("executionId") if len(inputs) == 1 else None
+                    if (not execution or (inputs[0].get("userInput") or {}).get("userResponse") != full_prompt
+                            or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"
+                            or any(step.get("status") != "CORTEX_STEP_STATUS_DONE"
+                                or (step.get("metadata") or {}).get("executionId") != execution for _, step in current_steps)):
+                        raise CodexChatAgentError("The format review lacks exact normal text-only completion; no actions were admitted.",
+                                                  gate=None, error_code="upstream_transport_failure")
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
@@ -818,6 +839,23 @@ class AntigravityAdapter:
                 error_code="empty_agent_response",
             )
 
+        if self._read_only_review:
+            try:
+                start = latest_response_text.rfind(CHAT_REVIEW_OPEN_TAG)
+                end = latest_response_text.rfind(CHAT_REVIEW_CLOSE_TAG)
+                if start < 0 or end <= start:
+                    raise ValueError("missing format review envelope")
+                payload = json.loads(latest_response_text[start + len(CHAT_REVIEW_OPEN_TAG):end])
+                if (not isinstance(payload, dict)
+                        or set(payload) - {"schema_version", "message", "context_handoff", "proposals", "gate",
+                                               "goal_draft", "protected_action", "unfinished_work"}
+                        or payload.get("proposals") not in (None, [])
+                        or any(payload.get(key) is not None for key in
+                            ("gate", "goal_draft", "protected_action", "unfinished_work"))):
+                    raise ValueError("format review contains other or unresolved actions")
+            except (TypeError, ValueError) as exc:
+                raise CodexChatAgentError("The format review is incomplete or contains other actions; no actions were admitted.",
+                                          gate=None, error_code="host_gate") from exc
         parsed = parse_agent_response(
             latest_response_text,
             protected_paths=[self.work_dir],

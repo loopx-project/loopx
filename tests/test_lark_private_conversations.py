@@ -328,6 +328,172 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
         fixture.close()
 
 
+@pytest.mark.parametrize("fault", [None, "wrong-target", "changed-brief", "other-action", "still-invalid",
+    "revoked", "new-input", "stop", "unknown-send", "post-enqueue-crash", "reservation-crash", "revoke-during-review",
+    "tool-call", "tool-step", "mixed-execution", "missing-stop"])
+def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
+    from copy import deepcopy
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.capabilities.manager_context import POLICY_SCHEMA, _root, _write, pending
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.chat_store import _read_json
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, _, workspace = next(fixture)
+    revoker = ThreadPoolExecutor(max_workers=1)
+    try:
+        registry = json.loads(runtime.registry_path.read_text())
+        registry["goals"] = [{"id": "work", "repo": str(workspace), "coordination": {"registered_agents": ["worker", "other-worker"]}}]
+        runtime.registry_path.write_text(json.dumps(registry))
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        language_server["invalid_handoff"] = True
+        language_server["original_handoffs"] = [
+            {"goal_id": "work", "agent_id": "worker", "brief": "invalid"},
+            {"goal_id": "work", "agent_id": "other-worker", "brief": "Second original instruction"}]
+        start = AntigravityAdapter.start_turn
+        def lose_first_commit(adapter, message, event_sink, **kwargs):
+            result = start(adapter, message, event_sink, **kwargs)
+            if not kwargs.get("read_only_review"):
+                raise CodexChatAgentError("Lost original Core commit", gate=None, error_code="antigravity_rpc_error")
+            if fault == "revoke-during-review":
+                revoker.submit(transport.bindings.disconnect, binding["binding_id"],
+                    expected_revision=transport.bindings.read()["revision"])
+                deadline = time.monotonic() + 5
+                while binding in transport.bindings.read()["bindings"]:
+                    assert time.monotonic() < deadline
+                    threading.Event().wait(0.01)
+            return result
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", lose_first_commit)
+        event = provider.event("steward-app", "format-original", "Ask the original worker to assess the constraint")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
+        assert failed["status"] == "failed"
+        failed_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
+        failed_events = store.events_after(original["session_id"], original["turn_id"], None)
+        path = transport.root / f"{ref}.json"
+        assert transport.reconcile_request(path) == 1  # Original failure notice.
+        assert transport.reconcile_request(path) == 1  # Original native prose, no model Send.
+        frozen = deepcopy(transport.core.read_request(ref)["native_result_recovery"])
+        notice = deepcopy(_read_json(path)["deliveries"]["terminal"])
+        assert frozen["delivery_verified"] and language_server["sent_count"] == 1
+        session = store.load_session(original["session_id"])
+        _write(_root(runtime.coordination_runtime_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+            session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]],
+                "targets": [{"goal_id": "work", "agent_id": agent} for agent in ("worker", "other-worker")]}}})
+        brief = {"schema_version": "collaboration_brief_v0", "purpose": "Assess the original constraint", "context": "invalid",
+            "constraints": ["Keep the original source"], "inputs": [], "acceptance": ["Return the assessment"],
+            "return_requirement": "Return to the original conversation"}
+        response = {"message": "Untrusted model delivery claim", "proposals": [], "gate": None,
+            "context_handoff": [{"goal_id": "work", "agent_id": "worker", "brief": brief},
+                {"goal_id": "work", "agent_id": "other-worker", "brief": {**brief, "context": "Second original instruction"}}]}
+        if fault == "wrong-target":
+            response["context_handoff"][-1]["agent_id"] = "another"
+        elif fault == "changed-brief":
+            brief["context"] = "Changed original instruction"
+        elif fault == "other-action":
+            response["unfinished_work"] = {"remaining": "New work", "dependency": "Someone", "effects_settled": True}
+            response["goal_draft"] = {"objective": "Other business"}
+        elif fault == "still-invalid":
+            response["context_handoff"][0]["brief"] = "invalid again"
+        language_server["review_response"] = response
+        language_server["review_native_fault"] = fault
+        if fault == "revoked":
+            transport.bindings.disconnect(binding["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        elif fault == "new-input":
+            store.create_queued_turn(session["session_id"], client_turn_id="newer", message="New correction", origin="lark")
+        elif fault == "stop":
+            store.append_event(session["session_id"], failed["turn_id"], kind="turn.interrupt_requested", payload={})
+        elif fault == "unknown-send":
+            language_server["send_failure"] = True
+        elif fault in {"post-enqueue-crash", "reservation-crash"}:
+            enqueue = runtime.enqueue_turn
+            def crash(**kwargs):
+                if fault == "post-enqueue-crash":
+                    enqueue(**kwargs)
+                raise OSError("Synthetic post-enqueue crash")
+            monkeypatch.setattr(runtime, "enqueue_turn", crash)
+            with pytest.raises(OSError, match="post-enqueue crash"):
+                transport.reconcile_request(path)
+            monkeypatch.setattr(runtime, "enqueue_turn", enqueue)
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+            runner=provider, cli_bin="lark-cli")
+        try:
+            restarted.reconcile_request(path)
+        except ValueError:
+            assert fault == "revoked"
+        row = restarted.core.read_request(ref)
+        if fault in {"revoked", "new-input", "stop"}:
+            assert row["turn_id"] == original["turn_id"]
+            assert language_server["sent_count"] == 1
+            return
+        assert row["turn_id"] != original["turn_id"]
+        reviewed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+        assert reviewed["client_turn_id"].endswith("-metadata-1")
+        if fault != "revoke-during-review":
+            restarted.reconcile_request(path)
+        recovered = restarted.core.read_request(ref)
+        assert recovered["native_result_recovery"] == frozen
+        assert _read_json(path)["deliveries"]["terminal"] == notice
+        assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == failed_bytes
+        assert store.events_after(original["session_id"], original["turn_id"], None) == failed_events
+        assert not any("Untrusted model delivery claim" in write[1] for write in provider.writes)
+        entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
+        others = pending(runtime.coordination_runtime_root, "work", "other-worker")["items"]
+        if fault in {None, "post-enqueue-crash", "reservation-crash"}:
+            assert reviewed["status"] == "completed", reviewed
+            assert len(entries) == 1 and entries[0]["source_id"] == ref
+            assert len(others) == 1 and others[0]["source_id"] == ref
+            assert reviewed["response"]["context_handoff_receipts"][0]["request_id"] == entries[0]["request_id"]
+            assert not reviewed["response"]["context_handoff_failures"]
+            assert "实际提交回执" in json.dumps(provider.messages, ensure_ascii=False)
+        else:
+            assert reviewed["status"] in ({"failed", "interrupted"} if fault == "revoke-during-review" else {"failed"}), reviewed
+            assert entries == others == []
+            if fault != "revoke-during-review":
+                assert restarted.core.quota_backlog_pending(recovered)
+        count, calls = language_server["sent_count"], len(provider.writes)
+        if fault != "revoke-during-review":
+            restarted.reconcile_request(path)
+            restarted.reconcile_request(path)
+        assert (language_server["sent_count"], len(provider.writes)) == (count, calls)
+        assert len(list(store._turn_path(row["session_id"], row["turn_id"]).parent.glob("*.json"))) == 2
+        sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
+        config = sends[-1]["cascadeConfig"]["plannerConfig"]
+        assert config["toolConfig"]["forceDisableToolCalling"] is True
+        assert config["conversational"]["agenticMode"] is False
+        assert config["customizationDiscoveryConfig"]["hooks"]["inheritUser"] is False
+        assert runtime.adapters[row["session_id"]].runtime_profile == "trusted_owner"
+        if fault is None:
+            from loopx.capabilities.manager_context import acknowledge
+            from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
+            from loopx.extensions.lark.manager_returns import LarkManagerReturnTransport
+            sender = LarkManagerReturnTransport(SimpleNamespace(registry_path=runtime.registry_path,
+                lark_private_conversations=restarted, lark_goal_topic_runtime=SimpleNamespace(
+                    snapshot_provider=lambda: pytest.fail("Private return must keep its native source"))),
+                runtime.coordination_runtime_root)
+            route = {"goal_id": "work", "agent_id": "worker", "request_id": entries[0]["request_id"],
+                "source_id": ref, "session_id": row["session_id"]}
+            acknowledge(sender.root, "work", "worker", route["request_id"], "adopt", "Use original source")
+            report(sender.root, "work", "worker", route["request_id"], "conclusion", "Verified receiver conclusion")
+            drain(sender.root, runtime.registry_path, store, sender)
+            assert reply_status(sender.root, route)[0]["status"] == "delivered"
+            assert "Verified receiver conclusion" in json.dumps(provider.messages, ensure_ascii=False)
+            returned = [item for item in store.messages(row["session_id"]) if item.get("origin") == "manager_followup"]
+            assert len(returned) == 1 and returned[0]["turn_id"] == reviewed["turn_id"]
+            assert language_server["sent_count"] == count
+    finally:
+        revoker.shutdown(wait=True)
+        fixture.close()
+
+
 def connect_group(fixture):
     store, runtime, provider, transport = connect(fixture)
     runtime.codex_home = fixture[-1].parent / "isolated-native-account"

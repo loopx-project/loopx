@@ -11,6 +11,7 @@ from loopx.control_plane.turn_driver.codex_context import _context_pages
 from loopx.control_plane.turn_driver.decision_capture import (
     capture_page_range, read_context_read_reference, write_context_read_reference,
 )
+from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
 
 
 def read(command, **overrides):
@@ -29,6 +30,46 @@ def fixture(tmp_path):
         "criterion": {"value": 9007199254740993, "stop": "No publication is authorized."}}
     view = native_context_capture_view(payload, tmp_path)
     return payload, view, model_context_reference(view)
+
+
+@pytest.mark.parametrize("mode", ["full", "delta"])
+@pytest.mark.parametrize("reference", [False, True], ids=["explicit", "navigation"])
+def test_policy_oracle_reads_complete_current_recovery(tmp_path, mode, reference):
+    payload, machine, model = fixture(tmp_path)
+    # Full and delta transports both expose the current complete recovery.
+    # A decoy transport/baseline must never replace those facts in a policy test.
+    view = dict(model if reference else machine, mode=mode)
+    view["path"] = str(tmp_path / "unavailable-delta.json")
+    view["baseline_reference"] = {"path": str(tmp_path / "old-capture.json")}
+    before = {path: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()}
+    assert read_cli_policy_payload(json.dumps(view), returncode=0) == payload
+    assert {path: path.read_bytes() for path in tmp_path.iterdir() if path.is_file()} == before
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_policy_oracle_preserves_inline_output_and_failed_commands(tmp_path, returncode):
+    inline = {"ok": returncode == 0, "decision": "skip", "error": "original failure"}
+    assert read_cli_policy_payload(json.dumps(inline), returncode=returncode) == inline
+    if returncode:
+        _, _, model = fixture(tmp_path)
+        failed = {**model, "ok": False, "error": "command failed after capture"}
+        # Keep the failure even if a complete successful capture is available.
+        assert read_cli_policy_payload(json.dumps(failed), returncode=returncode) == failed
+
+
+@pytest.mark.parametrize("damage", ["digest", "capture_symlink", "reference_symlink"])
+def test_policy_oracle_rejects_replaced_current_capture(tmp_path, damage):
+    _, machine, model = fixture(tmp_path)
+    if damage == "digest":
+        capture = Path(machine["path"])
+        capture.write_bytes(capture.read_bytes() + b" ")
+    else:
+        target = Path(machine["path"] if damage == "capture_symlink" else model["recovery"]["reference_file"])
+        saved = target.with_suffix(".original")
+        target.rename(saved)
+        target.symlink_to(saved)
+    with pytest.raises(ValueError, match="digest mismatch|physical.*symlink"):
+        read_cli_policy_payload(json.dumps(model), returncode=0)
 
 
 def test_native_navigation_keeps_digests_in_immutable_reference(tmp_path):

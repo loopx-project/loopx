@@ -19,6 +19,8 @@ from .doubao_model_behavior_actor import (
     _direct_ark_transport,
 )
 from .model_tool_behavior import (
+    QuotaToolContext,
+    is_context_read_command,
     DoubaoExecToolClient,
     argument_value,
     digest_text,
@@ -516,6 +518,7 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
         ]
         steps: list[dict[str, Any]] = []
         quota_observed = False
+        quota_context: QuotaToolContext | None = None
         callsite_verified = False
         reentry_completed = False
         contract: dict[str, Any] | None = None
@@ -548,7 +551,9 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
                     ),
                 )
 
-            if _is_capability_reentry_command(tool_call.command):
+            if is_context_read_command(tool_call.command):
+                kind, tool_output = "context_read", None
+            elif _is_capability_reentry_command(tool_call.command):
                 kind = (
                     "quota_reentry"
                     if quota_observed and callsite_verified
@@ -624,7 +629,8 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
                             "--turn-instance-id": turn_instance_id,
                         },
                     )
-                    contract = _capability_repair_contract(json.loads(tool_output))
+                    quota_context = QuotaToolContext.from_output(tool_output)
+                    contract = _capability_repair_contract(quota_context.packet)
                     quota_observed = True
                 except (RuntimeError, ValueError, json.JSONDecodeError):
                     return receipt(
@@ -642,7 +648,8 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
                             "--turn-instance-id": turn_instance_id,
                         },
                     )
-                    reentry = _capability_reentry_contract(json.loads(tool_output))
+                    quota_context = QuotaToolContext.from_output(tool_output)
+                    reentry = _capability_reentry_contract(quota_context.packet)
                     contract = {**dict(contract or {}), **reentry}
                     reentry_completed = True
                     return receipt(passed=True, failure_code=None)
@@ -651,6 +658,14 @@ class DoubaoCapabilityMonitorRepairToolBehaviorActor:
                         passed=False,
                         failure_code="quota_reentry_failed",
                     )
+            elif kind == "context_read":
+                try:
+                    if quota_context is None:
+                        raise ValueError("context read before quota")
+                    tool_output = quota_context.read(tool_call.command,
+                        source_root=fixture.source_root, project_root=fixture.project_root)
+                except (OSError, RuntimeError, ValueError):
+                    return receipt(passed=False, failure_code="context_read_failed")
             elif kind == "workspace_read":
                 try:
                     tool_output = _execute_workspace_read(

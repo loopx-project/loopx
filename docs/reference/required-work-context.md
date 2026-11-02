@@ -1,5 +1,9 @@
 # Required work context
 
+For a task example, supported setup, recovery and evaluation plan, start with the
+[context-delivery guide](../guides/context-delivery.md). This reference remains
+the owner of current delivery semantics.
+
 This page specifies current delivery behavior. The
 [unified-contract RFC](../architecture/rfcs/controller-executor-unified-contract-v0.md)
 proposes one full/delta/detail/recovery pipeline across entrypoints. Its
@@ -10,6 +14,22 @@ The proposed shared composition boundary preserves source revisions and pending
 read obligations before capture. Recovering delivery from that immutable capture
 does not refresh authority; a legitimate new selection/authority check remains
 distinct from retrying transport.
+
+The RFC's [two-layer delivery design](../architecture/rfcs/controller-executor-unified-contract-v0.md#differential-context)
+proposes host-independent Progressive defaults, independent qualified Delta and
+current-capture discovery of unread material, with an explicit legacy/off
+migration matrix. Those changes are **not shipped by this page**: current defaults
+and `context_delivery` on/off behavior below remain in force. Current selected
+reads already reach the complete capture; calling a reader or reaching EOF alone
+does not prove model-visible delivery, retention or adoption. Native saved-file
+Delta keeps its existing artifact proof without a full-model-read prerequisite.
+
+中文：RFC 的[双层交付设计](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#差分上下文)
+提议跨 Host 默认 Progressive、独立资格化 Delta，以及从当前 capture 发现未读材料，
+并明确旧配置/off 迁移矩阵。这些变更**尚未由本页交付**，下文当前默认值和
+`context_delivery` on/off 行为继续有效。当前选读已能到达完整 capture；调用 reader
+或到达 EOF 本身不证明模型可见交付、retention 或采用。原生文件 Delta 仍按既有产物
+证明复用，不增加模型全量读取前置。
 
 The RFC's [candidate context by decision stage](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage)
 proposes complete captured alternatives with discoverable decision facts and
@@ -159,6 +179,12 @@ An enabled native **full** reference for a recognized decision can include
 `first_read_command`. It batches current admission/stop facts, the selected task,
 whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
 history and optional authoring recipes remain expandable from the same capture.
+The existing bounded `unfinished_delegations` projection and `read_complete`
+flag also remain visible. Adoption or a queued return does not establish
+completion. Pending peer results, counts, omitted items and unavailable
+observations retain their source semantics. Full request bodies stay on demand and must be
+read before assessing, executing or returning a request; the initial view does
+not consume a result or grant authority.
 It also exposes existing outcome material addresses and the current settlement
 plan's obligations, including unknown step fields. Only attachments explicitly
 marked `required=false` defer their guidance/templates; their routes stay visible
@@ -186,6 +212,9 @@ does not prove complete source delivery, model retention or fresh authority.
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
+已有的有界 `unfinished_delegations` 投影和 `read_complete` 标记也直接呈现；采纳和
+回传入队不等于完成。待对端结果、计数、遗漏和不可用观测保留原来源语义。
+完整请求按需读取，评估、执行或回传前仍须读其全文；首读不消费结果，也不授予权限。
 
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
@@ -650,6 +679,9 @@ not restart stopped Goals, alter quota/leases or qualify installed Desktop,
 all-Goal adoption, actual solver costs or outcome benefit.
 
 ## 中文
+
+任务示例、受支持设置、恢复与验收方案见[上下文交付指南](../guides/context-delivery.zh-CN.md)。
+当前交付语义仍由本 reference 定义。
 
 本页规定当前交付行为。[统一契约提案](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md)
 拟让所有入口复用 full/delta/detail/recovery 流程。controller 编写的工作说明必须

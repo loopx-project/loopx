@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {createHash} from "node:crypto";
 import {planConversationBinding, resolveBoundConversation, planBoundConversationRequest,
   stewardCommand, authorizeStewardCreation, resolveConversationAgentTarget,
   listLocalBoundSessions} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
@@ -44,6 +45,16 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   assert.equal(plan.operation, "adopt_native_result");
   assert.equal(plan.recovery_eligible, true);
   assert.equal(plan.client_turn_id, undefined);
+  for (const field of ["input_sha256", "answer_sha256"]) {
+    for (const invalid of [null, false, 1, [], {}, "", "1".repeat(63), "1".repeat(65),
+      "A".repeat(64), `sha256:${"1".repeat(64)}`]) {
+      assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+        native_observation: {...proof, [field]: invalid}}}).recovery_eligible, false,
+      `${field} must reject ${JSON.stringify(invalid)}`);
+    }
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery,
+      native_observation: {...proof, [field]: "abcdef0123456789".repeat(4)}}}).recovery_eligible, true);
+  }
   for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
     {attachments_present: true}, {native_observation: {...proof, thread_id: "other"}},
     {native_observation: {...proof, request_ref: "a".repeat(24)}},
@@ -77,6 +88,39 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
     native_observation: {...proof, response: {...proof.response, gate: {kind: "response_metadata_invalid"}}}}};
   assert.equal(planBoundConversationRequest({request: incomplete, current_session: session,
     pending_observation: {turn: failed, stop_observed: false}}).pending, true);
+  const handoffs = [{goal_id: "work", agent_id: "worker", brief: "Preserve this exact instruction"}];
+  const raw = "<loopx-review-json>" + JSON.stringify({message: "Original prose", context_handoff: handoffs,
+    proposals: [], gate: null}) + "</loopx-review-json>";
+  const frozen = {...proof, answer_sha256: createHash("sha256").update(raw).digest("hex"),
+    response: {...proof.response, gate: {kind: "response_metadata_invalid", summary: "Unsubmitted handoffs"}}};
+  const owed = {...delivered, native_result_recovery: {...adopted, native_observation: frozen}};
+  const metadata = {...packet, request: owed, context_recovery: {...packet.context_recovery,
+    queued_input_present: false, native_observation: {...frozen, raw_response: raw}}};
+  const review = planBoundConversationRequest(metadata);
+  assert.equal(review.recovery_eligible, true);
+  assert.equal(review.metadata_review, true);
+  assert.deepEqual(review.metadata_handoffs, handoffs);
+  assert.ok(String(review.client_turn_id).endsWith("-metadata-1"));
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {native_observation: {...frozen, raw_response: raw + "changed"}},
+    {native_observation: {...frozen, raw_response: raw, total_steps: 9}}]) {
+    assert.equal(planBoundConversationRequest({...metadata, context_recovery: {...metadata.context_recovery, ...change}}).recovery_eligible, false);
+  }
+  assert.equal(planBoundConversationRequest({...metadata, current_session: {...session, active_turn_id: "newer"}}).recovery_candidate, false);
+  const reservation = {version: 21, failed_turn_id: failed.turn_id, client_turn_id: review.client_turn_id,
+    metadata_review: true, metadata_handoffs: handoffs};
+  const admitted = {session_id: session.session_id, turn_id: "format-review", client_turn_id: review.client_turn_id,
+    message: owed.message, origin: owed.origin, attachments: [], status: "failed", error_code: "host_gate"};
+  const crash = {...metadata, request: {...owed, context_recovery: reservation},
+    current_session: {...session, status: "busy", active_turn_id: admitted.turn_id},
+    context_recovery: {...metadata.context_recovery, native_observation: null, admitted_turn: admitted}};
+  assert.equal(planBoundConversationRequest(crash).admitted_turn_id, admitted.turn_id);
+  const exhausted = {...owed, turn_id: admitted.turn_id, context_recovery: reservation};
+  assert.equal(planBoundConversationRequest({...metadata, request: exhausted,
+    context_recovery: {...metadata.context_recovery, failed_turn: admitted}}).recovery_candidate, false);
+  assert.equal(planBoundConversationRequest({request: exhausted, current_session: session,
+    pending_observation: {turn: admitted, stop_observed: false}}).pending, true,
+    "A held/failed format review retains the original unresolved handoffs without retry authority");
   const unfinished = {...delivered, native_result_recovery: {...adopted,
     native_observation: {...proof, response: {...proof.response,
       unfinished_work: {remaining: "Still owed", dependency: "Original worker", effects_settled: true}}}}};

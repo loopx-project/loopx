@@ -889,10 +889,21 @@ Existing negative-result and later-work followthrough coverage remains necessary
 The effective review cadence remains owned by the
 [Goal Vision/replan contract](../../reference/protocols/goal-vision-replan-contract-v0.md#default-review-cadence)
 and Goal/device configuration. Six effective work Turns is the default; enabling
-the stride strategy for one Goal inherits its live review cadence, and only an
-explicit Goal cadence override pins a separate count or unit. The cadence is not
-Todo size, an experiment boundary or a mandatory route switch; this refinement
-does not change counting. Matched continuation must qualify actual
+the stride strategy for one Goal inherits that configured baseline. For the
+enabled strategy with receipt-backed effective-Turn cadence, the latest settled
+fresh stride review through the current Agent's last autonomous ACK adjusts the
+next interval: `grow` with `supported_progress` and an evidence-linked previous
+`goal_gain=improved` uses 1.5 times the baseline; `verify` or an uncertainty/gap/
+failure basis uses 0.5 times; `switch` takes precedence and keeps the baseline.
+Round up to at least one Turn, without compounding repeated reads. An initial,
+unsettled, historical-v1 or missing decision keeps the baseline; do not reach
+through a newer ACK to reuse older feedback. The settled writer validates citation
+provenance; the gain remains an Agent claim, not independent outcome certification.
+Off mode, legacy counting, stall triggers, authority, per-Turn settlement and
+frozen workers retain their behavior. The inline review questions and syntax
+example remain delivered together; shortening repeated prose adds no decision
+fields or gates. Cadence is not Todo size, an experiment boundary or a mandatory
+route switch. Matched continuation must qualify actual
 adoption, target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical
