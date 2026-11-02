@@ -364,8 +364,11 @@ class AntigravityAdapter:
             execution = metadata.get("executionId")
             current = indexed[start:]
             if not isinstance(execution, str) or not execution or any(
-                    step.get("status") != "CORTEX_STEP_STATUS_DONE"
-                    or step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                    (step.get("status") != "CORTEX_STEP_STATUS_DONE"
+                     and not (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                              and step.get("status") == "CORTEX_STEP_STATUS_CLEARED"))
+                    or (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                        and (step.get("errorMessage") or {}).get("shouldShowUser") is True)
                     or (step.get("metadata") or {}).get("executionId") != execution
                     for _, step in current):
                 return None
@@ -675,13 +678,22 @@ class AntigravityAdapter:
             self._check_interrupted()
             self._interrupted.wait(0.25)
             self._check_interrupted()
-            traj = _rpc_post(
-                self.ls_url,
-                self.csrf_token,
-                "GetCascadeTrajectory",
-                {"cascadeId": self.cascade_id},
-                timeout=2.0,
-            )
+            try:
+                traj = _rpc_post(
+                    self.ls_url,
+                    self.csrf_token,
+                    "GetCascadeTrajectory",
+                    {"cascadeId": self.cascade_id},
+                    timeout=2.0,
+                )
+            except CodexChatAgentError as exc:
+                # Losing an idempotent observation does not mean that the
+                # native invocation failed. Never resend its input, refresh its
+                # progress clock, or bypass the existing stop/deadline checks.
+                if exc.error_code != "antigravity_transport_error":
+                    raise
+                self._interrupted.wait(1.0)
+                continue
             status = str(traj.get("status") or "")
             total_steps = int(traj.get("numTotalSteps") or 0)
             if status == "CASCADE_RUN_STATUS_RUNNING" or total_steps > start_step_index:
@@ -691,17 +703,23 @@ class AntigravityAdapter:
             observed_total = total_steps
             if total_steps > start_step_index:
                 self._check_interrupted()
-                steps_resp = _rpc_post(
-                    self.ls_url,
-                    self.csrf_token,
-                    "GetCascadeTrajectorySteps",
-                    {
-                        "cascadeId": self.cascade_id,
-                        "startIndex": start_step_index,
-                        "endIndex": total_steps,
-                    },
-                    timeout=2.0,
-                )
+                try:
+                    steps_resp = _rpc_post(
+                        self.ls_url,
+                        self.csrf_token,
+                        "GetCascadeTrajectorySteps",
+                        {
+                            "cascadeId": self.cascade_id,
+                            "startIndex": start_step_index,
+                            "endIndex": total_steps,
+                        },
+                        timeout=2.0,
+                    )
+                except CodexChatAgentError as exc:
+                    if exc.error_code != "antigravity_transport_error":
+                        raise
+                    self._interrupted.wait(1.0)
+                    continue
                 steps = steps_resp.get("steps")
                 try:
                     if not isinstance(steps, list):
@@ -777,17 +795,11 @@ class AntigravityAdapter:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
-                            err_obj = step.get("errorMessage") or {}
-                            err_msg = str(
-                                (err_obj.get("error") if isinstance(err_obj, dict) else None)
-                                or err_obj
-                                or "Antigravity cascade step error"
-                            )
-                            raise CodexChatAgentError(
-                                err_msg,
-                                gate=None,
-                                error_code="antigravity_step_error",
-                            )
+                            # The native trajectory also records recoverable
+                            # API attempts and cleared errors. The native host
+                            # owns retry: only its settled terminal error ends
+                            # this turn. Do not cancel its in-flight backoff.
+                            continue
 
             # A running status alone is not progress. Observe only this input's
             # steps, including streamed text and command output; old history or
@@ -808,6 +820,14 @@ class AntigravityAdapter:
                                           gate=None, error_code="response_timeout")
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
+                if final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+                    detail = (final.get("errorMessage") or {}).get("error") or {}
+                    summary = (detail.get("userErrorMessage") or detail.get("shortError")
+                               if isinstance(detail, dict) else str(detail))
+                    error = CodexChatAgentError(summary or "Antigravity cascade step error",
+                                                gate=None, error_code="antigravity_step_error")
+                    error.native_error_info = detail
+                    raise error
                 planner = final.get("plannerResponse") or {}
                 if self._read_only_review:
                     inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]

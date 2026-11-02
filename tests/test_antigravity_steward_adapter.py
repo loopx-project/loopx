@@ -106,6 +106,13 @@ def language_server(monkeypatch):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             method = self.path.rsplit("/", 1)[-1]
             state["calls"].append((method, body))
+            failures = state.get("read_failures", {})
+            if state["active"] and failures.get(method, 0):
+                failures[method] -= 1
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"incomplete observation")
+                return
             if state.get("redirect"):
                 self.send_response(302)
                 self.send_header("Location", state["redirect"])
@@ -231,7 +238,7 @@ def test_cancel_failure_cannot_replace_the_original_provider_error(tmp_path, lan
     assert any("cancellation remains unconfirmed" in note for note in error.value.__notes__)
 
 
-@pytest.mark.parametrize("change", ["none", "stream-error", "pending-tool", "foreign-input", "wrong-source",
+@pytest.mark.parametrize("change", ["none", "native-retry", "terminal-error", "stream-error", "pending-tool", "foreign-input", "wrong-source",
     "old-input", "execution-changed", "incomplete", "wrong-anchor", "running", "missing-index", "changed-during-read"])
 def test_completed_result_readback_is_exact_and_never_executes(tmp_path, language_server, change):
     ref = "f" * 24
@@ -244,6 +251,10 @@ def test_completed_result_readback_is_exact_and_never_executes(tmp_path, languag
         {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
          "plannerResponse": {"response": "Original completed answer", "stopReason": "STOP_REASON_STOP_PATTERN"}},
     ]
+    if change in {"native-retry", "terminal-error"}:
+        steps.insert(1, {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_CLEARED",
+                         "errorMessage": {"error": {"shortError": "API attempt failed"},
+                                          "shouldShowUser": change == "terminal-error"}})
     for index, step in enumerate(steps):
         step["metadata"] = {"createdAt": "2026-01-01T00:00:05Z", "executionId": "original-execution",
                             "sourceTrajectoryStepInfo": {"stepIndex": index}}
@@ -273,7 +284,7 @@ def test_completed_result_readback_is_exact_and_never_executes(tmp_path, languag
     proof = AntigravityAdapter.completed_result_observation(cascade_id="synthetic-cascade", request_ref=ref,
         message="Original request", started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z",
         work_dir=tmp_path, input_anchor={"input_sha256": "0" * 64} if change == "wrong-anchor" else None)
-    assert (proof is not None) == (change == "none")
+    assert (proof is not None) == (change in {"none", "native-retry"})
     if proof:
         assert proof["response"]["message"] == "Original completed answer"
     assert not any(method in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}
@@ -559,3 +570,41 @@ def test_another_native_input_is_neither_adopted_nor_cancelled(tmp_path, languag
     assert error.value.error_code == "upstream_transport_failure"
     assert not language_server["cancelled"].is_set()
     assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+
+
+@pytest.mark.parametrize("method", ["GetCascadeTrajectory", "GetCascadeTrajectorySteps"])
+def test_lost_native_observation_keeps_the_same_invocation(tmp_path, language_server, method):
+    language_server["read_failures"] = {method: 1}
+    result = adapter_for(tmp_path).start_turn("task with effects")
+    assert result["message"] == "Argon answer 1"
+    assert not language_server["cancelled"].is_set()
+    assert len([1 for name, _ in language_server["calls"] if name == "SendUserCascadeMessage"]) == 1
+
+
+def test_native_retry_errors_do_not_cancel_native_backoff(tmp_path, language_server, monkeypatch):
+    frames = _native_frames()
+    error = {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+             "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+             "errorMessage": {"error": {"shortError": "API error (attempt 1): EOF"}}}
+    for frame in frames:
+        frame["steps"].insert(1, {**error, "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}}})
+        frame["steps"][-1]["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 2
+    _native_clock(monkeypatch, language_server, frames)
+    result = adapter_for(tmp_path).start_turn("original task")
+    assert result["message"] == "native final"
+    assert not language_server["cancelled"].is_set()
+    assert len([1 for name, _ in language_server["calls"] if name == "SendUserCascadeMessage"]) == 1
+
+
+def test_native_terminal_error_preserves_structured_cause(tmp_path, language_server, monkeypatch):
+    from loopx.chat_agent import CodexChatAgentError
+    frame = _native_frames()[-1]
+    detail = {"shortError": "stream reading error: unexpected EOF", "userErrorMessage": "Network interrupted", "errorCode": 2}
+    frame["steps"][-1] = {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+        "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}}, "errorMessage": {"error": detail}}
+    _native_clock(monkeypatch, language_server, [frame])
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter_for(tmp_path).start_turn("original task")
+    assert raised.value.error_code == "antigravity_step_error"
+    assert str(raised.value) == "Network interrupted"
+    assert raised.value.native_error_info == detail

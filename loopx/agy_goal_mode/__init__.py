@@ -2,13 +2,15 @@
 
 Supports both:
 - Legacy Antigravity CLI (``agy`` 1.x) flat skills in ``~/.gemini/antigravity-cli/skills/<name>.md`` with native ``/goal`` and ``schedule`` tools.
-- Antigravity 2.0 / Antigravity App (``antigravity-app``) directory skills in ``~/.gemini/config/skills/<name>/SKILL.md``, in-session ``schedule(DurationSeconds=..., Prompt=...)`` closed-loop timer suspension (for ``waiting_external`` / CI waits), background ``sidecar.json`` periodic heartbeat template, and optional ``mcp_config.json`` + ``hooks.json`` continuation gate registration.
+- Antigravity 2.0 / Antigravity App (``antigravity-app``) directory skills in ``~/.gemini/config/skills/<name>/SKILL.md``, in-session ``schedule(DurationSeconds=..., Prompt=...)`` closed-loop timer suspension (for ``waiting_external`` / CI waits), background ``sidecar.json`` periodic heartbeat template, and optional ``mcp_config.json`` + ``hooks.json`` bounded Stop recovery registration.
 """
 
 from __future__ import annotations
 
 import os
 import shlex
+import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +66,7 @@ AGY_NATIVE_WAKE_FACTS: tuple[str, ...] = (
     "not need a polling loop inside a turn.",
     "All native wakes live inside the running Antigravity process; for "
     "background periodic heartbeats in Antigravity 2.0 (`antigravity-app`), "
-    "configure `sidecar.json` and optional `hooks.json` continuation gates in "
+    "configure `sidecar.json` and optional `hooks.json` bound Stop recovery in "
     "`~/.gemini/config`.",
 )
 
@@ -86,13 +88,15 @@ ANTIGRAVITY_HOOKS_CONFIG_FILENAME = "hooks.json"
 ANTIGRAVITY_SIDECAR_FILENAME = "sidecar.json"
 ANTIGRAVITY_MCP_CONFIG_LABEL = "~/.gemini/config/mcp_config.json"
 ANTIGRAVITY_HOOKS_CONFIG_LABEL = "~/.gemini/config/hooks.json"
-ANTIGRAVITY_SIDECAR_CONFIG_LABEL = "~/.gemini/config/sidecar.json"
+ANTIGRAVITY_SIDECAR_CONFIG_LABEL = (
+    "~/.gemini/config/sidecars/loopx-antigravity-heartbeat/sidecar.json"
+)
 
 ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY: dict[str, Any] = {
     "display_name": "Antigravity App",
     "host_loop": (
         "Antigravity App native schedule timer closed loop + optional background "
-        "sidecar.json heartbeat and hooks.json continuation gate"
+        "sidecar.json heartbeat and hooks.json bound Stop recovery"
     ),
     "entry": (
         f"the LoopX skill installed in {ANTIGRAVITY_SKILLS_ROOT_LABEL} "
@@ -146,18 +150,40 @@ def build_antigravity_sidecar_template(
         "每次唤醒先执行：\n"
         f"```sh\n{shlex.join(heartbeat_args)}\n```\n"
         "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
-        "一次操作不代表结束；通知与执行分开，等待按当前调度契约（遇到 waiting_external / CI 等待时使用原生 schedule(DurationSeconds=..., TimerCondition=\"any\") 挂起，不跑 shell sleep 空查）。"
+        '一次操作不代表结束；通知与执行分开，等待按当前调度契约（遇到 waiting_external / CI 等待时使用原生 schedule(DurationSeconds=..., TimerCondition="any") 挂起，不跑 shell sleep 空查）。'
         "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
     )
+    interval_minutes = max(1, int(interval_seconds) // 60)
+    cron_expr = cron_for_interval_minutes(interval_minutes)
     return {
         "schema_version": "loopx_antigravity_sidecar_template_v0",
         "config_path": ANTIGRAVITY_SIDECAR_CONFIG_LABEL,
+        "sidecar_config_path": ANTIGRAVITY_SIDECAR_CONFIG_LABEL,
+        "sidecar_json": {
+            "builtin": "schedule",
+            "args": [
+                f"CRON_TZ=UTC {cron_expr}",
+                "agentapi",
+                "new-conversation",
+                "--model=pro",
+                "--",
+                bootstrap_prompt,
+            ],
+            "restart_policy": "always",
+            "display_name": "LoopX Antigravity Heartbeat",
+            "description": (f"LoopX periodic quota-gated heartbeat for goal {goal_id}"),
+            "agent_permissions": {
+                "access_grants": [
+                    f"command({cli_bin})",
+                ]
+            },
+        },
         "sidecar": {
             "loopx-heartbeat": {
                 "description": (
                     f"LoopX periodic quota-gated heartbeat for goal {goal_id}"
                 ),
-                "cron": "*/3 * * * *",
+                "cron": cron_expr,
                 "interval_seconds": int(interval_seconds),
                 "gate_command": shlex.join(quota_args),
                 "wake_when_json_field_true": "should_run",
@@ -192,6 +218,38 @@ def build_antigravity_sidecar_template(
             }
         },
     }
+
+
+def _antigravity_provider_args(
+    operation: str,
+    *,
+    cli_bin: str,
+    goal_id: str | None,
+    agent_id: str | None,
+    conversation_id: str | None,
+    runtime_root: str | None,
+    registry: str | None = None,
+) -> list[str]:
+    args = [
+        sys.executable,
+        "-E",
+        "-m",
+        "loopx.agy_goal_mode.host_runtime",
+        operation,
+        "--cli-bin",
+        shutil.which(cli_bin) or cli_bin,
+        "--goal-id",
+        goal_id or "<goal-id>",
+        "--agent-id",
+        agent_id or "<agent-id>",
+        "--conversation-id",
+        conversation_id or "<native-conversation-id>",
+    ]
+    if runtime_root:
+        args.extend(["--runtime-root", runtime_root])
+    if registry:
+        args.extend(["--registry", registry])
+    return args
 
 
 def cron_for_interval_minutes(interval_minutes: int) -> str:
@@ -292,49 +350,26 @@ def build_antigravity_hooks_template(
     goal_id: str | None = None,
     agent_id: str | None = None,
     runtime_root: str | None = None,
+    conversation_id: str | None = None,
+    registry: str | None = None,
 ) -> dict[str, Any]:
-    """Build a public-safe ``hooks.json`` continuation gate entry for Antigravity 2.0.
-
-    When bound to a concrete ``goal_id``, invokes ``quota should-run --goal-id ...``;
-    when installed globally without a goal binding, invokes ``quota plan --runtime-profile antigravity_app``
-    so the command succeeds without ``--goal-id``.
-    """
-    args: list[str] = ["--format", "json"]
-    if runtime_root:
-        args.extend(["--runtime-root", runtime_root])
-    bound_goal = bool(goal_id and goal_id != "<goal-id>")
-    if bound_goal:
-        args.extend(
-            [
-                "quota",
-                "should-run",
-                "--goal-id",
-                str(goal_id),
-                "--runtime-profile",
-                "antigravity_app",
-            ]
-        )
-        if agent_id:
-            args.extend(["--agent-id", str(agent_id)])
-        require_field = "should_run"
-    else:
-        args.extend(
-            [
-                "quota",
-                "plan",
-                "--runtime-profile",
-                "antigravity_app",
-            ]
-        )
-        require_field = "ok"
+    """Native Stop hook; installation alone never binds an arbitrary chat."""
+    conversation_id = conversation_id or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+    args = _antigravity_provider_args(
+        "stop-hook",
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        runtime_root=runtime_root,
+        registry=registry,
+    )
     return {
         "loopx": {
-            "schema_version": "loopx_antigravity_hooks_gate_v0",
-            "event": "before_continuation",
-            "command": cli_bin,
-            "args": args,
-            "require_json_field_true": require_field,
-            "on_waiting_external": "suspend_via_schedule_timer",
+            "enabled": bool(
+                conversation_id and agent_id and goal_id and goal_id != "<goal-id>"
+            ),
+            "Stop": [{"type": "command", "command": shlex.join(args), "timeout": 20}],
         }
     }
 
@@ -426,10 +461,7 @@ def antigravity_app_activation_extras(
         "extra_host_mutation": {
             "host_loop_primitive": "antigravity-schedule-tool-and-sidecar",
             "loop_driver": "antigravity_app_schedule_timer_and_sidecar_loop",
-            "quota_gate_enforcement": "hooks_or_advisory_quota_entry",
-            "native_goal_command": AGY_GOAL_COMMAND,
-            "goal_complete_token": AGY_GOAL_COMPLETE_TOKEN,
-            "goal_cancelled_token": AGY_GOAL_CANCELLED_TOKEN,
+            "quota_gate_enforcement": "advisory_agent_entry_with_bound_stop_recovery",
             "native_wake_tools": list(AGY_NATIVE_WAKE_TOOLS),
             "native_wake_facts": list(AGY_NATIVE_WAKE_FACTS),
             "skills_roots": [
@@ -443,8 +475,6 @@ def antigravity_app_activation_extras(
             "in_session_schedule_call": {
                 "tool": "schedule",
                 "arguments": {
-                    "CronExpression": "*/3 * * * *",
-                    "IsDaemon": True,
                     "DurationSeconds": 180,
                     "Prompt": wake_prompt,
                     "TimerCondition": "any",
@@ -467,7 +497,7 @@ def antigravity_app_activation_extras(
         "extra_activation_steps": [
             f"Install or refresh the Antigravity skill and optional MCP/hooks surface (`{cli_bin} slash-commands --install --surface antigravity-app --with-agy-mcp --with-agy-hooks` and `{cli_bin} workflow-skills --install --host-surface antigravity-app`).",
             "When a turn enters `waiting_external` or waits on CI/review checks, suspend directly with the native `schedule(DurationSeconds=<poll_after_seconds>, Prompt=...)` tool and end the turn instead of polling in a shell loop.",
-            f"For background periodic heartbeats, apply the generated `sidecar_template` in `{ANTIGRAVITY_SIDECAR_CONFIG_LABEL}` so each tick gates on `quota should-run` before waking the agent.",
+            f"For background periodic heartbeats, write only `sidecar_template.sidecar_json` to `{ANTIGRAVITY_SIDECAR_CONFIG_LABEL}`. Preserve its existing id, model, permissions and host enable choice. Each fresh native heartbeat loads Core admission before work; do not persist an expanded execution body. Apply the bound `hooks_template` at the top level of hooks.json for bounded transport-error recovery; never wrap it in a `hooks` object.",
         ],
         "host_scheduler_note": (
             "use the native `schedule(DurationSeconds=..., Prompt=...)` tool to suspend "

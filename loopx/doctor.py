@@ -1307,9 +1307,9 @@ def collect_doctor(
             "hooks_config_exists": (
                 agy_cfg_home / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
             ).is_file(),
-            "sidecar_config_path": str(agy_cfg_home / ANTIGRAVITY_SIDECAR_FILENAME),
+            "sidecar_config_path": str(agy_cfg_home / "sidecars" / "loopx-antigravity-heartbeat" / ANTIGRAVITY_SIDECAR_FILENAME),
             "sidecar_config_exists": (
-                agy_cfg_home / ANTIGRAVITY_SIDECAR_FILENAME
+                agy_cfg_home / "sidecars" / "loopx-antigravity-heartbeat" / ANTIGRAVITY_SIDECAR_FILENAME
             ).is_file(),
             "repair_commands": [
                 "loopx workflow-skills --install --host-surface antigravity-app",

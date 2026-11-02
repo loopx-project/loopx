@@ -918,7 +918,7 @@ def _merge_managed_hooks_json(
     uninstall: bool,
     execute: bool,
 ) -> str:
-    """Add or remove the ``loopx`` continuation gate in Antigravity ``hooks.json``."""
+    """Add or remove the managed ``loopx`` Stop recovery hook in Antigravity ``hooks.json``."""
     marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
     try:
         text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
@@ -927,13 +927,6 @@ def _merge_managed_hooks_json(
         return "blocked_invalid_antigravity_hooks_json"
     if not isinstance(raw, dict):
         return "blocked_invalid_antigravity_hooks_json"
-    hooks = raw.get("hooks")
-    if hooks is None:
-        hooks = {}
-    if not isinstance(hooks, dict):
-        return "blocked_invalid_antigravity_hooks_json"
-
-    existing = hooks.get(MANAGED_MCP_KEY)
     try:
         marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -944,6 +937,16 @@ def _merge_managed_hooks_json(
         else {}
     )
     recorded = recorded_hooks.get(MANAGED_MCP_KEY)
+    # Native named hooks live at the top level. Earlier proposals wrote an
+    # ignored `hooks.loopx` wrapper; migrate it only with exact ownership proof.
+    legacy = raw.get("hooks")
+    legacy_entry = legacy.get(MANAGED_MCP_KEY) if isinstance(legacy, dict) else None
+    existing = raw.get(MANAGED_MCP_KEY)
+    legacy_owned = existing is None and legacy_entry is not None and legacy_entry == recorded
+    if legacy_owned:
+        existing = legacy_entry
+    elif existing is None and legacy_entry is not None:
+        return "skipped_user_owned_hooks_entry"
     loopx_owned = existing is not None and existing == recorded
     if execute and recorded is not None and not loopx_owned:
         marker_path.unlink(missing_ok=True)
@@ -955,8 +958,12 @@ def _merge_managed_hooks_json(
             return "skipped_user_owned_hooks_entry"
         if not execute:
             return "would_retire"
-        hooks.pop(MANAGED_MCP_KEY, None)
-        raw["hooks"] = hooks
+        if legacy_owned:
+            legacy.pop(MANAGED_MCP_KEY)
+            if not legacy:
+                raw.pop("hooks")
+        else:
+            raw.pop(MANAGED_MCP_KEY)
         _write_json_atomic(config_path, raw)
         marker_path.unlink(missing_ok=True)
         return "retired"
@@ -965,11 +972,14 @@ def _merge_managed_hooks_json(
         return "skipped_user_owned_hooks_entry"
     entry = build_antigravity_hooks_template(cli_bin=cli_bin)[MANAGED_MCP_KEY]
     if not execute:
-        return "unchanged" if existing == entry else "would_write"
-    if existing == entry:
+        return "unchanged" if existing == entry and not legacy_owned else "would_write"
+    if existing == entry and not legacy_owned:
         return "unchanged"
-    hooks[MANAGED_MCP_KEY] = entry
-    raw["hooks"] = hooks
+    if legacy_owned:
+        legacy.pop(MANAGED_MCP_KEY)
+        if not legacy:
+            raw.pop("hooks")
+    raw[MANAGED_MCP_KEY] = entry
     _write_json_atomic(config_path, raw)
     _write_json_atomic(
         marker_path,
@@ -1304,7 +1314,7 @@ def install_slash_commands(
             {
                 "surface": "antigravity-app",
                 "host_surfaces": ["antigravity-app", "agy"],
-                "mechanism": "antigravity_hooks_gate",
+                "mechanism": "antigravity_stop_recovery_hook",
                 "command": "loopx",
                 "path": str(agy_hooks_path),
                 "status": hooks_status,

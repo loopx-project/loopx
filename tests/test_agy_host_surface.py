@@ -300,10 +300,8 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         "antigravity_app"
         in mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"]["gate_command"]
     )
-    assert (
-        mutation["hooks_template"]["loopx"]["schema_version"]
-        == "loopx_antigravity_hooks_gate_v0"
-    )
+    assert mutation["hooks_template"]["loopx"]["Stop"][0]["type"] == "command"
+    assert mutation["sidecar_template"]["sidecar_json"]["args"][0] == "CRON_TZ=UTC */3 * * * *"
 
     gate_dir = tmp_path / "gate"
     gate_dir.mkdir()
@@ -456,10 +454,9 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
 
     # Verify hooks_template includes --goal-id and --agent-id when bound, and sidecar uses
     # scheduler_hint.app_automation.recommended_interval_minutes.
-    assert "--goal-id" in mutation["hooks_template"]["loopx"]["args"]
-    assert "surface-goal" in mutation["hooks_template"]["loopx"]["args"]
-    assert "--agent-id" in mutation["hooks_template"]["loopx"]["args"]
-    assert "probe-agent" in mutation["hooks_template"]["loopx"]["args"]
+    hook_command = mutation["hooks_template"]["loopx"]["Stop"][0]["command"]
+    assert "--goal-id surface-goal" in hook_command
+    assert "--agent-id probe-agent" in hook_command
     assert (
         mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"][
             "suspend_on_waiting_external"

@@ -1,0 +1,161 @@
+"""Native host schemas, bounded recovery and once-only wake delivery."""
+
+from argparse import Namespace
+import json
+import shlex
+import subprocess
+
+import pytest
+
+from loopx.agy_goal_mode import (
+    build_antigravity_hooks_template,
+    build_antigravity_sidecar_template,
+)
+from loopx.agy_goal_mode import host_runtime as runtime
+from loopx.slash_command_install import (
+    ANTIGRAVITY_HOOKS_MARKER_NAME,
+    _merge_managed_hooks_json,
+)
+
+
+NETWORK_ERROR = "agent executor error: generating and executing: stream reading error: unexpected EOF"
+
+
+def bound(tmp_path):
+    return Namespace(
+        cli_bin="loopx",
+        registry=None,
+        runtime_root=None,
+        goal_id="work",
+        agent_id="worker",
+        conversation_id="native-chat",
+        agentapi="agentapi",
+        state_dir=str(tmp_path / "recovery"),
+    )
+
+
+def event(**changes):
+    return {
+        "conversationId": "native-chat",
+        "terminationReason": "ERROR",
+        "fullyIdle": True,
+        "lastUserInput": "Continue the authorized work",
+        "error": NETWORK_ERROR,
+        **changes,
+    }
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"conversationId": "another-chat"},
+        {"terminationReason": "USER_CANCELED"},
+        {"terminationReason": "NO_TOOL_CALL"},
+        {"terminationReason": "MAX_TOKEN_BUDGET_EXCEEDED"},
+        {"fullyIdle": False},
+        {"lastUserInput": ""},
+        {"error": "EOF"},
+        {"error": "permission denied"},
+        {"error": "quota exhausted"},
+    ],
+)
+def test_unrelated_stop_and_user_stop_never_query_quota_or_continue(
+    tmp_path, monkeypatch, change
+):
+    def forbidden(*_):
+        pytest.fail("unrelated native stop must have no Core side effects")
+
+    monkeypatch.setattr(runtime, "_admitted", forbidden)
+    assert runtime.stop_hook(bound(tmp_path), event(**change)) == {}
+    assert not (tmp_path / "recovery").exists()
+
+
+def test_native_retry_requires_fresh_admission_and_is_bounded_per_input(
+    tmp_path, monkeypatch
+):
+    args = bound(tmp_path)
+    monkeypatch.setattr(runtime, "_admitted", lambda _: False)
+    assert runtime.stop_hook(args, event()) == {}
+    monkeypatch.setattr(runtime, "_admitted", lambda _: True)
+    clock = [1000]
+    monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
+    for attempt in range(4):
+        response = runtime.stop_hook(args, event())
+        assert (response.get("decision") == "continue") == (attempt < 2)
+        if response:
+            assert "heartbeat-prompt --thin" in response["reason"]
+            assert "--agent-id worker" in response["reason"]
+        clock[0] += 61
+    assert (
+        runtime.stop_hook(args, event(lastUserInput="A new authorized request"))[
+            "decision"
+        ]
+        == "continue"
+    )
+
+
+def test_generated_native_configs_execute_the_stdio_hook_from_another_directory(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
+    foreign = tmp_path / "foreign" / "loopx"
+    foreign.mkdir(parents=True)
+    (foreign / "__init__.py").write_text(
+        'raise RuntimeError("wrong installed release")'
+    )
+    monkeypatch.setenv("PYTHONPATH", str(foreign.parent))
+    assert build_antigravity_hooks_template()["loopx"]["enabled"] is False
+    assert "sidecar_json" in build_antigravity_sidecar_template()
+    kwargs = dict(goal_id="work", agent_id="worker", conversation_id="native-chat")
+    config = build_antigravity_sidecar_template(goal_id="work", agent_id="worker")[
+        "sidecar_json"
+    ]
+    assert config["builtin"] == "schedule"
+    assert config["args"][0] == "CRON_TZ=UTC */3 * * * *"
+    assert config["args"][1:5] == ["agentapi", "new-conversation", "--model=pro", "--"]
+    hook = build_antigravity_hooks_template(**kwargs)["loopx"]
+    assert hook["enabled"] is True
+    # The installed native contract consumes one event on stdin and one native
+    # JSON result on stdout, not LoopX's arbitrary quota projection.
+    result = subprocess.run(
+        shlex.split(hook["Stop"][0]["command"]),
+        input=json.dumps(event(terminationReason="USER_CANCELED")),
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {}
+
+
+def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):
+    path = tmp_path / "hooks.json"
+    legacy = {"event": "before_continuation", "command": "loopx"}
+    unrelated = {"Stop": [{"type": "command", "command": "echo '{}'"}]}
+    original = {"hooks": {"loopx": legacy}, "personal-hook": unrelated}
+    path.write_text(json.dumps(original))
+    args = dict(config_path=path, cli_bin="loopx", uninstall=False)
+    assert (
+        _merge_managed_hooks_json(**args, execute=True)
+        == "skipped_user_owned_hooks_entry"
+    )
+    assert json.loads(path.read_text()) == original
+    marker = tmp_path / ANTIGRAVITY_HOOKS_MARKER_NAME
+    marker.write_text(json.dumps({"hooks": {"loopx": legacy}}))
+    assert _merge_managed_hooks_json(**args, execute=False) == "would_write"
+    assert json.loads(path.read_text()) == original
+    assert _merge_managed_hooks_json(**args, execute=True) == "written"
+    result = json.loads(path.read_text())
+    assert result["personal-hook"] == unrelated
+    assert "hooks" not in result
+    assert result["loopx"]["enabled"] is False
+    assert "Stop" in result["loopx"]
+    assert _merge_managed_hooks_json(**args, execute=True) == "unchanged"
+    assert (
+        _merge_managed_hooks_json(
+            config_path=path, cli_bin="loopx", uninstall=True, execute=True
+        )
+        == "retired"
+    )
+    assert json.loads(path.read_text()) == {"personal-hook": unrelated}
