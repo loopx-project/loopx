@@ -50,7 +50,8 @@ class ChatExternalConversations:
                                observation: dict[str, Any] | None = None,
                                source_verified: bool = False,
                                selected_binding: dict[str, Any] | None = None,
-                               discovery_only: bool = False) -> dict[str, Any]:
+                               discovery_only: bool = False,
+                               preparation_scope_available: bool = False) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
         from ...control_plane.effect_runtime import effect_runtime_result
 
@@ -71,11 +72,26 @@ class ChatExternalConversations:
             selected_binding = self.bindings.resolve(binding_id=row["binding_id"], **row["source"])["binding"]
         reservation = row.get("context_recovery") or {}
         admitted = (store.turn_for_client(session["session_id"], reservation["client_turn_id"])
-            if (reservation.get("routing_attempt") or reservation.get("quota_attempt")
+            if (reservation.get("routing_attempt") or reservation.get("quota_attempt") or reservation.get("preparation_attempt")
                 or reservation.get("read_only_review") or reservation.get("work_attempt")
                 or reservation.get("metadata_review"))
             and reservation.get("failed_turn_id") == row["turn_id"] else None)
         events = store.events_after(session["session_id"], turn["turn_id"], None)
+        preparation = None
+        later_equivalent = None
+        if turn.get("error_code") == "manager_authorization_unavailable":
+            # Collect canonical facts only. The typed planner owns the exact
+            # pre-dispatch sequence, retry budget and authority decision.
+            preparation = {"kind": "core_context_preparation_failure", "session_id": session["session_id"],
+                "turn_id": turn["turn_id"], "events": [
+                    {"event_id": item["event_id"], "kind": item["kind"],
+                     **{key: item.get("payload", {})[key] for key in ("phase", "schema_version", "error_code")
+                        if key in item.get("payload", {})}} for item in events]}
+            created = datetime.fromisoformat(turn["created_at"])
+            later_equivalent = any(item.get("role") == "user" and item.get("turn_id") != turn["turn_id"]
+                and item.get("text") == row.get("message") and item.get("origin") in {None, "lark", "web"}
+                and datetime.fromisoformat(item["created_at"]) > created
+                for item in store.messages(session["session_id"]))
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
@@ -86,6 +102,9 @@ class ChatExternalConversations:
                 "attachments_present": bool(row.get("attachments")),
                 "steering_observed": any(event.get("kind") == "turn.steered" for event in events),
                 "stop_observed": self._source_stop_observed(row, turn, events),
+                "preparation_observation": preparation,
+                "later_equivalent_input_present": later_equivalent,
+                "preparation_scope_available": preparation_scope_available,
                 "native_observation": observation, "source_verified": source_verified},
         })
 
@@ -166,7 +185,7 @@ class ChatExternalConversations:
 
         The failed Turn and its original notice remain immutable. The new Turn
         has a deterministic client identity, original grant/source and a native
-        no-effects readback; a crash resumes that reservation, never replays the
+        Core or native no-effects readback; a crash resumes that reservation, never replays the
         failed Turn or fabricates successful execution.
         """
         from .codex_adapter import CodexAppServerAdapter
@@ -184,15 +203,9 @@ class ChatExternalConversations:
             if plan.get("recover_native_result"):
                 return self._recover_native_result(path, row, session, turn, source_observation)
             metadata_review = plan.get("metadata_review") is True
-            pre_execution_scope_retry = (
-                turn.get("error_code") == "manager_authorization_unavailable"
-                and turn.get("upstream_turn_id") is None
-            )
-            model_auth_home = (
-                None
-                if metadata_review or pre_execution_scope_retry
-                else checked_session_home(self.controller.codex_home, session)
-            )
+            preparation_retry = plan.get("preparation_attempt") is not None
+            model_auth_home = (None if metadata_review or preparation_retry
+                               else checked_session_home(self.controller.codex_home, session))
             context = self.controller.project_contexts.session_context(session)
 
             def source_requests() -> list[dict[str, Any]]:
@@ -208,9 +221,7 @@ class ChatExternalConversations:
             proof = None
             if not plan.get("admitted_turn_id") and metadata_review:
                 proof = self._original_native_result(row, session, turn, context, include_raw_response=True)
-            elif not plan.get("admitted_turn_id") and pre_execution_scope_retry:
-                proof = self._pre_execution_scope_observation(session, turn)
-            elif not plan.get("admitted_turn_id"):
+            elif not plan.get("admitted_turn_id") and not preparation_retry:
                 proof = CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
                     model_auth_home=model_auth_home,
@@ -219,6 +230,8 @@ class ChatExternalConversations:
                     thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)
+            scope_available = (self._preparation_scope_available(session)
+                if preparation_retry and source is not None and not plan.get("admitted_turn_id") else False)
             # Identity and original-message reads are fallible provider IO too.
             # Never hold up newer source input while they wait. If another
             # route already owns the fence, leave this request unchanged for
@@ -241,7 +254,7 @@ class ChatExternalConversations:
                         or source_requests() != requests):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
-                    selected_binding=selected["binding"])
+                    selected_binding=selected["binding"], preparation_scope_available=scope_available)
                 if not plan.get("recovery_eligible"):
                     return row
                 recovery = row.get("context_recovery")
@@ -264,11 +277,13 @@ class ChatExternalConversations:
                         recovery.update(work_attempt=1, unfinished_work=plan["unfinished_work"],
                             prior_result_delivery_verified=row["delivery_verified"],
                             presentation_key=f"{MANAGER_CONTEXT_VERSION}.work.1", not_before=plan["not_before"])
-                    for kind in ("routing", "quota"):
+                    for kind in ("routing", "quota", "preparation"):
                         if plan.get(f"{kind}_attempt") is not None:
                             recovery.update({f"{kind}_attempt": plan[f"{kind}_attempt"],
                                 "presentation_key": f"{MANAGER_CONTEXT_VERSION}.{kind}.{plan[f'{kind}_attempt']}",
                                 "not_before": plan["not_before"]})
+                    if preparation_retry:
+                        recovery["preparation_observation"] = plan["preparation_observation"]
                     row["context_recovery"] = recovery
                     _atomic_write_json(path, row)
                 # Freeze correlation before the existing queue can dispatch.
@@ -287,6 +302,21 @@ class ChatExternalConversations:
                 work_dir=context["project"], objective=context["objective"])
             return row
 
+    def _preparation_scope_available(self, session: dict[str, Any]) -> bool:
+        # A local queue hint does not perform this fallible authority read.
+        # Fresh admission must establish the current manager scope before
+        # spending a preparation attempt; dispatch checks the scope again.
+        from ...chat_manager_context import manager_authorization_scope_id_for_registry
+
+        try:
+            scope = (self.controller.manager_scope_resolver(session)
+                if self.controller.manager_scope_resolver is not None else self.bindings.steward_scope(session))
+            return bool(isinstance(scope, list) and self.controller.registry_path is not None
+                and manager_authorization_scope_id_for_registry(self.controller.registry_path, scope,
+                    runtime_root=self.controller.coordination_runtime_root, channel_id=session.get("channel_id")))
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            return False
+
     @staticmethod
     def _native_result_text(recovered: dict[str, Any]) -> str:
         response = recovered["native_observation"]["response"]
@@ -299,56 +329,6 @@ class ChatExternalConversations:
             text += "\n\n未完事项：" + response["unfinished_work"]["remaining"]
             text += "\n当前依赖：" + response["unfinished_work"]["dependency"]
         return text
-
-    def _pre_execution_scope_observation(
-        self, session: dict[str, Any], turn: dict[str, Any]
-    ) -> dict[str, Any]:
-        from ...chat_manager_context import manager_authorization_scope_id_for_registry
-
-        events = self.controller.store.events_after(
-            session["session_id"], turn["turn_id"], None
-        )
-        runtime_root = getattr(
-            self.controller, "coordination_runtime_root", self.controller.store.root.parent
-        )
-        registry_path = getattr(self.controller, "registry_path", None)
-        try:
-            scope = (
-                self.controller.manager_scope_resolver(session)
-                if getattr(self.controller, "manager_scope_resolver", None) is not None
-                else self.bindings.steward_scope(session)
-            )
-            current_scope_id = (
-                manager_authorization_scope_id_for_registry(
-                    registry_path,
-                    scope,
-                    runtime_root=runtime_root,
-                    channel_id=session.get("channel_id"),
-                )
-                if registry_path is not None and isinstance(scope, list)
-                else None
-            )
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            current_scope_id = None
-        return {
-            "pre_execution_scope_failure": (
-                turn.get("status") == "failed"
-                and turn.get("error_code") == "manager_authorization_unavailable"
-                and turn.get("upstream_turn_id") is None
-                and turn.get("delta_count") == 0
-                and turn.get("response") is None
-            ),
-            "turn_started_observed": any(
-                event.get("kind") == "turn.started" for event in events
-            ),
-            "authorization_changed_warning": any(
-                event.get("kind") == "manager.context"
-                and "external_authorization_changed"
-                in (event.get("payload", {}).get("warnings") or [])
-                for event in events
-            ),
-            "current_scope_available": bool(current_scope_id),
-        }
 
     def _original_native_result(self, row: dict[str, Any], session: dict[str, Any],
                                 turn: dict[str, Any], context: dict[str, Any], *,
@@ -434,11 +414,12 @@ class ChatExternalConversations:
             _atomic_write_json(path, row)
 
     def recovery_context(self, session: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any] | None:
-        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota)-[1-3]|review-1|work-1|metadata-1))?", str(turn.get("client_turn_id") or ""))
+        match = re.fullmatch(r"external-([a-f0-9]{24})-recovery-[1-9][0-9]*(?:-((?:routing|quota|preparation)-[1-3]|review-1|work-1|metadata-1))?", str(turn.get("client_turn_id") or ""))
         if match is None:
             return None
         row = self.read_request(match[1])
         recovery = row.get("context_recovery")
+        preparation = match[2] is not None and match[2].startswith("preparation-")
         if (row.get("session_id") == session["session_id"] and recovery
                 and recovery["client_turn_id"] == turn["client_turn_id"]):
             if (match[2] == "review-1") != (recovery.get("read_only_review") is True):
@@ -447,8 +428,11 @@ class ChatExternalConversations:
                 raise ValueError("reserved unfinished work correlation changed")
             if (match[2] == "metadata-1") != (recovery.get("metadata_review") is True):
                 raise ValueError("reserved metadata review correlation changed")
+            if preparation != (recovery.get("preparation_attempt") is not None) or (
+                    preparation and str(recovery["preparation_attempt"]) != match[2][-1]):
+                raise ValueError("reserved preparation recovery correlation changed")
             return {"request_ref": row["request_ref"], **recovery}
-        if match[2] in {"review-1", "work-1", "metadata-1"}:
+        if preparation or match[2] in {"review-1", "work-1", "metadata-1"}:
             raise ValueError("reserved result review correlation unavailable")
         return None
 

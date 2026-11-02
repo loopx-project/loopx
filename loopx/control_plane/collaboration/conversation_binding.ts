@@ -456,8 +456,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     const reservation = row.context_recovery && typeof row.context_recovery === "object"
       && !Array.isArray(row.context_recovery) ? row.context_recovery as JsonObject : null;
     const gate = response?.gate;
-    const quotaGate = reservation !== null && Number.isSafeInteger(reservation.quota_attempt)
-      && Number(reservation.quota_attempt) >= 1 && Number(reservation.quota_attempt) <= 3
+    const continuationAttempt = reservation?.quota_attempt ?? reservation?.preparation_attempt;
+    const continuationGate = reservation !== null && Number.isSafeInteger(continuationAttempt)
+      && Number(continuationAttempt) >= 1 && Number(continuationAttempt) <= 3
       && typeof reservation.failed_turn_id === "string" && reservation.failed_turn_id !== row.turn_id
       && typeof reservation.client_turn_id === "string" && reservation.client_turn_id.length > 0
       && turn?.client_turn_id === reservation.client_turn_id
@@ -466,7 +467,7 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     const invalidMetadata = gate !== null && typeof gate === "object" && !Array.isArray(gate)
       && (gate as JsonObject).kind === "response_metadata_invalid" && typeof (gate as JsonObject).summary === "string";
     const unfinished = turn?.status === "completed" && response !== null
-      && (unfinishedProjectWork(response) !== null || quotaGate || invalidMetadata);
+      && (unfinishedProjectWork(response) !== null || continuationGate || invalidMetadata);
     const metadataReview = reservation?.metadata_review === true
       && turn?.client_turn_id === reservation.client_turn_id;
     const metadataReceipts = response?.context_handoff_receipts;
@@ -486,10 +487,9 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (metadataOwed || unfinished || turn?.status === "failed"
-        && (["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
-          "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"].includes(String(turn.error_code))
-          || turn.error_code === "manager_authorization_unavailable"
-            && turn.upstream_turn_id === null && turn.delta_count === 0 && turn.response === null))
+        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
+          "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
+          "manager_authorization_unavailable"].includes(String(turn.error_code)))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -583,10 +583,15 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
-  const preExecutionScopeFailure = steward
-    && failed.error_code === "manager_authorization_unavailable"
-    && failed.upstream_turn_id === null;
-  if (current.agent_id === "antigravity" && !preExecutionScopeFailure) {
+  const preparation = steward ? planPreparationRecovery(recovery, row, current, failed, version) : null;
+  if (preparation !== null) return preparation;
+  // Once preparation has dispatched, a different terminal category must not
+  // switch recovery families and start a fresh business retry budget.
+  if ((row.context_recovery != null
+      && requireJsonObject(row.context_recovery, "preparation reservation").preparation_attempt != null)
+      || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
+        requireJsonObject(value, "prior preparation recovery").preparation_attempt != null))) return no;
+  if (current.agent_id === "antigravity") {
     // Result adoption has no admission/dispatch authority. Keep the failed
     // Turn and original failure delivery, even when native tools ran.
     if (!steward || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
@@ -644,9 +649,8 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
       || recovery.steering_observed !== false
-      || (!preExecutionScopeFailure && (
-        !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
-        || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id))) return no;
+      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
   const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
   const attemptKey = `${retryKind}_attempt`;
   if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
@@ -874,6 +878,51 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
     && observed.effects_observed === true};
 }
 
+/** A local manager-context failure precedes native dispatch. Only the Core's
+ * exact preparation event sequence can qualify it; absence alone cannot.
+ */
+function planPreparationRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, version: number): JsonObject | null {
+  if (failed.error_code !== "manager_authorization_unavailable") return null;
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.status !== "failed" || failed.response !== null || failed.upstream_turn_id !== null
+      || failed.delta_count !== 0 || failed.message !== row.message || recovery.attachments_present !== false
+      || recovery.steering_observed !== false || recovery.native_observation != null) return no;
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "preparation recovery");
+  const otherKinds = ["routing_attempt", "quota_attempt", "read_only_review", "metadata_review", "work_attempt"];
+  if (previous !== null && (!Number.isSafeInteger(previous.preparation_attempt)
+      || Number(previous.preparation_attempt) < 1 || Number(previous.preparation_attempt) > 3
+      || previous.version !== version || otherKinds.some(key => previous[key] != null))) return no;
+  if (row.context_recovery_history != null && (!Array.isArray(row.context_recovery_history)
+      || row.context_recovery_history.some(value => {
+        const item = requireJsonObject(value, "prior preparation recovery");
+        return otherKinds.some(key => item[key] != null);
+      }))) return no;
+  const reserved = previous?.failed_turn_id === failed.turn_id;
+  const prior = previous === null ? 0 : Number(previous.preparation_attempt) - (reserved ? 1 : 0);
+  const originalClient = `external-${ref(row.request_ref, "original request")}`;
+  const failedClient = prior === 0 ? originalClient : `${originalClient}-recovery-${version}-preparation-${prior}`;
+  if (failed.client_turn_id !== failedClient) return no;
+  if (reserved && recovery.admitted_turn != null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted preparation continuation");
+    const client = `${originalClient}-recovery-${version}-preparation-${previous?.preparation_attempt}`;
+    if (previous?.client_turn_id !== client || admitted.client_turn_id !== client
+        || admitted.session_id !== current.session_id || admitted.turn_id === failed.turn_id
+        || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+      client_turn_id: client, admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted preparation Turn"),
+      preparation_attempt: previous?.preparation_attempt,
+      session_id: current.session_id, native_thread_ids: []};
+  }
+  // Newer human input has priority. An equivalent later submission can already
+  // have executed; it is never authority to replay this older failure too.
+  if (recovery.stop_observed !== false || recovery.queued_input_present !== false
+      || recovery.later_equivalent_input_present !== false) return no;
+  return planRoutingRecovery(recovery, row, current, failed, previous, version) ?? no;
+}
+
 /** Routing outages outlive one worker or context migration. Reserve at most
  * three separately correlated continuations, with a persisted failure clock.
  * Provider IO must prove a latest, terminal, pre-execution request every time.
@@ -881,16 +930,15 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
 function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
   const quota = failed.error_code === "usage_limit_exceeded";
-  const preExecutionScope = failed.error_code === "manager_authorization_unavailable"
-    && failed.upstream_turn_id === null;
-  const kind = quota ? "quota" : "routing";
+  const preparation = failed.error_code === "manager_authorization_unavailable";
+  const kind = preparation ? "preparation" : quota ? "quota" : "routing";
   const attemptKey = `${kind}_attempt`;
-  if (!quota && !preExecutionScope && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
+  if (!quota && !preparation && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
   // An unfinished older reservation must finish under its original identity.
   if (previous !== null && previous.failed_turn_id === failed.turn_id && previous[attemptKey] === undefined) return null;
-  const observed = recovery.native_observation == null ? null
-    : requireJsonObject(recovery.native_observation, "native failure readback");
-  if (observed && !quota && !preExecutionScope && observed.pre_execution_routing_timeout !== true) return null;
+  const raw = preparation ? recovery.preparation_observation : recovery.native_observation;
+  const observed = raw == null ? null : requireJsonObject(raw, "pre-execution failure readback");
+  if (observed && !quota && !preparation && observed.pre_execution_routing_timeout !== true) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
   const priorAttempt = previous?.[attemptKey] ?? 0;
@@ -904,26 +952,35 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   if (!Number.isFinite(now) || !Number.isFinite(completed) || now < notBefore) {
     // Preserve the existing context-migration path when no routing diagnostic
     // has been established. A proven routing timeout always obeys backoff.
-    return observed || preExecutionScope ? no : null;
+    return observed ? no : null;
   }
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${kind}-${attempt}`;
   if (reserved && (previous?.client_turn_id !== client || previous.version !== version)) return no;
   const candidate = {...no, recovery_candidate: true, client_turn_id: client,
     [attemptKey]: attempt, not_before: new Date(notBefore).toISOString(),
     session_id: current.session_id, failed_turn_id: failed.turn_id,
-    native_thread_ids: [sessionIdentity(current.upstream_thread_id, "current native thread")]};
+    native_thread_ids: preparation ? [] : [sessionIdentity(current.upstream_thread_id, "current native thread")]};
   if (!observed) return candidate;
+  if (preparation) {
+    const events = observed.events;
+    if (observed.kind !== "core_context_preparation_failure" || observed.session_id !== failed.session_id
+        || observed.turn_id !== failed.turn_id || !Array.isArray(events) || events.length !== 4) return candidate;
+    const [queued, phase, context, terminal] = events.map(value => requireJsonObject(value, "Core preparation event"));
+    const ids = events.map(value => (value as JsonObject).event_id);
+    const verified = new Set(ids).size === 4 && ids.every(value => typeof value === "string" && value.length > 0)
+      && queued.kind === "turn.queued" && phase.kind === "agent.phase" && phase.phase === "manager_context"
+      && context.kind === "manager.context" && context.schema_version === "manager_turn_context_v1"
+      && terminal.kind === "turn.failed" && terminal.error_code === failed.error_code;
+    return {...candidate, recovery_eligible: verified && recovery.source_verified === true
+      && recovery.preparation_scope_available === true,
+      preparation_observation: observed};
+  }
   return {...candidate, recovery_eligible: recovery.source_verified === true
-    && (preExecutionScope
-      ? observed.pre_execution_scope_failure === true
-        && observed.turn_started_observed === false
-        && observed.authorization_changed_warning === true
-        && observed.current_scope_available === true
-      : observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
-        && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
-          && observed.quota_available === true && typeof observed.quota_observed_at === "number"
-          && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
-          : observed.codex_error_info === "other" && observed.only_pre_execution_items === true))};
+    && observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
+    && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
+      && observed.quota_available === true && typeof observed.quota_observed_at === "number"
+      && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
+      : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.

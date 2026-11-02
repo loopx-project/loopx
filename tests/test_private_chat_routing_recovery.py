@@ -370,8 +370,8 @@ def test_original_worker_recovers_historical_user_only_routing_failure(steward, 
 
 @pytest.mark.parametrize("fault", [None, "turn-started", "scope-unavailable"])
 def test_steward_recovers_pre_execution_authorization_scope_failure(
-    steward, monkeypatch, fault
-):  # noqa: F811
+    steward, monkeypatch, fault  # noqa: F811
+):
     """A Steward turn rejected before model execution due to transient scope churn replays once stable."""
     import loopx.chat_manager_context as manager_context
 
@@ -454,7 +454,7 @@ def test_steward_recovers_pre_execution_authorization_scope_failure(
 
     assert recovered["turn_id"] != original["turn_id"]
     assert recovered["session_id"] == original["session_id"]
-    assert recovered["context_recovery"]["routing_attempt"] == 1
+    assert recovered["context_recovery"]["preparation_attempt"] == 1
     assert recovered["context_recovery"]["failed_turn_id"] == original["turn_id"]
     completed = finish(runtime, recovered)
     assert completed["status"] == "completed"
