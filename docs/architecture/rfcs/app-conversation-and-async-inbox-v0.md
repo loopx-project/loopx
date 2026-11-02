@@ -292,7 +292,10 @@ discovered within the existing five-second scan even without a transcript append
 Before each effect, the worker rechecks the canonical input/Turn, current source
 and grants, and frozen provider message. Feedback failures retain recoverable
 receipts without blocking message delivery or starting work. Unknown provider
-writes are not retried. No synthetic incoming event or original-request
+writes are not retried. Optional App feedback runs on at most one slot of the
+existing reply pool, outside the body outbox lock. Its final write merges only
+feedback fields, preserving concurrently delivered current and later answers.
+No synthetic incoming event or original-request
 settlement is used. Existing finished mirrors are not backfilled; current active
 mirrors can adopt the feedback path. `loopx chat --no-private-reactions` keeps
 feedback disabled without changing the message path. The isolated HTTP/Core and

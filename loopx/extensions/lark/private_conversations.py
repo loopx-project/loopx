@@ -172,7 +172,7 @@ class LarkPrivateConversations:
         self.root = controller.store.root / "lark-private-deliveries"
         self._context_recovery_probe_at: dict[Path, float] = {}
         self._web_projection_scan_at = 0.0
-        self._web_projection_snapshots: dict[str, tuple[int, int, int]] = {}
+        self._web_projection_snapshots: dict[str, tuple[int, int]] = {}
         from .owner_attention import LarkOwnerAttention
         self.owner_attention = LarkOwnerAttention(self)
         from .private_ingress import PrivateIngressObserver
@@ -1329,17 +1329,10 @@ class LarkPrivateConversations:
             for sid, source in sources.items():
                 try:
                     stat = (store.sessions_root / sid / "messages.jsonl").stat()
-                    # A queued/running/terminal transition need not append a
-                    # message. These are discovery hints, never grant proofs.
-                    snapshot = (stat.st_mtime_ns, stat.st_size,
-                        (store.sessions_root / sid / "turns").stat().st_mtime_ns if self.reaction_feedback else 0)
+                    snapshot = (stat.st_mtime_ns, stat.st_size)
                     key = identity_ref(source["binding_id"], sid)
                     path = root / f"{key}.json"
-                    previous = _read_json(path) if self.reaction_feedback and path.exists() else {}
-                    retry_feedback = self.reaction_feedback and any(
-                        isinstance(phase.get("feedback"), dict) and not phase["feedback"].get("ok")
-                        for phase in previous.get("deliveries", {}).values())
-                    if self._web_projection_snapshots.get(sid) == snapshot and not retry_feedback:
+                    if self._web_projection_snapshots.get(sid) == snapshot:
                         continue
                     messages = store.messages(sid)
                     web_turns = {message["turn_id"] for message in messages
@@ -1354,21 +1347,8 @@ class LarkPrivateConversations:
                                 "binding_id": source["binding_id"], "profile": source["profile"],
                                 "source": source["source"], "event": source["event"],
                                 "session_id": sid, "deliveries": {}, "status": "pending"}
-                            needs_feedback = False
-                            if self.reaction_feedback:
-                                for message in selected:
-                                    if message["role"] != "user":
-                                        continue
-                                    state = row["deliveries"].get("web." + message["message_id"], {})
-                                    turn = store.load_turn(sid, message["turn_id"]) or {}
-                                    feedback = state.get("feedback")
-                                    # Do not backfill reactions onto old,
-                                    # already-finished verified history.
-                                    needs_feedback |= (not feedback.get("ok") or
-                                        feedback.get("turn_status") != turn.get("status")) if isinstance(feedback, dict) else (
-                                            turn.get("status") not in TERMINAL_TURN_STATES)
-                            if needs_feedback or any(not row["deliveries"].get("web." + message["message_id"], {}).get("verified")
-                                                     for message in selected):
+                            if any(not row["deliveries"].get("web." + message["message_id"], {}).get("verified")
+                                   for message in selected):
                                 row["status"] = "pending"
                                 _atomic_write_json(path, row)
                     self._web_projection_snapshots[sid] = snapshot
@@ -1485,8 +1465,6 @@ class LarkPrivateConversations:
                 pending = next((message for message in messages
                     if not row["deliveries"].get("web." + message["message_id"], {}).get("verified")), None)
                 if pending is None:
-                    for message in messages:
-                        self._web_projection_feedback(row, message)
                     # Older verified placeholders retain their exact attempts.
                     # They cannot be relabelled as media delivery or resent.
                     row["status"] = "partial" if any(message.get("attachments") and not
@@ -1512,7 +1490,6 @@ class LarkPrivateConversations:
                     image_attachments=pending.get("attachments"))
                 if delivered:
                     row.pop("blocker", None)
-                    self._web_projection_feedback(row, pending)
                 _atomic_write_json(path, row)
                 return int(delivered)
             except (OSError, ValueError, KeyError):
@@ -1520,8 +1497,47 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, row)
                 return 0
 
+    def reconcile_app_feedback(self) -> int:
+        """Reconcile optional reactions independently of the body outbox.
+
+        The live service reserves at most one existing reply worker for this
+        pass. A slow reaction must never own the body-delivery fence or prevent
+        a later canonical answer from reaching the same audience.
+        """
+        if not self.reaction_feedback:
+            return 0
+        for path in sorted((self.root / "web-projections").glob("*.json")):
+            with exclusive_file_lock(path.with_suffix(".feedback"), operation="reconcile_web_input_feedback"):
+                with exclusive_file_lock(path, operation="read_web_input_feedback"):
+                    row = _read_json(path)
+                try:
+                    messages = self._web_projection_messages(row)
+                except (OSError, ValueError, KeyError):
+                    continue
+                for message in messages:
+                    phase_key = "web." + message["message_id"]
+                    phase = row["deliveries"].get(phase_key, {})
+                    # Keep a frozen comparison without the independent
+                    # feedback field; concurrent body deliveries stay intact.
+                    frozen = {key: value for key, value in phase.items() if key != "feedback"}
+                    prior_feedback = phase.get("feedback")
+                    self._web_projection_feedback(row, message)
+                    if "feedback" not in phase or phase["feedback"] == prior_feedback:
+                        continue
+                    with exclusive_file_lock(path, operation="record_web_input_feedback"):
+                        current = _read_json(path)
+                        saved = current["deliveries"].get(phase_key, {})
+                        if (all(current.get(key) == row.get(key) for key in
+                                ("request_ref", "binding_id", "profile", "source", "event", "session_id"))
+                                and {key: value for key, value in saved.items() if key != "feedback"} == frozen):
+                            saved["feedback"] = phase["feedback"]
+                            _atomic_write_json(path, current)
+        return 0
+
     def reconcile(self) -> int:
-        return sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+        delivered = sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+        self.reconcile_app_feedback()
+        return delivered
 
     def _recovery_source_observation(self, record: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any] | None:
         source = self._source_message(record, selected=selected)

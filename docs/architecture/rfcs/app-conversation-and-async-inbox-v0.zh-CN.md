@@ -207,7 +207,9 @@ Turn 已进入 starting/running 后添加 `OnIt`；完成、失败或中断后�
 实际分段消息，不对组合 parts locator 操作。Turn 独立变化即使没有追加正文，也会由
 既有五秒扫描发现。每次副作用前重查 canonical 输入/Turn、当前来源和授权，以及冻结
 provider 消息；反馈失败保留可恢复回执，不阻断正文送达或启动工作，未知 provider
-写入不重发。不伪造 incoming event，也不结算原 Lark 请求。已有已结束镜像不补写表情，
+写入不重发。App 可选反馈最多占用既有回复池的一个槽位，在正文 outbox 锁外执行；
+回写时仅合并反馈字段，保留并发完成的当前和后续答案投递。
+不伪造 incoming event，也不结算原 Lark 请求。已有已结束镜像不补写表情，
 当前活动镜像可接续此反馈。`loopx chat --no-private-reactions` 仍可关闭反馈，正文路径
 不变。隔离真实 HTTP/Core 配合合成 provider 的检查只核验源码行为；安装后的实际
 Lark 表情和 provider 呈现仍独立验收。

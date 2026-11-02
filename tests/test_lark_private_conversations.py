@@ -3720,6 +3720,57 @@ def test_slow_reply_readback_does_not_hold_independent_stop_or_other_app(ordinar
 
 
 
+def test_slow_app_reaction_does_not_block_current_or_later_answers(ordinary, monkeypatch):  # noqa: F811
+    from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
+
+    store, runtime, provider, transport, original, turns, before = _app_projection_journey(ordinary)
+    blocked, release = threading.Event(), threading.Event()
+    provider_call = Provider.__call__
+
+    def held_reaction(self, args, cwd=None, timeout=None):
+        if "reactions" in args and "create" in args:
+            ref = args[args.index("--message-id") + 1]
+            if "你（App）" in json.dumps(self.messages[ref], ensure_ascii=False):
+                blocked.set()
+                assert release.wait(20)
+        return provider_call(self, args, cwd, timeout)
+
+    monkeypatch.setattr(Provider, "__call__", held_reaction)
+    starts = ordinary[4].read_bytes()
+    service = LarkGoalTopicRuntimeService(snapshot_provider=lambda: {}, runtime_root=store.root.parent,
+        runtime_controller=runtime, private_conversations=transport)
+    service.start()
+    try:
+        assert blocked.wait(8)
+        deadline = time.monotonic() + 7
+        while len(provider.writes) < before + 4:
+            assert time.monotonic() < deadline, "A held input reaction blocked a completed answer"
+            time.sleep(.01)
+        assert ordinary[4].read_bytes() == starts  # No model replay to recover delivery.
+        status, later = ordinary[3](f"/api/chat/sessions/{original['session_id']}/turns", {
+            "message": "Later App input", "client_turn_id": "later-app-input"})
+        assert status == 202
+        assert runtime.wait_for_turn(session_id=original["session_id"], turn_id=later["turn_id"],
+            timeout_sec=10)["status"] == "completed"
+        transport._web_projection_scan_at = 0
+        service._delivery_wakeup.set()
+        deadline = time.monotonic() + 6
+        while len(provider.writes) < before + 6:
+            assert time.monotonic() < deadline, "A held reaction blocked later canonical messages"
+            time.sleep(.01)
+        assert not release.is_set()
+        assert any("Later App input" in text for _, text in provider.writes[before:])
+        assert len(store.list_sessions()) == 1
+    finally:
+        release.set()
+        service.close()
+        service._delivery_thread.join(10)
+        runtime.close()
+    projection = json.loads(next((transport.root / "web-projections").glob("*.json")).read_text())
+    assert len(projection["deliveries"]) == 6
+    assert all(phase.get("verified") for phase in projection["deliveries"].values())
+
+
 def test_private_reply_workers_have_no_executor_backlog_and_stop_scheduling(tmp_path):
     import threading
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
