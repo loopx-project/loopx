@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from .control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
-from .control_plane.coordination.local_authority import (
+from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
+from ..control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
 )
-from .paths import effective_runtime_root
-from .control_plane.todos.provider_projection import projection_delivery_requires_ack
+from ..paths import effective_runtime_root
+from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
 
 
 def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
@@ -170,7 +170,7 @@ class ChatTodoActionMixin:
         CAS admits a new edit; the immutable receipt proves a previous edit.
         Both paths drain the current projection, never an old receipt's state.
         """
-        from .chat_actions import _digest, _opaque
+        from ..chat_actions import _digest, _opaque
 
         operation_id = f"chat-update:{proposal_id}"
         basis = proposal["canonical_update_basis"]
@@ -244,7 +244,7 @@ class ChatTodoActionMixin:
     def _apply_todo_update(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
-        from .chat_actions import _digest, _opaque
+        from ..chat_actions import _digest, _opaque
 
         if proposal.get("canonical_update_basis") is not None:
             return self._apply_reviewed_todo_edit(proposal_id, proposal, parameters)

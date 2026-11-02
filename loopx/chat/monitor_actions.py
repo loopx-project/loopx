@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .control_plane.runtime.time import parse_timestamp
-from .control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
+from ..control_plane.runtime.time import parse_timestamp
+from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 
 
 class ChatMonitorActionMixin:
@@ -16,7 +16,7 @@ class ChatMonitorActionMixin:
         self, parameters: dict[str, Any], *, dry_run: bool,
         basis: dict[str, Any] | None = None, operation_id: str | None = None,
     ) -> dict[str, Any]:
-        from .chat_actions import _monitor_metadata, _monitor_text
+        from ..chat_actions import _monitor_metadata, _monitor_text
 
         goal_id = str(parameters["goal_id"])
         operation = str(parameters["operation"])
@@ -113,7 +113,7 @@ class ChatMonitorActionMixin:
     def _apply_monitor_update(
         self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
     ) -> dict[str, Any]:
-        from .chat_actions import (
+        from ..chat_actions import (
             ProtectedActionGate,
             _digest,
             _opaque,
