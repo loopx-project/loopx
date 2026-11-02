@@ -65,6 +65,8 @@ def make_progress_cli_fixture(root: Path, provider: str, scenario: str) -> dict:
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
         "domain": "synthetic-typed-progress",
+        # Individual comparison journeys explicitly enable Stride below.
+        "execution_profile": {"stride_strategy": "off"},
         "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
         "quota": {"compute": 1.0, "window_hours": 24},
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
@@ -293,6 +295,11 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
                  "--tag", "writeback-result", "--evidence-ref", "evidence-existing")
             call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
                  "--explore-result-node-ref", "recorded-local-route")
+        # The proposal must reach the real Todo owner, not only a cadence label.
+        complete_scope = ("Implement local, reverse-priority and joint assignment; compare their costs "
+            "under the unchanged one-use-per-column constraint and retain the best valid artifact.")
+        call("todo", "update", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
+            "--text", complete_scope)
         guard(TURN, todo=None)
         admitted = guard(TURN)
         obligation = admitted["autonomous_replan_obligation"]
@@ -369,6 +376,7 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
         work_turn = "turn-executed-route-comparison"
         selected = guard(work_turn)
         assert selected["selected_todo"]["todo_id"] == TODO
+        assert next(row for row in _authority(fixture)["todos"] if row["todo_id"] == TODO)["text"].endswith(complete_scope)
         artifact = fixture["project"] / "assignment-comparison.json"
         subprocess.run([sys.executable, "-c", """
 import itertools, json, sys

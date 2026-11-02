@@ -104,6 +104,7 @@ def default_replan_cadence_configuration() -> dict[str, Any]:
         "count_unit": ReplanCadenceUnit.EFFECTIVE_TURNS.value,
         "count": DEFAULT_EFFECTIVE_TURN_REPLAN_THRESHOLD,
         "planning_horizon_goal": DEFAULT_PLANNING_HORIZON_GOAL,
+        "stride_strategy": "evidence_conditioned_v1",
     }
 
 
@@ -126,14 +127,13 @@ def todo_replan_cadence_machine_configuration_namespace() -> (
         description=(
             "Live review threshold for Goals without an explicit cadence override. "
             "Defaults to six settled work Turns; completed Todos remain an explicit option. "
-            "The optional versioned stride strategy is disabled by default; enabled fresh Vision reviews require a bounded structured proposal. "
+            "Evidence-conditioned stride is enabled by default; fresh Vision reviews require a bounded structured work-shape proposal. Explicit off and legacy saved configurations retain their meaning. "
             "It does not create "
             "turns, spend quota, or grant authority."
         ),
         default_configuration={
             "schema_version": TODO_REPLAN_CADENCE_MACHINE_DEFAULTS_V2,
             **default_replan_cadence_configuration(),
-            "stride_strategy": "off",
         },
     )
 
