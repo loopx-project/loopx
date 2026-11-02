@@ -184,7 +184,15 @@ class ChatExternalConversations:
             if plan.get("recover_native_result"):
                 return self._recover_native_result(path, row, session, turn, source_observation)
             metadata_review = plan.get("metadata_review") is True
-            model_auth_home = None if metadata_review else checked_session_home(self.controller.codex_home, session)
+            pre_execution_scope_retry = (
+                turn.get("error_code") == "manager_authorization_unavailable"
+                and turn.get("upstream_turn_id") is None
+            )
+            model_auth_home = (
+                None
+                if metadata_review or pre_execution_scope_retry
+                else checked_session_home(self.controller.codex_home, session)
+            )
             context = self.controller.project_contexts.session_context(session)
 
             def source_requests() -> list[dict[str, Any]]:
@@ -200,6 +208,8 @@ class ChatExternalConversations:
             proof = None
             if not plan.get("admitted_turn_id") and metadata_review:
                 proof = self._original_native_result(row, session, turn, context, include_raw_response=True)
+            elif not plan.get("admitted_turn_id") and pre_execution_scope_retry:
+                proof = self._pre_execution_scope_observation(session, turn)
             elif not plan.get("admitted_turn_id"):
                 proof = CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
@@ -289,6 +299,56 @@ class ChatExternalConversations:
             text += "\n\n未完事项：" + response["unfinished_work"]["remaining"]
             text += "\n当前依赖：" + response["unfinished_work"]["dependency"]
         return text
+
+    def _pre_execution_scope_observation(
+        self, session: dict[str, Any], turn: dict[str, Any]
+    ) -> dict[str, Any]:
+        from ...chat_manager_context import manager_authorization_scope_id_for_registry
+
+        events = self.controller.store.events_after(
+            session["session_id"], turn["turn_id"], None
+        )
+        runtime_root = getattr(
+            self.controller, "coordination_runtime_root", self.controller.store.root.parent
+        )
+        registry_path = getattr(self.controller, "registry_path", None)
+        try:
+            scope = (
+                self.controller.manager_scope_resolver(session)
+                if getattr(self.controller, "manager_scope_resolver", None) is not None
+                else self.bindings.steward_scope(session)
+            )
+            current_scope_id = (
+                manager_authorization_scope_id_for_registry(
+                    registry_path,
+                    scope,
+                    runtime_root=runtime_root,
+                    channel_id=session.get("channel_id"),
+                )
+                if registry_path is not None and isinstance(scope, list)
+                else None
+            )
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            current_scope_id = None
+        return {
+            "pre_execution_scope_failure": (
+                turn.get("status") == "failed"
+                and turn.get("error_code") == "manager_authorization_unavailable"
+                and turn.get("upstream_turn_id") is None
+                and turn.get("delta_count") == 0
+                and turn.get("response") is None
+            ),
+            "turn_started_observed": any(
+                event.get("kind") == "turn.started" for event in events
+            ),
+            "authorization_changed_warning": any(
+                event.get("kind") == "manager.context"
+                and "external_authorization_changed"
+                in (event.get("payload", {}).get("warnings") or [])
+                for event in events
+            ),
+            "current_scope_available": bool(current_scope_id),
+        }
 
     def _original_native_result(self, row: dict[str, Any], session: dict[str, Any],
                                 turn: dict[str, Any], context: dict[str, Any], *,

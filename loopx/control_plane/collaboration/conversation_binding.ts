@@ -486,8 +486,10 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
       && (metadataOwed || unfinished || turn?.status === "failed"
-        && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
-          "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"].includes(String(turn.error_code)))
+        && (["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
+          "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error"].includes(String(turn.error_code))
+          || turn.error_code === "manager_authorization_unavailable"
+            && turn.upstream_turn_id === null && turn.delta_count === 0 && turn.response === null))
       && !(current?.session_id === row.session_id && current?.status === "closed")
       && observation.stop_observed !== true};
   }
@@ -581,7 +583,10 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || saved.project_ref !== selected.project_ref || (!steward && saved.grant !== selected.grant)
       || current.channel_id !== `${steward ? "manager.external.native" : "project.external"}.${selected.binding_id}.${saved.source_ref}`) return no;
   const failed = requireJsonObject(recovery.failed_turn, "original failed Turn");
-  if (current.agent_id === "antigravity") {
+  const preExecutionScopeFailure = steward
+    && failed.error_code === "manager_authorization_unavailable"
+    && failed.upstream_turn_id === null;
+  if (current.agent_id === "antigravity" && !preExecutionScopeFailure) {
     // Result adoption has no admission/dispatch authority. Keep the failed
     // Turn and original failure delivery, even when native tools ran.
     if (!steward || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
@@ -639,8 +644,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
       || failed.status !== "failed" || failed.delta_count !== 0 || failed.response !== null
       || recovery.steering_observed !== false
-      || !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
-      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id) return no;
+      || (!preExecutionScopeFailure && (
+        !["context_window_exceeded", "host_gate", "upstream_transport_failure", "server_overloaded", "usage_limit_exceeded"].includes(String(failed.error_code))
+        || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id))) return no;
   const retryKind = failed.error_code === "usage_limit_exceeded" ? "quota" : "routing";
   const attemptKey = `${retryKind}_attempt`;
   if (recovery.admitted_turn != null && previous !== null && previous.failed_turn_id === failed.turn_id
@@ -875,14 +881,16 @@ function planResultReview(recovery: JsonObject, row: JsonObject, current: JsonOb
 function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
   failed: JsonObject, previous: JsonObject | null, version: number): JsonObject | null {
   const quota = failed.error_code === "usage_limit_exceeded";
+  const preExecutionScope = failed.error_code === "manager_authorization_unavailable"
+    && failed.upstream_turn_id === null;
   const kind = quota ? "quota" : "routing";
   const attemptKey = `${kind}_attempt`;
-  if (!quota && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
+  if (!quota && !preExecutionScope && !["host_gate", "upstream_transport_failure"].includes(String(failed.error_code))) return null;
   // An unfinished older reservation must finish under its original identity.
   if (previous !== null && previous.failed_turn_id === failed.turn_id && previous[attemptKey] === undefined) return null;
   const observed = recovery.native_observation == null ? null
     : requireJsonObject(recovery.native_observation, "native failure readback");
-  if (observed && !quota && observed.pre_execution_routing_timeout !== true) return null;
+  if (observed && !quota && !preExecutionScope && observed.pre_execution_routing_timeout !== true) return null;
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
   const reserved = previous?.failed_turn_id === failed.turn_id;
   const priorAttempt = previous?.[attemptKey] ?? 0;
@@ -896,7 +904,7 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
   if (!Number.isFinite(now) || !Number.isFinite(completed) || now < notBefore) {
     // Preserve the existing context-migration path when no routing diagnostic
     // has been established. A proven routing timeout always obeys backoff.
-    return observed ? no : null;
+    return observed || preExecutionScope ? no : null;
   }
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-${kind}-${attempt}`;
   if (reserved && (previous?.client_turn_id !== client || previous.version !== version)) return no;
@@ -906,11 +914,16 @@ function planRoutingRecovery(recovery: JsonObject, row: JsonObject, current: Jso
     native_thread_ids: [sessionIdentity(current.upstream_thread_id, "current native thread")]};
   if (!observed) return candidate;
   return {...candidate, recovery_eligible: recovery.source_verified === true
-    && observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
-    && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
-      && observed.quota_available === true && typeof observed.quota_observed_at === "number"
-      && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
-      : observed.codex_error_info === "other" && observed.only_pre_execution_items === true)};
+    && (preExecutionScope
+      ? observed.pre_execution_scope_failure === true
+        && observed.turn_started_observed === false
+        && observed.authorization_changed_warning === true
+        && observed.current_scope_available === true
+      : observed.thread_id === current.upstream_thread_id && observed.turn_id === failed.upstream_turn_id
+        && (quota ? observed.codex_error_info === "usageLimitExceeded" && observed.only_original_user_item === true
+          && observed.quota_available === true && typeof observed.quota_observed_at === "number"
+          && now / 1000 >= observed.quota_observed_at && now / 1000 - observed.quota_observed_at <= 120
+          : observed.codex_error_info === "other" && observed.only_pre_execution_items === true))};
 }
 
 /** A labelled observation of the same authorized context and canonical queue.
