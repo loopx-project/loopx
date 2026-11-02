@@ -903,16 +903,26 @@ with `--delivery-boundary semantic_closeout --agent-vision-json <file>` selected
 It is an alternative for that step, not another plan, claim, debit or admission.
 Material CLI closeout and MCP `complete_task` retain their existing evidence gates.
 
-Released feedback affecting the next experiment or closeout decision ends the
-current work segment. Bind it to the evaluated artifact/input, record the actual
+New decision evidence produced or obtained by the current admitted work can end
+its work segment. Prior-feedback readback, bookkeeping and deterministic
+repetition without new information are context, not this Turn's progress; use
+them to advance the original task first. Bind the new result to the evaluated artifact/input, record the actual
 decision in Vision/path delta even when retaining the route, execute the current
 plan's writeback/spend and yield for a freshly guarded Host continuation. Leave
 an unfinished Todo open. Repeated unchanged polls and bookkeeping alone need no
 new checkpoint. This is Agent execution guidance, not automatic classification
 of tool text, a new Stride trigger, or proof of adoption or useful outcomes.
 
-For an explicitly continuing or optimization objective, a usable candidate is a
-checkpoint. Before stopping, compare unmet acceptance, plausible headroom,
+An open Todo with controller-declared completion validation can use this
+semantic checkpoint for `outcome_progress` with a fresh, open Vision and an
+evidence-linked `continue` or `no_change` path. The shared settlement owner
+qualifies the admitted writeback and its exact receipted spend through the same
+rule. This closes only the original Turn: the Todo remains open and its final
+completion validator remains pending. Primary-outcome, closed-Vision and
+terminal declarations retain that validator gate.
+
+For an explicitly continuing or optimization objective, candidate usability
+alone does not establish completion. Before stopping, compare unmet acceptance, plausible headroom,
 feasible next work and full marginal cost with the original stopping condition.
 Retain an evidenced no-follow-up, Stop, budget/permission limit or genuine wait;
 neither a submission nor unused budget decides whether further work is useful.
@@ -920,13 +930,20 @@ neither a submission nor unused budget decides whether further work is useful.
 普通 CLI Todo 结算在默认 in-flight 边界下也提供既有 Vision 编写结构；写回步骤的
 `semantic_closeout_command_template` 沿用原 Goal、Todo、Turn，只显式选择
 semantic closeout 与 Vision 文件。它是当前步骤的可执行变体，不增加 plan、认领、
-扣额或准入。影响下一实验或收尾判断的已释放反馈结束当前工作段；绑定评估版本与
+扣额或准入。当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的
+检查点；旧反馈读回、记账与没有新增信息的确定性重验只是上下文，应先用于推进原
+任务。绑定新结果的评估版本与
 输入，即使保留路线也记录实际 Vision/path 决策，再按原计划写回、扣额并让宿主
 以新 guard 接续，未完成 Todo 保持 open。未变化轮询、记账无需新 checkpoint。
-持续优化目标中的可用候选只是检查点；停止前对照剩余验收、改进空间、可行工作、
+持续优化目标不能仅因已有可用候选就宣布完成；停止前对照剩余验收、改进空间、可行工作、
 完整边际成本和原停止条件，保留有依据的 no-follow-up、Stop、预算/权限限制与真实
 等待。不强制用满预算或换路，也不由工具文本自动分类或新增 Stride trigger；执行
 指导与模型实际采用、结果收益仍须分别验证。
+
+声明完成验证器的开放 Todo，可以用 fresh、open 的 Vision 和有证据关联的
+`continue` / `no_change` 路径记录 `outcome_progress`；准入写回与精确回执的扣额
+复用同一 TS 资格规则。它只结算原 Turn，不完成 Todo，也不满足最终完成验证器。
+primary outcome、已闭合 Vision 与终态声明仍须通过原完成验证门。
 
 One explicit exception exists for in-flight delivery. When quota admits an
 open advancement Todo for normal delivery, its settlement guidance may add the
@@ -956,7 +973,7 @@ decision merely because the scheduler woke up. Agents must start from
 projected boundary and identity flags; reconstructing a generic
 `semantic_closeout` command discards that continuity contract.
 
-If decision-relevant feedback arrived, the work actually replanned or completed the Todo, explicitly choose
+If this admitted work obtains new decision evidence, actually replans or completes the Todo, explicitly choose
 `semantic_closeout` and provide its required vision checkpoint. Do not simply
 remove the replan ACK to make a real replan pass as in-flight work. Conversely,
 ordinary within-Todo progress must not add `--autonomous-replan-recorded`.

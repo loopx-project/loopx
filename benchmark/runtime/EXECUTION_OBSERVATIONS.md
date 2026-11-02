@@ -39,8 +39,10 @@ merely to produce an attachment. Configuration and readback invoke neither a
 probe nor a model. Runtime receipts record the selected producer, which does
 not attest execution, adoption or improvement.
 
-Decision-relevant released feedback closes the current work segment before the
-next experiment or closeout decision. The ordinary settlement plan's
+New decision evidence produced or obtained by the current admitted work can
+close its work segment. Prior-feedback readback, bookkeeping and deterministic
+repetition without new information are context, not this Turn's progress; use
+them to advance the original task first. The ordinary settlement plan's
 `durable_writeback.semantic_closeout_command_template` selects that boundary
 with the original Turn, Todo and Goal identity; fill its result and Vision
 placeholders, then follow the same plan's remaining steps and yield to the Host.
@@ -50,12 +52,14 @@ The next guarded wake can continue the same Goal/session or perform an existing
 due review; neither feedback counts nor this command enable Stride. Repeated
 unchanged polls and bookkeeping alone need no new checkpoint.
 
-For an explicitly continuing optimization objective, a usable candidate is a
-checkpoint. Before stopping, review remaining acceptance gaps, plausible
+For an explicitly continuing optimization objective, candidate usability alone
+does not establish completion. Before stopping, review remaining acceptance gaps, plausible
 headroom, feasible experiments, full marginal cost and the accepted stopping
 condition. Stop when justified; do not force a pivot or use the remaining time
 merely because it is available. This is Agent-consumed execution guidance,
 not automatic tool-result classification or proof that a model adopted it.
+Native model adoption, automatic long-Turn supervision and outcome benefit
+remain unqualified; scripted lifecycle checks do not establish them.
 
 ## Retiring the bundled research treatment
 
@@ -188,7 +192,8 @@ Stop、原预算和真实阻塞继续有效，不为填满时长制造任务。
 变化拒绝归因；文件清单哈希不是原生归档哈希，只覆盖明确选择的文件及探针
 边界，不覆盖传递依赖或独立写入者，结果仍须证明对应实际评测快照和输入版本。
 
-影响下一实验或收尾判断的已释放反馈，是当前工作段的结算边界。使用当前
+当前授权工作实际产生或取得新的决策证据后，才进入相应工作段的检查点。旧反馈读回、
+记账和没有新增信息的确定性重复验证只是上下文，应先用于推进原任务。使用当前
 settlement plan 的 `durable_writeback.semantic_closeout_command_template`，
 保留原 Turn、Todo、Goal 身份，填写实际结果和 Vision，再按同一 plan 的剩余
 步骤结算并让宿主接续；未完成的 Todo 保持 open。即使路线不变，也在既有
@@ -197,6 +202,7 @@ Vision/path delta 中记录被评估版本、输入和决策。下一次 guard �
 无需新 checkpoint。明确持续优化的目标不能因已有可用候选就自动收尾；结束前
 评估剩余验收、改进空间、可行实验、完整边际成本和原停止条件。合理时可停止，
 不强制换路或用满时间。这是 Agent 执行指导，不是自动分类工具结果或模型已采用的证明。
+原生模型采用、自动长轮次监督和结果收益仍未取得资格，脚本路径通过不能替代这些证据。
 
 观测通过既有 Explore 写回、replan 和研究历程保留，输入版本与引用必须属于
 该 finding，计划/实际方法不同须记录理由。finding 引用及观测的 `evidence_refs`、

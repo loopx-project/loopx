@@ -6,9 +6,11 @@ Explore, Stride and local evaluations run; model adoption is a separate check.
 from __future__ import annotations
 
 import hashlib
+from itertools import product
 import json
 from pathlib import Path
 import shlex
+import subprocess
 import sys
 
 import pytest
@@ -18,10 +20,12 @@ from canonical_authority_fixture import isolate_sqlite_runtime
 import test_quota_settlement_cli as fixture
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("strategy", ["off", "evidence_conditioned_v1"])
-@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
-def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatch, provider, strategy, handoff_mode):
+@pytest.mark.parametrize(("provider", "strategy", "handoff_mode", "preexisting_feedback"), [
+    (*case, False) for case in product(["file", "sqlite"], ["off", "evidence_conditioned_v1"], ["soft_claim", "hard_lease"])
+] + [pytest.param("sqlite", "evidence_conditioned_v1", "hard_lease", True, id="historical-feedback-is-context")])
+def test_feedback_checkpoint_reaches_next_actual_experiment(
+    tmp_path, monkeypatch, provider, strategy, handoff_mode, preexisting_feedback,
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
     configuration = json.loads(registry.read_text())
@@ -31,6 +35,7 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
     state.write_text(state.read_text().replace("Settle one standard Codex App delivery.",
         "Minimize route cost on the supplied graph while retaining a valid route. "
         "A feasible candidate is a checkpoint; stop when no useful authorized comparison remains."))
+    fixture._configure_completion_validation_todo(project)
     fixture._initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     monkeypatch.chdir(project)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
@@ -57,7 +62,8 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
         lease_before = cli("task-lease", "inspect", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)
         assert lease_before["active"]
     route = project / "route.json"
-    graph = {"start": {"middle": 1, "finish": 1}, "middle": {"finish": 1}, "finish": {}}
+    graph = {"start": {"detour": 1, "middle": 1, "finish": 1},
+             "detour": {"middle": 1}, "middle": {"finish": 1}, "finish": {}}
     (project / "graph.json").write_text(json.dumps(graph))
     validator = project / "evaluate.py"
     validator.write_text(
@@ -66,7 +72,13 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
         "assert r[0]=='start' and r[-1]=='finish' and len(r)==len(set(r))\n"
         "cost=sum(g[a][b] for a,b in zip(r,r[1:]))\n"
         "print(json.dumps({'valid':True,'cost':cost}))\n")
-    route.write_text(json.dumps(["start", "middle", "finish"]))
+    route.write_text(json.dumps(["start", "detour", "middle", "finish"] if preexisting_feedback
+                               else ["start", "middle", "finish"]))
+    if preexisting_feedback:
+        previous = subprocess.run([sys.executable, str(validator)], capture_output=True, text=True, check=True)
+        prior = project / "released-before-admission.json"
+        prior.write_text(previous.stdout)
+        assert json.loads(prior.read_text()) == {"valid": True, "cost": 3}
     guard = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
         "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-1")
     assert guard["should_run"] and guard["selected_todo"]["todo_id"] == fixture.TODO_ID
@@ -77,11 +89,26 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
     assert writeback["vision_authoring"]["continuation_review"]
     # Merely obtaining the new executable projection performs no work or writeback.
     assert not (runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl").exists()
+    if preexisting_feedback:
+        guidance = plan["ordered_steps"][0]["precondition"]
+        assert "not this Turn's progress; use them to advance the task first" in guidance
+        repeated = run_probe(command=[sys.executable, str(validator)], candidate_files=[route],
+            output=project / "prior-recheck.json", input_revision="graph-v1", planned_method_id="retained-route",
+            executed_method_id="retained-route", evidence_ref="probe:prior-recheck", limit_seconds=10)
+        assert json.loads((project / "prior-recheck.json.stdout").read_text()) == json.loads(prior.read_text())
+        # Reading and deterministically reproducing the known result adds no
+        # decision evidence here. Advance the actual route before checkpointing.
+        assert not (runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl").exists()
+        assert fixture._spend_run_count(runtime) == 0
+        route.write_text(json.dumps(["start", "middle", "finish"]))
     observed = run_probe(command=[sys.executable, str(validator)], candidate_files=[route],
         output=project / "probe-1.json", input_revision="graph-v1", planned_method_id="retained-route",
         executed_method_id="retained-route", evidence_ref="probe:route-1", limit_seconds=10)
     first = json.loads((project / "probe-1.json.stdout").read_text())
     assert first == {"valid": True, "cost": 2}
+    if preexisting_feedback:
+        assert observed["candidate_sha256"] != repeated["candidate_sha256"]
+        assert json.loads(prior.read_text())["cost"] > first["cost"]
     evidence = "result:" + hashlib.sha256((project / "probe-1.json.stdout").read_bytes()).hexdigest()
     observed.update(result_ref=evidence, result_candidate_sha256=observed["candidate_sha256"])
     observed["evidence_refs"].append(evidence)
@@ -121,11 +148,18 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
     execute(plan["ordered_steps"][2]["command_template"])
     execute(plan["ordered_steps"][2]["command_template"])
     assert fixture._spend_run_count(runtime) == 1
-    assert cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]["status"] == "open"
+    retained_todo = cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]
+    assert retained_todo["status"] == "open" and retained_todo["completion_validation_required"]
     if handoff_mode == "hard_lease":
         lease_after = cli("task-lease", "inspect", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)
         assert lease_after["lease"]["idempotency_key"] == lease_before["lease"]["idempotency_key"]
         assert lease_after["lease"]["lease_epoch"] == lease_before["lease"]["lease_epoch"]
+    if preexisting_feedback:
+        code, refused_completion = fixture._run_cli(registry, runtime, "todo", "complete", *binding,
+            "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-1",
+            "--claim-operation-id", "route-original-execution", "--evidence", "probe:route-1", cwd=project)
+        assert code == 1 and refused_completion.get("validation_blocked_completion"), refused_completion
+        assert cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]["status"] == "open"
     # A new Host wake has a new Turn and the same Goal/Agent/Todo lane. The
     # ordinary cadence reads the material result; raw experiment counts do not.
     review = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
@@ -173,3 +207,18 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
     assert changed["candidate_sha256"] != observed["candidate_sha256"]
     assert json.loads((project / "probe-2.json.stdout").read_text()) == {"valid": True, "cost": 1}
     assert first["cost"] == 2  # Retain the original result; no hindsight rewrite.
+    terminal = dict(packet, state="no_followup", path_delta={"outcome": "stop",
+        "prior_assumption": "The retained route could still be improved.",
+        "observed_reality": "The direct route now has cost one.", "stopped": ["This comparison is complete."],
+        "evidence_refs": ["probe:route-2"]})
+    terminal.pop("stride_decision", None)
+    vision.write_text(json.dumps(terminal))
+    refused_command = next_guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1][
+        "semantic_closeout_command_template"] + " --no-global-sync --suppress-external-sinks"
+    for key, value in dict(validated_progress="unvalidated_completion", scale="implementation",
+                           outcome="primary_goal_outcome", file=vision).items():
+        refused_command = refused_command.replace("<" + key + ">", shlex.quote(str(value)))
+    code, refused = fixture._run_generated_cli(refused_command, registry_path=registry, cwd=project)
+    assert code == 1 and "completion validation" in refused["error"], refused
+    assert cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]["status"] == "open"
+    assert fixture._classification_count(runtime, "unvalidated_completion") == 0

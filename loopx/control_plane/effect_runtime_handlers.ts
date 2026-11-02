@@ -760,6 +760,11 @@ export function createEffectRuntimeHandlers(
       ),
     ],
     [
+      "settlement.open_todo_semantic_checkpoint",
+      lazyHandler(() => import("./goals/vision_checkpoint.ts"), ({qualifiesOpenTodoSemanticCheckpoint}) => (params) =>
+        qualifiesOpenTodoSemanticCheckpoint(params.writeback, settlementIdentity(settlementIdentityInput(params.identity)))),
+    ],
+    [
       "settlement.receipt_bound_monitor_phase",
       lazyHandler(() => import("./quota/settlement_phase.ts"), ({receiptBoundMonitorPhase}) => (params) => receiptBoundMonitorPhase({
         poll_present: params.poll_present === true,

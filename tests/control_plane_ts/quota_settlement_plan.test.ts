@@ -53,9 +53,11 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.match(plan.steps[0].precondition,
     /--result-file requires approved Goal acceptance criteria bound to this Todo, not merely a Todo validator/);
   assert.match(plan.steps[0].precondition, /Todo done does not settle the Turn/);
-  assert.match(plan.steps[0].precondition, /Released feedback.*work-segment boundary/);
-  assert.match(plan.steps[0].precondition, /unfinished Todo open.*freshly guarded continuation/);
-  assert.match(plan.steps[0].precondition, /Unchanged polls.*no checkpoint/);
+  assert.match(plan.steps[0].precondition, /new decision evidence produced or obtained by this admitted work/);
+  assert.match(plan.steps[0].precondition, /Prior-feedback readback.*deterministic repetition without new information are context/);
+  assert.match(plan.steps[0].precondition, /not this Turn's progress; use them to advance the task first/);
+  assert.match(plan.steps[0].precondition, /After that progress.*writeback\/spend.*unfinished Todo open/);
+  assert.doesNotMatch(plan.steps[0].precondition, /spend before the next decision/);
   assert.match(plan.steps[1].precondition, /--agent-vision-json/);
   assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);
   assert.match(plan.steps[1].precondition, /acceptance_summary/);
@@ -101,7 +103,7 @@ test("in-flight validation offers completion only after original deliverable acc
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
   assert.match(plan.steps[1].precondition, /failure alone is not progress/);
-  assert.match(plan.steps[1].precondition, /decision-relevant feedback.*semantic_closeout.*fresh evidence-linked/i);
+  assert.match(plan.steps[1].precondition, /new decision evidence.*semantic_closeout.*fresh evidence-linked/i);
   assert.match(plan.steps[1].precondition, /including when the route stays unchanged/);
   assert.match(
     plan.steps[1].precondition,
@@ -128,7 +130,7 @@ test("semantic feedback checkpoint is an exact variant of the current writeback,
     const serialized = settlementPlanPayload(plan).ordered_steps as Record<string, unknown>[];
     assert.equal(serialized[1].semantic_closeout_command_template, checkpoint);
     assert.match(visionAuthoringContract().continuation_review as string,
-      /usable candidate is a checkpoint.*full marginal cost/);
+      /candidate usability alone does not establish completion.*full marginal cost/);
     assert.match(visionAuthoringContract().continuation_review as string,
       /no useful authorized step remains/);
   }

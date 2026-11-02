@@ -83,10 +83,10 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
       "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
       "not merely a Todo validator. No invented successor " +
       "or --no-follow-up is required. Todo done does not settle the Turn. " +
-      "Released feedback that changes or justifies the next experiment or closeout is a work-segment boundary: " +
-      "bind it to the evaluated artifact/input, then execute this plan's writeback and spend before the next decision. " +
-      "Keep an unfinished Todo open; after settlement yield to the Host for a freshly guarded continuation. " +
-      "Unchanged polls and bookkeeping alone create no checkpoint. " +
+      "Checkpoint new decision evidence produced or obtained by this admitted work, bound to its artifact/input. " +
+      "Prior-feedback readback, bookkeeping and deterministic repetition without new information are context, " +
+      "not this Turn's progress; use them to advance the task first. After that progress, use this plan's writeback/spend; " +
+      "keep an unfinished Todo open, then yield for freshly guarded continuation. " +
       (inFlight ? "For unfinished bounded progress, keep the Todo open with its original declaration. " +
         "The projected in-flight boundary is not an instruction to retain completed work: " +
         "when complete or changing route, use --delivery-boundary semantic_closeout with an " +
@@ -101,7 +101,7 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
           " Pass a new packet with --agent-vision-json.") +
         " Route elimination needs evidence; failure alone is not progress. " +
         (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open; "
-          : "For decision-relevant feedback use --delivery-boundary semantic_closeout and a fresh evidence-linked " +
+          : "For that new decision evidence use --delivery-boundary semantic_closeout and a fresh evidence-linked " +
             "Vision/path_delta with --agent-vision-json, including when the route stays unchanged. " +
             "Use this step's semantic_closeout_command_template when present; follow the remaining plan unchanged. " +
             "Other outcome_progress may use in_flight_continuation; ") + "outcome_gap requires " +
