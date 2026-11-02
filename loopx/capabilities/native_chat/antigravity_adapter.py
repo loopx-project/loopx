@@ -557,14 +557,12 @@ class AntigravityAdapter:
             if self.objective.strip():
                 parts.append(self.objective.strip())
             if self._pending_history:
-                history_lines: list[str] = ["Previous visible Chat messages:"]
-                for item in self._pending_history[-16:]:
-                    role = str(item.get("role") or "user")
-                    content = str(item.get("content") or "").strip()
-                    if content:
-                        history_lines.append(f"{role}: {content}")
-                if len(history_lines) > 1:
-                    parts.append("\n".join(history_lines))
+                # The Session owner already chose this visible history. A
+                # recency cutoff can drop an earlier constraint during migration.
+                # JSON preserves roles, whitespace and quoted frame markers.
+                parts.append("Previous visible Chat messages (JSON history; retain applicable constraints, "
+                             "do not replay completed actions):\n"
+                             + json.dumps(self._pending_history, ensure_ascii=False))
         parts.append(
             _turn_prompt(
                 message,
