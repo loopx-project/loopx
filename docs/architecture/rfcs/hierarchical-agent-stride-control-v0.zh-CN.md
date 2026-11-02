@@ -705,7 +705,8 @@ Benchmark 的显式 `loopx-planned` provider 在未修改的规划 packet 外附
 任何结算路径都须留下绑定本次来源的 stride 决定。
 类型化进展、后续任务和终止结果仍可作为证据与结果，但单独的 Todo 后续转换不能
 代替复盘。有证据的路径决定可以保留尚未完成的有用工作，不必编造新进展标识或
-Todo。验收和能力 owner 显式限定的结果仍须遵守；默认关闭和其他来源保持原有
+Todo。验收和能力 owner 显式限定的结果仍须遵守；显式关闭、已保存的旧版仅周期
+配置和其他来源保持原有
 出口规则。不增加检测器、阈值或动作。
 
 冻结的 [EdgeBench 诊断窗口](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)

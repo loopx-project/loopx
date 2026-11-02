@@ -870,7 +870,8 @@ source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. An evidenced path decision can retain unfinished useful
 work without a fabricated new progress identifier or Todo. Explicit acceptance
-and capability outcome restrictions still apply; default-off and other sources
+and capability outcome restrictions still apply; explicit off, saved legacy
+cadence-only configurations and other sources
 retain their prior exit policies. No new detector, threshold or action is added.
 
 The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)

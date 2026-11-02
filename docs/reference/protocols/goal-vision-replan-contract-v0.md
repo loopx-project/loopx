@@ -439,8 +439,10 @@ is required before typed progress, a successor, blocker or terminal outcome can
 settle the obligation. Enabled fresh-path decisions also retain their existing
 structured-decision validation. The [structured contract](#structured-stride-control)
 owns those field, reference and review requirements; the shared planning
-guidance does not replace or add to them. `off` remains the default, including
-legacy configurations, and unknown versions fail before mutation. No new
+guidance does not replace or add to them. The inherited capability default is
+`evidence_conditioned_v1`; explicit `off` and saved legacy cadence-only
+configurations retain their meaning, as described in [Default review cadence](#default-review-cadence).
+Unknown versions fail before mutation. No new
 permission, scheduler or automatic route actuator is introduced here.
 
 The [captured reader](turn-envelope-v0.md#captured-replan-reads--捕获后的重规划读取)
@@ -485,7 +487,9 @@ Todo 顺序和 Agent 暂定筛选规则可调整；到期复核可以继续、�
 fresh-path 决定仍受既有结构校验约束。这些是机器执行的字段、引用与复核要求，
 不能一概称为建议文字，也不是本段新增的门禁。
 
-默认仍为 `off`，旧配置兼容，未知版本在写入前拒绝。捕获后的 reader 在开关两种
+继承能力配置时默认启用 `evidence_conditioned_v1`；显式 `off` 和已保存的旧版仅周期
+配置保留原语义，详见[默认复盘周期](#default-review-cadence)。未知版本在写入前拒绝。
+捕获后的 reader 在开关两种
 情况下都先交付复盘事实、再交付写回格式；它改善信息交付，不是首次引入证据驱动
 重规划。关闭 Stride 时观察到的读取／结算改善不能归为 Stride 收益。权限、调度器与
 自动路线执行权不变；投递与隔离验证不证明实际决策采用、有用成果或可比完整成本。
