@@ -1044,14 +1044,22 @@ def resolve_bound_mcp_goal_context(
             registry_path = candidate
 
     if registry_path is None:
-        try:
-            rt_root = (
-                Path(explicit_runtime_root).expanduser()
-                if explicit_runtime_root
-                else select_default_runtime_root()
-            )
-            global_reg = global_registry_path(rt_root)
-            if global_reg.is_file():
+        candidate_rt_roots: list[Path] = []
+        if explicit_runtime_root:
+            candidate_rt_roots.append(Path(explicit_runtime_root).expanduser())
+        else:
+            try:
+                candidate_rt_roots.append(select_default_runtime_root())
+            except Exception:
+                pass
+            for fallback_rt in (Path.home() / ".loopx", Path.home() / ".goal-harness"):
+                if fallback_rt not in candidate_rt_roots:
+                    candidate_rt_roots.append(fallback_rt)
+        for rt_root in candidate_rt_roots:
+            try:
+                global_reg = global_registry_path(rt_root)
+                if not global_reg.is_file():
+                    continue
                 global_data = load_registry(global_reg)
                 for g in global_data.get("goals") or []:
                     if isinstance(g, dict) and str(g.get("id") or "") == goal_id:
@@ -1064,8 +1072,10 @@ def resolve_bound_mcp_goal_context(
                             registry_path = find_registry(Path(str(repo)).expanduser())
                             if registry_path is not None:
                                 break
-        except Exception:
-            registry_path = None
+                if registry_path is not None:
+                    break
+            except Exception:
+                continue
 
     if registry_path is None:
         return None
@@ -1101,12 +1111,23 @@ def bind_session(args: argparse.Namespace) -> dict[str, Any]:
             "error_kind": "missing_goal_or_agent_id",
             "error": "--goal-id and --agent-id are required for bind-session.",
         }
+    registry = getattr(args, "registry", None)
+    if not registry:
+        try:
+            from loopx.goal_mode_context import find_registry
+
+            ws = getattr(args, "workspace", None)
+            found_reg = find_registry(ws if ws else Path.cwd())
+            if found_reg is not None:
+                registry = str(found_reg)
+        except Exception:
+            registry = None
     return bind_antigravity_session_configs(
         goal_id=goal_id,
         agent_id=agent_id,
         conversation_id=conversation_id,
         cli_bin=args.cli_bin,
-        registry=args.registry,
+        registry=registry,
         runtime_root=args.runtime_root,
         agy_home=getattr(args, "agy_home", None),
     )
