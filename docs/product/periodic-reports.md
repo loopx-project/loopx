@@ -445,6 +445,25 @@ account acceptance.
 | --- | --- |
 | ![Partial notification coverage in a narrow viewport](../assets/personal-workspace/owner-attention-source/partial-phone.png) | ![Recovered notification worker in a narrow viewport](../assets/personal-workspace/owner-attention-source/recovered-phone.png) |
 
+### Terminal-failure notices
+
+A blocked Todo that is neither done nor superseded and has a `reject` or `cancel`
+in its typed `decision_scope_outcomes` becomes a separate owner-attention subject,
+`<goal>/<todo>/terminal`, independent of its ordinary owner-action subject.
+The notice uses the latest terminal outcome by recorded time when all terminal
+outcomes have timestamps; otherwise it uses the last terminal outcome in the list.
+Its digest includes the terminal outcome count, so a second outcome starts a new
+notice generation even when the latest terms are unchanged. Clearing the terminal
+outcomes, leaving blocked status, completing or superseding the Todo withdraws
+unsent notices; delivered receipts remain unchanged. A missing `decision_scope`
+does not suppress a terminal notice. These notices reuse **Automatically notify
+new owner tasks**, its first-enable baseline and the existing outbound worker;
+they add no setting, scheduler or message consumer.
+
+未完成、未被替代的阻塞待办若有 `reject` 或 `cancel` 结果，会成为独立的所有者关注项；缺少 `decision_scope` 也不会漏报。
+终止结果均有时间戳时取最新一项，否则取列表最后一项；计数变化会产生新一代通知。结果清除或待办离开阻塞、完成、被替代时撤回未发送通知，已送达回执不变。
+此通知复用“自动通知新增所有者任务”、首次启用时的历史基线和现有出站工作器，不新增设置、调度器或消息消费者。
+
 The intended flow is:
 
 ```text
