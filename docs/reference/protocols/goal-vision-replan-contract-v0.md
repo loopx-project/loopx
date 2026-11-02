@@ -38,6 +38,16 @@ no TurnEnvelope opt-in is needed. Quota and writeback resolve the same live
 configuration. See [Goal review cadence](../../quota-allocation.md#goal-review-cadence)
 for configuration precedence, rollback and independent review triggers.
 
+When `stride_strategy=evidence_conditioned_v1` is enabled, receipt-backed cadence
+uses the configured count as a baseline for the next interval. A settled fresh
+review can scale it by 1.5 (supported grow with evidence-linked improved goal
+gain) or 0.5 (verify or uncertainty/gap/failure); switch keeps the baseline.
+Counts round up to at least one, never compound across reads, and do not cross a
+newer autonomous ACK to reuse older feedback. Missing/unsettled/historical
+decisions and off mode keep the baseline. Stall triggers and settlement remain
+independent. This feedback uses source-validated Agent claims, not certified gain;
+see the [strategy boundary](../../architecture/rfcs/hierarchical-agent-stride-control-v0.md#76-research-scope-and-evidence-conditioned-control).
+
 ## Replan ACK freshness
 
 An accepted ACK with a legal vision outcome covers gaps at or before its

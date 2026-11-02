@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from operator import itemgetter
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 from ..control_plane.work_items.replan_history_codec import effective_turn_cadence_context
 from ..control_plane.coordination.local_authority import (
@@ -508,7 +509,7 @@ def handle_todo_command(
                 dry_run=bool(args.dry_run),
             )
             if payload.get("ok") and payload.get("execution_managed") and not args.dry_run:
-                route = ["loopx", "--registry", str(registry_path), "--runtime-root",
+                route = [*loopx_cli_argv(), "--registry", str(registry_path), "--runtime-root",
                     str(resolve_runtime_root(load_registry(registry_path), runtime_root_arg)), "--format", "json"]
                 selected = ["--goal-id", args.goal_id, "--todo-id", args.todo_id,
                     "--agent-id", args.agent_id, "--claim-operation-id", payload["claim_operation_id"]]
