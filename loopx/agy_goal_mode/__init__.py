@@ -149,15 +149,39 @@ def build_antigravity_sidecar_template(
         "一次操作不代表结束；通知与执行分开，等待按当前调度契约（遇到 waiting_external / CI 等待时使用原生 schedule(DurationSeconds=..., TimerCondition=\"any\") 挂起，不跑 shell sleep 空查）。"
         "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
     )
+    interval_minutes = max(1, int(interval_seconds) // 60)
+    cron_expr = cron_for_interval_minutes(interval_minutes)
     return {
         "schema_version": "loopx_antigravity_sidecar_template_v0",
         "config_path": ANTIGRAVITY_SIDECAR_CONFIG_LABEL,
+        "sidecar_config_path": "~/.gemini/config/sidecars/loopx-antigravity-heartbeat/sidecar.json",
+        "sidecar_json": {
+            "builtin": "schedule",
+            "args": [
+                f"CRON_TZ=UTC {cron_expr}",
+                "agentapi",
+                "new-conversation",
+                "--model=pro",
+                "--",
+                bootstrap_prompt,
+            ],
+            "restart_policy": "always",
+            "display_name": "LoopX Antigravity Heartbeat",
+            "description": (
+                f"LoopX periodic quota-gated heartbeat for goal {goal_id}"
+            ),
+            "agent_permissions": {
+                "access_grants": [
+                    f"command({cli_bin})",
+                ]
+            },
+        },
         "sidecar": {
             "loopx-heartbeat": {
                 "description": (
                     f"LoopX periodic quota-gated heartbeat for goal {goal_id}"
                 ),
-                "cron": "*/3 * * * *",
+                "cron": cron_expr,
                 "interval_seconds": int(interval_seconds),
                 "gate_command": shlex.join(quota_args),
                 "wake_when_json_field_true": "should_run",
