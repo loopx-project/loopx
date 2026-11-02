@@ -346,26 +346,6 @@ function boundedReason(value: unknown, fallback: string): string {
   return reason.length > 0 ? reason.slice(0, 4096) : fallback;
 }
 
-/** Preserve a rejected Turn plan as data before the host adapter reads its transaction. */
-export function delegationTurnPlanDecision(params: JsonObject): JsonObject {
-  const plan = requireJsonObject(params.plan, "Turn plan");
-  if (plan.ok !== true) return {
-    schema_version: "loopx_delegation_turn_plan_decision_v0",
-    state: "rejected",
-    turn_key: null,
-    reason: boundedReason(plan.error ?? plan.reason, "Turn plan rejected without a reason"),
-  };
-  const transaction = requireJsonObject(plan.transaction, "Turn plan transaction");
-  requireThat(typeof transaction.turn_key === "string"
-    && ENVELOPED_SHA256_PATTERN.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
-  return {
-    schema_version: "loopx_delegation_turn_plan_decision_v0",
-    state: "planned",
-    turn_key: transaction.turn_key,
-    reason: null,
-  };
-}
-
 /** Preserve the host owner's public diagnosis, not its private configuration.
  * Optional fields keep older host previews compatible; null means unprobed. */
 export function delegationRuntimeFacts(executor: JsonObject): JsonObject {

@@ -26,7 +26,7 @@ from loopx.control_plane.todos.decision_scope import (  # noqa: E402
     standing_decision_authority_for_agent,
 )
 from loopx.control_plane.todos.standing_decision import (  # noqa: E402
-    build_standing_decision_authority,
+    standing_decision_source_items,
 )
 from loopx.quota import build_quota_should_run  # noqa: E402
 
@@ -34,6 +34,17 @@ GOAL_ID = "standing-decision-authority-fixture"
 PRIMARY_AGENT = "codex-main-control"
 OTHER_AGENT = "codex-reviewer"
 SCOPE = "write_scope:goal:benchmark_pr_self_merge"
+
+
+def project_standing_authority(items, *, legacy_source_order=True, canonical_records=False):
+    """Exercise the production source decoder and composed Todo read transaction."""
+    from loopx.control_plane.todos.goal_todo_projection import source_todo_fields
+
+    return source_todo_fields(
+        [], lineage=[],
+        standing_items=standing_decision_source_items(items, canonical_records=canonical_records),
+        legacy_source_order=legacy_source_order and not canonical_records,
+    ).get("standing_decision_authority")
 
 
 def user_receipt(
@@ -122,7 +133,7 @@ def assert_receipt_is_agent_scoped_and_revocable(authority: dict) -> None:
     assert consistency["ok"] is True, consistency
     assert consistency["standing_authority_match_count"] == 1, consistency
 
-    revoked = build_standing_decision_authority(
+    revoked = project_standing_authority(
         [
             user_receipt("todo_standing_approve"),
             user_receipt("todo_standing_reject", outcome="reject"),
@@ -145,7 +156,7 @@ def assert_receipt_is_agent_scoped_and_revocable(authority: dict) -> None:
 
 
 def assert_one_shot_and_non_done_gates_are_not_standing() -> None:
-    authority = build_standing_decision_authority(
+    authority = project_standing_authority(
         [
             user_receipt(
                 "todo_linked_approve",

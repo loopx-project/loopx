@@ -468,6 +468,15 @@ def register_todo_command(
             "--thin or --todo-id."
         ),
     )
+    todo_parser.add_argument(
+        "--include-archived",
+        dest="include_archived",
+        action="store_true",
+        help=(
+            "For todo list, include archived Todos from canonical SQLite "
+            "authority alongside active Todos."
+        ),
+    )
     todo_parser.add_argument("--project", help="Project root. Defaults to the registry goal repo.")
     todo_parser.add_argument("--state-file", help="Active goal state path. Defaults to the registry goal state_file.")
     todo_parser.add_argument("--dry-run", action="store_true", help="Preview the active-state edit without writing.")
