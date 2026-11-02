@@ -191,10 +191,17 @@ marked `required=false` defer their guidance/templates; their routes stay visibl
 and the complete captured attachment must be read before use. Unknown plan
 versions remain whole. Initial pages do not repeat pointers already present in
 their content; the selection digest still prevents a full-input receipt.
-Its `context-read --initial-read` uses the same exact-address selector; paged
-continuations retain the short option and pin the selection digest. A changed
-profile rejects rather than mixing views. The option is read-only and exclusive with explicit
-selectors or discovery; unknown schemas use generic discovery.
+Its `context-read --initial-read` uses the same exact-address selector. New private
+selection references pin the resolved addresses and complete selection digest;
+continuations use the existing explicit reader instead of rerunning initial
+navigation. A later navigation change cannot replace the saved selection.
+Historical recipe-only references and explicit-file initial cursors still reject
+a changed selection digest; recover through the same original full-capture
+reference, without another admission or rewriting the saved descriptor. These
+legacy readers still require reconciliation of their unfinished original Turns
+before retirement; this slice retains their decoder and full-capture recovery.
+The option is read-only and exclusive with
+explicit selectors or discovery; unknown schemas use generic discovery.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. Warm
 deltas keep their existing reader, and disabled native delivery is unchanged.
@@ -219,7 +226,11 @@ activation defaults, saved files, Delta and full-read receipts are unchanged.
 同一捕获中按需展开。它是起始选读，不代表已读全部必要来源；依赖具体验收、证据或
 执行/结算契约前仍须完整读取。未知 schema、过小引用预算和 warm delta 保留既有路线，
 关闭原生传输的输出不变；完整恢复和原 SHA 校验均保留。只读的 `--initial-read` 不与
-显式选读或索引混用；续页保留短选项和固定的选读摘要，profile 改变则拒绝混读。
+显式选读或索引混用。新私有选读引用固定已解析路径和完整选读摘要，续页复用显式
+reader，不重新运行首读导航；后续导航改变不能替换原选读。历史仅保存导航配方的引用
+及显式文件首读游标在选读摘要变化时仍拒绝，沿同一完整原 capture 引用恢复，不重新
+准入或改写旧描述文件。退役这些 legacy reader 前仍须对账原未完成 Turn；本切片
+保留历史解码与完整捕获恢复。
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。

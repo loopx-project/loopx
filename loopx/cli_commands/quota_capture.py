@@ -251,8 +251,11 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             selectors = [item["pointer"] for item in views]
             if reference_file is not None and pinned_selection is None:
                 try:
+                    # Pin the resolved addresses, not the initial navigation
+                    # recipe. Existing explicit readers can replay these exact
+                    # bytes after a navigation change, with both digests checked.
                     reference_file = write_context_read_reference(path, digest, selection={
-                        "select": None if initial_read else selectors, "initial_read": initial_read,
+                        "select": selectors, "initial_read": False,
                         "list_fields": list_fields, "list_depth": list_depth, "sha256": expected})
                 except OSError:
                     # A verified read must not require a writable capture root.
