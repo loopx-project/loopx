@@ -43,33 +43,10 @@ EFFECT_RUNTIME_STARTUP_ERROR_SCHEMA_VERSION = (
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_LOCAL_SNAPSHOT_BYTES = 64 * 1024 * 1024
-LOCAL_SNAPSHOT_METHODS = frozenset({
-    "todo.read",
-    "todo.quota_planning.project",
-    "goal.vision_wait.project",
-    "collaboration.inbox.read",
-    "collaboration.delegation.inventory_page",
-    "benchmark.trajectory.codex-usage",
-    "coordination.local_authority.todo_source",
-    "coordination.local_authority.todo_snapshot",
-    "todo.context.page",
-    "work_item.context.project",
-    "work_item.interaction_reads.project",
-    "scheduler.hint.project",
-    "work_item.task_graph.goal_topology",
-    "work_item.replan_semantics.project",
-    "quota.settlement.read",
-    "quota.spend.commit",
-    "quota.turn_envelope.evaluate",
-    "turn.controller",
-    "goal.checkpoint_read_context.resolve",
-    "goal.checkpoint_read_context.commit",
-    "goal.checkpoint_read_context.inspect_replay",
-    "performance_diagnosis.inspect",
-    "state.recovery.archive.verify",
-    "state.recovery.manifest.verify",
-    "runtime.checkpoint_artifacts",
-})
+# Shared packaged transport eligibility; business authority stays with each method.
+LOCAL_SNAPSHOT_METHODS = frozenset(json.loads(
+    Path(__file__).with_name("effect_runtime_snapshot_methods.json").read_text(encoding="utf-8"),
+))
 MAX_STARTUP_DIAGNOSTIC_BYTES = 8 * 1024
 STARTUP_LOCK_TIMEOUT_SECONDS = 15.0
 STARTUP_POLL_SECONDS = 0.025
