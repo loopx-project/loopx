@@ -136,12 +136,18 @@ export const researchRouteReadingScenario = {
           const question = reader.locator(".research-reader-content > .research-reader-question > summary > span");
           assert.equal(await question.innerText(), fullTitle, "One route activation reveals the complete original question");
           assert(await question.evaluate(element => element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1), "Requested question text is not clipped");
+          await page.reload();
+          await question.waitFor();
+          assert.equal(await question.innerText(), fullTitle, "Reload preserves complete-question reading after the finding is pinned");
+          assert(await reader.locator('.research-reader-question').evaluate(element => element.open), "Reload must not substitute finding-only reading");
           if (!endpoint) {
             const summary = reader.locator(".research-reader-question > summary");
             await summary.focus();
             await page.keyboard.press("Enter");
             await page.waitForFunction(() => document.activeElement?.classList.contains("research-history-detail"));
             assert.equal(await reader.locator(".research-reader-question").count(), 0, "Closing the question preserves reader focus without a redundant title row");
+            await page.reload(); await reader.waitFor();
+            assert.equal(await reader.locator('.research-reader-question').count(), 0, "An explicit collapse stays collapsed on reload");
             const context = reader.getByRole("button", {name: language === "zh-CN" ? "完整研究问题" : "Full research question", exact: true});
             await context.tap();
             assert.equal(await reader.locator(".research-question-text p").first().innerText(), fullTitle, "Touch can recover the complete question after collapse");
@@ -157,6 +163,8 @@ export const researchRouteReadingScenario = {
             assert(await body.evaluate(element => parseFloat(getComputedStyle(element).fontSize) >= 16), "Density retains readable finding text");
             assert.match(await reader.locator(".research-finding-exceptions").innerText(), /1/);
             assert.equal(await reader.locator(".research-reader-question").count(), 0, "Finding reading does not repeat the parent question in a collapsed title row");
+            await page.reload(); await reader.waitFor();
+            assert.equal(await reader.locator('.research-reader-question').count(), 0, "An explicit finding selection retains its reading intent on reload");
             const context = reader.getByRole("button", {name: language === "zh-CN" ? "完整研究问题" : "Full research question", exact: true});
             await context.focus();
             const fullQuestion = reader.locator(".research-question-text p").first();
@@ -187,6 +195,29 @@ export const researchRouteReadingScenario = {
           await caption.first().evaluate(element => element.scrollIntoView({block: "center"}));
           await page.screenshot({path: resolve(outputDir, `research-route-reading-routes-${width}.png`), animations: "disabled"});
         }
+        await history.getByRole("button", {name: language === "zh-CN" ? "关系图" : "Graph", exact: true}).click();
+        const graphNode = history.locator(".research-history-node:not(.research-history-group)").first();
+        const graphKey = await graphNode.getAttribute("data-research-return");
+        assert(graphKey, "A graph node has a stable return address across document reloads");
+        const graphTitle = capture.events.find(event => event.result_id === graphKey.slice("graph:".length) && event.event_kind === "node").title;
+        await graphNode.focus();
+        await page.keyboard.press("Enter");
+        await reader.waitFor();
+        await page.reload();
+        await reader.waitFor();
+        assert.equal(await reader.locator(".research-reader-question > summary > span").innerText(), graphTitle, "Graph reading retains the complete question on reload");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, graphKey);
+        // Native button clicks can leave focus elsewhere; return identity
+        // belongs to the activated node, independently of browser focus policy.
+        await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+        await graphNode.evaluate(element => element.click());
+        await reader.waitFor();
+        await page.reload();
+        await reader.waitFor();
+        await reader.locator(".research-reader-back").click();
+        await page.waitForFunction(key => document.activeElement?.getAttribute("data-research-return") === key, graphKey);
+        await history.getByRole("button", {name: language === "zh-CN" ? "时间线" : "Timeline", exact: true}).click();
       }
       await caption.first().locator("button").last().tap();
       await reader.waitFor();
