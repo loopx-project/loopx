@@ -1168,6 +1168,13 @@ Oversized or missing tool output is recovered from the affected range of this
 same capture, never by another admission. Off responses retain their original
 contract. Reader/output sizing alone proves neither model retention nor savings.
 
+Republishing a reader reference through a normal parent-path alias reuses the
+existing immutable descriptor when the resolved parent, exact leaf name, full
+digest and all other metadata agree. The stored descriptor is never rewritten.
+Different leaf names, including hardlinks, remain distinct; capture and descriptor
+leaf symlinks are still rejected by the reader. This compatibility does not
+establish retention or authorize another admission.
+
 `quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
 省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
 在已存在的父目录下以 `0700` 创建。已有目录仍须属于当前用户、权限私有且不是
@@ -1180,3 +1187,8 @@ contract. Reader/output sizing alone proves neither model retention nor savings.
 上限 64000 字节；Markdown 保留 4096 字节正文默认值。显式上限和 UTF-8 字节 cursor
 语义不变。工具输出过大或缺失时，只恢复同一捕获的受影响范围，不重新准入。
 关闭态保持原有契约。页大小与输出预算本身不证明模型保留或成本收益。
+
+通过正常父路径别名再次发布读取引用时，只有解析后的父目录、精确末级文件名、完整
+摘要及其余元数据均一致，才复用已有不可变描述文件；不重写其内容。不同末级文件名
+仍是不同引用，即使它们是硬链接；读取器仍拒绝 capture 或描述文件的末级符号链接。
+此兼容不证明模型保留，也不授权再次准入。

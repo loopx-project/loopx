@@ -264,6 +264,14 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
         write_decision_capture(reference, payload)
     except FileExistsError:
         existing = read_context_read_reference(str(reference))[1]
+        if existing["path"] != payload["path"]:
+            # Readers resolve parent aliases, while retaining the exact leaf.
+            # Compare that same spelling without rewriting immutable metadata
+            # or treating a different leaf (including a hardlink) as identical.
+            original = Path(existing["path"]).expanduser().absolute()
+            current = path.expanduser().absolute()
+            if original.parent.resolve(strict=True) / original.name == current.parent.resolve(strict=True) / current.name:
+                existing["path"] = payload["path"]
         if json.dumps(existing, sort_keys=True) != json.dumps(payload, sort_keys=True):
             raise ValueError("original reader reference changed; restore it without rerunning admission") from None
     return reference

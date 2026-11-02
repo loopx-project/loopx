@@ -138,7 +138,9 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
     {failed_turn: {...failed, error_code: "host_gate"}}, {failed_turn: {...failed, status: "interrupted"}}]) {
     assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, false);
   }
-  for (const change of [{status: "closed"}, {session_mode: "attached_host"}, {agent_id: "codex"}]) {
+  for (const change of [{status: "closed"}, {session_mode: "attached_host"}, {agent_id: "codex"},
+    {status: "busy", active_turn_id: "current"}, {status: "ready", active_turn_id: "current"},
+    {status: "busy", active_turn_id: null}]) {
     assert.equal(planBoundConversationRequest({...packet, current_session: {...session, ...change}}).recovery_candidate, false);
   }
   assert.throws(() => planBoundConversationRequest({...packet,

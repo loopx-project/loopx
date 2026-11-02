@@ -1210,6 +1210,9 @@ reaction 清理未完成时，也只恢复原结果 proof，不能再次发送�
 
 ### Core 失败后的原生结果恢复
 
+同一 Core Session 忙碌或仍有活跃 Turn 时，历史原生结果暂不进入读回发现，避免
+占用当前进度所需的共享回复 worker。已核验结果的元数据仍由原关联修复路径负责。
+
 Antigravity 原生端可能已经完成，而 Core 仍保留 transport 失败。原回复 worker
 可以采用既有答复，不准入另一个 Turn，不发送原生输入，也不取消执行。会话的
 typed owner 核验原私聊管家 binding、来源、失败 Turn 和当前授权，并排除附件、
