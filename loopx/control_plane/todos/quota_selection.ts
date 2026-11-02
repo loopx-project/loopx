@@ -1,3 +1,5 @@
+import {COORDINATION_STATE_CONTRACT} from "../coordination/coordination_state_contract.generated.ts";
+import {decodeTodoReadSource, readAgent, pythonFieldText, writeScopes, readScope, readScopes, taskClass} from "./read_codec.ts";
 import {projectTodoSummaryDisplay} from "./context_projection.ts";
 import {isBoundedBlockedRetry} from "../quota/settlement_phase.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
@@ -413,7 +415,8 @@ function quotaPlanningWire(planning: JsonObject): JsonObject {
 /** One quota read boundary composes scope/claim selection, resume, hint
  * visibility and the typed source closure rules. */
 export function projectTodoQuotaPlanning(value: unknown): JsonObject {
-  const request = requireJsonObject(value, "quota planning");
+  let request = requireJsonObject(value, "quota planning");
+  if (request.summary_request !== undefined) request = prepareQuotaSummary(request);
   if (!["todo_quota_planning_request_v0", "todo_quota_planning_request_v1", "todo_quota_planning_request_v2",
       "todo_quota_planning_request_v3", "todo_quota_planning_request_v4"].includes(String(request.schema_version))) {
     throw new EffectRuntimeRequestError("quota planning schema mismatch");
@@ -488,5 +491,211 @@ export function projectTodoQuotaPlanning(value: unknown): JsonObject {
   const planning = {schema_version: "todo_quota_planning_v0", resume_planning: resume, ...selected, ...closure,
     ...(hasSourceContract ? {handoff_lanes: handoff, route_lanes: route} : {}),
     ...(now === null ? {} : frontier)};
-  return referenced ? quotaPlanningWire(planning) : planning;
+  return request.summary_request !== undefined ? composeQuotaSummary(request, planning) :
+    referenced ? quotaPlanningWire(planning) : planning;
+}
+
+type Path = (string | number)[];
+const summaryObject = (v: unknown): v is JsonObject => !!v && typeof v === "object" && !Array.isArray(v);
+const truth = (v: unknown): boolean => Array.isArray(v) ? !!v.length : summaryObject(v) ? !!Object.keys(v).length : !!v;
+const get = (v: JsonObject, k: string, fallback: unknown = null): unknown => Object.hasOwn(v, k) ? v[k] : fallback;
+const summaryRows = (v: unknown): JsonObject[] => Array.isArray(v) ? v.filter(summaryObject) : [];
+
+/** Source selection is part of the existing quota read, using the display owner. */
+export function prepareQuotaSummary(request: JsonObject): JsonObject {
+  const summary = requireJsonObject(request.summary_request, "summary request");
+  const source = decodeTodoReadSource(requireJsonObject(summary.source, "summary source"));
+  const legacy = summary.kind === "project_asset" && !(
+    (Array.isArray(source.items) || Array.isArray(source.first_open_items)) &&
+    ["total_count", "open_count", "done_count"].some(k => Object.hasOwn(source, k)));
+  if (summary.kind !== "user" && summary.kind !== "project_asset") {
+    throw new EffectRuntimeRequestError("invalid quota summary kind");
+  }
+  const pool = requireJsonObject(summary.source_rows, "source rows");
+  const selectedFacts: JsonObject[] = [];
+  let selected: JsonObject[] = projectTodoSummaryDisplay({source: summary.source,
+    handoff_gates: (request.handoff_items as JsonObject[]).map(row => row.display)}, (key, index) => {
+      const lane = pool[key];
+      if (!Array.isArray(lane)) throw new EffectRuntimeRequestError("quota summary source lane missing");
+      selectedFacts.push(requireJsonObject(lane[index], "quota source fact"));
+    }).map((payload, index) => {
+      const fact = selectedFacts[index]!;
+      const presentation = [...fact.presentation as [number, number, string, string]];
+      // Display rows already crossed JSON in the previous transaction. Integral
+      // floats therefore supplied Python int coordinates at that boundary.
+      const legacySchema = COORDINATION_STATE_CONTRACT.todo_read_record.item_schema_version;
+      const legacy = payload.schema_version === legacySchema || payload.schema_version == null && truth(payload.source_section);
+      const unknownSchema = payload.schema_version != null && ![legacySchema, COORDINATION_STATE_CONTRACT.todo_domain_record.item_schema_version].some(schema => schema === payload.schema_version);
+      if ((legacy || unknownSchema) && typeof payload.index === "number" && Number.isInteger(payload.index) && payload.index >= 0) {
+        presentation[1] = payload.index; presentation[2] = ""; presentation[3] = "";
+      }
+      return {...fact, presentation, payload, display_source: {record: payload}};
+    });
+  if (legacy && !selected.length && summary.next_fact) {
+    const fact = requireJsonObject(summary.next_fact, "next fact");
+    if (truth(requireJsonObject(fact.payload, "next payload").text)) selected = [fact];
+  }
+  selected.sort((a, b) => {
+    const x = a.presentation as [number, number, string, string], y = b.presentation as typeof x;
+    return x[0] - y[0] || x[1] - y[1] || authorityUnicodeCompare(x[2], y[2]) || authorityUnicodeCompare(x[3], y[3]);
+  });
+  const selection = requireJsonObject(request.selection, "selection");
+  return {...request, summary_request: {...summary, legacy}, selection: {...selection, items: selected,
+    source_open_count: legacy ? get(source, "open", get(source, "open_count", selected.length)) : get(source, "open_count", selected.length)}};
+}
+
+/** Complete presentation decisions stay here. Copies are explicit transport
+ * references to values the old Python projection retained from its input. */
+export function composeQuotaSummary(request: JsonObject, planning: JsonObject): JsonObject {
+  const input = requireJsonObject(request.summary_request, "summary request");
+  const source = decodeTodoReadSource(requireJsonObject(input.source, "summary source"));
+  const legacy = input.legacy === true;
+  const selection = requireJsonObject(request.selection, "selection");
+  const agent = String(selection.agent_id ?? "").trim();
+  const scoped = selection.user_gate_scope === true;
+  const lanes = requireJsonObject(planning.lanes, "lanes");
+  const lane = (name: string): JsonObject[] => {
+    const value = lanes[name];
+    if (!Array.isArray(value)) throw new EffectRuntimeRequestError(`quota summary lane missing: ${name}`);
+    return value.map(row => requireJsonObject(row, "quota summary lane row"));
+  };
+  const resume = requireJsonObject(planning.resume_planning, "resume");
+  const capacity = summaryObject(resume.capacity_fields) ? resume.capacity_fields : {};
+  const value = {...source, ...capacity};
+  const copies: {source: Path; target: Path}[] = [];
+  const refs = new Map<object, Path>();
+  const integers = new Map<object, string>();
+  const integerCopies: {value: string; target: Path}[] = [];
+  const integer = (value: string): JsonObject => {const marker = {}; integers.set(marker, value); return marker;};
+  const ref = (path: Path): JsonObject => {const marker = {}; refs.set(marker, path); return marker;};
+  const field = (key: string, fallback: any = null): any => Object.hasOwn(capacity, key) ? capacity[key] :
+    Object.hasOwn(source, key) ? ref([key]) : fallback;
+  const sourceCountKey = legacy && Object.hasOwn(source, "open") ? "open" : "open_count";
+  const count = lanes.open_count;
+  const summary: JsonObject = {
+    schema_version: field("schema_version"),
+    source_section: legacy ? truth(value.source_section) ? field("source_section") : "project_asset" : field("source_section"),
+    total_count: field(legacy && Object.hasOwn(value, "total") ? "total" : "total_count"),
+    open_count: count, work_counts: planning.work_counts,
+    done_count: field(legacy && Object.hasOwn(value, "done") ? "done" : "done_count"),
+    ...(!legacy ? {deferred_count: field("deferred_count"), source_completeness: planning.source_completeness} : {}),
+    first_open_items: lane("display_open_items").slice(0, 3), first_executable_items: lane("executable_items").slice(0, 3),
+    ...(!legacy ? {gate_open_items: lanes.gate_items} : {}),
+    monitor_open_items: lanes.monitor_items, monitor_due_count: lane("monitor_due_items").length,
+    monitor_due_items: lane("monitor_due_items").slice(0, 1), watch_only_monitor_count: lane("watch_only_monitor_items").length,
+    watch_only_monitor_due_count: lane("watch_only_monitor_due_items").length,
+    watch_only_monitor_due_items: lane("watch_only_monitor_due_items").slice(0, 1),
+    non_watch_only_monitor_due_items: lane("non_watch_only_monitor_due_items").slice(0, 1),
+    monitor_capability_blocked_due_count: lane("monitor_capability_blocked_due_items").length,
+    monitor_capability_blocked_due_items: lanes.monitor_capability_blocked_due_items,
+    ...(!legacy ? {monitor_schedule_gap_count: lane("monitor_schedule_gap_items").length,
+      monitor_schedule_gap_items: lane("monitor_schedule_gap_items").slice(0, 1)} : {}),
+    active_next_action_items: lanes.active_next_action_items,
+    active_next_action_executable_items: lanes.active_next_action_executable_items,
+    backlog_items: lane("display_open_items").slice(0, 8), executable_backlog_items: lane("executable_items").slice(0, 8),
+  };
+  const display = (items: JsonObject[]) => projectTodoSummaryDisplay({items: items.map(record => ({record})), strip_text: true});
+  if (!legacy) {
+    for (const key of ["goal_acceptance_contract", "advancement_frontier_revision_index"]) if (summaryObject(value[key])) summary[key] = field(key);
+    if (lane("watch_only_monitor_items").length) summary.convergence_open_count = field("convergence_open_count");
+    const recent = summaryRows(value.recent_completed_advancement_items).filter(row => !agent || readAgent(row.claimed_by) === agent);
+    if (recent.length) summary.recent_completed_advancement_items = display(recent);
+    if (Array.isArray(value.vision_wait_states)) summary.vision_wait_states = value.vision_wait_states.flatMap((row: any, index: number) =>
+      summaryObject(row) && row.agent_id === agent ? [ref(["vision_wait_states", index])] : []);
+    const blockers = lane("all_open_items").filter((row: JsonObject) => row.task_class === "blocker" &&
+      String(row.status || "").trim().toLowerCase() === "blocked" && String(row.reason || "").trim());
+    const current = blockers.filter((row: JsonObject) => agent && readAgent(row.claimed_by) === agent);
+    if (blockers.length) summary.blocker_open_count = blockers.length;
+    if (current.length) {summary.current_agent_blocker_count = current.length; summary.current_agent_blocker_items = current.slice(0, 2);}
+    if (truth(planning.closure_intent)) {
+      const closure = requireJsonObject(planning.closure_intent, "closure intent");
+      summary.closure_intent = {...Object.fromEntries(Object.keys(source.closure_intent as JsonObject).map(key => [key, ref(["closure_intent", key])])), ...closure};
+    }
+  }
+  for (const key of ["frontier_deadline", "blocked_retry_wait"]) if (truth(planning[key])) summary[key] = planning[key];
+  const monitor = value.monitor_writeback;
+  if (summaryObject(monitor) && monitor.supported === false) {
+    const label = pythonFieldText(monitor, "source").trim();
+    summary.monitor_writeback = {supported: false, ...(label ? {source: label} : {})};
+  }
+  Object.assign(summary, planning.claim_visibility, resume.deferred_lanes,
+    ...(!legacy ? [resume.resume_blocked_lanes] : []), planning.handoff_lanes, planning.route_lanes);
+  if (!legacy) Object.assign(summary, successionWarning(value, ref, input.integer_counts, integer));
+  const claimed = scoped ? null : value.claimed_open_count;
+  if (lane("claimed_open_items").length || truth(claimed)) {
+    summary.claimed_open_count = truth(claimed) ? field("claimed_open_count") : lane("claimed_open_items").length;
+    summary.unclaimed_open_count = !scoped && Object.hasOwn(value, "unclaimed_open_count") ? field("unclaimed_open_count") :
+      Math.max(0, Math.trunc(Number(lanes.open_count || 0)) - lane("claimed_open_items").length);
+  }
+  if (truth(lanes.claim_scope)) summary.claim_scope = lanes.claim_scope;
+  const allCount = () => field(sourceCountKey, lane("all_open_items").length);
+  if (!legacy && scoped) summary.all_open_count = allCount();
+  if (truth(lanes.agent_scope_filter)) {
+    summary.agent_scope_filter = lanes.agent_scope_filter;
+    if (legacy) summary.all_open_count = allCount();
+    summary.other_agent_scoped_open_count = lane("other_agent_scoped_items").length;
+    summary.other_agent_scoped_items = display(lane("other_agent_scoped_items").slice(0, 16));
+  }
+  if (scoped && lane("user_action_open_items").length) {
+    summary.user_action_open_count = lane("user_action_open_items").length;
+    summary.user_action_items = display(lane("user_action_open_items").slice(0, 16));
+  }
+  if (truth(lanes.user_action_agent_scope_filter)) {
+    summary.user_action_agent_scope_filter = lanes.user_action_agent_scope_filter;
+    summary.other_agent_bound_user_action_open_count = lane("other_agent_bound_user_action_items").length;
+    summary.other_agent_bound_user_action_items = display(lane("other_agent_bound_user_action_items").slice(0, 16));
+  }
+  function encode(value: any, path: Path): any {
+    if (value && typeof value === "object" && integers.has(value)) {
+      integerCopies.push({value: integers.get(value)!, target: path}); return null;
+    }
+    if (value && typeof value === "object" && refs.has(value)) {
+      copies.push({source: refs.get(value)!, target: path}); return null;
+    }
+    if (Array.isArray(value)) return value.map((row, i) => encode(row, [...path, i]));
+    if (summaryObject(value)) return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, encode(child, [...path, key])]));
+    return value;
+  }
+  return {schema_version: "todo_quota_summary_wire_v1", summary: encode(summary, []), source_copies: copies, integer_copies: integerCopies};
+}
+
+function successionWarning(value: JsonObject, ref: (path: Path) => JsonObject,
+  integerFacts: unknown, integer: (value: string) => JsonObject): JsonObject {
+  const warning = summaryObject(value.todo_succession_warning) ? value.todo_succession_warning : {};
+  const key = Array.isArray(warning.items) ? "todo_succession_warning" : "completed_without_successor_items";
+  const source = key === "todo_succession_warning" ? warning.items : value[key];
+  const items = (Array.isArray(source) ? source : []).flatMap((row: unknown, index: number) => {
+    if (!summaryObject(row)) return [];
+    const path: Path = key === "todo_succession_warning" ? [key, "items", index] : [key, index];
+    const copy = (name: string) => Object.hasOwn(row, name) ? ref([...path, name]) : null;
+    const projected: JsonObject = {index: copy("index"), text: copy("text")};
+    for (const name of [
+      "schema_version", "todo_id", "role", "status", "priority", "title", "archive_state", "source_section",
+      "task_class", "action_kind", "task_domain", "task_repository", "continuation_policy", "required_write_scopes",
+      "required_capabilities", "target_capabilities", "decision_scope", "required_decision_scopes", "claimed_by",
+      "blocks_agent", "excluded_agents", "unblocks_todo_id", "resume_when", "resume_monitor_generation",
+      "resume_condition", "resume_ready", "no_followup", "successor_todo_ids", "target_key", "cadence", "next_due_at",
+      "expires_at", "last_checked_at", "result_hash", "consecutive_no_change", "material_change",
+      "material_change_generation", "max_no_change_before_replan", "route_continuation_replan_required",
+      "route_continuation_reason", "route_id", "route_key", "completed_at", "updated_at", "superseded_by",
+      "completion_continuation", "completion_recovery", "completion_turn_key", "done", "succession_tracked", "recommended_action",
+    ]) if (row[name] != null) projected[name] = copy(name);
+    for (const [name, normalized] of [["required_write_scopes", writeScopes(row.required_write_scopes)],
+      ["decision_scope", readScope(row.decision_scope)], ["required_decision_scopes", readScopes(row.required_decision_scopes)]] as const) {
+      if (normalized && (!Array.isArray(normalized) || normalized.length)) projected[name] = normalized;
+      else delete projected[name];
+    }
+    projected.task_class = taskClass({...row, text: pythonFieldText(row, "text")});
+    return [projected];
+  }).slice(0, 8);
+  const facts = summaryObject(integerFacts) ? integerFacts : {};
+  const encoded = Object.hasOwn(warning, "count") ? facts.warning : facts.source;
+  const numeric = typeof encoded === "string" ? BigInt(encoded) : BigInt(items.length);
+  const positive = numeric > 0n;
+  if (!positive && !items.length) return {};
+  const count = numeric <= 0n ? 0 : numeric <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(numeric) : integer(String(numeric));
+  const payload = {schema_version: Object.hasOwn(warning, "schema_version") ? ref(["todo_succession_warning", "schema_version"]) : "todo_succession_warning_v0",
+    reason_code: Object.hasOwn(warning, "reason_code") ? ref(["todo_succession_warning", "reason_code"]) : "completed_advancement_without_successor", count, items,
+    recommended_action: Object.hasOwn(warning, "recommended_action") ? ref(["todo_succession_warning", "recommended_action"]) : "Review remaining authorized Goal acceptance and the runnable frontier; follow the current quota settlement/replan contract. A summary warning does not authorize terminal action."};
+  return {completed_without_successor_count: count, completed_without_successor_items: items, todo_succession_warning: payload};
 }

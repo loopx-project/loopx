@@ -1118,8 +1118,9 @@ closure, not completion of all Todo fields or Goal promotion.
 Bounded prerequisite: `todos/public_update.ts` now composes authoring scope,
 external-wait topology and Monitor/field planning over one locked source.
 The public Python writer no longer sequences their leaf RPCs or derives the
-Monitor wait baseline. `update_source.py` supplies complete compact active/archive
-facts, never a display-limited inventory. A partial topology edit validates its
+Monitor wait baseline. Correction (2026-11-02): `update_source.py` had no
+remaining caller and is removed; planning still requires complete compact
+active/archive facts, never a display-limited inventory. A partial topology edit validates its
 retained wait; copy-only edits preserve the original fence without re-arming it.
 Explicitly clearing the condition still permits changing its former topology.
 Locked completion proof is checked before this pure plan, so a stale proof wins
@@ -2835,3 +2836,6 @@ The native query now owns recovery lookup and completion capability evidence,
 with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.
 
 - Summary-display final-head qualification and preserved tail cohorts: [2026-10-27 follow-up](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md).
+- Quota summary composition in one `todo.quota_planning.project` crossing with source references: [2026-11-02 cutover](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.md).
+- Complete global summary and gate read transactions: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.md).
+- Complete global-risk read ownership: [2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.md).

@@ -100,7 +100,7 @@ export const researchNativeReadingScenario = {
       await page.addInitScript(() => {if (!localStorage.getItem("loopx-pw-locale")) localStorage.setItem("loopx-pw-locale", "zh-CN");});
       await page.goto(`${owner.base}/chat/?goalId=${fixture.goal_id}&view=research&statusUrl=%2Fstatus.json`, {waitUntil: "domcontentloaded"});
       const native = page.getByRole("region", {name: "原生测量", exact: true});
-      const selector = page.locator(".research-progress select");
+      const selector = page.locator(".research-progress > header select");
       await native.waitFor();
       const pausedClock = await page.addStyleTag({content: "*, *::before, *::after {animation-play-state: paused !important;}"});
       const tabs = page.getByRole("navigation", {name: "Goal 视图", exact: true});

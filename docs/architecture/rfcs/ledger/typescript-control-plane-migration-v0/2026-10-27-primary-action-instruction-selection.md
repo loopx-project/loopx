@@ -51,6 +51,9 @@ scalar/label codecs and facts carrier only after the last Python text/label
 consumer exits and a complete typed compatibility codec proves Python coercion,
 Unicode, truncation and trace parity. This slice does not retire those owners.
 
+Correction (2026-11-02): `protocol_monitor_action` had no remaining caller
+and is removed. The resolution trace remains live.
+
 ## Vocabulary budget
 
 The registry's `meaning` says "module_budget counts modules under loopx/ whose text carries the standalone field token" and "the token count stays until Q11 decides whether the syntactic metric replaces it"; this deliberately conservative lexical proxy protects against unexplained growth in potential field readers.

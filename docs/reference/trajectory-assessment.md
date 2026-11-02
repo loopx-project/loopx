@@ -644,6 +644,46 @@ journey or qualify the model assessor.
 
 ## Measured solver session cost (optional)
 
+### Find expensive Turns and inspect their evidence
+
+In a Goal's **Research** view, select a registered capture with solver usage.
+The first screen keeps aggregate cost and coverage together; expand **Sources
+and usage**, then **Find time and input hotspots** to inspect individual Turns.
+No analysis execution or model call is needed for this path.
+
+![Research entry with measured totals and unknown attribution](../images/research-turn-costs-overview.png)
+
+Choose **Most input**, **Longest elapsed** or **Chronological**. Each page shows
+at most eight Turns with elapsed time, input, its cached subset, uncached input
+and output. Cached input is already included in input. An unfinished Turn is
+labelled observed-only; a dash means unavailable, never zero. The following
+synthetic example puts the largest input Turn first, even though another Turn
+took longest.
+
+![Turn input hotspot and cached versus uncached counters](../images/research-turn-costs-desktop.png)
+
+**Counter evidence** opens the existing source reader. It shows the preceding
+cumulative counter observation, this Turn's start, its latest counters and its
+completion when present, with original line numbers and capture digest. These
+are filtered counter/lifecycle fields, not a contiguous transcript: prompts,
+tool content and account metadata are excluded. Escape closes the reader and
+returns focus to the selected Turn. Sorting, paging and evidence reading also
+work in the narrow layout.
+
+![Narrow Turn cost reader](../images/research-turn-costs-mobile.png)
+
+The read endpoint accepts only the registered Goal, pack, analysis key and Turn
+identifier. It verifies the complete source digest before returning evidence;
+a missing or changed source stays unavailable rather than being substituted.
+
+This inspection compares Turns only within the selected capture. Turn input
+is **not** control-layer input; the separate measured LoopX input share retains
+its own coverage rules. Elapsed time includes tools, waiting and orchestration.
+Different source revisions, capture windows and incomplete runs are not matched
+experiments. These counters do not establish waste, monetary cost, avoidable
+time or a causal benefit from LoopX. The screenshots use synthetic data from the
+retained `research-turn-costs` browser scenario, not a live benchmark.
+
 ### Native outcome readback (optional, separate from analyzer judgments)
 
 The trusted provider/Agent may add `--native-outcomes-json native-outcomes.json`

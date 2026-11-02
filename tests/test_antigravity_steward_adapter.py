@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
 from copy import deepcopy
 import json
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -219,6 +221,46 @@ def language_server(monkeypatch):
 
 def adapter_for(tmp_path, **kwargs):
     return AntigravityAdapter.start(work_dir=tmp_path, objective="Act as LoopX Steward.", **kwargs)
+
+
+@pytest.mark.parametrize(("unicode_source", "malformed"), [("ps", False), ("lsof", False), ("ps", True), ("lsof", True)])
+def test_process_discovery_decodes_utf8_before_verifying_the_local_endpoint(
+    monkeypatch, language_server, unicode_source, malformed,
+):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    real_check_output = subprocess.check_output
+    calls = []
+    port = language_server["url"].rsplit(":", 1)[1]
+    outputs = {
+        "ps": "123 /Applications/Antigravity.app/language_server --csrf_token synthetic-csrf-token\n",
+        "lsof": f"language_server 123 user 10u IPv4 0 TCP 127.0.0.1:{port} (LISTEN)\n",
+    }
+    outputs[unicode_source] = outputs[unicode_source].replace("language_server", "中文🚀/language_server", 1)
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "gbk")
+    # The process/port discovery is POSIX-owned; simulate its listings on
+    # Windows while retaining actual child pipes and the loopback HTTP owner.
+    monkeypatch.setattr(provider.os, "getuid", lambda: 501, raising=False)
+
+    def listing(command, **kwargs):
+        calls.append(command[0])
+        output = outputs[command[0]].encode("utf-8")
+        if malformed and command[0] == unicode_source:
+            output += b"\xff\n"
+        return real_check_output(
+            [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({output!r})"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(provider.subprocess, "check_output", listing)
+    discovered = provider.discover_antigravity_language_server(env={})
+    assert discovered == {
+        "url": language_server["url"], "csrf_token": "synthetic-csrf-token",
+        "pid": 123, "source": "process_discovery",
+    }
+    assert calls == ["ps", "lsof"]
+    assert [method for method, _ in language_server["calls"]] == ["GetCascadeModelConfigData"]
+    assert language_server["sent_count"] == 0
 
 
 def test_cancel_failure_cannot_replace_the_original_provider_error(tmp_path, language_server):
