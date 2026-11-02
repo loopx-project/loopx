@@ -149,6 +149,21 @@ def test_display_limits_report_complete_sources_and_actual_shown_items(read_cli)
         assert coverage["truncated"] == (len(payload["todos"]) < available)
 
 
+def test_read_lenses_report_the_actual_canonical_source(read_cli):
+    provider, run, _, state = read_cli
+    before = state.read_bytes()
+    expected = f"{provider}_v0"
+    for options in [(), ("--agent-id", "agent-a"), ("--limit", "1"),
+                    ("--thin",), ("--summary",), ("--todo-id", OWN),
+                    ("--todo-id", "todo_missing"), ("--status", "done")]:
+        payload = run(*options)
+        assert payload["source"] == expected
+        assert payload["authority_read"]["source_authority"] == expected
+        assert [source["source_id"] for source in payload["projection_envelope"]["sources"]] == [expected]
+    assert f"- source: `{expected}`" in run(format_name="markdown")
+    assert state.read_bytes() == before
+
+
 def test_read_entrypoint_does_not_load_mutation_owners(read_cli):
     _, run, _, _ = read_cli
     assert run(isolated=True)["todo_count"] == 3
