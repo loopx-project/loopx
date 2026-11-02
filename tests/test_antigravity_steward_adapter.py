@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
 from copy import deepcopy
 import json
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -219,6 +221,46 @@ def language_server(monkeypatch):
 
 def adapter_for(tmp_path, **kwargs):
     return AntigravityAdapter.start(work_dir=tmp_path, objective="Act as LoopX Steward.", **kwargs)
+
+
+@pytest.mark.parametrize(("unicode_source", "malformed"), [("ps", False), ("lsof", False), ("ps", True), ("lsof", True)])
+def test_process_discovery_decodes_utf8_before_verifying_the_local_endpoint(
+    monkeypatch, language_server, unicode_source, malformed,
+):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    real_check_output = subprocess.check_output
+    calls = []
+    port = language_server["url"].rsplit(":", 1)[1]
+    outputs = {
+        "ps": "123 /Applications/Antigravity.app/language_server --csrf_token synthetic-csrf-token\n",
+        "lsof": f"language_server 123 user 10u IPv4 0 TCP 127.0.0.1:{port} (LISTEN)\n",
+    }
+    outputs[unicode_source] = outputs[unicode_source].replace("language_server", "中文🚀/language_server", 1)
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "gbk")
+    # The process/port discovery is POSIX-owned; simulate its listings on
+    # Windows while retaining actual child pipes and the loopback HTTP owner.
+    monkeypatch.setattr(provider.os, "getuid", lambda: 501, raising=False)
+
+    def listing(command, **kwargs):
+        calls.append(command[0])
+        output = outputs[command[0]].encode("utf-8")
+        if malformed and command[0] == unicode_source:
+            output += b"\xff\n"
+        return real_check_output(
+            [sys.executable, "-c", f"import sys; sys.stdout.buffer.write({output!r})"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(provider.subprocess, "check_output", listing)
+    discovered = provider.discover_antigravity_language_server(env={})
+    assert discovered == {
+        "url": language_server["url"], "csrf_token": "synthetic-csrf-token",
+        "pid": 123, "source": "process_discovery",
+    }
+    assert calls == ["ps", "lsof"]
+    assert [method for method, _ in language_server["calls"]] == ["GetCascadeModelConfigData"]
+    assert language_server["sent_count"] == 0
 
 
 def test_cancel_failure_cannot_replace_the_original_provider_error(tmp_path, language_server):
@@ -475,6 +517,45 @@ def _native_clock(monkeypatch, language_server, frames):
     # Keep HTTP/socket/thread clocks real. Only the provider's invocation clock
     # advances, in response to completed synthetic native HTTP observations.
     monkeypatch.setattr(provider, "time", SimpleNamespace(monotonic=lambda: language_server["now"], sleep=time.sleep))
+
+
+def test_native_http_progress_reaches_owner_before_final_without_hidden_reasoning(
+    tmp_path, language_server, monkeypatch
+):
+    from loopx.extensions.lark.private_progress import project_progress
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    think = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING",
+             "plannerResponse": {"thinking": "hidden native reasoning"}}
+    command = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_GENERATING",
+               "runCommand": {"commandLine": f"cat {tmp_path}/source.txt --token private-value",
+                              "combinedOutput": "private stdout"}}
+    final = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+             "plannerResponse": {"response": "verified final", "stopReason": "STOP_REASON_STOP_PATTERN"}}
+    frames = [{"at": 1, "steps": [user, think], "status": "CASCADE_RUN_STATUS_RUNNING"},
+              {"at": 2, "steps": [user, think, command], "status": "CASCADE_RUN_STATUS_RUNNING"},
+              {"at": 3, "steps": [user, think, command], "status": "CASCADE_RUN_STATUS_RUNNING"},
+              {"at": 4, "steps": [user, dict(think, status="CORTEX_STEP_STATUS_DONE"),
+                  {**command, "status": "CORTEX_STEP_STATUS_DONE", "runCommand": {**command["runCommand"], "exitCode": 0}}, final],
+               "status": "CASCADE_RUN_STATUS_IDLE"}]
+    _native_clock(monkeypatch, language_server, frames)
+    adapter = adapter_for(tmp_path, runtime_profile="trusted_owner")
+    state, events, views = {}, [], []
+
+    def observed(kind, payload):
+        event = {"event_id": str(len(events)), "kind": kind, "payload": payload}
+        events.append(event)
+        views.append((language_server["now"], project_progress(state, [event], owner_private=True)))
+
+    result = adapter.start_turn("read the source", observed)
+    assert result["message"] == "verified final"
+    assert any(at < 4 and view and "正在思考" in view for at, view in views)
+    assert any(at < 4 and view and "source.txt" in view for at, view in views)
+    assert not any(secret in json.dumps(events) for secret in (
+        "hidden native reasoning", "private-value", "private stdout", str(tmp_path)))
+    command_events = [event for event in events if event["payload"].get("step", {}).get("kind") == "command"]
+    assert [event["payload"]["method"] for event in command_events] == ["item/started", "item/completed"]
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
 
 
 def test_default_core_keeps_an_original_progressing_invocation_past_five_minutes(tmp_path, language_server, monkeypatch):

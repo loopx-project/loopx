@@ -174,7 +174,7 @@ sample-2：转写正确，却回复到了另一对话
 <h2 id="native-path">开启后，默认交付的是一个读取入口</h2>
 <p>把前面的动作接回产品，当前支持的 Codex 原生 quota 路径是：</p>
 
-<figure class="diagram"><p class="diagram-label">同一次捕获，从保存到读取</p><img src="../../images/context-delivery/context-native-path-v10.svg" alt="Context Delivery 开启后的默认机制路径：完整原始捕获 projection.json、必要视图 required-context.json、小文件引用与按问题逐层选读" width="1200" height="760" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"><pre style="padding:0;margin:0;border:0;background:transparent"><code class="language-text">decision-&lt;id&gt;/
+<figure class="diagram"><p class="diagram-label">同一次捕获，从保存到读取</p><a href="../../images/context-delivery/context-native-path-v10.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的路径图"><img src="../../images/context-delivery/context-native-path-v10.svg" alt="Context Delivery 开启后的默认机制路径：完整原始捕获 projection.json、必要视图 required-context.json、小文件引用与按问题逐层选读" width="1360" height="1020" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><pre style="padding:0;margin:0;border:0;background:transparent"><code class="language-text">decision-&lt;id&gt;/
 ├─ projection.json        原始捕获
 ├─ required-context.json  必要视图
 ├─ delivery.json          full/delta
@@ -201,7 +201,7 @@ loopx --format json quota context-read \
 <li><strong>长内容跨页：</strong> 按 <code>next_command</code> 接读，保留捕获摘要、选择摘要和字节游标，按连续偏移组合正文。某组选读的 EOF 只覆盖该选择。</li>
 <li><strong>遇到未知结构或不适用的来源：</strong> 保留完整内容及原有读取义务，不猜哪些文字可以隐藏。</li>
 </ul>
-<figure class="diagram"><p class="diagram-label">连续性与恢复</p><img src="../../images/context-delivery/context-cycle-v9.svg" alt="Differential：同一有效周期内复用，失效即完整恢复" width="1200" height="620" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"><p><strong>同一有效周期</strong>：完整基线 → 新事实与差分 → 完整还原。</p><p><strong>新周期或已知连续性丢失</strong>：当前完整来源 → 必要事实重新读取。</p><figcaption>未结束的 Turn 保留原捕获、原工作与结算身份。恢复读取不重新执行外部副作用。</figcaption></figure>
+<figure class="diagram"><p class="diagram-label">连续性与恢复</p><a href="../../images/context-delivery/context-cycle-v9.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的连续性图"><img src="../../images/context-delivery/context-cycle-v9.svg" alt="Differential：同一有效周期内复用，失效即完整恢复" width="1200" height="620" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><p><strong>同一有效周期</strong>：完整基线 → 新事实与差分 → 完整还原。</p><p><strong>新周期或已知连续性丢失</strong>：当前完整来源 → 必要事实重新读取。</p><figcaption>未结束的 Turn 保留原捕获、原工作与结算身份。恢复读取不重新执行外部副作用。</figcaption></figure>
 <h2 id="evidence">这些数据说明了什么</h2>
 <p>这组例子把三个收益来源分开了：<strong>少重复搬当前用不上的历史，少发本可合并的读取请求，少重复交付已经核验的不变结构。</strong> 完整来源、要求与恢复路径贯穿其中。</p>
 <p>上面的 reader 数字包含实际 CLI 响应中的分页元数据；本机路径长度会影响少量封装字节。原生投影数字比较捕获正文，周期表比较编码层，三种口径分别列出。示例脚本可复算这些值与完整还原结果。</p>

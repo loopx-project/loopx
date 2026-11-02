@@ -179,6 +179,87 @@ def test_initial_read_exposes_existing_outcome_addresses_without_loading_all_cri
     assert json.loads(detail["content"])["selections"][0]["value"] == outcome
 
 
+@pytest.fixture
+def navigated_decision(decision):
+    decision["agent_identity"] = {"agent_id": "author"}
+    content = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]
+    decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["source"] = "goal_acceptance"
+    outcomes = [{"id": name, "owner_agent_id": owner, "revision": 1,
+        "requirements": [{"id": "tail", "description": text,
+            "future_required_fact": "Keep this unknown requirement field whole."}]}
+        for name, owner, text in [
+            ("current", "author", "Current work must retain the final cancellation condition."),
+            ("dependency", "peer", "The peer dependency must be delivered before publication."),
+            ("independent", "peer", "Read this other complete criterion when it becomes relevant.")]]
+    content.update(status="loaded", ok=True, provider_revision="fixture-current", decision_read_from_provider=True,
+        legacy_fallback_used=False,
+        goal_acceptance_contract={"outcome_requirements": {"schema_version": "loopx_goal_outcomes_v0",
+            "current_lifetime": True, "revision": 7, "outcomes": outcomes}},
+        outcome_context={"schema_version": "outcome_context_navigation_v1", "goal_id": "fixture",
+            "agent_id": "author", "todo_id": "todo_current", "outcome_revision": 7,
+            "provider_revision": "fixture-current", "coverage_complete": True,
+            "suggested_outcome_ids": ["current", "dependency"],
+            "instruction": "Navigation is guidance; other applicable criteria still require reading."})
+    return decision
+
+
+def test_initial_read_uses_current_navigation_without_hiding_peer_constraints(tmp_path, navigated_decision):
+    before = json.loads(json.dumps(navigated_decision))
+    view = native_context_capture_view(navigated_decision, tmp_path)
+    page, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
+    outcomes = before["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert values[prefix + "/0"] == outcomes[0]
+    assert values[prefix + "/1"] == outcomes[1]  # Shared work crosses Agent ownership.
+    assert prefix + "/0/id" not in values  # Do not repeat a delivered parent.
+    assert values[prefix + "/2/id"] == "independent"
+    assert outcomes[2]["requirements"][0]["description"] not in page["content"]
+    detail = read_context_capture(Namespace(capture_file=view["recovery"]["path"],
+        capture_sha256=view["recovery"]["sha256"], format="json", select=[prefix + "/2"],
+        offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert json.loads(detail["content"])["selections"][0]["value"] == outcomes[2]
+    assert json.loads(Path(view["recovery"]["path"]).read_bytes()) == before
+    assert capture_page_range(page, raw=Path(view["recovery"]["path"]).read_bytes(), digest=page["sha256"]) is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("goal_id", "other-goal"), ("agent_id", "other-agent"), ("todo_id", "other-todo"),
+    ("outcome_revision", 6), ("provider_revision", "older-source"),
+    ("coverage_complete", False), ("schema_version", "future-navigation"),
+    ("suggested_outcome_ids", ["current", "missing-outcome"]),
+])
+def test_initial_read_does_not_expand_unbound_navigation(tmp_path, navigated_decision, field, value):
+    source = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]
+    source["content"]["outcome_context"][field] = value
+    view = native_context_capture_view(navigated_decision, tmp_path)
+    page, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
+    assert values[prefix + "/0/id"] == "current" and prefix + "/0" not in values
+    assert "Current work must retain the final cancellation condition." not in page["content"]
+    assert values["/interaction_contract/agent_channel/work_context/sources/0/content/outcome_context"] == source["content"]["outcome_context"]
+
+
+@pytest.mark.parametrize("failure", ["source_incomplete", "legacy_source", "old_lifetime", "ambiguous_outcome", "conflicting_agent"])
+def test_initial_read_keeps_uncertain_sources_on_the_existing_detail_route(tmp_path, navigated_decision, failure):
+    content = navigated_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]
+    declaration = content["goal_acceptance_contract"]["outcome_requirements"]
+    if failure == "source_incomplete":
+        content["read_complete"] = False
+    elif failure == "legacy_source":
+        content["legacy_fallback_used"] = True
+    elif failure == "old_lifetime":
+        declaration["current_lifetime"] = False
+    elif failure == "ambiguous_outcome":
+        declaration["outcomes"].append({"id": "current", "requirements": ["A different captured revision."]})
+    else:
+        navigated_decision["agent_id"] = "different-agent"
+    view = native_context_capture_view(navigated_decision, tmp_path)
+    page, values = read_selection(view["first_read_command"])
+    prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes"
+    assert values[prefix + "/0/id"] == "current" and prefix + "/0" not in values
+    assert "Current work must retain the final cancellation condition." not in page["content"]
+
+
 def test_small_reference_budget_omits_the_whole_initial_command(tmp_path, decision):
     view = native_context_capture_view(decision, tmp_path, max_page_output_bytes=3000)
     assert "first_read_command" not in view

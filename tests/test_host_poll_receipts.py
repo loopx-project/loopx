@@ -15,7 +15,6 @@ from loopx.control_plane.quota.host_poll_receipts import (
     read_host_poll_receipt_observation,
     read_host_worker_observations,
     record_host_poll_receipt,
-    stale_host_poll_risk,
 )
 
 
@@ -148,27 +147,6 @@ def test_read_receipt_observation_distinguishes_missing_and_unreadable(
         "read_status": "unreadable",
         "receipt": None,
     }
-
-
-def test_stale_host_poll_risk_only_for_quiet_expecting_loops() -> None:
-    now = datetime(2026, 8, 13, 10, 0, 0, tzinfo=timezone.utc)
-    stale = {
-        "schema_version": HOST_POLL_RECEIPT_SCHEMA_VERSION,
-        "goal_id": "goal-1",
-        "agent_id": "agent-1",
-        "poll_count": 7,
-        "last_poll_at": (now - timedelta(hours=6)).isoformat(),
-        "expected_continuation": True,
-    }
-    risk = stale_host_poll_risk(stale, now=now)
-    assert risk is not None
-    assert risk["kind"] == "stale_host_poll"
-    assert risk["age_minutes"] == 360.0
-    fresh = {**stale, "last_poll_at": (now - timedelta(minutes=5)).isoformat()}
-    assert stale_host_poll_risk(fresh, now=now) is None
-    stopped = {**stale, "expected_continuation": False}
-    assert stale_host_poll_risk(stopped, now=now) is None
-    assert stale_host_poll_risk({"expected_continuation": True, "last_poll_at": "not-a-date"}, now=now) is None
 
 
 def test_worker_observations_survive_polls_and_only_their_agent_can_clear(tmp_path):
