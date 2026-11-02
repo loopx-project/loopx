@@ -56,6 +56,13 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   Argon tiers must be offered by the local account and match the requested reasoning effort.
   A missing original cascade fails resume without silently starting a replacement. Stop waits
   for the native cascade to become idle; timeout or partial output is not successful completion.
+- Antigravity manager inputs place the complete original user message before the frozen Core
+  evidence, encoding that message as a JSON string so whitespace and quoted transport markers
+  remain exact. The full authorized snapshot still travels inline; this framing adds no
+  progressive reader, context truncation or new tools. Original-result recovery recognizes
+  both this framing and historical evidence-first inputs, with the same source, input-time,
+  prompt-hash and native terminal checks. RPC fixtures qualify serialization and recovery;
+  installed provider limits and real-model adoption still need separate evidence.
 - `trusted_owner` applies to the local private owner-manager and a native private steward
   binding freshly verified by the existing Core conversation owner. That owner checks the
   App, owner principal, private source, current resource grant and frozen Session identity.
