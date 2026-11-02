@@ -65,6 +65,8 @@ def make_progress_cli_fixture(root: Path, provider: str, scenario: str) -> dict:
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
         "domain": "synthetic-typed-progress",
+        # Individual comparison journeys explicitly enable Stride below.
+        "execution_profile": {"stride_strategy": "off"},
         "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
         "quota": {"compute": 1.0, "window_hours": 24},
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},

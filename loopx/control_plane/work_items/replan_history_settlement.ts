@@ -70,7 +70,6 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
           settlement.replay_phase === "settled" && settlement.writeback_run != null &&
           settlement.monitor_phase !== "settled") {
         qualified.add(key);
-
       }
     }
     return projectReplanHistory({...request, runs}, qualified);
