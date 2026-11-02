@@ -4,10 +4,31 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..effect_runtime import effect_runtime_result
 from ..todos.completion_validation_projection import (
     pending_completion_validation_todo,
 )
 from ..todos.contract import normalize_todo_id
+
+
+def qualified_open_todo_semantic_checkpoint(
+    delivery_run: dict[str, Any] | None, *, goal_id: str,
+    todo_id: str, agent_id: str | None,
+) -> bool:
+    """Transport prepared or exact receipted facts to the shared TS qualifier."""
+    if not isinstance(delivery_run, dict) or agent_id is None:
+        return False
+    identity = delivery_run.get("settlement_identity")
+    if not isinstance(identity, dict):
+        return False
+    turn_id = identity.get("turn_instance_id")
+    if not isinstance(turn_id, str) or not turn_id.strip():
+        return False
+    return effect_runtime_result("settlement.open_todo_semantic_checkpoint", {
+        "identity": {"goal_id": goal_id, "agent_id": agent_id, "todo_id": todo_id,
+                     "turn_instance_id": turn_id},
+        "writeback": delivery_run,
+    }) is True
 
 
 def _is_qualified_semantic_replan_writeback(
@@ -158,6 +179,10 @@ def completion_validation_spend_error(
         is not None
         for summary in summaries
     ):
+        if qualified_open_todo_semantic_checkpoint(
+            delivery_run, goal_id=goal_id, todo_id=normalized_todo_id, agent_id=agent_id,
+        ):
+            return None
         return (
             "quota spend is blocked until controller-declared completion "
             f"validation durably completes todo {normalized_todo_id}"

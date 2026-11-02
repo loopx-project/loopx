@@ -2404,6 +2404,12 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         _initialize_git_checkout(project)
         todo_id = SELECTED_REPLAN_TODO_ID
     _initialize_fixture_authority(project, runtime, provider=provider)
+    if writeback_kind == "replan":
+        # This replay fixture supplies the ordinary typed replan delta. Keep
+        # its strategy explicit; Stride decision followthrough is tested separately.
+        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                                  "--execution-stride-strategy", "off", "--execute")
+        assert rc == 0, configured
     turn_id = "turn-same-todo-writeback"
     host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
     guard_args = (
@@ -2522,7 +2528,10 @@ def test_in_flight_progress_preserves_todo_across_heartbeat_settlements(
     ]
     assert "--delivery-boundary <boundary>" in first_writeback
     writeback_step = guard["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
-    assert "vision_authoring" not in writeback_step
+    assert writeback_step["vision_authoring"]["schema_version"] == "goal_vision_replan_contract_v0"
+    checkpoint = writeback_step["semantic_closeout_command_template"]
+    assert "--delivery-boundary semantic_closeout" in checkpoint and "<boundary>" not in checkpoint
+    assert f"--turn-instance-id {first_turn_id}" in checkpoint
     assert "outcome_gap requires semantic_closeout" in writeback_step["precondition"]
     offered = writeback_step["precondition"].split("; outcome=", 1)[1].split(".", 1)[0].split("|")
     blocked = {

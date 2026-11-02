@@ -53,6 +53,13 @@ test("ordinary completion is conditional on deliverable acceptance, not Turn acc
   assert.match(plan.steps[0].precondition,
     /--result-file requires approved Goal acceptance criteria bound to this Todo, not merely a Todo validator/);
   assert.match(plan.steps[0].precondition, /Todo done does not settle the Turn/);
+  assert.match(plan.steps[0].precondition, /unfinished Todo open with its original declaration/);
+  assert.doesNotMatch(plan.steps[0].precondition, /Prior-feedback|semantic_closeout/);
+  assert.match(plan.steps[1].precondition, /new evidence produced or obtained by this admitted work.*artifact\/input/);
+  assert.match(plan.steps[1].precondition, /Prior-feedback readback.*deterministic repetition without new information are context/);
+  assert.match(plan.steps[1].precondition, /not this Turn's progress; use them to advance the task first/);
+  assert.match(plan.steps[1].precondition, /Follow the remaining plan.*yield for freshly guarded continuation/);
+  assert.doesNotMatch(plan.steps[0].precondition, /spend before the next decision/);
   assert.match(plan.steps[1].precondition, /--agent-vision-json/);
   assert.match(plan.steps[1].precondition, /path_delta.*evidence_refs/);
   assert.match(plan.steps[1].precondition, /acceptance_summary/);
@@ -93,11 +100,13 @@ test("in-flight validation offers completion only after original deliverable acc
   assert.equal(plan.steps[0].command_template, "ordinary completion");
   assert.equal(plan.steps[0].command_condition, "todo_deliverable_complete");
   assert.equal(plan.steps[0].conditional, undefined);
-  assert.match(plan.steps[0].precondition, /keep the Todo open with its original declaration/);
-  assert.match(plan.steps[0].precondition, /semantic_closeout.*same Turn; no new guard or binding/);
+  assert.match(plan.steps[0].precondition, /unfinished Todo open with its original declaration/);
+  assert.match(plan.steps[1].precondition, /same Turn; no new guard or binding/);
   assert.match(plan.steps[1].precondition, /^validation succeeded/);
   assert.match(plan.steps[1].precondition, /Route elimination needs evidence/);
   assert.match(plan.steps[1].precondition, /failure alone is not progress/);
+  assert.match(plan.steps[1].precondition, /semantic_closeout.*new decision evidence.*fresh Vision\/path_delta/i);
+  assert.match(plan.steps[1].precondition, /including continue\/no_change when retaining the route/);
   assert.match(
     plan.steps[1].precondition,
     /outcome_gap requires semantic_closeout.*blocker\/evidence IDs.*continuation checks/,
@@ -106,6 +115,33 @@ test("in-flight validation offers completion only after original deliverable acc
   assert.equal(plan.steps[2].command_template, "spend");
   assert.equal(plan.identity.turn_instance_id, "turn");
   assert.equal(plan.steps[3].conditional, true);
+});
+
+test("semantic feedback checkpoint is an exact variant of the current writeback, not another plan", () => {
+  for (const delivery_boundary of [undefined, "in_flight_continuation"]) {
+    const before = turnScopedCliSettlementPlan({...input, delivery_boundary});
+    const checkpoint = "same bound writeback --delivery-boundary semantic_closeout --agent-vision-json <file>";
+    const plan = turnScopedCliSettlementPlan({...input, delivery_boundary,
+      command_templates: {...input.command_templates, semantic_closeout: checkpoint}});
+    assert.deepEqual(plan.identity, before.identity);
+    assert.equal(plan.steps.length, before.steps.length);
+    for (const i of [0, 2, 3]) assert.deepEqual(plan.steps[i], before.steps[i]);
+    assert.equal(plan.steps[1].command_template, before.steps[1].command_template);
+    assert.equal(plan.steps[1].semantic_closeout_command_template, checkpoint);
+    if (delivery_boundary === "in_flight_continuation") {
+      assert.match(plan.steps[1].precondition,
+        /^validation succeeded; Choose one: command_template for ordinary in_flight_continuation without new decision evidence; semantic_closeout_command_template for new decision evidence, route change or Todo completion/);
+    }
+    assert.deepEqual(plan.steps[1].vision_authoring, visionAuthoringContract());
+    const serialized = settlementPlanPayload(plan).ordered_steps as Record<string, unknown>[];
+    assert.equal(serialized[1].semantic_closeout_command_template, checkpoint);
+    assert.match(visionAuthoringContract().continuation_review as string,
+      /candidate usability alone is not completion.*full marginal cost/);
+    assert.match(visionAuthoringContract().continuation_review as string,
+      /useful authorized work.*preserve Stop, budget\/permission limits and genuine waits/);
+  }
+  assert.throws(() => turnScopedCliSettlementPlan({...input,
+    command_templates: {...input.command_templates, semantic_closeout: ""}}), /must be a non-empty string/);
 });
 
 test("Todo-bound semantic planning shares its exact autonomous authoring contract", () => {
