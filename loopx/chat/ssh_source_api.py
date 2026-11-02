@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .control_plane.goals.ssh_lifecycle_transport import (
+from ..control_plane.goals.ssh_lifecycle_transport import (
     apply_ssh_goal_lifecycle,
 )
-from .control_plane.status.ssh_tunnel import ensure_ssh_source
-from .status_server import is_loopback_host
+from ..control_plane.status.ssh_tunnel import ensure_ssh_source
+from ..status_server import is_loopback_host
 
 
 SSH_SOURCE_ENSURE_PATH = "/api/ssh-source/ensure"
