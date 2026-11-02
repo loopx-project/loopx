@@ -20,7 +20,8 @@ import test_quota_settlement_cli as fixture
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("strategy", ["off", "evidence_conditioned_v1"])
-def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatch, provider, strategy):
+@pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
+def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatch, provider, strategy, handoff_mode):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = fixture._write_fixture(tmp_path)
     configuration = json.loads(registry.read_text())
@@ -30,7 +31,7 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
     state.write_text(state.read_text().replace("Settle one standard Codex App delivery.",
         "Minimize route cost on the supplied graph while retaining a valid route. "
         "A feasible candidate is a checkpoint; stop when no useful authorized comparison remains."))
-    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     monkeypatch.chdir(project)
     binding = ("--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID)
 
@@ -49,6 +50,12 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
 
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--execution-replan-after-turns", "1",
         "--execution-stride-strategy", strategy, "--explore-graph-enabled", "--execute")
+    if handoff_mode == "hard_lease":
+        claimed = cli("todo", "claim", *binding, "--todo-id", fixture.TODO_ID,
+            "--claimed-by", fixture.AGENT_ID, "--claim-operation-id", "route-original-execution")
+        assert claimed["execution_managed"] and claimed["claim_operation_id"] == "route-original-execution"
+        lease_before = cli("task-lease", "inspect", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)
+        assert lease_before["active"]
     route = project / "route.json"
     graph = {"start": {"middle": 1, "finish": 1}, "middle": {"finish": 1}, "finish": {}}
     (project / "graph.json").write_text(json.dumps(graph))
@@ -115,6 +122,10 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(tmp_path, monkeypatc
     execute(plan["ordered_steps"][2]["command_template"])
     assert fixture._spend_run_count(runtime) == 1
     assert cli("todo", "list", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)["todo"]["status"] == "open"
+    if handoff_mode == "hard_lease":
+        lease_after = cli("task-lease", "inspect", "--goal-id", fixture.GOAL_ID, "--todo-id", fixture.TODO_ID)
+        assert lease_after["lease"]["idempotency_key"] == lease_before["lease"]["idempotency_key"]
+        assert lease_after["lease"]["lease_epoch"] == lease_before["lease"]["lease_epoch"]
     # A new Host wake has a new Turn and the same Goal/Agent/Todo lane. The
     # ordinary cadence reads the material result; raw experiment counts do not.
     review = cli("quota", "should-run", *binding, "--runtime-profile", "generic_cli",
