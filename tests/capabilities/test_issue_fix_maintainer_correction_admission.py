@@ -624,3 +624,38 @@ def test_missing_goal_does_not_write_ledger(harness: Harness) -> None:
     assert result.returncode == 1
     assert json.loads(result.stdout)["ok"] is False
     assert (ledger.read_bytes() if ledger.exists() else None) == before
+
+
+def test_unverified_correction_is_accepted_on_verified_retry(harness: Harness) -> None:
+    event = _event("3501")
+    missing = _metadata([])
+    for key in ("comments", "reviews", "reviewComments"):
+        missing.pop(key)
+    first = harness.run_json(metadata=missing, correction=_correction_v1(event))
+    _assert_no_correction_todo(first, harness, "source_event_not_observed")
+    second = harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+    assert second["maintainer_correction_admission"]["replay"] is False
+    assert harness.entries()[0]["disposition"] == "accepted"
+    assert _correction_write(second)["write_performed"] is True
+    third = harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+    assert third["maintainer_correction_admission"]["replay"] is True
+    assert _correction_write(third)["write_performed"] is False
+    assert len(harness.correction_todos()) == 1
+
+
+def test_pending_correction_requires_current_event_verification(harness: Harness) -> None:
+    event = _event("3502")
+    failed = harness.run(metadata=_metadata([event]), correction=_correction_v1(event),
+        env={"LOOPX_ISSUE_FIX_FAULT_BEFORE_CORRECTION_TODO": "1"}, check=False)
+    assert failed.returncode != 0
+    for events, reason in (
+        ([], "source_event_not_observed"),
+        ([_event("3502", updated_at="2026-06-20T12:00:00Z")], "source_event_revision_mismatch"),
+    ):
+        packet = harness.run_json(metadata=_metadata(events), correction=_correction_v1(event))
+        assert _correction_write(packet)["skip_reason"] == reason
+        assert harness.correction_todos() == []
+        assert harness.entries()[0]["todo_id"] is None
+    harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+    harness.run_json(metadata=_metadata([event]), correction=_correction_v1(event))
+    assert len(harness.correction_todos()) == 1

@@ -701,8 +701,10 @@ def evaluate_issue_fix_maintainer_correction_admission(
     )
 
     accepted = reason is None
-    replay = existing_entry is not None
-    if existing_entry is not None:
+    replay = existing_entry is not None and (
+        not accepted or existing_entry.get("disposition") in {"accepted", "superseded"}
+    )
+    if replay:
         entry = dict(existing_entry)
     else:
         entry = {

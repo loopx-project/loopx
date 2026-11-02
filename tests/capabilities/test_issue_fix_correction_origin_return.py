@@ -360,3 +360,29 @@ def test_invalid_request_entry_writes_nothing(h, damage, error):
     assert json.loads(result.stdout)["ok"] is False
     assert json.loads(result.stdout)["error"] == error
     assert not default_issue_fix_domain_state_ledger_path(project=h.project, goal_id=GOAL_ID).exists()
+
+
+def test_return_ledger_failure_preserves_publication_identity(h, monkeypatch):
+    from loopx.capabilities.issue_fix import correction_settlement
+
+    event = _event("313")
+    packet = h.run_json(metadata=observation([event]), correction=_correction_v1(event), origin=h.request_id)
+    h.mark_done(h.entries()[0]["todo_id"])
+    packet["observation"]["head_commit_ref"] = "b" * 40
+    original = correction_settlement.upsert_issue_fix_pr_lifecycle_ledger_jsonl
+
+    def fail_return_write(path, payload):
+        if any(entry.get("returns") for entry in payload["maintainer_corrections"]):
+            raise OSError("return ledger interrupted")
+        return original(path, payload)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(correction_settlement, "upsert_issue_fix_pr_lifecycle_ledger_jsonl", fail_return_write)
+        with pytest.raises(OSError, match="return ledger interrupted"):
+            settle(h, packet)
+    assert len(h.replies()) == 1
+    assert not h.entries()[0].get("returns")
+    h.run_json(metadata=observation([event], "b" * 40), correction=None)
+    assert len(h.replies()) == len(h.entries()[0]["returns"]) == 1
+    h.run_json(metadata=observation([event], "c" * 40), correction=None)
+    assert len(h.replies()) == len(h.entries()[0]["returns"]) == 2

@@ -217,6 +217,17 @@ def _settle_maintainer_correction_entries(
             or (entry.get("todo_id") and not is_current)
         ):
             continue
+        if is_current and not entry.get("todo_id") and admission.get("reason") in {
+            "source_event_not_observed", "source_event_revision_mismatch",
+        }:
+            refusal = str(admission["reason"])
+            settlements.append(
+                {"operation_id": operation_id, "status": "refused", "reason": refusal}
+            )
+            current_todo_write = _correction_todo_readback_receipt(
+                skip_reason=refusal, operation_id=operation_id, todo_id=entry.get("todo_id"),
+            )
+            continue
         refusal = recheck_issue_fix_maintainer_correction_effect_gates(
             entry,
             observation=observation,
@@ -324,12 +335,20 @@ def _settle_maintainer_correction_entries(
             origin_root = resolve_runtime_root(
                 load_project_registry(Path(origin["registry_path"])),
                 origin["runtime_root"], registry_path=Path(origin["registry_path"]))
+            pending = entry.get("pending_return")
+            if not isinstance(pending, dict) or pending.get("head_sha") != head:
+                # Select the initial/update identity durably before publication;
+                # a successful report may outlive the final return-ledger write.
+                pending = {"head_sha": head, "update_id": update_id if any(
+                    r["phase"] == "conclusion" for r in reply_status(origin_root, origin)
+                ) else None}
+                entry["pending_return"] = pending
+                upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
             result = report(origin_root, identity["goal_id"], identity["agent_id"],
                 origin["request_id"], "conclusion", text, registry=Path(origin["registry_path"]),
-                update_id=(update_id if any(
-                    r["phase"] == "conclusion" for r in reply_status(origin_root, origin)
-                ) else None), workspace=project, request_revision=view["revision"],
+                update_id=pending["update_id"], workspace=project, request_revision=view["revision"],
                 caller_goal_ref=goal_ref)
+            entry["pending_return"] = None
             returns.append({"update_id": update_id, "result_key": result.get("result_key", "conclusion"),
                 "enqueued_at": now_utc_iso(), "head_sha": head})
             upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
