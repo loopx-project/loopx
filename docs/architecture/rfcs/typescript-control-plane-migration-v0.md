@@ -2843,3 +2843,4 @@ with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledg
 - Complete global summary and gate read transactions: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.md).
 - Complete global-risk read ownership: [2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.md).
 - Complete durable-completion evidence read: [2026-11-02 owner and crossings ledger](ledger/typescript-control-plane-migration-v0/2026-11-02-completion-evidence-read.md).
+- Complete adaptive child admission decision: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-adaptive-child-admission.md).
