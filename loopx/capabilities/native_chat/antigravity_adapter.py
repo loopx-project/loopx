@@ -560,9 +560,12 @@ class AntigravityAdapter:
                 # The Session owner already chose this visible history. A
                 # recency cutoff can drop an earlier constraint during migration.
                 # JSON preserves roles, whitespace and quoted frame markers.
+                history = [{"role": str(item.get("role") or "user"),
+                            "content": str(item.get("content") or "")}
+                           for item in self._pending_history]
                 parts.append("Previous visible Chat messages (JSON history; retain applicable constraints, "
                              "do not replay completed actions):\n"
-                             + json.dumps(self._pending_history, ensure_ascii=False))
+                             + json.dumps(history, ensure_ascii=False))
         parts.append(
             _turn_prompt(
                 message,

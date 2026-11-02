@@ -242,6 +242,7 @@ def test_native_history_is_complete_exact_data_once_on_a_new_thread(
     tmp_path, language_server, profile, resumed,
 ):
     history = _visible_history()
+    history[0]["transport_metadata"] = "DO-NOT-SEND-TRANSPORT-METADATA"
     original = deepcopy(history)
     adapter = adapter_for(tmp_path, runtime_profile=profile, history=history,
                           **({"resume_thread_id": "synthetic-cascade"} if resumed else {}))
@@ -253,7 +254,9 @@ def test_native_history_is_complete_exact_data_once_on_a_new_thread(
             assert "Previous visible Chat messages" not in prompt
         else:
             assert "EARLIEST-CONSTRAINT" in prompt
-            assert _read_visible_history(prompt) == original
+            assert _read_visible_history(prompt) == [
+                {"role": item["role"], "content": item["content"]} for item in original]
+        assert "DO-NOT-SEND-TRANSPORT-METADATA" not in prompt
         assert prompt.count("CURRENT-REQUEST") == 1
         assert first["cascadeConfig"]["plannerConfig"]["conversational"]["agenticMode"] == (profile == "trusted_owner")
         adapter.start_turn("NEXT-REQUEST", lambda *_: None)
