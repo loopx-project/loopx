@@ -25,7 +25,6 @@ def external_progress_review_context(
     from .policy import progress_review_goal_policy
     from .receipt import (
         load_progress_review_receipts,
-        progress_review_receipt_order_key,
         progress_review_receipt_summary,
     )
 
@@ -34,59 +33,23 @@ def external_progress_review_context(
     if policy["mode"] == "off" or runtime_root is None or not goal_id:
         return None
     from ...control_plane.effect_runtime import effect_runtime_result, EffectRuntimeRemoteError
-    from ...control_plane.goals.goal_ref_validation import exact_goal_ref
     read_error = None
     try:
         loaded, rejected = load_progress_review_receipts(Path(runtime_root), goal_id)
     except (OSError, ValueError, EffectRuntimeRemoteError):
         loaded, rejected = [], 0
         read_error = "receipt_store_unavailable"
-    # Only newly scoped canonical observations need this current-owner check.
-    # Old receipts and manual studies retain their existing policy semantics.
-    current_by_todo = {}
-    qualified = []
-    for receipt in loaded:
-        binding = receipt.get("evidence_scope", {}).get("criterion_binding", {})
-        if binding.get("origin") == "goal_acceptance":
-            todo_id = binding["todo_id"]
-            if todo_id not in current_by_todo:
-                try:
-                    goal_instance_id = goal.get("goal_instance_id")
-                    observation = effect_runtime_result("goal.acceptance.inspect", {
-                        "goal_id": goal_id, "runtime_root": str(runtime_root), "todo_id": todo_id,
-                        **({"goal_ref": exact_goal_ref(goal_id, goal_instance_id)}
-                           if goal_instance_id is not None else {}),
-                    })
-                    current_by_todo[todo_id] = observation.get("completion_requirements")
-                except (OSError, ValueError, EffectRuntimeRemoteError):
-                    current_by_todo[todo_id] = None
-            try:
-                requirements = current_by_todo[todo_id]
-                selected = effect_runtime_result("progress_review.criterion_basis", {
-                    "requirements": requirements, "criterion_ids": binding["criterion_ids"], "acceptance": [],
-                    "goal_id": goal_id, "agent_id": receipt["run"]["agent_id"],
-                })["binding"] if requirements is not None else None
-                current = selected == binding
-            except (ValueError, EffectRuntimeRemoteError):
-                current = False
-            receipt = {**receipt, "criterion_current": current}
-            if not current:
-                receipt.update(status="stale", reason="criterion_basis_unavailable",
-                               drift_signal={"noul": None, "choice": None})
-        qualified.append(receipt)
-    loaded = qualified
-    pinned = policy.get("contract_revision")
-    # Newest by run order, never by the observer's local sequence counter.
-    newest = max(loaded, key=progress_review_receipt_order_key, default=None)
-    newest_revision = str(newest["contract_revision"]) if newest else None
-    if pinned:
-        # Only receipts bound to the pinned revision are current evidence; the
-        # pin is manual, so a newer receipt under another revision means the
-        # observer basis moved and the Goal owner must re-pin (or not).
-        receipts = [item for item in loaded if item["contract_revision"] == pinned]
-        stale = len(loaded) - len(receipts) + sum(item.get("criterion_current") is False for item in receipts)
-    else:
-        receipts, stale = loaded, sum(item.get("criterion_current") is False for item in loaded)
+    # Empty IO results need no qualification; all nonempty decisions belong to TS.
+    qualification = effect_runtime_result("progress_review.context.qualify", {
+        "goal_id": goal_id, "runtime_root": str(runtime_root),
+        "goal_instance_id": goal.get("goal_instance_id"),
+        "receipts": loaded,
+        "contract_revision": policy.get("contract_revision"),
+    }) if loaded else None
+    receipts = [
+        _receipt_number_codec(row, loaded[index])
+        for row, index in zip(qualification["selected"], qualification["selected_indices"], strict=True)
+    ] if qualification else []
     result = {
         "policy": policy,
         "receipts": receipts,
@@ -94,14 +57,33 @@ def external_progress_review_context(
             receipts,
             policy=policy,
             rejected=rejected,
-            stale=stale,
-            newest_contract_revision=newest_revision,
+            stale=qualification["stale"] if qualification else 0,
+            newest_contract_revision=qualification["newest_contract_revision"] if qualification else None,
         ),
     }
     result["summary"]["read_state"] = "unavailable" if read_error else "observed" if loaded else "missing"
     if read_error:
         result["summary"]["read_error"] = read_error
     return result
+
+
+def _receipt_number_codec(value: Any, source: Any) -> Any:
+    """Qualification never edits numeric facts; retain their Python IO spelling.
+
+    JSON numbers cannot carry integral floats or arbitrary integer precision
+    through JavaScript. Selected source indices preserve those historical facts
+    without repeating any qualification or selection decision here.
+    """
+    if type(value) in (int, float) and type(source) in (int, float):
+        return source
+    if isinstance(value, dict) and isinstance(source, dict):
+        return {key: _receipt_number_codec(child, source.get(key)) for key, child in value.items()}
+    if isinstance(value, list) and isinstance(source, list):
+        return [
+            _receipt_number_codec(child, original)
+            for child, original in zip(value, source, strict=True)
+        ]
+    return value
 
 
 __all__ = ["external_progress_review_context"]
