@@ -144,6 +144,67 @@ def _source_digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _usage_event(line_number: int, event: dict) -> dict | None:
+    payload = event.get("payload") or {}
+    if not isinstance(payload, dict):
+        raise ValueError("Usage capture contains a non-object payload")
+    if event.get("type") == "session_meta":
+        payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
+    elif event.get("type") == "token_usage_record":
+        payload = _request_usage_record(payload)
+    elif event.get("type") == "loopx_input_token_attribution":
+        # Optional host measurement, not a tokenizer or prose classifier.
+        # Preserve only binding/counts; raw prompts and packet text stay private.
+        payload = {
+            key: payload[key] if isinstance(payload[key], str) else None
+            for key in (
+                "method", "thread_id", "session_id", "turn_id",
+                "root_turn_id", "response_id",
+            ) if key in payload
+        } | {
+            key: payload[key] if type(payload[key]) is int else None
+            for key in (
+                "input_tokens", "loopx_input_tokens", "loopx_cached_input_tokens",
+            ) if key in payload
+        }
+    elif event.get("type") == "compacted":
+        payload = {
+            "compaction_response_id": payload.get("compaction_response_id")
+            if isinstance(payload.get("compaction_response_id"), str)
+            else None,
+            "latest_token_usage_record": _request_usage_record(
+                payload.get("latest_token_usage_record")
+            ),
+        }
+    elif event.get("type") == "event_msg" and payload.get("type") in {
+        "task_started",
+        "task_complete",
+        "token_count",
+    }:
+        payload = {
+            k: payload[k] for k in ("type", "turn_id", "info") if k in payload
+        }
+        if isinstance(payload.get("info"), dict):
+            payload["info"] = {
+                name: {
+                    key: value[key]
+                    for key in (
+                        "input_tokens",
+                        "cached_input_tokens",
+                        "output_tokens",
+                    )
+                    if key in value
+                }
+                if isinstance(value, dict)
+                else value
+                for name in ("total_token_usage", "last_token_usage")
+                if (value := payload["info"].get(name)) is not None
+            }
+    else:
+        return None
+    return {"line": line_number, "type": event["type"], "timestamp": event.get("timestamp"), "payload": payload}
+
+
 def _usage_capture(
     source_root: Path,
     artifact: str,
@@ -166,71 +227,9 @@ def _usage_capture(
         if include_tool_context:
             from .trajectory_tool_context import project_tool_context
             tool_context.extend(project_tool_context([event], first_line=line_number))
-        payload = event.get("payload") or {}
-        if not isinstance(payload, dict):
-            raise ValueError("Usage capture contains a non-object payload")
-        if event.get("type") == "session_meta":
-            payload = {k: payload[k] for k in ("id", "forked_from_id") if k in payload}
-        elif event.get("type") == "token_usage_record":
-            payload = _request_usage_record(payload)
-        elif event.get("type") == "loopx_input_token_attribution":
-            # Optional host measurement, not a tokenizer or prose classifier.
-            # Preserve only binding/counts; raw prompts and packet text stay private.
-            payload = {
-                key: payload[key] if isinstance(payload[key], str) else None
-                for key in (
-                    "method", "thread_id", "session_id", "turn_id",
-                    "root_turn_id", "response_id",
-                ) if key in payload
-            } | {
-                key: payload[key] if type(payload[key]) is int else None
-                for key in (
-                    "input_tokens", "loopx_input_tokens", "loopx_cached_input_tokens",
-                ) if key in payload
-            }
-        elif event.get("type") == "compacted":
-            payload = {
-                "compaction_response_id": payload.get("compaction_response_id")
-                if isinstance(payload.get("compaction_response_id"), str)
-                else None,
-                "latest_token_usage_record": _request_usage_record(
-                    payload.get("latest_token_usage_record")
-                ),
-            }
-        elif event.get("type") == "event_msg" and payload.get("type") in {
-            "task_started",
-            "task_complete",
-            "token_count",
-        }:
-            payload = {
-                k: payload[k] for k in ("type", "turn_id", "info") if k in payload
-            }
-            if isinstance(payload.get("info"), dict):
-                payload["info"] = {
-                    name: {
-                        key: value[key]
-                        for key in (
-                            "input_tokens",
-                            "cached_input_tokens",
-                            "output_tokens",
-                        )
-                        if key in value
-                    }
-                    if isinstance(value, dict)
-                    else value
-                    for name in ("total_token_usage", "last_token_usage")
-                    if (value := payload["info"].get(name)) is not None
-                }
-        else:
-            continue
-        events.append(
-            {
-                "line": line_number,
-                "type": event["type"],
-                "timestamp": event.get("timestamp"),
-                "payload": payload,
-            }
-        )
+        observed = _usage_event(line_number, event)
+        if observed is not None:
+            events.append(observed)
     observation = None
     input_artifacts = []
     if loopx_input_json is not None:
@@ -739,3 +738,60 @@ def read_citation(
         "applicability": "historical" if requested in native_citations
         and view["native_outcomes"]["applicability"] == "historical" else view["applicability"],
     }
+
+
+def read_usage_turn(*, runtime_root: Path, owner_goal_id: str, pack_id: str,
+                    analysis_key: str, turn_id: str, output_language: str | None = None) -> dict:
+    """Read bounded counter evidence for an existing captured Turn, never raw model/tool text."""
+    _, record = _resolve(runtime_root, owner_goal_id, pack_id)
+    identity = _prepared(record, output_language) if output_language is not None else record
+    if analysis_key != identity["analysis_key"]:
+        raise PackUnavailable("analysis_key_mismatch")
+    captured = record.get("solver_usage")
+    if not captured:
+        raise PackUnavailable("usage_not_captured")
+    projection = captured["projection"]
+    turns = [*projection["turns"]]
+    if projection.get("incomplete_turn"):
+        turns.append(projection["incomplete_turn"])
+    matches = [turn for turn in turns if turn["turn_id"] == turn_id]
+    if len(matches) != 1:
+        raise PackUnavailable("usage_turn_not_captured")
+    turn = matches[0]
+    first, last = turn["first_line"], turn["last_line"]
+    digest = hashlib.sha256()
+    baseline = start = counter = end = None
+    try:
+        path = _source_path(Path(record["source_root"]), captured["artifact"])
+        for line, event in _usage_rows(path, digest):
+            if not isinstance(event, dict):
+                raise ValueError("invalid usage event")
+            if line > last:
+                continue  # Still hash the entire source before disclosing any evidence.
+            observed = _usage_event(line, event)
+            if not observed or observed["type"] != "event_msg":
+                continue
+            kind = observed["payload"].get("type")
+            if line < first:
+                if kind == "token_count" and observed["payload"].get("info"):
+                    baseline = observed
+            elif kind == "task_started":
+                start = observed
+            elif kind == "token_count" and observed["payload"].get("info"):
+                counter = observed
+            elif kind == "task_complete":
+                end = observed
+        if digest.hexdigest() != captured["artifact_sha256"]:
+            raise PackUnavailable("source_changed")
+    except PackUnavailable:
+        raise
+    except (OSError, ValueError, TypeError, KeyError):
+        raise PackUnavailable("source_unavailable") from None
+    events = [event for event in (baseline, start, counter, end) if event is not None]
+    if not events:
+        raise PackUnavailable("usage_evidence_unavailable")
+    return {"source_id": "solver_usage", "artifact": captured["artifact"],
+            "first_line": events[0]["line"], "last_line": events[-1]["line"],
+            "applicability": "current", "evidence_kind": "usage_counters",
+            "text": json.dumps({"turn_id": turn_id, "artifact_sha256": captured["artifact_sha256"],
+                                "events": events}, ensure_ascii=False, indent=2)}

@@ -23,7 +23,7 @@ type Pack = ResearchProgressPack & {source_count: number; analysis_key: string; 
   continuation_unavailable?: {base_pack_id: string};
   continuation?: TrajectoryContinuation & {base_pack_id: string; base_title: string; base_available: boolean; base_episode_count: number}};
 type Snapshot = {ok: true; execution_enabled?: boolean; catalog: {availability: string; reason_code: string | null; default_pack_id: string | null; packs: Pack[]; unreadable_pack_ids?: string[]}; pack: Pack | null};
-type Citation = AssessmentCitation & {artifact: string; text: string; applicability: string};
+type Citation = AssessmentCitation & {evidence_kind?: "usage_counters"; artifact: string; text: string; applicability: string};
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const locationFor = (goal: string) => {
   const query = new URLSearchParams(window.location.search);
@@ -175,18 +175,20 @@ export function useResearchAnalysis(goalId: string, active: boolean, zh: boolean
     } catch (e) {if (current === generation.current) setError(errorText(e));}
     finally {if (current === generation.current) setCancelPending(false);}
   };
-  const readCitation = async (c: AssessmentCitation, origin?: HTMLButtonElement) => {
+  const readEvidence = async (selection: Record<string, string>, route: string, origin?: HTMLButtonElement) => {
     const p = pack;
     if (!p) return;
     if (origin) sourceTrigger.current = origin;
     const current = ++citeGeneration.current; setCitation(null); setCitationBusy(true); setCitationError("");
-    const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, output_language: outputLanguage, source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)});
-    try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/citation?${query}`)); if (current === citeGeneration.current) setCitation(value);}
+    const query = new URLSearchParams({goal_id: goalId, pack_id: p.pack_id, analysis_key: p.analysis_key, output_language: outputLanguage, ...selection});
+    try {const value = await requestJson<Citation>(sourceReadApiUrl(readSourceUrl, `${endpoint}/${route}?${query}`)); if (current === citeGeneration.current) setCitation(value);}
     catch (e) {if (current === citeGeneration.current) setCitationError(errorText(e));}
     finally {if (current === citeGeneration.current) setCitationBusy(false);}
   };
+  const readCitation = (c: AssessmentCitation, origin?: HTMLButtonElement) => readEvidence({source_id: c.source_id, first_line: String(c.first_line), last_line: String(c.last_line)}, "citation", origin);
+  const readUsageTurn = (turnId: string, origin: HTMLButtonElement) => readEvidence({turn_id: turnId}, "usage-turn", origin);
   const closeCitation = () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); requestAnimationFrame(() => sourceTrigger.current?.focus());};
-  return {readOnly: Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true, citation, citationBusy, citationError, sourcePanel, readCitation, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
+  return {readOnly: Boolean(readSourceUrl) && currentSnapshot?.execution_enabled !== true, citation, citationBusy, citationError, sourcePanel, readCitation, readUsageTurn, closeCitation, goalId, zh, location, snapshot: currentSnapshot, pack, readError, error, loading, pending, cancelPending, recordedRunning, panel, trigger, read, show, execute, cancel,
     close: () => {citeGeneration.current++; setCitation(null); setCitationError(""); setCitationBusy(false); navigate(false); requestAnimationFrame(() => trigger.current?.focus());}, select: (id: string) => navigate(location.open, id, true)};
 }
 type Controller = ReturnType<typeof useResearchAnalysis>;
@@ -279,7 +281,7 @@ export function ResearchAnalysisStatus({analysis: a}: {analysis: Controller}) {
 export function ResearchProgressSummary({analysis: a, includeReport = true}: {analysis: Controller; includeReport?: boolean}) {
   const packs = a.snapshot?.catalog.packs ?? [];
   if (!a.pack && !packs.length) return null;
-  return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} analysisOpen={a.location.open} includeReport={includeReport} onSelect={a.select} onCitation={a.readCitation}/>;
+  return <ResearchProgress pack={a.pack} packs={packs} selectedId={a.location.packId ?? a.snapshot?.catalog.default_pack_id ?? ""} zh={a.zh} analysisOpen={a.location.open} includeReport={includeReport} onSelect={a.select} onCitation={a.readCitation} onUsageTurn={a.readUsageTurn}/>;
 }
 
 export function ResearchReportSummary({analysis: a}: {analysis: Controller}) {
@@ -373,6 +375,7 @@ export function ResearchCitationPanel({analysis: a}: {analysis: Controller}) {
     {a.citationBusy ? <p role="status">{zh ? "正在读取引用原文…" : "Reading cited source…"}</p> : null}
     {a.citationError ? <p className="analysis-error" role="alert">{a.citationError}</p> : null}
     {a.citation ? <><p>{a.citation.artifact} · {zh ? "行" : "lines"} {a.citation.first_line}–{a.citation.last_line}</p>
+      {a.citation.evidence_kind === "usage_counters" ? <p>{zh ? "计数事件：前一累计观测、本轮开始、末次计数及完成（如有）。仅显示计数字段；提示词、工具内容与账户信息不传入浏览器。" : "Counter events: preceding cumulative observation, Turn start, latest counters and completion if present. Only counter fields are shown; prompts, tool content and account metadata stay outside the browser."}</p> : null}
       <CitationContent key={`${a.pack?.analysis_key}:${a.citation.source_id}:${a.citation.first_line}:${a.citation.last_line}`} citation={a.citation} zh={zh}/></> : null}
   </section>;
 }

@@ -1762,7 +1762,7 @@ print(json.dumps([
       await progress.locator(`.research-progress-scope[data-pack-id="${"d".repeat(64)}"]`).waitFor();
 
       comparisonFixture = true;
-      await progress.locator('select').selectOption('a'.repeat(64));
+      await progress.locator(':scope > header select').selectOption('a'.repeat(64));
       await progress.locator(`.research-progress-scope[data-pack-id="${"a".repeat(64)}"]`).waitFor();
       await page.reload({waitUntil: "networkidle"});
       const comparison = progress.locator('[data-metric="goal_alignment"]');
