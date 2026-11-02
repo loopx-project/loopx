@@ -20,7 +20,7 @@ from .chat_manager import (
     manager_answer_readback,
     manager_session_model_allocation,
 )
-from .chat_coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
+from .chat.coordination import PROJECT_COORDINATION_GUIDANCE, PROJECT_CONTEXT_VERSION, apply_context_handoff
 from .capabilities.native_chat import codex_context, project_context as project_context_policy
 from .capabilities.native_chat.codex_adapter import CodexAppServerAdapter, start_attachment_turn
 from .capabilities.native_chat.machine_defaults import codex_profile_home, load_codex_chat_defaults
@@ -46,7 +46,7 @@ from .chat_codex_goal import (
     validate_goal_chat,
 )
 from .chat_dsh import DshChatAdapter
-from .chat_endpoint_catalog import builtin_chat_endpoints
+from .chat.endpoint_catalog import builtin_chat_endpoints
 from .chat_endpoints import AgentEndpointRegistry
 from .control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from .control_plane.turn_driver.execution_profile import managed_execution_profile
@@ -1733,7 +1733,7 @@ class ChatRuntimeController:
             if session.get("project_context") is not None:
                 self.project_contexts.session_context(session)
                 project_context_policy.validate_project_executor_scope(str(session["agent_id"]), session["project_context"], self.capabilities)
-            from .chat_coordination import prepare_turn_context
+            from .chat.coordination import prepare_turn_context
             current_turn = self.store.load_turn(session_id, turn_id) or {}
             if current_turn.get("origin") == "peer" or "collaboration_request" in current_turn:
                 from .capabilities.native_chat.conversation_bindings import OriginalConversationRequests

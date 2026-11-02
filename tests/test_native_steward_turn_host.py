@@ -585,7 +585,7 @@ def test_new_native_user_gate_wins_immediately_before_app_server_dispatch(stewar
 def test_inventory_replacement_during_context_read_never_forks_the_original_native_thread(steward, tmp_path, monkeypatch):
     sid, actor, _ = prepare(steward, "file", tmp_path, monkeypatch)
     store, runtime, _, _, binding, capture, _ = steward
-    import loopx.chat_coordination as coordination
+    import loopx.chat.coordination as coordination
     prepare_context = coordination.prepare_turn_context
 
     def changed(*args, **kwargs):

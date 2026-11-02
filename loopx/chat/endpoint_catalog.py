@@ -17,13 +17,13 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .chat_dsh import STEWARD_SEGMENT_ENV
-from .control_plane.operator_provider import operator_provider_environ
-from .control_plane.turn_driver.host_binding import (
+from ..chat_dsh import STEWARD_SEGMENT_ENV
+from ..control_plane.operator_provider import operator_provider_environ
+from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     managed_executor_binding,
 )
-from .kiro_cli_goal_mode import (
+from ..kiro_cli_goal_mode import (
     KIRO_CLI_CHAT_ADAPTER_KIND,
     KIRO_CLI_CHAT_AGENT_ID,
     KIRO_CLI_CHAT_DISPLAY_NAME,
@@ -88,7 +88,7 @@ def _environment_readiness(variable: str) -> dict[str, Any]:
 def _antigravity_readiness() -> dict[str, Any]:
     """Live local probe for Antigravity's LanguageServerService."""
 
-    from .capabilities.native_chat.antigravity_adapter import probe_antigravity_endpoint
+    from ..capabilities.native_chat.antigravity_adapter import probe_antigravity_endpoint
 
     available, executable, detail = probe_antigravity_endpoint()
     if available:

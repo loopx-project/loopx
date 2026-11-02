@@ -40,7 +40,7 @@ def session_model_settings_supported(session: dict[str, Any]) -> bool:
     configuration owner. A model choice must never trigger their thread replay.
     Imports are local because the Session store also uses these normalizers.
     """
-    from ...chat_coordination import PROJECT_CONTEXT_VERSION
+    from ...chat.coordination import PROJECT_CONTEXT_VERSION
     from ...chat_manager import is_manager_channel
     from ...chat_store import CHAT_SESSION_MODE_MANAGED
 
