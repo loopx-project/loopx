@@ -274,7 +274,7 @@ def test_capability_model_rejects_non_string_inputs(config: dict) -> None:
 def test_goal_drawer_preview_binding_and_model_roundtrip(registry: Path) -> None:
     from types import SimpleNamespace
 
-    from loopx.chat_goal_subagent_api import GoalSubagentConfigurationRequestMixin
+    from loopx.chat.goal_subagent_api import GoalSubagentConfigurationRequestMixin
 
     class Handler(GoalSubagentConfigurationRequestMixin):
         def __init__(self) -> None:

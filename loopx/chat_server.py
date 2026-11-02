@@ -36,7 +36,7 @@ from .chat_attachments import (
 )
 from .chat_actions import ChatActionService, ProtectedActionGate, goal_workspace_labels, goal_workspace_ref
 from .chat_action_store import ACTION_KINDS, ActionConflictError, ChatActionStore
-from .chat_goal_subagent_api import (
+from .chat.goal_subagent_api import (
     GoalSubagentConfigurationRequestMixin,
     add_goal_subagent_capability,
     add_goal_subagent_routes,
@@ -101,7 +101,7 @@ from .extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
 )
-from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
+from .chat.completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GoalSourceRequestMixin
