@@ -11,6 +11,22 @@ read obligations before capture. Recovering delivery from that immutable capture
 does not refresh authority; a legitimate new selection/authority check remains
 distinct from retrying transport.
 
+The RFC's [two-layer delivery design](../architecture/rfcs/controller-executor-unified-contract-v0.md#differential-context)
+proposes host-independent Progressive defaults, independent qualified Delta and
+current-capture discovery of unread material, with an explicit legacy/off
+migration matrix. Those changes are **not shipped by this page**: current defaults
+and `context_delivery` on/off behavior below remain in force. Current selected
+reads already reach the complete capture; calling a reader or reaching EOF alone
+does not prove model-visible delivery, retention or adoption. Native saved-file
+Delta keeps its existing artifact proof without a full-model-read prerequisite.
+
+中文：RFC 的[双层交付设计](../architecture/rfcs/controller-executor-unified-contract-v0.zh-CN.md#差分上下文)
+提议跨 Host 默认 Progressive、独立资格化 Delta，以及从当前 capture 发现未读材料，
+并明确旧配置/off 迁移矩阵。这些变更**尚未由本页交付**，下文当前默认值和
+`context_delivery` on/off 行为继续有效。当前选读已能到达完整 capture；调用 reader
+或到达 EOF 本身不证明模型可见交付、retention 或采用。原生文件 Delta 仍按既有产物
+证明复用，不增加模型全量读取前置。
+
 The RFC's [candidate context by decision stage](../architecture/rfcs/controller-executor-unified-contract-v0.md#candidate-context-by-decision-stage)
 proposes complete captured alternatives with discoverable decision facts and
 same-capture batch detail reads. It does not change current read obligations.

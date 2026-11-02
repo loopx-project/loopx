@@ -183,7 +183,10 @@ acceptance remain open. Proposed experiments are advice, not execution authority
 
 The [controller/executor RFC](controller-executor-unified-contract-v0.md)
 refines S2/S4/S6/S7/S11: one governed work schema replaces quota/Turn packet
-format choices and incorporates full-first differential context. The optional
+format choices. Its [two-layer delivery design](controller-executor-unified-contract-v0.md#differential-context)
+targets cross-host Progressive by default, independent Delta auto only on
+qualified hosts, and unread-material discovery from the current complete capture;
+explicit off and versioned migration remain protected. The optional
 controller model alone talks to Core; the executor receives natural-language
 work and materials, while existing host/Core owners retain identity, permissions,
 recovery and settlement. Session roles, execution modes, wake sources and
