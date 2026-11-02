@@ -4,12 +4,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from .capabilities.configuration_ui import build_capability_configuration_catalog
-from .configuration_catalog import build_configuration_capability_descriptors
-from .capabilities.machine_configuration.builtins import (
+from ..capabilities.configuration_ui import build_capability_configuration_catalog
+from ..configuration_catalog import build_configuration_capability_descriptors
+from ..capabilities.machine_configuration.builtins import (
     build_builtin_machine_configuration_registry,
 )
-from .capabilities.machine_configuration.contract import (
+from ..capabilities.machine_configuration.contract import (
     MACHINE_CONFIGURATION_SCHEMA,
     MachineConfigurationRegistry,
     machine_configuration_revision,
@@ -17,7 +17,7 @@ from .capabilities.machine_configuration.contract import (
     normalize_machine_configuration,
     remove_machine_configuration_namespace,
 )
-from .capabilities.machine_configuration.store import (
+from ..capabilities.machine_configuration.store import (
     configure_machine_configuration,
     inspect_machine_configuration,
     read_stored_machine_configuration,

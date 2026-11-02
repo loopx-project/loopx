@@ -249,7 +249,7 @@ def test_goal_overrides_win_and_clearing_restores_live_machine_defaults(
 
 def test_effective_turn_machine_default_migration_and_override_readback(tmp_path: Path) -> None:
     """An explicit unit switch preserves v0 storage until apply and is reversible."""
-    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.chat.goal_configuration_api import _goal_capability_options
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
 
     _repo, registry_path, runtime_root = _fixture(tmp_path)
@@ -354,7 +354,7 @@ def test_product_default_and_namespace_removal_use_six_settled_turns(tmp_path, m
 
 
 def test_stride_version_inherits_and_rolls_back(tmp_path: Path) -> None:
-    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.chat.goal_configuration_api import _goal_capability_options
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
 
     _repo, registry_path, runtime_root = _fixture(tmp_path)
@@ -414,7 +414,7 @@ def test_stride_version_inherits_and_rolls_back(tmp_path: Path) -> None:
 
 
 def test_goal_stride_only_uses_live_review_interval(tmp_path: Path) -> None:
-    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.chat.goal_configuration_api import _goal_capability_options
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
 
     _repo, registry_path, runtime_root = _fixture(tmp_path)
@@ -509,7 +509,7 @@ def test_stride_configuration_rejects_unsupported_or_ambiguous_versions(schema_v
 
 
 def test_horizon_goal_defaults_on_with_explicit_overrides_and_clear(tmp_path):
-    from loopx.chat_goal_configuration_api import _goal_capability_options
+    from loopx.chat.goal_configuration_api import _goal_capability_options
     from loopx.capabilities.goal_inspection import inspect_goal_capabilities
 
     _repo, registry_path, runtime_root = _fixture(tmp_path)

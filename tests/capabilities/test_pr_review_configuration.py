@@ -8,7 +8,7 @@ import pytest
 
 from loopx.cli import main
 from loopx.configure_goal import configure_goal
-from loopx.chat_goal_configuration_api import _goal_capability_options
+from loopx.chat.goal_configuration_api import _goal_capability_options
 from loopx.capabilities.pr_review_queue.goal_configuration import (
     apply_change,
     configuration_summary,
