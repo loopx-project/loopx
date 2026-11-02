@@ -354,6 +354,26 @@ def test_native_turn_activation_scope_matrix(tmp_path: Path) -> None:
     assert '"anti_entropy_context"' in host_input
     assert "loopx anti-entropy inspect" in host_input
 
+    note_only_todo = _add_todo(
+        registry,
+        runtime,
+        goal_id,
+        text="Replace old_api with new_api and delete the legacy export.",
+        note=json.dumps(basis),
+    )
+    host_input = _capture_turn_stdin(
+        registry,
+        runtime,
+        goal_id,
+        todo_id=note_only_todo,
+        capture=capture,
+        fake_codex=fake_codex,
+        project=project,
+    )
+    assert "Anti-entropy code governance is active for this task" in host_input
+    assert '"anti_entropy_context"' in host_input
+    assert '"old_api"' in host_input
+
     later_todo = _add_todo(
         registry,
         runtime,

@@ -909,6 +909,42 @@ def test_heartbeat_without_should_run_does_not_route(
     assert called is False
 
 
+def test_canonical_work_context_todo_without_id_is_selected_carrier() -> None:
+    """The canonical Todo read record can omit todo_id; its note still declares intent."""
+    payload = {
+        "turn_envelope": {
+            "action": {
+                "selected_todo": {
+                    "todo_id": "todo-selected",
+                    "text": "Replace old_api with new_api and delete the legacy export.",
+                },
+            },
+            "work_context": {
+                "sources": [
+                    {
+                        "source": "selected_todo",
+                        "content": {
+                            "todo": {
+                                "note": (
+                                    '{"retirement_basis": '
+                                    '{"target_symbols": ["old_api"]}}'
+                                ),
+                                "schema_version": "loopx_coordination_todo_record_v0",
+                                "title": "Replace old_api",
+                                "updated_at": "2026-01-01T00:00:00Z",
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+    }
+    result = anti_entropy_context_result(payload, goal_id="g1", decision={})
+    guidance = result["readback"]["anti_entropy_guidance"]
+    assert guidance["status"] == "active"
+    assert guidance["target_symbols"] == ["old_api"]
+
+
 def test_stale_recommended_action_from_another_todo_does_not_activate() -> None:
     """A selected Todo's own text governs; a stale action recommendation does not."""
     payload = {

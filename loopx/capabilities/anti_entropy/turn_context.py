@@ -248,7 +248,11 @@ def _record_matches_selection(
     if not selected_ids:
         return True
     todo_id = record.get("todo_id")
-    return isinstance(todo_id, str) and todo_id.strip() in selected_ids
+    # The canonical work-context Todo record can omit todo_id; it is still the
+    # selected task's own carrier. Only an explicitly different id is excluded.
+    if not isinstance(todo_id, str) or not todo_id.strip():
+        return True
+    return todo_id.strip() in selected_ids
 
 
 def _resolve_retirement_basis(
