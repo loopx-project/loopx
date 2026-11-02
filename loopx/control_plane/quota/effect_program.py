@@ -54,6 +54,7 @@ __all__ = [
     "settlement_binding_args",
     "settlement_result_payload",
     "settlement_step_command",
+    "turn_instance_arg",
 ]
 
 
@@ -75,6 +76,18 @@ def _quoted_turn_ref(turn_instance_id_ref: str) -> str:
     if turn_instance_id_ref == _POWERSHELL_TURN_REF and _is_windows_host():
         return turn_instance_id_ref
     return shlex.quote(turn_instance_id_ref)
+
+
+def turn_instance_arg(turn_instance_id: str | None = None) -> str:
+    """Render the ``--turn-instance-id`` argument for the shell that runs it.
+
+    A caller holding a concrete Turn passes it through unchanged. Without one,
+    the argument names the reference the current host shell can expand, so a
+    native Windows host does not receive an empty Turn from POSIX syntax.
+    """
+
+    reference = turn_instance_id or _default_turn_ref()
+    return f"--turn-instance-id {_quoted_turn_ref(reference)}"
 
 
 def _settlement_actor_args(arguments: str, agent_id: str) -> str:
@@ -302,8 +315,4 @@ def settlement_binding_args(plan: Mapping[str, Any] | None) -> str:
             f" --goal-instance-id "
             f"{shlex.quote(normalized_goal_ref['goal_instance_id'])}"
         )
-    return (
-        binding_arg
-        + f" --turn-instance-id {_quoted_turn_ref(turn_instance_id)}"
-        + goal_ref_arg
-    )
+    return binding_arg + " " + turn_instance_arg(turn_instance_id) + goal_ref_arg
