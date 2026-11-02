@@ -311,7 +311,7 @@ def test_unavailable_typed_plan_keeps_original_capture(tmp_path, monkeypatch):
         raise EffectRuntimeStartupError("Synthetic unavailable runtime", diagnostic_code="fixture_unavailable")
 
     setup(tmp_path, monkeypatch)
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", unavailable)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", unavailable)
     original = payload()
     _, required = project(tmp_path, payload=original)
     recovery = context._state(tmp_path)["recovery"]
@@ -349,14 +349,14 @@ def test_native_required_view_and_encoding_use_one_runtime_request(tmp_path, mon
     from loopx.control_plane.quota import turn_envelope
 
     setup(tmp_path, monkeypatch)
-    invoke = turn_envelope.effect_runtime_result
+    invoke = turn_envelope.effect_runtime_projection_result
     requests = []
 
     def observe(method, params, **kwargs):
         requests.append((method, params["operation"]))
         return invoke(method, params, **kwargs)
 
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", observe)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", observe)
     original = payload()
     before = json.dumps(original, sort_keys=True)
     for capture in ("cold", "warm"):
