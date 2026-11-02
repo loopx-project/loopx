@@ -305,8 +305,19 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             read_commands[name] = descriptor["command"]
             # The public native CLI now shares context-project's paged reader.
             # Keep the independent full-wire oracle separate from its page view.
-            wire_file = Path(descriptor["path"]).parent / "delivery.json"
-            wires[name] = json.loads(wire_file.read_text())
+            wire_file = Path(descriptor["path"])
+            wire_bytes = wire_file.read_bytes()
+            assert hashlib.sha256(wire_bytes).hexdigest() == descriptor["sha256"]
+            if descriptor["mode"] == "full":
+                # Full native delivery reads the advertised original directly;
+                # the retired duplicate delivery.json is not a public oracle.
+                assert str(wire_file) == descriptor["recovery"]["path"]
+                assert descriptor["sha256"] == descriptor["recovery"]["sha256"]
+                wires[name] = {"schema_version": "context_delivery_v1", "mode": "full",
+                    "context": json.loads(wire_bytes), "target": descriptor["target"],
+                    "recovery": descriptor["recovery"], "ancestry": 0}
+            else:
+                wires[name] = json.loads(wire_bytes)
             assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" or resume_loss else "delta")
             assert "Native input observation independently verifies" not in descriptor["instruction"]
             if name == "warm" and not resume_loss and "content" in descriptor:
