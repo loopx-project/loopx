@@ -170,14 +170,39 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(self.manager.config.read_bytes(), before)
         self.assertTrue(before.endswith(tail.encode()))
 
-    def test_non_native_routes_and_profiles_are_not_converted(self):
+    def test_gateway_provider_and_catalog_survive_api_and_subscription_switches(self):
+        gateway = ('# kept\nmodel="gateway-model"\nmodel_provider="gateway"\n'
+                   'model_catalog_json="models.json"\n'
+                   '[model_providers.gateway]\nname="Gateway"\n'
+                   'base_url="https://gateway.example/v1"\n'
+                   'wire_api="responses"\n'
+                   'requires_openai_auth=true\n'
+                   '[mcp_servers.demo]\ncommand="demo"\n')
+        self.manager.config.write_text(gateway)
+        self.current()
+        self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        self.manager.switch('api')
+        cfg = tomllib.loads(self.manager.config.read_text())
+        self.assertEqual(cfg['model_provider'], 'gateway')
+        self.assertEqual(cfg['model_catalog_json'], 'models.json')
+        self.assertEqual(cfg['forced_login_method'], 'api')
+        self.assertNotIn('openai_base_url', cfg)
+        self.manager.switch('a')
+        cfg = tomllib.loads(self.manager.config.read_text())
+        self.assertEqual(cfg['model_provider'], 'gateway')
+        self.assertEqual(cfg['model_catalog_json'], 'models.json')
+        self.assertEqual(cfg['forced_login_method'], 'chatgpt')
+        self.assertNotIn('openai_base_url', cfg)
+        self.assertEqual(cfg['mcp_servers']['demo']['command'], 'demo')
+
+    def test_ambiguous_routes_and_profiles_are_not_converted(self):
         for raw in (b'model_provider="optional_http"\n',
-                    b'model_catalog_json="models.json"\n',
                     b'[model_providers.openai]\n',
                     b'profile="custom"\n',
                     b'[profiles.custom]\nmodel_provider="optional_http"\n'):
             with self.subTest(raw=raw):
-                with self.assertRaisesRegex(ValueError, 'native GPT'):
+                with self.assertRaises(ValueError):
                     accounts.file_config(raw)
 
     def test_live_enrollment_shares_cli_lease_and_preserves_switch_recovery(self):

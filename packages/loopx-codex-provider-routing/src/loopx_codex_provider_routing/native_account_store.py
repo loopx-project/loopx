@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 import tomllib
+from urllib.parse import urlsplit
 import uuid
 
 API_KEY_SLOTS_VERSION = 1
@@ -26,6 +27,47 @@ def api_endpoint(value):
     if not 1024 <= port <= 65535:
         raise ValueError('API fallback requires an unprivileged loopback port')
     return value
+
+
+def gateway_endpoint(value):
+    """Accept a Responses API gateway without allowing credentials in the URL."""
+    try:
+        parts = urlsplit(value) if isinstance(value, str) else None
+        port = parts.port if parts is not None else None
+    except ValueError:
+        parts = None
+        port = None
+    if (parts is None or parts.scheme not in ('http', 'https') or not parts.hostname
+            or parts.username is not None or parts.password is not None
+            or parts.query or parts.fragment or port == 0):
+        raise ValueError('API gateway requires a clean HTTP(S) Responses endpoint')
+    if parts.scheme == 'http' and parts.hostname not in ('127.0.0.1', '::1', 'localhost'):
+        raise ValueError('Unencrypted API gateways must stay on the loopback interface')
+    return value
+
+
+def provider_route(cfg):
+    """Return the selected provider after validating launch-safe configuration."""
+    providers = cfg.get('model_providers') or {}
+    if not isinstance(providers, dict):
+        raise ValueError('Invalid Codex provider definitions')
+    if 'openai' in providers:
+        raise ValueError('A custom provider must not shadow the built-in OpenAI provider')
+    provider = cfg.get('model_provider', 'openai')
+    if not isinstance(provider, str) or not provider:
+        raise ValueError('Invalid Codex provider selection')
+    if provider == 'openai':
+        endpoint = cfg.get('openai_base_url')
+        if endpoint is not None:
+            gateway_endpoint(endpoint)
+        return provider
+    definition = providers.get(provider)
+    if not isinstance(definition, dict):
+        raise ValueError('Selected Codex provider is not a configured API gateway')
+    if definition.get('wire_api', 'responses') != 'responses':
+        raise ValueError('API gateways must use the Responses protocol')
+    gateway_endpoint(definition.get('base_url'))
+    return provider
 
 
 def auth_kind(raw):
@@ -137,11 +179,11 @@ def file_config(raw, auth=None):
         cfg = tomllib.loads(text)
     except (ValueError, UnicodeError):
         raise ValueError('Invalid GPT config; repair locally without printing its contents') from None
-    # Preserve unused custom definitions; they do not change the native route.
-    if (cfg.get('model_provider', 'openai') != 'openai'
-            or 'openai' in (cfg.get('model_providers') or {})
-            or cfg.get('model_catalog_json') or cfg.get('profiles') or cfg.get('profile')):
-        raise ValueError('Account switching requires an ordinary native GPT config')
+    provider = provider_route(cfg)
+    # A profile can replace the checked provider at runtime, so account switching
+    # cannot safely infer which route the credential transaction owns.
+    if cfg.get('profiles') or cfg.get('profile'):
+        raise ValueError('Account switching does not support provider profile overrides')
     if cfg.get('cli_auth_credentials_store') not in (None, 'auto', 'file'):
         raise ValueError('Explicit keyring/ephemeral storage is preserved; use native sign-in or review file storage locally')
     if cfg.get('forced_login_method') not in (None, 'chatgpt', 'api'):
@@ -151,17 +193,19 @@ def file_config(raw, auth=None):
     if mode == 'api':
         identity(auth)
         endpoint = api_endpoint(json.loads(auth)['loopx_api_base_url'])
-    # Change auth settings and the owned API endpoint; preserve model and other config.
+    # Change auth settings and the owned built-in API endpoint. A selected
+    # gateway owns its own base_url, model catalog and provider identity.
     section = re.search(r'^\s*\[', text, re.M)
     head, tail = (text[:section.start()], text[section.start():]) if section else (text, '')
     settings = [('cli_auth_credentials_store', 'file'), ('forced_login_method', mode)]
-    if mode == 'api':
+    if mode == 'api' and provider == 'openai':
         if cfg.get('openai_base_url') and cfg.get('forced_login_method') != 'api':
             raise ValueError('An existing OpenAI base URL must not be replaced by API fallback')
         if cfg.get('openai_base_url'):
             api_endpoint(cfg['openai_base_url'])
         settings.append(('openai_base_url', endpoint))
-    elif cfg.get('forced_login_method') == 'api' and cfg.get('openai_base_url'):
+    elif (mode == 'chatgpt' and provider == 'openai'
+          and cfg.get('forced_login_method') == 'api' and cfg.get('openai_base_url')):
         api_endpoint(cfg['openai_base_url'])
         pattern = r'^openai_base_url\s*=.*(?:\n|$)'
         if len(re.findall(pattern, head, re.M)) != 1:
