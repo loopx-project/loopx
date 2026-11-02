@@ -3,7 +3,8 @@ import test from "node:test";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {TODO_DOMAIN_ITEM_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {selectCoordinationTodoArchive} from "../../loopx/control_plane/coordination/todo_archive_selection.ts";
-import {evaluateStandingDecisionProjection, isStandingDecisionReceipt, projectStandingDecisions} from "../../loopx/control_plane/todos/standing_decision.ts";
+import {isStandingDecisionReceipt, projectStandingDecisions} from "../../loopx/control_plane/todos/standing_decision.ts";
+import {readTodo} from "../../loopx/control_plane/todos/read_projection.ts";
 
 const decision = (todo_id: string, decision_outcome: string, extra: JsonObject = {}): JsonObject => ({
   schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id, decision_outcome, role: "user", task_class: "user_gate",
@@ -97,10 +98,22 @@ test("retained archive revocation stays effective; all decision outcomes survive
   assert.equal(archive.retained_standing_decision_count, 3);
 });
 
-test("projection wire rejects malformed requests and accepts an empty inventory", () => {
-  const request = {schema_version: "standing_decision_projection_request_v0", items: [], legacy_source_order: false};
-  assert.equal(evaluateStandingDecisionProjection(request), null);
-  for (const extra of [{schema_version: "unknown"}, {items: {}}, {items: [null]}, {legacy_source_order: "false"}]) {
-    assert.throws(() => evaluateStandingDecisionProjection({...request, ...extra}));
+test("composed Todo read rejects malformed requests and accepts an empty standing inventory", async () => {
+  const request = {schema_version: "todo_read_request_v0", kind: "source_fields", groups: [], standing_items: [], legacy_source_order: false};
+  const result = await readTodo(request);
+  assert.equal((result.fields as JsonObject).standing_decision_authority, undefined);
+  for (const extra of [{schema_version: "unknown"}, {kind: "unknown"}, {groups: {}}, {standing_items: [null]}]) {
+    await assert.rejects(() => readTodo({...request, ...extra}));
+  }
+});
+
+test("composed read refuses contradictory authority when legacy source order is not explicitly true", async () => {
+  for (const legacy_source_order of [false, "false"]) {
+    const result = await readTodo({schema_version: "todo_read_request_v0", kind: "source_fields", groups: [],
+      standing_items: [decision("todo_approve", "approve"), decision("todo_revoke", "reject")], legacy_source_order});
+    const authority = (result.fields as JsonObject).standing_decision_authority as JsonObject;
+    assert.equal(authority.active_count, 0);
+    assert.deepEqual(authority.entries, []);
+    assert.equal(authority.conflict_count, 1);
   }
 });
