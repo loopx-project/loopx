@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img">
+  <title>Default Mechanism Path with Context Delivery Enabled</title>
+  <desc>Full raw capture is persisted first; progressive required-context view and verified differential reuse are built on disk; stdout receives a compact file reference with select_command and recovery_command.</desc>
+  
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif; fill: #0f172a; }
+  .mono { font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  .muted { fill: #475569; }
+  .subtle { fill: #64748b; }
+  .accent { fill: #1d4ed8; }
+  .emerald { fill: #047857; }
+  .amber { fill: #b45309; }
+  .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+  .card-accent { fill: #f8fafc; stroke: #93c5fd; stroke-width: 1.8; }
+  .card-emerald { fill: #f0fdf4; stroke: #86efac; stroke-width: 1.8; }
+  .card-amber { fill: #fffbeb; stroke: #fcd34d; stroke-width: 1.8; }
+  .pill { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1.2; }
+  .divider { stroke: #e2e8f0; stroke-width: 1.5; }
+</style>
+<defs>
+  <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#f8fafc"/>
+    <stop offset="100%" stop-color="#f1f5f9"/>
+  </linearGradient>
+  <linearGradient id="blueBar" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#2563eb"/>
+    <stop offset="100%" stop-color="#1d4ed8"/>
+  </linearGradient>
+  <linearGradient id="slateBar" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#64748b"/>
+    <stop offset="100%" stop-color="#475569"/>
+  </linearGradient>
+  <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+    <path d="M1,1 L9,5 L1,9 Z" fill="#2563eb"/>
+  </marker>
+  <marker id="arrowSlate" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+    <path d="M1,1 L9,5 L1,9 Z" fill="#64748b"/>
+  </marker>
+</defs>
+
+  <rect width="1200" height="760" fill="url(#bgGrad)"/>
+  <rect x="44" y="32" width="430" height="34" rx="17" class="pill"/>
+  <text x="64" y="54" font-size="15" font-weight="700" class="accent mono">LOOPX 2.2 · CONTEXT DELIVERY NATIVE PATH (V10)</text>
+  <text x="44" y="110" font-size="38" font-weight="800">Default Mechanism Path with Context Delivery Enabled</text>
+  <text x="44" y="148" font-size="20" class="muted">Illustrated on the native Codex quota path: lossless on-disk capture without flooding the active prompt window</text>
+
+  <!-- Column Headers -->
+  <text x="44" y="192" font-size="18" font-weight="700" class="accent">A. On-Disk Durable Artifacts</text>
+  <text x="454" y="192" font-size="18" font-weight="700" class="emerald">B. Default stdout Reference Envelope</text>
+  <text x="814" y="192" font-size="18" font-weight="700" class="accent">C. Progressive Readback</text>
+
+  <!-- Step 1 -->
+  <rect x="44" y="210" width="370" height="130" rx="14" class="card"/>
+  <text x="66" y="248" font-size="20" font-weight="700" class="mono">1  projection.json (Full Raw Capture)</text>
+  <text x="66" y="282" font-size="15.5" class="muted">Complete source state written first (~34 KB)</text>
+  <text x="66" y="312" font-size="16" class="subtle">Goals · Todos · Acceptance · Constraints · Revisions</text>
+  <line x1="229" y1="340" x2="229" y2="362" stroke="#2563eb" stroke-width="2.2"/><polygon points="223,360 229,372 235,360" fill="#2563eb"/>
+
+  <!-- Step 2 -->
+  <rect x="44" y="374" width="370" height="130" rx="14" class="card-accent"/>
+  <text x="66" y="412" font-size="20" font-weight="700" class="accent mono">2  required-context.json (Required View)</text>
+  <text x="66" y="446" font-size="15.5" class="muted">Extracts active requirements &amp; risks when applicable</text>
+  <text x="66" y="476" font-size="16" class="subtle">Keeps pointers to raw evidence; falls back if larger</text>
+  <line x1="229" y1="504" x2="229" y2="526" stroke="#2563eb" stroke-width="2.2"/><polygon points="223,524 229,536 235,524" fill="#2563eb"/>
+
+  <!-- Step 3 -->
+  <rect x="44" y="538" width="370" height="130" rx="14" class="card"/>
+  <text x="66" y="576" font-size="20" font-weight="700" class="mono">3  full / delta (Verified Continuity Reuse)</text>
+  <text x="66" y="610" font-size="15.5" class="muted">Same continuity epoch: verified baseline → exact delta</text>
+  <text x="66" y="640" font-size="16" class="subtle">No baseline / compacted / full shorter → auto full</text>
+
+  <!-- Arrow Col 1 -> Col 2 -->
+  <line x1="414" y1="598" x2="442" y2="598" stroke="#059669" stroke-width="2.5"/><polygon points="440,592 452,598 440,604" fill="#059669"/>
+
+  <!-- Step 4 (Center Envelope) -->
+  <rect x="454" y="210" width="320" height="458" rx="16" class="card-emerald"/>
+  <text x="478" y="254" font-size="18.5" font-weight="800" class="emerald">4  Compact File Reference (~1.2 KB)</text>
+  <rect x="478" y="280" width="272" height="128" rx="10" fill="#ffffff" stroke="#86efac"/>
+  <text x="494" y="314" font-size="15" font-weight="700" class="mono">path + sha256 + mode + byte_size</text>
+  <text x="494" y="346" font-size="15" font-weight="700" class="emerald mono">select_command + recovery_command</text>
+  <text x="494" y="382" font-size="14" class="subtle mono">toc_sections: [goal, active_todo, ...]</text>
+  <text x="478" y="454" font-size="13.8" class="muted">TOC attached only when compact; never floods stdout</text>
+  <rect x="478" y="488" width="272" height="148" rx="10" fill="#dcfce7"/>
+  <text x="496" y="524" font-size="16" font-weight="700" class="emerald">stdout 负载对比 (Payload Size)</text>
+  <text x="496" y="558" font-size="15" class="mono">Full JSON:   ~34,200 B</text>
+  <text x="496" y="586" font-size="15" font-weight="700" class="emerald mono">Ref Envelope: ~1,180 B (-96%)</text>
+  <text x="496" y="616" font-size="14" class="subtle">模型先把注意力留给当前任务决策</text>
+
+  <!-- Arrow Col 2 -> Col 3 -->
+  <line x1="774" y1="438" x2="802" y2="438" stroke="#2563eb" stroke-width="2.5"/><polygon points="800,432 812,438 800,444" fill="#2563eb"/>
+
+  <!-- Step 5 (Right Progressive Readback) -->
+  <rect x="814" y="210" width="342" height="458" rx="16" class="card-accent"/>
+  <text x="838" y="254" font-size="21" font-weight="800" class="accent">5  Targeted Selection by Question</text>
+  <rect x="838" y="284" width="294" height="104" rx="10" class="card"/>
+  <text x="856" y="322" font-size="13.5" font-weight="700">① select_command → read active required sections</text>
+  <text x="856" y="356" font-size="14" class="subtle mono">--section active_todo --section risks</text>
+  <rect x="838" y="408" width="294" height="104" rx="10" class="card"/>
+  <text x="856" y="446" font-size="13.5" font-weight="700" class="accent">② context_details[id] + Pointer → exact raw source</text>
+  <text x="856" y="480" font-size="14" class="subtle mono">JSON Pointer → projection.json#/todos/0</text>
+  <rect x="838" y="532" width="294" height="104" rx="10" class="card"/>
+  <text x="856" y="570" font-size="13.5" font-weight="700" class="emerald">③ recovery_command → bypass delta &amp; read current full</text>
+  <text x="856" y="604" font-size="14" class="subtle mono">--recover-full (zero-loss fallback)</text>
+
+  <text x="44" y="718" font-size="17" font-weight="600" class="muted">Core Invariant: delta exposes changes directly while recovery reads current truth without replaying old baselines; saved on disk ≠ read by model.</text>
+</svg>
