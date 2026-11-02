@@ -469,6 +469,8 @@ export function createEffectRuntimeHandlers(
     ["quota.monitor_poll.commit", lazyHandler(() => import("./quota/monitor_poll_commit.ts"), ({evaluateQuotaMonitorPollCommit}) => evaluateQuotaMonitorPollCommit)],
     ["presentation.decision_notice.project", lazyHandler(() => import("./presentation/decision_notice.ts"), ({projectDecisionNotice}) => projectDecisionNotice)],
     ["presentation.decision_notice.validate_references", lazyHandler(() => import("./presentation/decision_notice.ts"), ({validateDecisionNoticeReferences}) => validateDecisionNoticeReferences)],
+    ["presentation.global_summary.project", lazyHandler(() => import("./presentation/global_manager_read.ts"), ({projectGlobalSummary}) => projectGlobalSummary)],
+    ["presentation.global_gates.project", lazyHandler(() => import("./presentation/global_manager_read.ts"), ({projectGlobalGates}) => projectGlobalGates)],
     ["presentation.goal_attention.project", lazyHandler(() => import("./presentation/goal_attention.ts"), ({projectGoalAttention}) => projectGoalAttention)],
     ["presentation.goal_sources.project", lazyHandler(() => import("./presentation/goal_source_links.ts"), ({projectGoalSourceLinks}) => projectGoalSourceLinks)],
   ["presentation.owner_attention.plan", lazyHandler(() => import("./presentation/owner_attention.ts"), ({planOwnerAttention}) => planOwnerAttention)],

@@ -2836,3 +2836,4 @@ with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledg
 
 - Summary-display final-head qualification and preserved tail cohorts: [2026-10-27 follow-up](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md).
 - Quota summary composition in one `todo.quota_planning.project` crossing with source references: [2026-11-02 cutover](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.md).
+- Complete global summary and gate read transactions: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.md).
