@@ -330,7 +330,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
     else url.searchParams.set("research_goal", goalId);
     if (selection.finding !== next.finding || selection.question !== next.question || selection.returnKey !== next.returnKey || selection.day !== next.day || selection.nodes.length !== next.nodes.length || selection.nodes.some((id, index) => id !== next.nodes[index])) window.history.pushState(null, "", url);
   };
-  const choose = (id: string, focus = true, finding?: string) => {collectionOpener.current = null; select({nodes: id ? [id] : [], day: null, finding}, focus);};
+  const choose = (id: string, focus = true, finding?: string, returnKey?: string) => {collectionOpener.current = null; select({nodes: id ? [id] : [], day: null, finding, returnKey}, focus);};
   const closeReader = () => {
     focusPending.current = false;
     focusReturn.current = {nodeId: collection ? selectedId : undefined, eventId: selectedFinding?.event_id,
@@ -418,7 +418,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
           {layout.map(({node, x, y}) => {
             const measured = measurementFeedback.find(item => item.node_id === node.id);
             return <button key={node.id} type="button" className={`research-history-node is-${node.latest.status}${selection.nodes.includes(node.id) ? " is-selected" : ""}`}
-            style={{left: x, top: y}} aria-pressed={selection.nodes.includes(node.id)} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={() => choose(node.id)}>
+            data-research-return={`graph:${node.id}`} style={{left: x, top: y}} aria-pressed={selection.nodes.includes(node.id)} aria-label={`${node.latest.title} · ${stateLabel(node.latest.status)}`} onClick={event => choose(node.id, true, undefined, event.currentTarget.dataset.researchReturn)}>
             <span className="research-node-meta">{node.latest.node_kind === "experiment" ? <FlaskConical size={13} aria-hidden/> : <Circle size={12} aria-hidden/>}{kindLabel(node.latest.node_kind)}<small>{stateLabel(node.latest.status)}</small></span>
             <strong>{node.latest.title}</strong>{measured ? <span className="research-node-count" title={`${measured.metric} (${measured.unit}) · ${measured.comparison_scope} · ${measured.evaluation_ref}`}>
               {measured.metric} {formatExploreMeasurementValue(measured.latest.measurement.value, zh)} · best {formatExploreMeasurementValue(measured.best?.value ?? null, zh)} {measured.higher_is_better ? "↑" : "↓"}
