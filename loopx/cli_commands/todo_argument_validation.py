@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Iterable
 from pathlib import Path
 
+from ..command_invocation import loopx_cli_argv
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 
 TODO_OPTION_FIELDS = (
@@ -379,7 +381,8 @@ class TodoClaimArgumentError(ValueError):
         ]
         if args.task_lease_expected_version is not None and not args.task_lease_idempotency_key:
             missing.append("--task-lease-idempotency-key")
-        cli_args = ["--registry", str(registry_path), "--format", "json"]
+        route = loopx_cli_argv()
+        cli_args = [*route[1:], "--registry", str(registry_path), "--format", "json"]
         if runtime_root_arg is not None:
             cli_args.extend(["--runtime-root", runtime_root_arg])
         cli_args.extend(["todo", "claim", "--goal-id", args.goal_id])
@@ -393,7 +396,7 @@ class TodoClaimArgumentError(ValueError):
         if args.dry_run:
             cli_args.append("--dry-run")
         return {
-            "command": "loopx todo claim",
+            "command": shlex.join([*route, "todo", "claim"]),
             "cli_args": cli_args,
             "requires_flags": missing,
             "remove_flags": unsupported_todo_options(args, allowed_fields=_TODO_CLAIM_FIELDS),
