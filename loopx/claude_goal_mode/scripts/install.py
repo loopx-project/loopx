@@ -138,7 +138,7 @@ def _shell_command(value: str, *, powershell: bool) -> str:
 
 
 def _launches_python(py: str) -> bool:
-    """True when running `py` actually starts an interpreter.
+    """True when running `py` starts a supported Python 3.11+ interpreter.
 
     `shutil.which` only proves a file is executable, not that it runs Python. On
     Windows it can return the 0-byte `WindowsApps` App Execution Alias, which
@@ -147,7 +147,11 @@ def _launches_python(py: str) -> bool:
     bakes that path (the PreToolUse hook, the statusline, `/loopx`) then
     silently does nothing."""
     try:
-        return subprocess.run([py, "-c", ""], capture_output=True, timeout=10).returncode == 0
+        return subprocess.run(
+            [py, "-c", "import sys; raise SystemExit(sys.version_info < (3, 11))"],
+            capture_output=True,
+            timeout=10,
+        ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -155,7 +159,8 @@ def _launches_python(py: str) -> bool:
 def _python_cmd() -> str:
     """Interpreter to bake into hook / statusline / command strings — robust where
     only `python` (not `python3`) is registered, and where `python3` resolves to a
-    launcher that cannot run Python (the Windows `WindowsApps` alias)."""
+    launcher that cannot run supported Python (including the Windows
+    `WindowsApps` alias and an older PATH interpreter)."""
     for candidate in (shutil.which("python3"), shutil.which("python")):
         if candidate and _launches_python(candidate):
             return candidate
