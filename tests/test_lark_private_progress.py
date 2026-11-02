@@ -127,6 +127,7 @@ def test_public_summary_and_recent_tools_are_private_owner_only_and_bounded():
     state = {}
     view = project_progress(state, events, owner_private=True)
     assert "思考摘要" in view and "公开摘要" in view and "read_6" in view and "read_0" not in view
+    assert view.index("read_6") < view.index("思考摘要")
     assert len(state["public_summary"]) == 1200 and len(state["activities"]) == 4
     assert "not a tool result" not in view
     events += [{"event_id": "raw", "kind": "agent.phase", "payload": {

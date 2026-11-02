@@ -142,12 +142,12 @@ def project_progress(state: dict[str, Any], events: list[dict[str, Any]], *,
     if not state.get("label") and not state.get("answer"):
         return None
     header = f"⏳ **{state.get('label') or '正在处理'}**"
-    if owner_private and state.get("public_summary"):
-        header += "\n\n**思考摘要**\n" + state["public_summary"]
     if owner_private and state.get("activities"):
-        header += "\n\n" + "\n".join(
+        header += "\n\n**最近步骤**\n" + "\n".join(
             f"{'✓' if row['state'] == 'completed' else '!' if row['state'] == 'failed' else '·'} `{row['title']}`"
             for row in state["activities"])
+    if owner_private and state.get("public_summary"):
+        header += "\n\n**思考摘要**\n" + state["public_summary"]
     answer = str(state.get("answer") or "")
     if answer:
         if state.get("clipped"):

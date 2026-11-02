@@ -880,7 +880,8 @@ receipt → observed work or actionable failure → readable answer in the same 
   waiting caption, not an invented failure or continually changing animation.
 - The original private Lark owner can read the latest qualified public reasoning
   summary (up to 1,200 characters) and four redacted activity titles alongside
-  the existing answer stream. Group and unqualified projections retain coarse
+  the existing answer stream. Recent steps precede a potentially long summary.
+  Group and unqualified projections retain coarse
   labels. Antigravity reports observed thinking spans and native command/tool
   steps through the shared activity contract; its raw `thinking` field is not a
   public summary, and planner completion is not tool completion. Final answers
