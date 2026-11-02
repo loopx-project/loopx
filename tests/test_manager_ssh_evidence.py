@@ -19,7 +19,7 @@ from loopx.capabilities.manager_context.ssh_evidence import (
 from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
 from loopx.capabilities.manager_context.evidence_export import export_page
 from loopx.chat_manager_context import manager_authorization_scope_id
-from loopx.chat_manager_history import read_manager_delivery_history
+from loopx.chat.manager_history import read_manager_delivery_history
 
 
 @pytest.fixture
@@ -266,7 +266,7 @@ def test_old_or_offline_remote_is_unknown_not_empty_healthy(remote):
 def test_export_uses_canonical_todos_and_never_returns_owner_private_continuation(
     tmp_path, monkeypatch, todo_id
 ):
-    import loopx.chat_manager_details as details
+    import loopx.chat.manager_details as details
 
     registry = tmp_path / "registry.json"
     registry.write_text(

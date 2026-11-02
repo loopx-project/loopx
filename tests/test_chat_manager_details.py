@@ -1,6 +1,6 @@
 import pytest
 
-import loopx.chat_manager_details as details
+import loopx.chat.manager_details as details
 from loopx.chat_manager import manager_workspace
 
 
