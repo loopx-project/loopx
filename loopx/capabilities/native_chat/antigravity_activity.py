@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from ...presentation.codex_activity import CodexActivitySteps
 
@@ -55,6 +56,18 @@ class AntigravityActivity:
                            "tool": call["name"]})
             # A finished planner has only requested the tool. It is not proof
             # that the tool ran or completed; never fabricate that transition.
+        elif kind == "CORTEX_STEP_TYPE_VIEW_FILE":
+            view = native.get("viewFile")
+            if not isinstance(view, dict):
+                return events
+            uri = view.get("absolutePathUri")
+            name = unquote(uri[7:]) if isinstance(uri, str) and uri.startswith("file:///") else "[local-path]"
+            item = {"id": f"agy_read_{index}", "type": "commandExecution", "command": "",
+                    "commandActions": [{"type": "read", "name": name}]}
+            start(item)
+            if status in {"CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_ERROR"}:
+                item["status"] = "failed" if status == "CORTEX_STEP_STATUS_ERROR" else "completed"
+                finish(item)
         elif kind == "CORTEX_STEP_TYPE_RUN_COMMAND":
             command = native.get("runCommand")
             if not isinstance(command, dict):

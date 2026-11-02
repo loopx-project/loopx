@@ -35,3 +35,14 @@ def test_command_redaction_failure_and_output_observation_use_shared_contract(tm
     assert len(final) == 1 and final[0]["step"]["state"] == "failed"
     assert final[0]["step"]["exit_code"] == 3
     assert activity.observe(2, native) == []
+
+
+def test_observed_native_file_view_redacts_uri_and_never_emits_contents(tmp_path):
+    activity = AntigravityActivity(tmp_path)
+    native = {"type": "CORTEX_STEP_TYPE_VIEW_FILE", "status": "CORTEX_STEP_STATUS_DONE",
+              "viewFile": {"absolutePathUri": (tmp_path / "file name.txt").as_uri(), "content": "private file body"}}
+    rows = activity.observe(3, native)
+    assert [row["step"]["state"] for row in rows] == ["running", "completed"]
+    assert all(row["step"]["verb"] == "read" and row["step"]["title"] == "file name.txt" for row in rows)
+    assert str(tmp_path) not in json.dumps(rows) and "private file body" not in json.dumps(rows)
+    assert activity.observe(3, native) == []
