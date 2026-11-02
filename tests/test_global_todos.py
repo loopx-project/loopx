@@ -812,3 +812,46 @@ def test_unscoped_peer_v1_goal_fans_out_past_eighth_registered_agent_and_records
     assert (
         payload["projection_envelope"]["sources"][1]["unreadable_count"] == 1
     )
+
+
+def test_peer_source_budget_preserves_complete_counts_before_display_limit(
+    monkeypatch, tmp_path,
+) -> None:
+    agents = [f"agent-{index}" for index in range(1, 10)]
+    goal = "source-budget-goal"
+    status = {"ok": True, "attention_queue": {"items": [{"goal_id": goal}] * 2},
+              "run_history": {"goals": [{"id": goal, "coordination": {
+                  "registered_agents": [*agents, agents[0]],
+              }}]}}
+    reads = {"status": 0, "quota": []}
+
+    def collect_status(**_kwargs):
+        reads["status"] += 1
+        return status
+
+    def build_quota(source, *, goal_id, agent_id=None):
+        assert source is status and goal_id == goal
+        reads["quota"].append(agent_id)
+        if agent_id is None:
+            return {"ok": True, "goal_id": goal, "normal_delivery_allowed": False}
+        return runnable_quota(goal, f"todo_{agent_id}", agent_id=agent_id)
+
+    monkeypatch.setattr(global_todos, "collect_status", collect_status)
+    monkeypatch.setattr(global_todos, "build_quota_should_run", build_quota)
+    for limit in (1, 100):
+        reads["status"], reads["quota"] = 0, []
+        result = build_payload(tmp_path, limit=limit)
+        assert result["summary"]["matched_todo_count"] == len(agents)
+        assert result["summary"]["runnable_count"] == len(agents)
+        assert len(result["todos"]) == min(limit, len(agents))
+        assert reads["status"] == 1
+        # The public budget is a ceiling: a future complete batch may use
+        # fewer packets. Duplicate queue/roster entries cannot multiply reads.
+        assert len(reads["quota"]) <= 1 + len(agents)
+        scoped = [agent for agent in reads["quota"] if agent is not None]
+        assert len(scoped) == len(set(scoped))
+
+    reads["status"], reads["quota"] = 0, []
+    result = build_payload(tmp_path, agent_id=agents[-1], limit=1)
+    assert [row["todo_id"] for row in result["todos"]] == [f"todo_{agents[-1]}"]
+    assert reads == {"status": 1, "quota": [agents[-1]]}

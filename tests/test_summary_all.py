@@ -895,8 +895,9 @@ def test_foreign_todo_counts_preserve_an_independent_decision_through_native_pro
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("mixed", [False, True], ids=["ninth-worker", "worker-and-peer-gate"])
+@pytest.mark.parametrize("extra_gate", [False, True], ids=["original-gates", "another-peer-gate"])
 def test_real_peer_manager_reads_preserve_work_gates_and_authority(
-    tmp_path, monkeypatch, provider, reverse, mixed,
+    tmp_path, monkeypatch, provider, reverse, mixed, extra_gate,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project = tmp_path / "synthetic project"
@@ -916,6 +917,17 @@ def test_real_peer_manager_reads_preserve_work_gates_and_authority(
         "  <!-- loopx:todo todo_id=todo_held status=open task_class=advancement_task "
         "claimed_by=agent-9 action_kind=verify task_domain=validation -->\n"
     ) if mixed else ""
+    if extra_gate:
+        gate += (
+            "- [ ] Approve another peer output?\n"
+            "  <!-- loopx:todo todo_id=todo_other_gate status=open task_class=user_gate "
+            "blocks_agent=agent-2 unblocks_todo_id=todo_other_held -->\n"
+        )
+        held += (
+            "- [ ] Verify another held peer output.\n"
+            "  <!-- loopx:todo todo_id=todo_other_held status=open task_class=advancement_task "
+            "claimed_by=agent-2 action_kind=verify task_domain=validation -->\n"
+        )
     state.write_text(
         "---\nstatus: active\nobjective: Read synthetic peer work without executing it.\n---\n"
         "# Synthetic Goal\n\n## Objective\n\nRead synthetic peer work without executing it.\n"
@@ -955,12 +967,15 @@ def test_real_peer_manager_reads_preserve_work_gates_and_authority(
     assert len(summary["lanes"]) == 1
     assert summary["lanes"][0]["agent_id"] == worker
     assert summary["lanes"][0]["top_todo_id"] == "todo_ready"
-    assert summary["summary"]["open_gate_count"] == gates["summary"]["open_gate_count"] == int(mixed)
+    assert summary["summary"]["open_gate_count"] == gates["summary"]["open_gate_count"] == int(mixed) + int(extra_gate)
     if mixed:
-        assert gates["gates"][0]["blocks"] == ["todo_held"]
-        assert "Approve synthetic peer output?" in gates["gates"][0]["question"]
+        original_gate = next(row for row in gates["gates"] if row["blocks"] == ["todo_held"])
+        assert "Approve synthetic peer output?" in original_gate["question"]
         explicit = read("global-gates", "--agent-id", "agent-1")
         assert explicit["gates"] == []
+    if extra_gate:
+        other_gate = next(row for row in gates["gates"] if row["blocks"] == ["todo_other_held"])
+        assert "Approve another peer output?" in other_gate["question"]
     after = read("todo", "list", "--goal-id", goal)
     assert before["todos"] == after["todos"]
     assert before["authority_read"] == after["authority_read"]
