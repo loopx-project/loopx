@@ -1434,7 +1434,7 @@ def test_read_only_bound_project_rejects_write_scoped_executor_before_session_cr
         project_grant="workspace_read",
     )
     monkeypatch.setattr(
-        "loopx.chat_endpoint_catalog.shutil.which",
+        "loopx.chat.endpoint_catalog.shutil.which",
         lambda executable: executable if executable == "kiro-cli" else None,
     )
     starts = []
@@ -1478,7 +1478,7 @@ def test_read_only_bound_project_rejects_write_scoped_executor_before_session_cr
         project_grant="workspace_read",
     )
     monkeypatch.setattr(
-        "loopx.chat_endpoint_catalog.shutil.which",
+        "loopx.chat.endpoint_catalog.shutil.which",
         lambda executable: executable
         if executable in {"kiro-cli", runtime.codex_bin}
         else None,
