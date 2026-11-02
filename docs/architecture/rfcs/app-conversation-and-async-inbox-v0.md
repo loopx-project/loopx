@@ -282,6 +282,26 @@ a started write without a provider locator stays unconfirmed after restart.
 Revocation or changed identity prevents further delivery. Disable the existing
 connection to revoke it; rollback must preserve its private delivery journals.
 
+Newly verified App user mirrors also reuse the existing reaction journals:
+`Get` acknowledges receipt; only an observed starting/running Core Turn adds
+`OnIt`. Terminal completion, failure or interruption removes processing feedback
+while retaining receipt feedback. A queued input never claims to be processing,
+and assistant mirrors receive neither reaction. Long inputs use their last
+verified concrete post, not the composite parts locator. Turn-only changes are
+discovered within the existing five-second scan even without a transcript append.
+Before each effect, the worker rechecks the canonical input/Turn, current source
+and grants, and frozen provider message. Feedback failures retain recoverable
+receipts without blocking message delivery or starting work. Unknown provider
+writes are not retried. Optional App feedback runs on at most one slot of the
+existing reply pool, outside the body outbox lock. Its final write merges only
+feedback fields, preserving concurrently delivered current and later answers.
+No synthetic incoming event or original-request
+settlement is used. Existing finished mirrors are not backfilled; current active
+mirrors can adopt the feedback path. `loopx chat --no-private-reactions` keeps
+feedback disabled without changing the message path. The isolated HTTP/Core and
+synthetic-provider checks qualify source behavior; installed Lark reactions and
+actual provider presentation remain separate acceptance work.
+
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
 This checkpoint covers text and bounded App image projection, not reply/thread
