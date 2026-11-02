@@ -773,6 +773,18 @@ class AntigravityAdapter:
                                     delta_chunk = text[len(prev_text) :]
                                 else:
                                     delta_chunk = text
+                                if not prev_text and delta_chunk:
+                                    prior_texts = [
+                                        val
+                                        for idx, val in sorted(emitted_text_by_step.items())
+                                        if idx != step_idx and val
+                                    ]
+                                    if prior_texts and not delta_chunk.startswith("\n"):
+                                        last_prior = prior_texts[-1]
+                                        if not last_prior.endswith("\n"):
+                                            delta_chunk = "\n\n" + delta_chunk
+                                        elif not last_prior.endswith("\n\n"):
+                                            delta_chunk = "\n" + delta_chunk
                                 emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
