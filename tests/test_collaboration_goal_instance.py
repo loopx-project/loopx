@@ -1328,6 +1328,47 @@ def test_lost_answer_readback_cannot_invent_or_rebind_a_commitment(tmp_path, dam
     snapshot = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=registry)
     assert snapshot["messages"] == before
     assert not any(m.get("collaboration") for m in snapshot["messages"])
+    assert _http_snapshot(tmp_path, registry, session["session_id"])["messages"] == before
+
+
+@pytest.mark.parametrize("exact", [False, True], ids=["legacy", "exact"])
+def test_lost_answer_recovers_distinct_recipients_around_an_ambiguous_request(tmp_path, exact):
+    registry = _create_source_registry(tmp_path)
+    if not exact:
+        registry.write_text(json.dumps({"goals": _source_payload(tmp_path, INSTANCE_A)["goals"]}))
+    store, session, receipt = _manager_request(tmp_path, registry, complete=False)
+    turn = store.turn_for_client(session["session_id"], "owner-request")
+    other = deliver(tmp_path, registry, session=session, turn=turn,
+                    request={"goal_id": "delivery", "agent_id": "reviewer",
+                             "brief": _brief("Independently review the delivery plan")})
+    store.update_turn(session["session_id"], turn["turn_id"], status="failed", response=None)
+    messages = store.messages(session["session_id"])
+
+    def source_bytes():
+        return {path.relative_to(_root(tmp_path)): path.read_bytes()
+                for path in _root(tmp_path).rglob("*.json")}
+
+    def read_requests():
+        before = source_bytes()
+        snapshot = _http_snapshot(tmp_path, registry, session["session_id"])
+        assert store.messages(session["session_id"]) == messages
+        assert source_bytes() == before
+        assert store.load_turn(session["session_id"], turn["turn_id"])["response"] is None
+        cards = [message for message in snapshot["messages"] if message.get("collaborations")]
+        assert len(cards) == 1 and cards[0]["role"] == "user"
+        return {item["request_id"]: item for item in cards[0]["collaborations"]}
+
+    initial = read_requests()
+    assert set(initial) == {receipt["request_id"], other["request_id"]}
+    assert {item["agent_id"] for item in initial.values()} == {"builder", "reviewer"}
+    assert all(item["returns"] == [] for item in initial.values())
+    route_path = _root(tmp_path) / "roundtrips" / (receipt["request_id"] + ".json")
+    duplicate = route_path.with_name("b" * 64 + ".json")
+    _write(duplicate, json.loads(route_path.read_text()))
+    for _ in range(2):
+        assert read_requests() == {other["request_id"]: initial[other["request_id"]]}
+    duplicate.unlink()
+    assert read_requests() == initial
 
 
 def test_exact_instance_updates_keep_original_route_and_http_readback(tmp_path):
