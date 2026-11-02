@@ -31,6 +31,10 @@ on:
         description: "Optional full merged commit supplying corrected browser fixtures"
         required: false
         type: string
+      validated_run_id:
+        description: "Publication only: reuse the successful build of an existing tagged release run"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -42,7 +46,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'loopx-project/loopx'
+    if: github.repository == 'loopx-project/loopx' && inputs.validated_run_id == ''
     runs-on: ubuntu-latest
     # Run 39196404607 completed all 71 packaged scenarios and two companion
     # flows at the 20m job window, leaving required release checks unrun.
@@ -416,23 +420,50 @@ jobs:
           retention-days: 30
 
   upload-release:
-    if: github.event_name != 'pull_request'
+    if: >-
+      !cancelled() && github.repository == 'loopx-project/loopx' &&
+      github.event_name != 'pull_request' &&
+      (needs.build.result == 'success' ||
+       (inputs.validated_run_id != '' && needs.build.result == 'skipped'))
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
+      attestations: read
     steps:
       - name: Check out release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.build.outputs.release-tag }}
+          ref: ${{ needs.build.outputs.release-tag || inputs.tag }}
+
+      - name: Check out reviewed publication tooling
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: publication-tooling
+
+      - name: Verify the original tagged build before recovery
+        if: inputs.validated_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATED_RUN_ID: ${{ inputs.validated_run_id }}
+          BROWSER_FIXTURE_COMMIT: ${{ inputs.browser_fixture_commit }}
+        run: |
+          set -euo pipefail
+          test -z "${BROWSER_FIXTURE_COMMIT}"
+          python publication-tooling/scripts/release_artifacts.py verify-publication-run \
+            --repo "$GITHUB_REPOSITORY" --run-id "$VALIDATED_RUN_ID" \
+            --commit "$(git rev-parse HEAD)"
 
       - name: Download validated release bundle
         uses: actions/download-artifact@v7
         with:
-          name: loopx-${{ needs.build.outputs.release-tag }}
+          name: loopx-${{ needs.build.outputs.release-tag || inputs.tag }}
           path: dist
+          run-id: ${{ inputs.validated_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Verify checksums before upload
         run: >-
@@ -443,28 +474,25 @@ jobs:
       - name: Upload immutable GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.release-tag }}
+          VALIDATED_RUN_ID: ${{ inputs.validated_run_id }}
         run: |
           set -euo pipefail
-          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null
-          gh release upload "${RELEASE_TAG}" \
-            dist/packages/* \
-            dist/SHA256SUMS \
-            dist/RELEASE-SOURCES.json \
-            dist/runtime/* \
-            --repo "${GITHUB_REPOSITORY}"
+          recovery=()
+          if [[ -n "$VALIDATED_RUN_ID" ]]; then recovery=(--recover); fi
+          python publication-tooling/scripts/release_artifacts.py upload-immutable \
+            --dist-dir dist --repo "$GITHUB_REPOSITORY" "${recovery[@]}"
 
   publish-pypi:
     if: >-
-      github.event_name != 'pull_request' &&
+      !cancelled() && github.event_name != 'pull_request' &&
+      needs.upload-release.result == 'success' &&
       vars.PYPI_PUBLISH_ENABLED == 'true'
-    needs:
-      - build
-      - upload-release
+    needs: upload-release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       id-token: write
+      actions: read
     environment:
       name: pypi
       url: https://pypi.org/project/loopx/
@@ -472,8 +500,10 @@ jobs:
       - name: Download validated release bundle
         uses: actions/download-artifact@v7
         with:
-          name: loopx-${{ needs.build.outputs.release-tag }}
+          name: loopx-${{ github.event.release.tag_name || inputs.tag }}
           path: dist
+          run-id: ${{ inputs.validated_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Publish distributions with PyPI Trusted Publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
@@ -482,7 +512,7 @@ jobs:
 
       - name: Verify the published package from PyPI
         env:
-          RELEASE_TAG: ${{ needs.build.outputs.release-tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"

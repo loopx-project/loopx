@@ -1802,3 +1802,48 @@ explicit quota refusal, unknown failure, lost post-write receipt, unavailable
 readback, recovery of older failed journals and two-App isolation. Live provider
 delivery remains separate. Model completion, material intake and an intermediate
 card cannot substitute for final-message readback.
+
+### Recovering a native result after Core failure
+
+An Antigravity owner request can finish natively while Core retains a transport
+failure. The original reply worker may adopt that existing answer, without
+admitting another Turn, sending native input or cancelling an invocation. The
+typed conversation owner requires the original private steward binding, source,
+failed Turn and current grant, with no attachments, steering, stop/new command
+or attached-host routing. The provider read must cover a stable, idle trajectory,
+its latest input and one fully settled native execution ending in a normal final
+response. Correlation requires the exact Core source context, original message
+and input time inside the failed Turn. New inputs additionally persist the
+pre-send prompt hash and native start index in the existing `turn.started` event.
+Missing, conflicting or stream-error evidence keeps the request pending.
+
+The existing request journal freezes the adopted result and rendered message before appending one
+deterministic canonical Chat message. The original failed Turn, events and
+delivered failure notice remain unchanged. Lark uses a distinct phase in the
+same Inbox intent/readback path; a crash resumes the same message and receipt.
+An unknown post-write acknowledgement remains owed and cannot cause a blind
+resend. Invalid action metadata preserves the answer with an explicit gate and
+submits none of its actions. Recovery itself does not execute even valid action
+metadata. Such work remains pending after the recovered prose is delivered;
+answer restoration does not certify the requested business or handoff complete.
+Cancellation failure retains the primary provider error and unconfirmed cleanup.
+
+After the recovered answer is independently delivered, a malformed batch whose
+only actions are string-brief handoffs can reserve one **format review** through
+the original Session queue. Fresh original native input/answer hashes, current
+binding, source readback and an idle queue are required. The review sends no
+business request again: that invocation disables native tools and user hooks,
+requires exact normal text-only completion, and withholds model prose until
+validation. Each normalized brief must retain its original context text and the
+same ordered recipients. Other actions, changed targets, unknown completion,
+new input, steering, stop or revoked authority admit no handoff.
+
+The existing ingress preserves the original source id, so ordinary publication
+uses the same recipient-specific request identity and fresh grants. The normal
+handoff owner supplies actual receipts; receiver conclusions remain separate.
+The original reply worker returns those receipts in a distinct presentation
+phase alongside the immutable failed Turn, failure notice and recovered answer.
+Reservation/enqueue crashes adopt the same queued Turn. A failed, partial or
+unknown review stays pending and cannot become another review or business retry.
+Other malformed actions and completed Turns without a recovered native result
+remain explicit holds; this path is not a generic action or execution replayer.

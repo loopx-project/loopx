@@ -5,6 +5,8 @@ import {reviewedPromotionPlan, promotionPlanDigest, decodeReviewedPromotionOpera
 import {registryAuthoritySourceCheck} from "./authority_source.ts";
 import {ResearchTerminalEvidenceHost} from "../capabilities/explore_research_terminal.ts";
 import {decodeTaskLeaseProof} from "./task_lease_proof.ts";
+import {LeaseWorktreeObservationError, observeLeaseWorktree} from "../work_items/task_lease_workspace.ts";
+import {evaluateTaskLeaseWriteScopesOverlap} from "../work_items/task_lease_acquire_decision.ts";
 import {COORDINATION_TODO_ARCHIVE_RESULT_SCHEMA} from "./todo_archive.ts";
 import {readCoordinationOwnership} from "./ownership_observation.ts";
 import {executeTodoContinuation} from "./todo_continuation.ts";
@@ -1035,6 +1037,11 @@ export async function claimLocalCoordinationTodo(
     }
     if (Object.hasOwn(input, "manage_execution") && input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA)
       throw new TypeError("Managed execution requires claim request v2");
+    const worktree = input.write_worktree;
+    if (worktree !== undefined && (input.schema_version !== LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA ||
+        input.manage_execution !== true || typeof worktree !== "string" || !isAbsolute(worktree))) {
+      throw new TypeError("Worktree observation requires a managed claim and an absolute caller path");
+    }
     const authoritySourcesCurrent = registryAuthoritySourceCheck(input,
       input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA);
     if (typeof input.dry_run !== "boolean") {
@@ -1085,7 +1092,15 @@ export async function claimLocalCoordinationTodo(
         ...(input.manage_execution === undefined ? {} : {manage_execution: input.manage_execution as boolean}),
         dry_run: input.dry_run === true,
         now: claimObservedAt(input.observed_at),
-      }, authoritySourcesCurrent);
+      }, authoritySourcesCurrent, worktree === undefined ? undefined : async writeScopes => {
+        try {
+          return await observeLeaseWorktree(worktree as string, path =>
+            evaluateTaskLeaseWriteScopesOverlap({left: [...writeScopes], right: [path]}).overlap === true);
+        } catch (error) {
+          throw new Error(error instanceof LeaseWorktreeObservationError ? error.message
+            : "Cannot verify independent Git worktree and origin for task claim");
+        }
+      });
       return {
         ...result,
         source_authority: sourceAuthority,

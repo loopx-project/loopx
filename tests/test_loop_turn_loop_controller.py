@@ -398,7 +398,6 @@ def test_controller_snapshot_limit_rejects_before_sending(monkeypatch, qualified
 @pytest.mark.parametrize("rejection", ["invalid_request", "ambiguous"])
 def test_controller_does_not_retry_other_transport_failures(monkeypatch, rejection) -> None:
     from loopx.control_plane import effect_runtime
-    from loopx.control_plane.turn_driver import loop_controller
 
     failure = (effect_runtime.EffectRuntimeResponseAmbiguous("turn.controller", timeout=1)
                if rejection == "ambiguous" else effect_runtime.EffectRuntimeRejected("rejected"))
@@ -408,7 +407,7 @@ def test_controller_does_not_retry_other_transport_failures(monkeypatch, rejecti
         calls.append((method, kwargs))
         raise failure
 
-    monkeypatch.setattr(loop_controller, "effect_runtime_result", reject)
+    monkeypatch.setattr(effect_runtime, "effect_runtime_result", reject)
     with pytest.raises(type(failure)) as error:
         _decide_loop_disposition(turn_receipt=None, quota_decision=_envelope(should_run=True))
     assert error.value is failure

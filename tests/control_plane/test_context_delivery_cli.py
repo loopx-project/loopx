@@ -897,7 +897,7 @@ def test_context_nonfinite_numbers_are_rejected_before_rpc(monkeypatch, number):
     def unexpected(*args, **kwargs):
         pytest.fail("Non-finite evidence must not enter the codec")
 
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", unexpected)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", unexpected)
     with pytest.raises(ValueError, match="finite"):
         prepare_context_delivery({"nested": [{"measurement": number}]},
             scope={}, capture_id="invalid")
@@ -908,7 +908,7 @@ def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path,
     from loopx.control_plane.quota import turn_envelope
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    original_rpc = turn_envelope.effect_runtime_result
+    original_rpc = turn_envelope.effect_runtime_projection_result
     costs = []
 
     def size(value):
@@ -920,7 +920,7 @@ def test_fractional_observations_keep_complete_codec_cost_proportional(tmp_path,
         costs.append(size(params) + size(result))
         return result
 
-    monkeypatch.setattr(turn_envelope, "effect_runtime_result", measured_rpc)
+    monkeypatch.setattr(turn_envelope, "effect_runtime_projection_result", measured_rpc)
     totals, source_sizes = [], []
     for fraction in (False, True):
         costs.clear()

@@ -103,7 +103,8 @@ def _secure_write(
 
 
 def read_machine_configuration(
-    runtime_root: Path, *, registry: MachineConfigurationRegistry
+    runtime_root: Path, *, registry: MachineConfigurationRegistry,
+    namespace_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
     path = machine_configuration_store_path(runtime_root)
     if not path.is_file():
@@ -111,7 +112,7 @@ def read_machine_configuration(
             raise ValueError("machine configuration must be a readable file")
         return None
     normalized: dict[str, Any] = normalize_machine_configuration(
-        read_json(path), registry=registry
+        read_json(path), registry=registry, namespace_ids=namespace_ids,
     )
     return normalized
 

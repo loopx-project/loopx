@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from copy import deepcopy
 
 import pytest
@@ -130,7 +131,11 @@ def test_real_guard_and_recovery_keep_distinct_vision_observations(tmp_path, mon
     if native:
         context = tmp_path / "native-context"
         context.mkdir(mode=0o700)
-        args += ["--context-delivery", "on", "--codex-context-dir", str(context)]
+        args += ["--codex-context-dir", str(context)]  # Exercise the supported-host default.
+        if os.name == "nt":
+            args += ["--context-delivery", "on"]  # Windows retains explicit activation.
+    else:
+        args += ["--context-delivery", "off"]
     code, emitted = call(*args)
     assert code == 0 and emitted["ok"] and len(observations) == 1, emitted
     original_bytes = (capture / "decision.json").read_bytes()
@@ -138,22 +143,34 @@ def test_real_guard_and_recovery_keep_distinct_vision_observations(tmp_path, mon
     before_receipts = fixture._heartbeat_receipt_count(runtime, "source-sharing-turn")
     assert before_receipts == 1 and fixture._spend_run_count(runtime) == 0
     if native:
-        from pathlib import Path
-
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
         recovery = emitted["recovery"]
-        view = json.loads(Path(recovery["path"]).read_bytes())
+        assert emitted["schema_version"] == "context_capture_navigation_v1"
+        reader = recovery["reference_file"]
+        offset, bodies = 0, []
+        while True:
+            code, page = call("quota", "context-read", "--reference-file", reader,
+                "--offset", str(offset), "--page-bytes", "64000", "--max-page-output-bytes", "64000")
+            assert code == 0 and page["ok"] and page["offset"] == offset, page
+            bodies.append(page["content"].encode("utf-8"))
+            offset += len(bodies[-1])
+            if page["eof"]:
+                assert page["next_offset"] is None and offset == page["total_bytes"]
+                break
+            assert page["next_offset"] == offset
+        view = json.loads(b"".join(bodies))
         pointers = ["/vision_continuation_audit/sharing_fixture",
             "/goal_frontier_projection/vision_continuation_audit/sharing_fixture",
             "/interaction_contract/agent_channel/vision_continuation_audit/sharing_fixture",
             "/interaction_contract/cli_channel/vision_continuation_audit/sharing_fixture"]
         selects = [arg for pointer in pointers for arg in ("--select", pointer)]
-        code, page = call("quota", "context-read", "--capture-file", recovery["path"],
-            "--capture-sha256", recovery["sha256"], *selects)
+        code, page = call("quota", "context-read", "--reference-file", reader, *selects)
         assert code == 0 and page["ok"] and page["eof"], page
         values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
         for pointer in pointers:
             _assert_scalar(values[pointer]["observation"], True if pointer == pointers[0] else 1)
-        code, refused = call("quota", "context-read", "--capture-file", recovery["path"],
+        _, original_reference = read_context_read_reference(reader)
+        code, refused = call("quota", "context-read", "--capture-file", original_reference["path"],
             "--capture-sha256", "0" * 64, *selects)
         assert code == 1 and refused["ok"] is False
     else:

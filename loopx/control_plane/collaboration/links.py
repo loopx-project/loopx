@@ -14,13 +14,29 @@ from .inbox import _entry, _now, _receipt, _request_lock, _root, _write
 from .goal_instance_scope import collaboration_goal_scope, decide_collaboration_lifecycle
 
 
-def _core_todos(registry_path, root, goal_id):
-    result = list_goal_todos(
-        registry_path=registry_path, runtime_root_arg=str(root), goal_id=goal_id
-    )
-    if result.get("ok") is not True:
-        raise ValueError("Core Todo authority unavailable")
-    return {r["todo_id"]: r for r in result.get("todos", []) if r.get("todo_id")}
+def _core_todos(registry_path, root, goal_id, *, todo_ids=(), cached_todos=None):
+    if cached_todos is None:
+        result = list_goal_todos(
+            registry_path=registry_path, runtime_root_arg=str(root), goal_id=goal_id
+        )
+        if result.get("ok") is not True:
+            raise ValueError("Core Todo authority unavailable")
+        cached_todos = {r["todo_id"]: r for r in result.get("todos", []) if r.get("todo_id")}
+    for tid in todo_ids:
+        if tid in cached_todos:
+            continue
+        # The queue omits completed history. Resolve only the explicit missing
+        # links through Core's existing exact read, without exporting history.
+        try:
+            result = list_goal_todos(
+                registry_path=registry_path, runtime_root_arg=str(root),
+                goal_id=goal_id, todo_id=tid,
+            )
+            todo = result.get("todo") if result.get("ok") is True else None
+            cached_todos[tid] = todo if isinstance(todo, dict) and todo.get("todo_id") == tid else None
+        except (OSError, ValueError, RuntimeError):
+            cached_todos[tid] = None
+    return cached_todos
 
 
 def read_linked_work(root, registry_path, item, todos_cache, *, include_core_details):
@@ -40,7 +56,9 @@ def read_linked_work(root, registry_path, item, todos_cache, *, include_core_det
     gid, aid = item["goal_id"], item["agent_id"]
     goal_ref = item.get("goal_ref")
     cache_key = (gid, (goal_ref or {}).get("goal_instance_id"))
-    if tids and cache_key not in todos_cache:
+    core = todos_cache.get(cache_key)
+    if tids and (cache_key not in todos_cache or
+                 (core is not None and any(tid not in core for tid in tids))):
         try:
             with collaboration_goal_scope(
                 registry_path, goal_id=gid, agents=(), caller_goal_ref=goal_ref
@@ -48,7 +66,7 @@ def read_linked_work(root, registry_path, item, todos_cache, *, include_core_det
                 admission = decide_collaboration_lifecycle(scope, operation="inbox_observe", record=item)
                 todos_cache[cache_key] = (
                     None if admission.get("kind") == "omit"
-                    else _core_todos(registry_path, root, gid)
+                    else _core_todos(registry_path, root, gid, todo_ids=tids, cached_todos=core)
                 )
         except (OSError, ValueError, RuntimeError):
             todos_cache[cache_key] = None
@@ -72,7 +90,7 @@ def read_linked_work(root, registry_path, item, todos_cache, *, include_core_det
 
 
 def receiver_work_observations(root, registry_path, items):
-    """Read the actual linked Core provider once per Goal instance."""
+    """Cache the active queue and exact linked reads within each Goal instance."""
     todos_cache, observations = {}, []
     for item in items:
         work = read_linked_work(root, registry_path, item, todos_cache, include_core_details=True)
@@ -130,9 +148,9 @@ def link(
         record=row,
     )
     if todo_ids:
-        rows = _core_todos(registry_path, root, goal_id)
+        rows = _core_todos(registry_path, root, goal_id, todo_ids=todo_ids)
         for tid in todo_ids:
-            todo = rows.get(tid, {})
+            todo = rows.get(tid) or {}
             if todo.get("claimed_by") != agent_id and todo.get("bound_agent") != agent_id:
                 raise ValueError("linked Todo must belong to the receiving Agent")
     path = _root(root) / "links" / (request_id + ".json")

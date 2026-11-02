@@ -754,6 +754,34 @@ def test_runtime_decode_change_rotates_identity_and_starts_replacement(
         raise
 
 
+def test_snapshot_method_declaration_rotates_runtime_and_changes_eligibility(
+    tmp_path: Path, monkeypatch, request,
+) -> None:
+    staged_root, _ = observe_copied_runtime(tmp_path, monkeypatch, request)
+    monkeypatch.setattr(effect_runtime, "_runtime_dir", lambda: tmp_path / "runtime")
+    source = tmp_path / "candidate"
+    source.write_bytes(b"synthetic candidate")
+    params = {"action": "probe", "components": [{"id": "code", "source_path": str(source)}]}
+    original_fingerprint = effect_runtime._runtime_fingerprint()
+    original = effect_runtime.effect_runtime_result("runtime.ping", {})
+    observed = effect_runtime.effect_runtime_result(
+        "runtime.checkpoint_artifacts", params, large_local_snapshot=True,
+    )
+    assert observed["source_witness"]["code"][0]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+
+    declaration = staged_root / "effect_runtime_snapshot_methods.json"
+    methods = json.loads(declaration.read_text(encoding="utf-8"))
+    methods.remove("runtime.checkpoint_artifacts")
+    declaration.write_text(json.dumps(methods) + "\n", encoding="utf-8")
+    assert effect_runtime._runtime_fingerprint() != original_fingerprint
+    with pytest.raises(effect_runtime.EffectRuntimeRejected, match="snapshot transport is unavailable"):
+        effect_runtime.effect_runtime_result(
+            "runtime.checkpoint_artifacts", params, large_local_snapshot=True,
+        )
+    replacement = effect_runtime.effect_runtime_result("runtime.ping", {})
+    assert replacement["pid"] != original["pid"]
+
+
 def test_runtime_retirement_trace_filters_private_stderr() -> None:
     raw = b'private path/token\nloopx_fixture_retirement:{"event":{}}\nloopx_fixture_retirement:{"event":"lock_release_error","code":"EPERM","token":"private","path":"private","pid":12,"ms":1}\n'
     assert trace_events(raw) == [{"event": "lock_release_error", "pid": 12, "ms": 1, "code": "EPERM"}]

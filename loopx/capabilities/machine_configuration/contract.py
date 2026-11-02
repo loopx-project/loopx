@@ -217,8 +217,15 @@ def _mapping(value: object, label: str) -> dict[str, Any]:
 
 
 def normalize_machine_configuration(
-    raw: object, *, registry: MachineConfigurationRegistry
+    raw: object, *, registry: MachineConfigurationRegistry,
+    namespace_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
+    """Validate a whole document, or its explicitly selected read-only owners.
+
+    Scoped readers still validate the envelope and every selected owner. They
+    neither interpret nor certify sibling settings. Mutation and full inspection
+    keep the default whole-document validation.
+    """
     payload = _mapping(raw, "machine_configuration")
     unknown = sorted(set(payload) - {"schema_version", "namespaces"})
     if unknown:
@@ -232,8 +239,15 @@ def normalize_machine_configuration(
     namespaces = _mapping(payload.get("namespaces"), "machine_configuration.namespaces")
     if not namespaces:
         raise ValueError("machine_configuration.namespaces must not be empty")
+    selected = set(namespaces)
+    if namespace_ids is not None:
+        if not namespace_ids:
+            raise ValueError("machine-configuration read scope must not be empty")
+        for namespace in namespace_ids:
+            registry.resolve(namespace)
+        selected.intersection_update(namespace_ids)
     normalized: dict[str, Any] = {}
-    for namespace in sorted(namespaces):
+    for namespace in sorted(selected):
         contract = registry.resolve(namespace)
         candidate = _mapping(
             namespaces[namespace], f"machine_configuration.namespaces.{namespace}"

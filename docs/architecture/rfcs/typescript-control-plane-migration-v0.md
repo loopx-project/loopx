@@ -2835,3 +2835,6 @@ The native query now owns recovery lookup and completion capability evidence,
 with shared write/read status-phase checks. See the [2026-10-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.md) for compatibility, measured cost, validation boundaries and facade exit.
 
 - Summary-display final-head qualification and preserved tail cohorts: [2026-10-27 follow-up](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.md).
+- Quota summary composition in one `todo.quota_planning.project` crossing with source references: [2026-11-02 cutover](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.md).
+- Complete global summary and gate read transactions: [2026-11-02 checkpoint](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.md).
+- Complete global-risk read ownership: [2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.md).

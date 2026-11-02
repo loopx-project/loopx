@@ -85,6 +85,22 @@ def _environment_readiness(variable: str) -> dict[str, Any]:
             "unavailable_reason": "api_key_not_set"}
 
 
+def _antigravity_readiness() -> dict[str, Any]:
+    """Live local probe for Antigravity's LanguageServerService."""
+
+    from .capabilities.native_chat.antigravity_adapter import probe_antigravity_endpoint
+
+    available, executable, detail = probe_antigravity_endpoint()
+    if available:
+        return {"available": True, "executable": executable, "detail": detail}
+    return {
+        "available": False,
+        "executable": executable,
+        "unavailable_reason": "antigravity_unavailable",
+        "detail": detail,
+    }
+
+
 def builtin_chat_endpoints(
     *,
     codex_bin: str,
@@ -106,6 +122,18 @@ def builtin_chat_endpoints(
             "display_name": "Codex",
             "adapter_kind": "codex_app_server",
             **_executable_readiness(codex_bin),
+            "streaming": True,
+            "resume": True,
+            "interrupt": True,
+            "tool_calls": True,
+            "trust_scope": "read_only",
+            "source": "builtin",
+        },
+        {
+            "agent_id": "antigravity",
+            "display_name": "Antigravity (Gemini 4 Argon)",
+            "adapter_kind": "antigravity_ls",
+            **_antigravity_readiness(),
             "streaming": True,
             "resume": True,
             "interrupt": True,

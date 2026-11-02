@@ -540,7 +540,9 @@ function terminalRequestSha(input: CoordinationTodoTerminalLifecycleInput): stri
     validation_declaration_sha256: input.user_update !== undefined ? null :
       input.validation_declaration_sha256 ?? (input.validation_declaration === null
         ? null : canonicalAuthoritySha256(input.validation_declaration)),
-    dry_run: input.dry_run,
+    // Preview reads the same intent as a committed command. Only non-preview
+    // operations can persist receipts, whose historical fingerprint is false.
+    dry_run: false,
   });
 }
 
@@ -1200,7 +1202,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   rawInput: CoordinationTodoTerminalLifecycleInput,
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
   terminalEvidenceGuard: TodoTerminalEvidenceGuard | null = null,
-  verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<void>,
+  verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<JsonObject>,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1230,7 +1232,21 @@ export async function executeCoordinationTodoTerminalLifecycle(
     // Named operation recovery reports history, not present execution authority.
     const receipt = terminalReceipt(input, requestSha);
     const replay = await receipt.read(store);
-    if (replay !== null) return replay;
+    if (replay !== null) {
+      // Older accepted lifecycle receipts lack the original quota binding.
+      // Add it to this response from verified history; never rewrite the receipt.
+      if (replay.status === "replayed" && isLifecycleCloseout(input) &&
+          requiresReentrySettlement(input) && replay.settlement_identity == null &&
+          verifyLifecycleSettlement !== undefined) {
+        try {
+          return {...replay, settlement_identity: await verifyLifecycleSettlement(input)};
+        } catch (error) {
+          return terminalFailure("invalid_todo_completion_transaction",
+            error instanceof Error ? error.message : "Original terminal settlement unavailable", {}, "decision_rejection");
+        }
+      }
+      return replay;
+    }
     if (normalized.operation_identity.kind === "completion_turn" && normalized.requested_no_followup) {
       // Older adapters used the ordinary id for an already accepted closeout.
       // Recover that exact historical request before reading current authority.
@@ -1433,12 +1449,13 @@ export async function executeCoordinationTodoTerminalLifecycle(
   }
   if (isLifecycleCloseout(input)) {
     let closed: JsonObject | null;
+    let settlement: JsonObject | null = null;
     try {
       closed = prepareTerminalReentry(todo, input, activeLease(projection.leases.get(input.todo_id), input.now));
-      if (closed !== null && requiresReentrySettlement(input)) {
+      if (requiresReentrySettlement(input)) {
         if (verifyLifecycleSettlement === undefined) throw new AuthorityStoreProtocolError(
           "Lifecycle closeout requires original quota settlement verification");
-        await verifyLifecycleSettlement(input);
+        settlement = await verifyLifecycleSettlement(input);
       }
     } catch (error) {
       return terminalFailure("invalid_todo_completion_transaction",
@@ -1457,6 +1474,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
       completion_recovery: target.completion_recovery ?? null,
       completion_receipt_id: target.completion_receipt_id ?? null,
       completed_at: target.completed_at ?? null,
+      ...(settlement === null ? {} : {settlement_identity: settlement}),
     }, closed === null ? [] : [{kind: "todo_upsert", todo: closed}], authoritySourcesCurrent);
   }
   let untypedCompletionRepair: UntypedCompletionRepairPlan | null;
@@ -1671,7 +1689,9 @@ export async function executeCoordinationTodoTerminalLifecycle(
         requested_has_successor:
           input.successor_intents.length > 0 || input.linked_successor_todo_ids.length > 0,
         dry_run: input.dry_run,
-        validation_receipt: implicitMonitorNoChange ? null : terminalUpgradeReceipt !== null
+        // Preview never declares a validation effect. The parent receipt above
+        // already proves the original check; retain it in the returned result.
+        validation_receipt: input.dry_run || implicitMonitorNoChange ? null : terminalUpgradeReceipt !== null
           ? terminalUpgradeReceipt.validation_receipt : input.validation_receipt,
         // Link ids are caller intent; role/status are facts owned by this head.
         // Receipt recovery above preserves the originally accepted policy.

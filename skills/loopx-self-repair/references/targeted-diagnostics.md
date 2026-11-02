@@ -74,6 +74,33 @@ diagnostic is not current authority.
 
 ## Measure the right latency
 
+### Preserve the command tool's completion state
+
+Read the command tool's result envelope before projecting its stdout. A code cell
+can finish while its child command is still running. For a tool exposing
+`session_id` and `exit_code`, forwarding only `result.output` loses the distinction:
+
+| Observed tool result | Next action |
+| --- | --- |
+| Running session handle, no terminal exit code; stdout may be empty or partial | Retain the handle and collect that same command's completion through the tool's continuation API. Do not submit the command again. |
+| Terminal zero exit code, empty stdout | The command exited silently. If a structured result was required, use the original operation's receipt/capture recovery; empty text does not establish its domain outcome. |
+| Terminal nonzero exit code, empty stdout | Preserve the failure and available stderr/typed recovery. Empty text does not turn failure into a running command or grant a retry. |
+
+Respect the existing timeout, cancellation and stop conditions during collection.
+For example, `text(result)` preserves these fields where `text(result.output)`
+would discard them. With large output, retain the complete result in the tool's
+value store or an authorized private capture and expose its completion metadata
+and pinned reader; obey the original context-read contract for required content.
+The child output budget does not raise the enclosing code cell's output budget.
+
+If the handle was already lost and the operation may have committed, recover its
+original receipt or digest-bound capture before considering another execution.
+Preserve Goal, Agent, Turn and operation identity. A directory listing, a wrapper's
+"completed" label or a later file's existence does not prove the child outcome,
+full context delivery or current authority.
+
+### Separate tool waits from command duration
+
 Distinguish command start-to-exit duration from the tool's initial yield or
 poll wait. Separately record response bytes, output truncation, read count and
 time between useful operations. A fast `cat` can still consume substantial

@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal; no new runtime, schema or default is shipped by this document.
 - **Authors / owners:** LoopX maintainers; control-plane and runtime owners
 - **Created:** 2026-10-27
-- **Last normative revision:** 2026-10-29
+- **Last normative revision:** 2026-11-02
 - **Implementation baseline:** `fe2b8dcbcb998647edb4bafb51932988bd7fdaa6`
 - **Related contracts:** [Effect interpreter](agent-loop-effect-interpreter-v0.md), [Session execution modes](agent-session-execution-modes-v0.md), [Semantic handoff](capable-manager-semantic-handoff-v0.md), [Overall roadmap](loopx-overall-roadmap-v0.md)
 - **Language mirror:** [中文版](controller-executor-unified-contract-v0.zh-CN.md)
@@ -40,9 +40,11 @@ evidence belongs in a dated ledger when an implementation first produces it.
    and questions. It neither consumes a second Core packet view nor authors
    quota, Vision, lease or settlement fields. A small machine carrier records
    routing and causality outside the task prose.
-4. Full-first delivery, exact differential context and automatic full recovery
-   are capabilities of the single contract. Controller and executor sessions
-   have independent continuity evidence; one cannot borrow the other's baseline.
+4. Save complete context, then compose two independent delivery layers:
+   **Progressive by default across hosts**, and **Delta automatically only on
+   qualified hosts**. Keep unread material discoverable from the current capture.
+   Controller and executor have separate continuity evidence and cannot borrow
+   each other's baseline. Full recovery remains available.
 5. Unification first qualifies the existing single-session path. Two-session
    execution remains opt-in until matched outcome and complete-cost evidence
    justifies adoption. This RFC launches no benchmark or privileged operation.
@@ -454,20 +456,140 @@ its existing independent claim/lease/handoff contract.
 ### Differential context
 
 Reuse the existing context-delivery owner and immutable capture mechanism.
-Deliver complete context first. Send exact registered-subtree deltas only with
-proven complete delivery and retained context in the exact consumer session,
-role, epoch, schema and source capture. Preserve deletion, array order, null,
-empty values and complete strings. Unknown fields remain fully delivered until
-their reuse semantics are registered; send full if delta plus metadata is larger.
+The target has two orthogonal layers; neither creates another semantic producer:
+
+- **Layer 1 — Progressive:** default model-facing delivery across LoopX hosts,
+  including ordinary CLI, MCP/HTTP and external workers without Session Hooks.
+  Keep the current Goal, applicable cumulative acceptance, failures/unknowns,
+  authority, stop conditions and outstanding read/settlement obligations inline.
+  Fold heavy history, source bodies and review evidence only through the existing
+  typed composition owner, with exact current-capture read routes and explicit
+  before-dependent-work obligations. Unknown relevance/schema keeps the complete
+  necessary material. This is a delivery default, not permission to collect or
+  persist additional data. A caller without an authorized, usable reader receives
+  complete inline context; a local file path is not a working remote read route.
+  If hard Host limits prevent both routes, expose unavailable context and hold
+  dependent work.
+- **Layer 2 — Delta:** an exact encoding of the composed instance, automatically
+  selected only with qualified consumer/session, role, epoch, schema and source
+  binding. Progressive can use full encoding; a complete inline instance can use
+  Delta. Qualify both combinations as well as Progressive plus Delta and neither.
+  A host without qualified continuity uses current full encoding of Layer 1,
+  without losing Progressive or requiring a native session to be invented.
+
+Distinguish two existing reuse claims. **`captured_file`** compares verified,
+compatible immutable saved artifacts; exact reconstruction does not require the
+model to have read the old file, reached EOF or retained its contents. **Retained
+model-input reuse** may omit previously delivered text only with trusted complete
+delivery and retention evidence for that exact consumer binding. A saved file,
+tool-output receipt or model self-acknowledgement cannot establish that evidence.
+Session Hooks observe their supported boundary; they grant no new authority.
+Preserve deletion, array order, null, empty values, original numeric values and
+complete strings. Unknown fields stay complete until reuse semantics are
+registered. Publish the current complete recovery source before an optional view
+or delta, verify reconstruction, and choose full when Delta plus its metadata is
+not smaller. Layer 1 likewise compares its final serialized UTF-8 view, read
+guidance and index with the same capture's complete alternative; use the smaller
+valid delivery, never trim mandatory meaning to meet a size budget.
 
 Current authority, admission, cancellation, unresolved-read, settlement and
 scheduler facts stay fresh and inline even if unchanged. A warm transport never
-relaxes the underlying instructions. Missing/out-of-order deltas, truncation,
-compaction, corrupt or unknown baselines select full recovery from the same
-capture automatically, without another admission/debit. Execution still checks
-current source validity and authority; recovering an old capture cannot revive
-cancelled work. The executor's task conversation is a separate consumer of
-semantic material, not a relabeled delta of the controller's Core packet.
+relaxes the underlying instructions. Missing/out-of-order deltas, corrupt or
+unknown baselines select current full encoding/recovery. Truncated or missing
+reads recover the necessary range from the same capture. Compaction invalidates
+retention for the next work Turn's new baseline epoch; it neither invalidates the
+existing Turn nor forces an old-packet prefetch or immediate full reread. Preserve
+the original admission, recovery reference and once-only settlement/debit.
+Execution still checks current source validity and authority; recovering an old
+capture cannot revive cancelled work. The executor's task conversation consumes
+semantic material separately, not a relabeled controller Core-packet delta.
+
+#### Unread material across Turns
+
+Current immutable captures already support exact selected reads. The missing
+design is explicit discovery of unread material across deliveries, not a second
+reader or a requirement to consume an entire baseline. Extend the existing
+context/readback owner and native `session.json` projection; use its equivalent
+consumer binding on other hosts. Distinguish publication, model-visible delivery
+coverage, retention and semantic adoption/accepted outcomes.
+
+`confirmed_read_sections` is a proposed coverage projection;
+`consumed_pointers`, if retained as a name, must derive from that same owner,
+not become a second ledger or imply comprehension. Bind evidence to the exact
+source/capture digest, revision, consumer/session role, epoch, schema and selected
+pointer/range. Confirm coverage only from trusted Host observation of the actual
+model-visible result. Calling `--select`, file existence, reader EOF, a successful
+tool log or a self-ACK alone is insufficient. Partial/truncated/missing output
+stays unconfirmed; selecting a parent/index cannot confirm hidden descendants.
+Without such an observer, coverage is unknown and discovery stays conservative.
+This coverage never becomes a new full-read gate for `captured_file` Delta.
+
+Every warm delivery carries an **`unread_context_index`** (proposed name) for
+eligible non-inline material whose current content is unconfirmed or changed,
+including unchanged text omitted by Delta. Include exact current pointers,
+source revisions/digests and required-read status, rather than inferred relevance
+from a summary. A confirmed range applies only to its observed version; changed
+content, reordered arrays or ambiguous mappings require current rebinding and
+conservative discovery. Confirmed delivery never proves retained input or adoption.
+
+Each item resolves independently through existing `quota context-read --select`
+against the **current complete immutable `projection.json`**, with its exact
+capture SHA, without the previous packet, baseline file, model memory or patch
+chain. A derived `required-context.json` or wire view retains the existing owner's
+explicit mapping to the canonical source; roots and digests are not interchangeable.
+Historical exact-version lookup remains a separate, version-pinned artifact/read
+contract, not an invented path alias or a reason to silently use stale facts.
+If still-required earlier material is absent from the new projection, its owner
+must carry it forward or expose its current authorized source/read obligation.
+Legitimate expiry, revocation or removal must remain explicit, with unavailable
+required material holding dependent work; never silently mark it read or retain
+forbidden raw data. External materials keep their own source-consumption contract.
+
+#### Configuration and migration
+
+The following is proposed behavior, not a change to today's Codex-scoped
+`context_delivery` on/off interface. Evolve the existing typed configuration owner
+to express the two layer decisions; C1 maps exact names and versions before
+implementation. Do not add a parallel settings store or packet-format toggle.
+
+| Configuration / caller | Migration and effective behavior |
+| --- | --- |
+| No saved preference, model-facing caller | Target Layer 1 default applies after that caller's reader/fallback and cost qualification; Layer 2 is auto only for a qualified continuity host, otherwise full encoding. Today's ordinary CLI/other-host full behavior remains until that rollout qualifies. |
+| Explicit invocation/environment off | Preserve current precedence and full/raw delivery for that invocation, with no optional codec/coverage-ledger dependency; do not rewrite the saved preference. |
+| Existing persisted off | Preserve the complete off path and its original read/recovery obligations; never convert it to Progressive or Delta through an absent-preference migration. |
+| Existing on, supported host | Preserve the qualified native file/recovery semantics while mapping to Layer 1 plus qualified Layer 2 auto; no full-model-read prerequisite is introduced. |
+| Existing explicit on, unsupported host | Preserve the current validation error during compatibility. A versioned caller rollout may expose supported Layer 1 after qualification; do not silently reinterpret an unsupported request. |
+| New independently configured layers | Honor each layer independently, including Progressive off with qualified Delta auto. Explicit Delta off preserves Progressive; unsupported auto falls back to current full encoding. |
+| Internal raw machine consumers | Preserve their explicit `--context-delivery off` contracts; do not replace machine JSON with a model-facing file reference or mutate preferences. |
+
+Freeze recorded versions, experimental configurations and historical receipts.
+Qualify default expansion as a behavior change on real callers, including explicit
+off isolation and failure/recovery; a merged design alone changes no defaults.
+
+#### Delivery acceptance
+
+Reuse C1/C2's real-entry and §9 comparisons, including these decisive cases:
+
+| Case | Required observation |
+| --- | --- |
+| Ordinary no-hook CLI and supported MCP/HTTP/worker routes | Layer 1 works through the actual authorized reader or complete inline fallback; no dangling local-only references or invented native epoch. |
+| Unchanged unread tail becomes decisive next Turn | Warm Delta may omit its bytes, but the current index exposes its full source and actual subsequent selection/work obeys the recovered constraint. Index visibility alone is not success. |
+| Changed/unread bodies, reordered arrays, unknown fields or scope | Rebind to the current source; preserve applicable cross-Agent obligations and unknown-scope complete fallback. |
+| Partial pages, lost/truncated tool output, EOF without a Host witness | Do not confirm unseen bytes or hidden descendants; recover missing ranges, conservatively index unknown coverage, and keep file Delta usable. |
+| Compaction, role/session/schema/epoch change | Invalidate incompatible retention/reuse; recover current facts without replaying the original admission, effects or debit, and without old-packet prefetch. |
+| Revoked source, missing reader or legitimately removed material | Respect the current permission/source owner; expose the loss and hold dependent work or use authorized complete fallback, without stale-data disclosure. |
+| Full is cheaper; off and legacy configuration | Choose valid full delivery, preserve explicit off and frozen versions, and observe both source identity and raw machine-consumer parity. |
+
+The primary stored-body reduction is **`1 - V/F`**: `F` is the complete capture's
+actual UTF-8 file bytes and `V` the selected view body file's actual bytes from
+that same capture; saved bytes are `F - V`. Bind both artifacts and their digests,
+and report wire/index overhead separately rather than changing that denominator.
+The delivery size guards above still include their actual presentation overhead.
+A net-benefit claim also counts all later reads/recovery, host/controller/executor calls and latency,
+actual tokenizer/cached/output usage, human attention and accepted outcomes.
+Preserve unfavorable cases and frozen budgets. A smaller packet alone proves
+neither lower token cost nor better outcomes; §9's original quota single-session
+comparison stays primary, and two-session costs remain a separate comparison.
 
 ### Candidate context by decision stage
 
@@ -502,9 +624,10 @@ and cursor. Distinct revisions of one Todo stay distinct. Missing, truncated,
 unsupported or changed detail holds dependent work and uses that capture's full
 recovery; a fresh guard is not a detail reader. One read can deliver several bodies;
 verified bodies need not be repeated within a supported retained session. Reading
-an index never acknowledges hidden bodies. Delta baselines contain only material
-actually delivered to that consumer: newly required detail must supply its text
-even if the machine already holds it. Context loss recovers the required model
+an index never acknowledges hidden bodies. Retained-model reuse covers only text
+actually delivered and retained for that consumer; saved-file Delta has its
+separate artifact proof above. Newly required detail must supply its text even
+if the machine already holds it. Context loss recovers the required model
 artifact, widening to the full source when its scope is unknown. Historical captures
 keep their original obligations. Read receipts prove coverage, not comprehension,
 retention, fresh authority or acceptance.
@@ -621,6 +744,9 @@ an immutable product constraint.
 | Work context, required reads and settlement | Keep their existing `interaction_contract` paths and owners. Existing root-relative references retain their meaning; any intentional relocation requires explicit reference and reader migration. Never rewrite prose or command strings by pattern. |
 | Host-operation binding | Compose from the actual caller execution context. Validate consistency with source authority; reject conflicting bindings rather than choosing whichever representation is convenient. |
 | Content and transport integrity | Commit the entire semantic instance independently of the former compact action digest. Preserve exact capture-byte verification and original settlement identity as separate checks; changing a transport encoding does not create a new effect. |
+| Complete capture and Progressive view | Keep canonical `projection.json` distinct from its derived `required-context.json`/wire view; inventory exact root, revision, digest and pointer mappings. Save complete recovery before presentation; reference only through an authorized usable reader. |
+| Saved-file reuse, delivery coverage and retention | Inventory each existing typed owner and its evidence boundary separately. Proposed `confirmed_read_sections`/derived `consumed_pointers` describe observed coverage only; neither is artifact-reconstruction proof, comprehension or a full-read gate for file Delta. |
+| Unread discovery | Map the proposed `unread_context_index` to current complete-capture pointers, revisions and source/read obligations, including unchanged unconfirmed material. Rebind changed/unknown mappings; retain explicit unavailable states and permission checks. |
 | Historical receipts and readers | Decode the recorded version for outstanding work. A temporary internal adapter may serve an existing effect interpreter, but must not become a second emitted contract or a compact replacement for the model's required input. |
 
 A synthetic layout probe used real isolated File/SQLite quota captures and the
@@ -635,8 +761,9 @@ remains possible if its mapping and consumers justify the migration cost.
 
 Therefore C1/C2 must explicitly version the context surface and its fresh/reuse
 paths with the wire transition. Do not relabel an old surface or inherit its
-baseline by Turn identity. The first delivery after transition is full; reuse
-requires a verified compatible retained baseline. Qualification includes fields
+baseline by Turn identity. The transition first saves a complete compatible
+source; the model-facing view may already be Progressive. Reuse requires the
+appropriate saved-artifact or retained-model proof above. Qualification includes fields
 outside the old action projection, missing baselines, session/epoch changes and
 same-capture recovery. This resolves a concrete layout risk; shared writer and
 final-consumer replacement remain the next implementation, not another layout
@@ -861,6 +988,33 @@ full encoding and its delta encoding separately so transport reuse cannot hide
 a semantic regression. Controller/executor separation is a later independent
 comparison and cannot explain away a C1 regression.
 
+### Default adoption and retirement qualification
+
+The [context-delivery guide](../../guides/context-delivery.md#qualify-default-adoption-and-retirement)
+turns this comparison into an operator plan. Documentation may ship first;
+future broader default adoption needs both a declared DeepSeek model and a declared
+strong model to support the claimed effectiveness and complete-cost scope.
+The reference's existing Codex-scoped default remains current behavior, not proof
+that these model comparisons have passed.
+Record exact model/provider/version/effort and fixed task, source, host, tools,
+feedback, evaluator, budget and stops. Include actual final input/output,
+cached/uncached tokens, requests, detail/recovery reads, wall/IO/setup costs and
+human attention, alongside task-native outcomes, constraint misses, wrong
+actions and once-only recovery. Unknown cost is not zero; preserve repeated-run
+variation, failures and negative cases. Historical-best optimization keeps that
+native ranking, with final-retention facts separate. A Codex-scoped adapter
+cannot qualify a DeepSeek host.
+
+Keep this sequence in C1/C2/C9: explanation → both-model comparison → supported
+profile's reversible adoption/release → scoped default → named old-path
+retirement. Mixed or regressed results retain opt-in or explicit limitations.
+Retirement requires actual caller replacement, historical decoding/readback,
+supported-version and rollback coverage; full snapshots, digest checks,
+authority/identity/stops and recovery remain. Do not preserve two permanent
+semantic owners or delete a still-supported reader based on new-path existence.
+This is a qualification plan, not new experiment authority, a claim of shipped
+benefit, or a gate on other independent authorized work.
+
 The [packaged source comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
 pins mainline quota and the C1 candidate through real File/SQLite CLI delivery,
 file deltas, capture refusal/recovery and once-only settlement. Source fidelity
@@ -1021,8 +1175,8 @@ are stable design references, not claims that a canonical Todo is complete.
 
 | Task / dependency | Owner and concrete replacement | Decisive exit / rollback |
 | --- | --- | --- |
-| **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields and instruction clauses, capture one schema, migrate actual ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus the quota-baseline effectiveness/full-cost comparison in §9; retain version-pinned readers until cutover qualifies |
-| **C2 — One context-delivery pipeline; C1** | Context owner + host observers: absorb full/delta/detail/recovery into the canonical contract; replace candidate delivery by decision stage; remove packet-format branches and duplicate context copies | Required detail precedes actual selection/work; normal/replan/resume preserve cross-Agent constraints and exact role/session continuity at measured complete cost; full fallback without a new admission; rollback encoding to full |
+| **C1 — Unified contract; first** | Interaction/work-context + quota/Turn owners: inventory fields/instruction clauses, capture/view/read-evidence mappings and versioned two-layer configuration; capture one schema and migrate ordinary quota/Turn producers and thin renderer | Single-session real-entry parity with necessary information, action binding and once-only settlement, plus §9's quota-baseline effectiveness/full-cost comparison; preserve explicit off and version-pinned readers until cutover qualifies |
+| **C2 — One context-delivery pipeline; C1** | Context owner + host observers: compose cross-host Progressive, independent qualified Delta, same-capture detail/recovery and conservative unread discovery; replace staged candidate delivery and duplicate packet branches | Unchanged unread constraints reach actual next-Turn work; qualify no-hook readers, exact evidence/continuity and all four layer combinations at complete cost; full fallback without a new admission; rollback encoding/configuration through the existing owner |
 | **C3 — Session binding and native lifecycle; C1** | Session/runtime owner: extend existing binding for role/generation; reuse native create/resume/observe/interrupt and ordered queues | Two roles cannot overwrite the Agent native ID, cross-read baselines or race execution; recovery observes existing attempts before retry; disable new role admission to roll back |
 | **C4 — Shared governed lifecycle; C1** | Effect/Turn owner + outer worker adapters: converge duplicated prepare/dispatch/observe/validate/writeback/settle orchestration around existing typed operations and receipts | App/Turn/external worker agree on admission, original result and single debit under partial failure; scheduler effects retain their true host owner; switch callers back only after receipt reconciliation |
 | **C5 — Replan and result authoring boundary; C1** | Goal/Vision and interaction owners: expose current facts and typed controller operations; remove ordinary executor obligations to manufacture Core writeback fields in the two-session profile | Fact-first decision preserves default/stride policy differences, all evidence and required validation; invalid proposed writes reject; single-session authoring remains qualified during rollout |
@@ -1030,6 +1184,21 @@ are stable design references, not claims that a canonical Todo is complete.
 | **C7 — Benchmark reuse and full-cost attribution; C4/C6** | Benchmark toolkit/execution owner: thin adapters select the same product profiles; consolidate duplicated launch/session settings and track both sessions without changing frozen trials | Native/plain controls unchanged; matched-arm configuration/replay and complete cost coverage; no jobs launched merely by merging helpers |
 | **C8 — Product configuration and operational readback; C3/C6** | Existing App/settings/Chat projections: one effective configuration owner, role-aware activity, failure/recovery, proactive evidence-based reports, task-appropriate rich views, feedback/readback, Stop and artifact return | Packaged managed and supported attached heartbeat journeys from §9, including unavailable host, late results, quiet/deduplicated reports, accessible fallback, audience denial and recovery; installed qualification separate; no new packet-format toggle |
 | **C9 — Retire old paths and qualify adoption; C1–C8** | Contract/runtime maintainers: remove superseded producers, format switches, duplicated prompts and tests; update protocols, guides and RFC delivery facts | Caller/field/decoder retirement inventory, historical replay and rollback evidence; App + benchmark acceptance and matched benefit before any default promotion |
+
+Evolve this delivery boundary through those existing tasks, not another roadmap:
+
+1. **C1:** map canonical capture, derived view, reader references, coverage and
+   retention to existing owners; version both layer decisions and the legacy
+   migration matrix above. Keep unresolved mappings explicit before caller cutover.
+2. **C2:** replace actual no-hook and native callers with the common Progressive
+   composition/reader and conservative unread index. Add trusted Host coverage
+   observations where available; unknown coverage must still work. Then qualify
+   independent Delta auto/full recovery on supported hosts, with §5's negative
+   cases and the original quota single-session/full-cost comparison.
+3. **C9:** retire conflated switches, duplicate delivery assumptions and superseded
+   readers only after their consumers, off path, historical replay and local
+   rollback qualify. Reconcile existing C1/C2 tasks/PRs and preserve unpassed size
+   or adoption gates; do not put this design into a frozen experimental treatment.
 
 The existing native context entry now supports a bounded C2 precursor: complete
 captures remain on disk, the normal response exposes file navigation, and exact

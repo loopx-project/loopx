@@ -2100,3 +2100,6 @@ SQLite 中位数略升，收益不能外推为全面加速。这只资格化本�
 原生查询统一拥有恢复定位和 completion capability 证据，并共享写入／回读的状态阶段约束。兼容变更、实测代价、验证范围与 facade 退出条件见 [2026-10-02 检查点](ledger/typescript-control-plane-migration-v0/2026-10-02-turn-journal-readback.zh-CN.md)。
 
 - 摘要展示最终 head 验收与历史尾延迟批次：[2026-10-27 后续记录](ledger/typescript-control-plane-migration-v0/2026-10-27-todo-summary-qualification.zh-CN.md)。
+- 配额摘要经来源引用在一次 `todo.quota_planning.project` 跨运行时调用内完成组合：[2026-11-02 切换记录](ledger/typescript-control-plane-migration-v0/2026-11-02-quota-summary-transaction.zh-CN.md)。
+- 完整全局摘要与门禁读取事务：[2026-11-02 检查点](ledger/typescript-control-plane-migration-v0/2026-11-02-global-manager-reads.zh-CN.md)。
+- 完整全局风险读取所有权：[2026-11-02](ledger/typescript-control-plane-migration-v0/2026-11-02-global-risks-read.zh-CN.md)。

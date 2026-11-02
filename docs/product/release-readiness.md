@@ -239,6 +239,20 @@ workflow commit, separately from the immutable product tag passed as `tag`.
 Retain the tooling ref for provenance verification; do not move the product tag,
 relax the environment policy, or replace Trusted Publishing with a token.
 
+When a tagged build passed but publication stopped after a partial upload,
+dispatch the reviewed release workflow with the original product `tag` and its
+`validated_run_id`. This path reuses the successful release-event build without
+rebuilding packages or repeating qualification. It checks the repository,
+workflow, tag, source and successful build job, then verifies every recovered
+file's attestation against that tagged source. Existing Release assets must
+match downloaded bytes exactly before any missing file is uploaded; a mismatch
+or case-insensitive name collision stops publication without replacement.
+Trusted Publishing and the existing environment policy still apply.
+
+Reserve `qualification.json` for the workflow's attested runtime qualification.
+Use `RELEASE-QUALIFICATION.json` for a separately maintained release overview;
+GitHub Release asset names must also be unique when compared ignoring case.
+
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,

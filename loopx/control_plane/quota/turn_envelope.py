@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result, source_number_tokens
+from ..effect_runtime import effect_runtime_projection_result, source_number_tokens
 from ..scheduler.execution_context import (
     SchedulerExecutionContextResolution,
     render_scheduler_execution_args,
@@ -60,15 +60,7 @@ def _turn_envelope_result(
         tokens = source_number_tokens(params)
         if tokens:
             request["source_number_tokens"] = tokens
-    try:
-        result = effect_runtime_result("quota.turn_envelope.evaluate", request)
-    except EffectRuntimeRejected as error:
-        if error.diagnostic_code != "request_too_large":
-            raise
-        # The client refused before sending this pure projection. Reuse the
-        # existing bounded local-snapshot transport, never truncate the source
-        # or re-enter quota admission. Small packets retain their normal path.
-        result = effect_runtime_result("quota.turn_envelope.evaluate", request, large_local_snapshot=True)
+    result = effect_runtime_projection_result("quota.turn_envelope.evaluate", request)
     if not isinstance(result, Mapping):
         raise RuntimeError("TypeScript Turn envelope result must be an object")
     return dict(result)

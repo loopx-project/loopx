@@ -284,7 +284,7 @@ def main() -> int:
         "python scripts/release_artifacts.py write-checksums",
         "python scripts/release_artifacts.py verify-checksums",
         "uses: actions/attest@v4",
-        "gh release upload",
+        "scripts/release_artifacts.py upload-immutable",
         "vars.PYPI_PUBLISH_ENABLED == 'true'",
         "environment:\n      name: pypi",
         "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33",
