@@ -934,6 +934,7 @@ jobs:
           tests/test_file_lock_cross_process.py
           tests/test_host_thread_activity.py
           tests/control_plane/test_effect_runtime_integration.py
+          tests/control_plane/test_turn_instance_arg.py
           tests/control_plane/test_shadow_observation_retirement.py
           tests/test_python_install_owner_platform.py
           tests/test_self_update_runtime_activation.py
