@@ -2057,9 +2057,15 @@ def test_inherited_stride_projection_growth_is_one_time_and_bounded(surface, roo
     control = f"{root}.replan_action_packet.stride_control"
     paths = [control, *[f"{control}.{key}" for key in (
         "schema_version", "strategy_version", "reference_context_id", "reference_obligation_id",
-        "required_fields", "rule", "minimal_example.axes.work_slice.plan",
-        "minimal_example.axes.route_distance.plan", "minimal_example.axes.validation_scope.plan",
-        "minimal_example.next_probe.minimum_evidence",
+        "required_fields", "rule", "minimal_example.schema_version", "minimal_example.strategy_version",
+        "minimal_example.reference_context_id", "minimal_example.reference_obligation_id",
+        "minimal_example.basis", "minimal_example.action",
+        *[f"minimal_example.axes.{axis}.{field}"
+          for axis in ("work_slice", "route_distance", "validation_scope")
+          for field in ("plan", "reason")],
+        *[f"minimal_example.next_probe.{field}" for field in (
+            "scope", "prediction", "adoption_criterion", "cost_bound", "minimum_evidence",
+        )],
     )]]
     base = _row(row_id=f"surface/{surface}/crowded/json")
     candidate = {**base, "json_shape_paths": [*base["json_shape_paths"], *paths]}
@@ -2073,3 +2079,13 @@ def test_inherited_stride_projection_growth_is_one_time_and_bounded(surface, roo
     assert _compare_row(base, {**candidate, "json_shape_paths": paths})["failures"]
     for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
         assert _compare_row(base, {**candidate, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+    for review, fields in (
+        ("previous_review", ("reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson")),
+        ("explore_review", ("revision", "disposition", "considered_refs", "reason")),
+    ):
+        review_paths = [f"{control}.minimal_example.{review}.{field}" for field in fields]
+        complete = {**candidate, "json_shape_paths": [*candidate["json_shape_paths"], *review_paths]}
+        assert not _compare_row(base, complete)["failures"]
+        for missing in review_paths:
+            partial = {**complete, "json_shape_paths": [p for p in complete["json_shape_paths"] if p != missing]}
+            assert _compare_row(base, partial)["failures"], missing

@@ -1298,6 +1298,62 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
     assert "do not rewrite criteria after failure" in guidance
 
 
+@pytest.mark.parametrize("surface", ["quota_should_run", "loopx_turn_plan"])
+def test_native_stride_projection_rejects_each_missing_decision_field(tmp_path: Path, surface: str) -> None:
+    import copy
+
+    from loopx.control_plane.testing.cli_output_differential import _turn_projection_migration
+
+    with _stable_budget_fixture_root(tmp_path / "stride-projection") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(stable_root, SCENARIOS[1])
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(
+            project=project, runtime=runtime, registry_path=registry_path,
+            state_file=state_file, output_format="json",
+        )[surface]
+        code, text = _invoke_cli(command)
+    assert code == 0, text
+    payload = json.loads(text)
+
+    def envelope(value):
+        return value["turn_envelope"] if surface == "loopx_turn_plan" else value
+
+    def row(value):
+        return {
+            **measure_cli_output(json.dumps(value, ensure_ascii=False), output_format="json"),
+            "row_id": f"surface/{surface}/crowded/json",
+        }
+
+    base_payload = copy.deepcopy(payload)
+    del envelope(base_payload)["replan_action_packet"]["stride_control"]
+    envelope(base_payload).get("autonomous_replan_obligation", {}).get("replan_context", {}).pop("stride_strategy", None)
+    base = row(base_payload)
+    assert _turn_projection_migration(base, row(payload))[0]
+
+    # Walk the actual native example rather than a hand-written projection.
+    # Each delivered leaf is required for a usable decision (including each
+    # axis reason and all five probe fields). Arrays are atomic fields here.
+    def leaves(value, prefix=()):
+        for key, child in value.items():
+            path = (*prefix, key)
+            if isinstance(child, dict):
+                yield from leaves(child, path)
+            else:
+                yield path
+
+    example = envelope(payload)["replan_action_packet"]["stride_control"]["minimal_example"]
+    paths = list(leaves(example))
+    assert ("next_probe", "cost_bound") in paths
+    assert len(paths) >= 17
+    for path in paths:
+        partial = copy.deepcopy(payload)
+        target = envelope(partial)["replan_action_packet"]["stride_control"]["minimal_example"]
+        for key in path[:-1]:
+            target = target[key]
+        del target[path[-1]]
+        assert not _turn_projection_migration(base, row(partial))[0], path
+
+
 def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
     tmp_path: Path,
 ) -> None:
