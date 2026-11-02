@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -81,6 +82,7 @@ def test_one_packet_repairs_all_grammar_errors_and_preserves_route(claim_cli):
     assert snapshot() == before
     assert rejected["error_code"] == "todo_claim_invalid_arguments"
     recovery = rejected["recovery"]
+    assert recovery["command"] == "loopx todo claim"
     assert recovery["requires_flags"] == ["--claimed-by"]
     assert recovery["remove_flags"] == ["--turn-instance-id", "--note"]
     repaired = recovery["cli_args"]
@@ -196,6 +198,8 @@ def test_ordinary_claim_progress_completion_need_no_lease_flags(claim_cli):
     assert all(action in rendered for action in accepted["next_cli_actions"])
     assert accepted["claim_operation_id"] == "managed-claim"
     assert len(accepted["next_cli_actions"]) == 2
+    assert all(shlex.split(action)[0] == "loopx" and "--cli-bin" not in shlex.split(action)
+               for action in accepted["next_cli_actions"])
     assert all("--claim-operation-id managed-claim" in action for action in accepted["next_cli_actions"])
     assert all("task-lease" not in action for action in accepted["next_cli_actions"])
     common = ["--goal-id", GOAL, "--todo-id", TODO, "--agent-id", "peer-a", "--claim-operation-id", "managed-claim"]
@@ -210,6 +214,65 @@ def test_ordinary_claim_progress_completion_need_no_lease_flags(claim_cli):
     replay = run([*prefix, "todo", "complete", *common, "--evidence", "evidence:validated-output"])
     assert replay["ok"] is True
     assert snapshot() == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable alias and PATH fixture")
+def test_explicit_runtime_survives_repair_progress_and_completion(claim_cli, tmp_path, monkeypatch):
+    _, run, snapshot, prefix, claim, _, project, _ = claim_cli
+    program = "candidate's cli"
+    binaries = tmp_path / "candidate bin"
+    binaries.mkdir()
+    (binaries / program).symlink_to(Path(sys.executable).parent / "loopx")
+    marker = tmp_path / "wrong-runtime"
+    poison = binaries / "loopx"
+    poison.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                      f"Path({str(marker)!r}).write_text('wrong runtime')\nraise SystemExit(97)\n")
+    poison.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ.get("PATH", ""))
+    # The external cwd must import this candidate, even with an ambient installed package.
+    monkeypatch.setenv("PYTHONPATH", str(REPO))
+
+    def execute(argv, expected_exit=0):
+        result = subprocess.run(argv, cwd=project, capture_output=True, text=True, timeout=90)
+        assert result.returncode == expected_exit, result.stdout + result.stderr
+        assert not marker.exists()
+        return json.loads(result.stdout)
+
+    before = snapshot()
+    rejected = run(["--cli-bin", program, *prefix, *claim, "--note", "invalid"], expected_exit=1)
+    assert snapshot() == before
+    recovery = rejected["recovery"]
+    assert recovery["requires_flags"] == ["--claimed-by"]
+    assert recovery["remove_flags"] == ["--note"]
+    assert shlex.split(recovery["command"]) == [program, "--cli-bin", program, "todo", "claim"]
+    repaired = [program, *recovery["cli_args"], "--claimed-by", "peer-a",
+                "--claim-operation-id", "selected-runtime-claim"]
+    accepted = execute(repaired)
+    assert accepted["execution_managed"] is True
+    from loopx.control_plane.todos.markdown import render_todo_markdown
+    assert all(action in render_todo_markdown(accepted) for action in accepted["next_cli_actions"])
+    actions = [shlex.split(action) for action in accepted["next_cli_actions"]]
+    assert all(argv[:3] == [program, "--cli-bin", program] for argv in actions)
+    assert all(argv[argv.index("--claim-operation-id") + 1] == "selected-runtime-claim"
+               for argv in actions)
+    progress = [{"<progress-operation-id>": "selected-runtime-progress", "<progress>": "Validation passed"}
+                .get(part, part) for part in actions[0]]
+    claimed = snapshot()
+    wrong_actor = ["peer-b" if i and progress[i - 1] == "--agent-id" else part
+                   for i, part in enumerate(progress)]
+    assert execute(wrong_actor, expected_exit=1)["ok"] is False
+    assert snapshot() == claimed
+    assert execute(progress)["ok"] is True
+    progressed = snapshot()
+    assert execute(progress)["ok"] is True
+    assert snapshot() == progressed
+    complete = ["evidence:validated-output" if part == "<validated-evidence>" else part
+                for part in actions[1]]
+    assert execute(complete)["ok"] is True
+    completed = snapshot()
+    assert completed[0][0]["status"] == "done"
+    assert execute(complete)["ok"] is True
+    assert snapshot() == completed
 
 
 def test_terminal_refusal_recovers_through_ordinary_claim(claim_cli):
