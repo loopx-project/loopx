@@ -333,7 +333,7 @@ def update_canonical_todo_if_promoted(
         # an unrelated Goal when this call used an explicit registry/runtime.
         recovery = result.get("recovery")
         if isinstance(recovery, dict):
-            for step in ("inspect", "retry", "acquire", "release"):
+            for step in ("claim", "inspect", "retry", "acquire", "release"):
                 descriptor = recovery.get(step)
                 if isinstance(descriptor, dict) and isinstance(descriptor.get("cli_args"), list):
                     descriptor["cli_args"] = [f"--registry={registry_path}",

@@ -464,6 +464,15 @@ def terminal_canonical_todo_if_promoted(
     if validation_failure is not None:
         return validation_failure
     payload = dict(result)
+    # Recovery describes native decisions. Bind its executable arguments to
+    # this exact caller route so an explicit registry cannot become a default.
+    recovery = payload.get("recovery")
+    if isinstance(recovery, dict):
+        for step in ("claim", "inspect", "retry", "acquire", "release"):
+            descriptor = recovery.get(step)
+            if isinstance(descriptor, dict) and isinstance(descriptor.get("cli_args"), list):
+                descriptor["cli_args"] = [f"--registry={registry_path}",
+                    f"--runtime-root={runtime_root}", "--format", "json", *descriptor["cli_args"]]
     if completion_validation_executed:
         payload["completion_validation_executed"] = True
     if (

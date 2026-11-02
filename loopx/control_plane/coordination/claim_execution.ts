@@ -26,38 +26,52 @@ type ExecutionInput = {goal_id: string; todo_id: string; actor_agent_id: string 
 
 export type ClaimWorkspaceObserver = (writeScopes: readonly string[]) => Promise<LeaseWorkspace>;
 
+/** A diagnostic distinction, never permission to renew or adopt another grant. */
+export class ClaimExecutionUnavailable extends AuthorityStoreProtocolError {
+  readonly sameExecutionExpired: boolean;
+  constructor(message: string, sameExecutionExpired = false) {
+    super(message);
+    this.sameExecutionExpired = sameExecutionExpired;
+  }
+}
+
 /** Resolve only this accepted execution. No acquisition, adoption of a newer
  * generation, or write retry is hidden behind a progress/completion request. */
 export async function claimExecutionProof(store: AuthorityStore, head: JsonObject,
   input: ExecutionInput, operationId: string, allowReleasedCloseout = false): Promise<{lease_idempotency_key: string; lease_expected_version: number} | null> {
   const receipt = await store.readReceipt(operationId);
   if (receipt.status !== "found" || receipt.receipts.length !== 1) {
-    throw new AuthorityStoreProtocolError("Original task claim unavailable; recover that claim before writing");
+    throw new ClaimExecutionUnavailable("Original task claim unavailable; recover that claim before writing");
   }
   const original = receipt.receipts[0];
   const result = canonicalAuthorityObject(original.result, "original task claim");
   if (original.schema_version !== "loopx_coordination_todo_claim_receipt_v0" ||
       original.operation_id !== operationId || original.goal_id !== input.goal_id ||
       result.todo_id !== input.todo_id || result.claimed_by !== input.actor_agent_id ||
-      result.execution_managed !== true) throw new AuthorityStoreProtocolError(
+      result.execution_managed !== true) throw new ClaimExecutionUnavailable(
     "The claim reference does not name this actor's managed task execution");
   // A soft claim has no execution lease. Its normal writer still checks policy.
   if (result.handoff_mode !== "hard_lease") {
     if (result.handoff_mode === "soft_claim" && head.handoff_mode === "soft_claim") return null;
-    throw new AuthorityStoreProtocolError("Task ownership policy changed; review a new task claim");
+    throw new ClaimExecutionUnavailable("Task ownership policy changed; review a new task claim");
   }
-  if (head.handoff_mode !== "hard_lease") throw new AuthorityStoreProtocolError("Task ownership policy changed; review the current task before continuing");
+  if (head.handoff_mode !== "hard_lease") throw new ClaimExecutionUnavailable("Task ownership policy changed; review the current task before continuing");
   const accepted = canonicalTaskLease(canonicalAuthorityObject(result.lease, "accepted execution"), input.goal_id, input.todo_id);
   const index = indexCoordinationProjection(head, input.goal_id);
   const raw = index.leases.get(input.todo_id);
   const current = raw && canonicalTaskLease(raw, input.goal_id, input.todo_id);
   const retainedCloseout = allowReleasedCloseout && current?.status === "released" &&
     index.todos.get(input.todo_id)?.status === "done";
-  if (accepted.owner !== input.actor_agent_id || !current || !(leaseIsActive(current, input.now) || retainedCloseout) || current.owner !== input.actor_agent_id || current.idempotency_key !== accepted.idempotency_key ||
+  const active = current !== undefined && leaseIsActive(current, input.now);
+  if (accepted.owner !== input.actor_agent_id || !current || current.owner !== input.actor_agent_id || current.idempotency_key !== accepted.idempotency_key ||
       leaseEpoch(current) !== leaseEpoch(accepted) || leaseVersion(current) < leaseVersion(accepted) ||
       !sameLeaseWorkspace(current.write_workspace, accepted.write_workspace) ||
       leaseWriteRepository(current.write_repository) !== leaseWriteRepository(accepted.write_repository)) {
-    throw new AuthorityStoreProtocolError("Original task execution changed; reconcile task ownership before a new claim");
+    throw new ClaimExecutionUnavailable("Original task execution changed; reconcile task ownership before a new claim");
+  }
+  if (!active && !retainedCloseout) {
+    throw new ClaimExecutionUnavailable("Original task execution changed; reconcile task ownership before a new claim",
+      current.status === "active");
   }
   return {lease_idempotency_key: String(current.idempotency_key), lease_expected_version: leaseVersion(current)};
 }

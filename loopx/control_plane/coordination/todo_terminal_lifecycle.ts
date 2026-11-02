@@ -1,4 +1,5 @@
 import {claimExecutionReference, claimExecutionProof} from "./claim_execution.ts";
+import {claimExecutionRecovery} from "./claim_execution_recovery.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
@@ -1275,9 +1276,16 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
     head = observation.authority;
   }
-  if (input.claim_operation_id !== undefined) {
-    try { input = {...input, ...await claimExecutionProof(store, head.head, input, input.claim_operation_id, input.requested_no_followup), claim_operation_id: undefined}; }
-    catch (error) { return terminalFailure("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"); }
+  const claimReference = input.claim_operation_id;
+  if (claimReference !== undefined) {
+    try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference, input.requested_no_followup), claim_operation_id: undefined}; }
+    catch (error) {
+      const recovery = input.command === "complete" ? await claimExecutionRecovery(store,
+        {...input, claim_operation_id: claimReference, expected_provider_revision: head.provider_revision},
+        "complete", error, authoritySourcesCurrent) : undefined;
+      return terminalFailure("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable",
+        recovery === undefined ? {} : {handoff_mode: head.head.handoff_mode, recovery});
+    }
   }
   let update: NormalizedCoordinationTodoUpdateInput | undefined;
   if (input.user_update !== undefined) {
