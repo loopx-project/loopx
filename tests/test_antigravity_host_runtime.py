@@ -518,3 +518,321 @@ def test_hooks_migrate_only_an_unchanged_owned_legacy_entry(tmp_path):
         == "retired"
     )
     assert json.loads(path.read_text()) == {"personal-hook": unrelated}
+
+
+def test_generated_bind_session_command_and_auto_sentinel_resolve_via_loopback_http(
+    tmp_path, monkeypatch
+):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    from loopx.control_plane.testing.canary_harness import REPO_ROOT
+    from loopx.host_loop_activation import build_host_loop_activation_packet
+
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
+    workspace = tmp_path / "target-repo"
+    workspace.mkdir()
+    ws_uri = workspace.resolve().as_uri()
+
+    rpc_calls: list[str] = []
+    summaries_state: dict[str, dict] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            rpc_calls.append(self.path)
+            body = json.dumps({"trajectorySummaries": summaries_state}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        addr = f"127.0.0.1:{server.server_port}"
+        env = {
+            **{k: v for k, v in runtime.os.environ.items() if k != "ANTIGRAVITY_CONVERSATION_ID"},
+            "ANTIGRAVITY_LS_ADDRESS": addr,
+            "ANTIGRAVITY_CSRF_TOKEN": "loopback-token",
+            "PYTHONPATH": str(REPO_ROOT),
+        }
+        activation = build_host_loop_activation_packet(
+            agent_type="antigravity-app",
+            goal_id="surface-goal",
+            agent_id="probe-agent",
+            registered_agents=["probe-agent"],
+        )
+        bind_cmd = shlex.split(activation["host_mutation"]["bind_session_command"])
+        assert bind_cmd[:6] == [
+            "python3",
+            "-E",
+            "-P",
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            "bind-session",
+        ]
+        assert "auto" not in bind_cmd
+        exec_bind_cmd = [
+            sys.executable,
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            *bind_cmd[5:],
+        ]
+
+        # 1. Foreign-only running root -> refused, no config files written
+        foreign_ws = (tmp_path / "foreign-repo").resolve().as_uri()
+        summaries_state.clear()
+        summaries_state["foreign-root-cid"] = {
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "lastModifiedTime": "2026-11-02T11:00:00Z",
+            "stepCount": 12,
+            "trajectoryMetadata": {},
+            "workspaces": [{"workspaceFolderAbsoluteUri": foreign_ws}],
+        }
+        agy_foreign = tmp_path / "agy-foreign"
+        res_foreign = subprocess.run(
+            [*exec_bind_cmd, "--workspace", str(workspace), "--agy-home", str(agy_foreign)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+        assert res_foreign.returncode == 1
+        payload_foreign = json.loads(res_foreign.stdout)
+        assert payload_foreign["ok"] is False
+        assert payload_foreign["error_kind"] == "conversation_id_unresolved"
+        assert len(rpc_calls) >= 1
+        assert not (agy_foreign / "hooks.json").exists()
+        assert not (
+            agy_foreign / "sidecars" / "loopx-antigravity-heartbeat" / "sidecar.json"
+        ).exists()
+
+        # 2. Ambiguous multiple running roots in the same workspace -> refused
+        summaries_state.clear()
+        summaries_state["same-ws-1"] = {
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "lastModifiedTime": "2026-11-02T11:01:00Z",
+            "stepCount": 5,
+            "trajectoryMetadata": {},
+            "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+        }
+        summaries_state["same-ws-2"] = {
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "lastModifiedTime": "2026-11-02T11:02:00Z",
+            "stepCount": 8,
+            "trajectoryMetadata": {},
+            "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+        }
+        res_ambig = subprocess.run(
+            [*exec_bind_cmd, "--workspace", str(workspace), "--agy-home", str(agy_foreign)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+        assert res_ambig.returncode == 1
+        assert json.loads(res_ambig.stdout)["error_kind"] == "conversation_id_unresolved"
+        assert not (agy_foreign / "hooks.json").exists()
+
+        # 3. Single matching running root in target workspace (plus subagent & foreign root) ->
+        #    both the generated command AND explicit `--conversation-id auto` resolve real ID
+        summaries_state.clear()
+        summaries_state["foreign-root-cid"] = {
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "lastModifiedTime": "2026-11-02T11:05:00Z",
+            "stepCount": 99,
+            "trajectoryMetadata": {},
+            "workspaces": [{"workspaceFolderAbsoluteUri": foreign_ws}],
+        }
+        summaries_state["subagent-cid"] = {
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "lastModifiedTime": "2026-11-02T11:06:00Z",
+            "stepCount": 50,
+            "trajectoryMetadata": {"parentConversationId": "scoped-root-cid"},
+            "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+        }
+        summaries_state["scoped-root-cid"] = {
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "lastModifiedTime": "2026-11-02T11:03:00Z",
+            "stepCount": 20,
+            "trajectoryMetadata": {},
+            "workspaces": [{"workspaceFolderAbsoluteUri": ws_uri}],
+        }
+        for idx, extra_args in enumerate(([], ["--conversation-id", "auto"])):
+            agy_ok = tmp_path / f"agy-ok-{idx}"
+            before_rpcs = len(rpc_calls)
+            res_ok = subprocess.run(
+                [
+                    *exec_bind_cmd,
+                    *extra_args,
+                    "--workspace",
+                    str(workspace),
+                    "--agy-home",
+                    str(agy_ok),
+                ],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=10,
+            )
+            assert res_ok.returncode == 0, res_ok.stderr
+            assert len(rpc_calls) > before_rpcs
+            payload_ok = json.loads(res_ok.stdout)
+            assert payload_ok["ok"] is True
+            assert payload_ok["conversation_id"] == "scoped-root-cid"
+            hooks_written = json.loads((agy_ok / "hooks.json").read_text())
+            assert hooks_written["loopx"]["enabled"] is True
+            assert "--conversation-id scoped-root-cid" in hooks_written["loopx"]["Stop"][0]["command"]
+            assert "--conversation-id auto" not in hooks_written["loopx"]["Stop"][0]["command"]
+            sidecar_written = json.loads(
+                (
+                    agy_ok
+                    / "sidecars"
+                    / "loopx-antigravity-heartbeat"
+                    / "sidecar.json"
+                ).read_text()
+            )
+            assert "scoped-root-cid" in sidecar_written["args"]
+            assert "auto" not in sidecar_written["args"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_bind_session_and_bind_agent_thread_preserve_sidecar_policy_and_reject_foreign_owner(
+    tmp_path, monkeypatch
+):
+    from examples.control_plane.quota_plan_fixtures import (
+        SCOPED_AGENT_ID,
+        write_cli_fixture,
+    )
+    from loopx.control_plane.testing.canary_harness import REPO_ROOT, run_json_cli
+
+    agy_cfg = tmp_path / "agy-policy"
+    sidecar_path = (
+        agy_cfg / "sidecars" / "loopx-antigravity-heartbeat" / "sidecar.json"
+    )
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1. Existing user-owned non-LoopX sidecar is rejected without modification
+    foreign_sidecar = {
+        "builtin": "schedule",
+        "args": ["CRON_TZ=UTC */5 * * * *", "/usr/local/bin/custom-user-job"],
+        "enabled": True,
+    }
+    sidecar_path.write_text(json.dumps(foreign_sidecar, indent=2))
+    conflict_res = runtime.bind_antigravity_session_configs(
+        goal_id="work",
+        agent_id="worker",
+        conversation_id="cid-1",
+        agy_home=str(agy_cfg),
+    )
+    assert conflict_res["ok"] is False
+    assert conflict_res["error_kind"] == "sidecar_ownership_conflict"
+    assert conflict_res["sidecar_status"] == "skipped_user_owned_sidecar_entry"
+    assert json.loads(sidecar_path.read_text()) == foreign_sidecar
+
+    # 2. Existing LoopX heartbeat sidecar with user policy overrides (enabled=False,
+    #    custom id, custom model, empty access_grants, custom cron) preserves all
+    #    policy fields across both `bind-session` and `bind-agent-thread --execute`
+    policy_sidecar = {
+        "id": "user-heartbeat-id",
+        "enabled": False,
+        "model": "gemini-2.5-pro-custom",
+        "builtin": "schedule",
+        "args": [
+            "CRON_TZ=UTC */7 * * * *",
+            "python3",
+            "-E",
+            "-P",
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            "sidecar-tick",
+            "--goal-id",
+            "old-goal",
+            "--agent-id",
+            "old-agent",
+            "--conversation-id",
+            "old-cid",
+        ],
+        "agent_permissions": {"access_grants": []},
+        "custom_user_note": "preserve-me",
+    }
+    sidecar_path.write_text(json.dumps(policy_sidecar, indent=2))
+
+    res_direct = runtime.bind_session(
+        Namespace(
+            cli_bin="loopx",
+            registry="/tmp/reg.json",
+            runtime_root="/tmp/rt",
+            goal_id="bound-goal-1",
+            agent_id="bound-agent-1",
+            conversation_id="bound-cid-1",
+            workspace=None,
+            agy_home=str(agy_cfg),
+        )
+    )
+    assert res_direct["ok"] is True
+    after_direct = json.loads(sidecar_path.read_text())
+    assert after_direct["id"] == "user-heartbeat-id"
+    assert after_direct["enabled"] is False
+    assert after_direct["model"] == "gemini-2.5-pro-custom"
+    assert after_direct["agent_permissions"] == {"access_grants": []}
+    assert after_direct["custom_user_note"] == "preserve-me"
+    assert after_direct["args"][0] == "CRON_TZ=UTC */7 * * * *"
+    assert "bound-goal-1" in after_direct["args"]
+    assert "bound-agent-1" in after_direct["args"]
+    assert "bound-cid-1" in after_direct["args"]
+
+    # Also test automatic sync through real `bind-agent-thread --host-surface antigravity-app --execute`
+    from loopx.global_registry import sync_project_registry_to_global
+
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "cli-bind",
+        scoped_agents=True,
+    )
+    sync_project_registry_to_global(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id="full-speed",
+        dry_run=False,
+    )
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
+    monkeypatch.setenv("AGY_HOME", str(agy_cfg))
+    cli_payload = run_json_cli(
+        "bind-agent-thread",
+        "--goal-id",
+        "full-speed",
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--host-surface",
+        "antigravity-app",
+        "--thread-id",
+        "bound-cid-via-registry-admin",
+        "--execute",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert cli_payload["ok"] is True
+    assert cli_payload["antigravity_host_config_sync"]["ok"] is True
+    after_cli = json.loads(sidecar_path.read_text())
+    assert after_cli["id"] == "user-heartbeat-id"
+    assert after_cli["enabled"] is False
+    assert after_cli["model"] == "gemini-2.5-pro-custom"
+    assert after_cli["agent_permissions"] == {"access_grants": []}
+    assert after_cli["custom_user_note"] == "preserve-me"
+    assert after_cli["args"][0] == "CRON_TZ=UTC */7 * * * *"
+    assert "full-speed" in after_cli["args"]
+    assert SCOPED_AGENT_ID in after_cli["args"]
+    assert "bound-cid-via-registry-admin" in after_cli["args"]
+    mcp_ctx = runtime.resolve_bound_mcp_goal_context(agy_home=str(agy_cfg))
+    assert mcp_ctx is not None
+    assert mcp_ctx["goal_id"] == "full-speed"
+    assert mcp_ctx["agent_id"] == SCOPED_AGENT_ID
+    assert Path(mcp_ctx["registry"]).resolve() == registry_path.resolve()
+

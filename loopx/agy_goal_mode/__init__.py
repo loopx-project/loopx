@@ -230,6 +230,24 @@ def build_antigravity_sidecar_template(
     }
 
 
+CONVERSATION_DISCOVERY_SENTINELS: frozenset[str] = frozenset(
+    {
+        "",
+        "auto",
+        "<native-conversation-id>",
+        "<conversation-id>",
+    }
+)
+
+
+def normalize_bound_conversation_id(value: str | None) -> str | None:
+    """Normalize an explicit conversation ID, returning None for discovery sentinels."""
+    raw = str(value or "").strip()
+    if not raw or raw.lower() in CONVERSATION_DISCOVERY_SENTINELS:
+        return None
+    return raw
+
+
 def _antigravity_provider_args(
     operation: str,
     *,
@@ -245,6 +263,7 @@ def _antigravity_provider_args(
     resolved_cli_bin = (
         (shutil.which(cli_bin) or cli_bin) if resolve_local_executable else cli_bin
     )
+    bound_cid = normalize_bound_conversation_id(conversation_id)
     args = [
         python_bin,
         "-E",
@@ -258,9 +277,12 @@ def _antigravity_provider_args(
         goal_id or "<goal-id>",
         "--agent-id",
         agent_id or "<agent-id>",
-        "--conversation-id",
-        conversation_id or "<native-conversation-id>",
     ]
+    if operation == "bind-session":
+        if bound_cid is not None:
+            args.extend(["--conversation-id", bound_cid])
+    else:
+        args.extend(["--conversation-id", bound_cid or "<native-conversation-id>"])
     if runtime_root:
         args.extend(["--runtime-root", runtime_root])
     if registry:
@@ -382,13 +404,15 @@ def build_antigravity_hooks_template(
     resolve_local_executable: bool = True,
 ) -> dict[str, Any]:
     """Native Stop hook; installation alone never binds an arbitrary chat."""
-    conversation_id = conversation_id or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+    bound_cid = normalize_bound_conversation_id(
+        conversation_id or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+    )
     args = _antigravity_provider_args(
         "stop-hook",
         cli_bin=cli_bin,
         goal_id=goal_id,
         agent_id=agent_id,
-        conversation_id=conversation_id,
+        conversation_id=bound_cid,
         runtime_root=runtime_root,
         registry=registry,
         resolve_local_executable=resolve_local_executable,
@@ -396,9 +420,9 @@ def build_antigravity_hooks_template(
     return {
         "loopx": {
             "enabled": bool(
-                conversation_id
-                and conversation_id != "<native-conversation-id>"
+                bound_cid
                 and agent_id
+                and agent_id != "<agent-id>"
                 and goal_id
                 and goal_id != "<goal-id>"
             ),
@@ -498,7 +522,7 @@ def antigravity_app_activation_extras(
         cli_bin=cli_bin,
         goal_id=goal_id,
         agent_id=agent_id,
-        conversation_id=conversation_id or "auto",
+        conversation_id=normalize_bound_conversation_id(conversation_id),
         runtime_root=runtime_root,
         resolve_local_executable=False,
     )

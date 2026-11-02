@@ -292,8 +292,17 @@ def _workspace_matches(summary: dict[str, Any], target_workspace: Path) -> bool:
 def discover_active_conversation_id(
     workspace: str | Path | None = None,
 ) -> str | None:
-    """Discover the currently active Antigravity conversation ID from Language Server."""
-    env_cid = (os.environ.get("ANTIGRAVITY_CONVERSATION_ID") or "").strip()
+    """Discover the currently active Antigravity conversation ID from Language Server.
+
+    Only binds a conversation that unambiguously matches the target workspace
+    (or shares its underlying git repository/worktree). Foreign workspaces and
+    ambiguous multi-session workspaces return None so the caller fails closed.
+    """
+    from . import normalize_bound_conversation_id
+
+    env_cid = normalize_bound_conversation_id(
+        os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+    )
     if env_cid:
         return env_cid
     endpoint = _ls_endpoint()
@@ -317,15 +326,14 @@ def discover_active_conversation_id(
         try:
             target_workspace = Path(workspace).expanduser().resolve()
         except OSError:
-            target_workspace = None
-    if target_workspace is None:
+            return None
+    else:
         try:
             target_workspace = Path.cwd().resolve()
         except OSError:
-            target_workspace = None
+            return None
 
     running_workspace_matches: list[tuple[str, int, str]] = []
-    running_root_candidates: list[tuple[str, int, str]] = []
     idle_workspace_matches: list[tuple[str, int, str]] = []
 
     for cid, summary in summaries.items():
@@ -335,42 +343,43 @@ def discover_active_conversation_id(
         if isinstance(meta, dict) and meta.get("parentConversationId"):
             # Skip subagent trajectories when binding root session
             continue
+        if not _workspace_matches(summary, target_workspace):
+            continue
         status = str(summary.get("status") or "")
         modified = str(summary.get("lastModifiedTime") or summary.get("createdTime") or "")
         steps = int(summary.get("stepCount") or 0)
-        ws_match = (
-            _workspace_matches(summary, target_workspace)
-            if target_workspace is not None
-            else False
-        )
         if status == "CASCADE_RUN_STATUS_RUNNING":
-            if ws_match:
-                running_workspace_matches.append((modified, steps, cid))
-            running_root_candidates.append((modified, steps, cid))
-        elif status == "CASCADE_RUN_STATUS_IDLE" and ws_match:
+            running_workspace_matches.append((modified, steps, cid))
+        elif status == "CASCADE_RUN_STATUS_IDLE":
             if (
                 summary.get("latestExecutorTerminationReason")
                 != "EXECUTOR_TERMINATION_REASON_USER_CANCELED"
             ):
                 idle_workspace_matches.append((modified, steps, cid))
 
-    for bucket in (
-        running_workspace_matches,
-        running_root_candidates if len(running_root_candidates) == 1 else [],
-        idle_workspace_matches if len(idle_workspace_matches) == 1 else [],
-    ):
-        if bucket:
-            bucket.sort(reverse=True)
-            return bucket[0][2]
+    if len(running_workspace_matches) == 1:
+        return running_workspace_matches[0][2]
+    if len(running_workspace_matches) > 1:
+        return None
+    if len(idle_workspace_matches) == 1:
+        return idle_workspace_matches[0][2]
     return None
 
 
 def _resolve_bound_session(
     args: argparse.Namespace,
 ) -> tuple[str | None, str | None, str | None]:
+    from . import normalize_bound_conversation_id
+
     goal_id = (getattr(args, "goal_id", None) or "").strip() or None
+    if goal_id == "<goal-id>":
+        goal_id = None
     agent_id = (getattr(args, "agent_id", None) or "").strip() or None
-    conversation_id = (getattr(args, "conversation_id", None) or "").strip() or None
+    if agent_id == "<agent-id>":
+        agent_id = None
+    conversation_id = normalize_bound_conversation_id(
+        getattr(args, "conversation_id", None)
+    )
     if goal_id and agent_id and conversation_id:
         return goal_id, agent_id, conversation_id
 
@@ -692,7 +701,11 @@ def sidecar_tick(args: argparse.Namespace) -> dict[str, Any]:
     if (
         isinstance(ack_cli_args, list)
         and ack_cli_args
-        and (backoff_action.get("apply_needed") or cron_updated)
+        and (
+            backoff_action.get("apply_needed")
+            or backoff_action.get("ack_needed")
+            or cron_updated
+        )
     ):
         ack_executed = _run_cli_raw(
             bound_args, [str(item) for item in ack_cli_args]
@@ -780,6 +793,37 @@ def sidecar_tick(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+ANTIGRAVITY_SIDECAR_MARKER_NAME = ".loopx-managed-sidecar.json"
+ANTIGRAVITY_SIDECAR_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_sidecar_v0"
+
+
+def _is_loopx_compatible_sidecar(
+    existing_data: dict[str, Any],
+    marker_payload: dict[str, Any] | None = None,
+) -> bool:
+    """Return True when an existing sidecar.json belongs to LoopX or is a user policy overlay on LoopX's heartbeat sidecar."""
+    if isinstance(marker_payload, dict) and existing_data == marker_payload.get("sidecar"):
+        return True
+    if any(key in existing_data for key in ("command", "script", "entrypoint")):
+        return False
+    builtin = existing_data.get("builtin")
+    if builtin is not None and builtin != "schedule":
+        return False
+    existing_args = existing_data.get("args")
+    if existing_args is not None:
+        if not isinstance(existing_args, list):
+            return False
+        if len(existing_args) > 1:
+            joined = " ".join(str(item) for item in existing_args)
+            if "loopx" not in joined and "host_runtime" not in joined:
+                return False
+        elif len(existing_args) == 1:
+            first = str(existing_args[0])
+            if not first.startswith("CRON_TZ=") and "loopx" not in first:
+                return False
+    return True
+
+
 def bind_antigravity_session_configs(
     *,
     goal_id: str,
@@ -794,8 +838,22 @@ def bind_antigravity_session_configs(
     write_hooks: bool = True,
 ) -> dict[str, Any]:
     """Atomically bind local Antigravity `hooks.json` and `sidecar.json` to `(goal_id, agent_id, conversation_id)`."""
-    from . import antigravity_config_home, build_antigravity_sidecar_template
+    from . import (
+        antigravity_config_home,
+        build_antigravity_sidecar_template,
+        normalize_bound_conversation_id,
+    )
     from ..slash_command_install import _merge_managed_hooks_json
+
+    normalized_cid = normalize_bound_conversation_id(conversation_id)
+    normalized_gid = (goal_id or "").strip()
+    normalized_aid = (agent_id or "").strip()
+    if not normalized_cid or not normalized_gid or normalized_gid == "<goal-id>" or not normalized_aid or normalized_aid == "<agent-id>":
+        return {
+            "ok": False,
+            "error_kind": "conversation_id_unresolved" if not normalized_cid else "missing_goal_or_agent_id",
+            "error": "Concrete goal_id, agent_id, and conversation_id are required before writing Antigravity configs.",
+        }
 
     config_root = antigravity_config_home(agy_home)
     hooks_path = config_root / "hooks.json"
@@ -805,6 +863,49 @@ def bind_antigravity_session_configs(
         / "loopx-antigravity-heartbeat"
         / "sidecar.json"
     )
+    sidecar_marker_path = sidecar_path.parent / ANTIGRAVITY_SIDECAR_MARKER_NAME
+
+    existing_sidecar_data: dict[str, Any] | None = None
+    if write_sidecar and sidecar_path.exists():
+        try:
+            raw_text = sidecar_path.read_text(encoding="utf-8")
+            parsed_sidecar = json.loads(raw_text) if raw_text.strip() else {}
+        except (OSError, json.JSONDecodeError):
+            return {
+                "ok": False,
+                "error_kind": "invalid_sidecar_config",
+                "error": f"Existing {sidecar_path} is not valid JSON.",
+                "hooks_path": str(hooks_path),
+                "hooks_status": "skipped",
+                "sidecar_path": str(sidecar_path),
+                "sidecar_status": "blocked_invalid_antigravity_sidecar_json",
+            }
+        if not isinstance(parsed_sidecar, dict):
+            return {
+                "ok": False,
+                "error_kind": "invalid_sidecar_config",
+                "error": f"Existing {sidecar_path} root must be a JSON object.",
+                "hooks_path": str(hooks_path),
+                "hooks_status": "skipped",
+                "sidecar_path": str(sidecar_path),
+                "sidecar_status": "blocked_invalid_antigravity_sidecar_json",
+            }
+        try:
+            marker_payload = json.loads(sidecar_marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            marker_payload = None
+        if not _is_loopx_compatible_sidecar(parsed_sidecar, marker_payload):
+            return {
+                "ok": False,
+                "error_kind": "sidecar_ownership_conflict",
+                "error": f"Existing {sidecar_path} belongs to a non-LoopX command and will not be overwritten.",
+                "hooks_path": str(hooks_path),
+                "hooks_status": "skipped",
+                "sidecar_path": str(sidecar_path),
+                "sidecar_status": "skipped_user_owned_sidecar_entry",
+            }
+        existing_sidecar_data = parsed_sidecar
+
     hooks_status = "skipped"
     if write_hooks:
         hooks_status = _merge_managed_hooks_json(
@@ -812,49 +913,81 @@ def bind_antigravity_session_configs(
             cli_bin=cli_bin,
             uninstall=False,
             execute=True,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
+            goal_id=normalized_gid,
+            agent_id=normalized_aid,
+            conversation_id=normalized_cid,
             registry=registry,
             runtime_root=runtime_root,
         )
+        if hooks_status.startswith("blocked_") or hooks_status.startswith("skipped_user_owned_"):
+            return {
+                "ok": False,
+                "error_kind": "hooks_ownership_conflict",
+                "error": f"Could not update {hooks_path}: {hooks_status}",
+                "hooks_path": str(hooks_path),
+                "hooks_status": hooks_status,
+                "sidecar_path": str(sidecar_path),
+                "sidecar_status": "skipped",
+            }
+
     sidecar_status = "skipped"
     if write_sidecar:
         existing_cron: str | None = None
-        if sidecar_path.exists():
-            try:
-                existing_data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-                existing_args = existing_data.get("args") if isinstance(existing_data, dict) else None
-                if isinstance(existing_args, list) and existing_args and isinstance(existing_args[0], str):
+        if existing_sidecar_data is not None:
+            existing_args = existing_sidecar_data.get("args")
+            if isinstance(existing_args, list) and existing_args and isinstance(existing_args[0], str):
+                if existing_args[0].startswith("CRON_TZ="):
                     existing_cron = existing_args[0]
-            except Exception:
-                existing_cron = None
         sidecar_template = build_antigravity_sidecar_template(
-            goal_id=goal_id,
-            agent_id=agent_id,
-            conversation_id=conversation_id,
+            goal_id=normalized_gid,
+            agent_id=normalized_aid,
+            conversation_id=normalized_cid,
             cli_bin=cli_bin,
             interval_seconds=max(60, int(interval_minutes) * 60),
             registry=registry,
             runtime_root=runtime_root,
             resolve_local_executable=True,
         )
-        sidecar_json = dict(sidecar_template["sidecar_json"])
-        if existing_cron and existing_cron.startswith("CRON_TZ=UTC ") and interval_minutes == 3:
-            sidecar_args = list(sidecar_json.get("args") or [])
-            if sidecar_args:
-                sidecar_args[0] = existing_cron
-                sidecar_json["args"] = sidecar_args
+        template_json = dict(sidecar_template["sidecar_json"])
+        template_args = list(template_json.get("args") or [])
+        if existing_cron and interval_minutes == 3 and template_args:
+            template_args[0] = existing_cron
+
+        if existing_sidecar_data is not None:
+            sidecar_json = dict(existing_sidecar_data)
+            sidecar_json["builtin"] = template_json["builtin"]
+            sidecar_json["args"] = template_args
+            sidecar_json["description"] = template_json["description"]
+            sidecar_json.setdefault("restart_policy", template_json["restart_policy"])
+            sidecar_json.setdefault("display_name", template_json["display_name"])
+            sidecar_json.setdefault("agent_permissions", template_json["agent_permissions"])
+        else:
+            sidecar_json = template_json
+            sidecar_json["args"] = template_args
+
         sidecar_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = sidecar_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(sidecar_json, indent=2) + "\n", encoding="utf-8")
         tmp.replace(sidecar_path)
+        marker_tmp = sidecar_marker_path.with_suffix(".tmp")
+        marker_tmp.write_text(
+            json.dumps(
+                {
+                    "schema_version": ANTIGRAVITY_SIDECAR_MARKER_SCHEMA_VERSION,
+                    "sidecar": sidecar_json,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        marker_tmp.replace(sidecar_marker_path)
         sidecar_status = "written"
     return {
         "ok": True,
-        "goal_id": goal_id,
-        "agent_id": agent_id,
-        "conversation_id": conversation_id,
+        "goal_id": normalized_gid,
+        "agent_id": normalized_aid,
+        "conversation_id": normalized_cid,
         "hooks_path": str(hooks_path),
         "hooks_status": hooks_status,
         "sidecar_path": str(sidecar_path),
@@ -862,8 +995,94 @@ def bind_antigravity_session_configs(
     }
 
 
+def resolve_bound_mcp_goal_context(
+    agy_home: str | Path | None = None,
+) -> dict[str, Any] | None:
+    """Resolve Goal/agent context from the bound Antigravity sidecar when MCP runs with cwd=/."""
+    from . import antigravity_config_home, normalize_bound_conversation_id
+    from loopx.goal_mode_context import find_registry, resolve_goal_context
+    from loopx.history import load_registry
+    from loopx.paths import global_registry_path, select_default_runtime_root
+
+    cfg_root = antigravity_config_home(agy_home)
+    sidecar_path = cfg_root / "sidecars" / "loopx-antigravity-heartbeat" / "sidecar.json"
+    if not sidecar_path.is_file():
+        return None
+    try:
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not _is_loopx_compatible_sidecar(sidecar):
+        return None
+    args = [str(item) for item in (sidecar.get("args") or [])]
+
+    def _flag_value(flag: str) -> str | None:
+        if flag in args:
+            idx = args.index(flag)
+            if idx + 1 < len(args):
+                return args[idx + 1].strip() or None
+        return None
+
+    goal_id = _flag_value("--goal-id")
+    agent_id = _flag_value("--agent-id")
+    conversation_id = normalize_bound_conversation_id(_flag_value("--conversation-id"))
+    if (
+        not goal_id
+        or goal_id == "<goal-id>"
+        or not agent_id
+        or agent_id == "<agent-id>"
+        or not conversation_id
+    ):
+        return None
+
+    explicit_registry = _flag_value("--registry")
+    explicit_runtime_root = _flag_value("--runtime-root")
+    registry_path: Path | None = None
+    if explicit_registry:
+        candidate = Path(explicit_registry).expanduser()
+        if candidate.is_file():
+            registry_path = candidate
+
+    if registry_path is None:
+        try:
+            rt_root = (
+                Path(explicit_runtime_root).expanduser()
+                if explicit_runtime_root
+                else select_default_runtime_root()
+            )
+            global_reg = global_registry_path(rt_root)
+            if global_reg.is_file():
+                global_data = load_registry(global_reg)
+                for g in global_data.get("goals") or []:
+                    if isinstance(g, dict) and str(g.get("id") or "") == goal_id:
+                        src_reg = g.get("source_registry")
+                        if src_reg and Path(str(src_reg)).expanduser().is_file():
+                            registry_path = Path(str(src_reg)).expanduser()
+                            break
+                        repo = g.get("repo")
+                        if repo:
+                            registry_path = find_registry(Path(str(repo)).expanduser())
+                            if registry_path is not None:
+                                break
+        except Exception:
+            registry_path = None
+
+    if registry_path is None:
+        return None
+    return resolve_goal_context(
+        registry_path.parent.parent,
+        preferred_goal_id=goal_id,
+        preferred_agent_id=agent_id,
+        require_preferred_binding=True,
+    )
+
+
 def bind_session(args: argparse.Namespace) -> dict[str, Any]:
-    conversation_id = (getattr(args, "conversation_id", None) or "").strip() or None
+    from . import normalize_bound_conversation_id
+
+    conversation_id = normalize_bound_conversation_id(
+        getattr(args, "conversation_id", None)
+    )
     if not conversation_id:
         conversation_id = discover_active_conversation_id(
             workspace=getattr(args, "workspace", None)
@@ -874,15 +1093,17 @@ def bind_session(args: argparse.Namespace) -> dict[str, Any]:
             "error_kind": "conversation_id_unresolved",
             "error": "Could not auto-discover active Antigravity conversation ID; pass --conversation-id explicitly.",
         }
-    if not getattr(args, "goal_id", None) or not getattr(args, "agent_id", None):
+    goal_id = (getattr(args, "goal_id", None) or "").strip()
+    agent_id = (getattr(args, "agent_id", None) or "").strip()
+    if not goal_id or goal_id == "<goal-id>" or not agent_id or agent_id == "<agent-id>":
         return {
             "ok": False,
             "error_kind": "missing_goal_or_agent_id",
             "error": "--goal-id and --agent-id are required for bind-session.",
         }
     return bind_antigravity_session_configs(
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
+        goal_id=goal_id,
+        agent_id=agent_id,
         conversation_id=conversation_id,
         cli_bin=args.cli_bin,
         registry=args.registry,
@@ -930,6 +1151,8 @@ def main() -> int:
         )
         result = {}
     print(json.dumps(result))
+    if args.operation == "bind-session" and not result.get("ok"):
+        return 1
     return 0
 
 
