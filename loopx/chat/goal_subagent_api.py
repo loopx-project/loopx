@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .control_plane.goals.configure_goal_service import configure_goal_with_global_sync
-from .capabilities.multi_subagent import (
+from ..control_plane.goals.configure_goal_service import configure_goal_with_global_sync
+from ..capabilities.multi_subagent import (
     apply_codex_subagent_capacity,
     plan_codex_subagent_capacity,
     public_codex_host_capacity,
 )
-from .control_plane.todos.contract import normalize_todo_task_domain
-from .status_server import configure_goal_preview_id
-from .orchestration import subagent_model_configuration_options
+from ..control_plane.todos.contract import normalize_todo_task_domain
+from ..status_server import configure_goal_preview_id
+from ..orchestration import subagent_model_configuration_options
 
 
 CHAT_GOAL_SUBAGENT_DRY_RUN_PATH = "/api/chat/goal-subagents/dry-run"

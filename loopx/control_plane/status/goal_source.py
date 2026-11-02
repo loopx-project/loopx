@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ..content_digest import BARE_SHA256_PATTERN
-from ...chat_completed_todos import CompletedTodoPages
+from ...chat.completed_todos import CompletedTodoPages
 from ...status_server import is_loopback_host
 from .ssh_host_catalog import configured_ssh_host_aliases
 

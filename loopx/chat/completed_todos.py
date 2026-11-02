@@ -10,14 +10,14 @@ from threading import Lock
 from time import monotonic
 from urllib.parse import parse_qs, urlparse
 
-from .paths import resolve_runtime_root
-from .capabilities.native_chat.project_context import coordination_runtime_root
-from .status_server import is_loopback_host
+from ..paths import resolve_runtime_root
+from ..capabilities.native_chat.project_context import coordination_runtime_root
+from ..status_server import is_loopback_host
 
 
 def _goal_result_candidates(*, runtime_root, goal_id):
     """Snapshot bounded metadata; exact acceptance is checked per requested page."""
-    from .control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from ..control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
     payload = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id)
     if payload is None:
@@ -42,7 +42,7 @@ def _goal_result_candidates(*, runtime_root, goal_id):
 
 
 def _verify_goal_result_page(*, page, registry_path, runtime_root, goal_id):
-    from .control_plane.todos.completion_result import read_completion_result
+    from ..control_plane.todos.completion_result import read_completion_result
 
     rows = []
     unavailable_todo_ids = []
@@ -159,7 +159,7 @@ class CompletedTodoRequestMixin:
             self._send_error("Goal results could not be loaded.", status=503)
 
     def _goal_result(self, todo_id: str) -> None:
-        from .control_plane.todos.completion_result import read_completion_result
+        from ..control_plane.todos.completion_result import read_completion_result
 
         goal_id = parse_qs(urlparse(self.path).query).get("goal_id", [""])[0]
         try:
@@ -182,7 +182,7 @@ class CompletedTodoRequestMixin:
     def _completed_todos(self) -> None:
         # This loopback-only workspace read preserves task text and evidence.
         # Select display fields without returning the authority's internal metadata.
-        from .control_plane.todos.list_readback import list_goal_todos
+        from ..control_plane.todos.list_readback import list_goal_todos
 
         if not self._require_loopback_origin():
             return
