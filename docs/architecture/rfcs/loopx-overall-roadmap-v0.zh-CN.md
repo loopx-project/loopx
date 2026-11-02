@@ -140,8 +140,10 @@ assessment 中有证据绑定的研究综合分析接入指标 → 汇报 → �
 ### 统一契约与 controller/executor 交付
 
 [Controller/executor RFC](controller-executor-unified-contract-v0.zh-CN.md) 细化
-S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择，并纳入
-完整首包与差分上下文。可选 controller 模型独自对接 Core，executor 接收自然语言工作
+S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择。
+[双层交付设计](controller-executor-unified-contract-v0.zh-CN.md#差分上下文)以跨 Host 默认
+Progressive、仅已资格化 Host 独立 Delta auto，以及当前完整 capture 的未读发现为目标；
+保留显式 off 与分版本迁移。可选 controller 模型独自对接 Core，executor 接收自然语言工作
 和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
 唤醒来源和 benchmark 评估组保持正交。这是设计方向，不是已交付行为或成本收益证据。
 
