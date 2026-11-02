@@ -1255,10 +1255,8 @@ _ESCAPED_MEMBER_FORMS = (
     r"old\x5fapi",
     r"old\137api",
     r"old\_api",
-    "old_\
-api",
-    "old_\
-api",
+    "old_" + "\\\n" + "api",
+    "old_" + "\\\r\n" + "api",
 )
 _ESCAPED_IDENTIFIER_FORMS = tuple(
     name for name in _ESCAPED_MEMBER_FORMS if "\n" not in name
