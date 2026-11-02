@@ -316,33 +316,133 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         "runtime_profile": "antigravity_app"
     }
 
-    # Verify antigravity_app runtime profile maps to interactive AGENT_CLI_LOOP
-    # (so todo complete / refresh-state use turn-scoped visible-goal settlement
-    # instead of emitting Codex App -A / --ack-applied-rrule commands).
+    from loopx.agy_goal_mode import build_antigravity_backoff_schedule_action
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_context import validate_quota_command_context_request
+    from loopx.control_plane.scheduler.state import (
+        APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    )
+    from tests.control_plane.scheduler_arbitration_fixture import (
+        build_native_scheduler_hint,
+    )
+
+    # Verify antigravity_app runtime profile maps to HOST_AUTOMATION + HOSTED_AUTOMATION
+    # with first-class app_automation stateful backoff (matching Codex App & Trae App),
+    # while emitting --antigravity_app (never -A / --codex-app).
     runtime_ctx = scheduler_execution_context_for_runtime_profile(
         SchedulerRuntimeProfile.ANTIGRAVITY_APP
     )
     assert runtime_ctx.ok
     assert runtime_ctx.context is not None
     assert runtime_ctx.context.host_surface is HostSurface.ANTIGRAVITY_APP
-    assert runtime_ctx.context.scheduler_owner is SchedulerOwner.AGENT_CLI_LOOP
-    assert runtime_ctx.context.execution_mode is ExecutionMode.INTERACTIVE
-    assert runtime_ctx.context.app_automation_applicable is False
+    assert runtime_ctx.context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION
+    assert runtime_ctx.context.execution_mode is ExecutionMode.HOSTED_AUTOMATION
+    assert runtime_ctx.context.app_automation_applicable is True
+    assert "codex_app_applicability" not in runtime_ctx.projection()
     assert (
-        runtime_ctx.projection()["codex_app_applicability"] == "not_applicable"
+        runtime_ctx.projection()["app_automation_applicability"] == "applicable"
     )
 
-    interactive_ctx = resolve_scheduler_execution_context(
+    # Invalid owner/mode combinations on antigravity_app are rejected cleanly
+    invalid_ctx = resolve_scheduler_execution_context(
         {
             "host_surface": HostSurface.ANTIGRAVITY_APP.value,
             "scheduler_owner": SchedulerOwner.AGENT_CLI_LOOP.value,
             "execution_mode": ExecutionMode.INTERACTIVE.value,
         }
     )
-    assert interactive_ctx.ok
+    assert not invalid_ctx.ok
+    assert (
+        invalid_ctx.projection()["app_automation_applicability"]
+        == "blocked_invalid_context"
+    )
+
+    # Verify build_scheduler_hint projects scheduler_hint.app_automation with
+    # --antigravity_app and --surface antigravity_app (and no -A / codex_app)
+    hint = build_native_scheduler_hint(
+        {
+            "goal_id": "surface-goal",
+            "agent_identity": {"agent_id": "probe-agent"},
+            "should_run": True,
+            "effective_action": "normal_run",
+            "recommended_action": "Advance the public fixture.",
+            "heartbeat_recommendation": {
+                "recommended_mode": "normal_run",
+                "spend_policy": "spend only after validated writeback",
+            },
+            "execution_obligation": {
+                "must_attempt_work": True,
+                "spend_policy": "spend only after validated writeback",
+            },
+            "automation_liveness": {
+                "automation_action": "execute_bounded_work",
+                "spend_policy": "spend only after validated writeback",
+            },
+            "interaction_contract": {
+                "schema_version": "loopx_interaction_contract_v0",
+                "mode": "normal_run",
+                "user_channel": {"action_required": False, "notify": "DONT_NOTIFY"},
+                "agent_channel": {
+                    "must_attempt": True,
+                    "delivery_allowed": True,
+                    "quiet_noop_allowed": False,
+                },
+                "cli_channel": {"next_cli_actions": [], "spend_allowed_now": False},
+            },
+        },
+        include_detail=True,
+        scheduler_execution_context=runtime_ctx,
+    )
+    assert "codex_app" not in hint
+    app_hint = hint["app_automation"]
+    assert app_hint["host_surface"] == "antigravity_app"
+    assert (
+        app_hint["stateful_backoff"]["state_key"]
+        == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    )
+    assert app_hint["recommended_interval_minutes"] == 3
+    ack_cli_args = app_hint["ack_hint"]["cli_args"]
+    assert "--antigravity_app" in ack_cli_args
+    assert "-A" not in ack_cli_args
+    assert "--codex-app" not in ack_cli_args
+    assert "--surface" in ack_cli_args
+    assert "antigravity_app" in ack_cli_args
+
+    schedule_action = build_antigravity_backoff_schedule_action(
+        hint,
+        current_task_id="task-1750",
+        prompt="LoopX managed heartbeat bootstrap v2",
+    )
+    assert schedule_action["action"] == "update_current_heartbeat_rrule"
+    assert schedule_action["cron_expression"] == "*/3 * * * *"
+    assert schedule_action["manage_task_kill"] == {
+        "Action": "kill",
+        "TaskId": "task-1750",
+    }
+    assert schedule_action["schedule_call"]["CronExpression"] == "*/3 * * * *"
+    assert "--antigravity_app" in schedule_action["ack_cli_args"]
+
+    # Verify quota scheduler follow-up parser defaults to antigravity_app + app_automation state key
+    followup_args = build_parser().parse_args(
+        [
+            "quota",
+            "scheduler-fail-current",
+            "--goal-id",
+            "surface-goal",
+            "--agent-id",
+            "probe-agent",
+            "--antigravity_app",
+            "--failed-rrule",
+            "FREQ=MINUTELY;INTERVAL=3",
+            "--execute",
+        ]
+    )
+    validate_quota_command_context_request(followup_args)
+    assert followup_args.surface == "antigravity_app"
+    assert followup_args.state_key == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
 
     # Verify hooks_template includes --goal-id and --agent-id when bound, and sidecar uses
-    # scheduler_hint.local_scheduler.recommended_interval_minutes.
+    # scheduler_hint.app_automation.recommended_interval_minutes.
     assert "--goal-id" in mutation["hooks_template"]["loopx"]["args"]
     assert "surface-goal" in mutation["hooks_template"]["loopx"]["args"]
     assert "--agent-id" in mutation["hooks_template"]["loopx"]["args"]
@@ -351,7 +451,13 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"][
             "suspend_on_waiting_external"
         ]["interval_minutes_field"]
-        == "scheduler_hint.local_scheduler.recommended_interval_minutes"
+        == "scheduler_hint.app_automation.recommended_interval_minutes"
+    )
+    assert (
+        mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"][
+            "stateful_backoff"
+        ]["state_key"]
+        == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
     )
 
 
@@ -433,3 +539,78 @@ def test_antigravity_dual_skills_mcp_hooks_workflow_skills_and_doctor(
         c for c in doc["checks"] if c["id"] == "antigravity_host_surface_ready"
     )
     assert agy_check["ok"] is True
+
+
+def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
+    tmp_path: Path,
+) -> None:
+    """Verify Antigravity App (`--antigravity_app`) runs real CLI `quota should-run`,
+    `quota scheduler-ack-current`, and `quota scheduler-fail-current` with independent
+    `antigravity_app` state persistence and zero `-A` / `--codex-app` leakage."""
+    from examples.control_plane.quota_plan_fixtures import (
+        SCOPED_AGENT_ID,
+        write_cli_fixture,
+    )
+    from loopx.control_plane.scheduler.state import (
+        APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+        load_scheduler_state,
+    )
+    from loopx.control_plane.testing.canary_harness import (
+        run_json_cli,
+        run_json_cli_result,
+    )
+
+    goal_id = "needs-operator"
+    registry_path, runtime_root, project = write_cli_fixture(
+        tmp_path / "fixture",
+        scoped_agents=True,
+    )
+    _returncode, first = run_json_cli_result(
+        "quota",
+        "should-run",
+        "--goal-id",
+        goal_id,
+        "--agent-id",
+        SCOPED_AGENT_ID,
+        "--antigravity_app",
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert "codex_app" not in first["scheduler_hint"]
+    app = first["scheduler_hint"]["app_automation"]
+    assert app["host_surface"] == "antigravity_app"
+    assert (
+        app["stateful_backoff"]["state_key"]
+        == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    )
+    assert "--antigravity_app" in app["ack_hint"]["cli_args"]
+    assert "-A" not in app["ack_hint"]["cli_args"]
+
+    ack = run_json_cli(
+        *app["ack_hint"]["cli_args"],
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        cwd=project,
+    )
+    assert ack["scheduler_state_mutated"] is True
+    assert ack["surface"] == "antigravity_app"
+    assert ack["state_key"] == APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
+    persisted = load_scheduler_state(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=SCOPED_AGENT_ID,
+        surface="antigravity_app",
+        state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+    )
+    assert persisted is not None
+    assert (
+        load_scheduler_state(
+            runtime_root,
+            goal_id=goal_id,
+            agent_id=SCOPED_AGENT_ID,
+            surface="codex_app",
+            state_key=APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY,
+        )
+        is None
+    )

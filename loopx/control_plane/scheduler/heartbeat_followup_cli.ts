@@ -80,6 +80,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     "-A",
     "--codex-app",
     "--trae_app",
+    "--antigravity_app",
     "--execute",
     "--dry-run",
     "--host-match-observed",
@@ -244,6 +245,15 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
     if (legacyCodexObservedRrule) {
       throw new EffectRuntimeRequestError(
         "Trae App cannot use the Codex RRULE compatibility alias",
+        "scheduler_host_facts_identity_mismatch",
+      );
+    }
+  }
+  if (parsed.booleans.has("--antigravity_app")) {
+    matchingText(facts, "surface", "antigravity_app", "--antigravity_app");
+    if (legacyCodexObservedRrule) {
+      throw new EffectRuntimeRequestError(
+        "Antigravity App cannot use the Codex RRULE compatibility alias",
         "scheduler_host_facts_identity_mismatch",
       );
     }

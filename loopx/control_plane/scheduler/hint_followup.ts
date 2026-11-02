@@ -18,8 +18,9 @@ function capabilities(raw: unknown): string[] {
 function followupArgs(request: JsonObject, command: string): unknown[] {
   const surface = text(request.surface === undefined ? "codex_app" : request.surface);
   const stateKey = text(request.state_key === undefined ? APP_STATE : request.state_key);
+  const surfaceFlag = surface === "trae_app" ? "--trae_app" : surface === "antigravity_app" ? "--antigravity_app" : "-A";
   const args: unknown[] = ["quota", command, "--goal-id", text(request.goal_id),
-    "--agent-id", text(request.agent_id), surface === "trae_app" ? "--trae_app" : "-A"];
+    "--agent-id", text(request.agent_id), surfaceFlag];
   for (const capability of capabilities(request.available_capabilities)) args.push("--available-capability", capability);
   if (jsonObject(request.scheduler_host_facts)) {
     // The Python adapter performs only the persisted zlib/base64 wire codec.

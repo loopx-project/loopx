@@ -842,7 +842,13 @@ Paste this task body into the visible TraeX `/goal` task.
     else:
         style = ""
     runtime_profile = str(payload.get("runtime_profile") or "")
-    host_label = "Trae App" if runtime_profile == "trae_app" else "Codex App"
+    host_label = (
+        "Trae App"
+        if runtime_profile == "trae_app"
+        else "Antigravity App"
+        if runtime_profile == "antigravity_app"
+        else "Codex App"
+    )
     return f"""# Heartbeat Automation Prompt
 
 Copy this {style}task body into a {host_label} heartbeat automation.
