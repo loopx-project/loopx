@@ -19,9 +19,11 @@ import pytest
 from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
+from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
 from test_quota_settlement_cli import AGENT_ID, GOAL_ID, TODO_ID, _spend_run_count, _write_fixture
 from tests.control_plane.codex_checkpoint_fixture import (
     local_inference_provider, delivered_context as _delivered, last_context_page as _last_page,
+    reference_metadata_oracle,
 )
 from tests.control_plane.test_heartbeat_envelope_transport import private_handoff  # noqa: F401 -- shared private socket fixture
 from tests.control_plane.test_codex_context_boundary import _app_server, _configure_provider, _input_text, _native_fixture
@@ -207,28 +209,27 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 offsets.append(start)
                 count = 0
             count += size
-        if host == "benchmark" and name in {"cold", "recovery"}:
-            # Execute the shipped original recovery route, including its pinned
-            # executable; no fixture substitute for installed command routing.
-            recovery = wires["cold" if name == "cold" else "warm"]["recovery"]
-            routed = shlex.split(recovery["command"])
-            assert routed[:3] == [env["LOOPX_CLI"], "--cli-bin", env["LOOPX_CLI"]]
+        # Execute the model-visible route, preserving its executable, reference
+        # and output budget. Private metadata only verifies the expected bytes.
+        routed = shlex.split(read_commands[name] if name != "recovery"
+                             else wires["warm"]["recovery"]["command"])
+        if "--reference-file" in routed:
+            _, reference = read_context_read_reference(routed[routed.index("--reference-file") + 1])
+            assert reference["path"] == str(path) and reference["sha256"] == digest
+        else:
             assert routed[routed.index("--capture-file") + 1] == str(path)
-            routed[routed.index("--page-bytes") + 1] = "5000"
-            commands = []
-            for offset in offsets:
-                routed[routed.index("--offset") + 1] = str(offset)
-                commands.append(shlex.join(routed))
-            return commands
-        commands = [shlex.join(cli + ["--format", "json", "quota", "context-read",
-            "--capture-file", str(path), "--capture-sha256", digest,
-            "--offset", str(offset), "--page-bytes", str(page_size)]) for offset in offsets]
+            assert routed[routed.index("--capture-sha256") + 1] == digest
+        routed[routed.index("--page-bytes") + 1] = str(page_size)
+        commands = []
+        for offset in offsets:
+            routed[routed.index("--offset") + 1] = str(offset)
+            commands.append(shlex.join(routed))
         if adaptive and name == "cold":
             # An intact initial short read remains in current native input when
             # subsequent reads choose different boundaries. Production must
             # accept exact complete coverage without clearing that history.
             initial = shlex.split(commands[0])
-            initial[-1] = "256"
+            initial[initial.index("--page-bytes") + 1] = "256"
             commands.insert(0, shlex.join(initial))
         return commands
 
@@ -305,17 +306,18 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
             read_commands[name] = descriptor["command"]
             # The public native CLI now shares context-project's paged reader.
             # Keep the independent full-wire oracle separate from its page view.
-            wire_file = Path(descriptor["path"])
+            wire_descriptor = reference_metadata_oracle(descriptor)
+            wire_file = Path(wire_descriptor["path"])
             wire_bytes = wire_file.read_bytes()
-            assert hashlib.sha256(wire_bytes).hexdigest() == descriptor["sha256"]
+            assert hashlib.sha256(wire_bytes).hexdigest() == wire_descriptor["sha256"]
             if descriptor["mode"] == "full":
                 # Full native delivery reads the advertised original directly;
                 # the retired duplicate delivery.json is not a public oracle.
-                assert str(wire_file) == descriptor["recovery"]["path"]
-                assert descriptor["sha256"] == descriptor["recovery"]["sha256"]
+                assert str(wire_file) == wire_descriptor["recovery"]["path"]
+                assert wire_descriptor["sha256"] == wire_descriptor["recovery"]["sha256"]
                 wires[name] = {"schema_version": "context_delivery_v1", "mode": "full",
-                    "context": json.loads(wire_bytes), "target": descriptor["target"],
-                    "recovery": descriptor["recovery"], "ancestry": 0}
+                    "context": json.loads(wire_bytes), "target": wire_descriptor["target"],
+                    "recovery": wire_descriptor["recovery"], "ancestry": 0}
             else:
                 wires[name] = json.loads(wire_bytes)
             assert descriptor["mode"] == wires[name]["mode"] == ("full" if name == "cold" or resume_loss else "delta")
@@ -333,7 +335,7 @@ def test_native_cli_capture_delta_and_compact_recovery(tmp_path, monkeypatch, ho
                 stages["pages"] = [descriptor["command"]] if bounded_pages else pages(name, read_paths[name])
             else:
                 stages["pages"] = ([descriptor["next_command"]] if not descriptor["eof"] else []) if bounded_pages else pages(name, read_paths[name])
-            page_digests[name] = descriptor["sha256"]
+            page_digests[name] = wire_descriptor["sha256"]
             stages["phase"] = name + "_read"
             if not stages["pages"]:
                 return response(request, number, message)
