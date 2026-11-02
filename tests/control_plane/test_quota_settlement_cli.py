@@ -7610,11 +7610,22 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
         # A later IO failure cannot conceal the effect that already committed.
         capture_root = runtime / "context-delivery"
         capture_root.chmod(0o755)
+        rejected_rc, rejected = _run_generated_cli(command, registry_path=registry_path, cwd=project)
+        assert rejected_rc == 1 and rejected["appended"] is False
+        assert _spend_run_count(runtime) == 0
+        for field in ("ok", "workspace_guard", "reason", "recommended_action", "error_code"):
+            if field in raw:
+                assert rejected[field] == raw[field]
+        assert rejected["result_delivery_error"]["error_code"] == "quota_decision_transport_failed"
         failed_rc, failed = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
-        assert failed_rc == 1 and failed["error_code"] == "quota_decision_transport_failed"
+        assert failed_rc == 1 and failed["ok"] is True
+        assert failed["result_delivery_error"]["error_code"] == "quota_decision_transport_failed"
+        assert failed["settlement_result"]["ok"] is True
+        assert "quota_spend" in {row["step_kind"] for row in failed["settlement_result"]["receipts"]}
+        assert failed["settlement_identity"]["turn_instance_id"] == TURN_ID
         assert failed["appended"] is True and _spend_run_count(runtime) == 1
         assert failed["settlement_progress"]["state"] == "settled"
-        assert "original settlement receipt" in failed["recommended_action"]
+        assert "original" in failed["result_delivery_error"]["recommended_action"]
         capture_root.chmod(0o700)
     for replay in (False, True):
         spent_rc, spent = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)

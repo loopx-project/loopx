@@ -21,7 +21,7 @@ from ..control_plane.turn_driver.decision_capture import (
     NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     native_context_page_budget,
     read_context_capture_file as _read_capture,
-    read_context_read_reference, write_context_read_reference,
+    read_context_read_reference, write_context_read_reference, private_capture_uid,
 )
 
 
@@ -771,10 +771,11 @@ def budgeted_settlement_result(
     if fits(payload):
         return payload
     try:
+        uid = private_capture_uid()
         root = runtime_root.expanduser().resolve() / "context-delivery"
         root.mkdir(mode=0o700, exist_ok=True)
         metadata = root.lstat()
-        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.getuid()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
                 or metadata.st_mode & 0o077):
             raise ValueError("result capture requires a private physical directory owned by this user")
         directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
@@ -959,6 +960,13 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         except (OSError, ValueError, TypeError) as exc:
             print_payload({"ok": False, "reason": str(exc)}, args.format,
                 lambda value: json.dumps(value, ensure_ascii=False, indent=2))
+            return 1
+    if has_output_limit and settlement_output:
+        try:
+            private_capture_uid()
+        except ValueError as exc:
+            print_payload({"ok": False, "reason": str(exc), "appended": False,
+                "registry_mutated": False}, args.format, str)
             return 1
     if has_output_limit and settlement_output and args.max_page_output_bytes <= 0:
         print_payload({"ok": False, "reason": "max-page-output-bytes must be positive"}, args.format, str)
