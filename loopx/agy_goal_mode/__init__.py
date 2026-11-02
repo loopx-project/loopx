@@ -108,7 +108,7 @@ def build_antigravity_sidecar_template(
     agent_id: str | None = None,
     runtime_root: str | None = None,
     cli_bin: str = "loopx",
-    interval_seconds: int = 300,
+    interval_seconds: int = 180,
 ) -> dict[str, Any]:
     """Build a public-safe Antigravity 2.0 ``sidecar.json`` periodic heartbeat template."""
     quota_args = [cli_bin, "--format", "json"]
@@ -132,15 +132,23 @@ def build_antigravity_sidecar_template(
     heartbeat_args.extend(
         [
             "heartbeat-prompt",
+            "--thin",
             "--goal-id",
             goal_id,
-            "--thin",
             "--runtime-profile",
             "antigravity_app",
         ]
     )
     if agent_id:
         heartbeat_args.extend(["--agent-id", agent_id])
+    bootstrap_prompt = (
+        "LoopX managed heartbeat bootstrap v2\n"
+        "每次唤醒先执行：\n"
+        f"```sh\n{shlex.join(heartbeat_args)}\n```\n"
+        "读取完整结果；仅 ok=true 时按本次 task_body 推进，不复用旧指令。"
+        "一次操作不代表结束；通知与执行分开，等待按当前调度契约（遇到 waiting_external / CI 等待时使用原生 schedule(DurationSeconds=..., TimerCondition=\"any\") 挂起，不跑 shell sleep 空查）。"
+        "入口异常先做权限内恢复；契约仍不可用时不执行任务或记账，并报告阻塞。"
+    )
     return {
         "schema_version": "loopx_antigravity_sidecar_template_v0",
         "config_path": ANTIGRAVITY_SIDECAR_CONFIG_LABEL,
@@ -149,11 +157,13 @@ def build_antigravity_sidecar_template(
                 "description": (
                     f"LoopX periodic quota-gated heartbeat for goal {goal_id}"
                 ),
+                "cron": "*/3 * * * *",
                 "interval_seconds": int(interval_seconds),
                 "gate_command": shlex.join(quota_args),
                 "wake_when_json_field_true": "should_run",
                 "prompt_command": shlex.join(heartbeat_args),
                 "prompt_json_field": "task_body",
+                "bootstrap_prompt": bootstrap_prompt,
                 "suspend_on_waiting_external": {
                     "tool": "schedule",
                     "interval_minutes_field": (
@@ -300,12 +310,7 @@ def antigravity_app_activation_extras(
         agent_id=agent_id,
         runtime_root=runtime_root,
     )
-    runtime_arg = f" --runtime-root {shlex.quote(runtime_root)}" if runtime_root else ""
-    wake_prompt = (
-        f"Run `{cli_bin} --format json{runtime_arg} quota should-run --goal-id {goal_id}"
-        + (f" --agent-id {agent_id}" if agent_id else "")
-        + " --runtime-profile antigravity_app` and continue the active LoopX Todo when allowed."
-    )
+    wake_prompt = sidecar_template["sidecar"]["loopx-heartbeat"]["bootstrap_prompt"]
     return {
         "activation_method": "bind_antigravity_schedule_loop_and_sidecar",
         "extra_host_mutation": {
@@ -328,6 +333,8 @@ def antigravity_app_activation_extras(
             "in_session_schedule_call": {
                 "tool": "schedule",
                 "arguments": {
+                    "CronExpression": "*/3 * * * *",
+                    "IsDaemon": True,
                     "DurationSeconds": 180,
                     "Prompt": wake_prompt,
                     "TimerCondition": "any",
