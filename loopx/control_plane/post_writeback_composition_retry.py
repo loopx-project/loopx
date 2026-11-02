@@ -460,8 +460,6 @@ def collect_pending_composition_retry_projection(
     pending: list[dict[str, Any]] = []
     total_matching = 0
     for journal_path in journal_paths:
-        if not journal_path.is_file():
-            continue
         for row in pending_composition_retry_receipts_for_path(journal_path):
             if (
                 selector_agent_id
