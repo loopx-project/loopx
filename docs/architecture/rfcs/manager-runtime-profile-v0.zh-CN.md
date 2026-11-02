@@ -46,6 +46,11 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   这些契约。Argon 档位必须由本地账号提供，并与请求的思考深度一致。原始 cascade 丢失
   时续接失败，不静默创建替代会话。停止等待原生 cascade 回到 idle；超时或部分输出
   不代表成功完成。
+  只读轮询的传输中断不会重发输入，也不会重置 idle 或 hard deadline。运行中的原生
+  cascade 继续拥有重试与错误步骤；接入层仅在原生终态错误后失败，并保留结构化原始
+  原因。宿主心跳与有界 Stop-hook 恢复遵循独立的
+  [Antigravity 宿主流程](../../../skills/loopx-project/references/heartbeat-hosts.md#antigravity-app)。
+  这些源码边界不证明上游网络已修复，也不证明持续长程可靠性。
 - `trusted_owner` 适用于本地私有 Owner 管家和由既有 Core conversation owner 重新核验的
   原生本人管家私聊。Core 核验 App、Owner 身份、私聊来源、当前资源授权和冻结的 Session
   身份；受众证明本身不授予工具，仍按实际机器策略执行，包括显式受限选择。其他外部

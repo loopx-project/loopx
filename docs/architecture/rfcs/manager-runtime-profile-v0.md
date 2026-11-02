@@ -56,6 +56,11 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   Argon tiers must be offered by the local account and match the requested reasoning effort.
   A missing original cascade fails resume without silently starting a replacement. Stop waits
   for the native cascade to become idle; timeout or partial output is not successful completion.
+  Read-only polling transport loss does not resend the input or reset its idle/hard deadline.
+  Native retry/error steps remain owned by the running cascade; only a settled terminal error
+  fails the adapter, with its structured native cause retained. Host heartbeat and bounded
+  Stop-hook recovery use the separate [Antigravity host procedure](../../../skills/loopx-project/references/heartbeat-hosts.md#antigravity-app).
+  These source boundaries do not establish upstream network repair or sustained long-run reliability.
 - `trusted_owner` applies to the local private owner-manager and a native private steward
   binding freshly verified by the existing Core conversation owner. That owner checks the
   App, owner principal, private source, current resource grant and frozen Session identity.
