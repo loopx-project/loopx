@@ -444,6 +444,28 @@ class ChatExternalConversations:
             + json.dumps({"original_request": turn["message"],
                 "context_handoff": continuation["metadata_handoffs"]}, ensure_ascii=False))
 
+    @staticmethod
+    def execute_turn(controller: Any, adapter: Any, session: dict[str, Any], turn: dict[str, Any],
+                     message: str, event_sink: Callable) -> dict[str, Any]:
+        """Narrow a reserved format review; preserve ordinary adapter dispatch."""
+        if (session.get("agent_id") != "antigravity" or session.get("steward_context") is None
+                or controller.project_contexts.conversation_bindings is None):
+            return adapter.start_turn(message, event_sink)
+        external = ChatExternalConversations(controller)
+        review_input = external.prepare_metadata_review_input(session, turn)
+        if review_input is None:
+            return adapter.start_turn(message, event_sink)
+        from .antigravity_adapter import AntigravityAdapter
+        if not isinstance(adapter, AntigravityAdapter):
+            raise ValueError("metadata review requires its original native adapter")
+        # Keep the original thread/profile. Only this Send disables tools;
+        # model prose is never presented as a publication receipt.
+        response = adapter.start_turn(review_input,
+            lambda kind, payload: event_sink(kind, payload)
+                if kind not in {"answer.delta", "answer.final"} else None,
+            read_only_review=True)
+        return external.validate_metadata_review_response(session, turn, response)
+
     def validate_metadata_review_response(self, session: dict[str, Any], turn: dict[str, Any],
                                          response: dict[str, Any]) -> dict[str, Any]:
         from ...chat_agent import CodexChatAgentError

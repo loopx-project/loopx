@@ -1856,24 +1856,7 @@ class ChatRuntimeController:
                         response = start_attachment_turn(adapter, session, current_turn, message, event_sink, attachments)
                     else:
                         from .capabilities.native_chat.external_conversations import ChatExternalConversations
-                        external = (ChatExternalConversations(self)
-                            if (session.get("agent_id") == "antigravity" and session.get("steward_context") is not None
-                                and self.project_contexts.conversation_bindings is not None) else None)
-                        review_input = external.prepare_metadata_review_input(session, current_turn) if external else None
-                        if review_input is None:
-                            response = adapter.start_turn(message, event_sink)
-                        else:
-                            from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
-                            if not isinstance(adapter, AntigravityAdapter):
-                                raise ValueError("metadata review requires its original native adapter")
-                            # Keep the original thread/profile. Only this Send
-                            # disables tools; unvalidated prose is never streamed
-                            # as a receipt or a new business answer.
-                            response = adapter.start_turn(review_input,
-                                lambda kind, payload: event_sink(kind, payload)
-                                    if kind not in {"answer.delta", "answer.final"} else None,
-                                read_only_review=True)
-                            response = external.validate_metadata_review_response(session, current_turn, response)
+                        response = ChatExternalConversations.execute_turn(self, adapter, session, current_turn, message, event_sink)
             if execution_ended():
                 event_buffer.close()
                 return
