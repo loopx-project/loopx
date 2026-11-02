@@ -274,6 +274,16 @@ restore withdrawn collection.
 Offline `migrate-local-state` commands do not schedule these observations,
 because their previews and rollback receipts bind the machine-state bytes.
 
+Settings-service and local transport failures exit with status 1. With
+`--format json`, the command returns `ok=false`, `error` and a public-safe
+`message`; Markdown prints the same message. `mutation_lock_timeout` means the
+settings lock was not acquired, so that attempt did not change consent. Wait
+for the current settings operation to finish before retrying. Other unavailable
+results do not confirm a change's outcome: follow the message and inspect
+`loopx usage-ping status` before retrying a change. Child output, raw exceptions
+and local paths are not exposed. Invalid device-context input retains exit
+status 2. Consent, generation fencing and existing lock deadlines are unchanged.
+
 Each installation attempts at most one heartbeat per UTC day. The first measured
 CLI result attempts an aggregate send immediately, including a failed result.
 Later eligible activity sends buffered deltas at most once every 15 minutes;
