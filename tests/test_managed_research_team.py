@@ -19,7 +19,7 @@ from test_managed_research_scenario import fixture  # noqa: E402
 from loopx.control_plane.goals.acceptance import (  # noqa: E402
     configure_goal_acceptance, inspect_goal_acceptance, verify_goal_acceptance,
 )
-from loopx.chat_completed_todos import (  # noqa: E402
+from loopx.chat.completed_todos import (  # noqa: E402
     CompletedTodoPages, _goal_result_candidates, _verify_goal_result_page,
 )
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler  # noqa: E402
