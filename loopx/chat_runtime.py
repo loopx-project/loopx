@@ -1857,7 +1857,8 @@ class ChatRuntimeController:
                     else:
                         from .capabilities.native_chat.external_conversations import ChatExternalConversations
                         external = (ChatExternalConversations(self)
-                            if self.project_contexts.conversation_bindings is not None else None)
+                            if (session.get("agent_id") == "antigravity" and session.get("steward_context") is not None
+                                and self.project_contexts.conversation_bindings is not None) else None)
                         review_input = external.prepare_metadata_review_input(session, current_turn) if external else None
                         if review_input is None:
                             response = adapter.start_turn(message, event_sink)
