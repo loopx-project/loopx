@@ -225,11 +225,12 @@ async function pendingPage(source: InboxSource, params: JsonObject): Promise<Jso
     instruction: TRIAGE + " Follow next_cursor to read later pending requests. Restart without a cursor " +
       "to discover new requests before it. The end of a page sequence is not work completion."};
 }
-function inspectResult(root: string, row: JsonObject, key: string, reply: JsonObject): JsonObject | null {
+function inspectResult(root: string, row: JsonObject, key: string, reply: JsonObject,
+    observations?: JsonObject[]): JsonObject | null {
   const folder = join(root, "replies", requestId(row.request_id));
   try {
-    const results = reply.update_id != null || reply.phase === "decision" ? resultKeys(folder).map(candidate =>
-      resultObservation(candidate, readRecord(join(folder, candidate + ".json")))) : [resultObservation(key, reply)];
+    const results = observations ?? (reply.update_id != null || reply.phase === "decision" ? resultKeys(folder).map(candidate =>
+      resultObservation(candidate, readRecord(join(folder, candidate + ".json")))) : [resultObservation(key, reply)]);
     const legacy = Object.hasOwn(row, "request_control") || Object.hasOwn(reply, "request_revision")
       ? observe(join(root, "decisions", String(row.request_id) + ".json")) : {};
     const inspected = planCollaborationResult({request: row, phase: reply.phase, text: reply.text,
@@ -330,10 +331,13 @@ function replyStatuses(root: string, row: JsonObject): JsonObject[] {
 function agendaResults(root: string, row: JsonObject): JsonObject[] {
   const folder = join(root, "replies", requestId(row.request_id));
   const statuses = new Map(replyStatuses(root, row).map(status => [status.result_key ?? status.phase, status.status]));
-  return resultKeys(folder).flatMap(key => {
-    const reply = readRecord(join(folder, key + ".json"));
+  const replies = resultKeys(folder).map(key => ({key, reply: readRecord(join(folder, key + ".json"))}));
+  // Reuse immutable request-local observations; each result still goes through
+  // the publication validator and its current delivery/consumption readback.
+  const observations = replies.map(({key, reply}) => resultObservation(key, reply));
+  return replies.flatMap(({key, reply}) => {
     if (reply.phase !== "conclusion") return [];
-    if (!inspectResult(root, row, key, reply)) fail("delegation result identity unavailable");
+    if (!inspectResult(root, row, key, reply, observations)) fail("delegation result identity unavailable");
     return [{result_key: key, request_revision: reply.request_revision ?? 1, status: statuses.get(key),
       consumed: row.source_kind === "peer" && returnConsumed(root, key, row, reply, row.source_agent_id)}];
   });
