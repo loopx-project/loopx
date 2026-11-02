@@ -7445,10 +7445,12 @@ def test_receipt_review_does_not_persist_private_or_lossy_stop_clauses() -> None
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("bounded_result", [False, True])
 def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
+    bounded_result: bool,
 ) -> None:
     if provider == "sqlite":
         from canonical_authority_fixture import isolate_sqlite_runtime
@@ -7575,10 +7577,62 @@ def test_peer_refresh_rejects_implicit_canonical_workspace_before_writeback(
     )
     assert linked["delivery_workspace"]["peer_independent_worktree_required"] is True
     command = linked["settlement_owed"]["command"]
-    spent_rc, spent = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
-    assert spent_rc == 0 and spent["settlement_progress"]["state"] == "settled", spent
-    repeated_rc, repeated = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
-    assert repeated_rc == 0 and repeated["appended"] is False, repeated
+    assert "--max-page-output-bytes 64000" in command
+    if bounded_result:
+        command = command.replace("--max-page-output-bytes 64000", "--max-page-output-bytes 8192")
+        # Wrong workspace remains a refusal, with no accounting effect. The
+        # full unbudgeted API remains available for independent comparison.
+        raw_command = command.replace(" --max-page-output-bytes 8192", "")
+        raw_rc, raw = _run_generated_cli(raw_command, registry_path=registry_path, cwd=project)
+        assert raw_rc == 1 and raw["appended"] is False
+        assert raw["before"]["selected_todo"]["todo_id"] == TODO_ID
+        assert len(json.dumps(raw).encode()) > 8192
+        refused_rc, refused = _run_generated_cli(command, registry_path=registry_path, cwd=project)
+        assert refused_rc == 1 and refused["workspace_guard"] == raw["workspace_guard"]
+        assert refused["appended"] is False and refused["registry_mutated"] is False
+        assert "before" not in refused and _spend_run_count(runtime) == 0
+        reference = Path(refused["result_details"]["reference_file"])
+        original = Path(json.loads(reference.read_text())["path"])
+        complete = json.loads(original.read_text())
+        assert complete["before"]["selected_todo"]["todo_id"] == TODO_ID
+        assert len(json.dumps(refused, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 8192
+        assert original.stat().st_mode & 0o077 == 0
+        read_rc, page = _run_cli(registry_path, runtime, "quota", "context-read",
+            "--reference-file", str(reference), "--select", "/workspace_guard", cwd=project)
+        assert read_rc == 0 and page["eof"]
+        assert json.loads(page["content"])["selections"][0]["value"] == raw["workspace_guard"]
+        assert not list((runtime / "context-delivery").rglob("session.json"))
+        # Invalid presentation input is rejected before the original effect.
+        invalid_rc, invalid = _run_generated_cli(command.replace("8192", "0"),
+            registry_path=registry_path, cwd=linked_worktree)
+        assert invalid_rc == 1 and "positive" in invalid["reason"]
+        assert _spend_run_count(runtime) == 0
+        # A later IO failure cannot conceal the effect that already committed.
+        capture_root = runtime / "context-delivery"
+        capture_root.chmod(0o755)
+        failed_rc, failed = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
+        assert failed_rc == 1 and failed["error_code"] == "quota_decision_transport_failed"
+        assert failed["appended"] is True and _spend_run_count(runtime) == 1
+        assert failed["settlement_progress"]["state"] == "settled"
+        assert "original settlement receipt" in failed["recommended_action"]
+        capture_root.chmod(0o700)
+    for replay in (False, True):
+        spent_rc, spent = _run_generated_cli(command, registry_path=registry_path, cwd=linked_worktree)
+        assert spent_rc == 0, spent
+        if "command" in spent:
+            parts = []
+            read_command = spent["command"]
+            while read_command:
+                read_rc, page = _run_generated_cli(read_command, registry_path=registry_path, cwd=linked_worktree)
+                assert read_rc == 0
+                parts.append(page["content"])
+                read_command = page.get("next_command")
+            spent = {row["pointer"][1:]: row["value"]
+                for row in json.loads("".join(parts))["selections"]}
+        if not replay and not bounded_result:
+            assert spent["settlement_progress"]["state"] == "settled", spent
+        else:
+            assert spent["appended"] is False, spent
     assert _spend_run_count(runtime) == 1
 
 

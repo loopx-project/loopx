@@ -1102,6 +1102,39 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 包括根选择在内的目录/详情 EOF 不证明全量模型保留；原生文件比较与此独立。
 模型可直接查当前完整文件，也可查基线和差分，无须先通读。
 
+### Bounded settlement results / 有界结算结果
+
+Generated Turn-bound JSON `quota spend-slot` commands include
+`--max-page-output-bytes 64000`. This output option does not enable Context
+Delivery or create a native continuity baseline. Small results remain complete;
+when a result exceeds the budget, its `before` / `after` snapshots move to a
+private immutable JSON capture. The other fields, including the actual append
+outcome, workspace refusal and settlement receipts, remain visible. Use
+`result_details.command` with `--select` for needed diagnostic facts; the reader
+keeps the same output budget and verifies the full capture digest on every page.
+If the remaining controls also exceed the limit, the returned command selects
+all of them: read those pages completely before acting. No control text is cut.
+
+Omitting the option preserves the existing full-result API. A nonpositive
+budget is rejected before execution. A capture or metadata delivery failure
+after evaluation reports the actual settlement outcome and requires recovery
+from the original receipt; it does not prove that the effect failed to commit.
+Never rerun admission or change the original Turn/effect identity to recover
+output. This transport change alone does not prove model retention or savings.
+
+生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
+`--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生
+连续性基线。小结果保持完整；超出预算时，将 `before` / `after` 快照存入私有、
+不可变的完整 JSON，其他字段仍直接返回，包括实际追加结果、工作目录拒绝和结算
+回执。按需在 `result_details.command` 后添加 `--select`；读取器保留相同输出预算，
+每页校验完整摘要。如果其余控制信息也超限，返回命令会选择全部控制字段，必须
+完整读完这些页再行动，不截断控制正文。
+
+省略选项保留原有完整结果 API；非正预算在执行前拒绝。求值后 capture 或元数据
+投递失败时，错误仍报告实际结算结果，并要求从原回执恢复，不能据此认定效果未
+提交。恢复输出不重新准入，也不更换原 Turn／effect 身份。此传输变化本身不证明
+模型保留或成本收益。
+
 ### Saved context cache / 已保存上下文缓存
 
 For `quota context-project`, enabling context delivery no longer requires a

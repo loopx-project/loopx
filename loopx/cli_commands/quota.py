@@ -13,7 +13,7 @@ from .quota_presentation import (
     _quota_renderer as _quota_renderer,
 )
 from .quota_capture import (
-    bind_capture_selection_transport, capture_decision, handoff_decision,
+    bind_capture_selection_transport, budgeted_settlement_result, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
     native_context_activation, model_context_reference,
 )
@@ -337,6 +337,24 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
+    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
+            and getattr(args, "max_page_output_bytes", None) is not None):
+        try:
+            view = budgeted_settlement_result(payload, runtime_root=context.runtime_root,
+                output_bytes=args.max_page_output_bytes)
+        except QuotaDecisionTransportError as exc:
+            view = {"ok": False, "mode": args.quota_command, "goal_id": args.goal_id,
+                "error_code": exc.error_code, "reason": str(exc),
+                "recommended_action": "Result delivery failed after the spend operation was evaluated. "
+                    "Read its original settlement receipt before recovery; do not repeat admission "
+                    "or assume the operation did not commit."}
+            for field in ("appended", "registry_mutated", "settlement", "settlement_progress", "heartbeat_receipt"):
+                if field in payload:
+                    view[field] = payload[field]
+            print_payload(view, args.format, _quota_renderer(args, failure=True))
+            return 1
+        print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))
+        return 0 if payload.get("ok") is True else 1
     try:
         context_delivery_enabled = native_context_activation(args)["enabled"]
     except QuotaCommandValidationError:
