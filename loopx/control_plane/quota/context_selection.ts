@@ -3,6 +3,18 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 
+// Local selection diagnostics: counts only, never source keys or values.
+class SelectionLookupError extends EffectRuntimeRequestError {
+  readonly argumentIndex: number;
+  readonly parentTokenCount: number;
+
+  constructor(message: string, code: string, argumentIndex: number, parentTokenCount: number) {
+    super(message, code);
+    this.argumentIndex = argumentIndex;
+    this.parentTokenCount = parentTokenCount;
+  }
+}
+
 /** Initial navigation may share a complete parent instead of repeating every
  * child address. The selected facts stay exact; unselected children prevent
  * sharing. Explicit selectors and discovery keep their original addresses. */
@@ -40,6 +52,20 @@ function coalescedInitialPointers(context: JsonObject, pointers: string[]): stri
 }
 
 export function capturedContextSelection(request: JsonObject, initialPointers: string[] = []): JsonObject {
+  if (request.recover_selection_errors !== undefined && typeof request.recover_selection_errors !== "boolean")
+    throw new EffectRuntimeRequestError("recover-selection-errors must be boolean");
+  try {
+    return resolveSelection(request, initialPointers);
+  } catch (error) {
+    if (!(error instanceof SelectionLookupError) || request.recover_selection_errors !== true) throw error;
+    // No partial selections survive. The IO adapter can bind a discovery
+    // command to this verified prefix of the caller's original argument.
+    return {rejected_selection: {message: error.message, code: error.code,
+      argument_index: error.argumentIndex, parent_token_count: error.parentTokenCount}};
+  }
+}
+
+function resolveSelection(request: JsonObject, initialPointers: string[]): JsonObject {
   const context = requireJsonObject(request.context, "captured context");
   if (request.initial_read !== undefined && typeof request.initial_read !== "boolean")
     throw new EffectRuntimeRequestError("initial-read must be boolean");
@@ -70,18 +96,20 @@ export function capturedContextSelection(request: JsonObject, initialPointers: s
     const tokens = pointer === "" ? [] : pointer.slice(1).split("/").map(token => token.replace(/~1/g, "/").replace(/~0/g, "~"));
     const path: (string | number)[] = [];
     let value: unknown = context;
+    let parentTokenCount = 0;
     for (const token of tokens) {
+      if (value !== null && typeof value === "object") parentTokenCount = path.length;
       if (Array.isArray(value)) {
         if (!/^(0|[1-9][0-9]*)$/.test(token) || !Number.isSafeInteger(Number(token)) || Number(token) >= value.length)
-          throw new EffectRuntimeRequestError(`context selection array index is missing or invalid (${argument}, token ${path.length + 1}; positions are 1-based)`,
-            "context_selection_invalid_index");
+          throw new SelectionLookupError(`context selection array index is missing or invalid (${argument}, token ${path.length + 1}; positions are 1-based)`,
+            "context_selection_invalid_index", argumentsByPointer.get(pointer)!, parentTokenCount);
         path.push(Number(token));
         value = value[Number(token)];
       } else if (value !== null && typeof value === "object" && Object.hasOwn(value, token)) {
         path.push(token);
         value = (value as JsonObject)[token];
-      } else throw new EffectRuntimeRequestError(`context selection pointer does not exist (${argument}, token ${path.length + 1}; positions are 1-based)`,
-        "context_selection_missing_pointer");
+      } else throw new SelectionLookupError(`context selection pointer does not exist (${argument}, token ${path.length + 1}; positions are 1-based)`,
+        "context_selection_missing_pointer", argumentsByPointer.get(pointer)!, parentTokenCount);
     }
     // Return the verified address, not a JS-number-coerced copy of the value.
     // The file adapter retains original JSON values and owns byte serialization.
