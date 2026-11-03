@@ -56,7 +56,13 @@ def _lease(*, owner: str = AGENT, status: str = "active", expired: bool = False)
     }
 
 
-def _run(tmp_path, monkeypatch, provider: str, leases: list[dict[str, object]]):
+def _run(
+    tmp_path,
+    monkeypatch,
+    provider: str,
+    leases: list[dict[str, object]],
+    *guard_args: str,
+):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
@@ -93,6 +99,7 @@ def _run(tmp_path, monkeypatch, provider: str, leases: list[dict[str, object]]):
     )
     code, packet = run_json_cli_result(
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        *guard_args,
         registry_path=registry, runtime_root=runtime,
     )
     assert code == 0, json.dumps(packet, ensure_ascii=False, indent=2)
@@ -160,6 +167,65 @@ def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_claim_prepares_the_same_receipt_bound_turn(
+    tmp_path, monkeypatch, provider,
+):
+    unbound = _run(
+        tmp_path,
+        monkeypatch,
+        provider,
+        [],
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--context-delivery",
+        "off",
+        "--begin-turn",
+    )
+    assert "heartbeat_receipt" in unbound, json.dumps(
+        unbound, ensure_ascii=False, indent=2,
+    )
+    turn = unbound["heartbeat_receipt"]["turn_instance_id"]
+    guard_code, before = run_json_cli_result(
+        "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--context-delivery", "off",
+        "--goal-id", GOAL,
+        "--agent-id", AGENT,
+        "--turn-instance-id", turn,
+        "--todo-id", TODO,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert guard_code == 0, json.dumps(before, ensure_ascii=False, indent=2)
+    assert before["execution_preparation"]["state"] == "claim_required"
+    assert before["heartbeat_receipt"]["turn_instance_id"] == turn
+
+    claim_code, claim = run_json_cli_result(
+        *before["execution_preparation"]["claim"]["cli_args"],
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert claim_code == 0, json.dumps(claim, ensure_ascii=False, indent=2)
+
+    guard_code, after = run_json_cli_result(
+        "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--context-delivery", "off",
+        "--goal-id", GOAL,
+        "--agent-id", AGENT,
+        "--turn-instance-id", turn,
+        "--todo-id", TODO,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert guard_code == 0, json.dumps(after, ensure_ascii=False, indent=2)
+    assert after["heartbeat_receipt"]["turn_instance_id"] == turn
+    assert after["selected_todo"]["todo_id"] == TODO
+    assert after["execution_preparation"]["state"] == "ready"
+    assert after["normal_delivery_allowed"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_foreign_active_lease_blocks_without_claim_action(tmp_path, monkeypatch, provider):
     packet = _run(tmp_path, monkeypatch, provider, [_lease(owner="agent-b")])
     preparation = packet["execution_preparation"]
@@ -170,10 +236,7 @@ def test_foreign_active_lease_blocks_without_claim_action(tmp_path, monkeypatch,
     assert packet["normal_delivery_allowed"] is False
 
 
-@pytest.mark.parametrize("boundary", ["selection", "receipt"])
-def test_preparation_does_not_replace_selection_or_receipt_identity(
-    monkeypatch, boundary,
-):
+def test_preparation_does_not_replace_explicit_action_selection(monkeypatch):
     from loopx.control_plane.quota import execution_preparation as module
 
     monkeypatch.setattr(
@@ -185,15 +248,13 @@ def test_preparation_does_not_replace_selection_or_receipt_identity(
         "should_run": True,
         "selected_todo": {"todo_id": TODO},
     }
-    if boundary == "selection":
-        payload["action_portfolio"] = {
-            "selection_policy": {"requires_explicit_turn_binding": True},
-        }
+    payload["action_portfolio"] = {
+        "selection_policy": {"requires_explicit_turn_binding": True},
+    }
     apply_selected_todo_execution_preparation(
         payload,
         runtime_root="/synthetic/runtime",
         goal_id=GOAL,
         agent_id=AGENT,
-        receipt_bound=boundary == "receipt",
     )
     assert "execution_preparation" not in payload

@@ -109,7 +109,6 @@ def apply_selected_todo_execution_preparation(
     if (
         not isinstance(selected, dict)
         or payload.get("should_run") is not True
-        or receipt_bound
         or action_portfolio_requires_explicit_selection(payload)
     ):
         return
@@ -119,6 +118,17 @@ def apply_selected_todo_execution_preparation(
         selected_todo=selected,
         agent_id=agent_id,
     )
+    # Existing receipt-bound recovery predates this projection and may be
+    # reconstructed without canonical lease authority in synthetic/legacy
+    # environments. Preserve that recovery path, while a Host that just ran a
+    # projected claim still requires the explicit `ready` postcondition before
+    # launching work. Available authority continues to surface conflicts and
+    # stale leases for the same bound Todo.
+    if receipt_bound and (
+        preparation is None
+        or preparation.get("state") == "authority_unavailable"
+    ):
+        return
     if preparation is None or preparation.get("state") == "not_required":
         return
     payload["execution_preparation"] = preparation

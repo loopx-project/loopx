@@ -1413,9 +1413,10 @@ the model, then must rerun the guard and observe the same Todo as `ready`.
 The read-only guard never acquires authority itself, and the claim still
 atomically rechecks current ownership, write scopes, physical workspace and
 lease generation. Foreign ownership, conflicting leases, or unreadable
-canonical authority fail closed. Explicit action selection and receipt-bound
-recovery keep their existing identities and are never replaced by automatic
-preparation. Hosts without this integration expose only the claim command for
+canonical authority fail closed. Explicit action selection must bind one Todo
+before preparation. Receipt-bound recovery rechecks that same Todo and Turn, so
+the post-claim guard can prove `ready` without replacing their identities. Hosts
+without this integration expose only the claim command for
 the Agent to execute, avoiding unrelated context reads or delivery work first.
 
 Correctly typed future work is handled earlier. A higher-priority
