@@ -360,7 +360,19 @@ class AntigravityAdapter:
             inputs = [(i, step) for i, step in indexed if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
             if not inputs:
                 return None
-            start, user = inputs[-1]
+            # Historical results are usable only through the original Core
+            # input anchor. Legacy records still require the latest input.
+            if input_anchor is not None:
+                anchored = input_anchor.get("start_step_index")
+                if type(anchored) is not int:
+                    return None
+                matching = [item for item in inputs if item[0] == anchored]
+                if len(matching) != 1:
+                    return None
+                start, user = matching[0]
+            else:
+                start, user = inputs[-1]
+            end = next((index for index, _ in inputs if index > start), total)
             metadata = user.get("metadata") or {}
             created = datetime.fromisoformat(metadata["createdAt"])
             if not datetime.fromisoformat(started_at) <= created <= datetime.fromisoformat(completed_at):
@@ -376,7 +388,7 @@ class AntigravityAdapter:
                     or input_anchor.get("start_step_index") != start or input_anchor.get("input_sha256") != prompt_hash):
                 return None
             execution = metadata.get("executionId")
-            current = indexed[start:]
+            current = [(index, step) for index, step in indexed if start <= index < end]
             if not isinstance(execution, str) or not execution or any(
                     (step.get("status") != "CORTEX_STEP_STATUS_DONE"
                      and not (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
@@ -399,7 +411,9 @@ class AntigravityAdapter:
             return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
                 "input_created_at": metadata["createdAt"], "start_step_index": start, "total_steps": total,
                 "input_sha256": prompt_hash, "answer_sha256": hashlib.sha256(answer.encode()).hexdigest(),
-                "latest_input_verified": True, "normal_terminal_verified": True, "response": response,
+                "latest_input_verified": start == inputs[-1][0],
+                **({"end_step_index": end} if start != inputs[-1][0] else {}),
+                "normal_terminal_verified": True, "response": response,
                 **({"raw_response": answer} if include_raw_response else {})}
         except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
             return None
