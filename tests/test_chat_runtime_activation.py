@@ -9,6 +9,7 @@ from pathlib import Path
 import plistlib
 import shlex
 import subprocess
+import sys
 import threading
 from unittest import mock
 
@@ -115,6 +116,28 @@ def test_same_process_worker_exit_is_recovered_without_replay(tmp_path, released
         assert store.events_after(sid, tid, None) == events
         assert lock_holder_path(path).read_bytes() == record
         assert not runtime.adapters and not runtime.session_queue_threads
+
+
+@pytest.mark.parametrize("released", [False, True])
+def test_recovery_preserves_stop_after_the_live_service_worker_retires(tmp_path, released):
+    store = ChatSessionStore(tmp_path)
+    sid, tid, path = lost_execution(store, released=released)
+    store.begin_turn_interrupt(sid, tid, expected_statuses={"running"})
+    before = content_hashes(store.root)
+    runtime = ChatRuntimeController(store=store, codex_bin="must-not-execute")
+    runtime.recover_exited_turn(sid, tid)
+    assert content_hashes(store.root) == before
+    assert store.load_turn(sid, tid)["status"] == "interrupting"
+    assert store.load_session(sid)["active_turn_id"] == tid
+    # A later service crash still belongs to the existing dead-owner recovery.
+    holder = json.loads(lock_holder_path(path).read_text())
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait(timeout=5)
+    holder["pid"] = process.pid
+    lock_holder_path(path).write_text(json.dumps(holder))
+    runtime.recover_exited_turn(sid, tid)
+    assert store.load_turn(sid, tid)["error_code"] == ("runtime_error" if released else "server_restarted")
+    assert store.load_session(sid)["active_turn_id"] is None
 
 
 @pytest.mark.parametrize("fault", ["absent", "foreign", "pid", "identity", "operation", "queued", "attached"])

@@ -1763,6 +1763,90 @@ def test_completed_command_recovery_leaves_provenance_to_delivery(ordinary, comm
         runtime.close()
 
 
+@pytest.mark.parametrize("fault", [None, "changed-source", "provider-unavailable", "revoked"])
+def test_completed_answer_delivery_does_not_prepare_another_execution(ordinary, monkeypatch, fault):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    event = provider.event("notes-app", "completed-original", "Complete this original request.")
+    try:
+        transport.admit("notes-app", event)
+        native = next(row for row in transport.core.pending() if row["message"] == event["content"])
+        sid, tid = native["session_id"], native["turn_id"]
+        completed = runtime.wait_for_turn(session_id=sid, turn_id=tid, timeout_sec=10)
+        assert completed["status"] == "completed"
+        worker = runtime.session_queue_threads.get(sid)
+        if worker is not None:
+            worker.join(5)
+            assert not worker.is_alive()
+        followup, _ = store.create_queued_turn(sid, client_turn_id="saved-next-input", message="Saved next input.")
+        queued_before = store.load_turn(sid, followup["turn_id"])
+        path = transport.root / f"{native['request_ref']}.json"
+        native_path = transport.core.root / path.name
+        original = native_path.read_bytes()
+        messages = store.messages(sid)
+        # Preparing another execution may be slow or unavailable while a
+        # committed answer is ready. Delivery must not depend on either call.
+        monkeypatch.setattr(runtime.project_contexts, "session_context",
+                            lambda *_: pytest.fail("workspace preparation before committed-answer delivery"))
+        monkeypatch.setattr(runtime, "resume_session_queue",
+                            lambda **_: pytest.fail("queue preparation before committed-answer delivery"))
+        provider.calls.clear()
+        transport.core.recover(request_ref=native["request_ref"])
+        assert provider.calls == []
+        assert native_path.read_bytes() == original
+        assert store.messages(sid) == messages
+        if fault == "changed-source":
+            provider.messages[event["message_id"]]["sender"]["id"] = "ou_another_human"
+        elif fault == "provider-unavailable":
+            provider.bot_ready = False
+        elif fault == "revoked":
+            transport.bindings.disconnect(native["binding_id"], expected_revision=transport.bindings.read()["revision"])
+        # Disconnect legitimately stops the queued follow-up. Compare delivery
+        # against that new authority state, retaining the original answer.
+        delivery_messages = store.messages(sid)
+        delivery_followup = store.load_turn(sid, followup["turn_id"])
+        if fault == "revoked":
+            assert delivery_followup["status"] in {"failed", "interrupted"}
+        delivered = transport.reconcile_request(path)
+        if fault != "revoked":
+            assert any("auth" in call for call in provider.calls)  # Fresh delivery provenance remains mandatory.
+        if fault:
+            assert delivered == 0 and provider.writes == []
+            assert json.loads(path.read_text())["status"] != "delivered"
+        else:
+            assert delivered == 1
+            assert provider.writes == [("notes-app", "Runtime response.")]
+            assert json.loads(native_path.read_text())["delivery_verified"] is True
+        assert store.messages(sid) == delivery_messages
+        assert [m for m in delivery_messages if m.get("turn_id") == tid] == [m for m in messages if m.get("turn_id") == tid]
+        assert store.load_turn(sid, followup["turn_id"]) == delivery_followup
+        if fault != "revoked":
+            assert delivery_followup == queued_before
+        packets = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
+        assert len([row for row in packets if row["method"] == "turn/start"]) == 1
+    finally:
+        runtime.close()
+
+
+def test_unexecuted_request_still_uses_original_queue_recovery(ordinary, monkeypatch):  # noqa: F811
+    store, runtime, provider, transport = connect(ordinary)
+    resumes = []
+    monkeypatch.setattr(runtime, "resume_session_queue", lambda **kw: resumes.append(kw))
+    event = provider.event("notes-app", "not-completed", "A completed-looking title is still new work.")
+    try:
+        transport.admit("notes-app", event)
+        native = next(row for row in transport.core.pending() if row["message"] == event["content"])
+        assert store.load_turn(native["session_id"], native["turn_id"])["status"] == "queued"
+        resumes.clear()
+        provider.calls.clear()
+        transport.core.recover(request_ref=native["request_ref"])
+        assert len(resumes) == 1 and resumes[0]["session_id"] == native["session_id"]
+        assert any("auth" in call for call in provider.calls)
+        assert provider.writes == []
+        assert store.load_turn(native["session_id"], native["turn_id"])["status"] == "queued"
+    finally:
+        runtime.close()
+
+
 def test_lark_transport_recovery_returns_on_original_admission_without_model_replay(ordinary, monkeypatch):  # noqa: F811
     from test_chat_turn_steering import install_transport_failure
 
