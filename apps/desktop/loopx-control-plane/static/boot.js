@@ -7,6 +7,15 @@ let lastTiming = null;
 let timingObservedAt = pageStarted;
 let bootState = null;
 let observedEnvironment = null;
+const runtimeRecoveryTitles = {
+  service_runtime_alignment_unavailable: "请更新 LoopX 以连接现有服务",
+  service_runtime_route_unverified: "系统服务配置需要恢复",
+  service_runtime_alignment_failed: "服务版本切换未完成",
+  service_runtime_rollback_failed: "系统服务需要恢复",
+};
+function serviceRecoveryRequired(state) {
+  return state?.phase === "service_error" && Object.hasOwn(runtimeRecoveryTitles, state.details?.code);
+}
 function renderStartup(result) {
   const state = result?.state;
   bootState = state;
@@ -24,6 +33,7 @@ function renderStartup(result) {
     service_error: "本地服务连接失败，正在等待重试",
   };
   const serviceTitles = {
+    ...runtimeRecoveryTitles,
     chat_work_pending: "管家正在处理请求，完成后自动连接",
     chat_state_unverified: "正在核验管家任务状态，稍后自动重试",
     chat_service_unverified: "正在确认管家服务切换，稍后自动重试",
@@ -38,7 +48,7 @@ function renderStartup(result) {
   updateStartupElapsed();
 }
 function updateStartupElapsed() {
-  if (["error", "runtime_required"].includes(bootState?.phase)) {
+  if (["error", "runtime_required"].includes(bootState?.phase) || serviceRecoveryRequired(bootState)) {
     bootElapsed.textContent = "等待恢复";
     bootDetail.textContent = "启动已停止等待。可在下方恢复，不必反复重开 App。";
     return;
@@ -83,7 +93,7 @@ let channelInitialized = false;
 let runtimeExplicit = false;
 let bundledRepairAvailable = true;
 const updateWorkingPhases = ["checking","downloading","installing_app","installing_runtime","connecting"];
-document.querySelector("#retry").onclick = () => location.reload();
+document.querySelector("#retry").onclick = () => window.__TAURI__ ? void run("reconnect") : location.reload();
 channel.onchange = () => { channelInitialized = true; render({phase:"idle"}); };
 const labels = {
   idle: "检查当前通道，不会自动安装。",
@@ -101,6 +111,10 @@ const labels = {
   error: "更新未完成。请重试检查，或修复当前版本。Goal 数据不会被删除。",
 };
 const errors = {
+  service_runtime_alignment_unavailable: "当前运行时尚不支持服务版本对齐。请更新 LoopX CLI 后重新连接。现有服务未被停止。",
+  service_runtime_route_unverified: "系统服务配置已变化或使用自定义启动方式，无法自动对齐。请通过原安装方式恢复服务后重新连接。",
+  service_runtime_alignment_failed: "服务版本切换未完成，已尝试恢复原配置。可点击「重新连接」重试。",
+  service_runtime_rollback_failed: "服务版本切换与恢复均未完成。请保留诊断信息，通过原安装方式恢复系统服务。",
   chat_work_pending: "管家正在处理已有请求，完成后会自动切换服务并连接工作区。无需强退或重复发送。",
   chat_state_unverified: "暂时无法核验管家服务的任务状态。连接会自动重试；请保留诊断信息。",
   chat_service_unverified: "管家服务切换尚未确认。连接会自动重试；可保留诊断信息，或通过原安装方式更新 LoopX。",
@@ -239,7 +253,7 @@ async function run(action) {
   // Match the phase the backend publishes for each action (rollback restores
   // the previous app; restart keeps the required-restart state) instead of
   // previewing a download that is not happening.
-  render({phase: action === "check" ? "checking" : action === "repair" || action === "align_runtime" ? "installing_runtime" : action === "forget_runtime_selection" ? "connecting" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : "downloading"});
+  render({phase: action === "check" ? "checking" : action === "repair" || action === "align_runtime" ? "installing_runtime" : action === "forget_runtime_selection" || action === "reconnect" ? "connecting" : action === "rollback" ? "installing_app" : action === "restart" ? "restart_required" : "downloading"});
   try {
     const result = await window.__TAURI__.core.invoke("desktop_update", {action,channel:channel.value});
     statusGeneration++;
@@ -292,14 +306,15 @@ async function refresh() {
   }
 }
 function escalateFromSnapshot(state) {
-  const terminal = TERMINAL_PHASES.includes(state?.phase);
+  const terminal = TERMINAL_PHASES.includes(state?.phase) || serviceRecoveryRequired(state);
   terminalRounds = terminal ? terminalRounds + 1 : 0;
   if (terminal && terminalRounds >= ERROR_ESCALATION_ROUNDS) escalated = true;
   if (!escalated) return;
   if (terminal) {
     panel.dataset.state = "error";
     panel.setAttribute("aria-busy", "false");
-    status.textContent = `${codeText(state?.details?.code, state?.phase)} 详见下方「恢复与更新」面板，可复制诊断信息反馈。`;
+    status.textContent = serviceRecoveryRequired(state) ? runtimeRecoveryTitles[state.details.code]
+      : `${codeText(state?.details?.code, state?.phase)} 详见下方「恢复与更新」面板，可复制诊断信息反馈。`;
     bootDetail.textContent = "启动已停止等待。可在下方恢复，不必反复重开 App。";
     document.querySelector(".recovery").open = true;
   } else {

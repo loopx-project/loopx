@@ -396,6 +396,16 @@ impl Maintenance {
         &self,
         start: impl FnOnce() -> Result<T, String>,
     ) -> Result<Option<T>, String> {
+        {
+            let snapshot = self.snapshot.lock().unwrap();
+            if snapshot["phase"] == "service_error"
+                && crate::services::runtime_recovery_required(
+                    snapshot["details"]["code"].as_str().unwrap_or(""),
+                )
+            {
+                return Ok(None);
+            }
+        }
         if self.busy.load(Ordering::Acquire)
             || self.incomplete_app_installation.load(Ordering::Acquire)
             || self.manual_failure_pending.load(Ordering::Acquire)
@@ -436,6 +446,12 @@ impl Maintenance {
                         "chat_work_pending" => "chat_work_pending",
                         "chat_state_unverified" => "chat_state_unverified",
                         "chat_service_unverified" => "chat_service_unverified",
+                        "service_runtime_alignment_unavailable" => {
+                            "service_runtime_alignment_unavailable"
+                        }
+                        "service_runtime_alignment_failed" => "service_runtime_alignment_failed",
+                        "service_runtime_route_unverified" => "service_runtime_route_unverified",
+                        "service_runtime_rollback_failed" => "service_runtime_rollback_failed",
                         _ => "service_start_failed",
                     };
                     self.publish("service_error", json!({"code":code}));
@@ -657,6 +673,17 @@ pub async fn desktop_update(
     action: String,
     channel: String,
 ) -> Result<Value, String> {
+    if action == "reconnect" {
+        let state = app.state::<Maintenance>();
+        let _guard = state.acquire()?;
+        allow_action(
+            state.snapshot.lock().unwrap()["phase"]
+                .as_str()
+                .unwrap_or(""),
+            &action,
+        )?;
+        return Ok(state.publish("connecting", json!({})));
+    }
     if cfg!(dev) || !app_update_platform_supported() {
         return Err("platform_update_not_supported".into());
     }
@@ -2533,6 +2560,29 @@ mod tests {
                 !runtime_state_publishes_own_phase(relabelled),
                 "{relabelled}"
             );
+        }
+    }
+
+    #[test]
+    fn failed_alignment_waits_for_reconnect_without_restarting_services() {
+        let state = Maintenance::default();
+        for code in [
+            "service_runtime_alignment_unavailable",
+            "service_runtime_route_unverified",
+            "service_runtime_alignment_failed",
+            "service_runtime_rollback_failed",
+        ] {
+            state.publish("service_error", json!({"code":code}));
+            for _ in 0..3 {
+                assert!(state
+                    .reconcile_services::<()>(|| panic!(
+                        "unchanged failure must not restart services"
+                    ))
+                    .unwrap()
+                    .is_none());
+            }
+            state.publish("connecting", json!({}));
+            assert_eq!(state.reconcile_services(|| Ok(42)).unwrap(), Some(42));
         }
     }
 

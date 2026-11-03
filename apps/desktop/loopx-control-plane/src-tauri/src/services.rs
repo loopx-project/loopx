@@ -20,6 +20,16 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_PROBE_RESPONSE_BYTES: u64 = 1024 * 1024;
 
+pub(crate) fn runtime_recovery_required(code: &str) -> bool {
+    matches!(
+        code,
+        "service_runtime_alignment_unavailable"
+            | "service_runtime_route_unverified"
+            | "service_runtime_alignment_failed"
+            | "service_runtime_rollback_failed"
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ServiceKind {
     Status,
@@ -167,6 +177,10 @@ impl ServiceSet {
         endpoints: &ServiceEndpoints,
         progress: impl Fn(&[ServiceKind]) + Sync,
     ) -> Result<Self, ServiceError> {
+        #[cfg(target_os = "macos")]
+        if !endpoints.isolated {
+            align_managed_runtime(runtime)?;
+        }
         Self::collect(
             connect_all(
                 SERVICE_KINDS,
@@ -261,6 +275,70 @@ impl ServiceSet {
         }
         self.owned.clear();
     }
+}
+
+#[cfg(target_os = "macos")]
+fn align_managed_runtime(runtime: &SelectedRuntime) -> Result<(), ServiceError> {
+    let managed = SERVICE_KINDS
+        .iter()
+        .any(|kind| platform_managed_service_declared(env::var_os("HOME").as_deref(), *kind));
+    if !managed
+        || SERVICE_KINDS
+            .iter()
+            .all(|kind| probe(*kind, runtime.identity.as_ref()) == Probe::Matching)
+    {
+        return Ok(());
+    }
+    let mut command = Command::new(&runtime.executable);
+    configure_runtime_environment(&mut command);
+    command.args([
+        "--format",
+        "json",
+        "update",
+        "activate",
+        "--service",
+        "all",
+        "--runtime-executable",
+        &runtime.executable,
+    ]);
+    managed_runtime_alignment_result(
+        timed_output_with_timeout(command, Duration::from_secs(60)),
+        runtime.identity.as_ref(),
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn managed_runtime_alignment_result(
+    output: Option<std::process::Output>,
+    expected: Option<&serde_json::Value>,
+) -> Result<(), ServiceError> {
+    let payload = output
+        .as_ref()
+        .and_then(|result| serde_json::from_slice::<serde_json::Value>(&result.stdout).ok());
+    let Some(payload) = payload.filter(|value| {
+        value["schema_version"] == "loopx_runtime_service_activation_v1"
+            && value["service"] == "all"
+    }) else {
+        return Err(ServiceError("service_runtime_alignment_unavailable".into()));
+    };
+    if payload["ok"] == true
+        && payload["status"] == "aligned"
+        && payload["readiness_verified"] == true
+        && expected.is_some_and(|identity| payload.get("runtime_identity") == Some(identity))
+        && output
+            .as_ref()
+            .is_some_and(|result| result.status.success())
+    {
+        return Ok(());
+    }
+    let code = match payload["reason"].as_str() {
+        Some("chat_work_pending") => "chat_work_pending",
+        Some("chat_state_unverified") => "chat_state_unverified",
+        Some("service_runtime_route_unverified") => "service_runtime_route_unverified",
+        Some("service_runtime_rollback_failed") => "service_runtime_rollback_failed",
+        _ => "service_runtime_alignment_failed",
+    };
+    Err(ServiceError(code.into()))
 }
 
 // Ownership transfer (adopt, update handoff, stop) is exercisable without a
