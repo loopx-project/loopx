@@ -105,6 +105,27 @@ def _check_hard_timeout(value: float | None) -> None:
         raise ValueError("Antigravity hard timeout must be finite and positive")
 
 
+def _native_completion_facts(cascade_id: str, current: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
+    """One private completion projection, without tool outputs or reasoning."""
+    facts = []
+    for index, step in current:
+        metadata = step.get("metadata") or {}
+        fact = {"type": step.get("type"), "status": step.get("status"), "metadata": {
+            "createdAt": metadata.get("createdAt"), "executionId": metadata.get("executionId"),
+            "sourceTrajectoryStepInfo": {"stepIndex": index}}}
+        if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT":
+            fact["userInput"] = step.get("userInput")
+        if step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+            fact["errorMessage"] = {"shouldShowUser": (step.get("errorMessage") or {}).get("shouldShowUser")}
+        if index == current[-1][0]:
+            planner = step.get("plannerResponse") or {}
+            fact["plannerResponse"] = {key: planner[key] for key in
+                ("response", "modifiedResponse", "stopReason", "toolCalls") if key in planner}
+        facts.append(fact)
+    return {"thread_id": cascade_id, "start_step_index": current[0][0],
+        "total_steps": current[-1][0] + 1, "steps": facts}
+
+
 class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
                          headers: Any, newurl: str) -> None:
@@ -360,11 +381,79 @@ class AntigravityAdapter:
     adapter_kind = "antigravity_ls"
 
     @staticmethod
+    def metadata_review_capacity(*, cascade_id: str, model_id: str) -> dict[str, Any] | None:
+        """Observe the existing model's quota; never probe it with generation.
+
+        A positive fraction alone is insufficient: an invocation can have
+        reached its limit with a small advertised remainder. Preserve that
+        native failure alongside the exact model's quota epoch.
+        """
+        try:
+            found = discover_antigravity_language_server()
+            if found is None:
+                return None
+            def read(method: str, payload: dict[str, Any]) -> dict[str, Any]:
+                return _rpc_post(found["url"], found["csrf_token"], method, payload, timeout=5.0)
+            before = read("GetCascadeTrajectory", {"cascadeId": cascade_id})
+            total = before.get("numTotalSteps")
+            if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total < 2
+                    or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                return None
+            start = max(0, total - 128)
+            steps, covered = _observed_turn_steps(read("GetCascadeTrajectorySteps",
+                {"cascadeId": cascade_id, "startIndex": start, "endIndex": total})["steps"], start, total)
+            inputs = [i for i, step in steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
+            if not inputs and start:
+                steps, covered = _observed_turn_steps(read("GetCascadeTrajectorySteps",
+                    {"cascadeId": cascade_id, "startIndex": 0, "endIndex": total})["steps"], 0, total)
+                inputs = [i for i, step in steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
+            if not inputs or covered != total:
+                return None
+            latest = [step for i, step in steps if i >= inputs[-1]]
+            exhausted = any(str(((step.get("errorMessage") or {}).get("error") or {}).get(
+                "userErrorMessage") or "").startswith("Individual quota reached.")
+                for step in latest)
+            planner = latest[-1].get("plannerResponse") or {}
+            normal = (latest[-1].get("type") == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                and planner.get("stopReason") == "STOP_REASON_STOP_PATTERN" and not planner.get("toolCalls")
+                and all(step.get("status") == "CORTEX_STEP_STATUS_DONE" for step in latest)
+                and isinstance((latest[0].get("metadata") or {}).get("executionId"), str)
+                and bool((latest[0].get("metadata") or {}).get("executionId"))
+                and len({(step.get("metadata") or {}).get("executionId") for step in latest}) == 1)
+            if not normal and not exhausted:
+                return None  # An unknown native failure is not capacity evidence.
+            status = read("GetUserStatus", {})
+            user = status["userStatus"]
+            account = user.get("email")
+            if not isinstance(account, str) or not account.strip():
+                return None
+            rows = user["cascadeModelConfigData"]["clientModelConfigs"]
+            matching = [row for row in rows if row.get("modelId") == model_id]
+            if len(matching) != 1:
+                return None
+            quota = matching[0]["quotaInfo"]
+            fraction, reset = quota.get("remainingFraction", 0), quota.get("resetTime")
+            if (type(fraction) not in (int, float) or not math.isfinite(fraction)
+                    or not 0 <= fraction <= 1 or not isinstance(reset, str)
+                    or datetime.fromisoformat(reset).tzinfo is None):
+                return None
+            after = read("GetCascadeTrajectory", {"cascadeId": cascade_id})
+            if (after.get("status") != before["status"] or after.get("numTotalSteps") != total
+                    or (after.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                return None
+            return {"model_id": model_id, "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
+                "remaining_fraction": fraction, "reset_time": reset,
+                "observed_at": time.time(), "quota_exhausted": exhausted, "normal_completion": normal}
+        except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
+            return None
+
+    @staticmethod
     def completed_result_observation(*, cascade_id: str, request_ref: str, message: str,
                                      started_at: str, completed_at: str,
                                      work_dir: Path, input_anchor: dict[str, Any] | None = None,
                                      include_raw_response: bool = False,
-                                     retained_result: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                                     retained_result: dict[str, Any] | None = None,
+                                     include_retained_result: bool = False) -> dict[str, Any] | None:
         """Read an existing result; never start, send to or cancel a cascade.
 
         Legacy owner requests require the exact Core-generated source context,
@@ -461,6 +550,7 @@ class AntigravityAdapter:
                 **({"observation_source": "retained_turn_result"} if retained_result is not None else {}),
                 **({"end_step_index": end} if start != inputs[-1][0] else {}),
                 "normal_terminal_verified": True, "response": response,
+                **({"retained_result": _native_completion_facts(cascade_id, current)} if include_retained_result else {}),
                 **({"raw_response": answer} if include_raw_response else {})}
         except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
             return None
@@ -984,23 +1074,9 @@ class AntigravityAdapter:
             # Keep only completion facts and the original input/final text,
             # never native tool output or raw reasoning. Core consumes this
             # privately and durably before parsing can fail or lose text.
-            facts = []
-            for index, step in current_steps:
-                metadata = step.get("metadata") or {}
-                fact = {"type": step.get("type"), "status": step.get("status"), "metadata": {
-                    "createdAt": metadata.get("createdAt"), "executionId": metadata.get("executionId"),
-                    "sourceTrajectoryStepInfo": {"stepIndex": index}}}
-                if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT":
-                    fact["userInput"] = step.get("userInput")
-                if step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
-                    fact["errorMessage"] = {"shouldShowUser": (step.get("errorMessage") or {}).get("shouldShowUser")}
-                if index == current_steps[-1][0]:
-                    fact["plannerResponse"] = {key: planner[key] for key in
-                        ("response", "modifiedResponse", "stopReason", "toolCalls") if key in planner}
-                facts.append(fact)
             self._check_interrupted()
-            event_sink("turn.native_result", {"thread_id": self.cascade_id, "upstream_turn_id": turn_id,
-                "start_step_index": start_step_index, "total_steps": total_steps, "steps": facts})
+            event_sink("turn.native_result", {**_native_completion_facts(self.cascade_id, current_steps),
+                "upstream_turn_id": turn_id})
             tail = stream_filter.finish()
             if tail:
                 emitted_visible_delta = True

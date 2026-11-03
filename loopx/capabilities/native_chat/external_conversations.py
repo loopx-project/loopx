@@ -51,7 +51,8 @@ class ChatExternalConversations:
                                source_verified: bool = False,
                                selected_binding: dict[str, Any] | None = None,
                                discovery_only: bool = False,
-                               preparation_scope_available: bool = False) -> dict[str, Any]:
+                               preparation_scope_available: bool = False,
+                               metadata_capacity: dict[str, Any] | None = None) -> dict[str, Any]:
         from ...chat_manager import MANAGER_CONTEXT_VERSION
         from ...control_plane.effect_runtime import effect_runtime_result
 
@@ -113,6 +114,7 @@ class ChatExternalConversations:
                 "preparation_scope_available": preparation_scope_available,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 "response_literal_open": bool(open_literal),
+                "metadata_capacity": metadata_capacity,
                 "native_observation": observation, "source_verified": source_verified},
         })
 
@@ -184,7 +186,8 @@ class ChatExternalConversations:
             if turn.get("status") == "completed" and not (turn.get("response") or {}).get("unfinished_work"):
                 from ...chat import _review_openings
                 _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
-                if not open_literal:
+                invalid_metadata = ((turn.get("response") or {}).get("gate") or {}).get("kind") == "response_metadata_invalid"
+                if not open_literal and not invalid_metadata:
                     return False  # A lexical probe hint, never permission to adopt or send.
             return self._context_recovery_plan(row, discovery_only=True).get("recovery_candidate") is True
         except (KeyError, ValueError, RuntimeError, OSError):
@@ -230,8 +233,15 @@ class ChatExternalConversations:
             # matches after reacquiring the route fence; fresh authority/source
             # checks and the typed eligibility decision remain below that fence.
             proof = None
+            capacity = None
             if not plan.get("admitted_turn_id") and metadata_review:
-                proof = self._original_native_result(row, session, turn, context, include_raw_response=True)
+                proof = self._original_native_result(row, session, turn, context, include_raw_response=True,
+                    include_retained_result=turn.get("status") == "completed")
+                if proof is not None:
+                    from .antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
+                    capacity = AntigravityAdapter.metadata_review_capacity(
+                        cascade_id=session["upstream_thread_id"],
+                        model_id=session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
             elif not plan.get("admitted_turn_id") and not preparation_retry:
                 proof = CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
@@ -239,6 +249,7 @@ class ChatExternalConversations:
                     **({"read_only_review": True} if plan.get("read_only_review") else {}),
                     **({"completed_work": True, "work_dir": Path(context["project"])} if plan.get("work_attempt") else {}),
                     thread_ids=plan["native_thread_ids"], turn_id=turn["upstream_turn_id"])
+            facts = proof.pop("retained_result", None) if proof is not None and metadata_review else None
             selected = self.bindings.resolve(binding_id=row["binding_id"], **row["source"], include_observation=True)
             source = source_observation(selected)
             scope_available = (self._preparation_scope_available(session)
@@ -265,8 +276,23 @@ class ChatExternalConversations:
                         or source_requests() != requests):
                     return row
                 plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
-                    selected_binding=selected["binding"], preparation_scope_available=scope_available)
+                    selected_binding=selected["binding"], preparation_scope_available=scope_available,
+                    metadata_capacity=capacity)
+                if plan.get("retain_metadata_result") and facts and not self.controller.store.native_result(row["session_id"], turn["turn_id"]):
+                    try:
+                        self.controller.store.retain_native_result(row["session_id"], turn["turn_id"],
+                            {**facts, "upstream_turn_id": turn["upstream_turn_id"]}, completed_turn=turn)
+                    except (OSError, ValueError) as exc:
+                        import logging
+                        logging.getLogger(__name__).warning("Metadata proof retention held (%s)", type(exc).__name__)
+                        return row  # Preserve the delivered answer and unspent review.
+                    proof = self._original_native_result(row, session, turn, context, include_raw_response=True)
+                    plan = self._context_recovery_plan(row, observation=proof, source_verified=source is not None,
+                        selected_binding=selected["binding"], metadata_capacity=capacity)
                 if not plan.get("recovery_eligible"):
+                    if plan.get("metadata_quota_wait") is not None and row.get("metadata_quota_wait") != plan["metadata_quota_wait"]:
+                        row["metadata_quota_wait"] = plan["metadata_quota_wait"]
+                        _atomic_write_json(path, row)
                     return row
                 recovery = row.get("context_recovery")
                 if recovery is None or recovery.get("client_turn_id") != plan["client_turn_id"]:
@@ -343,7 +369,8 @@ class ChatExternalConversations:
 
     def _original_native_result(self, row: dict[str, Any], session: dict[str, Any],
                                 turn: dict[str, Any], context: dict[str, Any], *,
-                                include_raw_response: bool = False) -> dict[str, Any] | None:
+                                include_raw_response: bool = False,
+                                include_retained_result: bool = False) -> dict[str, Any] | None:
         from .antigravity_adapter import AntigravityAdapter
 
         events = self.controller.store.events_after(session["session_id"], turn["turn_id"], None)
@@ -360,11 +387,13 @@ class ChatExternalConversations:
             return AntigravityAdapter.completed_result_observation(
                 cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
                 started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),
-                input_anchor=anchors[0], include_raw_response=include_raw_response, retained_result=retained)
+                input_anchor=anchors[0], include_raw_response=include_raw_response, retained_result=retained,
+                **({"include_retained_result": True} if include_retained_result else {}))
         return AntigravityAdapter.completed_result_observation(
             cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
             started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),
             input_anchor=anchors[0] if anchors else None,
+            **({"include_retained_result": True} if include_retained_result else {}),
             **({"include_raw_response": True} if include_raw_response else {}))
 
     def _recover_native_result(self, path: Path, row: dict[str, Any], session: dict[str, Any],

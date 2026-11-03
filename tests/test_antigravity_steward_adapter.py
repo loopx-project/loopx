@@ -125,6 +125,15 @@ def language_server(monkeypatch):
                     {"modelId": f"gemini-4-argon-{tier}",
                      "modelOrAlias": {"model": f"MODEL_PLACEHOLDER_M{number}"}}
                     for tier, number in (("high", 417), ("medium", 418), ("low", 419))]}
+            elif method == "GetUserStatus":
+                from datetime import timedelta
+                reset = state.setdefault("quota_reset", (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
+                response = {"userStatus": {"email": state.get("quota_account", "synthetic@invalid.example"),
+                    "cascadeModelConfigData": {"clientModelConfigs": [{
+                    "modelId": "gemini-4-argon-high", "quotaInfo": {
+                        "remainingFraction": state.get("quota_fraction", 1), "resetTime": reset}}]}}}
+                if state.get("quota_unknown"):
+                    response = {}
             elif method == "StartCascade":
                 response = {"cascadeId": "synthetic-cascade"}
             elif method == "GetCascadeTrajectory":
@@ -181,9 +190,18 @@ def language_server(monkeypatch):
                          "status": "CORTEX_STEP_STATUS_WAITING" if state["mode"] == "waiting" else "CORTEX_STEP_STATUS_DONE",
                          "plannerResponse": {"thinking": "synthetic status", "response": answer,
                                              "stopReason": "STOP_REASON_STOP_PATTERN"}}])
+                    if index in state.get("quota_error_indices", []):
+                        final = response["steps"][-1]
+                        final["type"] = "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                        final.pop("plannerResponse")
+                        final["errorMessage"] = {"error": {"userErrorMessage": "Individual quota reached. Resets in 123h."}}
+                    if index in state.get("cleared_input_indices", []):
+                        for step in response["steps"][-2:]:
+                            step["status"] = "CORTEX_STEP_STATUS_CLEARED"
+                        response["steps"][-1].get("plannerResponse", {}).pop("stopReason", None)
                     if index > 0:
                         final = response["steps"][-1]
-                        fault = state.get("review_native_fault")
+                        fault = state.get("review_native_fault") if index >= state.get("review_fault_start_index", 1) else None
                         if fault == "tool-call":
                             final["plannerResponse"]["toolCalls"] = [{"name": "run_command"}]
                         elif fault == "tool-step":

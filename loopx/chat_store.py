@@ -1395,11 +1395,19 @@ class ChatSessionStore(ChatIngressStore):
         token = _opaque_id(turn_id, field="turn_id")
         return _read_json(self._session_dir(session_id) / "native-results" / f"{token}.json")
 
-    def retain_native_result(self, session_id: str, turn_id: str, result: dict[str, Any]) -> None:
-        """Freeze once under the original Turn fence, before response handling."""
+    def retain_native_result(self, session_id: str, turn_id: str, result: dict[str, Any], *,
+                             completed_turn: dict[str, Any] | None = None) -> None:
+        """Freeze once; a completed backfill requires the exact unchanged Turn.
+
+        The automatic recovery owner first verifies the original native proof
+        and current source. This fence changes neither its Turn nor its events.
+        """
         with exclusive_file_lock(self._turn_path(session_id, turn_id), agent_id="loopx-chat", operation="retain_native_result"):
             turn = self.load_turn(session_id, turn_id)
-            if turn is None or turn.get("status") != "running":
+            if completed_turn is not None:
+                if turn != completed_turn or turn is None or turn.get("status") != "completed":
+                    raise ValueError("the original completed Turn changed")
+            elif turn is None or turn.get("status") != "running":
                 return
             if not result.get("upstream_turn_id") or result["upstream_turn_id"] != turn.get("upstream_turn_id"):
                 raise ValueError("native result belongs to another invocation")
