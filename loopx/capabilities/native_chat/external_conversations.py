@@ -351,6 +351,16 @@ class ChatExternalConversations:
                    if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
         if len(anchors) > 1:
             return None
+        # Retained facts can repair only a completed Turn's text. Failed-Turn
+        # recovery keeps its live/latest-input requirements; old capture does
+        # not authorize another invocation or change unknown-effect handling.
+        retained = self.controller.store.native_result(session["session_id"], turn["turn_id"])
+        if (turn.get("status") == "completed" and len(anchors) == 1 and retained
+                and retained.get("upstream_turn_id") == turn.get("upstream_turn_id")):
+            return AntigravityAdapter.completed_result_observation(
+                cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
+                started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),
+                input_anchor=anchors[0], include_raw_response=include_raw_response, retained_result=retained)
         return AntigravityAdapter.completed_result_observation(
             cascade_id=session["upstream_thread_id"], request_ref=row["request_ref"], message=row["message"],
             started_at=turn["started_at"], completed_at=turn["completed_at"], work_dir=Path(context["project"]),

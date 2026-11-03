@@ -342,7 +342,8 @@ class AntigravityAdapter:
     def completed_result_observation(*, cascade_id: str, request_ref: str, message: str,
                                      started_at: str, completed_at: str,
                                      work_dir: Path, input_anchor: dict[str, Any] | None = None,
-                                     include_raw_response: bool = False) -> dict[str, Any] | None:
+                                     include_raw_response: bool = False,
+                                     retained_result: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Read an existing result; never start, send to or cancel a cascade.
 
         Legacy owner requests require the exact Core-generated source context,
@@ -350,27 +351,40 @@ class AntigravityAdapter:
         New Turns additionally freeze their prompt hash before provider send.
         """
         try:
-            found = discover_antigravity_language_server()
-            if found is None:
-                return None
-            def read(method: str, **payload: Any) -> dict[str, Any]:
-                return _rpc_post(found["url"], found["csrf_token"], method,
-                                 {"cascadeId": cascade_id, **payload}, timeout=5.0)
+            if retained_result is not None:
+                # Core retained this exact invocation before parsing/delivery.
+                # It is not a fresh claim about the provider's latest input.
+                if (input_anchor is None or retained_result.get("thread_id") != cascade_id
+                        or retained_result.get("start_step_index") != input_anchor.get("start_step_index")):
+                    return None
+                total = retained_result.get("total_steps")
+                if type(total) is not int or total < 2:
+                    return None
+                indexed, covered = _observed_turn_steps(retained_result["steps"], input_anchor["start_step_index"], total)
+                if covered != total:
+                    return None
+            else:
+                found = discover_antigravity_language_server()
+                if found is None:
+                    return None
+                def read(method: str, **payload: Any) -> dict[str, Any]:
+                    return _rpc_post(found["url"], found["csrf_token"], method,
+                                     {"cascadeId": cascade_id, **payload}, timeout=5.0)
 
-            before = read("GetCascadeTrajectory")
-            total = before.get("numTotalSteps")
-            if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total < 2
-                    or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
-                return None
-            raw = read("GetCascadeTrajectorySteps", startIndex=0, endIndex=total).get("steps")
-            if not isinstance(raw, list):
-                return None
-            indexed, covered = _observed_turn_steps(raw, 0, total)
-            after = read("GetCascadeTrajectory")
-            if (covered != total or after.get("status") != before["status"]
-                    or after.get("numTotalSteps") != total
-                    or (after.get("trajectory") or {}).get("cascadeId") != cascade_id):
-                return None
+                before = read("GetCascadeTrajectory")
+                total = before.get("numTotalSteps")
+                if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total < 2
+                        or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                    return None
+                raw = read("GetCascadeTrajectorySteps", startIndex=0, endIndex=total).get("steps")
+                if not isinstance(raw, list):
+                    return None
+                indexed, covered = _observed_turn_steps(raw, 0, total)
+                after = read("GetCascadeTrajectory")
+                if (covered != total or after.get("status") != before["status"]
+                        or after.get("numTotalSteps") != total
+                        or (after.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                    return None
             inputs = [(i, step) for i, step in indexed if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
             if not inputs:
                 return None
@@ -425,6 +439,7 @@ class AntigravityAdapter:
                 "input_created_at": metadata["createdAt"], "start_step_index": start, "total_steps": total,
                 "input_sha256": prompt_hash, "answer_sha256": hashlib.sha256(answer.encode()).hexdigest(),
                 "latest_input_verified": start == inputs[-1][0],
+                **({"observation_source": "retained_turn_result"} if retained_result is not None else {}),
                 **({"end_step_index": end} if start != inputs[-1][0] else {}),
                 "normal_terminal_verified": True, "response": response,
                 **({"raw_response": answer} if include_raw_response else {})}
@@ -921,6 +936,26 @@ class AntigravityAdapter:
                 break
 
         if event_sink is not None:
+            # Keep only completion facts and the original input/final text,
+            # never native tool output or raw reasoning. Core consumes this
+            # privately and durably before parsing can fail or lose text.
+            facts = []
+            for index, step in current_steps:
+                metadata = step.get("metadata") or {}
+                fact = {"type": step.get("type"), "status": step.get("status"), "metadata": {
+                    "createdAt": metadata.get("createdAt"), "executionId": metadata.get("executionId"),
+                    "sourceTrajectoryStepInfo": {"stepIndex": index}}}
+                if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT":
+                    fact["userInput"] = step.get("userInput")
+                if step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+                    fact["errorMessage"] = {"shouldShowUser": (step.get("errorMessage") or {}).get("shouldShowUser")}
+                if index == current_steps[-1][0]:
+                    fact["plannerResponse"] = {key: planner[key] for key in
+                        ("response", "modifiedResponse", "stopReason", "toolCalls") if key in planner}
+                facts.append(fact)
+            self._check_interrupted()
+            event_sink("turn.native_result", {"thread_id": self.cascade_id, "upstream_turn_id": turn_id,
+                "start_step_index": start_step_index, "total_steps": total_steps, "steps": facts})
             tail = stream_filter.finish()
             if tail:
                 emitted_visible_delta = True

@@ -350,7 +350,10 @@ def test_original_queue_recovers_historical_truncated_answer_without_execution(t
         start = AntigravityAdapter.start_turn
 
         def old_parser(adapter, message, event_sink):
-            response = start(adapter, message, event_sink)
+            # This legacy service had neither the fixed parser nor durable
+            # native result capture. Keep exercising its live-history path.
+            response = start(adapter, message, lambda kind, payload:
+                event_sink(kind, payload) if kind != "turn.native_result" else None)
             return {**response, "message": "Original `"}
 
         monkeypatch.setattr(AntigravityAdapter, "start_turn", old_parser)
@@ -431,6 +434,147 @@ def test_original_queue_recovers_historical_truncated_answer_without_execution(t
         assert store._event_path(row["session_id"], row["turn_id"]).read_bytes() == event_bytes
         assert len(list(store._turn_path(row["session_id"], row["turn_id"]).parent.glob("*.json"))) == 2
         assert [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}] == calls
+    finally:
+        fixture.close()
+
+
+@pytest.mark.parametrize("case", ["normal", "provider-unavailable", "closed", "source-changed", "wrong-native-turn", "wrong-anchor",
+                                  "mixed-execution", "failed-core", "lost-ack"])
+def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path, language_server, monkeypatch, case):
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    from loopx.chat_store import _read_json
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, *_ = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        complete = "Original `<loopx-review-json>` is literal.\n\n" + "完整原答复包含中文和🙂。\n" * 200 + "Original final paragraph."
+        language_server.update(plain_text=True, answers={0: '<loopx-review-json>' + json.dumps({
+            "message": complete, "proposals": [], "gate": None}) + '</loopx-review-json>'})
+        start = AntigravityAdapter.start_turn
+
+        def damaged_response(adapter, message, event_sink):
+            response = start(adapter, message, event_sink)
+            if case == "failed-core":
+                raise CodexChatAgentError("Synthetic post-processing failure", gate=None, error_code="upstream_transport_failure")
+            return {**response, "message": "Original `"}
+
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", damaged_response)
+        event = provider.event("steward-app", "retained-original", "Complete original request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        row = transport.core.read_request(ref)
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)["status"] == (
+            "failed" if case == "failed-core" else "completed")
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
+        retained = store.native_result(row["session_id"], row["turn_id"])
+        result_path = store._session_dir(row["session_id"]) / "native-results" / f"{row['turn_id']}.json"
+        assert result_path.stat().st_mode & 0o777 == 0o600
+        assert retained["steps"][-1]["plannerResponse"]["response"].endswith('</loopx-review-json>')
+        assert all("thinking" not in step.get("plannerResponse", {}) and "runCommand" not in step for step in retained["steps"])
+        assert not any(item["kind"] == "turn.native_result" for item in store.events_after(row["session_id"], row["turn_id"], None))
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", start)
+        later = provider.event("steward-app", "retained-later", "A separate later request")
+        transport.admit("steward-app", later)
+        later_row = transport.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
+        assert runtime.wait_for_turn(session_id=later_row["session_id"], turn_id=later_row["turn_id"], timeout_sec=15)["status"] == "completed"
+        transport.reconcile_request(transport.root / f"{later_row['request_ref']}.json")
+        store.compact_completed_events(older_than_hours=0)
+        # The provider can no longer prove even a normal stop, and the original
+        # input is historical. Recovery must use the privately retained facts.
+        from copy import deepcopy
+        cleared = deepcopy(retained["steps"] + store.native_result(later_row["session_id"], later_row["turn_id"])["steps"])
+        for step in cleared:
+            step["status"] = "CORTEX_STEP_STATUS_CLEARED"
+            step.get("plannerResponse", {}).pop("stopReason", None)
+        language_server.update(frames=[], frame={"at": 0, "steps": cleared, "status": "CASCADE_RUN_STATUS_IDLE"})
+        if case in {"wrong-native-turn", "wrong-anchor", "mixed-execution"}:
+            if case == "wrong-native-turn":
+                retained["upstream_turn_id"] = "another-invocation"
+            elif case == "wrong-anchor":
+                retained["steps"][0]["userInput"]["items"][0]["text"] += "foreign"
+            else:
+                retained["steps"][-1]["metadata"]["executionId"] = "another-execution"
+            # Corrupt only the isolated fixture's private artifact.
+            result_path.write_text(json.dumps(retained))
+        elif case == "provider-unavailable":
+            monkeypatch.setattr("loopx.capabilities.native_chat.antigravity_adapter.discover_antigravity_language_server", lambda: None)
+        elif case == "closed":
+            store.update_session(row["session_id"], status="closed")
+        elif case == "source-changed":
+            provider.messages[event["message_id"]]["content"] = "Edited source"
+        elif case == "lost-ack":
+            provider.lose_next_reply = True
+        turn_bytes = store._turn_path(row["session_id"], row["turn_id"]).read_bytes()
+        events_bytes = store._event_path(row["session_id"], row["turn_id"]).read_bytes()
+        retained_bytes = result_path.read_bytes()
+        writes = len(provider.writes)
+        calls = [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}]
+        monkeypatch.setattr(runtime, "enqueue_turn", lambda **_: pytest.fail("Result recovery enqueued work"))
+        monkeypatch.setattr(runtime, "resume_session_queue", lambda **_: pytest.fail("Result recovery resumed work"))
+        restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root, runner=provider, cli_bin="lark-cli")
+        restarted.reconcile()
+        recovered = restarted.core.read_request(ref).get("native_result_recovery")
+        if case in {"normal", "provider-unavailable", "lost-ack"}:
+            assert recovered["native_observation"]["observation_source"] == "retained_turn_result"
+            assert recovered["native_observation"]["response"]["message"] == complete
+            assert recovered["delivery_verified"] is (case != "lost-ack")
+            assert len(provider.writes) == writes + 1
+            if case != "lost-ack":
+                receipt = _read_json(transport.root / f"{ref}.json")["deliveries"][f"native_result.{row['turn_id']}"]
+                body = json.loads(provider.messages[receipt["attempt"]["message_ref"]]["body"]["content"])
+                assert complete in "".join(item.get("text", "") for line in body["zh_cn"]["content"] for item in line)
+            restarted.reconcile()
+            assert len(provider.writes) == writes + 1
+        else:
+            assert recovered is None and len(provider.writes) == writes
+        assert store._turn_path(row["session_id"], row["turn_id"]).read_bytes() == turn_bytes
+        assert store._event_path(row["session_id"], row["turn_id"]).read_bytes() == events_bytes
+        assert result_path.read_bytes() == retained_bytes
+        assert [item for item in language_server["calls"] if item[0] in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}] == calls
+    finally:
+        fixture.close()
+
+
+def test_native_capture_io_failure_preserves_the_primary_answer(tmp_path, language_server, monkeypatch, caplog):
+    from test_native_steward_private import steward
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, *_ = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        retain = store.retain_native_result
+
+        def blocked_capture(session_id, turn_id, result):
+            (store._session_dir(session_id) / "native-results").write_text("Synthetic occupied artifact directory")
+            return retain(session_id, turn_id, result)
+
+        monkeypatch.setattr(store, "retain_native_result", blocked_capture)
+        language_server.update(plain_text=True, answers={0: "Verified original complete answer."})
+        event = provider.event("steward-app", "original-primary", "Complete original request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        row = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+        assert turn["status"] == "completed"
+        assert store.native_result(row["session_id"], row["turn_id"]) == {}
+        transport.reconcile_request(transport.root / f"{ref}.json")
+        receipt = json.loads((transport.root / f"{ref}.json").read_text())["deliveries"]["terminal"]
+        body = json.loads(provider.messages[receipt["attempt"]["message_ref"]]["body"]["content"])
+        assert "Verified original complete answer." in "".join(item.get("text", "") for line in body["zh_cn"]["content"] for item in line)
+        assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+        assert not any(method == "CancelCascadeInvocation" for method, _ in language_server["calls"])
+        warning = [record.getMessage() for record in caplog.records if record.name == "loopx.chat_runtime"]
+        assert any("Native completion capture unavailable: FileExistsError" in message for message in warning)
+        assert all(str(tmp_path) not in message for message in warning)
     finally:
         fixture.close()
 

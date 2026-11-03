@@ -1722,6 +1722,16 @@ class ChatRuntimeController:
             with self.lock:
                 if (session_id, turn_id) in self.cancelled_turns:
                     return
+            if kind == "turn.native_result":
+                if getattr(adapter, "adapter_kind", None) != "antigravity_ls":
+                    raise ValueError("native result capture is unavailable for this adapter")
+                try:
+                    self.store.retain_native_result(session_id, turn_id, payload)
+                except OSError as exc:
+                    # Supplemental retention cannot discard a valid primary
+                    # answer. Missing facts still cannot authorize recovery.
+                    logging.getLogger(__name__).warning("Native completion capture unavailable: %s", type(exc).__name__)
+                return
             event_buffer.emit(kind, payload)
             if kind == "native_goal.status":
                 self.store.update_session(session_id, native_goal=payload)
