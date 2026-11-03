@@ -90,7 +90,7 @@
 .research-history-read-error > button:hover, .research-history-empty > button:hover { background: var(--pw-hover); }
 .research-history-error { color: var(--pw-red); font-size: var(--text-body); overflow-wrap: anywhere; }
 .research-history button:focus-visible, .research-history-canvas:focus-visible, .research-history-detail:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: -2px; }
-@media (max-width: 640px) { .research-history-heading { flex-wrap: wrap; gap: 12px; } .research-history-controls { --research-control-height: 44px; width: 100%; column-gap: 4px; } .research-history-canvas { max-height: 350px; } .research-history-detail { padding: 20px; } .research-history-read-error, .research-history-empty { flex-wrap: wrap; } .research-history-read-error > button, .research-history-empty > button { margin-inline-start: 30px; } }
+@media (max-width: 640px) { .research-history-heading { flex-wrap: wrap; gap: 12px; } .research-history-controls { --research-control-height: 44px; width: 100%; column-gap: 4px; } .research-history-canvas { max-height: 350px; } .research-history-detail { padding: 16px; } .research-history-read-error, .research-history-empty { flex-wrap: wrap; } .research-history-read-error > button, .research-history-empty > button { margin-inline-start: 0; margin-top: 8px; } }
 @media (prefers-reduced-motion: reduce) { .research-history * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
 .research-history-edges text { fill: var(--pw-muted); font-size: var(--text-caption); paint-order: stroke; stroke: var(--pw-hover); stroke-width: 4px; }
