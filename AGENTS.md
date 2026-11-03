@@ -148,8 +148,8 @@ uv run --extra test python scripts/check_rfc_bilingual.py --base "$PR_BASE_REF" 
 ```
 
 Before merge, run `uv run --extra test python scripts/check_rfc_bilingual.py --base "$PR_BASE_REF" --head HEAD`
-and `uv run --extra test loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`
-against the exact reviewed head. A failure holds merge even when CI waiting is
+against the PR's target branch and exact reviewed head (`uv run --extra test loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`
+runs this as a direct blocking check, including in the quick tier). A failure holds merge even when CI waiting is
 disabled or admin bypass is authorized; unstaged translations cannot satisfy it,
 and paired diffs do not certify semantic equivalence.
 
