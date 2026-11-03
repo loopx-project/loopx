@@ -206,6 +206,37 @@ def test_scoped_activation_recovery_skips_unrelated_startup_maintenance(services
     assert not result["activation_pending"] and len(calls) == 2
 
 
+def test_activation_rechecks_new_managed_and_attached_sessions_in_same_runtime(services):
+    root, _agents, calls = services
+    assert not activate()["activation_pending"]
+    assert len(calls) == 2
+    store = ChatSessionStore(root)
+    sid, tid, _ = lost_execution(store)
+    attached = store.create_session(goal_id="fixture", agent_id="fixture", adapter_kind="fake",
+        upstream_thread_id="attached", session_mode="attached_host", host_surface="codex_app")["session_id"]
+    turn, _ = store.create_turn(attached, client_turn_id="attached", message="Independent attached work.")
+    store.update_turn(attached, turn["turn_id"], status="running")
+    original = store.session_snapshot(attached)
+    result = activate()
+    assert store.load_turn(sid, tid)["status"] == "failed"
+    assert store.session_snapshot(attached) == original
+    assert result["activation_pending"] and result["restart_reason"] == "chat_work_pending"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("patch", [{"active_turn_id": None}, {"status": "closed"}])
+def test_mutable_session_fields_cannot_hide_running_work_from_activation(services, patch):
+    root, _agents, calls = services
+    store = ChatSessionStore(root)
+    sid, tid, _ = lost_execution(store)
+    store.update_session(sid, **patch)
+    before = content_hashes(store.root)
+    result = activate()
+    assert result["activation_pending"] and result["restart_reason"] == "chat_work_pending"
+    assert not calls and content_hashes(store.root) == before
+    assert store.load_turn(sid, tid)["status"] == "running"
+
+
 def test_original_queue_survives_progress_and_cleanup_disk_failure(tmp_path, monkeypatch):
     from loopx.chat_runtime import _TurnEventBuffer
 
