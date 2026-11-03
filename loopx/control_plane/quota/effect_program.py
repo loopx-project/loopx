@@ -29,7 +29,7 @@ from ..effect_program import (
 )
 from ..goals.goal_ref_validation import exact_goal_ref
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
-from ..turn_driver.decision_capture import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+from ..turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
 
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",

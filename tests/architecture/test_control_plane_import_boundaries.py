@@ -324,6 +324,20 @@ def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
         assert completed.returncode == 0, completed.stderr
 
 
+def test_settlement_plan_import_does_not_load_native_capture_io() -> None:
+    # A command template needs the native output profile, not capture binding
+    # or the complete quota/Goal routing graph. Keep the typed kernel usable
+    # independently of those orchestration owners.
+    completed = subprocess.run(
+        [sys.executable, "-c", (
+            "import sys; import loopx.control_plane.quota.effect_program; "
+            "assert 'loopx.control_plane.turn_driver.decision_capture' not in sys.modules"
+        )],
+        cwd=REPOSITORY_ROOT, capture_output=True, check=False, text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_turn_preview_import_does_not_select_report_delivery_or_lark_hosts() -> None:
     # A fresh process detects eager package facades and command-only imports;
     # the in-process test suite may already have selected these real owners.
