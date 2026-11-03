@@ -296,20 +296,8 @@ def merge_goal_entries(
         for item in existing
         if isinstance(item, dict) and item.get("id")
     }
-
-    for item in existing:
-        if isinstance(item, dict) and str(item.get("id")) in seen_incoming:
-            continue
-        if isinstance(item, dict):
-            sibling = sibling_by_id.get(str(item.get("id") or ""))
-            if (
-                sibling is not None
-                and same_source_registry(item, sibling)
-                and preserve_attention_override({}, {**item, "synced_at": ""})
-                == preserve_attention_override(item, {**sibling, "synced_at": ""})
-            ):
-                item = {**item, "synced_at": sibling["synced_at"]}
-        merged.append(item)
+    resolved_incoming: dict[str, dict[str, Any]] = {}
+    added_goals: list[dict[str, Any]] = []
 
     for goal in incoming:
         goal_id = str(goal.get("id") or "")
@@ -331,9 +319,30 @@ def merge_goal_entries(
                 == {k: v for k, v in goal.items() if k != "synced_at"}
             ):
                 goal["synced_at"] = existing_goal["synced_at"]
-        merged.append(goal)
+            resolved_incoming[goal_id] = goal
+        else:
+            added_goals.append(goal)
         actions.append(f"{goal_id}:{action}")
         synced_ids.append(goal_id)
+
+    for item in existing:
+        if isinstance(item, dict) and str(item.get("id")) in seen_incoming:
+            goal_id = str(item.get("id") or "")
+            if goal_id in resolved_incoming:
+                merged.append(resolved_incoming.pop(goal_id))
+            continue
+        if isinstance(item, dict):
+            sibling = sibling_by_id.get(str(item.get("id") or ""))
+            if (
+                sibling is not None
+                and same_source_registry(item, sibling)
+                and preserve_attention_override({}, {**item, "synced_at": ""})
+                == preserve_attention_override(item, {**sibling, "synced_at": ""})
+            ):
+                item = {**item, "synced_at": sibling["synced_at"]}
+        merged.append(item)
+
+    merged.extend(added_goals)
     return merged, actions, synced_ids, collisions
 
 
@@ -349,14 +358,22 @@ def merge_project_entries(
             raise ValueError(
                 f"global ProjectRecord conflicts with source registry: {project_id}"
             )
-    return [
-        item
-        for item in existing
-        if not (
-            isinstance(item, dict)
-            and str(item.get("project_id") or "") in incoming_by_id
-        )
-    ] + list(incoming_by_id.values())
+    merged: list[Any] = []
+    seen_existing: set[str] = set()
+    for item in existing:
+        if isinstance(item, dict):
+            project_id = str(item.get("project_id") or "")
+            if project_id in incoming_by_id:
+                merged.append(incoming_by_id[project_id])
+                seen_existing.add(project_id)
+                continue
+        merged.append(item)
+    merged.extend(
+        project
+        for project_id, project in incoming_by_id.items()
+        if project_id not in seen_existing
+    )
+    return merged
 
 
 def _project_entries_by_id(

@@ -7,6 +7,7 @@ routing, receiver-authored replies, and publication receipts. No model polling.
 from __future__ import annotations
 
 import logging
+import json
 import threading
 from itertools import islice
 from contextlib import contextmanager, ExitStack
@@ -179,6 +180,7 @@ def report(
     attachment_refs=None,
     workspace=None,
     request_revision=None,
+    remaining_work=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -204,13 +206,15 @@ def report(
                 attachment_refs=attachment_refs,
                 workspace=workspace,
                 request_revision=request_revision,
+                remaining_work=remaining_work,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
     if route.get("kind") == "peer" and phase != "conclusion":
         raise ValueError("peer replies require a conclusion; report a concrete result or blocker")
+    audience_text = text + ("\n" + json.dumps(remaining_work, ensure_ascii=False) if remaining_work is not None else "")
     if (route["channel_id"] != "peer" and not conversation_scope(route)["private_conversation"]
-            and not scan_public_boundary_text(text)["ok"]):
+            and not scan_public_boundary_text(audience_text)["ok"]):
         raise ValueError("reply contains private boundary material; write an audience-safe conclusion")
     from ...control_plane.collaboration.inbox import record_result
     attachments = None
@@ -234,6 +238,7 @@ def report(
             update_id=update_id,
             attachments=attachments,
             request_revision=request_revision,
+            remaining_work=remaining_work,
         ),
         "status": (
             "queued_for_requester"
@@ -258,8 +263,45 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
     if not pending_message_ids:
         return list(messages)
     statuses = {}
-    paths = sorted((_root(root) / "roundtrips").glob("*.json"))
-    for path in paths:
+    routes = _root(root) / "roundtrips"
+
+    def candidate_paths():
+        # The original Turn normally names its requests. Prefer those locators
+        # over scanning every conversation's routes for every history page.
+        # They are only hints: the route, source host and result identity below
+        # still have to match. Lost/older receipts retain the exhaustive fallback.
+        known = set()
+        if source_store is not None:
+            turn_ids = dict.fromkeys(
+                message.get("turn_id") for message in messages
+                if message.get("message_id") in pending_message_ids
+                and isinstance(message.get("turn_id"), str) and message.get("turn_id")
+            )
+            for turn_id in turn_ids:
+                try:
+                    turn = source_store.load_turn(session_id, turn_id) or {}
+                    if turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+                        continue
+                    response = turn.get("response") or {}
+                    if not isinstance(response, dict):
+                        continue
+                    receipts = response.get("context_handoff_receipts")
+                    if receipts is None:
+                        receipts = [response.get("context_handoff_receipt")]
+                    for receipt in receipts if isinstance(receipts, list) else []:
+                        request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
+                        if (isinstance(request_id, str) and BARE_SHA256_PATTERN.fullmatch(request_id)
+                                and request_id not in known):
+                            known.add(request_id)
+                            yield routes / (request_id + ".json")
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        # This part is lazy: a fully resolved page never enumerates the directory.
+        for path in sorted(routes.glob("*.json")):
+            if path.stem not in known:
+                yield path
+
+    for path in candidate_paths():
         try:
             route = _read(path)
             if (route.get("session_id") != session_id

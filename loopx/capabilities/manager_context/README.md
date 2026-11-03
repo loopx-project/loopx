@@ -284,6 +284,17 @@ The local Inbox read transaction now lives in
 Goal-instance, request-revision and agenda owners inside one runtime request.
 The Turn hook remains read-only. CLI/MCP reads record the supplied requests and
 peer-return read receipts; they do not adopt requests or consume peer results.
+If the runtime response is lost, a read may already have published some or all
+of those receipts. The CLI returns JSON with `ok=false`, `read_complete=false`
+and exit status 1; MCP returns a tool error containing the same recovery object.
+It retains the original Goal/Agent (and exact Goal instance when bound), read
+arguments, known request revisions and offered peer-result keys. Unknown source
+lists are `null`, distinct from a verified empty list. It never retries, advances
+a cursor or reports an empty Inbox to hide that ambiguity. Inspect those exact
+durable read/delivery receipts using the existing Inbox/status readers, recheck
+the original source and Goal lifetime, then recover the same page with its
+original arguments. An absent receipt does not prove the timed-out writer has
+stopped. This recovery grants no work replay, result consumption or quota spend.
 Python releases the initial Goal lifetime guard for provider enrichment.
 Core Todo and workspace inputs retain their actual IO adapters and provider
 fences. The Host reacquires the Goal guard before native finalization.
@@ -622,8 +633,9 @@ before the last position. Peer results retain their separate consumption flow
 and are not paginated by this cursor. `status --offset/--limit` remains separate.
 
 After `acknowledge`, the request remains visible until the answer obligation is
-resolved. `pending.items` retains its existing receipt-only semantics: it stops
-including a request once its conclusion exists. The separate unfinished agenda
+resolved. `pending.items` describes the current reply obligation: an ordinary
+conclusion resolves it, while an explicitly reported remainder keeps it open.
+Neither case certifies fulfillment of the user's requirements. The unfinished agenda
 keeps undelivered conclusions visible, and keeps peer work until the requester
 explicitly consumes the current result. The worker uses `link` for canonical Todo/evidence lineage
 and `report` to publish the answer intended for the original audience:
@@ -715,6 +727,46 @@ request finished merely because a plan exists. A research-direction request can
 conclude with the adopted/rejected planning decision; deferred or blocked work
 must explain the concrete condition and next action. Completion of this exchange
 is separate from completion of the receiving Goal.
+
+A partial conclusion can return a useful result while explicitly retaining work
+on this request. Use the existing result publication, without creating a Todo:
+
+```sh
+loopx manager-inbox report --goal-id research --agent-id worker \
+  --request-id <id> --reply-text 'The implementation is ready; installed validation remains.' \
+  --remaining-work 'Validate the repair in the isolated installed package.' \
+  --resume-when 'The isolated package is available to the receiving Agent.'
+```
+
+MCP uses `return_result(..., remaining_work={"summary": "...", "resume_when": "..."})`.
+Both fields are required, each at most 600 Unicode characters; the rendered reply
+still fits the existing 20,000-character budget. They belong to the receiver's
+immutable result for its exact request revision. They do not transfer ownership,
+schedule execution or create a second completion state. The receiver retains the
+remainder under its existing authority; linked Todo status cannot resolve it.
+`resume_when` here describes a condition, unlike a typed Todo scheduler rule.
+
+The pending Inbox, Turn agenda and App delegation reader retain this request
+after the partial reply is delivered or consumed. The original conversation and
+provider reply also show the remainder and continuation condition. Queued replies
+remain distinct from delivered ones. A peer can consume the partial result once
+and still await the final result. Other requests sharing the same Todo retain
+their independent scope. Source correction and cancellation keep their existing
+request-control rules; an old revision's remainder cannot settle a newer request.
+
+When the remaining scope is actually resolved, append a conclusion using a stable
+`--update-id` and omit `--remaining-work`/`--resume-when`. This resolves the reply
+obligation after normal return processing, not independent acceptance. Retry with
+the same text and remainder: changing either under a committed result key is a
+conflict. Valid unmarked legacy results retain their ordinary reply state and
+unknown fulfillment qualification; unreadable or conflicting result chains stay
+unavailable. This path does not batch-close old work.
+Before rolling back to a reader without remainder support, stop new partial
+publications and reconcile the retained result chains with the compatible
+reader. Do not rewrite their receipts or treat an older reader's empty queue as
+fulfilled work. No installation, host wake or permission change is implied.
+普通短答仍可直接返回，无需创建任务；阶段结果保留原负责人和具体续接条件，
+不能用 Todo done、回传或送达替代原要求的验收。
 
 If a returned blocker or draft is followed by a materially changed fact, append
 a conclusion with a stable `--update-id`; do not replace the first conclusion or

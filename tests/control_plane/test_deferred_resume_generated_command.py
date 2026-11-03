@@ -33,12 +33,14 @@ from test_quota_settlement_cli import (
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("host_args", [("--codex-app",), ("--runtime-profile", "generic_cli")])
 def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     provider: str,
     fallback: bool,
+    host_args: tuple[str, ...],
 ) -> None:
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -95,6 +97,8 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     )
 
     def cli(*args: str) -> tuple[int, dict]:
+        if ("quota", "should-run") in zip(args, args[1:]):
+            args = (*args, "--context-delivery", "off")
         with monkeypatch.context() as context:
             context.chdir(project)
             rc = cli_main(
@@ -113,7 +117,7 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     rc, guard = cli(
         "quota",
         "should-run",
-        "--codex-app",
+        *host_args,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -197,32 +201,14 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
         "task-lease", "inspect", "--goal-id", GOAL_ID, "--todo-id", TODO_ID
     )
     assert rc == 0 and absent["active"] is False, absent
-    rc, acquired = cli(
-        "task-lease",
-        "acquire",
-        "--goal-id",
-        GOAL_ID,
-        "--todo-id",
-        TODO_ID,
-        "--owner",
-        AGENT_ID,
-        "--idempotency-key",
-        "fresh-after-resume",
-    )
-    assert rc == 0 and acquired["lease"]["status"] == "active", acquired
-    rc, reentry = cli(
-        "quota",
-        "should-run",
-        "--codex-app",
-        "--goal-id",
-        GOAL_ID,
-        "--agent-id",
-        AGENT_ID,
-        "--turn-instance-id",
-        "resume-command-turn",
-        "--todo-id",
-        TODO_ID,
-    )
+    actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
+    # Execute the delivered continuation instead of constructing a successful
+    # guard that the consumer was never shown. No new Turn or premature spend.
+    reentry_args = shlex.split(actions[1])[1:]
+    assert reentry_args[reentry_args.index("--turn-instance-id") + 1] == "resume-command-turn"
+    assert reentry_args[reentry_args.index("--todo-id") + 1] == TODO_ID
+    assert not any("refresh-state" in action or "spend-slot" in action for action in actions)
+    rc, reentry = cli(*reentry_args)
     assert rc == 0 and reentry["normal_delivery_allowed"], reentry
     assert (
         reentry["heartbeat_receipt"]["settlement_identity"]
@@ -237,12 +223,28 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
     qualified = next(row for row in events if row["event_id"] == reentry["heartbeat_receipt"]["event_id"])
     assert qualified["causality"]["source_event_id"] == original["event_id"]
     assert qualified["details"]["delivery_allowed"] is True
-    rc, cold = cli("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+    rc, cold = cli("quota", "should-run", *host_args, "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", "resume-command-turn",
         "--todo-id", TODO_ID, )
     assert rc == 0 and cold["heartbeat_receipt"]["status"] == "replayed", cold
     assert cold["heartbeat_receipt"]["event_id"] == qualified["event_id"]
     assert load_rollout_events(log_path) == events
+    rc, acquired = cli(
+        "task-lease",
+        "acquire",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        TODO_ID,
+        "--owner",
+        AGENT_ID,
+        "--idempotency-key",
+        "fresh-after-resume",
+    )
+    assert rc == 0 and acquired["lease"]["status"] == "active", acquired
+    artifact = project / "verified-result.txt"
+    artifact.write_text(str(17 * 23))
+    assert artifact.read_text() == "391"
     child = ("native-child", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
              "--turn-instance-id", "resume-command-turn")
     rc, decision = cli(*child, "record", "--operation-id", "resumed-audit",
@@ -261,3 +263,25 @@ def test_generated_deferred_resume_keeps_proof_fences_with_planning_note(
         "--validation-ref", "synthetic-validation", "--execute")
     assert rc == 0 and reviewed["native_child_activity"]["parent_accepted_count"] == 1
     assert _spend_run_count(runtime) == 0
+    vision = project / "vision.json"
+    vision.write_text(json.dumps({
+        "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verify the retained arithmetic result."},
+        "path_delta": {"outcome": "continue", "prior_assumption": "The work waits for its scheduled time.",
+            "observed_reality": "The wait resolved and the resumed work produced the verified result 391.",
+            "retained": ["Original acceptance and execution budget."],
+            "evidence_refs": ["artifact:verified-result"]},
+    }))
+    settlement = ("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--turn-instance-id", "resume-command-turn",
+        "--classification", "resumed_work_verified", "--delivery-batch-scale", "single_surface",
+        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(vision),
+        "--no-global-sync", "--suppress-external-sinks", "--settle-turn")
+    for _ in range(2):
+        rc, settled = cli(*settlement)
+        assert rc == 0 and settled["settlement_progress"]["state"] == "settled", json.dumps(settled)
+        assert settled["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+        assert _spend_run_count(runtime) == 1
+    rc, ended = cli(*reentry_args)
+    assert rc == 0 and ended["effective_action"] == "heartbeat_settled_skip", ended
+    assert artifact.read_text() == "391"

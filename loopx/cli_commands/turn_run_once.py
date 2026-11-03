@@ -27,14 +27,7 @@ from ..control_plane.quota.spend_sources import quota_spend_source_for_execution
 from ..control_plane.work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
-from ..control_plane.todos.durable_completion import (
-    project_durable_completion_intent,
-    project_durable_completion_outcome,
-    project_durable_terminal_completion_readback,
-    read_persisted_todo_record,
-    read_persisted_todo_record_with_source,
-)
-from ..control_plane.todos.completion_fence import evaluate_todo_completion_fence
+from ..control_plane.todos.durable_completion import read_durable_completion_evidence
 from ..control_plane.turn_driver import (
     build_loopx_turn_command_validator,
     codex_cli_session_binding,
@@ -329,17 +322,9 @@ def execute_turn_run_once(
                 project=None,
                 state_file=None,
             )
-            durable_todo, existing_todo_ids = read_persisted_todo_record(
-                state_file,
-                todo_id=todo_id,
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                runtime_root=runtime_root,
-            )
-            return project_durable_completion_intent(
-                todo=durable_todo,
-                expected_todo_id=todo_id,
-                existing_todo_ids=existing_todo_ids,
+            return read_durable_completion_evidence(
+                state_file, todo_id=todo_id, registry_path=registry_path,
+                goal_id=args.goal_id, runtime_root=runtime_root, operation="intent",
             )
 
         def todo_completion(
@@ -386,17 +371,9 @@ def execute_turn_run_once(
                     ),
                 }
             try:
-                durable_todo, existing_todo_ids = read_persisted_todo_record(
-                    Path(state_file),
-                    todo_id=todo_id,
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    runtime_root=runtime_root,
-                )
-                completion_outcome = project_durable_completion_outcome(
-                    todo=durable_todo,
-                    expected_todo_id=todo_id,
-                    existing_todo_ids=existing_todo_ids,
+                completion_outcome = read_durable_completion_evidence(
+                    Path(state_file), todo_id=todo_id, registry_path=registry_path,
+                    goal_id=args.goal_id, runtime_root=runtime_root, operation="outcome",
                 )
             except ValueError as exc:
                 return {
@@ -555,23 +532,10 @@ def execute_turn_run_once(
                     project=None,
                     state_file=None,
                 )
-                durable_todo, existing_todo_ids, projection_source = read_persisted_todo_record_with_source(
-                    state_file,
-                    todo_id=todo_id,
-                    registry_path=registry_path,
-                    goal_id=args.goal_id,
-                    runtime_root=runtime_root,
-                )
-                evaluate_todo_completion_fence(
-                    todo=durable_todo,
-                    projection_source=projection_source,
+                return read_durable_completion_evidence(
+                    state_file, todo_id=todo_id, registry_path=registry_path,
+                    goal_id=args.goal_id, runtime_root=runtime_root, operation="outcome",
                     completion_turn_key=settlement_identity.turn_instance_id,
-                    no_followup=False,
-                )
-                return project_durable_completion_outcome(
-                    todo=durable_todo,
-                    expected_todo_id=todo_id,
-                    existing_todo_ids=existing_todo_ids,
                 )
             except (OSError, ValueError):
                 return None
@@ -586,23 +550,10 @@ def execute_turn_run_once(
                 project=None,
                 state_file=None,
             )
-            (
-                durable_todo,
-                existing_todo_ids,
-                projection_source,
-            ) = read_persisted_todo_record_with_source(
-                state_file,
-                todo_id=todo_id,
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                runtime_root=runtime_root,
-            )
-            readback = project_durable_terminal_completion_readback(
-                todo=durable_todo,
-                expected_todo_id=todo_id,
-                expected_completion_turn_key=settlement_identity.turn_instance_id,
-                projection_source=projection_source,
-                existing_todo_ids=existing_todo_ids,
+            readback = read_durable_completion_evidence(
+                state_file, todo_id=todo_id, registry_path=registry_path,
+                goal_id=args.goal_id, runtime_root=runtime_root, operation="terminal",
+                completion_turn_key=settlement_identity.turn_instance_id,
             )
             if readback["kind"] == "absent":
                 return None

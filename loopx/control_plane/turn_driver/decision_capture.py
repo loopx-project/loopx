@@ -16,6 +16,14 @@ from typing import Any
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
 from ..content_digest import BARE_SHA256_PATTERN
+from .native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES as NATIVE_CONTEXT_PAGE_BYTES,
+    NATIVE_CONTEXT_PAGE_OUTPUT_BYTES as NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_LARGE_OUTPUT_BYTES as NATIVE_CONTEXT_LARGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_HISTORY_TOKENS as NATIVE_CONTEXT_HISTORY_TOKENS,
+    NATIVE_CONTEXT_OUTPUT_ENV as NATIVE_CONTEXT_OUTPUT_ENV,
+    native_context_page_budget as native_context_page_budget,
+)
 
 
 def private_capture_uid() -> int:
@@ -203,21 +211,6 @@ CONTEXT_CAPTURE_READ_GUIDANCE = (
 )
 
 
-# Use the existing configured native output profile for every native caller,
-# including App shells that do not inherit the generated environment override.
-# Smaller explicit reader budgets remain available for same-capture recovery.
-NATIVE_CONTEXT_PAGE_BYTES = 64000
-NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 64000
-# Keep the configuration declaration usable by older installed readers too.
-NATIVE_CONTEXT_LARGE_OUTPUT_BYTES = 64000
-NATIVE_CONTEXT_HISTORY_TOKENS = 20000
-NATIVE_CONTEXT_OUTPUT_ENV = "LOOPX_CONTEXT_PAGE_OUTPUT_BYTES"
-
-
-def native_context_page_budget() -> tuple[int, int]:
-    return NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
-
-
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  page_bytes: int | None = None,
                                  max_page_output_bytes: int | None = None,
@@ -264,6 +257,14 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
         write_decision_capture(reference, payload)
     except FileExistsError:
         existing = read_context_read_reference(str(reference))[1]
+        if existing["path"] != payload["path"]:
+            # Readers resolve parent aliases, while retaining the exact leaf.
+            # Compare that same spelling without rewriting immutable metadata
+            # or treating a different leaf (including a hardlink) as identical.
+            original = Path(existing["path"]).expanduser().absolute()
+            current = path.expanduser().absolute()
+            if original.parent.resolve(strict=True) / original.name == current.parent.resolve(strict=True) / current.name:
+                existing["path"] = payload["path"]
         if json.dumps(existing, sort_keys=True) != json.dumps(payload, sort_keys=True):
             raise ValueError("original reader reference changed; restore it without rerunning admission") from None
     return reference

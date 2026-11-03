@@ -46,6 +46,28 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   这些契约。Argon 档位必须由本地账号提供，并与请求的思考深度一致。原始 cascade 丢失
   时续接失败，不静默创建替代会话。停止等待原生 cascade 回到 idle；超时或部分输出
   不代表成功完成。
+  执行时，原生 `IDLE` 本身不代表完成：输入、工具与 planner 步骤之间也可能出现此状态。
+  LoopX 继续观察原调用，不重发输入；最终答案须带正常停止标记，且本次覆盖的全部步骤均
+  已完成才能收尾，与原生结果恢复的完成要求一致。短暂 idle 不延长既有无进展或硬截止
+  时间；权限等待、原生错误、未核验的停止原因及另一个输入仍沿既有拒绝路径处理。
+- Antigravity 管家输入先呈现完整用户原话，再附上冻结的 Core 证据；用户原话按 JSON
+  字符串编码，保留空白和被引用的传输标记。原始结果恢复同时识别新格式与历史上的
+  证据在前格式，沿用同一来源、输入时间、prompt hash 和原生终止检查。
+- 强能力 Antigravity 管家可通过既有私有 capture/JSON Pointer CLI 渐进读取支撑用的
+  交付历史。当前 Goal、Todo、attention、权限、来源质量及未知字段仍内联保留；只将已知
+  `recent_delivery_history.deliveries` 正文移到按需读取，其窗口、覆盖及来源元数据仍可见，
+  同时明确 `status=not_read` 并给出可执行读取引用。原先供应的完整 Core 快照仍可恢复。
+  例如 `/goals/0/recent_delivery_history` 是首个 Goal 的已捕获历史地址：知道地址时直接
+  执行供应的选择命令，不知道时再查目录。这是冻结快照读取，不是 Codex 专属的实时
+  `loopx_manager_read` 工具或差分基线。依赖该历史前，应读完所需片段的全部页；上下文
+  丢失后从同一 capture 恢复，不重新发送请求或重复副作用。
+- 机器配置 `context_delivery.antigravity_mode=off` 或宿主环境变量 `LOOPX_CONTEXT_DELIVERY=off`
+  使后续原生管家输入保持完整内联，`context_delivery.mode` 仍保持为独立的 Codex 偏好。
+  受限/文本宿主、配置损坏或私有 capture IO 不可用时
+  也保留原输入，不改变宿主权限或审批。引用只保留原已授权快照，不是新鲜观察或动作
+  授权；capture 私有保存于 Chat 存储，不写入所选项目的检出目录。RPC 与真实 CLI fixture
+  验证输入、恢复及拒绝行为；真实模型读取、已安装宿主限制、完整成本和长程收益仍需
+  独立资格。Codex 差分激活与 native-hook 连续性不变。
 - `trusted_owner` 适用于本地私有 Owner 管家和由既有 Core conversation owner 重新核验的
   原生本人管家私聊。Core 核验 App、Owner 身份、私聊来源、当前资源授权和冻结的 Session
   身份；受众证明本身不授予工具，仍按实际机器策略执行，包括显式受限选择。其他外部
@@ -62,6 +84,12 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
 配置 revision 和状态。有效 manager namespace 发生变化时，LoopX 关闭旧上游线程，并用
 可见历史启动新线程，避免旧 sandbox 或旧提示词继续生效。其他机器能力的修改不会旋转
 健康的管家会话。旧版、与显式受限策略相同的健康会话只补齐 readback，不做无意义重启。
+
+既有迁移需要新建 Antigravity 线程时，首次输入以 JSON 数据携带所提供的完整可见
+user/assistant 历史，保留早期约束、消息顺序与有意义的空白，不能用最后 16 条消息
+替代。后续 Turn 和成功续接原生线程时不重放这份历史。原 Chat store、Session、
+来源权限和原生工具审批仍各有归属；这不跨不同 Session 转移历史，仅加载历史也不派工。
+完整迁移输入可能增大；源码/RPC 验证不证明真实模型采用、token 节省或净成本改善。
 
 Dashboard 同时显示机器配置和当前会话 readback。CLI/managed Turn、Dashboard 与 Lark
 继续调用同一个 manager runtime controller；Lark 是同源会话的入口和投影，不拥有独立

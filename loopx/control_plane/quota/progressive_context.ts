@@ -9,6 +9,8 @@ import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
 import {encodeContextDelivery} from "./context_delivery.ts";
 
 type Path = (string | number)[];
+const pointer = (path: Path): string => "/" + path.map(key =>
+  String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/");
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
   Array.isArray(row) ? row[Number(key)] : jsonObject(row)?.[key], root);
 const known = (row: JsonObject, fields: string[]): boolean => Object.keys(row).every(key => fields.includes(key));
@@ -138,8 +140,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
     for (const edit of deferred) {
       const path = edit.path as Path, owner = edit.parent as Path;
       delete parent(path)[path.at(-1)!];
-      parent([...owner, String(edit.index_key)])[String(edit.index_key)] = "/" + owner.map(key =>
-        String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/");
+      parent([...owner, String(edit.index_key)])[String(edit.index_key)] = pointer(owner);
       removed.push(["context", ...path]);
     }
     for (const edit of instructions) {
@@ -147,12 +148,21 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       parent(path)[path.at(-1)!] = edit.value;
     }
     if (deferred.length) required.context_details = {...details,
+      unread_context_index: {
+        source: {path: details.path, sha256: details.sha256},
+        coverage_confirmed: false,
+        read_before_dependent_work: true,
+        pointers: [...new Set(deferred.map(edit => pointer(edit.path as Path)))],
+      },
       instruction: "This view retains complete requirements and current review/check states. "
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "For source history use supporting_material_pointer plus /sources. For review detail append "
         + "/requirements/<index>/agent_review/note or /requirements/<index>/agent_review/evidence_refs instead. "
         + "Repeat --select to batch needed fields without replaying the outcome's requirements. "
+        + "unread_context_index lists unconfirmed supporting fields in the current complete source. "
+        + "Use its source path and sha256 with quota context-read --select for each exact pointer. "
+        + "A prior selected read, EOF or saved file does not confirm model-visible coverage or retention. "
         + "Detail reads never establish a full baseline. "
         + "Uncertain or missing necessary facts must be recovered before dependent action; Agent review is not independent acceptance."};
   }
@@ -189,7 +199,10 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   const required = requiredNativeContext(request, sourceValues);
   const codec = nativeContextContinuity({...request, context: required.context,
     ...(request.source_number_tokens === undefined ? {} : {source_number_tokens: required.tokens})});
-  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues);
+  const details = jsonObject(required.context.context_details);
+  const navigation: Path[] = details && Object.hasOwn(details, "unread_context_index")
+    ? [["context_details", "unread_context_index"]] : [];
+  const delivery = encodeContextDelivery(codec, legacyFields, sourceValues, navigation);
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected}, sourceValues);
 }
@@ -210,6 +223,7 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
   };
   for (const field of decisionFields) include(field);
+  include("context_details", "unread_context_index");
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
@@ -234,8 +248,10 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     // incomplete observations visible without expanding full request bodies.
     include(...source, "content", "read_complete");
     include(...source, "content", "unfinished_delegations");
-    include(...source, "content", "current", "revision");
-    include(...source, "content", "current", "instruction");
+    // The preference owner already supplies the complete current scoped view,
+    // including corrections, retirement, provenance and advisory authority.
+    // Its revision/instructions alone cannot fulfill that pre-work delivery.
+    include(...source, "content", "current");
     include(...source, "content", "outcome_context");
     const sourceRow = object(_source), content = object(sourceRow?.content);
     const requirements = object(object(content?.goal_acceptance_contract)?.outcome_requirements);

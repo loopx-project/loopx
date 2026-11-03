@@ -8,6 +8,7 @@ import pytest
 from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 
 
 @pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="worktree lease fixture requires symlinks; Windows needs Developer Mode")
@@ -196,3 +197,96 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
         "--expected-version", str(second["version"]))
     assert claim("b", "claim-b", expected=1)["ok"] is False
     assert not cli(["task-lease", "inspect"], "b")["active"]
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="independent worktree fixture requires POSIX Git")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("command", ["update", "complete"])
+def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monkeypatch, capsys, provider, command):
+    """Expiry advice and ordinary claims must make the same isolation decision."""
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "repo"
+    project.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(project), *args], capture_output=True, text=True, check=True)
+
+    git("init")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "--allow-empty", "-m", "fixture")
+    git("remote", "add", "origin", "https://github.com/example/project.git")
+    a, b = tmp_path / "a", tmp_path / "b"
+    git("worktree", "add", "-b", "a", str(a))
+    git("worktree", "add", "-b", "b", str(b))
+    runtime, state, registry = tmp_path / "runtime", tmp_path / "state.md", tmp_path / "registry.json"
+    goal = "expired-worktree-claim"
+    state.write_text("# Expired worktree claim\n\n## Agent Todo\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": goal, "repo": str(project), "state_file": str(state),
+        "coordination": {"registered_agents": ["agent-a", "agent-b"]},
+    }]}))
+    projection = build_todo_runtime_shadow_projection(goal_id=goal, handoff_mode="hard_lease", leases=[], todos=[{
+        "schema_version": "todo_item_v0", "todo_id": f"todo_expiry_{key}", "role": "agent", "status": "open", "done": False,
+        "text": "Edit isolated source", "archive_state": "active", "source_section": "Agent Todo", "index": i,
+        "task_class": "advancement_task", "task_domain": "code", "task_repository": "git:github.com/example/project",
+        "required_write_scopes": ["src/**"],
+    } for i, key in enumerate(("a", "b"), 1)])
+    initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
+    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+
+    def run(arguments, *, expected=0, route=True):
+        rc = cli_main([*(prefix if route else []), *arguments])
+        output = capsys.readouterr().out
+        assert rc == expected, output
+        return json.loads(output)
+
+    def claim(key, operation, *, preview=False, expected=0):
+        return run(["todo", "claim", "--goal-id", goal, "--todo-id", f"todo_expiry_{key}",
+            "--agent-id", f"agent-{key}", "--claimed-by", f"agent-{key}", "--claim-operation-id", operation,
+            *(["--dry-run"] if preview else [])], expected=expected)
+
+    def snapshot():
+        return read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal, include_leases=True)
+
+    monkeypatch.chdir(a)
+    # Only the accepted operation's clock is synthetic. Git observation, the
+    # managed claim, its receipt and both provider transactions remain real.
+    with monkeypatch.context() as clock:
+        clock.setattr("loopx.control_plane.coordination.local_authority.now_local", lambda: "2001-01-01T00:00:00Z")
+        assert claim("a", "expired-original")["execution_managed"]
+    monkeypatch.chdir(b)
+    assert claim("b", "peer-current")["execution_managed"]
+    original = snapshot()
+    peer = next(lease for lease in original["leases"] if lease["todo_id"] == "todo_expiry_b")
+    extra = ["--update-operation-id", "expired-writeback", "--note", "Reviewed progress"] if command == "update" else [
+        "--evidence", "evidence:validated-source"]
+    attempt = ["todo", command, "--goal-id", goal, "--todo-id", "todo_expiry_a", "--agent-id", "agent-a",
+        "--claim-operation-id", "expired-original", *extra]
+
+    # An independent marker cannot make the peer's physical checkout ours.
+    refused = run(attempt, expected=1)
+    assert refused["recovery"]["action"] == "resolve_acquire_rejection"
+    assert refused["recovery"]["reason_code"] == "invalid_coordination_task_lease"
+    assert "claim" not in refused["recovery"]
+    assert claim("a", "same-checkout-preview", preview=True, expected=1)["ok"] is False
+    assert snapshot() == original
+
+    monkeypatch.chdir(a)
+    ordinary_preview = claim("a", "independent-preview", preview=True)
+    assert ordinary_preview["status"] == "planned"
+    assert ordinary_preview["integration_overlap_advisories"] == [{
+        "todo_id": "todo_expiry_b", "owner": "agent-b", "write_scopes": ["src/**"],
+        "reason": "independent_worktree_integration_overlap",
+    }]
+    refused = run(attempt, expected=1)
+    assert refused["error_code"] == "claim_execution_unavailable"
+    assert snapshot() == original, "recovery previews cannot acquire or renew either execution"
+    recovery = refused["recovery"]
+    assert recovery["action"] == "claim_task", recovery
+    assert recovery["execution_authority_granted"] is False
+    prepared = run([*recovery["claim"]["cli_args"], "--claim-operation-id", "explicit-recovery"], route=False)
+    assert prepared["integration_overlap_advisories"] == ordinary_preview["integration_overlap_advisories"]
+    assert run(attempt, expected=1)["recovery"]["action"] == "reconcile_lease_owner"
+    retry = [prepared["claim_operation_id"] if arg == "expired-original" else arg for arg in attempt]
+    assert run(retry)["ok"]
+    readback = snapshot()
+    assert next(lease for lease in readback["leases"] if lease["todo_id"] == "todo_expiry_b") == peer

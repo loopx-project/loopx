@@ -1222,3 +1222,83 @@ def test_redundant_sync_does_not_rewrite_unchanged_global_registry(
     assert writes == [global_path]
     assert global_path.read_bytes() != before_bytes
 
+
+def test_cross_project_redundant_syncs_preserve_order_and_do_not_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Alternating project syncs must update in-place instead of churning list order."""
+    runtime_root = tmp_path / "runtime"
+    alpha_registry = _project_registry(tmp_path, "alpha", runtime_root)
+    beta_registry = _project_registry(tmp_path, "beta", runtime_root)
+    global_path = global_registry_path(runtime_root)
+
+    ticks = iter(
+        [
+            "2026-11-02T18:20:00+00:00",
+            "2026-11-02T18:20:10+00:00",
+            "2026-11-02T18:21:00+00:00",
+            "2026-11-02T18:21:10+00:00",
+            "2026-11-02T18:21:27+00:00",
+        ]
+    )
+    monkeypatch.setattr(global_registry, "now_local", lambda: next(ticks))
+
+    assert sync_project_registry_to_global(
+        registry_path=alpha_registry,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )["ok"]
+    assert sync_project_registry_to_global(
+        registry_path=beta_registry,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )["ok"]
+
+    before_bytes = global_path.read_bytes()
+    before_payload = json.loads(before_bytes.decode("utf-8"))
+    assert [g["id"] for g in before_payload["goals"]] == ["goal-alpha", "goal-beta"]
+    assert [p["project_id"] for p in before_payload["projects"]] == [
+        "project-alpha",
+        "project-beta",
+    ]
+
+    writes: list[Path] = []
+    real_write = global_registry.write_json
+
+    def tracking_write(path: Path, payload: dict[str, Any]) -> None:
+        writes.append(path)
+        real_write(path, payload)
+
+    monkeypatch.setattr(global_registry, "write_json", tracking_write)
+
+    assert sync_project_registry_to_global(
+        registry_path=alpha_registry,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )["ok"]
+    assert sync_project_registry_to_global(
+        registry_path=beta_registry,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )["ok"]
+    assert writes == []
+    assert global_path.read_bytes() == before_bytes
+
+    alpha_payload = json.loads(alpha_registry.read_text(encoding="utf-8"))
+    alpha_payload["goals"][0]["objective"] = "updated alpha objective"
+    alpha_registry.write_text(json.dumps(alpha_payload), encoding="utf-8")
+
+    assert sync_project_registry_to_global(
+        registry_path=alpha_registry,
+        runtime_root_override=str(runtime_root),
+        dry_run=False,
+    )["ok"]
+    assert writes == [global_path]
+    after_payload = json.loads(global_path.read_text(encoding="utf-8"))
+    assert [g["id"] for g in after_payload["goals"]] == ["goal-alpha", "goal-beta"]
+    assert [p["project_id"] for p in after_payload["projects"]] == [
+        "project-alpha",
+        "project-beta",
+    ]
+    assert after_payload["goals"][0]["objective"] == "updated alpha objective"
+

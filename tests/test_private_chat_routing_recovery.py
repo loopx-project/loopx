@@ -366,3 +366,100 @@ def test_original_worker_recovers_historical_user_only_routing_failure(steward, 
     assert sum(item.get("method") == "turn/start" for item in requests) == 3
     assert any(item.get("method") == "thread/items/list" for item in requests)
     assert len(store.list_sessions()) == 1
+
+
+@pytest.mark.parametrize("fault", [None, "turn-started", "scope-unavailable"])
+def test_steward_recovers_pre_execution_authorization_scope_failure(
+    steward, monkeypatch, fault  # noqa: F811
+):
+    """A Steward turn rejected before model execution due to transient scope churn replays once stable."""
+    import loopx.chat_manager_context as manager_context
+
+    store, runtime, provider, transport, _, _, _ = steward
+    profile = "steward-app"
+    binding = next(
+        row
+        for row in transport.bindings.read()["bindings"]
+        if row["transport_ref"] == profile
+    )
+
+    real_collect = manager_context.collect_manager_turn_context
+    calls = []
+
+    def flaky_collect(*args, **kwargs):
+        calls.append(len(calls))
+        if len(calls) == 1:
+            return {
+                "schema_version": "manager_turn_context_v1",
+                "coverage": {"discovered": 1, "verified": 0, "complete": False},
+                "goals": [],
+                "warnings": ["external_authorization_changed"],
+            }
+        return real_collect(*args, **kwargs)
+
+    monkeypatch.setattr(manager_context, "collect_manager_turn_context", flaky_collect)
+
+    event = provider.event(profile, "scope-churn-request", "Check PR 7909 and 7925.")
+    transport.admit(profile, event)
+    ref = identity_ref(binding["provider_ref"], event["message_id"])
+    original = transport.core.read_request(ref)
+    failed = finish(runtime, original)
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "manager_authorization_unavailable"
+    assert failed["upstream_turn_id"] is None
+    assert failed["delta_count"] == 0
+    assert failed["response"] is None
+
+    if fault == "turn-started":
+        store.append_event(
+            original["session_id"],
+            original["turn_id"],
+            kind="turn.started",
+            payload={"upstream_turn_id": "unexpected-upstream"},
+        )
+    elif fault == "scope-unavailable":
+        monkeypatch.setattr(
+            manager_context,
+            "manager_authorization_scope_id_for_registry",
+            lambda *args, **kwargs: None,
+        )
+
+    transport.reconcile()
+    failed_path = store._turn_path(original["session_id"], original["turn_id"])
+    original_bytes = failed_path.read_bytes()
+    transport_path = transport.root / f"{ref}.json"
+    old_notice = json.loads(transport_path.read_text())["deliveries"]["terminal"]
+
+    clock = datetime.now(timezone.utc) + timedelta(seconds=61)
+
+    class AfterBackoff(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock
+
+    monkeypatch.setattr(external_conversations, "datetime", AfterBackoff)
+    worker = LarkPrivateConversations(
+        controller=runtime,
+        runtime_root=store.root.parent,
+        runner=provider,
+        cli_bin="lark-cli",
+    )
+    worker.reconcile()
+    recovered = worker.core.read_request(ref)
+    if fault is not None:
+        assert recovered["turn_id"] == original["turn_id"]
+        assert not recovered.get("context_recovery")
+        assert failed_path.read_bytes() == original_bytes
+        return
+
+    assert recovered["turn_id"] != original["turn_id"]
+    assert recovered["session_id"] == original["session_id"]
+    assert recovered["context_recovery"]["preparation_attempt"] == 1
+    assert recovered["context_recovery"]["failed_turn_id"] == original["turn_id"]
+    completed = finish(runtime, recovered)
+    assert completed["status"] == "completed"
+    worker.reconcile()
+    delivered = json.loads(transport_path.read_text())
+    assert delivered["deliveries"]["terminal"] == old_notice
+    assert delivered["deliveries"][presentation_phase(recovered, "terminal")]["verified"]
+    assert failed_path.read_bytes() == original_bytes

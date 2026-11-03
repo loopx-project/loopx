@@ -29,7 +29,7 @@ from ..effect_program import (
 )
 from ..goals.goal_ref_validation import exact_goal_ref
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
-from ..turn_driver.decision_capture import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+from ..turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
 
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",
@@ -49,6 +49,7 @@ __all__ = [
     "SettlementStepKind",
     "build_codex_app_settlement_plan",
     "build_turn_scoped_cli_settlement_plan",
+    "is_turn_reference",
     "receipt_bound_monitor_phase",
     "receipt_bound_replay_phase",
     "receipt_bound_terminal_phase",
@@ -56,11 +57,14 @@ __all__ = [
     "settlement_result_payload",
     "settlement_step_command",
     "turn_instance_arg",
+    "turn_reference",
 ]
 
 
 _POSIX_TURN_REF = "${LOOPX_TURN:?}"
 _POWERSHELL_TURN_REF = "$LOOPX_TURN"
+# Any POSIX shell reference names the same variable; only the guard differs.
+_POSIX_TURN_REFS = frozenset({_POSIX_TURN_REF, "${LOOPX_TURN}"})
 
 
 def _is_windows_host() -> bool:
@@ -79,6 +83,20 @@ def _quoted_turn_ref(turn_instance_id_ref: str) -> str:
     return shlex.quote(turn_instance_id_ref)
 
 
+def turn_reference(turn_instance_id: str | None = None) -> str:
+    """The concrete Turn when one is known, else the reference this host expands."""
+
+    return turn_instance_id or _default_turn_ref()
+
+
+def is_turn_reference(value: object) -> bool:
+    """Report whether a token is a shell-level Turn reference, not a concrete Turn."""
+
+    if not isinstance(value, str):
+        return False
+    return value in _POSIX_TURN_REFS or value == _POWERSHELL_TURN_REF
+
+
 def turn_instance_arg(turn_instance_id: str | None = None) -> str:
     """Render the ``--turn-instance-id`` argument for the shell that runs it.
 
@@ -87,8 +105,7 @@ def turn_instance_arg(turn_instance_id: str | None = None) -> str:
     native Windows host does not receive an empty Turn from POSIX syntax.
     """
 
-    reference = turn_instance_id or _default_turn_ref()
-    return f"--turn-instance-id {_quoted_turn_ref(reference)}"
+    return f"--turn-instance-id {_quoted_turn_ref(turn_reference(turn_instance_id))}"
 
 
 def _settlement_actor_args(arguments: str, agent_id: str) -> str:

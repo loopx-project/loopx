@@ -18,10 +18,12 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeR
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
-    native_context_page_budget,
+    CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
     read_context_read_reference, write_context_read_reference, private_capture_uid,
+)
+from ..control_plane.turn_driver.native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
 )
 
 
@@ -137,6 +139,29 @@ def _context_index_fields(payload: dict[str, Any], children: list[dict[str, Any]
     return fields
 
 
+def _context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep address structure without retransmitting unused scalar prose.
+
+    The TS owner validates pointers; selected values still come from the fully
+    digest-checked original. Initial navigation and discovery need real scalar
+    values and do not use this adapter. JSON null takes four bytes, so replacing
+    only strings longer than two characters cannot increase request bytes.
+    Iteration preserves the original JSON reader's supported nesting depth.
+    """
+    result: dict[str, Any] = {}
+    pending: list[tuple[Any, Any]] = [(payload, result)]
+    while pending:
+        source, target = pending.pop()
+        for key, value in source.items() if isinstance(source, dict) else enumerate(source):
+            if isinstance(value, (dict, list)):
+                child: Any = {} if isinstance(value, dict) else [None] * len(value)
+                target[key] = child
+                pending.append((value, child))
+            else:
+                target[key] = None if isinstance(value, str) and len(value) > 2 else value
+    return result
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None) -> dict[str, Any]:
@@ -231,7 +256,23 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
 
             depth_options = {"list_depth": list_depth} if list_depth is not None else {}
             selection_options = {"initial_read": True} if initial_read else {"select": selectors}
-            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields, **selection_options, **depth_options)
+            planning_context = payload if initial_read or list_fields else _context_selection_transport(payload)
+            plan = _turn_envelope_result("context_select", context=planning_context, list_fields=list_fields,
+                recover_selection_errors=not initial_read, **selection_options, **depth_options)
+            if rejection := plan.get("rejected_selection"):
+                # TS alone resolves the nearest container. Reuse the original
+                # escaped tokens, without parsing diagnostic prose or traversing
+                # the payload again in Python. A failed batch delivers no body.
+                pointer = selectors[rejection["argument_index"] - 1]
+                parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
+                command = context_capture_read_command(path, digest, select=[parent], list_fields=True,
+                    page_bytes=next_page_bytes or size,
+                    max_page_output_bytes=next_page_output_bytes or output_limit)
+                return {"ok": False, "schema_version": "context_capture_page_v1",
+                    "error_kind": "request_rejected", "diagnostic_code": rejection["code"],
+                    "reason": rejection["message"], "recovery_command": command,
+                    "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
+                        "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload

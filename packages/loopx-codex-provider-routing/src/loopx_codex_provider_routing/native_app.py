@@ -12,7 +12,6 @@ from pathlib import Path
 import plistlib
 import re
 import subprocess
-import tomllib
 
 from . import native_account_store as accounts
 
@@ -152,12 +151,13 @@ def check_provider(spec, role="gpt"):
     if role != "gpt":
         raise ValueError("Only native Codex is supported")
     path = spec["home"] / "config.toml"
-    cfg = tomllib.loads(path.read_text()) if path.exists() else {}
-    if (cfg.get("model_provider", "openai") != "openai" or cfg.get("model_catalog_json")
-            or "openai" in (cfg.get("model_providers") or {})):
-        raise ValueError("Account switching requires the built-in OpenAI provider")
-    if cfg.get("forced_login_method") == "api":
-        accounts.api_endpoint(cfg.get("openai_base_url"))
+    if not path.exists():
+        return "openai"
+    try:
+        cfg = accounts.tomllib.loads(path.read_text())
+    except (ValueError, UnicodeError):
+        raise ValueError("Invalid Codex config; repair it locally without printing secrets") from None
+    return accounts.provider_route(cfg)
 
 
 def account_preflight(home, spec):

@@ -1,4 +1,7 @@
 /** One full-source Todo read reduction; the existing owners decide every lane. */
+import {evaluateTodoCompletionFence, TODO_COMPLETION_FENCE_REQUEST_SCHEMA} from "./completion_fence.ts";
+import {normalizeTodoNoFollowup, normalizeTodoCompletionContinuation, normalizeTodoCompletionRecovery} from "./completion_state.ts";
+import {pythonFieldText} from "./read_codec.ts";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import {stripPythonWhitespace} from "../coordination/todo_agents.ts";
 import {compactTodoReadSummary} from "./read_presentation.ts";
@@ -307,8 +310,12 @@ export async function projectSourceTodoFields(input: JsonObject): Promise<JsonOb
 
 export async function readTodo(value: unknown, observedAt = new Date().toISOString()): Promise<JsonObject> {
   const input = requireJsonObject(value, "Todo read request");
-  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields"].includes(text(input.kind))) {
+  if (input.schema_version !== TODO_READ_REQUEST || !["group", "fields", "canonical_fields", "select", "source_fields", "query", "historical_fields", "completion_evidence"].includes(text(input.kind))) {
     throw new EffectRuntimeRequestError("Todo read request schema mismatch");
+  }
+  if (input.kind === "completion_evidence") {
+    const {readCompletionEvidence} = await import("./read_transaction.ts");
+    return readCompletionEvidence(input);
   }
   if (input.kind === "canonical_fields" || input.kind === "query") {
     const {readCanonicalTodoProjection} = await import("./read_transaction.ts");
@@ -321,4 +328,69 @@ export async function readTodo(value: unknown, observedAt = new Date().toISOStri
   if (input.kind === "select") return selectTodoReadFields(input);
   if (input.kind === "source_fields") return projectSourceTodoFields(input);
   return input.kind === "fields" ? projectCanonicalTodoFields(input) : projectTodoReadGroup(input);
+}
+
+/** Complete continuation read, including the original fence-first diagnostics. */
+export function projectCompletionEvidence(input: JsonObject): JsonObject {
+  const todo = requireJsonObject(input.todo, "durable completion Todo");
+  const operation = input.operation;
+  if (!["intent", "outcome", "terminal"].includes(String(operation))) throw new EffectRuntimeRequestError("unsupported completion evidence operation");
+  const terminal = operation === "terminal";
+  if (terminal || input.completion_turn_key != null) {
+    const fenceTodo = input.fence_todo == null ? {
+      status: pythonFieldText(todo, "status") || "open",
+      no_followup: typeof todo.no_followup === "boolean" ? todo.no_followup : pythonFieldText(todo, "no_followup") || null,
+      completion_continuation: pythonFieldText(todo, "completion_continuation") || null,
+      completion_turn_key: pythonFieldText(todo, "completion_turn_key") || null,
+      successor_todo_ids: todo.successor_todo_ids ?? null,
+    } : requireJsonObject(input.fence_todo, "completion fence Todo");
+    const fence = evaluateTodoCompletionFence({schema_version: TODO_COMPLETION_FENCE_REQUEST_SCHEMA,
+      projection_source: input.projection_source ?? "materialized", todo: fenceTodo,
+      requested_no_followup: terminal, requested_completion_turn_key: input.completion_turn_key ?? null,
+      requested_completion_identity_source: null, goal_id: null, todo_id: null});
+    if (terminal && fence.outcome === "continue") {
+      if (fence.reason === "same_turn_terminal_upgrade" || fence.reason === "not_terminal" && fence.status === "open") return {kind: "absent"};
+      throw new EffectRuntimeRequestError("durable terminal completion is not safely replayable");
+    }
+    if (terminal && stripPythonWhitespace(pythonFieldText(todo, "status")).toLowerCase() !== "done")
+      throw new EffectRuntimeRequestError("durable terminal completion is not safely replayable");
+  }
+  const expected = id(input.expected_todo_id);
+  if (!expected) throw new EffectRuntimeRequestError("durable completion requires a public Todo id");
+  if (id(pythonFieldText(todo, "todo_id")) !== expected)
+    throw new EffectRuntimeRequestError("durable completion todo_id does not match the selected Todo");
+  const requireDone = operation !== "intent";
+  if (requireDone && stripPythonWhitespace(pythonFieldText(todo, "status")).toLowerCase() !== "done")
+    throw new EffectRuntimeRequestError("durable completion requires the selected Todo to be durably done");
+  const rawSuccessors = todo.successor_todo_ids;
+  const successorValues = Array.isArray(rawSuccessors) ? rawSuccessors.map((_, i) => pythonFieldText(rawSuccessors, i)) : [pythonFieldText(todo, "successor_todo_ids")];
+  const successors = ids(successorValues);
+  const noFollowup = normalizeTodoNoFollowup(typeof todo.no_followup === "boolean" ? todo.no_followup : pythonFieldText(todo, "no_followup"));
+  let continuation = normalizeTodoCompletionContinuation(pythonFieldText(todo, "completion_continuation"));
+  const rawRecovery = pythonFieldText(todo, "completion_recovery"), recovery = normalizeTodoCompletionRecovery(rawRecovery);
+  if (rawRecovery && recovery === null) throw new EffectRuntimeRequestError("durable completion_recovery is invalid");
+  if (requireDone && continuation === null) throw new EffectRuntimeRequestError("durable completion is missing completion_continuation; repair the Todo with `loopx todo complete`");
+  continuation ??= noFollowup === true ? "no_followup" : successors.length ? "successor" : "active_goal";
+  let completion: JsonObject;
+  if (noFollowup === true) {
+    if (successors.length) throw new EffectRuntimeRequestError("durable completion records both no_followup and successor_todo_ids");
+    if (continuation !== "no_followup") throw new EffectRuntimeRequestError("durable completion_continuation contradicts no_followup");
+    completion = {todo_id: expected, continuation: "no_followup"};
+  } else if (successors.length) {
+    if (recovery !== null) throw new EffectRuntimeRequestError("durable completion_recovery requires a no_followup continuation");
+    if (continuation !== "successor") throw new EffectRuntimeRequestError("durable completion_continuation contradicts successor_todo_ids");
+    if (input.existing_todo_ids != null) {
+      if (!Array.isArray(input.existing_todo_ids)) throw new EffectRuntimeRequestError("existing Todo ids must be an array");
+      const existing = new Set(input.existing_todo_ids), missing = successors.filter(value => !existing.has(value));
+      if (missing.length) throw new EffectRuntimeRequestError("durable completion declares missing successor Todo ids: " + missing.join(", "));
+    }
+    completion = {todo_id: expected, continuation: "successor", successor_todo_ids: successors};
+  } else {
+    if (continuation !== "active_goal") throw new EffectRuntimeRequestError("durable completion_continuation requires matching no_followup or successor_todo_ids");
+    if (recovery !== null) throw new EffectRuntimeRequestError("durable completion_recovery requires a no_followup continuation");
+    completion = {todo_id: expected, continuation: "active_goal"};
+  }
+  if (!terminal) return completion;
+  if (completion.continuation !== "no_followup") throw new EffectRuntimeRequestError("durable terminal completion is not no-follow-up");
+  return {kind: "committed", completion};
 }
