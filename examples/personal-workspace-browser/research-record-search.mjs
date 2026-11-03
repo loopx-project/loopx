@@ -66,6 +66,16 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
         assert.match(file.suggestedFilename(), /^report-research-synthetic-[a-z-]+-readback\.json$/);
         return JSON.parse(await readFile(await file.path(), "utf8"));
       };
+      const report = async () => {
+        await results.getByRole("combobox", {name: "Download format"}).selectOption("md");
+        const received = page.waitForEvent("download");
+        await results.getByRole("button", {name: "Download reading report", exact: true}).click();
+        const file = await received;
+        assert.match(file.suggestedFilename(), /-readback\.md$/);
+        const text = await readFile(await file.path(), "utf8");
+        await results.getByRole("combobox", {name: "Download format"}).selectOption("json");
+        return text;
+      };
       await search.waitFor();
       assert(await search.evaluate(element => element === document.activeElement), "The search entry moves keyboard focus to the input");
       await page.waitForFunction(() => document.querySelector('.research-history')?.getAttribute('aria-busy') === 'false');
@@ -102,6 +112,11 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(all.goal_id, "synthetic-record-search");
       assert.equal(all.records.length, 79, "Download includes matches beyond both HTTP and display paging");
       assert.deepEqual(all.coverage, {loaded_records: 79, exported_records: 79, history_complete: true, refresh_failed: false});
+      const fullReport = await report();
+      assert.equal((fullReport.match(/^## \d+\./gm) ?? []).length, 79);
+      assert.match(fullReport, /\*\*Value:\*\* Unknown/);
+      assert.match(fullReport, /\*\*Value:\*\* 0/);
+      assert.match(fullReport, /candidate:amber-v3/);
       await search.fill("AMBER-V1 run:old");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       assert.equal(await results.locator("li").count(), 1, "Search reaches beyond both the display limit and HTTP page boundary");
@@ -127,6 +142,10 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(selected.records[0].summary, "质量下降 — original negative evidence for candidate amber.");
       assert.deepEqual(selected.records[0].evidence_refs, ["candidate:amber-v1"]);
       assert.equal(selected.records[0].run_id, "run:old");
+      const selectedReport = await report();
+      assert.match(selectedReport, /质量下降 — original negative evidence/);
+      assert.match(selectedReport, /\*\*Comparison scope:\*\* synthetic:fixed/);
+      assert.doesNotMatch(selectedReport, /candidate:amber-v2|Later observation/);
       // Compare the original negative record with a revision excluded by both filters.
       const comparison = results.locator(".research-record-comparison");
       const comparisonSummary = comparison.locator(":scope > summary");
@@ -180,6 +199,16 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await page.screenshot({path: resolve(outputDir, "research-record-export-download-error.png")});
       assert.deepEqual((await download()).records, selected.records);
       assert.equal(await results.getByRole("alert").count(), 0);
+      await results.getByRole("combobox", {name: "Download format"}).selectOption("md");
+      await page.evaluate(() => {
+        const original = URL.createObjectURL;
+        URL.createObjectURL = () => {URL.createObjectURL = original; throw new Error("Synthetic report interruption");};
+      });
+      await results.getByRole("button", {name: "Download reading report", exact: true}).click();
+      await results.getByRole("alert").waitFor();
+      assert.match(await report(), /Earlier negative observation/);
+      assert.equal(await results.getByRole("alert").count(), 0);
+      await results.getByRole("combobox", {name: "Download format"}).selectOption("md");
       for (const width of [1440, 390]) {
         await page.setViewportSize({width, height: 900});
         await results.evaluate(element => element.scrollIntoView({block: "start"}));
@@ -187,6 +216,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
         await page.screenshot({path: resolve(outputDir, `research-record-search-${width}.png`), animations: "disabled"});
       }
       // A failed refresh keeps the selected query and old evidence visibly stale.
+      await results.getByRole("combobox", {name: "Download format"}).selectOption("json");
       await page.route("**/api/chat/explore-results?*", route => route.fulfill({status: 503, json: {error: "Synthetic interruption"}}));
       await history.getByRole("button", {name: "Refresh history", exact: true}).click();
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).getByText(/Refresh failed/).waitFor();
@@ -194,6 +224,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await results.locator("li").count(), 1);
       const stale = await download();
       assert.equal(stale.coverage.refresh_failed, true);
+      assert.match(await report(), /Failed; previously read records retained/);
       await comparisonSummary.click();
       await comparison.getByRole("combobox", {name: "Compare with"}).waitFor();
       assert.match(await comparison.innerText(), /candidate:amber-v2/);
@@ -227,6 +258,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       const partial = await download();
       assert.equal(partial.coverage.history_complete, false);
       assert.equal(partial.coverage.refresh_failed, true);
+      assert.match(await report(), /Incomplete; unloaded records are not included/);
       assert.equal(partial.records.length, partial.coverage.loaded_records);
       assert(partial.records.length > 0 && partial.records.length < 79);
       await search.fill("amber-v1");
@@ -285,6 +317,15 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await chineseDownload.focus();
       await page.keyboard.press("Enter");
       assert.equal(JSON.parse(await readFile(await (await received).path(), "utf8")).records.length, 79);
+      await results.getByRole("combobox", {name: "下载格式"}).selectOption("md");
+      const chineseReport = page.waitForEvent("download");
+      await results.getByRole("button", {name: "下载阅读报告", exact: true}).focus();
+      await page.keyboard.press("Enter");
+      const reportText = await readFile(await (await chineseReport).path(), "utf8");
+      assert.match(reportText, /^# 研究记录报告/);
+      assert.match(reportText, /\*\*数值:\*\* 未知/);
+      assert.match(reportText, /\*\*数值:\*\* 0/);
+      assert.match(reportText, /质量下降 — original negative evidence/);
       return {coverageEntries: collectCoverage ? await page.coverage.stopJSCoverage() : [], note: "packaged evidence search/export through native paged history; full and filtered downloads, original revisions, coverage/staleness, original revision comparison, download/read recovery, Goal isolation and narrow viewport"};
     } catch (error) {
       if (page && !page.isClosed()) await page.screenshot({path: resolve(outputDir, "research-record-search-failed.png")});

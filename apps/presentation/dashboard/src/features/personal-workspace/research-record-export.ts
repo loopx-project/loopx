@@ -5,13 +5,15 @@ import {searchResearchRecords, type ResearchRecordDisplay} from "./research-reco
  * Export canonical records, never translated/analysed display replacements.
  * Source endpoints are deliberately absent: opening a file needs no connection.
  */
-export function exportResearchRecords({goalId, events, query, status, complete, stale, exportedAt, display}: {
+export type ResearchRecordExport = {
   goalId: string; events: readonly ExploreHistoryEvent[]; query: string; status: string;
   complete: boolean; stale: boolean; exportedAt: string; display?: ResearchRecordDisplay;
-}): string {
+};
+
+export function researchRecordSnapshot({goalId, events, query, status, complete, stale, exportedAt, display}: ResearchRecordExport) {
   if (!goalId || events.some(event => event.goal_id !== goalId)) throw new Error("Research export Goal mismatch");
   const records = searchResearchRecords(events, query, status, display);
-  return JSON.stringify({
+  return {
     goal_id: goalId,
     exported_at: exportedAt,
     filters: {query, status},
@@ -22,5 +24,9 @@ export function exportResearchRecords({goalId, events, query, status, complete, 
       refresh_failed: stale,
     },
     records,
-  }, null, 2) + "\n";
+  };
+}
+
+export function exportResearchRecords(input: ResearchRecordExport): string {
+  return JSON.stringify(researchRecordSnapshot(input), null, 2) + "\n";
 }
