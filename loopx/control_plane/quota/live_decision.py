@@ -15,7 +15,11 @@ from ..capability_hooks import (
     InteractionProjectionHookRegistration,
     dispatch_interaction_projection_hooks,
 )
-from .effect_program import ReceiptBoundReplayPhase
+from .effect_program import (
+    ReceiptBoundReplayPhase,
+    is_turn_reference,
+    turn_reference,
+)
 from .blocked_retry import overlay_active_turn_retries
 from .settlement import (
     QuotaSettlementReadback,
@@ -380,6 +384,36 @@ def _apply_pending_capability_intent_precedence(
     return True
 
 
+def _bind_followup_turn_argument(
+    cli_args: list[Any],
+    reference: str,
+    *,
+    authoritative: bool,
+) -> str:
+    """Point a follow-up's ``--turn-instance-id`` value at ``reference`` in place.
+
+    An authoritative Turn always wins, because it owns the receipt the follow-up
+    replays. Without one only a shell reference is re-rendered, so a concrete
+    projected Turn survives untouched. Returns the value the vector now carries,
+    so a mirrored ``args`` block cannot disagree with the executed command.
+    """
+
+    index = (
+        cli_args.index("--turn-instance-id")
+        if "--turn-instance-id" in cli_args
+        else -1
+    )
+    if index < 0:
+        cli_args.extend(["--turn-instance-id", reference])
+        return reference
+    if index + 1 >= len(cli_args):
+        cli_args.append(reference)
+        return reference
+    if authoritative or is_turn_reference(cli_args[index + 1]):
+        cli_args[index + 1] = reference
+    return str(cli_args[index + 1])
+
+
 def bind_scheduler_followup_cli_routes(
     payload: dict[str, Any],
     *,
@@ -409,17 +443,33 @@ def bind_scheduler_followup_cli_routes(
             if hint_name == "fallback_hint":
                 if cli_args[0] != "loopx-apply-rrule" or "--registry" in cli_args:
                     continue
-                followup_hint["cli_args"] = [
+                bound_cli_args = [
                     cli_args[0],
                     "--registry",
                     str(registry_path.expanduser().resolve()),
                     *cli_args[1:],
                 ]
+                safe_turn_instance_id = str(turn_instance_id or "").strip()
+                # The fallback replays this decision through ``loopx quota
+                # should-run``, so it needs the Turn that owns the receipt.
+                # Projections leave a shell reference here; a native Windows
+                # host cannot expand the POSIX form and would replay an empty
+                # Turn instead of the decision it came from.
+                bound_turn = _bind_followup_turn_argument(
+                    bound_cli_args,
+                    turn_reference(safe_turn_instance_id),
+                    authoritative=bool(safe_turn_instance_id),
+                )
+                followup_hint["cli_args"] = bound_cli_args
+                args_value = followup_hint.get("args")
+                if isinstance(args_value, dict) and "turn_instance_id" in args_value:
+                    args_value["turn_instance_id"] = bound_turn
                 followup_hint["route_binding"] = {
                     "schema_version": "codex_app_scheduler_fallback_route_v0",
                     "source": source,
                     "registry_bound": True,
                     "runtime_root_bound": False,
+                    "turn_instance_bound": bool(safe_turn_instance_id),
                 }
                 continue
             bound_cli_args = list(cli_args)
