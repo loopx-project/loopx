@@ -72,6 +72,72 @@ class ChatIngressStore:
     def runtime_activation_lock(self):
         return chat_runtime_activation_lock(self.root.parent)
 
+    def queued_turns(self, session_id: str) -> list[dict[str, Any]]:
+        from .chat_store import _read_json, CHAT_TURN_SCHEMA_VERSION
+
+        session = self.load_session(session_id)
+        if session is None:
+            raise KeyError("chat session was not found")
+        active_turn_id = str(session.get("active_turn_id") or "")
+        turns_dir = self._session_dir(session_id) / "turns"
+        rows: list[dict[str, Any]] = []
+        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
+            if path.name.endswith(".events.json"):
+                continue
+            payload = _read_json(path)
+            if (
+                payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
+                and payload.get("status") == "queued"
+                and str(payload.get("turn_id") or "") != active_turn_id
+            ):
+                rows.append(payload)
+        return sorted(
+            rows,
+            key=lambda item: (
+                str(item.get("created_at") or ""),
+                str(item.get("turn_id") or ""),
+            ),
+        )
+
+    def complete_recovered_terminalization(
+        self, session_id: str, turn_id: str,
+        session: dict[str, Any] | None, turn: dict[str, Any] | None,
+        *, recovery_messages: dict[str, str],
+    ) -> None:
+        """Finish the lifecycle owner's already-persisted failure, never dispatch.
+
+        State precedes the event, error message and claim release. If one of
+        those writes failed, retain the exact recovery result and idempotently
+        finish only its missing writes under the caller's execution fence.
+        """
+        from .chat_store import CHAT_SESSION_MODE_MANAGED, utc_now
+
+        if (session is None or turn is None
+                or session.get("session_mode") != CHAT_SESSION_MODE_MANAGED
+                or turn.get("status") != "failed"):
+            return
+        code = str(turn.get("error_code") or "")
+        message = recovery_messages.get(code)
+        if message is None or (code != "server_restarted" and turn.get("error") != message):
+            return  # Match this owner's recorded recovery, not arbitrary failures.
+        if not any(
+            event.get("kind") == "turn.failed"
+            and (event.get("payload") or {}).get("error_code") == code
+            and (event.get("payload") or {}).get("message") == message
+            for event in self.events_after(session_id, turn_id, None)
+        ):
+            self.append_event(session_id, turn_id, kind="turn.failed",
+                              payload={"error_code": code, "message": message})
+        if not any(
+            item.get("turn_id") == turn_id and item.get("role") == "error"
+            and item.get("text") == message for item in self.messages(session_id)
+        ):
+            self.append_message(session_id, role="error", text=message, turn_id=turn_id)
+        if session.get("active_turn_id") == turn_id:
+            self.release_active_turn(session_id, turn_id,
+                                     last_activity_at=str(turn.get("completed_at") or utc_now()),
+                                     last_error_code=code)
+
     def create_queued_turn(
         self,
         session_id: str,
