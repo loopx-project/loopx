@@ -232,8 +232,13 @@ def test_misplaced_delta_rejects_before_write_and_corrected_packet_roundtrips(tm
     assert json.loads(index.read_text().splitlines()[-1])["agent_vision"]["path_delta"] == delta
 
 
-@pytest.mark.parametrize("omitted", [None, "path_delta", "evidence_refs"])
-def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path, omitted):
+@pytest.mark.parametrize("omitted", [None, "path_delta", "evidence_refs", "wait"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path, monkeypatch, omitted, provider):
+    from canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.state_refresh import render_state_refresh_markdown
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     from loopx.control_plane.work_items.progress_observation import replan_writeback_requirements
 
     source = Path(__file__).resolve().parents[2] / "examples/project/goal-vision-refresh-state-budget-smoke.py"
@@ -241,7 +246,7 @@ def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path
     fixture = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fixture)
     registry, runtime, _ = fixture.write_fixture(tmp_path)
-    import_fixture_authority(registry, fixture.GOAL_ID, provider="file")
+    import_fixture_authority(registry, fixture.GOAL_ID, provider=provider)
     contract = replan_writeback_requirements({
         "satisfying_semantic_outcomes": ["fresh_vision_path_outcome"],
     })["writeback_contract"]["vision_authoring"]
@@ -252,6 +257,8 @@ def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path
         packet.pop("path_delta", None)
     elif omitted == "evidence_refs":
         packet.get("path_delta", {}).pop("evidence_refs", None)
+    if omitted == "wait":
+        packet["path_delta"]["outcome"] = "wait"
     path = tmp_path / "vision.json"
     fixture.write_json(path, packet)
     result = fixture.payload(fixture.run_cli(
@@ -263,9 +270,11 @@ def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path
     gaps = quota["goal_frontier_projection"]["acceptance_gaps"]
     outcome_gaps = [g for g in gaps if g["kind"] == "vision_outcome_checkpoint_required"]
     assert bool(outcome_gaps) is (omitted is not None)
+    assert result["vision_checkpoint"].get("acceptance_gaps", []) == outcome_gaps
+    assert ("outcome qualification gap:" in render_state_refresh_markdown(result)) is (omitted is not None)
     if omitted:
         checks = outcome_gaps[0]["component_checks"]
-        assert checks["evidence_refs_present"] is False
+        assert checks["evidence_refs_present"] is (omitted == "wait")
         assert checks["path_outcome_valid"] is (omitted == "evidence_refs")
     else:
         persisted = result["agent_vision"]
