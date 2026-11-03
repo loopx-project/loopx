@@ -813,10 +813,10 @@ def test_multistep_planner_responses_preserve_split_control_marker_across_steps(
         "json>"
         + json.dumps(
             {
-                "message": "PROTOCOL_ONLY_SENTINEL",
+                "message": "",
                 "proposals": [],
                 "context_handoff": [],
-                "gate": None,
+                "gate": {"kind": "PROTOCOL_ONLY_SENTINEL", "summary": "PROTOCOL_ONLY_SENTINEL"},
             }
         )
         + "</loopx-review-json>"
