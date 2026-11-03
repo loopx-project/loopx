@@ -7328,8 +7328,9 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("stride", [False, True])
+@pytest.mark.parametrize("vision_gap", [False, True])
 def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool, vision_gap: bool,
 ) -> None:
     """Refreshing cumulative requirements must not rebind an admitted review."""
     if provider == "sqlite":
@@ -7369,11 +7370,36 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
         "declare-outcome")
     call("todo", "complete", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID, "--no-follow-up", "--evidence", "artifact:initial-delivery")
+    if vision_gap:
+        from loopx.control_plane.goals.goal_vision import (
+            compact_goal_vision_packet, normalize_goal_vision_packet,
+        )
+
+        # Two independently owned gaps coexist before admission. Linking work
+        # removes only the outcome gap, not the owed evidence-based review.
+        index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        source_json, source_md = index.parent / "source.json", index.parent / "source.md"
+        source_json.write_text('{"fixture":"independent-vision-gap"}\n')
+        source_md.write_text("# Independently review the original artifact\n")
+        vision = compact_goal_vision_packet(normalize_goal_vision_packet({
+            "goal_id": GOAL_ID, "agent_id": AGENT_ID, "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "Recovery evidence remains unproven.",
+                "replan_trigger_summary": "Review the artifact before selecting further work.",
+                "advancement_policy": "repeat_until_closed"},
+        }, goal_id=GOAL_ID, agent_id=AGENT_ID))
+        with index.open("a") as stream:
+            stream.write(json.dumps({"classification": "validated_progress", "agent_id": AGENT_ID,
+                "generated_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+                "agent_vision": vision, "json_path": str(source_json), "markdown_path": str(source_md)}) + "\n")
     turn = "turn-replan-outcome-refinement"
     guard_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
         "--agent-id", AGENT_ID, "--turn-instance-id", turn)
     first = call(*guard_args)
     assert first["decision"] == "autonomous_replan_required", first
+    if vision_gap:
+        assert {row["kind"] for row in first["autonomous_replan_obligation"]["triggers"]} == {
+            "vision_acceptance_gap", "goal_outcome_uncovered"}
     identity = first["heartbeat_receipt"]["settlement_identity"]
     assert identity["binding_kind"] == "autonomous_replan"
     receipt = _heartbeat_receipt_events(runtime, turn)[0]
@@ -7393,7 +7419,8 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
         if row.get("source") == "goal_acceptance")
     assert acceptance["goal_acceptance_contract"]["outcome_requirements"] == expected
     assert _heartbeat_receipt_count(runtime, turn) == 1
-    assert receipt["details"]["semantic_replan_review_kind"] == "goal_outcome_uncovered"
+    assert receipt["details"]["semantic_replan_review_kind"] == (
+        "vision_acceptance_gap" if vision_gap else "goal_outcome_uncovered")
     assert receipt["details"]["semantic_replan_review_stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
     assert replay["autonomous_replan_obligation"]["stop_condition"] == first["autonomous_replan_obligation"]["stop_condition"]
     assert "semantic_replan_obligation" not in receipt["details"]
@@ -7448,7 +7475,9 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
     empty = call("refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--replan-obligation-id", identity["replan_obligation_id"], "--turn-instance-id", turn,
         "--classification", "bounded_replan_progress", "--delivery-batch-scale", "single_surface",
-        "--delivery-outcome", "outcome_progress", "--agent-vision-json", str(decision),
+        "--delivery-outcome", "outcome_progress",
+        *(("--vision-unchanged-reason", "The original artifact remains unproven.") if vision_gap
+          else ("--agent-vision-json", str(decision))),
         "--no-global-sync", "--suppress-external-sinks", expected_code=1)
     assert empty["appended"] is False
     assert _spend_run_count(runtime) == 0
