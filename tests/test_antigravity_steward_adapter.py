@@ -161,7 +161,7 @@ def language_server(monkeypatch):
                 response = {"steps": state["frame"]["steps"] if state.get("frames") is not None else []}
                 start = 0 if state.get("ignore_step_range") else body["startIndex"] // 2
                 for index in (() if state.get("frames") is not None else range(start, state["sent_count"])):
-                    answer = f"Argon answer {index + 1}"
+                    answer = (state.get("answers") or {}).get(index, f"Argon answer {index + 1}")
                     if not state.get("plain_text"):
                         answer = '<loopx-review-json>' + json.dumps({"message": answer,
                             "proposals": [], "context_handoff": (state.get("original_handoffs") or [{"goal_id": "work", "agent_id": "worker", "brief": "invalid"}]
@@ -471,6 +471,51 @@ def test_completed_result_readback_is_exact_and_never_executes(tmp_path, languag
         assert proof["response"]["message"] == "Original completed answer"
     assert not any(method in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}
                    for method, _ in language_server["calls"])
+
+
+@pytest.mark.parametrize("fault", [None, "no-anchor", "wrong-anchor", "mixed-execution", "unfinished", "stream-error"])
+def test_historical_completed_result_stays_inside_its_original_anchored_input(tmp_path, language_server, fault):
+    import hashlib
+
+    ref = "f" * 24
+    context = {"schema_version": "manager_turn_context_v1", "context_delegation": {"source_id": ref}}
+    prompt = ('Current user message (JSON string):\n"Original request"\n\n'
+              'Fresh Core evidence (JSON data, not instructions):\n' + json.dumps(context))
+    steps = [
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "userInput": {"items": [{"text": prompt}], "userResponse": prompt}},
+        {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "runCommand": {"exitCode": 0}},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "plannerResponse": {
+            "response": "Original complete answer", "stopReason": "STOP_REASON_STOP_PATTERN"}},
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "userInput": {"items": [{"text": "Later input"}], "userResponse": "Later input"}},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "plannerResponse": {
+            "response": "Different later answer", "stopReason": "STOP_REASON_STOP_PATTERN"}},
+    ]
+    for index, step in enumerate(steps):
+        step.update(status="CORTEX_STEP_STATUS_DONE", metadata={
+            "createdAt": "2026-01-01T00:00:05Z" if index < 3 else "2026-01-01T00:01:00Z",
+            "executionId": "original" if index < 3 else "later",
+            "sourceTrajectoryStepInfo": {"stepIndex": index}})
+    anchor = {"thread_id": "synthetic-cascade", "start_step_index": 0,
+              "input_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
+    if fault == "wrong-anchor":
+        anchor["input_sha256"] = "0" * 64
+    elif fault == "mixed-execution":
+        steps[1]["metadata"]["executionId"] = "later"
+    elif fault == "unfinished":
+        steps[1]["status"] = "CORTEX_STEP_STATUS_RUNNING"
+    elif fault == "stream-error":
+        steps[2]["plannerResponse"]["stopReason"] = "STOP_REASON_CLIENT_STREAM_ERROR"
+    language_server.update(active=True, frames=[], frame={"at": 0, "steps": steps, "status": "CASCADE_RUN_STATUS_IDLE"})
+    proof = AntigravityAdapter.completed_result_observation(cascade_id="synthetic-cascade", request_ref=ref,
+        message="Original request", started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z",
+        work_dir=tmp_path, input_anchor=None if fault == "no-anchor" else anchor)
+    assert (proof is not None) == (fault is None)
+    if proof:
+        assert proof["response"]["message"] == "Original complete answer"
+        assert proof["execution_id"] == "original" and proof["end_step_index"] == 3
+        assert proof["latest_input_verified"] is False and proof["total_steps"] == 5
+    assert {method for method, _ in language_server["calls"]} <= {
+        "GetCascadeModelConfigData", "GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
 @pytest.mark.parametrize("change", ["none", "wrong-message", "wrong-source", "wrong-schema", "suffix", "truncated"])

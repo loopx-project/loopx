@@ -77,6 +77,12 @@ class ChatExternalConversations:
                 or reservation.get("metadata_review"))
             and reservation.get("failed_turn_id") == row["turn_id"] else None)
         events = store.events_after(session["session_id"], turn["turn_id"], None)
+        anchors = [event["payload"]["native_input"] for event in events
+                   if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
+        # This only selects read-only result probes. Adoption still requires
+        # the exact original anchor, native final, current source and typed rule.
+        from ...chat import _review_openings
+        _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
         preparation = None
         later_equivalent = None
         if turn.get("error_code") == "manager_authorization_unavailable":
@@ -105,6 +111,8 @@ class ChatExternalConversations:
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
+                "native_input": anchors[0] if len(anchors) == 1 else None,
+                "response_literal_open": bool(open_literal),
                 "native_observation": observation, "source_verified": source_verified},
         })
 
@@ -174,7 +182,10 @@ class ChatExternalConversations:
             if not turn or turn.get("status") not in {"failed", "completed"}:
                 return False
             if turn.get("status") == "completed" and not (turn.get("response") or {}).get("unfinished_work"):
-                return False
+                from ...chat import _review_openings
+                _, open_literal, _ = _review_openings(str((turn.get("response") or {}).get("message") or ""), 0)
+                if not open_literal:
+                    return False  # A lexical probe hint, never permission to adopt or send.
             return self._context_recovery_plan(row, discovery_only=True).get("recovery_candidate") is True
         except (KeyError, ValueError, RuntimeError, OSError):
             return False
