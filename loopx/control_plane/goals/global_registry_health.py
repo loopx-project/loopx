@@ -47,7 +47,7 @@ def _multi_goal_source_entry_unchanged(
         except Exception:  # noqa: BLE001
             source_goals_cache[cache_key] = None
     source_goals = source_goals_cache[cache_key]
-    if not source_goals or len(source_goals) <= 1:
+    if not source_goals:
         return False
     candidates = [
         row for row in source_goals if str(row.get("id") or "") == goal_id

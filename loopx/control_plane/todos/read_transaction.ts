@@ -18,7 +18,9 @@ export async function readCanonicalTodoProjection(input: JsonObject): Promise<Js
   const todos = canonical.todos;
   const guards = canonical.goal_acceptance_work_guards ?? {};
 
-  const projected = await projectCanonicalTodoFields({...input, todos, retained: requireJsonObject(input.query ?? {}, "Todo query").read_scope === "completed_history",
+  const query = requireJsonObject(input.query ?? {}, "Todo query");
+  const retained = query.read_scope === "completed_history" || query.include_archived === true;
+  const projected = await projectCanonicalTodoFields({...input, todos, retained,
     goal_acceptance_contract: canonical.goal_acceptance_contract ?? null,
     goal_acceptance_work_guards: guards});
   if (input.query == null || projected.rejection) return {...projected, canonical};
