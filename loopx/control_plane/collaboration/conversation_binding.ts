@@ -484,9 +484,13 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
       && typeof recovered.message_text === "string" && recovered.message_text.length > 0
       && result != null && !["gate", "context_handoff", "protected_action", "goal_draft", "unfinished_work"].some(key => result[key])
       && Array.isArray(result.proposals) && result.proposals.length === 0;
+    const expandedResult = turn?.status === "completed" && response !== null && result != null
+      && recovered !== null && recovered.turn_id === row.turn_id && recovered.message_id === `native.${row.turn_id}.recovered`
+      && typeof recovered.message_text === "string" && recovered.message_text.length > 0
+      && extendsOriginalText(response, result);
     return {pending: !returned && row.command === null && row.status === "accepted"
       && turn?.session_id === row.session_id && turn?.turn_id === row.turn_id
-      && (metadataOwed || unfinished || turn?.status === "failed"
+      && (expandedResult || metadataOwed || unfinished || turn?.status === "failed"
         && ["usage_limit_exceeded", "response_timeout", "upstream_transport_failure",
           "antigravity_rpc_error", "antigravity_transport_error", "antigravity_step_error",
           "manager_authorization_unavailable"].includes(String(turn.error_code)))
@@ -555,6 +559,22 @@ export function planBoundConversationRequest(params: JsonObject): JsonObject {
   return {operation: "admit_turn", client_turn_id: `external-${request}`, session_id: session, turn_id: null};
 }
 
+function pureResultText(response: JsonObject | null): boolean {
+  return response?.schema_version === "loopx_chat_agent_response_v0"
+    && typeof response.message === "string" && response.message.length > 0
+    && Array.isArray(response.proposals) && response.proposals.length === 0
+    && ["gate", "context_handoff", "protected_action", "goal_draft", "unfinished_work"].every(key => response[key] == null);
+}
+
+function extendsOriginalText(original: JsonObject, result: JsonObject): boolean {
+  const metadata = (value: JsonObject) => Object.fromEntries(Object.entries(value)
+    .filter(([key, value]) => key !== "message" && value != null));
+  return pureResultText(original) && pureResultText(result)
+    && (result.message as string).length > (original.message as string).length
+    && (result.message as string).startsWith(original.message as string)
+    && isDeepStrictEqual(metadata(original), metadata(result));
+}
+
 /** A new, correlated continuation after an observed pre-execution failure.
  * A delivered failure notice is not a completed business request. This bounded
  * migration path never reopens the failed Turn or retries unknown effects.
@@ -592,18 +612,30 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior preparation recovery").preparation_attempt != null))) return no;
   if (current.agent_id === "antigravity") {
+    const originalResponse = failed.response && typeof failed.response === "object" && !Array.isArray(failed.response)
+      ? failed.response as JsonObject : null;
+    const anchor = recovery.native_input && typeof recovery.native_input === "object" && !Array.isArray(recovery.native_input)
+      ? recovery.native_input as JsonObject : null;
+    // The lexical hint only bounds read-only probes. It confers no result,
+    // source or execution authority; an anchored native final is still needed.
+    const completedText = failed.status === "completed" && pureResultText(originalResponse)
+      && recovery.response_literal_open === true && recovery.queued_input_present === false
+      && anchor !== null && anchor.thread_id === current.upstream_thread_id
+      && Number.isSafeInteger(anchor.start_step_index) && Number(anchor.start_step_index) >= 0
+      && typeof anchor.input_sha256 === "string" && BARE_SHA256_PATTERN.test(anchor.input_sha256);
     // Result adoption has no admission/dispatch authority. Keep the failed
     // Turn and original failure delivery, even when native tools ran.
     if (!steward || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
-        || failed.client_turn_id !== `external-${row.request_ref}` || failed.status !== "failed"
-        || failed.response != null || failed.message !== row.message
-        || !["response_timeout", "antigravity_rpc_error", "antigravity_transport_error",
-          "upstream_transport_failure", "server_restarted"].includes(String(failed.error_code))
+        || failed.client_turn_id !== `external-${row.request_ref}` || failed.message !== row.message
+        || (!completedText && (failed.status !== "failed" || failed.response != null
+          || !["response_timeout", "antigravity_rpc_error", "antigravity_transport_error",
+            "upstream_transport_failure", "server_restarted"].includes(String(failed.error_code))))
         || recovery.attachments_present !== false || recovery.steering_observed !== false
         || recovery.stop_observed !== false) return no;
     const adopted = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "adopted native result");
     if (adopted?.delivery_verified === true) {
+      if (completedText) return no; // A repaired answer never starts a format review or business continuation.
       return planNativeMetadataReview(recovery, row, current, failed, adopted, version);
     }
     // A fresh native result requires an idle, stable trajectory. Do not spend
@@ -621,7 +653,15 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
     return {...candidate, recovery_eligible: recovery.source_verified === true
       && proof.thread_id === current.upstream_thread_id && proof.request_ref === row.request_ref
       && typeof proof.execution_id === "string" && proof.execution_id.length > 0
-      && proof.latest_input_verified === true && proof.normal_terminal_verified === true
+      && (completedText
+        ? proof.start_step_index === anchor!.start_step_index && proof.input_sha256 === anchor!.input_sha256
+          && (proof.latest_input_verified === true || proof.latest_input_verified === false
+            && Number.isSafeInteger(proof.end_step_index)
+            && Number(proof.end_step_index) > Number(proof.start_step_index) + 1
+            && Number(proof.end_step_index) < Number(proof.total_steps))
+          && response !== null && extendsOriginalText(originalResponse!, response)
+        : proof.latest_input_verified === true)
+      && proof.normal_terminal_verified === true
       && Number.isFinite(created) && created >= start && created <= end
       && Number.isSafeInteger(proof.start_step_index) && Number(proof.start_step_index) >= 0
       && Number.isSafeInteger(proof.total_steps) && Number(proof.total_steps) > Number(proof.start_step_index) + 1

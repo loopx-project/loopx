@@ -92,6 +92,66 @@ test("Core preparation failures resume through one bounded original-source queue
   }
 });
 
+test("completed truncated text adopts only its anchored original final, never a later result or action", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24);
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity",
+    upstream_mode: "default", status: "ready", upstream_thread_id: "native", active_turn_id: null,
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+  const response = {schema_version: "loopx_chat_agent_response_v0", message: "Original `", proposals: [], gate: null};
+  const completed = {session_id: "original", turn_id: "truncated", client_turn_id: `external-${ref}`,
+    message: "Original request", status: "completed", response, error_code: null,
+    started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:00:10Z"};
+  const anchor = {thread_id: "native", start_step_index: 4, input_sha256: "1".repeat(64)};
+  const proof = {...anchor, request_ref: ref, execution_id: "original-execution",
+    input_created_at: "2026-01-01T00:00:05Z", total_steps: 12, end_step_index: 8,
+    answer_sha256: "2".repeat(64), latest_input_verified: false, normal_terminal_verified: true,
+    response: {...response, message: "Original `<loopx-review-json>` is a literal marker. Complete answer."}};
+  const original = {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+    message: completed.message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "truncated", source};
+  const recovery = {version: 21, failed_turn: completed, native_input: anchor, response_literal_open: true,
+    queued_input_present: false, steering_observed: false, stop_observed: false, attachments_present: false,
+    source_verified: true, native_observation: proof};
+  const packet = {request: original, binding: selected, current_session: session, context_recovery: recovery};
+  assert.equal(planBoundConversationRequest(packet).operation, "adopt_native_result");
+  assert.equal(planBoundConversationRequest(packet).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest(packet).client_turn_id, undefined);
+  for (const change of [{native_input: null}, {response_literal_open: false}, {queued_input_present: true},
+    {source_verified: false}, {stop_observed: true}, {steering_observed: true}, {attachments_present: true},
+    {native_input: {...anchor, thread_id: "later"}}, {native_input: {...anchor, input_sha256: "3".repeat(64)}},
+    ...[{start_step_index: 5}, {end_step_index: 12}, {end_step_index: 5}, {end_step_index: null},
+      {normal_terminal_verified: false}, {input_created_at: "2026-01-02T00:00:00Z"},
+      {response: {...proof.response, message: response.message}},
+      {response: {...proof.response, message: "Later answer"}},
+      {response: {...proof.response, proposals: [{kind: "action"}]}},
+      {response: {...proof.response, gate: {kind: "response_metadata_invalid"}}},
+      {response: {...proof.response, extra_metadata: "changed"}}]
+      .map(value => ({native_observation: {...proof, ...value}})),
+    {failed_turn: {...completed, response: {...response, protected_action: {kind: "action"}}}}]) {
+    assert.equal(planBoundConversationRequest({...packet, context_recovery: {...recovery, ...change}}).recovery_eligible,
+      false, JSON.stringify(change));
+  }
+  for (const change of [{status: "closed"}, {status: "busy", active_turn_id: "newer"}, {active_turn_id: "newer"}]) {
+    assert.equal(planBoundConversationRequest({...packet, current_session: {...session, ...change}}).recovery_candidate, false);
+  }
+  const latest = {...proof, latest_input_verified: true};
+  delete (latest as Partial<typeof proof>).end_step_index;
+  assert.equal(planBoundConversationRequest({...packet, context_recovery: {...recovery, native_observation: latest}}).recovery_eligible, true);
+  const adopted = {turn_id: completed.turn_id, message_id: `native.${completed.turn_id}.recovered`,
+    message_text: "Frozen original answer", native_observation: proof, delivery_verified: false};
+  const pending = {...original, native_result_recovery: adopted};
+  assert.equal(planBoundConversationRequest({request: pending, current_session: session,
+    pending_observation: {turn: completed, stop_observed: false}}).pending, true);
+  const delivered = {...pending, native_result_recovery: {...adopted, delivery_verified: true}};
+  assert.equal(planBoundConversationRequest({request: delivered, current_session: session,
+    pending_observation: {turn: completed, stop_observed: false}}).pending, false);
+  assert.equal(planBoundConversationRequest({...packet, request: delivered}).recovery_candidate, false);
+});
+
 test("native terminal recovery adopts a result without Turn admission or lost failure provenance", () => {
   const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
   const configured = planConversationBinding({...request, binding: selected}).state;
