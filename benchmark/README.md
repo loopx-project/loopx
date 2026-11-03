@@ -62,6 +62,9 @@ helper delivery neither launches trials nor changes frozen historical arms.
   patch and synthetic HTTP/client/Docker checks for the frozen single-host v1
   sources. It preserves historical attribution and does not launch a model or
   native-grader trial.
+- [Native Claude Code](runtime/NATIVE_CLAUDE.md) provides an independent,
+  explicitly pinned SForge worker with native Stop hooks and session recovery.
+  Model, tool, Goal/Plan and submission qualification precedes long trials.
 - [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
   covers independent local measurements with ordinary Goal/Todo planning and
   stride selection, complete initial Goal retention, and migration from the
