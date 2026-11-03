@@ -1,8 +1,12 @@
 """Content-free, bounded observations from a live Codex session rollout.
 
-This is an operational signal for liveness and capacity control.  Exact usage
-accounting still uses the complete streaming reader owned by
-``loopx.control_plane.quota.codex_session_usage``.
+This is an operational signal for liveness and capacity control.
+``usage_cumulative`` retains the native ``token_count`` basis, which may exclude
+compaction. Goal usage collection uses the complete streaming reader in
+``loopx.control_plane.quota.codex_session_usage`` with that same counter basis.
+For recorded request/compaction coverage, use the benchmark-toolkit trajectory
+capture's ``request_coverage`` projection. Session counters and reconciled
+all-request totals are separate observations, not additive charges.
 """
 
 from __future__ import annotations

@@ -140,8 +140,10 @@ assessment 中有证据绑定的研究综合分析接入指标 → 汇报 → �
 ### 统一契约与 controller/executor 交付
 
 [Controller/executor RFC](controller-executor-unified-contract-v0.zh-CN.md) 细化
-S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择，并纳入
-完整首包与差分上下文。可选 controller 模型独自对接 Core，executor 接收自然语言工作
+S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择。
+[双层交付设计](controller-executor-unified-contract-v0.zh-CN.md#差分上下文)以跨 Host 默认
+Progressive、仅已资格化 Host 独立 Delta auto，以及当前完整 capture 的未读发现为目标；
+保留显式 off 与分版本迁移。可选 controller 模型独自对接 Core，executor 接收自然语言工作
 和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
 唤醒来源和 benchmark 评估组保持正交。这是设计方向，不是已交付行为或成本收益证据。
 
@@ -166,6 +168,15 @@ C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-�
 在真实 File/SQLite fixture 验证 C1 来源/恢复行为，同时记录更大的冷态/累计输出，
 以及尚开放的独立数值 hash 边界。保留这些反证和原成果/完整成本门；文件差分或一次
 结算回执可用，不证明长程收益。
+
+[上下文交付指南](../../guides/context-delivery.zh-CN.md) 解释当前行为和最小双模型对照。
+文档先交付；在 C1/C2/C9 内，用明确版本的 DeepSeek 与强模型，分别对照原 quota 路径，
+固定可比条件并计入完整成本。随后验收受支持 profile 的可回退采用与发布，再决定默认
+范围扩展建议；reference 已有的 Codex 范围默认仍是当前行为，不证明模型收益。
+结果混合或某模型退步时，保留范围化 opt-in 或明确限制。退役须点名已替换的
+producer/consumer，以实际迁移、历史 reader 兼容和回退证据为依据；保留完整快照、
+完整性、权限、身份、停止与恢复。指南、仅 Codex adapter 或更短输出不通过模型／默认
+门。此顺序不阻塞独立获授权工作，也不启动实验。
 
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback

@@ -56,7 +56,7 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       page.on("pageerror", error => errors.push(error.message));
       await page.goto(`${owner.base}/chat/?goalId=synthetic-context-reading&view=research&research_goal=synthetic-context-reading&statusUrl=%2Fstatus.json`, {waitUntil: "networkidle"});
       const progress = page.locator('.research-progress');
-      const selector = progress.locator('select');
+      const selector = progress.locator(':scope > header select');
       await selector.selectOption({label: 'Without tool inventory'});
       await progress.locator('.research-usage').waitFor({state: 'attached'});
       await page.screenshot({path: resolve(outputDir, 'research-tool-context-before.png'), animations: 'disabled'});

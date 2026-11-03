@@ -11,6 +11,22 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+def selected_context_values(content):
+    """Address selected facts independently of complete parent packaging."""
+    values = {}
+
+    def visit(pointer, value):
+        values[pointer] = value
+        if isinstance(value, (dict, list)):
+            children = value.items() if isinstance(value, dict) else enumerate(value)
+            for key, child in children:
+                visit(pointer + "/" + str(key).replace("~", "~0").replace("/", "~1"), child)
+
+    for item in json.loads(content)["selections"]:
+        visit(item["pointer"], item["value"])
+    return values
+
+
 def delivered_context(request, digest):
     """Independent byte-map oracle over actual native model input."""
     import hashlib

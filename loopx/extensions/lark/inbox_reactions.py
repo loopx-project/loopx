@@ -626,6 +626,7 @@ def ensure_lark_event_inbox_received_reaction_locked(
 def _ensure_reaction_creation_locked(
     *, inbox: Path, message_id: str, emoji_type: str, reaction_phase: str,
     create_reaction: ReactionCreator, delete_reaction: ReactionDeleter,
+    captured_pending: bool = True,
 ) -> dict[str, Any]:
     """One provider creation lifecycle for received and processing feedback.
 
@@ -642,7 +643,7 @@ def _ensure_reaction_creation_locked(
             status=f"already_{reaction_phase}",
             ok=True,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
         )
     operation = _load_reaction_creation_operation(inbox=inbox, message_id=message_id, reaction_phase=reaction_phase)
     if operation and operation["emoji_type"] != emoji_type:
@@ -650,7 +651,7 @@ def _ensure_reaction_creation_locked(
             status="operation_config_changed",
             ok=False,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
             blocker=f"lark_inbox_{reaction_phase}_reaction_operation_config_changed",
         )
     if operation and operation["phase"] == "prepared":
@@ -658,7 +659,7 @@ def _ensure_reaction_creation_locked(
             status="provider_outcome_uncertain",
             ok=False,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
             blocker=f"lark_inbox_{reaction_phase}_reaction_provider_outcome_uncertain",
         )
     if operation and operation["phase"] == "created":
@@ -676,7 +677,7 @@ def _ensure_reaction_creation_locked(
                 status="receipt_failed",
                 ok=False,
                 configured=True,
-                captured_pending=True,
+                captured_pending=captured_pending,
                 external_writes_performed=False,
                 blocker=f"lark_inbox_{reaction_phase}_reaction_receipt_failed",
             )
@@ -685,7 +686,7 @@ def _ensure_reaction_creation_locked(
             status="receipt_recovered",
             ok=True,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
         )
     _write_reaction_creation_operation(
         inbox=inbox,
@@ -700,7 +701,7 @@ def _ensure_reaction_creation_locked(
             status="failed",
             ok=False,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
             blocker=f"lark_inbox_{reaction_phase}_reaction_create_failed",
         )
     try:
@@ -720,7 +721,7 @@ def _ensure_reaction_creation_locked(
             status="operation_receipt_failed",
             ok=False,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
             created_count=int(not cleaned_up),
             external_writes_performed=True,
             blocker=(
@@ -742,7 +743,7 @@ def _ensure_reaction_creation_locked(
             status="receipt_failed",
             ok=False,
             configured=True,
-            captured_pending=True,
+            captured_pending=captured_pending,
             created_count=1,
             external_writes_performed=True,
             blocker=f"lark_inbox_{reaction_phase}_reaction_receipt_failed",
@@ -752,9 +753,72 @@ def _ensure_reaction_creation_locked(
         status=reaction_phase,
         ok=True,
         configured=True,
-        captured_pending=True,
+        captured_pending=captured_pending,
         created_count=1,
     )
+
+
+def _reconcile_outbound_input_reactions(
+    *, project: str | Path, config_path: str | Path, message_id: str,
+    processing: bool, complete: bool, before_write: Callable[[], bool],
+    runner: CommandRunner,
+) -> dict[str, Any]:
+    """Reuse reaction receipts for an independently verified outbound input.
+
+    This is not an Inbox capture or settlement. The private-conversation
+    caller supplies fresh canonical/source and provider-message verification.
+    """
+    config = load_lark_event_inbox_config(project=project, config_path=config_path)
+    if not config["enabled"] or not MESSAGE_ID_PATTERN.fullmatch(message_id):
+        raise ValueError("outbound feedback requires an enabled inbox and exact message")
+    if config["reply"].get("received_reaction_policy") != "retain":
+        raise ValueError("outbound feedback requires retained receipt feedback")
+    inbox = config["inbox_path"]
+    with lark_inbox_reaction_lock(inbox=inbox, message_id=message_id):
+        if not before_write():
+            raise ValueError("outbound feedback authority unavailable")
+        created_count = 0
+        writes_performed = False
+        for phase in ("received", "processing") if processing and not complete else ("received",):
+            emoji = str(config["reply"].get(f"{phase}_reaction_emoji") or "")
+            if not emoji:
+                continue
+
+            def create(target: str, value: str) -> str | None:
+                if not before_write():
+                    # This callback is reached only for a newly prepared
+                    # creation. No provider call occurred; old unknown writes
+                    # never reach it and keep their original journal.
+                    _clear_reaction_creation_operation(inbox=inbox, message_id=target, reaction_phase=phase)
+                    return None
+                return _create_reaction(runner=runner, profile=config["reply"]["sender_profile"],
+                    message_id=target, emoji_type=value)
+
+            result = _ensure_reaction_creation_locked(inbox=inbox, message_id=message_id,
+                emoji_type=emoji, reaction_phase=phase, captured_pending=False,
+                create_reaction=create,
+                delete_reaction=lambda target, reaction: before_write() and _delete_reaction(
+                    runner=runner, profile=config["reply"]["sender_profile"], message_id=target, reaction_id=reaction))
+            created_count += result["created_count"]
+            writes_performed |= result["external_writes_performed"]
+            if not result["ok"]:
+                result["created_count"] = created_count
+                result["external_writes_performed"] = writes_performed
+                return result
+        if complete:
+            def authorized_runner(args: Sequence[str]) -> Mapping[str, Any]:
+                return runner(args) if before_write() else {"returncode": 1}
+
+            result = _complete_lark_event_inbox_reactions_locked(config=config,
+                message_id=message_id, execute=True, runner=authorized_runner)
+        else:
+            result = _operation_result(operation="processing" if processing else "received",
+                status="processing" if processing else "received", ok=True, execute=True,
+                configured=bool(config["reply"].get("received_reaction_emoji")
+                    or config["reply"].get("processing_reaction_emoji")))
+        result["created_count"] += created_count
+        result["external_writes_performed"] |= writes_performed
+        return result
 
 
 def ensure_lark_event_inbox_received_reaction(

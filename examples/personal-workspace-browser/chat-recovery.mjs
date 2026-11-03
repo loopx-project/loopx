@@ -156,6 +156,16 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "collaboration-unreadable-mobile.png"), fullPage: false, animations: "disabled" });
       await page.setViewportSize({ width: 1512, height: 982 });
       if (api.turnRequests.length !== turnsBeforeReturn) throw new Error("Disposition readback started another model turn");
+      delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "retry_pending", error: "initial_delivery_receipt_unavailable_extra" }];
+      await collaboration.getByText("回复送达尚未核验", { exact: true }).waitFor({ state: "visible" });
+      delegatedMessage.collaboration.returns[0].error = "initial_delivery_receipt_unavailable";
+      await collaboration.getByText("原始交接待核验", { exact: true }).waitFor({ state: "visible" });
+      await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: resolve(outputDir, "collaboration-original-handoff-desktop.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      if (await collaboration.evaluate((node) => node.scrollWidth > node.clientWidth + 1)) throw new Error("Original handoff explanation overflows on mobile");
+      await page.screenshot({ path: resolve(outputDir, "collaboration-original-handoff-mobile.png"), fullPage: false, animations: "disabled" });
+      await page.setViewportSize({ width: 1512, height: 982 });
       pass("collaboration-brief", "Original conversation preserves context, constraints, inputs and receiver decision without a new turn");
 
       const returnText = "处理结论：已核验新约束并关联现有计划，无需再次追问。";
@@ -189,13 +199,20 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "manager-automatic-conclusion.png"), fullPage: false, animations: "disabled" });
       const returnedMessage = page.__loopxRuntime.messages.get(returnSessionId)
         .find((message) => message.message_id === "handoff.browser-fixture");
+      returnedMessage.return_delivery = { schema_version: "manager_return_delivery_status_v0", phase: "conclusion",
+        status: "retry_pending", error: "initial_delivery_receipt_unavailable_extra" };
+      await richConclusion.getByText("等待回传", { exact: true }).waitFor({ state: "visible" });
+      returnedMessage.return_delivery.error = "initial_delivery_receipt_unavailable";
+      await richConclusion.getByText("原始交接待核验", { exact: true }).waitFor({ state: "visible" });
       returnedMessage.return_delivery = {
         schema_version: "manager_return_delivery_status_v0",
         phase: "conclusion",
         status: "delivered",
         verification: "reconciled_after_restart",
+        error: "initial_delivery_receipt_unavailable",
       };
       await page.getByText("恢复后已核验送达", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+      if ((await richConclusion.innerText()).includes("原始交接待核验")) throw new Error("A stale error cannot override verified delivery");
       await page.setViewportSize({ width: 390, height: 844 });
       await page.getByText(returnText, { exact: true }).waitFor({ state: "visible" });
       await richConclusion.scrollIntoViewIfNeeded();

@@ -1,12 +1,10 @@
 /** Read-only standing decisions. Storage order is not decision chronology;
  * this projection neither grants a lease nor commits an owner decision. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {authorityUnicodeCompare} from "../coordination/authority_store_codec.ts";
 import {todoPresentationMetadata} from "../coordination/todo_presentation.ts";
 
-export const STANDING_DECISION_REQUEST_SCHEMA = "standing_decision_projection_request_v0";
 const SCOPE_KINDS = new Set(["private_read", "write_scope", "resource", "production", "public_claim", "direction", "other"]);
 const BROAD_SCOPES = new Set(["goal", "project", "global"]);
 // The existing decision_scope_v0 wire grammar; not a prose classifier.
@@ -109,11 +107,4 @@ export function projectStandingDecisions(items: readonly JsonObject[], legacySou
   return {schema_version: "standing_decision_authority_v0", active_count: entries.filter(e => e.active).length,
     inactive_count: entries.filter(e => !e.active).length, entries,
     ...(conflicts.length ? {conflict_count: conflicts.length, conflicts} : {})};
-}
-
-export function evaluateStandingDecisionProjection(value: unknown): JsonObject | null {
-  const request = requireJsonObject(value, "standing decision projection request");
-  if (request.schema_version !== STANDING_DECISION_REQUEST_SCHEMA || !Array.isArray(request.items) ||
-      typeof request.legacy_source_order !== "boolean") throw new TypeError("invalid standing decision projection request");
-  return projectStandingDecisions(request.items.map(item => requireJsonObject(item, "standing decision item")), request.legacy_source_order);
 }

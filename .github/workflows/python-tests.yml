@@ -890,6 +890,14 @@ jobs:
           python -m pytest -q
           tests/canary/test_repository_root.py::test_plan_renders_repository_paths_in_canonical_posix_form
 
+      - name: Qualify native Windows quota settlement Turn rendering
+        # The settlement plan renders the Turn reference for the host shell, so
+        # only a native Windows host can check that the generated command
+        # forwards $LOOPX_TURN instead of the POSIX-only ${LOOPX_TURN:?}.
+        run: >-
+          python -m pytest -q
+          tests/control_plane/test_quota_settlement.py::test_codex_app_windows_settlement_command_substitutes_powershell_turn
+
       - name: Qualify TypeScript shard paths on native Windows
         run: python -m pytest -q tests/test_python_ci_workflow.py::test_typescript_shards_select_every_test_file_exactly_once
 
@@ -934,6 +942,7 @@ jobs:
           tests/test_file_lock_cross_process.py
           tests/test_host_thread_activity.py
           tests/control_plane/test_effect_runtime_integration.py
+          tests/control_plane/test_turn_instance_arg.py
           tests/control_plane/test_shadow_observation_retirement.py
           tests/test_python_install_owner_platform.py
           tests/test_self_update_runtime_activation.py

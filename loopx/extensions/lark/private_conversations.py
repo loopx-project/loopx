@@ -29,7 +29,8 @@ from .goal_channel_transport import call, json_payload, lark_args, lark_provider
 from .identity_shapes import LARK_APP_ID_PATTERN as APP_ID_PATTERN
 from .inbox_reply import _message, reply_lark_event_inbox, update_lark_inbox_reply, verify_lark_inbox_reply
 from .manager_context import manager_failure_reply
-from .inbox_reactions import mark_lark_event_inbox_processing, mark_lark_event_inbox_received
+from .inbox_reactions import (_reconcile_outbound_input_reactions,
+                             mark_lark_event_inbox_processing, mark_lark_event_inbox_received)
 from .outbound import present_lark_conversation_text as _presentation_text
 from .private_images import private_message_caption, private_message_images
 from .return_files import uploaded_chat_images, verify_chat_images
@@ -1212,7 +1213,9 @@ class LarkPrivateConversations:
         stream = presentation_stream(record)
         events = self.core.controller.store.events_after(session_id or record["session_id"],
             turn_id or record["turn_id"], stream.get("cursor"))
-        text = project_progress(stream, events)
+        text = project_progress(stream, events, owner_private=(
+            record.get("source", {}).get("private_human_message") is True
+            and record.get("event", {}).get("chat_type") == "p2p"))
         if text:
             # Journal the exact presentation the sender freezes, not the raw
             # Core text. The same conversion also recovers older draft proofs.
@@ -1329,6 +1332,8 @@ class LarkPrivateConversations:
                 try:
                     stat = (store.sessions_root / sid / "messages.jsonl").stat()
                     snapshot = (stat.st_mtime_ns, stat.st_size)
+                    key = identity_ref(source["binding_id"], sid)
+                    path = root / f"{key}.json"
                     if self._web_projection_snapshots.get(sid) == snapshot:
                         continue
                     messages = store.messages(sid)
@@ -1337,8 +1342,6 @@ class LarkPrivateConversations:
                     selected = [message for message in messages if message.get("turn_id") in web_turns
                                 and message.get("role") in {"user", "agent"}]
                     if selected:
-                        key = identity_ref(source["binding_id"], sid)
-                        path = root / f"{key}.json"
                         with exclusive_file_lock(path, operation="discover_web_conversation_projection"):
                             row = _read_json(path) if path.exists() else {
                                 "schema_version": "lark_private_web_projection_v0",
@@ -1387,6 +1390,73 @@ class LarkPrivateConversations:
                 selected.append(message)
             return selected
 
+    @staticmethod
+    def _web_projection_delivery_id(row: dict[str, Any], message: dict[str, Any]) -> str:
+        """The existing provider identity binds this exact canonical message."""
+        return hashlib.sha256(json.dumps([row["binding_id"], row["session_id"], message["message_id"]],
+            separators=(",", ":")).encode()).hexdigest()
+
+    def _web_projection_feedback(self, row: dict[str, Any], message: dict[str, Any]) -> None:
+        if not self.reaction_feedback or message["role"] != "user":
+            return
+        phase = row["deliveries"].get("web." + message["message_id"], {})
+        if not phase.get("verified"):
+            return
+        store = self.core.controller.store
+        turn = store.load_turn(row["session_id"], message["turn_id"]) or {}
+        status = turn.get("status")
+        if "feedback" not in phase and status in TERMINAL_TURN_STATES:
+            return  # Existing finished mirrors keep their frozen history.
+        prior = phase.setdefault("feedback", {})
+        if prior.get("ok") and prior.get("turn_status") == status:
+            return
+        try:
+            if message not in self._web_projection_messages(row):
+                raise ValueError("canonical App input changed")
+            expected_text = f"**你（App）**\n\n{message['text']}"
+            if phase.get("text") not in (expected_text, _presentation_text(expected_text)):
+                raise ValueError("App input no longer matches its frozen mirror")
+            source = _read_json(self.root / f"{row['request_ref']}.json")
+            if (source.get("context_recovery") or turn.get("context_recovery")
+                    or status not in {"queued", "starting", "running", *TERMINAL_TURN_STATES}):
+                raise ValueError("App feedback source/Turn unavailable")
+            config = self._inbox(row)
+            from .post_delivery import attachment_reply
+            _, target = attachment_reply(project=self.runtime_root, config_path=config,
+                attempt=phase["attempt"], text=phase["text"])
+
+            def authorized() -> bool:
+                try:
+                    if message not in self._web_projection_messages(row):
+                        return False
+                    verified = verify_lark_inbox_reply(project=self.runtime_root, config_path=config,
+                        message_id=row["event"]["message_id"], text=phase["text"], attempt=phase["attempt"],
+                        reply_placement="chat_root", delivery_id=self._web_projection_delivery_id(row, message),
+                        image_keys=tuple(phase.get("image_keys", [])), runner=self._reply_runner,
+                        finalize_reactions=False, source_authority_verifier=lambda profile, chat, ref:
+                            self._source_authority(row, profile, chat, ref))
+                    # Provider IO can outlast a grant or a Turn. Re-read both
+                    # before this exact mirror's reaction, including cleanup.
+                    if (verified.get("ok") is not True or verified.get("reply_verified") is not True
+                            or message not in self._web_projection_messages(row)):
+                        return False
+                    current_source = _read_json(self.root / f"{row['request_ref']}.json")
+                    current = store.load_turn(row["session_id"], message["turn_id"]) or {}
+                    return (current.get("status") == status
+                        and current.get("origin") == "web" and not current.get("context_recovery")
+                        and not current_source.get("context_recovery"))
+                except (OSError, ValueError, KeyError):
+                    return False
+
+            result = _reconcile_outbound_input_reactions(project=self.runtime_root, config_path=config,
+                message_id=target["message_ref"], processing=status in {"starting", "running"},
+                complete=status in TERMINAL_TURN_STATES, before_write=authorized, runner=self._reply_runner)
+            phase["feedback"] = {"ok": result.get("ok") is True, "turn_status": status,
+                "message_ref": target["message_ref"], "result": result}
+        except (OSError, ValueError, KeyError):
+            phase["feedback"] = {"ok": False, "turn_status": status,
+                "blocker": "original_web_projection_unavailable"}
+
     def _reconcile_web_projection(self, path: Path) -> int:
         # The existing worker pool serializes this outbox with a durable fence.
         # Recovery reads the same provider attempt; it never starts a Core Turn.
@@ -1411,12 +1481,14 @@ class LarkPrivateConversations:
                         return False
                 who = "你" if pending["role"] == "user" else "LoopX"
                 text = f"**{who}（App）**\n\n{pending['text']}"
-                delivery_id = hashlib.sha256(json.dumps(
-                    [row["binding_id"], row["session_id"], pending["message_id"]],
-                    separators=(",", ":")).encode()).hexdigest()
+                if self.reaction_feedback and pending["role"] == "user":
+                    # Persist feedback intent before a mirror write/recovery;
+                    # old completed mirrors without it are not backfilled.
+                    row["deliveries"].setdefault("web." + pending["message_id"], {}).setdefault("feedback", {})
+                    _atomic_write_json(path, row)
                 delivered = self._deliver(path, row, "web." + pending["message_id"], text,
                     inbox=lambda: self._inbox(row), authorization_check=authorized,
-                    reply_placement="chat_root", delivery_id=delivery_id, finalize_source=False,
+                    reply_placement="chat_root", delivery_id=self._web_projection_delivery_id(row, pending), finalize_source=False,
                     image_attachments=pending.get("attachments"))
                 if delivered:
                     row.pop("blocker", None)
@@ -1427,8 +1499,47 @@ class LarkPrivateConversations:
                 _atomic_write_json(path, row)
                 return 0
 
+    def reconcile_app_feedback(self) -> int:
+        """Reconcile optional reactions independently of the body outbox.
+
+        The live service reserves at most one existing reply worker for this
+        pass. A slow reaction must never own the body-delivery fence or prevent
+        a later canonical answer from reaching the same audience.
+        """
+        if not self.reaction_feedback:
+            return 0
+        for path in sorted((self.root / "web-projections").glob("*.json")):
+            with exclusive_file_lock(path.with_suffix(".feedback"), operation="reconcile_web_input_feedback"):
+                with exclusive_file_lock(path, operation="read_web_input_feedback"):
+                    row = _read_json(path)
+                try:
+                    messages = self._web_projection_messages(row)
+                except (OSError, ValueError, KeyError):
+                    continue
+                for message in messages:
+                    phase_key = "web." + message["message_id"]
+                    phase = row["deliveries"].get(phase_key, {})
+                    # Keep a frozen comparison without the independent
+                    # feedback field; concurrent body deliveries stay intact.
+                    frozen = {key: value for key, value in phase.items() if key != "feedback"}
+                    prior_feedback = phase.get("feedback")
+                    self._web_projection_feedback(row, message)
+                    if "feedback" not in phase or phase["feedback"] == prior_feedback:
+                        continue
+                    with exclusive_file_lock(path, operation="record_web_input_feedback"):
+                        current = _read_json(path)
+                        saved = current["deliveries"].get(phase_key, {})
+                        if (all(current.get(key) == row.get(key) for key in
+                                ("request_ref", "binding_id", "profile", "source", "event", "session_id"))
+                                and {key: value for key, value in saved.items() if key != "feedback"} == frozen):
+                            saved["feedback"] = phase["feedback"]
+                            _atomic_write_json(path, current)
+        return 0
+
     def reconcile(self) -> int:
-        return sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+        delivered = sum(self.reconcile_request(path) for path in self.pending_delivery_paths())
+        self.reconcile_app_feedback()
+        return delivered
 
     def _recovery_source_observation(self, record: dict[str, Any], selected: dict[str, Any]) -> dict[str, Any] | None:
         source = self._source_message(record, selected=selected)
@@ -1683,7 +1794,10 @@ class LarkPrivateConversations:
                             retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
                                 for event in reversed(events) if event.get("kind") == "agent.phase"
                                 and event.get("payload", {}).get("method") == "error"), None)
-                        response = manager_failure_reply(turn, retry_info=retry_info)[1] + " 原会话已保留。"
+                        preparation_recovery = (record["source"].get("private_human_message") is True
+                            and selected["binding"].get("context_kind") == "steward" and not native.get("agent_target"))
+                        response = manager_failure_reply(turn, retry_info=retry_info,
+                            preparation_recovery=preparation_recovery)[1] + " 原会话已保留。"
                     else:
                         response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (
                             "本次执行已停止。" if turn["status"] == "interrupted" else

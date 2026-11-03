@@ -258,8 +258,45 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
     if not pending_message_ids:
         return list(messages)
     statuses = {}
-    paths = sorted((_root(root) / "roundtrips").glob("*.json"))
-    for path in paths:
+    routes = _root(root) / "roundtrips"
+
+    def candidate_paths():
+        # The original Turn normally names its requests. Prefer those locators
+        # over scanning every conversation's routes for every history page.
+        # They are only hints: the route, source host and result identity below
+        # still have to match. Lost/older receipts retain the exhaustive fallback.
+        known = set()
+        if source_store is not None:
+            turn_ids = dict.fromkeys(
+                message.get("turn_id") for message in messages
+                if message.get("message_id") in pending_message_ids
+                and isinstance(message.get("turn_id"), str) and message.get("turn_id")
+            )
+            for turn_id in turn_ids:
+                try:
+                    turn = source_store.load_turn(session_id, turn_id) or {}
+                    if turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+                        continue
+                    response = turn.get("response") or {}
+                    if not isinstance(response, dict):
+                        continue
+                    receipts = response.get("context_handoff_receipts")
+                    if receipts is None:
+                        receipts = [response.get("context_handoff_receipt")]
+                    for receipt in receipts if isinstance(receipts, list) else []:
+                        request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
+                        if (isinstance(request_id, str) and BARE_SHA256_PATTERN.fullmatch(request_id)
+                                and request_id not in known):
+                            known.add(request_id)
+                            yield routes / (request_id + ".json")
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        # This part is lazy: a fully resolved page never enumerates the directory.
+        for path in sorted(routes.glob("*.json")):
+            if path.stem not in known:
+                yield path
+
+    for path in candidate_paths():
         try:
             route = _read(path)
             if (route.get("session_id") != session_id
