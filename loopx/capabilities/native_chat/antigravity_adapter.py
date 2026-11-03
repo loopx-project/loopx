@@ -149,8 +149,13 @@ def _rpc_post(
 
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None,
+    *, deadline: float | None = None,
 ) -> dict[str, Any] | None:
-    """Discover a running local Antigravity language_server endpoint and CSRF token."""
+    """Discover a running local endpoint without reusing an availability verdict.
+
+    Readiness can bound the whole observation, including process listing. An
+    execution caller without that deadline retains the existing phase limits.
+    """
     source_env = os.environ if env is None else env
     explicit_url = str(source_env.get("ANTIGRAVITY_LS_URL") or "").strip()
     explicit_token = str(source_env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
@@ -159,12 +164,15 @@ def discover_antigravity_language_server(
             return None
         try:
             explicit_url = _local_url(explicit_url)
+            timeout = 2.5 if deadline is None else min(2.5, deadline - time.monotonic())
+            if timeout <= 0:
+                return None
             _rpc_post(
                 explicit_url,
                 explicit_token,
                 "GetCascadeModelConfigData",
                 {},
-                timeout=2.5,
+                timeout=timeout,
             )
             return {
                 "url": explicit_url.rstrip("/"),
@@ -175,6 +183,9 @@ def discover_antigravity_language_server(
         except (CodexChatAgentError, ValueError):
             return None
 
+    process_timeout = 3.0 if deadline is None else min(3.0, deadline - time.monotonic())
+    if process_timeout <= 0:
+        return None
     try:
         ps_out = subprocess.check_output(
             ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
@@ -182,7 +193,7 @@ def discover_antigravity_language_server(
             encoding="utf-8",
             errors="replace",
             stderr=subprocess.DEVNULL,
-            timeout=3.0,
+            timeout=process_timeout,
         )
     except Exception:
         return None
@@ -201,7 +212,8 @@ def discover_antigravity_language_server(
         if token_match:
             candidates.append((pid, token_match.group(1)))
 
-    deadline = time.monotonic() + 4.0
+    discovery_deadline = time.monotonic() + 4.0
+    deadline = min(discovery_deadline, deadline) if deadline is not None else discovery_deadline
     for pid, token in candidates:
         if time.monotonic() >= deadline:
             break
@@ -243,7 +255,9 @@ def probe_antigravity_endpoint(
     env: Mapping[str, str] | None = None,
 ) -> tuple[bool, str, str]:
     """Return `(available, command_display, detail)` for `/api/chat/capabilities`."""
-    discovered = discover_antigravity_language_server(env=env)
+    # The four-second discovery allowance covers this whole advisory read,
+    # rather than beginning again after a slow process-listing phase.
+    discovered = discover_antigravity_language_server(env=env, deadline=time.monotonic() + 4.0)
     if discovered is not None:
         return (
             True,

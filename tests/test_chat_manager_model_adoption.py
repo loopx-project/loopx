@@ -107,6 +107,28 @@ def test_idle_conversation_adopts_model_preserving_context_and_authority(convers
     assert len(starts) == 2
 
 
+def test_readback_observation_does_not_cache_later_allocation(conversation, monkeypatch):
+    _, store, runtime, session, _ = conversation
+    before = store.load_session(session["session_id"])
+    observed = []
+
+    def capabilities():
+        available = bool(observed)
+        observed.append(available)
+        return [{"agent_id": "codex", "available": available}]
+
+    monkeypatch.setattr(runtime, "capabilities", capabilities)
+    assert manager_executor_allocation(runtime, environ={},
+        endpoint_capabilities=[{"agent_id": "codex", "available": True}])["available"] is True
+    # An explicitly empty observation remains unknown, without a hidden retry.
+    assert manager_executor_allocation(runtime, environ={}, endpoint_capabilities=[])["available"] is None
+    assert observed == []
+    assert manager_executor_allocation(runtime, environ={})["available"] is False
+    assert manager_executor_allocation(runtime, environ={})["available"] is True
+    assert observed == [False, True]
+    assert store.load_session(session["session_id"]) == before
+
+
 def test_restart_migrates_legacy_history_once_preserving_source_and_native_provenance(conversation):
     root, store, runtime, session, starts = conversation
     sid = session["session_id"]
