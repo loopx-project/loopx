@@ -134,12 +134,19 @@ interpreter's `-m loopx.entrypoint` route rather than an unrelated PATH executab
 Native reads propagate that route through review, acceptance and writeback; the
 complete original observation is not rewritten to carry a new command.
 The review stage provides structured facts without a prescribed diagnostic
-method. Writeback omits filled-in Vision/stride examples while retaining field
-limits, legal options, source bindings and settlement rules. Stride exposes its
-required field names and basis options independently of examples. The unchanged
-full capture remains available for optional examples and source inspection.
-This intentionally reduces advisory prompting; it does not remove acceptance,
-authority or stop obligations, nor demonstrate better autonomous decisions.
+method. Writeback omits the generic filled-in Vision example while retaining
+field limits, legal options, source bindings and settlement rules. Enabled
+Stride retains its owner's current `minimal_example`, including the nested
+previous-decision and Explore review fields when applicable. Top-level required
+field names alone do not describe that authoring shape. The example supplies
+syntax, not a recommended decision or evidence of adoption; replace its claims
+with the reviewed facts. Decision evidence remains in review/Explore and the
+unchanged full capture. This changes no acceptance, authority, stop rule or
+validation budget, and does not establish fewer model retries or better results.
+
+中文：写回保留 Stride owner 的当前格式示例，包含适用的上次决策与 Explore 复盘
+嵌套字段。示例只说明语法，判断与证据仍来自本次复盘；验收、权限、停止条件和校验
+预算不变。字段完整性不代表模型已采用，也不证明重试减少或结果改善。
 
 Cumulative outcome requirements are indexed by exact content hash. Every
 objective, revision and requirement count remains visible; the acceptance read
