@@ -814,7 +814,7 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
 @pytest.mark.parametrize("fault", [None, "codex-fallback", "quota-restore", "quota-unchanged", "quota-unknown",
     "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer", "wrong-target", "changed-brief", "tool-step",
     "cleared-before-proof", "retention-io"])
-def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):
+def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):  # noqa: F811 - imported pytest fixture
     """An already delivered, historical answer must not be sent/executed twice."""
     from copy import deepcopy
     from datetime import timezone
@@ -925,8 +925,9 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
             monkeypatch.setattr(runtime, "capabilities", lambda: capabilities)
             allocation = manager_executor_allocation(runtime, environ={}, endpoint_capabilities=[
                 {**item, "available": item["agent_id"] == "codex"} for item in capabilities])
-            route = lambda *args: {"allocation": allocation, "blocked_primary": None,
-                "observed_at": time.time()}
+            def route(*args):
+                return {"allocation": allocation, "blocked_primary": None,
+                    "observed_at": time.time()}
             monkeypatch.setattr(manager_module, "manager_session_quota_route", route)
             monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
             class Formatter(CodexAppServerAdapter):
