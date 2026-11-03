@@ -223,6 +223,110 @@ def adapter_for(tmp_path, **kwargs):
     return AntigravityAdapter.start(work_dir=tmp_path, objective="Act as LoopX Steward.", **kwargs)
 
 
+def _visible_history():
+    return [{"role": "user" if index % 2 == 0 else "assistant",
+             "content": ("  EARLIEST-CONSTRAINT\r\n不要重复已完成的动作\t  " if index == 0 else
+                         " \t\r\n " if index == 19 else
+                         f"Message {index}: 中文🚀\nassistant: quoted role\n" * 40)}
+            for index in range(20)]
+
+
+def _read_visible_history(prompt):
+    start = prompt.index("Previous visible Chat messages")
+    return json.JSONDecoder().raw_decode(prompt[prompt.index("\n", start) + 1:])[0]
+
+
+@pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
+@pytest.mark.parametrize("resumed", [False, True])
+def test_native_history_is_complete_exact_data_once_on_a_new_thread(
+    tmp_path, language_server, profile, resumed,
+):
+    history = _visible_history()
+    history[0]["transport_metadata"] = "DO-NOT-SEND-TRANSPORT-METADATA"
+    original = deepcopy(history)
+    adapter = adapter_for(tmp_path, runtime_profile=profile, history=history,
+                          **({"resume_thread_id": "synthetic-cascade"} if resumed else {}))
+    try:
+        adapter.start_turn("CURRENT-REQUEST", lambda *_: None)
+        first = next(body for method, body in language_server["calls"] if method == "SendUserCascadeMessage")
+        prompt = first["items"][0]["text"]
+        if resumed:
+            assert "Previous visible Chat messages" not in prompt
+        else:
+            assert "EARLIEST-CONSTRAINT" in prompt
+            assert _read_visible_history(prompt) == [
+                {"role": item["role"], "content": item["content"]} for item in original]
+        assert "DO-NOT-SEND-TRANSPORT-METADATA" not in prompt
+        assert prompt.count("CURRENT-REQUEST") == 1
+        assert first["cascadeConfig"]["plannerConfig"]["conversational"]["agenticMode"] == (profile == "trusted_owner")
+        adapter.start_turn("NEXT-REQUEST", lambda *_: None)
+        sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
+        assert len(sends) == 2
+        assert "Previous visible Chat messages" not in sends[1]["items"][0]["text"]
+        assert sum(method == "StartCascade" for method, _ in language_server["calls"]) == (0 if resumed else 1)
+        assert history == original
+    finally:
+        adapter.close_session()
+
+
+@pytest.mark.parametrize("profile", ["restricted", "trusted_owner"])
+def test_manager_context_migration_keeps_all_stored_visible_history(
+    tmp_path, monkeypatch, language_server, profile,
+):
+    from loopx import chat_manager_context
+    from loopx.chat_manager import MANAGER_AGENT_GOAL_ID, MANAGER_CONTEXT_VERSION
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from loopx.capabilities.machine_configuration.store import configure_machine_configuration
+
+    root = tmp_path / "runtime"
+    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
+        "manager_runtime": {"schema_version": "manager_runtime_profile_v0", "runtime_profile": profile}}}
+    registry = build_builtin_machine_configuration_registry()
+    plan = configure_machine_configuration(runtime_root=root, registry=registry,
+                                            configuration=configuration, execute=False)
+    configure_machine_configuration(runtime_root=root, registry=registry, configuration=configuration,
+                                    execute=True, expected_plan_revision=plan["plan_revision"])
+    monkeypatch.setattr(chat_manager_context, "collect_manager_turn_context", lambda *_a, **_kw: {
+        "schema_version": "manager_turn_context_v1", "goals": [], "coverage": {"complete": False}})
+    store = ChatSessionStore(root)
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(json.dumps({"goals": []}))
+    runtime = ChatRuntimeController(store=store, codex_bin="unused", registry_path=registry_path)
+    session = store.create_session(goal_id=MANAGER_AGENT_GOAL_ID, agent_id="antigravity",
+        adapter_kind="antigravity_ls", upstream_thread_id="old-context", channel_id="manager",
+        agent_model_id="gemini-4-argon-high", agent_reasoning_effort="high",
+        requested_agent_model_id="gemini-4-argon-high", requested_agent_reasoning_effort="high")
+    sid = session["session_id"]
+    store.update_session(sid, manager_context_version=MANAGER_CONTEXT_VERSION - 1)
+    history = _visible_history()
+    for item in history:
+        store.append_message(sid, role="agent" if item["role"] == "assistant" else "user", text=item["content"])
+    store.append_message(sid, role="error", text="Retain this error in the store, not as a user instruction.")
+    before = store.messages(sid)
+    try:
+        for index in range(2):
+            turn, _ = runtime.submit_turn(session_id=sid, client_turn_id=f"migration-{index}",
+                message=f"Continue request {index}", work_dir=tmp_path, objective="manager")
+            done = runtime.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=20)
+            assert done["status"] == "completed", done
+        sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
+        assert len(sends) == 2
+        assert "EARLIEST-CONSTRAINT" in sends[0]["items"][0]["text"]
+        assert _read_visible_history(sends[0]["items"][0]["text"]) == history
+        assert "Previous visible Chat messages" not in sends[1]["items"][0]["text"]
+        assert sum(method == "StartCascade" for method, _ in language_server["calls"]) == 1
+        assert store.messages(sid)[:len(before)] == before
+        assert len(store.messages(sid)) == len(before) + 4
+        current = store.load_session(sid)
+        assert current["manager_context_version"] == MANAGER_CONTEXT_VERSION
+        assert current["manager_runtime_profile"] == profile
+        assert current["upstream_thread_id"] == "synthetic-cascade"
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize(("unicode_source", "malformed"), [("ps", False), ("lsof", False), ("ps", True), ("lsof", True)])
 def test_process_discovery_decodes_utf8_before_verifying_the_local_endpoint(
     monkeypatch, language_server, unicode_source, malformed,
