@@ -215,7 +215,8 @@ name is already declared; source-path deduplication and byte witnesses still app
 The destination must be a new direct child of the trial log owner's
 `checkpoints` directory. Capture runs after a successful execute wake's original
 settlement, before the next wake. It uses the remaining phase budget with a
-30-second capture ceiling, preserves SQLite's committed WAL through the existing
+30-second capture ceiling (90 seconds for the complete controller handoff below),
+preserves SQLite's committed WAL through the existing
 backup owner, rejects observed source changes/symlinks and never overwrites a
 destination. Capture failures are recorded separately in the wake receipt;
 they do not replay work or change its settled outcome. The ceiling bounds
@@ -243,6 +244,32 @@ retain any existing crash diagnostic outside the declared participants before
 requesting a new point. Omit the checkpoint declaration on a new worker to
 retain ordinary launch behavior. This is file/session reconstruction, not
 process-memory recovery or permission to inspect crash memory.
+
+For an explicitly requested **complete capture after settled work**, omit
+`trigger`, use a fresh direct-child `destination` as above, and include all four
+flags: `"native_session": true`, `"loopx_state": true`,
+`"evaluation_opportunity": true`, and `"controller_handoff": true`. Pair the
+request with the existing controller file and native feedback. The native tool
+must finish its original Turn settlement before returning; the worker then
+captures the completed native cursor, canonical research context and declared
+workspace, and the external controller freezes their writers while capturing
+native opportunity, incumbent and the original phase clock. This does not admit
+a replan, interrupt the source or spend another work slot. An unsettled wake
+refuses capture. The preparation and writer barrier share the original
+90-second window, capped by the original phase; post-release sealing uses the
+existing bounded completion allowance within that phase. Failure keeps the
+source's settled outcome and records a missed point. Each destination is attempted
+once, including failures or uncertain replies: a later wake cannot replace that
+point. A separately declared new point needs a fresh destination. An exhausted
+original phase rejects before reading the declaration or any source. Omitting the declaration
+keeps ordinary execution unchanged; no new operator trigger is accepted.
+
+The joint qualification command below accepts `--capture-boundary settled_work`
+to exercise this source through the actual worker and controller, fresh ordinary
+and stride receivers, and another full capture/receiver. Its default remains
+`fresh_replan`. Both use deterministic local inference and synthetic native
+feedback: they qualify mechanical reconstruction and adoption, not scientific
+benefit or authorization to stop a live campaign.
 
 For pre-decision capture at a **fresh replan projected at the start of a heartbeat
 wake**, add `"trigger": "fresh_replan"` and set `destination` to the trial's

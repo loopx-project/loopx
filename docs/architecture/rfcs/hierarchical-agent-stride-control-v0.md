@@ -939,8 +939,8 @@ ten hours is an experiment setting, not a product default or automatic pivot.
 The proposed automatic capture policy is **off by default; when explicitly
 enabled, capture at each fresh replan node before its strategy decision**. Reuse
 the canonical replan obligation identity: repeated context reads or retries of
-that node do not create another point. Ordinary work Turns do not trigger a full
-capture. A successful point records the replan identity, the completed Host
+that node do not create another point. Ordinary work Turns do not automatically
+trigger a full capture. A successful point records the replan identity, the completed Host
 cursor, source revisions and current strategy version; these are evidence
 bindings, not authority. Branches can then compare different replan decisions
 from the same retained research state, including a decision to keep the route.
@@ -959,6 +959,23 @@ they do not qualify a complete research checkpoint or extend the original deadli
 Measure capture time and storage per node before choosing compression, shared
 immutable members or retention limits. Retention must preserve declared study
 points and their branches rather than silently selecting favorable outcomes.
+
+An explicitly requested full benchmark capture can also use the existing
+completed-wake boundary: omit the declaration's `trigger` and supply native
+session, canonical research state, evaluation opportunity and controller handoff
+together. The original work must already be settled and its native turn completed;
+no synthetic replan, extra guard or work-slot spend is introduced. The same
+controller writer barrier, participant rereads and fresh destination admission
+apply. File-loaded and preloaded full declarations share the original 90-second
+capture window, capped by the source phase, plus the existing bounded sealing
+allowance after writer release. Ordinary file-only captures keep their 30-second
+window. A missed point continues the source and does not authorize a signal-based
+handoff or relabel a later state. The Host retains the first attempt per declared
+destination, even on failure or a lost reply; replay cannot replace its original
+settled source, and an exhausted phase performs no declaration/source reads.
+The joint native qualification has an explicit
+`settled_work` variant; deterministic inference qualifies mechanical adoption,
+not a scientific advantage or live rollout.
 
 Record the actual boundary and any skew:
 

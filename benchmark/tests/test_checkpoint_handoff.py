@@ -11,6 +11,71 @@ import pytest
 from benchmark.runtime.checkpoint_handoff import await_controller_capture
 
 
+@pytest.mark.parametrize("trigger", [None, "fresh_replan"])
+@pytest.mark.parametrize("missing", [None, "native_session", "loopx_state", "evaluation_opportunity"])
+def test_full_controller_capture_requires_all_participants_at_either_boundary(trigger, missing):
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
+
+    request = {"destination": "/logs/agent/checkpoints/point", "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": "/task"}],
+        "controller_handoff": True, "native_session": True,
+        "loopx_state": True, "evaluation_opportunity": True}
+    if trigger is not None:
+        request["trigger"] = trigger
+    if missing:
+        del request[missing]
+        with pytest.raises(ValueError, match="all three state participants"):
+            parse_checkpoint_request(json.dumps(request).encode())
+    else:
+        assert parse_checkpoint_request(json.dumps(request).encode()) == request
+
+
+def test_full_controller_capture_does_not_invent_an_operator_trigger():
+    from benchmark.runtime.checkpoint import parse_checkpoint_request
+
+    request = {"destination": "/logs/agent/checkpoints/point", "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": "/task"}],
+        "controller_handoff": True, "native_session": True, "loopx_state": True,
+        "evaluation_opportunity": True, "trigger": "operator_handoff"}
+    with pytest.raises(ValueError, match="trigger must be fresh_replan or omitted"):
+        parse_checkpoint_request(json.dumps(request).encode())
+
+
+def test_completed_controller_point_cannot_retry_a_failed_boundary_with_later_work(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint
+
+    declaration = tmp_path / "request.json"
+    destination = tmp_path / "checkpoints" / "point"
+    declaration.write_text(json.dumps({"destination": str(destination), "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": str(tmp_path / "workspace")}],
+        "controller_handoff": True, "native_session": True, "loopx_state": True, "evaluation_opportunity": True}))
+    env = {"LOOPX_CHECKPOINT_REQUEST": str(declaration), "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_REGISTRY": str(tmp_path / "registry"),
+        "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate",
+                        lambda *a, **k: {"capture_allowed": True})
+    monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k:
+        SimpleNamespace(progress={"state": "settled"},
+                        identity=SimpleNamespace(value=SimpleNamespace(effect_id=k["turn_instance_id"]))))
+    attempts = []
+    def unavailable(*args):
+        attempts.append(True)
+        raise ValueError("synthetic source unavailable before sealing")
+    monkeypatch.setattr(checkpoint, "research_participants", unavailable)
+    first = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": "original"}
+    checkpoint.capture_after_wake(env, first)
+    assert first["checkpoint"]["reason"] == "capture_failed" and not destination.exists()
+    marker = next((destination.parent / ".completed-attempts").iterdir())
+    original = marker.read_bytes()
+    for turn in ("original", "later-work"):
+        later = {**first, "turn_id": turn}
+        checkpoint.capture_after_wake(env, later)
+        assert later["checkpoint"]["reason"] == "destination_already_attempted_no_replay"
+        assert later["ok"] and not later["checkpoint"]["captured"]
+    assert attempts == [True] and marker.read_bytes() == original
+
+
 @pytest.mark.parametrize("response", ["captured", "failed", "foreign", "timeout"])
 def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response):
     mailbox = tmp_path / "checkpoint-controller"
@@ -160,7 +225,10 @@ def test_capture_preparation_uses_one_window_without_renewing_phase(tmp_path, mo
         observed = SimpleNamespace(progress={"state": "settled"},
             identity=SimpleNamespace(value=SimpleNamespace(effect_id="original-effect")))
         monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k: observed)
-        checkpoint.capture_after_wake(env, receipt, supplied_request=(request, b"declared"))
+        declaration = tmp_path / "capture-request.json"
+        declaration.write_text(json.dumps(request))
+        env["LOOPX_CHECKPOINT_REQUEST"] = str(declaration)
+        checkpoint.capture_after_wake(env, receipt)
         assert receipt["checkpoint"]["captured"] is (phase_seconds != 20)
         assert receipt["ok"] is True  # An optional miss cannot replay successful work.
     else:
