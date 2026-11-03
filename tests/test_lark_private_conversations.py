@@ -442,7 +442,7 @@ def test_original_queue_recovers_historical_truncated_answer_without_execution(t
 
 @pytest.mark.parametrize("case", ["normal", "provider-unavailable", "closed", "source-changed", "wrong-native-turn", "wrong-anchor",
                                   "mixed-execution", "failed-core", "lost-ack"])
-def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path, language_server, monkeypatch, case):
+def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path, language_server, monkeypatch, case):  # noqa: F811 - imported pytest fixture
     from test_native_steward_private import steward
     from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
     from loopx.chat_agent import CodexChatAgentError
@@ -543,7 +543,7 @@ def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path,
         fixture.close()
 
 
-def test_native_capture_io_failure_preserves_the_primary_answer(tmp_path, language_server, monkeypatch, caplog):
+def test_native_capture_io_failure_preserves_the_primary_answer(tmp_path, language_server, monkeypatch, caplog):  # noqa: F811 - imported pytest fixture
     from test_native_steward_private import steward
 
     monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
