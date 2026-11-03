@@ -1419,6 +1419,22 @@ the post-claim guard can prove `ready` without replacing their identities. Hosts
 without this integration expose only the claim command for
 the Agent to execute, avoiding unrelated context reads or delivery work first.
 
+For enabled native Codex App/SSH context delivery, the existing trusted
+`SessionStart` / `PostToolUse` lifecycle hook is a capable Host executor. The
+private session journal retains only the exact projected claim identity beside
+the immutable guard capture, including the absolute authority route that
+produced it. The hook uses that retained route even when its process runs from
+another project; it never rediscovers Goal authority from the hook cwd. The
+hook accepts only
+`host_execution_allowed=true`, executes the ordinary managed claim, reruns the
+guard for the same Todo and receipt-bound Turn, and injects a compact `ready`
+receipt before the next model step. A successful receipt suppresses repeated
+preparation for that capture; session resume rechecks it because the lease may
+have expired while the model was absent. Malformed, foreign, moved-workspace,
+timed-out, or failed preparation preserves the original explicit claim/recheck
+fallback and never erases context-recovery output. Context delivery remains an
+opt-in transport; it does not make a read-only guard itself acquire authority.
+
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota
 selects the next ready advancement todo and records the future monitor under

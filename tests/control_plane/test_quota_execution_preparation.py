@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -258,3 +262,105 @@ def test_preparation_does_not_replace_explicit_action_selection(monkeypatch):
         agent_id=AGENT,
     )
     assert "execution_preparation" not in payload
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.control_plane.turn_driver.codex_context import (
+        codex_context_hook,
+        project_codex_context,
+    )
+
+    before = _run(
+        tmp_path,
+        monkeypatch,
+        provider,
+        [],
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--context-delivery", "off",
+        "--begin-turn",
+    )
+    turn = before["heartbeat_receipt"]["turn_instance_id"]
+    context_root = tmp_path / "context"
+    capture_root = tmp_path / "capture"
+    context_root.mkdir(mode=0o700)
+    capture_root.mkdir(mode=0o700)
+    foreign_workspace = tmp_path / "project-b"
+    foreign_workspace.mkdir()
+    monkeypatch.setenv("CODEX_THREAD_ID", "codex-hook-session")
+    monkeypatch.chdir(foreign_workspace)
+    event = {
+        "session_id": "codex-hook-session",
+        "cwd": str(foreign_workspace.resolve()),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    }
+    assert codex_context_hook(str(context_root), event) == {}
+    project_codex_context(
+        before,
+        directory=str(context_root),
+        capture_directory=capture_root,
+        goal_id=GOAL,
+        agent_id=AGENT,
+        surface="quota_packet",
+        capture_id="claim-required",
+    )
+
+    command = [
+        sys.executable, "-m", "loopx.entrypoint",
+        # The lifecycle process may be rooted in another project.  These
+        # deliberately wrong invocation routes must not replace the route
+        # retained with the captured preparation action.
+        "--registry", str(foreign_workspace / ".loopx" / "registry.json"),
+        "--runtime-root", str(foreign_workspace / ".loopx" / "runtime"),
+        "--format", "json",
+        "quota", "context-hook",
+        "--context-delivery", "on",
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--codex-context-dir", str(context_root),
+    ]
+    post_tool = {**event, "hook_event_name": "PostToolUse", "tool_response": "{}"}
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    prepared = subprocess.run(
+        command,
+        input=json.dumps(post_tool),
+        cwd=foreign_workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    hook = json.loads(prepared.stdout)
+    additional = hook["hookSpecificOutput"]["additionalContext"]
+    assert "automatically restored" in additional
+    assert '"state":"ready"' in additional
+    assert turn in additional
+
+    guard_code, after = run_json_cli_result(
+        "quota", "should-run",
+        "--runtime-profile", "codex_app_ssh_goal",
+        "--context-delivery", "off",
+        "--goal-id", GOAL,
+        "--agent-id", AGENT,
+        "--turn-instance-id", turn,
+        "--todo-id", TODO,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert guard_code == 0
+    assert after["execution_preparation"]["state"] == "ready"
+
+    repeated = subprocess.run(
+        command,
+        input=json.dumps(post_tool),
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert repeated.returncode == 0 and json.loads(repeated.stdout) == {}

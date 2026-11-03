@@ -35,6 +35,64 @@ def test_shared_root_keeps_interleaved_native_sessions_independent(tmp_path, mon
         assert (directory / "session.json").read_bytes() == raw
 
 
+def test_native_journal_projects_one_host_execution_request(tmp_path, monkeypatch):
+    event = setup(tmp_path, monkeypatch)
+    payload = {
+        "ok": True,
+        "goal_id": "fixture",
+        "registry": str(tmp_path / "registry.json"),
+        "runtime_root": str(tmp_path / "runtime"),
+        "should_run": True,
+        "selected_todo": {"todo_id": "todo_fixture", "claimed_by": "agent"},
+        "execution_preparation": {
+            "schema_version": "execution_preparation_v0",
+            "state": "claim_required",
+            "todo_id": "todo_fixture",
+            "agent_id": "agent",
+            "claim": {
+                "host_execution_allowed": True,
+                "cli_args": [
+                    "todo", "claim", "--goal-id", "fixture",
+                    "--todo-id", "todo_fixture", "--agent-id", "agent",
+                    "--claimed-by", "agent",
+                ],
+            },
+        },
+        "heartbeat_receipt": {"turn_instance_id": "turn-fixture"},
+    }
+    _, wire = project(tmp_path, payload=payload)
+    request = context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    )
+    assert request == {
+        "goal_id": "fixture",
+        "agent_id": "agent",
+        "todo_id": "todo_fixture",
+        "claim_args": payload["execution_preparation"]["claim"]["cli_args"],
+        "authority_route": {
+            "registry_path": str(tmp_path / "registry.json"),
+            "runtime_root": str(tmp_path / "runtime"),
+        },
+        "turn_instance_id": "turn-fixture",
+        "source_sha256": wire["recovery"]["sha256"],
+    }
+    receipt = {
+        "event": "host_execution_prepared",
+        "todo_id": "todo_fixture",
+        "turn_instance_id": "turn-fixture",
+    }
+    context.record_native_execution_preparation(
+        str(tmp_path), event,
+        source_sha256=request["source_sha256"], receipt=receipt,
+    )
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "PostToolUse"},
+    ) is None
+    assert context.native_execution_preparation_request(
+        str(tmp_path), {**event, "hook_event_name": "SessionStart"},
+    )["todo_id"] == "todo_fixture"
+
+
 def test_shared_root_read_does_not_create_unknown_session_or_follow_alias(tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
     monkeypatch.setenv("CODEX_THREAD_ID", "unknown")

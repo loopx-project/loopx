@@ -7,7 +7,7 @@ This neither proves retained model input nor grants execution authority.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 import json
 import os
@@ -26,6 +26,7 @@ from .native_context_profile import (
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
 )
+from .codex_execution_preparation import compact_execution_preparation_request
 
 # Native adapter activation reuses scheduler-owned host declarations. These
 # settings are presentation opt-ins, never host authentication or authority.
@@ -370,6 +371,75 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     return {}
 
 
+def native_execution_preparation_request(
+    directory: str | None, event: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Read one compact Host action from this exact native session journal."""
+
+    if directory is None or event.get("hook_event_name") not in {"SessionStart", "PostToolUse"}:
+        return None
+    session, cwd = event.get("session_id"), event.get("cwd")
+    if not isinstance(session, str) or not session or not isinstance(cwd, str) or not cwd:
+        return None
+    try:
+        with _locked(directory) as root:
+            state = _state(root)
+            if state.get("session_id") != session or state.get("cwd") != cwd:
+                return None
+            recovery = state.get("recovery")
+            if not isinstance(recovery, dict):
+                return None
+            request = recovery.get("execution_preparation")
+            source_sha256 = recovery.get("sha256")
+            if not isinstance(request, dict) or not isinstance(source_sha256, str):
+                return None
+            previous = state.get("host_execution_preparation")
+            if (
+                event.get("hook_event_name") != "SessionStart"
+                and isinstance(previous, dict)
+                and previous.get("source_sha256") == source_sha256
+                and previous.get("state") == "ready"
+            ):
+                return None
+            return {**request, "source_sha256": source_sha256}
+    except (OSError, ValueError, TypeError, RecursionError):
+        return None
+
+
+def record_native_execution_preparation(
+    directory: str | None,
+    event: dict[str, Any],
+    *,
+    source_sha256: str,
+    receipt: Mapping[str, Any],
+) -> None:
+    """Record a ready receipt only while its source/session is still current."""
+
+    if directory is None or receipt.get("event") != "host_execution_prepared":
+        return
+    with _locked(directory) as root:
+        state = _state(root)
+        recovery = state.get("recovery")
+        if (
+            state.get("session_id") != event.get("session_id")
+            or state.get("cwd") != event.get("cwd")
+            or not isinstance(recovery, dict)
+            or recovery.get("sha256") != source_sha256
+        ):
+            raise ValueError("execution-preparation source moved before receipt publication")
+        state["host_execution_preparation"] = {
+            "source_sha256": source_sha256,
+            "state": "ready",
+            "todo_id": receipt.get("todo_id"),
+            **(
+                {"turn_instance_id": receipt["turn_instance_id"]}
+                if receipt.get("turn_instance_id")
+                else {}
+            ),
+        }
+        _save(root, state)
+
+
 def _context_pages(value: object) -> list[dict[str, Any]]:
     """Decode native shell/MCP JSON records; never classify arbitrary prose.
 
@@ -537,9 +607,11 @@ def project_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 def publish_recovery(reference: dict[str, Any]) -> None:
                     reference["command"] = context_capture_read_command(Path(reference["path"]), reference["sha256"],
                         page_bytes=page_bytes, max_page_output_bytes=output_bytes)
+                    preparation = compact_execution_preparation_request(payload)
                     state["recovery"] = {**{key: reference[key] for key in ("path", "sha256", "command")},
                         "goal_id": goal_id, "agent_id": agent_id,
-                        "total_bytes": Path(reference["path"]).stat().st_size}
+                        "total_bytes": Path(reference["path"]).stat().st_size,
+                        **({"execution_preparation": preparation} if preparation else {})}
                     state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
                         "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
                     _save(root, state)
