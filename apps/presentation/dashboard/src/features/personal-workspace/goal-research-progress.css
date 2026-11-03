@@ -149,9 +149,10 @@
 }
 
 .research-turn-costs { border-top: 1px solid var(--pw-line); padding-top: 12px; margin-top: 12px; }
-.research-turn-costs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-block: 8px; }
+.research-turn-costs-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-block: 8px; }
 .research-turn-costs-sort { display: flex; align-items: center; gap: 8px; font-size: var(--text-body); }
-.research-turn-costs-sort select { min-height: 36px; padding: 4px 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; font-size: var(--text-body); }
+.research-turn-costs-sort label { width: auto; flex-shrink: 0; }
+.research-turn-costs-sort select { flex-shrink: 0; min-height: 36px; padding: 4px 8px; border: 1px solid var(--pw-line); border-radius: 6px; background: var(--pw-card); color: var(--pw-text); font: inherit; font-size: var(--text-body); }
 .research-turn-costs > p { max-width: 72ch; color: var(--pw-muted); font-size: 12px; }
 .research-turn-cost-list { list-style: none; padding: 0; margin: 12px 0; }
 .research-turn-cost-list > li { padding: 12px 0; border-top: 1px solid var(--pw-line); }
