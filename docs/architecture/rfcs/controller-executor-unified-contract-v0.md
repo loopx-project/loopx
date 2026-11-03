@@ -169,6 +169,16 @@ workload and limit, including number-dense overhead. Neither this prerequisite
 nor a component byte saving qualifies the unified writer/consumer cutover or
 long-horizon net benefit.
 
+The proposed Turn selection-reader slice removes the Python adaptive-selection
+decision from the driver. Its existing plan, Host, Session, completion and
+settlement callers use the interaction owner's `selectedWorkTodo` rule through
+the existing source-edit transport. The selection adapter retains Python's historical
+scalar/whitespace decoding; original records and numeric values stay intact.
+This retires one duplicate rule, not the historical envelope format. Complete
+writer/consumer cutover and original-quota outcome/full-cost qualification remain
+open. The added bridge calls must be counted; code convergence alone is no
+evidence of lower cost.
+
 | Current source / obligation | Present envelope treatment | Required C1 disposition |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` and pending required reads | `work_context` plus `required_reads`; identical inline material can be referenced | One complete requirement/evidence source with resolvable references; preserve pending reads and their completion conditions |

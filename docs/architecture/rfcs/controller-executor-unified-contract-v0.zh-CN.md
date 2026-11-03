@@ -132,6 +132,13 @@ Journal owner 在原子发布前恢复这些数值，并在重放与不可变 pl
 负载与上限下比较，包括数值密集时的元数据开销。该前置或组件字节减少，都不
 构成统一 writer/consumer 切换或长程净收益的资格。
 
+本次提议的 Turn 选择 reader 切片删除 driver 中 Python 的 adaptive 选择判断。
+现有 plan、Host、Session、completion 和 settlement 调用方经既有 source-edit
+传输复用 interaction owner 的 `selectedWorkTodo` 规则。此选择 adapter 仅保留
+Python 标量与空白解码，原记录和数字值不变。这退役的是一条重复规则，不是历史
+envelope 格式；完整 writer/consumer 切换和相对原 quota 的成果／完整成本资格仍
+开放。新增 bridge 调用必须计入，代码收敛本身不证明成本降低。
+
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |
