@@ -92,6 +92,14 @@ def _rule_next_action(finding: AntiEntropyFinding) -> str:
     if finding.rule_id.startswith("AE003"):
         return "Delete the commented-out block under version control instead of keeping ghost code."
     if finding.rule_id.startswith("AE004"):
+        message = finding.message.lower()
+        if "property key" in message or "destructuring" in message:
+            return (
+                "If this key is an unrelated object-literal or type definition, rename or "
+                "move it so the property-key context is unambiguous; if it is a destructuring "
+                "read, migrate the reader. Certification cannot proceed until the context is "
+                "parser-resolvable."
+            )
         return "Re-run with --workspace bound to the complete post-change sources; diff-only evidence cannot certify retirement."
     return "Address the reported diff hygiene finding and re-run the inspection."
 

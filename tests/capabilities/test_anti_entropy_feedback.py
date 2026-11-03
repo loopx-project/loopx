@@ -998,6 +998,37 @@ def test_unselected_sibling_todo_basis_does_not_activate_selected_todo() -> None
     assert result["context_fields"] == {}
 
 
+def test_inspect_ambiguous_property_key_reports_actionable_ae004(tmp_path: Path) -> None:
+    """AE004 ambiguity carries a concrete next action, not just a generic block."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    workspace = tmp_path / "ws_ambiguous_feedback"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "service.mjs").write_text(
+        "export function new_api() { return 2; }\n", encoding="utf-8"
+    )
+    (workspace / "client.ts").write_text(
+        "class Config { 'old_api': number = 1; }\n", encoding="utf-8"
+    )
+    result = run_anti_entropy_feedback_cycle(
+        diff_text=diff,
+        basis=RetirementBasis(target_symbols=("old_api",)),
+        workspace=workspace,
+    )
+    assert result["verdict"] == "rejected"
+    ae004 = next(
+        item for item in result["actionable_feedback"] if item["rule_id"].startswith("AE004")
+    )
+    assert "property key" in ae004["message"].lower()
+    assert "object-literal" in ae004["next_action"].lower()
+    assert "destructuring" in ae004["next_action"].lower()
+
+
 def test_turn_context_reads_native_work_context_todo_note() -> None:
     """The hook reads the selected Todo's canonical note from the native work context."""
     basis = {

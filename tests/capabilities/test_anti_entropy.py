@@ -2027,3 +2027,194 @@ def test_python_nfkc_ligature_and_combining_identifiers(
     receipt = evaluate_diff_hygiene(diff, variant_basis, workspace=workspace)
     assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
     assert receipt.retired_symbols == ()
+
+
+_DESTRUCTURING_FORMS = (
+    "const { ['old_api']: fn } = api; fn();",
+    "const { [`old_api`]: fn } = api; fn();",
+    "const { 'old_api': fn } = api; fn();",
+    "const { ['old'+'_api']: fn } = api; fn();",
+    "const { nested: { ['old_api']: fn } } = api; fn();",
+    "const { ['old_api']: fn = () => 0 } = api; fn();",
+    "function run({ ['old_api']: fn }) { return fn(); } run(api);",
+    "const run = ({ ['old_api']: fn }) => fn(); run(api);",
+    "let fn; ({ ['old_api']: fn } = api); fn();",
+    "for (const { ['old_api']: fn } of [api]) { fn(); }",
+    "const [{ ['old_api']: fn }] = [api]; fn();",
+    "const { /* key */ ['old_api']: fn } = api; fn();",
+    "const { ['old_api'] /* key */ : fn } = api; fn();",
+    "const {\n  ['old_api']: fn\n} = api; fn();",
+    "const { // key\n  ['old_api']: fn } = api; fn();",
+)
+
+
+@pytest.mark.parametrize("caller", _DESTRUCTURING_FORMS)
+def test_typescript_destructuring_static_key_blocks_retirement(
+    tmp_path: Path, caller: str
+) -> None:
+    """A static destructuring property read is a reference in every common pattern context."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_destructuring",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": "import * as api from './service.mjs';\n" + caller + "\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+_OBJECT_LITERAL_FORMS = (
+    "const config = { 'old_api': 1 };",
+    "const config = { ['old_api']: 1 };",
+    "function f(x) { return x; } f({ 'old_api': 1 });",
+    "function f() { return { 'old_api': 1 }; }",
+    "const xs = [{ 'old_api': 1 }];",
+    "const v = true ? { 'old_api': 1 } : {};",
+    "const v = !{ 'old_api': 1 };",
+    "const v = true && { 'old_api': 1 };",
+    "const config = { 'new_api': 1 };",
+)
+
+
+@pytest.mark.parametrize("body", _OBJECT_LITERAL_FORMS)
+def test_typescript_object_literal_static_key_is_not_reference(
+    tmp_path: Path, body: str
+) -> None:
+    """A clear object-literal key is a definition, not a destructuring read."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_object_literal",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": "import * as api from './service.mjs';\n" + body + "\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+def test_typescript_ambiguous_static_property_key_reports_ae004(
+    tmp_path: Path,
+) -> None:
+    """A target property key the bounded classifier cannot place must fail closed."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_ambiguous_property_key",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.ts": "class Config { 'old_api': number = 1; }\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    ae004 = next(f for f in receipt.findings if f.rule_id.startswith("AE004"))
+    assert "property key" in ae004.message.lower()
+    assert "old_api" not in receipt.retired_symbols
+
+
+def test_typescript_dynamic_destructuring_key_reports_ae004(tmp_path: Path) -> None:
+    """A computed destructuring key is an executable read we cannot resolve."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_dynamic_destructuring",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "const { [key]: fn } = api;\nfn();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE004") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        "const { ['old_api']: fn } = api; fn();",
+        "const { [`old_api`]: fn } = api; fn();",
+        "const { 'old_api': fn } = api; fn();",
+        "const { ['old'+'_api']: fn } = api; fn();",
+    ),
+)
+def test_typescript_destructuring_real_cli_exit_code(
+    tmp_path: Path, caller: str
+) -> None:
+    """Reviewer-shaped real CLI cases: static destructuring reads reject."""
+    import subprocess
+    import sys
+
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    workspace = _make_workspace(
+        tmp_path / "ws_destructuring_cli",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": "import * as api from './service.mjs';\n" + caller + "\n",
+        },
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "anti-entropy",
+            "verify",
+            "--diff-file",
+            "-",
+            "--basis-json",
+            '{"target_symbols": ["old_api"]}',
+            "--workspace",
+            str(workspace),
+            "--format",
+            "json",
+        ],
+        input=diff.encode("utf-8"),
+        capture_output=True,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr

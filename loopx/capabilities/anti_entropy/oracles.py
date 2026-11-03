@@ -919,6 +919,316 @@ def _static_computed_member(
     )
 
 
+
+@dataclass(slots=True)
+class _JsBracketGroup:
+    start: int
+    open_char: str
+    parent: int | None = None
+    end: int = -1
+    kind: str = "unknown"
+
+
+def _skip_js_string_literal(text: str, index: int) -> int:
+    quote = text[index]
+    length = len(text)
+    cursor = index + 1
+    while cursor < length:
+        char = text[cursor]
+        if char == "\\\\":
+            cursor += 2
+            continue
+        if char == quote:
+            return cursor + 1
+        if quote != "`" and char in "\\r\\n\\u2028\\u2029":
+            return cursor
+        cursor += 1
+    return length
+
+
+def _scan_js_bracket_groups(text: str) -> list[_JsBracketGroup]:
+    """Collect balanced bracket groups with parent links, skipping JS strings/comments."""
+    groups: list[_JsBracketGroup] = []
+    stack: list[int] = []
+    index = 0
+    length = len(text)
+    closing = {"}": "{", "]": "[", ")": "("}
+    while index < length:
+        char = text[index]
+        if text.startswith("//", index):
+            newline = index + 2
+            while newline < length and text[newline] not in "\\r\\n\\u2028\\u2029":
+                newline += 1
+            index = newline
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            index = length if close == -1 else close + 2
+            continue
+        if char in _TS_QUOTE_CHARS:
+            index = _skip_js_string_literal(text, index)
+            continue
+        if char in "{[(":
+            group = _JsBracketGroup(
+                start=index,
+                open_char=char,
+                parent=stack[-1] if stack else None,
+            )
+            groups.append(group)
+            stack.append(len(groups) - 1)
+            index += 1
+            continue
+        if char in closing:
+            if stack:
+                top = groups[stack[-1]]
+                if top.open_char == closing[char]:
+                    top.end = index
+                    stack.pop()
+            index += 1
+            continue
+        index += 1
+    return groups
+
+
+def _token_after(text: str, index: int) -> tuple[str, str]:
+    index, ok = _skip_js_trivia(text, index)
+    if not ok or index >= len(text):
+        return "", ""
+    char = text[index]
+    if char.isalpha() or char in "_$":
+        match = _TS_IDENTIFIER_AT_RE.match(text, index)
+        if match is not None:
+            return "", match.group(0)
+    return char, ""
+
+
+def _token_before(text: str, index: int) -> tuple[str, str]:
+    cursor = index
+    while True:
+        while cursor > 0 and text[cursor - 1].isspace():
+            cursor -= 1
+        if cursor >= 2 and text[cursor - 2 : cursor] == "*/":
+            open_comment = text.rfind("/*", 0, cursor - 1)
+            cursor = 0 if open_comment == -1 else open_comment
+            continue
+        line_start = text.rfind("\n", 0, cursor) + 1
+        line_comment = text.rfind("//", line_start, cursor)
+        if line_comment != -1:
+            cursor = line_comment
+            continue
+        break
+    if cursor <= 0:
+        return "", ""
+    end = cursor
+    while cursor > 0 and (text[cursor - 1].isalnum() or text[cursor - 1] in "_$"):
+        cursor -= 1
+    if cursor < end:
+        return "", text[cursor:end]
+    return text[end - 1], ""
+
+
+_TS_CONTROL_PAREN_WORDS = frozenset({"if", "while", "switch", "with"})
+_TS_EXPRESSION_LITERAL_LEADS = frozenset("=([,:?!&|+-*/%^~<>")
+
+
+def _classify_js_group(
+    groups: list[_JsBracketGroup], group_index: int, text: str
+) -> str:
+    group = groups[group_index]
+    if group.kind != "unknown":
+        return group.kind
+    before_char, before_word = _token_before(text, group.start)
+    after_char, after_word = _token_after(text, group.end + 1 if group.end >= 0 else len(text))
+    parent_kind = (
+        groups[group.parent].kind
+        if group.parent is not None
+        else "unknown"
+    )
+    if parent_kind == "unknown" and group.parent is not None:
+        parent_kind = _classify_js_group(groups, group.parent, text)
+    if group.open_char == "(":
+        after_index, after_ok = _skip_js_trivia(
+            text, group.end + 1 if group.end >= 0 else len(text)
+        )
+        is_arrow_params = after_ok and text.startswith("=>", after_index)
+        if before_word == "for":
+            kind = "for_header"
+        elif before_word == "catch":
+            kind = "catch"
+        elif before_word in _TS_CONTROL_PAREN_WORDS:
+            kind = "expression"
+        elif is_arrow_params:
+            kind = "params"
+        elif after_char in ("{", ":") and before_word not in ("", "return"):
+            kind = "params"
+        else:
+            kind = "expression"
+    elif group.open_char in "{[": 
+        if before_word in ("const", "let", "var"):
+            kind = "pattern"
+        elif before_char == "(" and parent_kind in ("params", "catch", "for_header"):
+            kind = "pattern"
+        elif after_char == "=":
+            kind = "pattern"
+        elif after_word in ("of", "in"):
+            kind = "pattern"
+        elif parent_kind == "pattern":
+            if before_char == "=":
+                kind = "literal"
+            else:
+                kind = "pattern"
+        elif parent_kind == "literal":
+            kind = "literal"
+        elif before_char in _TS_EXPRESSION_LITERAL_LEADS or before_word in (
+            "return",
+            "throw",
+            "case",
+            "yield",
+            "await",
+            "typeof",
+            "void",
+            "delete",
+            "new",
+            "instanceof",
+            "of",
+            "in",
+        ):
+            kind = "literal"
+        else:
+            kind = "ambiguous"
+    else:
+        kind = "ambiguous"
+    group.kind = kind
+    return kind
+
+
+def _enclosing_object_group(
+    groups: list[_JsBracketGroup], index: int
+) -> _JsBracketGroup | None:
+    best: _JsBracketGroup | None = None
+    for group in groups:
+        if (
+            group.open_char == "{"
+            and group.end > index
+            and group.start < index
+            and (best is None or group.start > best.start)
+        ):
+            best = group
+    return best
+
+
+def _extract_static_property_key_refs(
+    text: str, target_symbols: set[str]
+) -> tuple[set[str], str]:
+    """Extract static property-key references and flag ambiguous executable contexts.
+
+    Clear destructuring/binding/parameter/assignment/for-of property keys are
+    references. Clear object-literal property keys are not. A static target key
+    in a context the bounded classifier cannot classify makes the file's source
+    evidence incomplete (AE004); dynamic destructuring keys do the same because
+    they are executable property reads we cannot resolve.
+    """
+    if not target_symbols:
+        return set(), ""
+    groups = _scan_js_bracket_groups(text)
+    if not groups:
+        return set(), ""
+    refs: set[str] = set()
+    incomplete_reason = ""
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if text.startswith("//", index):
+            newline = index + 2
+            while newline < length and text[newline] not in "\r\n\u2028\u2029":
+                newline += 1
+            index = newline
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            index = length if close == -1 else close + 2
+            continue
+        if char in _TS_QUOTE_CHARS:
+            parsed = (
+                _parse_static_template(text, index)
+                if char == "`"
+                else _parse_static_string(text, index)
+            )
+            if parsed is None:
+                # Dynamic template: an executable static property read cannot be
+                # resolved; only relevant when it is a pattern property key.
+                next_index = _skip_js_string_literal(text, index)
+                group = _enclosing_object_group(groups, index)
+                if group is not None:
+                    kind = _classify_js_group(groups, groups.index(group), text)
+                    previous, _ = _token_before(text, index)
+                    after, _ = _token_after(text, next_index)
+                    if previous in "{," and after == ":":
+                        if kind == "pattern":
+                            incomplete_reason = (
+                                "a dynamic destructuring property key cannot be resolved"
+                            )
+                        elif kind == "ambiguous":
+                            incomplete_reason = (
+                                "a static property key cannot be classified as object literal or destructuring read"
+                            )
+                index = next_index
+                continue
+            next_index = parsed.next_index
+            group = _enclosing_object_group(groups, index)
+            if group is not None:
+                kind = _classify_js_group(groups, groups.index(group), text)
+                previous, _ = _token_before(text, index)
+                after, _ = _token_after(text, next_index)
+                if previous in "{," and after == ":":
+                    is_target = parsed.resolved and parsed.value in target_symbols
+                    if kind == "pattern" and is_target:
+                        refs.add(parsed.value)
+                    elif kind == "ambiguous" and is_target:
+                        incomplete_reason = (
+                            "a static property key cannot be classified as object literal or destructuring read"
+                        )
+                    elif kind == "pattern" and not parsed.resolved:
+                        incomplete_reason = (
+                            "a malformed static destructuring property key cannot be resolved"
+                        )
+            index = next_index
+            continue
+        if char == "[":
+            group = _enclosing_object_group(groups, index)
+            if group is not None:
+                kind = _classify_js_group(groups, groups.index(group), text)
+                previous, _ = _token_before(text, index)
+                if previous in "{,":
+                    parsed = _parse_static_key_expression(text, index + 1)
+                    if parsed is None or not parsed.resolved:
+                        if kind in ("pattern", "ambiguous"):
+                            incomplete_reason = (
+                                "a computed destructuring property key cannot be resolved"
+                            )
+                        index += 1
+                        continue
+                    close, ok = _skip_js_trivia(text, parsed.next_index)
+                    if ok and close < length and text[close] == "]":
+                        after, _ = _token_after(text, close + 1)
+                        if after == ":":
+                            if kind == "pattern" and parsed.value in target_symbols:
+                                refs.add(parsed.value)
+                            elif kind == "ambiguous" and parsed.value in target_symbols:
+                                incomplete_reason = (
+                                    "a static property key cannot be classified as object literal or destructuring read"
+                                )
+                            index = close + 1
+                            continue
+                    index += 1
+                    continue
+            index += 1
+            continue
+        index += 1
+    return refs, incomplete_reason
+
+
 def _tokenize_ts_code(text: str) -> tuple[str, bool]:
     """Tokenize and strip comments and string-literal spans from TS/JS code.
 
@@ -1141,14 +1451,14 @@ def _extract_ts_refs(
     lines: list[str],
     target_symbols: set[str],
 ) -> set[str]:
-    refs, _ = _extract_ts_refs_with_syntax_check(lines, target_symbols)
+    refs, _, _ = _extract_ts_refs_with_syntax_check(lines, target_symbols)
     return refs
 
 
 def _extract_ts_refs_with_syntax_check(
     lines: list[str],
     target_symbols: set[str],
-) -> tuple[set[str], bool]:
+) -> tuple[set[str], bool, str]:
     """Extract real references to target symbols in TS/JS-like lines.
 
     Preserves lexical boundaries: template string text, string literals, and
@@ -1157,11 +1467,17 @@ def _extract_ts_refs_with_syntax_check(
     """
     refs: set[str] = set()
     if not target_symbols:
-        return refs, True
+        return refs, True, ""
 
     full_text = "\n".join(lines)
     stripped_text, is_clean = _tokenize_ts_code(full_text)
     stripped_lines = stripped_text.splitlines()
+    property_refs, property_incomplete_reason = _extract_static_property_key_refs(
+        full_text, target_symbols
+    )
+    refs.update(property_refs)
+    if property_incomplete_reason:
+        is_clean = False
 
     for i, raw_line in enumerate(lines):
         stripped = stripped_lines[i] if i < len(stripped_lines) else ""
@@ -1186,7 +1502,9 @@ def _extract_ts_refs_with_syntax_check(
             if s in words:
                 refs.add(s)
 
-    return refs, is_clean
+    if not is_clean:
+        return refs, False, property_incomplete_reason or "unclosed or unparseable JS/TS syntax"
+    return refs, True, ""
 
 
 def _extract_defs_for_file(lines: list[str], file_path: str = "", is_full_file: bool = False) -> set[str]:
@@ -1297,6 +1615,22 @@ def _normalized_python_symbols(symbols: set[str]) -> dict[str, str]:
     return {unicodedata.normalize("NFKC", symbol): symbol for symbol in symbols}
 
 
+def _has_property_key_hint(content: str) -> bool:
+    """True for an object/pattern property key start after ``{``.
+
+    Besides static keys this catches computed property keys such as
+    ``const { [key]: fn } = api`` that have no literal target in the source but
+    still perform an executable property read requiring completeness handling.
+    """
+    index = content.find("{")
+    while index != -1:
+        after, ok = _skip_js_trivia(content, index + 1)
+        if ok and after < len(content) and content[after] == "[":
+            return True
+        index = content.find("{", index + 1)
+    return False
+
+
 def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> bool:
     """Cheap gate before parsing a workspace file.
 
@@ -1322,7 +1656,7 @@ def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> b
     # A composed static member key (parentheses, concatenation, template,
     # comments/newlines, String(...)) need not contain the literal symbol, so
     # a literal-only prefilter would skip the file before the parser sees it.
-    if _has_static_member_hint(content):
+    if _has_static_member_hint(content) or _has_property_key_hint(content):
         return True
     if "\\" not in content:
         return False
@@ -1403,10 +1737,14 @@ def _scan_workspace(workspace: Path, symbols: tuple[str, ...]) -> _WorkspaceEvid
             else:
                 content_lines = content.splitlines()
                 defs = _extract_ts_defs(content_lines)
-                refs, syntax_ok = _extract_ts_refs_with_syntax_check(content_lines, symbol_set)
+                refs, syntax_ok, syntax_reason = _extract_ts_refs_with_syntax_check(
+                    content_lines, symbol_set
+                )
                 if not syntax_ok:
                     evidence.scan_incomplete = True
-                    evidence.incomplete_reason = f"Source file '{rel}' has unclosed or unparseable JS/TS syntax"
+                    evidence.incomplete_reason = (
+                        f"Source file '{rel}' has incomplete reference evidence: {syntax_reason}"
+                    )
                     skipped.append(rel)
                     continue
 
