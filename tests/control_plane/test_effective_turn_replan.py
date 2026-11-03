@@ -70,7 +70,11 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
         "configure-goal",
         "--goal-id",
         GOAL_ID,
-        *(["--execution-replan-after-turns", str(threshold_override), "--execute"]
+        # This matrix isolates cadence and typed-delta authority from the
+        # optional structured Stride decision. Inherited-on behavior is
+        # covered by machine-default and actual Stride followthrough tests.
+        "--execution-stride-strategy", "off", "--execute",
+        *(["--execution-replan-after-turns", str(threshold_override)]
           if threshold_override else []),
     )
     assert rc == 0, configured
@@ -333,7 +337,7 @@ def test_open_todo_settled_turn_cadence_and_evidence_linked_review(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("changed_context", [False, True])
-@pytest.mark.parametrize("stride_action,followthrough_count", [("verify", 1), ("switch", 2)])
+@pytest.mark.parametrize("stride_action,followthrough_count", [("verify", 2), ("switch", 2), ("grow", 2)])
 def test_due_stride_review_survives_successor_transition_until_decision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, changed_context: bool,
     stride_action: str, followthrough_count: int,
@@ -596,12 +600,21 @@ def test_due_stride_review_survives_successor_transition_until_decision(
     ordinary_ref = delivered_result["evidence_ref"]
     # The optional typed-progress attachment is not required for the Agent to
     # discover a declared experiment's ordinary result in its next review.
-    assert follow["ordinary_work"]["recorded_count"] == 1
-    assert follow["ordinary_work"]["evidence"] == [{
+    ordinary = follow["ordinary_work"]
+    # Switch's first Turn has typed progress; every other settled Turn is an
+    # ordinary result. Fixed cadence must retain both verify/grow results.
+    assert ordinary["recorded_count"] == followthrough_count - (stride_action == "switch")
+    assert ordinary["evidence"][0] == {
         "evidence_ref": ordinary_ref, "generated_at": last_work["generated_at"],
         "todo_id": successor["todo_id"],
-    }]
-    assert planned[0]["ordinary_evidence_refs"] == [ordinary_ref]
+    }
+    refs = [row["evidence_ref"] for row in ordinary["evidence"]]
+    assert len(set(refs)) == ordinary["recorded_count"]
+    assert planned[0]["ordinary_evidence_refs"] == refs
+    for ref in refs:
+        result = call("history", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+                      "--evidence-ref", ref)["evidence"]
+        assert "regressed (error 5 versus reference 2)" in result["recommended_action"]
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope
     envelope = build_turn_envelope(next_guard)
     assert envelope["replan_action_packet"]["stride_control"]["decision_followthrough"] == follow

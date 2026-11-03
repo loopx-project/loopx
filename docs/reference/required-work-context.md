@@ -179,6 +179,11 @@ An enabled native **full** reference for a recognized decision can include
 `first_read_command`. It batches current admission/stop facts, the selected task,
 whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
 history and optional authoring recipes remain expandable from the same capture.
+The preference source's complete `current` view also stays in the initial read:
+corrections, retirement/expiry and empty replacements retain their provenance,
+revision and advisory authority. This captured pre-work view does not replace the
+preference owner's fresh exact-scope read before a later preference-dependent
+external action, and neither delivery nor a preference grants authority.
 The existing bounded `unfinished_delegations` projection and `read_complete`
 flag also remain visible. Adoption or a queued return does not establish
 completion. Pending peer results, counts, omitted items and unavailable
@@ -193,7 +198,11 @@ versions remain whole. Initial pages do not repeat pointers already present in
 their content; the selection digest still prevents a full-input receipt.
 Its `context-read --initial-read` uses the same exact-address selector; paged
 continuations retain the short option and pin the selection digest. A changed
-profile rejects rather than mixing views. The option is read-only and exclusive with explicit
+profile rejects rather than mixing views. Initial navigation can replace fully
+selected children with their complete captured parent to avoid repeating addresses.
+An unselected child, including optional or unknown material, prevents that merge;
+the selected facts and obligations stay identical. Explicit selectors and index
+entries keep their original addresses. The option is read-only and exclusive with explicit
 selectors or discovery; unknown schemas use generic discovery.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. Warm
@@ -217,9 +226,15 @@ activation defaults, saved files, Delta and full-read receipts are unchanged.
 中文：已启用原生传输的完整引用可给出 `first_read_command`，合并当前准入、停止条件、
 任务和完整 Goal/Todo 正文，以及来源状态、版本与读取入口；历史和可选格式说明仍在
 同一捕获中按需展开。它是起始选读，不代表已读全部必要来源；依赖具体验收、证据或
-执行/结算契约前仍须完整读取。未知 schema、过小引用预算和 warm delta 保留既有路线，
+执行/结算契约前仍须完整读取。
+偏好来源的完整 `current` 视图也直接呈现：纠偏、退役/过期和空视图替换均保留
+原来源、版本及 advisory 权限边界。本次捕获的工作前视图不能替代偏好 owner 要求的
+后续偏好相关外部动作前精确作用域新读；偏好及其交付均不授予权限。
+未知 schema、过小引用预算和 warm delta 保留既有路线，
 关闭原生传输的输出不变；完整恢复和原 SHA 校验均保留。只读的 `--initial-read` 不与
 显式选读或索引混用；续页保留短选项和固定的选读摘要，profile 改变则拒绝混读。
+首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
+可选或未知内容都会阻止合并，选中事实和义务不变。显式选读和索引仍保留原地址。
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。

@@ -654,6 +654,7 @@ def return_result(
     scope=None,
     update_id=None,
     request_revision=None,
+    remaining_work=None,
 ):
     """Route by the saved recipient, never by an Agent's coordinator role."""
     if scope is None and registry is not None:
@@ -672,6 +673,7 @@ def return_result(
                 scope=goal_scope,
                 update_id=update_id,
                 request_revision=request_revision,
+                remaining_work=remaining_work,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     if row.get("source_kind") != "peer":
@@ -702,6 +704,7 @@ def return_result(
             route=route,
             update_id=update_id,
             request_revision=request_revision,
+            remaining_work=remaining_work,
         ),
         "status": "queued_for_requester",
     }

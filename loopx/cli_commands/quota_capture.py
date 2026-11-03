@@ -18,10 +18,12 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeR
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
-    native_context_page_budget,
+    CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
     read_context_read_reference, write_context_read_reference, private_capture_uid,
+)
+from ..control_plane.turn_driver.native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
 )
 
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {test} from "node:test";
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {effectRuntimeErrorPayload} from "../../loopx/control_plane/effect_runtime_errors.ts";
+import {capturedContextSelection} from "../../loopx/control_plane/quota/context_selection.ts";
 
 const select = (context: object, pointers: unknown) => evaluateTurnEnvelope({operation: "context_select", context, select: pointers});
 
@@ -111,7 +112,7 @@ test("full decision discovery points to current controls and whole source obliga
   for (const pointer of ["/execution_obligation", "/goal_boundary", "/selected_todo",
     "/interaction_contract/agent_channel/required_reads", "/interaction_contract/cli_channel/spend_allowed_now",
     "/interaction_contract/agent_channel/work_context/sources/0/content/text"])
-    assert.ok(pointers.includes(pointer), pointer);
+    assert.ok(pointers.some(parent => pointer === parent || pointer.startsWith(parent + "/")), pointer);
   assert.ok(!pointers.some(pointer => /writeback_results|full_criteria/.test(pointer)));
   assert.doesNotThrow(() => select(context, pointers));
   // Discovery is not a claim that omitted criteria were read or are optional.
@@ -120,6 +121,81 @@ test("full decision discovery points to current controls and whole source obliga
       path: ["interaction_contract", "agent_channel", "work_context", "sources", 0, "content", "full_criteria"]}]});
   assert.deepEqual(context, before);
   assert.deepEqual(evaluateTurnEnvelope({operation: "context_select", context, initial_read: true}), select(context, pointers));
+});
+
+// Compare the selected facts independently of their parent/child packaging.
+// Empty containers are facts too; neither omission nor accidental expansion is equivalent.
+function selectedFacts(context: unknown, selections: {path: (string | number)[]}[]): string[] {
+  const facts = new Set<string>();
+  const visit = (value: unknown, path: (string | number)[]) => {
+    if (value === null || typeof value !== "object" || !Object.keys(value).length) {
+      facts.add(JSON.stringify([path, value]));
+      return;
+    }
+    for (const [key, child] of Object.entries(value))
+      visit(child, [...path, Array.isArray(value) ? Number(key) : key]);
+  };
+  for (const selection of selections) {
+    let value = context;
+    for (const key of selection.path) value = (value as Record<string | number, unknown>)[key];
+    visit(value, selection.path);
+  }
+  return [...facts].sort();
+}
+
+test("initial navigation coalesces complete branches without changing selected facts or explicit readers", () => {
+  const context = {facts: [{"a/b": "Keep the final stop.", "~": null}, {allowed: false, evidence: []}],
+    single: {only: "A single address need not grow a container."}, unread: {history: "optional body"}};
+  // The owner's discovery order differs from object key order. A merged parent
+  // occupies its first selected child's position, preserving that priority.
+  const pointers = ["/single/only", "/facts/1/evidence", "/facts/0/a~1b", "/facts/0/~0", "/facts/1/allowed"];
+  const before = structuredClone(context);
+  const explicit = select(context, pointers);
+  const initial = capturedContextSelection({context, initial_read: true}, pointers);
+  assert.deepEqual(initial, select(context, ["/facts", "/single/only"]));
+  assert.deepEqual(selectedFacts(context, initial.selections as {path: (string | number)[]}[]),
+    selectedFacts(context, explicit.selections as {path: (string | number)[]}[]));
+  assert.deepEqual((explicit.selections as {pointer: string}[]).map(row => row.pointer), [...pointers].sort());
+  const discovery = capturedContextSelection({context, select: [""], list_fields: true}, pointers);
+  assert.deepEqual(discovery.initial_read_pointers, ["/single/only", "/facts"]);
+  assert.deepEqual(discovery.selections, [{pointer: "", path: [], children: [
+    {pointer: "/facts", path: ["facts"]}, {pointer: "/single", path: ["single"]}, {pointer: "/unread", path: ["unread"]},
+  ]}]);
+  assert.deepEqual(context, before);
+});
+
+test("ordinary selectors do not inspect initial-navigation data", () => {
+  const context = {facts: {allowed: false}};
+  const unused = new Proxy<string[]>([], {get() { throw new Error("Initial navigation was not requested"); }});
+  for (const pointers of [["/facts"], ["/facts", "/facts"]]) {
+    assert.deepEqual(capturedContextSelection({context, select: pointers}, unused), select(context, pointers));
+    assert.deepEqual(capturedContextSelection({context, select: pointers, list_fields: true}, unused),
+      evaluateTurnEnvelope({operation: "context_select", context, select: pointers, list_fields: true}));
+  }
+});
+
+test("duplicate root selectors retain the same discovery navigation", () => {
+  const context = {facts: {allowed: false, stop: "Preserve the final boundary."}, unread: "optional material"};
+  const initial = ["/facts/allowed", "/facts/stop"];
+  const single = capturedContextSelection({context, select: [""], list_fields: true}, initial);
+  const repeated = capturedContextSelection({context, select: ["", ""], list_fields: true}, initial);
+  assert.deepEqual(single.initial_read_pointers, ["/facts"]);
+  assert.deepEqual(repeated, single);
+  assert.throws(() => capturedContextSelection({context, select: ["", "", "/missing"], list_fields: true}, initial),
+    /does not exist/);
+});
+
+test("partial coverage never expands unknown or optional facts through a parent", () => {
+  const context = {controls: {allowed: false, instruction: "Preserve this constraint.", unknown: "not selected"},
+    attachment: {required: false, command: "read the attachment before use", recipe: "deferred recipe"},
+    required: {unknown_obligation: "This selected unknown obligation stays whole."}};
+  const pointers = ["/controls/allowed", "/controls/instruction", "/attachment/required", "/attachment/command", "/required"];
+  const initial = capturedContextSelection({context, initial_read: true}, pointers);
+  assert.deepEqual(initial, select(context, pointers));
+  const facts = selectedFacts(context, initial.selections as {path: (string | number)[]}[]);
+  assert.ok(facts.some(value => value.includes("selected unknown obligation")));
+  assert.ok(!facts.some(value => /not selected|deferred recipe/.test(value)));
+  assert.throws(() => capturedContextSelection({context, initial_read: true}, [...pointers, "/missing"]), /does not exist/);
 });
 
 test("unknown decision schemas and ordinary selections keep generic discovery", () => {

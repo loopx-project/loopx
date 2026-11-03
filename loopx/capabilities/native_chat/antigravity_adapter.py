@@ -756,13 +756,43 @@ class AntigravityAdapter:
                                     delta_chunk = text[len(prev_text) :]
                                 else:
                                     delta_chunk = text
-                                emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
+                                    if not prev_text:
+                                        combined_marker = stream_filter.marker_pending + delta_chunk.lstrip()
+                                        continues_control_tag = bool(
+                                            combined_marker
+                                            and (
+                                                combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                                or CHAT_REVIEW_OPEN_TAG.startswith(combined_marker)
+                                            )
+                                        )
+                                        if (
+                                            continues_control_tag
+                                            and not combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                            and step_status != "CORTEX_STEP_STATUS_DONE"
+                                        ):
+                                            continue
+                                        prior_texts = [
+                                            val
+                                            for idx, val in sorted(emitted_text_by_step.items())
+                                            if idx != step_idx and val
+                                        ]
+                                        if (
+                                            prior_texts
+                                            and not delta_chunk.startswith("\n")
+                                            and not continues_control_tag
+                                        ):
+                                            last_prior = prior_texts[-1]
+                                            if not last_prior.endswith("\n"):
+                                                delta_chunk = "\n\n" + delta_chunk
+                                            elif not last_prior.endswith("\n\n"):
+                                                delta_chunk = "\n" + delta_chunk
                                     visible_delta = stream_filter.feed(delta_chunk)
                                     if visible_delta:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
+                                emitted_text_by_step[step_idx] = text
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
                             err_obj = step.get("errorMessage") or {}
                             err_msg = str(
@@ -796,6 +826,16 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 planner = final.get("plannerResponse") or {}
+                # Native IDLE can occur between input, tool and planner steps.
+                # Keep observing this invocation; only a finished answer after
+                # all current work settles can close it. The existing idle and
+                # hard deadlines, permission gates and cancellation still apply.
+                if (planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
+                        and (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
+                        or (planner.get("stopReason") is None and not self._read_only_review)
+                        or any(step.get("status") in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}
+                               for _, step in current_steps))):
+                    continue
                 if self._read_only_review:
                     inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
                     execution = (inputs[0].get("metadata") or {}).get("executionId") if len(inputs) == 1 else None
@@ -807,8 +847,9 @@ class AntigravityAdapter:
                                                   gate=None, error_code="upstream_transport_failure")
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
+                        or any(step.get("status") != "CORTEX_STEP_STATUS_DONE" for _, step in current_steps)
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
-                        or planner.get("stopReason") not in {None, "STOP_REASON_STOP_PATTERN"}):
+                        or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"):
                     raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",
                                               gate=None, error_code="upstream_transport_failure")
                 break
