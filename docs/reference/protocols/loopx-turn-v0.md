@@ -344,6 +344,15 @@ boundary. Caller death can precede cleanup; the local lane lock alone cannot
 certify no overlap with a replacement executor. Authority-bound renewal,
 revocation and uncertain-effect recovery remain a separate delivery.
 
+The Codex CLI and managed app-server operation hosts use a strict wire schema: all
+properties are required, and work/validation evidence is an array or null. Stop
+results send both evidence fields as null; the Codex boundary removes only those
+null placeholders before internal validation. Material results with an
+`execution_profile` must supply both evidence arrays; null or missing evidence is
+rejected at that boundary. Empty or malformed arrays still fail the existing
+executor validator. Legacy material results without a profile may omit evidence.
+Other host contracts are unchanged.
+
 ### Repeatable Codex CLI Qualification
 
 The repository includes an opt-in end-to-end qualification that creates an
