@@ -16,6 +16,7 @@ import loopx.cli_commands.turn_run_once as turn_run_once_command
 from loopx.cli_commands.turn_rendering import render_loopx_turn_execution_markdown
 from tests.control_plane.canonical_authority_fixture import (
     initialize_canonical_authority,
+    isolate_sqlite_runtime,
 )
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import (
@@ -2618,11 +2619,14 @@ raise SystemExit(0 if artifact.read_text(encoding="utf-8") == "completed" else 7
     assert not any(replayed["effects"].values())
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_promoted_turn_completion_replays_after_commit_before_journal_crash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
-    project, runtime, registry = _write_live_fixture(tmp_path)
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_live_fixture(tmp_path, provider=provider)
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
     host_script, validation_script = _completion_host_and_validation_scripts()
@@ -2953,13 +2957,18 @@ def test_turn_run_once_cli_projects_durable_no_followup_continuation(
     [None, "sha256:different-turn"],
     ids=["missing-turn-key", "different-turn-key"],
 )
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_turn_run_once_cli_terminal_recovery_ignores_stale_display_identity(
     tmp_path: Path,
     display_completion_turn_key: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
 ) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_live_fixture(
         tmp_path,
         todo_metadata_extra="no_followup=true",
+        provider=provider,
     )
     host_project = project / "isolated-host-workspace"
     host_project.mkdir()
