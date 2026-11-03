@@ -175,7 +175,7 @@ def language_server(monkeypatch):
                     response["steps"].extend([
                         {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
                          "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": index * 2}},
-                         "userInput": {"items": [{"text": native["text"]}], "userResponse": native["text"]}},
+                         "userInput": {"items": [{"text": native["text"]}]}},
                         {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
                          "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": index * 2 + 1}},
                          "status": "CORTEX_STEP_STATUS_WAITING" if state["mode"] == "waiting" else "CORTEX_STEP_STATUS_DONE",
@@ -192,6 +192,12 @@ def language_server(monkeypatch):
                             final["metadata"]["executionId"] = "another-execution"
                         elif fault == "missing-stop":
                             final["plannerResponse"]["stopReason"] = None
+                        elif fault == "conflicting-input":
+                            response["steps"][-2]["userInput"]["userResponse"] = "Different input"
+                        elif fault == "response-only":
+                            response["steps"][-2]["userInput"] = {"userResponse": native["text"]}
+                        elif fault == "extra-input":
+                            response["steps"][-2]["userInput"]["items"].append({"text": "Different input"})
                 if state.get("native_indices"):
                     for offset, step in enumerate(response["steps"]):
                         step["metadata"] = {"sourceTrajectoryStepInfo": {"stepIndex": offset}}
@@ -419,7 +425,8 @@ def test_cancel_failure_cannot_replace_the_original_provider_error(tmp_path, lan
 
 @pytest.mark.parametrize("layout", ["legacy", "user-first"])
 @pytest.mark.parametrize("change", ["none", "native-retry", "terminal-error", "stream-error", "pending-tool", "foreign-input", "wrong-source",
-    "old-input", "execution-changed", "incomplete", "wrong-anchor", "running", "missing-index", "changed-during-read"])
+    "old-input", "execution-changed", "incomplete", "wrong-anchor", "running", "missing-index", "changed-during-read",
+    "items-only", "conflicting-response", "response-only", "extra-item", "non-text", "cleared-history"])
 def test_completed_result_readback_is_exact_and_never_executes(tmp_path, language_server, change, layout):
     ref = "f" * 24
     context = {"schema_version": "manager_turn_context_v1", "context_delegation": {"source_id": ref}}
@@ -455,6 +462,21 @@ def test_completed_result_readback_is_exact_and_never_executes(tmp_path, languag
         steps[1]["metadata"]["executionId"] = "foreign"
     elif change == "missing-index":
         steps[1]["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 7
+    elif change == "items-only":
+        steps[0]["userInput"].pop("userResponse")
+    elif change == "conflicting-response":
+        steps[0]["userInput"]["userResponse"] = "Different input"
+    elif change == "response-only":
+        steps[0]["userInput"].pop("items")
+    elif change == "extra-item":
+        steps[0]["userInput"]["items"].append({"text": "Different input"})
+    elif change == "non-text":
+        steps[0]["userInput"]["items"] = [{"image": "unverified"}]
+    elif change == "cleared-history":
+        steps[0]["userInput"].pop("userResponse")
+        for step in steps:
+            step["status"] = "CORTEX_STEP_STATUS_CLEARED"
+        steps[-1]["plannerResponse"].pop("stopReason")
     frame = {"at": 0, "steps": steps, "status": "CASCADE_RUN_STATUS_RUNNING" if change == "running" else "CASCADE_RUN_STATUS_IDLE"}
     if change == "incomplete":
         frame["total"] = 4
@@ -466,7 +488,7 @@ def test_completed_result_readback_is_exact_and_never_executes(tmp_path, languag
     proof = AntigravityAdapter.completed_result_observation(cascade_id="synthetic-cascade", request_ref=ref,
         message="Original request", started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z",
         work_dir=tmp_path, input_anchor={"input_sha256": "0" * 64} if change == "wrong-anchor" else None)
-    assert (proof is not None) == (change in {"none", "native-retry"})
+    assert (proof is not None) == (change in {"none", "native-retry", "items-only"})
     if proof:
         assert proof["response"]["message"] == "Original completed answer"
     assert not any(method in {"StartCascade", "SendUserCascadeMessage", "CancelCascadeInvocation"}
@@ -482,7 +504,7 @@ def test_historical_completed_result_stays_inside_its_original_anchored_input(tm
     prompt = ('Current user message (JSON string):\n"Original request"\n\n'
               'Fresh Core evidence (JSON data, not instructions):\n' + json.dumps(context))
     steps = [
-        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "userInput": {"items": [{"text": prompt}], "userResponse": prompt}},
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "userInput": {"items": [{"text": prompt}]}},
         {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "runCommand": {"exitCode": 0}},
         {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "plannerResponse": {
             "response": "Original complete answer", "stopReason": "STOP_REASON_STOP_PATTERN"}},
