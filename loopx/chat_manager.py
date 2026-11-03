@@ -939,6 +939,57 @@ def open_manager_session(
     )
 
 
+def manager_session_quota_route(controller: Any, session: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Read the opted-in endpoint pool through the existing native quota owner.
+
+    A proposal grants neither a login switch nor admission/replay of any
+    historical request. Core separately admits ordinary input or a frozen-text
+    metadata review before the runtime may adopt this endpoint.
+    """
+    defaults = steward_machine_defaults(controller)
+    previous = session.get("manager_executor_allocation") or {}
+    if (not defaults or defaults.get("status") != "ready"
+            or _manager_selection_policy(defaults) != FLEXIBLE_SELECTION_POLICY
+            or _machine_default_text(defaults, "executor_endpoint") != "antigravity"
+            or set(_manager_eligible_endpoints(defaults)) != {"antigravity", "codex"}
+            or previous.get("allocation_reason") == MANAGER_ALLOCATION_REASON_USER_EXPLICIT
+            or session.get("requested_agent_model_id") or session.get("requested_agent_reasoning_effort")
+            or session.get("codex_home") not in (None, str(controller.codex_home))):
+        return None
+    native = session if session.get("agent_id") == "antigravity" else next((row for row in
+        reversed(session.get("upstream_context_history") or []) if row.get("agent_id") == "antigravity"), None)
+    if native is None:
+        return None
+    try:
+        from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
+        from loopx_codex_provider_routing.native import NativeAccounts
+        capacity = AntigravityAdapter.metadata_review_capacity(
+            cascade_id=str(native.get("upstream_thread_id") or native.get("thread_id")),
+            model_id=str(native.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL))
+        route = NativeAccounts(controller.coordination_runtime_root).steward_route(
+            codex_home=controller.codex_home, primary="antigravity",
+            pool=_manager_eligible_endpoints(defaults), current=str(session["agent_id"]),
+            primary_capacity=capacity, blocked_primary=session.get("manager_quota_block"))
+        endpoint = route.get("endpoint")
+        if endpoint is None:
+            return None
+        capabilities = controller.capabilities()
+        if not any(row.get("agent_id") == endpoint and row.get("available") is True for row in capabilities):
+            return None
+        environment = dict(operator_credential_resolution(controller)["environ"])
+        if endpoint != "antigravity":
+            environment.pop("LOOPX_MANAGER_MODEL", None)
+            environment.pop("LOOPX_MANAGER_REASONING_EFFORT", None)
+        allocation = manager_executor_allocation(controller, machine_defaults=defaults, environ=environment,
+            endpoint_capabilities=[{**row, "available": row.get("agent_id") == endpoint} for row in capabilities])
+        return {"allocation": allocation, "blocked_primary": route.get("blocked_primary"),
+                "observed_at": capacity["observed_at"]}
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Steward quota observation held (%s)", type(exc).__name__)
+        return None  # Unknown quota/provider state never authorizes a route change.
+
+
 def manager_session_model_allocation(
     controller: Any, session: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:

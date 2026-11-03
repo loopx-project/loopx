@@ -217,6 +217,38 @@ class NativeAccounts:
         native = self.transport(adapter, "status")
         return self._projection(state, native)
 
+    def conversation_epoch(self, *, codex_home: Path) -> tuple[str, str] | None:
+        """An existing Chat process observes the native owner's login revision.
+
+        The caller may reopen its idle adapter, never restart the account owner
+        or retry a dispatched Turn. No credentials leave this observation.
+        """
+        state = self._load()
+        adapter = state.get("adapter")
+        if (state["policy"].get("enabled") is not True or not adapter
+                or Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve()):
+            return None
+        native = self.transport(adapter, "status")
+        if (native.get("current_login_matches") is not True or native.get("recovery_required")
+                or state.get("action") == "handoff_interrupted"):
+            return None
+        revision, slot = native.get("selection_revision"), native.get("active_slot")
+        return (revision, slot) if isinstance(revision, str) and revision and isinstance(slot, str) and slot else None
+
+    def steward_route(self, *, codex_home: Path, primary: str, pool: list[str], current: str,
+                      primary_capacity: dict | None, blocked_primary: dict | None = None) -> dict:
+        """Observe the existing account owner; never start a second watcher."""
+        state = self._load()
+        adapter = state.get("adapter")
+        if (state["policy"].get("enabled") is not True or not adapter
+                or Path(adapter.get("profile", {}).get("home", "")).resolve() != codex_home.resolve()):
+            return {"endpoint": None, "blocked_primary": blocked_primary}
+        native = self.transport(adapter, "status")
+        return policy({"operation": "steward-route", "now": self.clock(),
+            "primary": primary, "pool": pool, "current": current,
+            "native": self._projection(state, native), "primary_capacity": primary_capacity,
+            "blocked_primary": blocked_primary})
+
     def clients(self) -> dict:
         state = self._load()
         return self.transport(state.get("adapter") or discover(), "clients")

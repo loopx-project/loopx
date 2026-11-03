@@ -253,10 +253,14 @@ def test_interrupted_result_review_requires_stable_full_inventory_without_final_
 
 
 @pytest.mark.parametrize("background", [False, True])
-def test_result_review_enforces_workspace_read_profile_on_the_original_thread_and_home(monkeypatch, tmp_path, background):
+@pytest.mark.parametrize("metadata", [False, True])
+def test_result_review_enforces_workspace_read_profile_on_the_original_thread_and_home(monkeypatch, tmp_path, background, metadata):
     context = {"kind": "project_workspace", "project_ref": "a" * 24, "workspace_path": str(tmp_path),
         "audience": "bound_owner", "grant": "workspace_write", "binding_id": "b" * 24,
         "source_ref": "c" * 24, "provider_ref": "d" * 24, "operator_ref": "e" * 24}
+    if metadata:
+        context = {**context, "kind": "bound_steward", "grant": "portfolio_read", "goal_ids": []}
+    options = {"metadata_review_context" if metadata else "project_context": context}
     profile = "loopx_workspace_only_read"
     process = _FakeAppServerProcess(config_response={"config": {"features": {"apps": True},
         "mcp_servers": {"private_tool": {"command": "sensitive"}, "loopx_public_source_read": {"enabled": True}}}},
@@ -280,13 +284,13 @@ def test_result_review_enforces_workspace_read_profile_on_the_original_thread_an
     if background:
         with pytest.raises(chat_agent.CodexChatAgentError, match="still has background work"):
             chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
-                goal_id=None, objective="project", project_context=context, codex_home=home,
+                goal_id=None, objective="project", **options, codex_home=home,
                 resume_thread_id="thread-loopx-chat", read_only_review=True, model="synthetic", reasoning_effort="high")
         assert process.returncode == 0
         assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
         return
     session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
-        goal_id=None, objective="project", project_context=context, codex_home=home,
+        goal_id=None, objective="project", **options, codex_home=home,
         resume_thread_id="thread-loopx-chat", read_only_review=True, model="synthetic", reasoning_effort="high")
     try:
         sent = []
@@ -306,14 +310,18 @@ def test_result_review_enforces_workspace_read_profile_on_the_original_thread_an
         config = resume["config"]
         assert launched[0]["CODEX_HOME"] == str(home) and "PRIVATE_FIXTURE_TOKEN" not in launched[0]
         assert resume["threadId"] == "thread-loopx-chat" and resume["permissions"] == profile
-        assert "dynamicTools" not in resume and session.project_context == context
-        assert config["features"] == {"apps": False, "multi_agent": False, "multi_agent_v2": False}
+        assert "dynamicTools" not in resume and session.project_context == (None if metadata else context)
+        assert config["features"] == {"apps": False, "multi_agent": False, "multi_agent_v2": False,
+            **({"shell_tool": False, "apply_patch_freeform": False} if metadata else {})}
         assert resume["runtimeWorkspaceRoots"] == [str(tmp_path)]
         assert all(value == {"enabled": False} for value in config["mcp_servers"].values())
         policy = config["permissions"][profile]
         assert policy["filesystem"][":workspace_roots"] == {".": "read"} and policy["network"]["enabled"] is False
         turn = sent[0]
-        assert turn["permissions"] == profile and "do not re-execute" in turn["input"][0]["text"]
+        assert turn["permissions"] == profile
+        assert session.metadata_review == metadata
+        if not metadata:
+            assert "do not re-execute" in turn["input"][0]["text"]
     finally:
         session.close()
 
@@ -410,8 +418,7 @@ class _FakeAppServerProcess:
             {"id": 1, "result": {"serverInfo": {"name": "fake-codex"}}},
             {"id": 2, "result": thread_response or {"thread": {"id": thread_id}}},
         ]
-        if config_response is not None:
-            responses.insert(1, {"id": 3, "result": config_response})
+        responses.insert(1, {"id": 3, "result": config_response if config_response is not None else {"config": {}}})
         if model_provider is not None:
             responses[-1]["result"]["modelProvider"] = model_provider
         self.stdin = io.StringIO()
@@ -1674,6 +1681,39 @@ def test_codex_chat_pins_explicit_home_in_child_environment(monkeypatch, tmp_pat
         assert chat_agent.os.environ["CODEX_HOME"] == str(tmp_path / "ambient")
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("provider", ["openai", "fixture-api-relay"])
+def test_resumed_chat_follows_native_account_route_without_replaying(monkeypatch, tmp_path, provider):
+    process = _FakeAppServerProcess(config_response={"config": {"model_provider": provider}},
+        model_provider=provider, thread_id="original-thread")
+    monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    session = chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+        goal_id="fixture", objective="fixture", resume_thread_id="original-thread",
+        codex_home=tmp_path / "original-home")
+    try:
+        packets = [json.loads(line) for line in process.stdin.getvalue().splitlines()]
+        resume = next(p["params"] for p in packets if p.get("method") == "thread/resume")
+        assert resume["threadId"] == "original-thread" and resume["modelProvider"] == provider
+        assert resume["sandbox"] == "read-only" and resume["approvalPolicy"] == "never"
+        assert not any(p.get("method") in {"thread/start", "turn/start", "account/login/start"} for p in packets)
+    finally:
+        session.close()
+
+
+def test_native_route_readback_mismatch_blocks_dispatch(monkeypatch, tmp_path):
+    process = _FakeAppServerProcess(config_response={"config": {"model_provider": "openai"}},
+        model_provider="old-api-relay", thread_id="original-thread")
+    monkeypatch.delenv("LOOPX_CHAT_CODEX_MODEL_PROVIDER", raising=False)
+    monkeypatch.setattr(chat_agent.shutil, "which", lambda _: "codex")
+    monkeypatch.setattr(chat_agent.subprocess, "Popen", lambda *a, **k: process)
+    with pytest.raises(chat_agent.CodexChatAgentError, match="requested conversation provider"):
+        chat_agent.CodexChatAgentSession.start(codex_bin="codex", work_dir=tmp_path,
+            goal_id="fixture", objective="fixture", resume_thread_id="original-thread")
+    assert process.returncode == 0
+    assert not any(json.loads(line).get("method") == "turn/start" for line in process.stdin.getvalue().splitlines())
 
 
 def test_codex_chat_provider_override_resumes_original_thread_and_preserves_policy(monkeypatch, tmp_path):

@@ -438,7 +438,9 @@ class ChatSessionStore(ChatIngressStore):
             _atomic_write_json(path, payload)
             return payload
 
-    def update_session(self, session_id: str, *, expected_statuses: set[str] | None = None, **changes: Any) -> dict[str, Any]:
+    def update_session(self, session_id: str, *, expected_statuses: set[str] | None = None,
+                       expected_upstream_thread_id: str | None = None, metadata_review: bool = False,
+                       **changes: Any) -> dict[str, Any]:
         path = self._session_path(session_id)
         with self._session_lock(session_id):
             with exclusive_file_lock(
@@ -451,6 +453,8 @@ class ChatSessionStore(ChatIngressStore):
                     raise KeyError("chat session was not found")
                 if expected_statuses is not None and payload.get("status") not in expected_statuses:
                     raise KeyError("chat session is no longer open")
+                if expected_upstream_thread_id is not None and payload.get("upstream_thread_id") != expected_upstream_thread_id:
+                    raise ValueError("native executor binding changed")
                 if payload.get("managed_agent_id") is not None and "goal_id" in changes and changes["goal_id"] != payload["goal_id"]:
                     raise ValueError("a registered Agent Session cannot change its original Goal")
                 allowed = {
@@ -481,21 +485,54 @@ class ChatSessionStore(ChatIngressStore):
                     "agent_reasoning_effort", "agent_service_tier",
                     "requested_agent_model_id", "requested_agent_reasoning_effort",
                     "goal_id",
+                    "agent_id", "executor_endpoint_id", "adapter_kind", "manager_quota_block",
                 }
                 unknown = set(changes) - allowed
                 if unknown:
                     raise ValueError(f"unsupported chat session fields: {sorted(unknown)}")
+                if "manager_quota_block" in changes and "agent_id" not in changes:
+                    raise ValueError("quota observation belongs to an executor transition")
+                if any(key in changes for key in ("agent_id", "executor_endpoint_id", "adapter_kind")):
+                    allocation = normalize_manager_executor_allocation(changes.get("manager_executor_allocation", {}))
+                    active = self.load_turn(session_id, payload["active_turn_id"]) if payload.get("active_turn_id") else None
+                    endpoint = changes.get("agent_id")
+                    history = changes.get("upstream_context_history") or []
+                    if (expected_upstream_thread_id is None or not _session_channel(payload).startswith("manager")
+                            or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED or payload.get("managed_agent_id")
+                            or payload.get("upstream_mode") not in {"default", "chat"}
+                            or not active or active.get("status") != "queued" or active.get("upstream_turn_id")
+                            or active.get("origin") == "native_loopx"
+                            or ("-recovery-" in str(active.get("client_turn_id")) and not (metadata_review
+                                and payload.get("steward_context") is not None and endpoint == "codex"
+                                and str(active.get("client_turn_id")).endswith("-metadata-1")))
+                            or allocation["selection_policy"] != "flexible"
+                            or allocation["configured_endpoint"] != "antigravity"
+                            or set(allocation["eligible_endpoints"]) != {"antigravity", "codex"}
+                            or endpoint not in {"antigravity", "codex"} or endpoint == payload.get("agent_id")
+                            or changes.get("executor_endpoint_id") != endpoint or allocation["executor_endpoint"] != endpoint
+                            or changes.get("adapter_kind") != ("codex_app_server" if endpoint == "codex" else "antigravity_ls")
+                            or changes.get("upstream_mode") != ("chat" if endpoint == "codex" else "default")
+                            or not history or history[-1] != {"thread_id": payload["upstream_thread_id"],
+                                "manager_context_version": payload.get("manager_context_version"),
+                                "agent_id": payload["agent_id"], "agent_model_id": payload.get("agent_model_id")}
+                            or changes.get("upstream_thread_id") in {None, payload["upstream_thread_id"]}):
+                        raise ValueError("executor transition requires one unstarted steward Turn and preserved native provenance")
                 if "upstream_context_history" in changes:
                     history = changes["upstream_context_history"]
                     previous = payload.get("upstream_context_history") or []
                     if not isinstance(history, list) or history[:len(previous)] != previous:
                         raise ValueError("native context provenance must preserve its prior prefix")
                     for item in history:
-                        if (not isinstance(item, dict) or set(item) != {"thread_id", "manager_context_version"}
+                        if (not isinstance(item, dict) or set(item) not in (
+                                {"thread_id", "manager_context_version"},
+                                {"thread_id", "manager_context_version", "agent_id", "agent_model_id"})
                                 or item["manager_context_version"] is not None and (
                                     type(item["manager_context_version"]) is not int or item["manager_context_version"] < 0)):
                             raise ValueError("invalid native context provenance")
                         _opaque_id(item["thread_id"], field="upstream_thread_id")
+                        if "agent_id" in item and (item["agent_id"] not in {"codex", "antigravity"}
+                                or not isinstance(item["agent_model_id"], str)):
+                            raise ValueError("invalid historical executor provenance")
                 if "external_conversation_binding_id" in changes:
                     identity = _opaque_id(changes["external_conversation_binding_id"], field="external_conversation_binding_id")
                     if payload.get("session_mode") != CHAT_SESSION_MODE_ATTACHED or payload.get("external_conversation_binding_id") not in {None, identity}:
@@ -563,7 +600,7 @@ class ChatSessionStore(ChatIngressStore):
                 if "codex_home" in changes:
                     home = changes["codex_home"]
                     if (not isinstance(home, str) or not Path(home).is_absolute()
-                            or payload.get("agent_id") != "codex"
+                            or changes.get("agent_id", payload.get("agent_id")) != "codex"
                             or payload.get("session_mode") != CHAT_SESSION_MODE_MANAGED):
                         raise ValueError("codex_home must be an absolute managed Codex home")
                     if payload.get("codex_home") not in (None, home):

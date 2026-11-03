@@ -715,6 +715,7 @@ class CodexChatAgentSession:
     _host_model_auth: Any = field(default=None, repr=False)
     _public_source_read_context: str = field(default="", repr=False)
     read_only_review: bool = False
+    metadata_review: bool = False
     _launch_guard: Callable[[], AbstractContextManager[None]] | None = field(
         default=None, repr=False
     )
@@ -737,6 +738,7 @@ class CodexChatAgentSession:
         sandbox: str | None = None,
         project_context: dict[str, str] | None = None,
         read_only_review: bool = False,
+        metadata_review_context: dict[str, Any] | None = None,
         codex_home: Path | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -757,7 +759,15 @@ class CodexChatAgentSession:
         root = work_dir.resolve()
         if runtime_profile not in {"restricted", "trusted_owner"}:
             raise ValueError("unsupported Codex Chat runtime profile")
-        if read_only_review and (project_context is None or not resume_thread_id or dynamic_tools):
+        if metadata_review_context is not None:
+            if not read_only_review or project_context is not None or goal_id is not None or execution_mode or dynamic_tools or runtime_profile != "restricted":
+                raise ValueError("metadata review requires a restricted, tools-free steward formatter")
+            from .control_plane.effect_runtime import effect_runtime_result
+            policy = effect_runtime_result("collaboration.steward.session_identity", {
+                "context": metadata_review_context, "metadata_review": True})
+            if Path(policy["context"]["workspace_path"]).resolve() != root:
+                raise ValueError("metadata review workspace does not match its original source")
+        if read_only_review and metadata_review_context is None and (project_context is None or not resume_thread_id or dynamic_tools):
             raise ValueError("result review must resume the original private thread without dynamic tools")
         if project_context is not None:
             from .control_plane.effect_runtime import effect_runtime_result
@@ -794,7 +804,7 @@ class CodexChatAgentSession:
                 )
         # Core owns the optional narrower project filesystem policy. A model,
         # transport or project config cannot substitute a profile of its choice.
-        permissions_profile = policy.get("permissions_profile") if project_context is not None else None
+        permissions_profile = policy.get("permissions_profile") if project_context is not None or metadata_review_context is not None else None
         if permissions_profile:
             host_config = {**(host_config or {}), **policy["host_config"]}
             # Git must not consult private account/system configuration from
@@ -907,6 +917,7 @@ class CodexChatAgentSession:
             sandbox=selected_sandbox,
             permissions_profile=permissions_profile,
             read_only_review=read_only_review,
+            metadata_review=metadata_review_context is not None,
             project_context=policy["context"] if project_context is not None else None,
             model=model,
             reasoning_effort=reasoning_effort,
@@ -944,7 +955,13 @@ class CodexChatAgentSession:
             read_project_defaults = project_context is not None and bool(resume_thread_id) and (
                 model is None or reasoning_effort is None
             )
-            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write
+            # A resumed native thread can retain yesterday's API provider after
+            # the account owner has switched back to a subscription (or vice
+            # versa). Follow Codex's effective route without selecting accounts,
+            # copying auth, restarting clients or replacing the original thread.
+            follow_native_provider = bool(resume_thread_id and not execution_mode
+                and (not permissions_profile or metadata_review_context is not None) and not provider_override)
+            read_native_config = read_project_defaults or bool(permissions_profile) or owner_git_write or follow_native_provider
             if read_native_config:
                 # Resume otherwise inherits the old thread's model/effort, even
                 # when the owner's effective workspace configuration has changed.
@@ -992,6 +1009,11 @@ class CodexChatAgentSession:
                             ) from None
                         provider_override = host_config["model_provider"]
                 selected = {**effective, **(host_config or {})}
+                if follow_native_provider:
+                    provider = selected.get("model_provider")
+                    if provider is not None and (not isinstance(provider, str) or not provider.strip()):
+                        raise session._runtime_error("Codex returned an invalid native provider.")
+                    provider_override = provider or ""
                 if read_project_defaults and model is None:
                     model = selected.get("model")
                 if read_project_defaults and reasoning_effort is None:
@@ -1124,6 +1146,7 @@ class CodexChatAgentSession:
                     sandbox=selected_sandbox,
                     project_context=project_context,
                     read_only_review=read_only_review,
+                    metadata_review_context=metadata_review_context,
                     codex_home=base_home,
                     model=model,
                     reasoning_effort=reasoning_effort,
@@ -1702,7 +1725,7 @@ class CodexChatAgentSession:
         text = str(user_message or "")
         if not text.strip():
             raise ValueError("user message is required")
-        if self.read_only_review:
+        if self.read_only_review and not self.metadata_review:
             text = (
                 "Review the existing results of the interrupted original request below. "
                 "Its earlier execution may have already changed files or external systems. "

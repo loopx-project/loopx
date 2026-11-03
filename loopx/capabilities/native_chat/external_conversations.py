@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ...chat_actions import goal_workspace_ref
-from ...chat_store import _atomic_write_json, _read_json
+from ...chat_store import _atomic_write_json, _read_json, RESUMABLE_SESSION_STATES
 from ...chat_attachments import normalize_chat_image_attachments
 from ...control_plane.quota.automation_cadence_readback import (
     automation_cadence_readback,
@@ -80,6 +80,7 @@ class ChatExternalConversations:
         events = store.events_after(session["session_id"], turn["turn_id"], None)
         anchors = [event["payload"]["native_input"] for event in events
                    if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
+        session = self._original_native_session(session, anchors)
         # This only selects read-only result probes. Adoption still requires
         # the exact original anchor, native final, current source and typed rule.
         from ...chat import _review_openings
@@ -99,6 +100,7 @@ class ChatExternalConversations:
                 and item.get("text") == row.get("message") and item.get("origin") in {None, "lark", "web"}
                 and datetime.fromisoformat(item["created_at"]) > created
                 for item in store.messages(session["session_id"]))
+        from ...chat_manager import steward_machine_defaults
         return effect_runtime_result("collaboration.conversation.request", {
             "request": {key: value for key, value in row.items() if key != "attachments"},
             "current_session": session, "binding": selected_binding,
@@ -115,8 +117,22 @@ class ChatExternalConversations:
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
+                "executor_configuration": steward_machine_defaults(self.controller) if metadata_capacity else None,
                 "native_observation": observation, "source_verified": source_verified},
         })
+
+    @staticmethod
+    def _original_native_session(session: dict[str, Any], anchors: list[dict[str, Any]]) -> dict[str, Any]:
+        """Read a retained original native binding, never rebind/replay its Turn."""
+        if len(anchors) != 1 or anchors[0].get("thread_id") == session.get("upstream_thread_id"):
+            return session
+        matches = [row for row in session.get("upstream_context_history", [])
+                   if row.get("thread_id") == anchors[0].get("thread_id") and row.get("agent_id") == "antigravity"]
+        if len(matches) != 1:
+            return session
+        return {**session, "agent_id": "antigravity", "executor_endpoint_id": "antigravity",
+            "agent_model_id": matches[0]["agent_model_id"], "upstream_mode": "default",
+            "upstream_thread_id": matches[0]["thread_id"]}
 
     def _source_stop_observed(self, row: dict[str, Any], turn: dict[str, Any],
                               events: list[dict[str, Any]], *,
@@ -239,9 +255,15 @@ class ChatExternalConversations:
                     include_retained_result=turn.get("status") == "completed")
                 if proof is not None:
                     from .antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
+                    native_session = self._original_native_session(session, [proof])
                     capacity = AntigravityAdapter.metadata_review_capacity(
-                        cascade_id=session["upstream_thread_id"],
-                        model_id=session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
+                        cascade_id=native_session["upstream_thread_id"],
+                        model_id=native_session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
+                    if capacity is not None:
+                        from ...chat_manager import manager_session_quota_route
+                        route = manager_session_quota_route(self.controller, session)
+                        if route and route["allocation"]["executor_endpoint"] == "codex":
+                            capacity = {**capacity, "alternate_executor": route}
             elif not plan.get("admitted_turn_id") and not preparation_retry:
                 proof = CodexAppServerAdapter.failed_request_observation(
                     codex_bin=self.controller.codex_bin, codex_home=Path(session["codex_home"]),
@@ -306,6 +328,7 @@ class ChatExternalConversations:
                         recovery.update(read_only_review=True, presentation_key=f"{MANAGER_CONTEXT_VERSION}.review.1")
                     if plan.get("metadata_review"):
                         recovery.update(metadata_review=True, metadata_handoffs=plan["metadata_handoffs"],
+                            **({"metadata_executor": plan["metadata_executor"]} if plan.get("metadata_executor") else {}),
                             original_turn=deepcopy(turn), binding_snapshot=selected["binding"],
                             source_request_refs=sorted(item["request_ref"] for item in requests),
                             presentation_key=f"{MANAGER_CONTEXT_VERSION}.metadata.1")
@@ -376,6 +399,7 @@ class ChatExternalConversations:
         events = self.controller.store.events_after(session["session_id"], turn["turn_id"], None)
         anchors = [event["payload"]["native_input"] for event in events
                    if event.get("kind") == "turn.started" and event.get("payload", {}).get("native_input")]
+        session = self._original_native_session(session, anchors)
         if len(anchors) > 1:
             return None
         # Retained facts can repair only a completed Turn's text. Failed-Turn
@@ -502,12 +526,13 @@ class ChatExternalConversations:
         events += store.events_after(session["session_id"], continuation["failed_turn_id"], None)
         refs = sorted(item["request_ref"] for item in self.pending()
                       if item.get("binding_id") == row["binding_id"] and item.get("source") == row["source"])
-        if (session.get("agent_id") != "antigravity"
+        native_session = self._original_native_session(current, [continuation["native_observation"]])
+        if (native_session.get("agent_id") != "antigravity"
                 or row["turn_id"] not in {turn["turn_id"], continuation["failed_turn_id"]}
                 or (store.turn_for_client(session["session_id"], continuation["client_turn_id"]) or {}).get("turn_id") != turn["turn_id"]
                 or original != continuation["original_turn"] or binding != continuation["binding_snapshot"]
                 or current.get("status") == "closed" or current.get("active_turn_id") != turn["turn_id"]
-                or current.get("upstream_thread_id") != continuation["native_observation"]["thread_id"]
+                or native_session.get("upstream_thread_id") != continuation["native_observation"]["thread_id"]
                 or store.queued_turns(session["session_id"]) or refs != continuation["source_request_refs"]
                 or self._source_stop_observed(row, original or {}, events)
                 or any(event.get("kind") == "turn.steered" for event in events)):
@@ -542,7 +567,7 @@ class ChatExternalConversations:
     def execute_turn(controller: Any, adapter: Any, session: dict[str, Any], turn: dict[str, Any],
                      message: str, event_sink: Callable) -> dict[str, Any]:
         """Narrow a reserved format review; preserve ordinary adapter dispatch."""
-        if (session.get("agent_id") != "antigravity" or session.get("steward_context") is None
+        if (session.get("agent_id") not in {"antigravity", "codex"} or session.get("steward_context") is None
                 or controller.project_contexts.conversation_bindings is None):
             return adapter.start_turn(message, event_sink)
         external = ChatExternalConversations(controller)
@@ -550,6 +575,14 @@ class ChatExternalConversations:
         if review_input is None:
             return adapter.start_turn(message, event_sink)
         from .antigravity_adapter import AntigravityAdapter
+        from .codex_adapter import CodexAppServerAdapter
+        continuation = external._checked_metadata_review(session, turn)
+        if continuation.get("metadata_executor") == "codex":
+            if not isinstance(adapter, CodexAppServerAdapter) or not adapter.session.metadata_review:
+                raise ValueError("metadata fallback requires a tools-disabled native Codex review")
+            response = adapter.start_turn(review_input, lambda kind, payload: event_sink(kind, payload)
+                if kind not in {"answer.delta", "answer.final"} else None)
+            return external.validate_metadata_review_response(session, turn, response)
         if not isinstance(adapter, AntigravityAdapter):
             raise ValueError("metadata review requires its original native adapter")
         # Keep the original thread/profile. Only this Send disables tools;
@@ -612,7 +645,10 @@ class ChatExternalConversations:
                                 accepted_turn_id: str | None) -> dict[str, Any]:
         """Local policy correlation for an admitted, still-unstarted Turn."""
         if turn and turn.get("status") == "queued" and turn.get("turn_id") == accepted_turn_id:
-            return self.recovery_context(session, turn) or {}
+            recovery = self.recovery_context(session, turn) or {}
+            if recovery.get("metadata_review") and recovery.get("metadata_executor") == "codex":
+                return {**recovery, "read_only_review": True}
+            return recovery
         return {}
 
     def _automation_cadence_observation(
@@ -761,12 +797,26 @@ class ChatExternalConversations:
         else:
             current = controller.store.latest_session(goal_id=None,
             agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"])
+            if selected["binding"]["context_kind"] == "steward":
+                # A quota fallback keeps the original channel, source and Core
+                # Session. Agent filtering must not create another consumer or
+                # fork the conversation when its actual endpoint changed.
+                candidates = [item for item in controller.store.list_sessions(channel_id=selected["channel_id"])
+                              if item.get("status") in RESUMABLE_SESSION_STATES]
+                if candidates:
+                    latest = max(candidates, key=lambda item: str(item.get("created_at") or ""))
+                    candidate = controller.store.load_session(latest["session_id"])
+                    if candidate and candidate.get("manager_executor_allocation", {}).get("selection_policy") == "flexible":
+                        self.bindings.session_context(candidate["steward_context"], session=candidate)
+                        current = candidate
         if row["command"] in {"status", "help"} and not target:
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
-            current = max(controller.store.session_candidates(goal_id=None,
-                agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"]),
-                key=lambda candidate: str(candidate.get("updated_at") or ""), default=None)
+            candidates = (controller.store.list_sessions(channel_id=selected["channel_id"])
+                if selected["binding"]["context_kind"] == "steward" else controller.store.session_candidates(goal_id=None,
+                    agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"]))
+            snapshot = max(candidates, key=lambda candidate: str(candidate.get("updated_at") or ""), default=None)
+            current = controller.store.load_session(snapshot["session_id"]) if snapshot else None
         if row.get("session_id") and row["command"] is None:
             current = controller.store.load_session(row["session_id"])
             if current is None:
