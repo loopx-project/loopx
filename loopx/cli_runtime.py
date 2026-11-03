@@ -179,12 +179,12 @@ def resolve_cli_registry(
 		# Service activation reads its route from the loaded original manager.
 		# It neither opens Goal authority nor guesses a default Chat store.
 		return registry_path, registry_was_configured
-	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "replan-view"}:
+	if args.command == "quota" and getattr(args, "quota_command", None) in {"context-read", "context-project", "replan-view"}:
 		from .cli_commands.context_machine import has_explicit_context_read_source
 
-		# Captured readers own source validation (including missing references)
-		# and native-session scope; neither reaches live Goal authority.
-		if args.quota_command == "replan-view" or has_explicit_context_read_source(args):
+		# Saved views own source validation (including missing references) and
+		# native-session scope; machine defaults keep their separate route owner.
+		if args.quota_command in {"context-project", "replan-view"} or has_explicit_context_read_source(args):
 			return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
