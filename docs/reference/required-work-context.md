@@ -249,6 +249,38 @@ Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整
 原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
 通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
 
+For supporting fields folded by the existing native Progressive owner,
+`context_details.unread_context_index` contains the current complete
+`projection.json` source path/digest and exact `pointers`. The initial reader
+shows that index; a file-backed warm delta repeats it in full even when its
+pointers are unchanged. Each pointer uses the ordinary `context-read`
+`--capture-file`, `--capture-sha256` and `--select` route, independently of any
+previous packet, retained model input or patch chain. These addresses belong to
+the complete source, not the derived `required-context.json` recovery view.
+
+`coverage_confirmed=false` conservatively reports no trusted model-visible
+coverage witness. A previous select, reader EOF or file receipt does not clear
+an entry or create `confirmed_read_sections`/`consumed_pointers` state.
+`read_before_dependent_work` preserves the original obligation to read material
+when the decision or verification needs it; it is not an automatic full-read or
+execution gate. Updated/reordered material binds to its current addresses;
+removed material does not retain a predecessor route. The actual index and
+guidance count toward the existing byte guard, including fallback to the
+complete file when folding is not smaller. In-view deduplication alone adds no
+index. This bounded native slice changes no activation defaults or off path;
+cross-host rollout and trusted coverage observation remain C1/C2 work.
+
+中文：现有原生 Progressive owner 折叠的支持字段，在
+`context_details.unread_context_index` 中列出当前完整 `projection.json` 的路径、
+摘要和精确 `pointers`。首读呈现该索引；文件 warm delta 即使指针未变也完整重发。
+各指针通过普通 `context-read --capture-file ... --capture-sha256 ... --select ...`
+独立读取，不依赖旧包、模型保留或补丁链；它们属于完整源，不属于派生 required view。
+`coverage_confirmed=false` 表示没有可信模型可见覆盖见证，选读、EOF或文件回执不会
+清除条目，也不新建已读账本。`read_before_dependent_work` 保留原先按决策/验证需要
+读取的义务，不成为自动全读或执行门。变化/重排绑定当前地址，移除材料不沿用前序入口。
+索引和指导计入原字节守卫，不更小时回退完整文件；仅视图内去重不新增索引。本原生切片
+不改启用默认值或 off 路径，跨宿主推广和可信覆盖观察仍属 C1/C2 未完成工作。
+
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
 same complete Goal source for admitted work-context reads and writes the ordinary

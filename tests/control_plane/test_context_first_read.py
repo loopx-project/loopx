@@ -246,7 +246,8 @@ def test_initial_read_preserves_empty_and_unknown_current_preference_values(tmp_
     page, values = read_selection(view["first_read_command"])
     pointer = f"/interaction_contract/agent_channel/work_context/sources/{len(sources) - 1}/content/current"
     assert values[pointer] == current
-    assert not any(key.startswith(pointer + "/") for key in values)  # No duplicate delivered descendants.
+    pointers = {row["pointer"] for row in json.loads(page["content"])["selections"]}
+    assert not any(key.startswith(pointer + "/") for key in pointers)  # No duplicate delivered descendants.
     raw = Path(view["recovery"]["path"]).read_bytes()
     assert json.loads(raw) == before == decision
     assert capture_page_range(page, raw=raw, digest=page["sha256"]) is None
