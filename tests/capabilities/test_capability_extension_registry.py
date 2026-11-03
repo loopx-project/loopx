@@ -47,6 +47,7 @@ BUILTIN_IDS = [
     "reliability-diagnostics",
     "progress-review-sentinel",
     "goal-capability-organization",
+    "anti-entropy-governance",
 ]
 
 
