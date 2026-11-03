@@ -109,6 +109,62 @@ def test_pending_chat_prevents_both_service_changes(managed):
     assert store.load_turn(sid, turn["turn_id"])["status"] == "queued"
 
 
+@pytest.mark.parametrize("shell", [False, True])
+@pytest.mark.parametrize("readiness_fails", [False, True])
+@pytest.mark.parametrize("route", ["wrong_role", "option_value", "foreign_executable"])
+def test_custom_status_route_keeps_its_accepted_chat_and_has_no_effects(
+    managed, monkeypatch, shell, readiness_fails, route,
+):
+    root, agents, target, loaded, calls, _ = managed
+    custom_root = root.parent / "custom chat"
+    store = ChatSessionStore(custom_root)
+    sid = store.create_session(goal_id="fixture", agent_id="fixture", adapter_kind="fake",
+        upstream_thread_id="fixture")["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="pending", message="Keep accepted work.")
+    args = ["/old/bin/loopx", "--runtime-root", str(custom_root)]
+    if route == "option_value":
+        args += ["--registry", "serve-status"]
+    args += ["chat", "--host", "127.0.0.1", "--port", "8766"]
+    if route == "foreign_executable":
+        args[0], args[3] = "/custom/server", "serve-status"
+    path = agents / "com.loopx.status.plist"
+    payload = plistlib.loads(path.read_bytes())
+    payload["ProgramArguments"] = ["/bin/sh", "-c", "exec " + shlex.join(args)] if shell else args
+    path.write_bytes(plistlib.dumps(payload))
+    loaded[path.stem] = payload
+    before = {p: p.read_bytes() for p in agents.glob("*.plist")}
+    def readiness(*_):
+        if readiness_fails:
+            raise RuntimeError("service_runtime_alignment_failed")
+        pytest.fail("unverified source reached readiness after mutation")
+    monkeypatch.setattr(managed_runtime, "_verify_services", readiness)
+    with pytest.raises(ValueError, match="service_runtime_route_unverified"):
+        align_managed_runtime(str(target))
+    assert calls == []
+    assert {p: p.read_bytes() for p in before} == before
+    assert loaded == {p.stem: plistlib.loads(content) for p, content in before.items()}
+    assert store.load_turn(sid, turn["turn_id"])["status"] == "queued"
+    assert not (agents / ".loopx-runtime-activation.json").exists()
+
+
+def test_recovery_rejects_a_journal_with_changed_role_or_data_route(managed):
+    import base64
+
+    _, agents, target, loaded, calls, _ = managed
+    path = agents / "com.loopx.status.plist"
+    original = path.read_bytes()
+    candidate = plistlib.loads(original)
+    candidate["ProgramArguments"][2] = candidate["ProgramArguments"][2].replace("serve-status", "chat")
+    journal = agents / ".loopx-runtime-activation.json"
+    journal.write_text(json.dumps({"schema_version": "loopx_managed_runtime_handoff_v1",
+        "services": {path.stem: {"original": base64.b64encode(original).decode(),
+            "candidate": base64.b64encode(plistlib.dumps(candidate)).decode()}}}))
+    with pytest.raises(ValueError, match="service_runtime_route_unverified"):
+        align_managed_runtime(str(target))
+    assert calls == [] and len(loaded) == 2
+    assert path.read_bytes() == original and journal.exists()
+
+
 def test_failed_second_bootstrap_restores_original_loaded_pair(managed):
     _, agents, target, loaded, calls, fail = managed
     before = {p: p.read_bytes() for p in agents.glob("*.plist")}

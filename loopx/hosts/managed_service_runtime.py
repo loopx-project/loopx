@@ -45,11 +45,10 @@ def _literal_arguments(command: str) -> list[str]:
     return words
 
 
-def _retarget(payload: dict, executable: str, python: str) -> dict:
-    result = copy.deepcopy(payload)
-    if "Program" in result:
+def _launcher(payload: dict) -> tuple[list[str], str | None]:
+    if "Program" in payload:
         raise ValueError("service_runtime_route_unverified")
-    args = result.get("ProgramArguments")
+    args = payload.get("ProgramArguments")
     if not isinstance(args, list) or not args or not all(isinstance(a, str) for a in args):
         raise ValueError("service_runtime_route_unverified")
     if Path(args[0]).name in {"sh", "bash", "zsh"}:
@@ -69,13 +68,21 @@ def _retarget(payload: dict, executable: str, python: str) -> dict:
             words = words[2:]
         if not words or not Path(words[0]).is_absolute():
             raise ValueError("service_runtime_route_unverified")
+        return words, prefix
+    if not Path(args[0]).is_absolute():
+        raise ValueError("service_runtime_route_unverified")
+    return args, None
+
+
+def _retarget(payload: dict, executable: str, python: str) -> dict:
+    result = copy.deepcopy(payload)
+    words, prefix = _launcher(payload)
+    if prefix is not None:
         launch = ["/usr/bin/env", "-u", "PYTHONPATH", "-u", "LOOPX_RELEASE_ROOT",
             f"LOOPX_PYTHON={python}", executable, *words[1:]]
-        result["ProgramArguments"] = [args[0], "-c", (prefix + "; " if prefix else "") + "exec " + shlex.join(launch)]
+        result["ProgramArguments"] = [payload["ProgramArguments"][0], "-c", (prefix + "; " if prefix else "") + "exec " + shlex.join(launch)]
     else:
-        if not Path(args[0]).is_absolute() or "Program" in result:
-            raise ValueError("service_runtime_route_unverified")
-        result["ProgramArguments"] = [executable, *args[1:]]
+        result["ProgramArguments"] = [executable, *words[1:]]
         result.setdefault("EnvironmentVariables", {})["LOOPX_PYTHON"] = python
         result["EnvironmentVariables"].pop("PYTHONPATH", None)
         result["EnvironmentVariables"].pop("LOOPX_RELEASE_ROOT", None)
@@ -103,12 +110,23 @@ def has_runtime_binding() -> bool:
 
 
 def _endpoint(payload: dict) -> int:
-    arguments = payload["ProgramArguments"]
-    if Path(arguments[0]).name in {"sh", "bash", "zsh"}:
-        command = arguments[2].rpartition("; exec ")[2]
-        if arguments[2].startswith("exec ") and "; exec " not in arguments[2]:
-            command = arguments[2][5:]
-        arguments = _literal_arguments(command)
+    arguments, _ = _launcher(payload)
+    # A standard label is not evidence of the service's role. Parse the command
+    # position, rather than finding a word that could be an option's value.
+    # This adapter accepts the installer's global options; custom invocations
+    # remain under their original owner without any signal or persistent edit.
+    expected = {"com.loopx.status": "serve-status", "com.loopx.chat": "chat"}.get(payload.get("Label"))
+    if expected is None or Path(arguments[0]).name != "loopx":
+        raise ValueError("service_runtime_route_unverified")
+    index = 1
+    while index < len(arguments) and arguments[index].startswith("--"):
+        flag, separator, _ = arguments[index].partition("=")
+        if flag not in {"--registry", "--runtime-root", "--format"}:
+            raise ValueError("service_runtime_route_unverified")
+        index += 1 if separator else 2
+    if index >= len(arguments) or arguments[index] != expected:
+        raise ValueError("service_runtime_route_unverified")
+    arguments = arguments[index + 1:]
     def option(flag):
         values = [word.split("=", 1)[1] if word.startswith(flag + "=")
             else arguments[i + 1] if i + 1 < len(arguments) else ""
@@ -199,6 +217,13 @@ def _recover_alignment(journal: Path) -> None:
         path = journal.parent / f"{label}.plist"
         originals[path] = base64.b64decode(item["original"], validate=True)
         candidates[path] = base64.b64decode(item["candidate"], validate=True)
+        original = plistlib.loads(originals[path])
+        candidate = plistlib.loads(candidates[path])
+        if (not isinstance(original, dict) or not isinstance(candidate, dict)
+                or original.get("Label") != label or candidate.get("Label") != label
+                or _endpoint(original) != _endpoint(candidate)
+                or _launcher(original)[0][1:] != _launcher(candidate)[0][1:]):
+            raise ValueError("service_runtime_route_unverified")
         if path.is_symlink() or path.read_bytes() not in {originals[path], candidates[path]}:
             raise ValueError("service_runtime_route_unverified")
     chat = journal.parent / "com.loopx.chat.plist"
@@ -259,8 +284,8 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
         loaded, pid = activation._managed_service_state(plist)
         if not loaded:
             raise ValueError("service_runtime_route_unverified")
+        endpoints[plist] = _endpoint(payload)
         updated = _retarget(payload, str(target), python)
-        endpoints[plist] = _endpoint(updated)
         if updated != payload:
             originals[plist] = original
             updates[plist] = plistlib.dumps(updated)

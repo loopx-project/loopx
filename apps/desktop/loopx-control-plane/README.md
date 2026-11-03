@@ -225,6 +225,10 @@ click or reload. The startup screen shows the next automatic retry; waiting is
 visually idle, with details available in **Recovery & updates**. **Retry now**
 is optional and resets the delay through the native supervisor, preserving the
 selected runtime. Pending Chat work retains its existing automatic retry.
+Before any stop or write, alignment verifies the original literal launcher,
+the actual `serve-status`/`chat` command position and its loopback endpoint;
+a standard label alone never qualifies a custom service. Interrupted handoffs
+apply the same role and unchanged-data-route checks before restoring services.
 
 恢复是默认流程：暂时切换失败会自动退避重试，中断的切换会先恢复原服务。服务就绪后
 自动进入工作区，无需点击按钮；「立即重试」只是跳过等待的可选入口。自定义来源仍需
