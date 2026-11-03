@@ -114,7 +114,11 @@ def register_task_lease_command(
     parser.add_argument("--goal-id", required=True, help="Goal id that owns the todo.")
     parser.add_argument("--todo-id", required=True, help="Structured todo id such as todo_ab12cd34ef56.")
     parser.add_argument("--owner", help="Registered public-safe agent id that owns the lease.")
-    parser.add_argument("--idempotency-key", help="Public-safe token used for idempotent retries and CAS.")
+    parser.add_argument("--idempotency-key", help=(
+        "Public-safe execution key chosen for acquire. Renew/transfer/release reuse the original key "
+        "of this lease generation, not a new per-operation token. "
+        "Transfer's receiver key uses --new-idempotency-key."
+    ))
     parser.add_argument("--new-owner", help="For transfer, target registered public-safe agent id.")
     parser.add_argument("--new-idempotency-key", help="For transfer, target idempotency key.")
     parser.add_argument("--transfer-claim", action="store_true",
