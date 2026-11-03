@@ -1,5 +1,6 @@
 import {useId, useState} from "react";
 import type {TrajectorySolverUsage} from "../../../../../../loopx/control_plane/capabilities/trajectory_assessment_types.js";
+import {ContextHelp} from "./context-help";
 
 /** Presentation of existing Turn counters; never estimates missing usage or attributes it to control work. */
 export function ResearchTurnCosts({usage, zh, onRead}: {usage: TrajectorySolverUsage; zh: boolean;
@@ -21,13 +22,19 @@ export function ResearchTurnCosts({usage, zh, onRead}: {usage: TrajectorySolverU
   const number = (n: number | undefined | null) => n == null ? "—" : n.toLocaleString(zh ? "zh-CN" : "en");
   return <details className="research-turn-costs">
     <summary>{zh ? "定位耗时与输入最多的轮次" : "Find time and input hotspots"}</summary>
-    <p>{zh ? "仅比较当前捕获内的轮次。耗时含工具、等待与编排，不是可节省时间；轮次输入不等于 LoopX 控制输入。金额未采集。" : "Compares Turns within this capture only. Elapsed time includes tools, waiting and orchestration, not avoidable time. Turn input is not LoopX control input. Dollar cost is unmeasured."}</p>
-    <label htmlFor={id}>{zh ? "排序" : "Sort by"}</label>{" "}
-    <select id={id} value={sort} onChange={event => {setSort(event.target.value); setPage(0);}}>
-      <option value="input">{zh ? "输入最多" : "Most input"}</option>
-      <option value="elapsed">{zh ? "耗时最长" : "Longest elapsed"}</option>
-      <option value="time">{zh ? "时间顺序" : "Chronological"}</option>
-    </select>
+    <div className="research-turn-costs-toolbar">
+      <div className="research-turn-costs-sort">
+        <label htmlFor={id}>{zh ? "排序" : "Sort by"}</label>{" "}
+        <select id={id} value={sort} onChange={event => {setSort(event.target.value); setPage(0);}}>
+          <option value="input">{zh ? "输入最多" : "Most input"}</option>
+          <option value="elapsed">{zh ? "耗时最长" : "Longest elapsed"}</option>
+          <option value="time">{zh ? "时间顺序" : "Chronological"}</option>
+        </select>
+      </div>
+      <ContextHelp label={zh ? "轮次耗时与输入说明" : "Turn elapsed time and input note"}>
+        <p>{zh ? "仅比较当前捕获内的轮次。耗时含工具、等待与编排，不是可节省时间；轮次输入不等于 LoopX 控制输入。金额未采集。" : "Compares Turns within this capture only. Elapsed time includes tools, waiting and orchestration, not avoidable time. Turn input is not LoopX control input. Dollar cost is unmeasured."}</p>
+      </ContextHelp>
+    </div>
     {rows.length ? <ol className="research-turn-cost-list">
       {ordered.slice(current * size, (current + 1) * size).map(turn => <li key={turn.turn_id}>
         <div><strong>{zh ? `第 ${turn.ordinal} 轮` : `Turn ${turn.ordinal}`}</strong>
