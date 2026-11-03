@@ -20,6 +20,8 @@ from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     ("edgebench-research-history.json", "b876dd7660e0aab19db717f60e86865494a74b8fa27b42a5a67ee295ef524397", 104922),
     ("edgebench-graph-checkpoint-history.json", "b105de360ed7d015ae5d7bf96b545879e12507b1fc97eaeb5fb6fa2c0bbc00ab", 200333),
     ("edgebench-ad-checkpoint-history.json", "de04b679e9f382b650e891e5c7dd7146bc690500435c511f107c9d24da4f4efa", 145296),
+    ("edgebench-grid-context-on-20261103-history.json", "292f493ee5d88e0f99546776ee2a46958e19517ceae192c10288276f270f404d", 80992),
+    ("edgebench-grid-context-off-20261103-history.json", "d91047d06aa7ef43249bc79e70d8ba53d37a88240c124dcd17a75034ea524375", 20575),
 ])
 def test_checkpoint_fixture_reconstructs_original_captured_log_bytes(name, digest, size):
     fixture = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures" / name

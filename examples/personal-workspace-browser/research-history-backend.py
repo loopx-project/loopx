@@ -1,6 +1,7 @@
 """Disposable read-only HTTP owner for a captured Explore event log.
 
-The default is three real EdgeBench research checkpoints. The history route
+The default is the complete saved Explore log from a recent Grid benchmark run.
+Older real checkpoints and synthetic boundary cases use explicit fixtures. The history route
 and pagination are production code; execution state is never restored and
 model dispatch is never called. Explicit fixture paths support regressions.
 """
@@ -53,9 +54,7 @@ def main():
         help="Serve the production directory for scoped Goal navigation tests.")
     args = parser.parse_args()
     fixtures = Path(__file__).resolve().parents[2] / "apps/presentation/dashboard/src/data/fixtures"
-    sources = args.fixture or [fixtures / name for name in (
-        "edgebench-research-history.json", "edgebench-graph-checkpoint-history.json",
-        "edgebench-ad-checkpoint-history.json")]
+    sources = args.fixture or [fixtures / "edgebench-grid-context-on-20261103-history.json"]
     captures = []
     original = {}
     for source in sources:
@@ -92,7 +91,7 @@ def main():
         registry = root / "registry.json"
         registry.write_text(json.dumps({"schema_version": 1, "common_runtime_root": str(runtime), "goals": goals}))
         original[registry] = registry.read_bytes()
-        # Optional synthetic analysis uses the real pack verifier, process/job
+        # Optional boundary-test analysis uses the real pack verifier, process/job
         # owner and HTTP reader. It never enables model dispatch from the page.
         fixture_config = {**DEFAULT_CONFIG, "research_synthesis": False}
         fixture_config.pop("research_synthesis_revision", None)
@@ -109,6 +108,9 @@ def main():
                                            include_tool_context=analysis.get("include_tool_context", False),
                                            native_outcomes_json=analysis.get("native_outcomes_json"))
                 for language, output in analysis["outputs"].items():
+                    # Exercise saved artifacts from before language-scoped
+                    # generation without rewriting their registered identity.
+                    language = None if language == "original" else language
                     provider = write_python_host_fixture(root / f"analysis-provider-{index}-{language}",
                         ("#!python\n" if sys.platform == "win32" else f"#!{sys.executable}\n")
                         + "import sys\nfrom pathlib import Path\n"
@@ -184,7 +186,7 @@ def main():
         print(json.dumps({"port": server.server_port, "goal_id": goal_id,
             "goal_ids": [item["goal_id"] for item in captures],
             "event_count": sum(len(item["events"]) for item in captures),
-            "url": f"http://127.0.0.1:{server.server_port}/chat/?goalId={goal_id}&view=overview"}), flush=True)
+            "url": f"http://127.0.0.1:{server.server_port}/chat/?goalId={goal_id}&view=research"}), flush=True)
         try:
             server.serve_forever()
         finally:
