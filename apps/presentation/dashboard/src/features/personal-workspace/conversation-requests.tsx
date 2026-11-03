@@ -251,6 +251,13 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const moreButton = useRef<HTMLButtonElement>(null);
   const pageCountStatus = useRef<HTMLSpanElement>(null);
   const restorePagingFocus = useRef(false);
+  const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
+  const otherViewScope = JSON.stringify([sessionId, ownerFallback, !history, search]);
+  // Keep a verified view for the unchanged caller while its other filter loads.
+  // A fallback resolving to another source clears it before reading that source.
+  const keepPreviousView = loadedSource.current !== null
+    && (sessionId ? loadedSource.current === sessionId : ownerFallback)
+    && loadedScope.current === otherViewScope;
   useEffect(() => {
     setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
     loadedScope.current = null; loadedSource.current = null;
@@ -275,7 +282,6 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     requestAbort.current?.abort();
     const abort = new AbortController(); requestAbort.current = abort;
     setBusy(true); setError(false); setNoSession(false); setConversationChanged(false);
-    const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
     const sameScope = loadedScope.current === scope;
     const loadedRows = pages.reduce((count, page) => count + page.rows.length, 0);
     // A fresh snapshot or parent refresh must retain the page requested by
@@ -283,10 +289,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     requestedRows.current = sameScope
       ? Math.max(requestedRows.current, offset ? offset + 12 : Math.ceil(loadedRows / 12) * 12) : 12;
     const refreshRows = requestedRows.current;
-    // Keep verified rows during a same-source refresh, but never across scope
-    // changes or a failed read. Publish refreshed pages together below.
-    if (!sameScope) setPages([]);
-    loadedScope.current = scope;
+    // Keep the published view readable during this source's filter change.
+    // Searches, source changes and failed reads still discard its contents.
+    if (!sameScope && !keepPreviousView) setPages([]);
     try {
       let source = sessionId && sessionId !== "new-session-pending" ? sessionId : undefined;
       if (!source && ownerFallback) {
@@ -318,6 +323,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         if (value.next_offset !== null && value.next_offset <= cursor) throw new Error("Request paging did not advance.");
         refreshed.push(value); cursor = value.next_offset;
       }
+      loadedScope.current = scope;
       setPages(previous => offset ? [...previous, ...refreshed] : refreshed);
       if (!offset) setOriginalRevision(value => value + 1);
     } catch {
@@ -326,7 +332,10 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
       requestAbort.current = null; setBusy(false);
     }}
   }
-  const page = pages[0], last = pages.at(-1);
+  // Hide another source/search immediately, before effect cleanup can run.
+  const visiblePages = loadedScope.current === scope || keepPreviousView ? pages : [];
+  const page = visiblePages[0], last = visiblePages.at(-1);
+  const shownHistory = page ? loadedScope.current === JSON.stringify([sessionId, ownerFallback, true, search]) : history;
   useEffect(() => {
     if (!busy && restorePagingFocus.current) {
       restorePagingFocus.current = false;
@@ -336,10 +345,15 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
     }
   }, [busy]);
   const unknown = page && (!page.coverage.scan_complete || page.coverage.unreadable > 0);
-  const rows = [...new Map(pages.flatMap(value => value.rows).map(row => [row.request_id, row])).values()];
+  const rows = [...new Map(visiblePages.flatMap(value => value.rows).map(row => [row.request_id, row])).values()];
   const recipients = [...new Set(rows.map(row => `${row.goal_id}\n${row.agent_id}`))];
   const count = error || !page ? "—" : unknown ? (page.pending_count ? `${page.pending_count}+` : "—") : page.pending_count;
   const title = zh ? "委派" : "Delegations";
+  const changeHistory = (value: boolean) => {
+    if (value === history) return;
+    generation.current++; requestAbort.current?.abort();
+    setBusy(true); setError(false); setHistory(value);
+  };
   const applySearch = (value: string) => {
     // Fence immediately, including the interval before the effect starts.
     generation.current++; requestAbort.current?.abort();
@@ -349,7 +363,11 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   };
   const close = () => {generation.current++; requestAbort.current?.abort(); requestedRows.current = 12; setBusy(false); setOpen(false); trigger.current?.focus();};
   return <div className="conversation-requests-entry">
-    <button ref={trigger} type="button" onClick={() => {setHistory(false); setOpen(true); setRevision(value => value + 1);}}
+    <button ref={trigger} type="button" onClick={() => {
+      // Reopening always starts with follow-up, including after an interrupted switch.
+      if (loadedScope.current !== JSON.stringify([sessionId, ownerFallback, false, search])) setPages([]);
+      setHistory(false); setOpen(true); setRevision(value => value + 1);
+    }}
       aria-haspopup="dialog" aria-label={zh ? `委派，${count} 条待跟进` : `Delegations, ${count} awaiting follow-up`}>
       <ListChecks size={16}/><span>{title}</span><span className="conversation-requests-count">{count}</span>
     </button>
@@ -360,8 +378,10 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         <p>{zh ? "当前管家发出的请求，含同一来源的较早会话。数量是仍需回传、送达或核对的请求，不是任务数或成果验收。时间为最近可核验的记录。结论与取消记录仍可在历史中查看。" : "Requests from this steward, including earlier sessions from the same source. Counts describe returns, delivery or readback still owed, not task counts or accepted outcomes. Times identify the latest verifiable record. Concluded and cancelled requests remain in history."}</p>
       </ContextHelp></div><button type="button" onClick={close} aria-label={zh ? "关闭委派" : "Close delegations"}><X size={18}/></button></header>
       <nav aria-label={zh ? "委派记录" : "Delegation records"}>
-        <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>{zh ? "待跟进" : "Awaiting follow-up"}</button>
-        <button type="button" aria-pressed={history} onClick={() => setHistory(true)}>{zh ? "全部记录" : "All records"}</button>
+        <button type="button" aria-pressed={!shownHistory} aria-busy={busy && !history} onClick={() => changeHistory(false)}>{zh ? "待跟进" : "Awaiting follow-up"}
+          {busy && !history ? <RefreshCw size={14} className="motion-safe:animate-spin" aria-hidden/> : null}</button>
+        <button type="button" aria-pressed={shownHistory} aria-busy={busy && history} onClick={() => changeHistory(true)}>{zh ? "全部记录" : "All records"}
+          {busy && history ? <RefreshCw size={14} className="motion-safe:animate-spin" aria-hidden/> : null}</button>
         {conversationChanged ? <span className="conversation-requests-changed" role="status">{zh ? "对话有更新" : "Conversation updated"}</span> : null}
         <button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)} aria-label={zh ? "刷新委派" : "Refresh delegations"}><RefreshCw size={16}/></button>
       </nav>
@@ -380,7 +400,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         {!busy && noSession ? <p>{zh ? "尚无可读取的管家会话。" : "No readable steward conversation yet."}</p> : null}
         {!busy && !noSession && !error && page && !unknown && !rows.length ? <p>{search
           ? (zh ? "未找到匹配的委派。" : "No matching delegations.")
-          : history ? (zh ? "暂无委派记录。" : "No delegation records.")
+          : shownHistory ? (zh ? "暂无委派记录。" : "No delegation records.")
             : (zh ? "当前没有待跟进的委派。" : "No delegations awaiting follow-up.")}</p> : null}
         {recipients.map(recipient => {const [goal, agent] = recipient.split("\n"); return <section key={recipient} className="conversation-requests-group">
           <h3>{agent}<span>{goal}</span></h3>

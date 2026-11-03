@@ -15,6 +15,7 @@
 .conversation-requests-dialog button[aria-disabled=true] {cursor:default;opacity:.55;}
 .conversation-requests-dialog > header > button {display:grid;place-items:center;border:0;}
 .conversation-requests-dialog > nav {display:flex;gap:8px;padding:0 24px 16px;border-bottom:1px solid var(--pw-line);}
+.conversation-requests-dialog > nav > button {display:inline-flex;align-items:center;gap:6px;}
 .conversation-requests-dialog > nav > button[aria-pressed=true] {background:var(--pw-text);color:var(--pw-bg);}
 .conversation-requests-dialog > nav > button:last-child {margin-left:auto;}
 .conversation-requests-changed {align-self:center;color:var(--pw-muted);font-size:var(--text-caption);}
