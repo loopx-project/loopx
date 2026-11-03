@@ -357,6 +357,7 @@ def _replan_gate_tmp_fixture(
                         "status": "active",
                         "repo": str(project),
                         "state_file": str(state.relative_to(project)),
+                        "execution_profile": {"stride_strategy": "off"},
                         "coordination": {
                             "agent_model": "peer_v1",
                             "registered_agents": [AGENT_ID],

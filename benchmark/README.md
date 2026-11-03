@@ -137,6 +137,11 @@ preserved for inspection; the companion notice governs their current evidence
 status. Neither archive category is the architecture for new work or grants
 runner, verifier, submission, or publication authority.
 
+The [FrontierCS-2 single-host v1 archive note](frontiercs2-single-host-versions.md)
+registers the frozen native-client, HTTP bridge, Docker transport and verifier
+wrapper used by a one-task four-arm pilot. The companion note links the separate
+data release, dependencies, read-only identity check and qualification limits.
+
 ## Matched model provider routing
 
 For a custom Responses-compatible model endpoint, set `OPENAI_BASE_URL` and

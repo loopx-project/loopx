@@ -21,10 +21,10 @@ defects below are demonstrated separately with synthetic fault injection.
 | Local receipt IO failure | Returns `state=accepted` with `receipt_pending_recovery=true` and exit zero. Repeat `final` with the same tar and original trial capability to repair the receipt. Remote acceptance is authoritative. |
 | Acceptance observation | The bridge's original Unix timestamp appears as `accepted_at` in final responses/receipts and `final_at` in the inspection projection. It is preserved on replay and restart, not reconstructed from upload/grader timestamps. |
 | Bridge restart | A private v2 recovery record retains the original capability, deadline, payload identities, feedback, consumed opportunities, checkpoint/final selections and idempotent responses. Payload bytes and trial identity are checked before recovery. |
-| Durable admission | Admission and its replay response are committed before train queue handoff. A failed commit rolls back in-memory admission and consumes no opportunity; a completed orphan upload can be adopted on retry. |
+| Durable admission | Admission and its replay response are committed before train queue handoff. Payload bytes are flushed to a private temporary file before atomic publication; an interrupted write cannot poison the immutable target. A failed commit rolls back in-memory admission and consumes no opportunity; a completed orphan upload can be adopted on retry. |
 | Interrupted native worker | Recovery reports `controller_recovery_required`, blocks new train admission and automatic queue replay, and preserves measured cost and consumed opportunities. It neither repeats the evaluation nor invents unmeasured cost. |
 | Asynchronous Docker transport | Exec and both upload routes await subprocess IO. Timeout/cancellation reaps the Docker client. Error logging no longer prints exec command/stderr fragments. |
-| Uploads into writable tmpfs | Streams file bytes or tar through unprivileged `docker exec` in the container's mount namespace. It checks actual content in the Docker fixture; trusted installation retains its root-filesystem copy fallback. |
+| Uploads into writable tmpfs | Streams file bytes or tar through unprivileged `docker exec` in the container's mount namespace. File uploads replace a temporary sibling atomically, allowing repeated read-only artifact uploads while retaining mode and ownership. It checks actual content in the Docker fixture; trusted installation retains its root-filesystem copy fallback. |
 
 The existing HTTP capability, train/final purpose separation, train-only status,
 100-call/180,000-second train limits, 512-KiB request limit, final-selection rule
@@ -66,7 +66,10 @@ archives. `--docker-image` uses an already-local Python image with `/bin/bash`;
 it never pulls an image. It creates and removes only its uniquely named
 container, with network disabled and no host mounts. The fixture normalizes
 the Python interpreter path and checks concurrent exec plus sealed/streamed
-file and directory uploads. Omitting the image explicitly skips real Docker
+file and directory uploads, including repeated `0444`/`0555` files. Separate
+process/filesystem checks interrupt a payload write at the OS file-size limit
+and execute the emitted streaming upload program locally; these do not qualify
+container namespace or UID behavior. Omitting the image explicitly skips real Docker
 coverage. This is transport validation, not campaign sandbox qualification.
 No model, task, native evaluator, reference solution or historical candidate
 is executed by these checks. Experiment-specific tests remain opt-in here.
@@ -114,7 +117,8 @@ v1 or reinterpret the original study as a repaired run.
 ## 中文说明
 
 这是对冻结 v1 源码的独立修复补丁：保留原始实验、分数和归档字节，修复重复 final、
-回执失败恢复、提交接受时间缺失、桥接重启恢复及异步 Docker 阻塞。以上命令在新目录
+回执失败恢复、提交接受时间缺失、桥接重启恢复及异步 Docker 阻塞。文件先完整写入临时
+文件再原子发布，避免中断写入阻塞重试，并允许保留原权限地重复上传只读文件。以上命令在新目录
 应用补丁并执行合成 HTTP、客户端和真实 Docker 验证，不调用模型或裁判。
 
 恢复必须保留原 token、deadline、已消耗次数和实测成本；遇到中断的运行中评测，先核对

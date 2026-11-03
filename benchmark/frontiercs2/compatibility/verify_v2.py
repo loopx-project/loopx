@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import importlib.util
 import io
 import json
@@ -20,6 +21,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import uuid
 
 SOURCE: Path
@@ -211,6 +213,38 @@ class Compatibility(unittest.TestCase):
         self.assertEqual(self.trial.train_calls, 1)
         self.assertEqual(self.jobs.qsize(), 1)
 
+    @unittest.skipUnless(importlib.util.find_spec('resource'), 'requires POSIX file limits')
+    def test_interrupted_payload_write_does_not_poison_retry(self):
+        self.stop_server()
+        # Kill a separate writer after the filesystem accepts only a prefix.
+        # No finally block runs; the next bridge must still accept identical bytes.
+        code = '''import hashlib,os,pathlib,queue,resource,signal,sys
+sys.path.insert(0, sys.argv[1])
+from submission_bridge import Trial
+trial = Trial(pathlib.Path(sys.argv[2]), 'fixture', queue.Queue())
+body = pathlib.Path(sys.argv[3]).read_bytes()
+signal.signal(signal.SIGXFSZ, lambda *_: os._exit(73))
+resource.setrlimit(resource.RLIMIT_FSIZE, (128, 128))
+trial.request('POST', '/v1/payloads', body,
+              {'X-Content-SHA256': 'sha256:'+hashlib.sha256(body).hexdigest(),
+               'X-Frontier-Purpose': 'train'})
+'''
+        result = subprocess.run([sys.executable, '-c', code, str(SOURCE),
+                                 str(self.root / 'trial'), str(self.payload)],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 73, result.stderr.decode())
+        self.jobs = queue.Queue()
+        self.trial = self.bridge_module.Trial(self.root / 'trial', 'fixture', self.jobs)
+        self.start_server()
+        with patch.dict(os.environ, {'FRONTIER_DRIVER_API_URL': self.origin}):
+            client = self.client_module.Client()
+            self.client_module.run_train(client, self.payload)
+        self.assertEqual(self.trial.train_calls, 1)
+        self.assertEqual(self.jobs.qsize(), 1)
+        payload = next(iter(self.trial.payloads.values()))
+        self.assertEqual(Path(payload['path']).read_bytes(), self.payload.read_bytes())
+        self.assertEqual(payload['sha256'], 'sha256:'+hashlib.sha256(self.payload.read_bytes()).hexdigest())
+
     def test_failed_train_commit_does_not_enqueue_or_consume_an_opportunity(self):
         self.client_module.upload(self.client, 'train', self.payload)
         real_write = self.trial._write
@@ -301,6 +335,37 @@ class Compatibility(unittest.TestCase):
 
 
 class DockerTransport(unittest.TestCase):
+    def test_streamed_upload_replaces_readonly_files_with_preserved_modes(self):
+        module = load('docker_environment')
+
+        async def check(root):
+            env = module.DockerEnvironment('synthetic-local-transport', '')
+
+            async def local_run(argv, *, timeout, data=None):
+                # Execute the actual emitted upload program on a real writable
+                # directory. Container namespace/UID coverage stays in Docker.
+                return await module.DockerEnvironment._run(
+                    [sys.executable, *argv[-4:]], timeout=timeout, data=data)
+
+            async def writable(*args, **kwargs):
+                return SimpleNamespace(return_code=0)
+
+            with patch.object(env, 'exec', side_effect=writable), patch.object(env, '_run', side_effect=local_run):
+                source, target = root / 'source', root / 'target'
+                for mode in (0o444, 0o555):
+                    for content in (b'first upload', b'replacement bytes'):
+                        if source.exists():
+                            source.chmod(0o600)
+                        source.write_bytes(content)
+                        source.chmod(mode)
+                        await env.upload_file(source, str(target))
+                        self.assertEqual(target.read_bytes(), content)
+                        self.assertEqual(target.stat().st_mode & 0o777, mode)
+                        self.assertEqual(target.stat().st_uid, os.getuid())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            asyncio.run(check(Path(temporary)))
+
     def test_event_loop_can_release_a_real_child_process(self):
         module = load('docker_environment')
 
@@ -351,6 +416,15 @@ class DockerTransport(unittest.TestCase):
                 await env.upload_file(data, '/workspace/sealed.txt')
                 unsealed = module.DockerEnvironment(name, bootstrap)
                 await unsealed.upload_file(data, '/workspace/streamed.txt')
+                for mode in (0o444, 0o555):
+                    data.chmod(mode)
+                    await unsealed.upload_file(data, '/workspace/readonly.txt')
+                    await unsealed.upload_file(data, '/workspace/readonly.txt')
+                    observed = await env.exec('stat -c "%a %u" /workspace/readonly.txt')
+                    self.assertEqual(observed.stdout.strip(), f'{mode:o} 10001')
+                    observed = await env.exec('cat /workspace/readonly.txt')
+                    self.assertEqual(observed.stdout, 'synthetic transfer')
+                data.chmod(0o644)
                 await unsealed.upload_dir(root, '/workspace/tree')
                 await env.upload_dir(root, '/workspace/sealed-tree')
                 await unsealed.upload_file(data, '/usr/local/bin/frontier-fixture')

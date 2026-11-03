@@ -1,0 +1,62 @@
+{
+  "source_commit": "d247b3f15b73805e455ff93c6d043d84603ec341",
+  "task": {
+    "agent_image": {
+      "digest": "sha256:023cf56e4be5ca17fa3ac58d30bac45b3a765bcbf32635bb900d9051efef762d",
+      "repository": "docker.io/joyemang33/fcs2-task-batch_local_counting-agent",
+      "tag": "source-563816fc066098b1af7c91b97484322e2960f503e3c1c2f33536df1d46f6b747"
+    },
+    "baseline": {
+      "agreement_rule": {
+        "abs": 0.01,
+        "name": "cross-site-agreement/v1",
+        "rel": 0.05,
+        "replays": 1
+      },
+      "comparability_note": "result.json does not attest that these scores measured the exported input identity",
+      "comparable": false,
+      "datasets": {
+        "eval": "sha256:b1c6e93f03c972a4bf63d54b453a0e8519efaa51651a4f572d7334d173a501d7",
+        "train": "sha256:192f72eac119f17c4f866fe46e653d3ccc730e7c848ebed35e77c06461847868"
+      },
+      "evaluator_sha256": "sha256:cc0848f4d810f76319a3ef656281c0ce39953c03703ac36507f682ac4afad507",
+      "historical_mean": 12.805318426021563,
+      "historical_scores": [
+        12.500607571875047,
+        13.016857446054395,
+        13.011021729803632,
+        12.71547318684792,
+        12.782632195526816
+      ],
+      "historical_spread": 0.5162498741793478,
+      "provenance": "historical-authoring",
+      "reference_patch_sha256": "sha256:1cb3d6c02baec5454052d297fe7b29fed30982bce1fc3c605783676684eb0614",
+      "result_json_source": "judge/result.json",
+      "source_set_sha256": "sha256:563816fc066098b1af7c91b97484322e2960f503e3c1c2f33536df1d46f6b747",
+      "verifier_adapter_sha256": "sha256:e278eb9db3817ddc011c88b1af885c433b6c34f5d7a29d2eb93bd316013581a3"
+    },
+    "dataset_image": {
+      "digest": "sha256:b171b15d65c8b39e798361cf8ad5b35dcab279e3131623247718abcc6ed80a72",
+      "repository": "docker.io/joyemang33/fcs2-task-batch_local_counting-datasets",
+      "tag": "source-563816fc066098b1af7c91b97484322e2960f503e3c1c2f33536df1d46f6b747"
+    },
+    "datasets": {
+      "eval_sha256": "sha256:b1c6e93f03c972a4bf63d54b453a0e8519efaa51651a4f572d7334d173a501d7",
+      "train_sha256": "sha256:192f72eac119f17c4f866fe46e653d3ccc730e7c848ebed35e77c06461847868"
+    },
+    "name": "batch_local_counting",
+    "reference": {
+      "digest": "sha256:69837c04100abfd6817c4d9f6957b78423ad7a20f51c083d83a10a3e8b1eb060",
+      "launcher_sha256": "sha256:ce7234cdc7cd3a274df81e5d23cc6c96e38c2e10c5418511940928e98aa3e9ec",
+      "payload_sha256": "sha256:1cb3d6c02baec5454052d297fe7b29fed30982bce1fc3c605783676684eb0614",
+      "repository": "docker.io/joyemang33/fcs2-task-batch_local_counting-reference",
+      "tag": "source-563816fc066098b1af7c91b97484322e2960f503e3c1c2f33536df1d46f6b747"
+    },
+    "verifier_image": {
+      "digest": "sha256:2655a86ab2e228ac1ddb5ea9e47554f3d1178601ed6df85fb2be555df18b2ee9",
+      "repository": "docker.io/joyemang33/fcs2-task-verifier-batch_local_counting",
+      "tag": "source-563816fc066098b1af7c91b97484322e2960f503e3c1c2f33536df1d46f6b747"
+    }
+  },
+  "qualification": "native-local-reference-pipeline; no model calls or comparative claim"
+}
