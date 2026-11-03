@@ -143,7 +143,7 @@ export function GoalResearchHistory({goalId, active, zh, refreshRevision = 0, re
   const findingBody = (finding: ExploreHistoryEvent) => {
     const execution = finding.execution_observation;
     const measured = (value: unknown) => value === null ? (zh ? "未测量" : "Not measured") : String(value);
-    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{execution ? <details><summary>{zh ? "实际执行与资源观测" : "Execution and resource observations"} <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
+    return <>{finding.measurements ? <ExploreMeasurements measurements={finding.measurements} zh={zh}/> : null}{findingNarrative(finding)}{execution ? <details><summary><span>{zh ? "实际执行与资源观测" : "Execution and resource observations"}</span> <ContextHelp label={zh ? "执行观测说明" : "Execution observation guide"}><p>{zh ? "来源记录的执行观测；不等于方法有效或当前候选已通过验收。" : "Source-recorded execution observations; not proof of method benefit or current-candidate acceptance."}</p></ContextHelp></summary>
       <dl className="research-finding-sections">
         <dt>{zh ? "计划方法 → 实际方法" : "Planned → executed method"}</dt><dd>{String(execution.planned_method_id)} → {String(execution.executed_method_id)}</dd>
         {execution.change_reason ? <><dt>{zh ? "改向原因" : "Reason for change"}</dt><dd>{String(execution.change_reason)}</dd></> : null}
