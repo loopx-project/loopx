@@ -83,6 +83,8 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
         await page.setViewportSize({width, height: 1000});
         await costs.locator('summary').evaluate((element, offset) => {element.style.scrollMarginTop = `${offset}px`; element.scrollIntoView({block: 'start'});}, width < 600 ? 190 : 125);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+        const sortBox = await costs.getByRole('combobox').boundingBox();
+        assert(sortBox && sortBox.width >= 80 && sortBox.height >= (width < 600 ? 44 : 36));
         await page.screenshot({path: resolve(outputDir, `research-turn-costs-${width}.png`), animations: 'disabled'});
       }
       assert.deepEqual(errors, []);
