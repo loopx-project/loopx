@@ -521,6 +521,91 @@ def test_multi_goal_source_registry_sync_and_health_prevent_sibling_false_positi
     assert stale_goal_ids == ["goal-drifted"]
 
 
+def test_single_goal_source_registry_unchanged_prevents_false_positive_stale_warning(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    project = tmp_path / "project"
+    source_registry_path = project / ".loopx" / "registry.json"
+    source_registry_path.parent.mkdir(parents=True)
+
+    state_rel = ".codex/goals/goal-single/ACTIVE_GOAL_STATE.md"
+    state_path = project / state_rel
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("# Goal\n", encoding="utf-8")
+    single_goal = {
+        "id": "goal-single",
+        "status": "active",
+        "repo": str(project),
+        "state_file": state_rel,
+    }
+
+    old_synced_at = "2026-01-01T00:00:00+00:00"
+    global_goals = [
+        sanitize_goal_for_global(
+            single_goal,
+            source_registry=source_registry_path,
+            synced_at=old_synced_at,
+        )
+    ]
+    global_path = global_registry_path(runtime)
+    global_path.parent.mkdir(parents=True, exist_ok=True)
+    global_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime),
+                "goals": global_goals,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    source_registry = {
+        "schema_version": 1,
+        "common_runtime_root": str(runtime),
+        "goals": [single_goal],
+    }
+    source_registry_path.write_text(
+        json.dumps(source_registry, indent=2) + "\n", encoding="utf-8"
+    )
+
+    now = time.time() + 100
+    os.utime(source_registry_path, (now, now))
+
+    health = status_module.collect_global_registry_health(
+        registry_path=source_registry_path,
+        runtime_root=runtime,
+        current_registry=source_registry,
+    )
+    stale_goal_ids = [
+        finding.get("goal_id")
+        for finding in health["findings"]
+        if finding.get("kind") == "stale_source_registry"
+    ]
+    assert stale_goal_ids == []
+
+    source_registry["goals"][0]["status"] = "paused"
+    source_registry_path.write_text(
+        json.dumps(source_registry, indent=2) + "\n", encoding="utf-8"
+    )
+    os.utime(source_registry_path, (now + 10, now + 10))
+
+    health_mutated = status_module.collect_global_registry_health(
+        registry_path=source_registry_path,
+        runtime_root=runtime,
+        current_registry=source_registry,
+    )
+    stale_mutated_ids = [
+        finding.get("goal_id")
+        for finding in health_mutated["findings"]
+        if finding.get("kind") == "stale_source_registry"
+    ]
+    assert stale_mutated_ids == ["goal-single"]
+
+
 @pytest.mark.parametrize(
     ("scenario", "todo_payload", "expected_omitted_fields", "expect_inline_note"),
     [
