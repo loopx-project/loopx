@@ -1847,6 +1847,19 @@ card cannot substitute for final-message readback.
 
 ### Recovering a native result after Core failure
 
+A quota-failure notice remains pending work. For Antigravity, the original worker
+may reserve one new quota-continuation Turn only after two independent reads of
+the same idle native trajectory prove its latest invocation contains exactly the
+original input and a structured `QUOTA_EXHAUSTED` error, without model output or
+tool steps. Admission binds the prompt hash, source, execution time, native index,
+current authorization and fresh capacity. Later source input, steering, stop,
+queued input, unknown or cleared steps veto continuation. An unconfirmed cancel
+alone confers no replay eligibility. An enabled flexible endpoint pool may select
+Codex through the existing quota owner; dispatch rechecks current configuration
+and capacity. Keep the failed Turn and its original notice, and adopt the same
+reservation after a crash. The original Bot still delivers and independently
+reads back its normal result in the original audience.
+
 Historical native-result discovery waits while the same Core Session is busy
 or has an active Turn, leaving shared reply workers available for current
 progress. Already verified result metadata keeps its existing correlation owner.

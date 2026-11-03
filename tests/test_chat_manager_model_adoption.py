@@ -433,6 +433,37 @@ def test_quota_fallback_keeps_original_session_and_only_routes_unstarted_input(m
         assert restored["channel_id"] == original["channel_id"]
 
 
+def test_proven_quota_recovery_opens_fresh_context_when_codex_already_owns_the_session(conversation, monkeypatch):
+    from types import SimpleNamespace
+    import loopx.chat_runtime as runtime_module
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+
+    root, store, runtime, session, starts = conversation
+    configure(root, model="gemini-4-argon-high", effort="high", endpoint="antigravity", policy="flexible")
+    capabilities = [{"agent_id": name, "available": name == "codex", "adapter_kind": kind} for name, kind in
+        [("antigravity", "antigravity_ls"), ("codex", "codex_app_server")]]
+    monkeypatch.setattr(runtime, "capabilities", lambda: capabilities)
+    allocation = manager_executor_allocation(runtime, environ={}, endpoint_capabilities=capabilities)
+    session = store.update_session(session["session_id"], manager_executor_allocation=allocation,
+        agent_model_id="gpt-6.1-sol")
+    assert runtime_module.manager_session_model_allocation(runtime, session) is None
+    store.append_message(session["session_id"], role="user", text="Keep the original source and completed work.")
+    turn, _ = store.create_queued_turn(session["session_id"], client_turn_id="external-original-recovery-22-quota-1",
+        message="Continue the proven unstarted request", origin="lark")
+    session = store.update_session(session["session_id"], active_turn_id=turn["turn_id"], status="busy")
+    runtime.project_contexts.conversation_bindings = SimpleNamespace()
+    monkeypatch.setattr(ChatExternalConversations, "queued_recovery_context", lambda *_:
+        {"quota_attempt": 1, "quota_executor": "codex"})
+    monkeypatch.setattr(runtime_module, "manager_session_quota_route", lambda *_:
+        {"allocation": allocation, "blocked_primary": None})
+    runtime._ensure_adapter(session, work_dir=root, objective="manager")
+    assert len(starts) == 2 and starts[0][1].closed
+    assert starts[1][0]["resume_thread_id"] is None  # A formatter's native permissions cannot become business permissions.
+    assert starts[1][0]["read_only_review"] is False and starts[1][0]["metadata_review_context"] is None
+    assert starts[1][0]["history"] == [{"role": "user", "content": "Keep the original source and completed work."}]
+    assert store.load_turn(session["session_id"], turn["turn_id"])["status"] == "queued"
+
+
 @pytest.mark.parametrize("status", ["queued", "running"])
 def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation, monkeypatch, status):
     import sys

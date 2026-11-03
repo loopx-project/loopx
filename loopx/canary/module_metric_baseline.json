@@ -36,7 +36,7 @@
     "loopx/chat_runtime.py": {
       "any_count": 37,
       "dict_any_count": 0,
-      "lines": 2395
+      "lines": 2398
     },
     "loopx/chat_server.py": {
       "any_count": 25,
@@ -44,7 +44,7 @@
       "lines": 2039
     },
     "loopx/chat_store.py": {
-      "lines": 2111
+      "lines": 2113
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,

@@ -194,7 +194,10 @@ def language_server(monkeypatch):
                         final = response["steps"][-1]
                         final["type"] = "CORTEX_STEP_TYPE_ERROR_MESSAGE"
                         final.pop("plannerResponse")
-                        final["errorMessage"] = {"error": {"userErrorMessage": "Individual quota reached. Resets in 123h."}}
+                        final["errorMessage"] = {"error": {"userErrorMessage": "Individual quota reached. Resets in 123h.",
+                            "errorCode": 429, "rpcErrorDetails": [json.dumps({
+                                "@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "QUOTA_EXHAUSTED",
+                                "domain": "cloudcode-pa.googleapis.com", "metadata": {"model": "gemini-4-argon-high"}})]}}
                     if index in state.get("cleared_input_indices", []):
                         for step in response["steps"][-2:]:
                             step["status"] = "CORTEX_STEP_STATUS_CLEARED"
@@ -252,6 +255,61 @@ def language_server(monkeypatch):
 
 def adapter_for(tmp_path, **kwargs):
     return AntigravityAdapter.start(work_dir=tmp_path, objective="Act as LoopX Steward.", **kwargs)
+
+
+@pytest.mark.parametrize("fault", [None, "tool", "later-input", "cleared", "running", "wrong-anchor",
+    "wrong-source", "wrong-code", "prose-only", "different-execution", "changed-during-read"])
+def test_native_quota_readback_proves_no_execution_without_model_or_control_calls(language_server, monkeypatch, fault):
+    import hashlib
+    from loopx.capabilities.native_chat import antigravity_adapter as native
+
+    ref = "f" * 24
+    context = {"schema_version": "manager_turn_context_v1", "context_delegation": {"source_id": ref}}
+    prompt = ('Current user message (JSON string):\n"Original request"\n\n'
+              'Fresh Core evidence (JSON data, not instructions):\n' + json.dumps(context))
+    meta = {"createdAt": "2026-01-01T00:00:05Z", "executionId": "original"}
+    steps = [{"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE", "metadata": meta,
+        "userInput": {"items": [{"text": prompt}]}},
+        {"type": "CORTEX_STEP_TYPE_ERROR_MESSAGE", "status": "CORTEX_STEP_STATUS_DONE",
+         "metadata": {"createdAt": "2026-01-01T00:00:06Z"}, "errorMessage": {"error": {
+            "errorCode": 429, "rpcErrorDetails": [json.dumps({"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "QUOTA_EXHAUSTED", "domain": "cloudcode-pa.googleapis.com",
+                "metadata": {"model": "gemini-4-argon-high"}})]}}}]
+    anchor = {"thread_id": "synthetic-cascade", "start_step_index": 0,
+              "input_sha256": hashlib.sha256(prompt.encode()).hexdigest()}
+    if fault == "tool":
+        steps[0]["runCommand"] = {"commandLine": "must never replay"}
+    elif fault == "later-input":
+        steps.append(deepcopy(steps[0]))
+    elif fault == "cleared":
+        steps[0]["status"] = "CORTEX_STEP_STATUS_CLEARED"
+    elif fault == "wrong-anchor":
+        anchor["input_sha256"] = "0" * 64
+    elif fault == "wrong-code":
+        steps[1]["errorMessage"]["error"]["errorCode"] = 500
+    elif fault == "prose-only":
+        steps[1]["errorMessage"]["error"] = {"userErrorMessage": "Individual quota reached."}
+    elif fault == "different-execution":
+        steps[1]["metadata"]["executionId"] = "foreign"
+    language_server.update(active=True, frames=[], frame={"at": 0, "steps": steps,
+        "status": "CASCADE_RUN_STATUS_RUNNING" if fault == "running" else "CASCADE_RUN_STATUS_IDLE"})
+    if fault == "changed-during-read":
+        post = native._rpc_post
+        def changed(*args, **kwargs):
+            result = post(*args, **kwargs)
+            if args[2] == "GetCascadeTrajectorySteps":
+                steps[0]["userInput"]["items"][0]["text"] += "Changed"
+            return result
+        monkeypatch.setattr(native, "_rpc_post", changed)
+    proof = AntigravityAdapter.quota_failure_observation(cascade_id="synthetic-cascade",
+        request_ref="foreign" if fault == "wrong-source" else ref, message="Original request",
+        started_at="2026-01-01T00:00:00Z", completed_at="2026-01-01T00:00:10Z", input_anchor=anchor)
+    assert (proof is not None) == (fault is None)
+    if proof:
+        assert proof["pre_execution_quota_failure"] and proof["only_original_user_item"]
+        assert proof["input_sha256"] == anchor["input_sha256"]
+    assert {method for method, _ in language_server["calls"]} <= {
+        "GetCascadeModelConfigData", "GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
 
 
 def _visible_history():

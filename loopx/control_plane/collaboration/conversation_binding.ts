@@ -637,6 +637,9 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       || (Array.isArray(row.context_recovery_history) && row.context_recovery_history.some(value =>
         requireJsonObject(value, "prior preparation recovery").preparation_attempt != null))) return no;
   if (current.agent_id === "antigravity") {
+    if (failed.error_code === "antigravity_step_error") {
+      return planNativeQuotaRecovery(recovery, row, current, failed, version);
+    }
     const originalResponse = failed.response && typeof failed.response === "object" && !Array.isArray(failed.response)
       ? failed.response as JsonObject : null;
     const anchor = recovery.native_input && typeof recovery.native_input === "object" && !Array.isArray(recovery.native_input)
@@ -885,14 +888,72 @@ function planNativeMetadataReview(recovery: JsonObject, row: JsonObject, current
     targets.add(target);
     transcribed.push({goal_id: item.goal_id, agent_id: item.agent_id, brief});
   }
-  return metadataReviewCapacity(recovery, row, current, {...candidate, metadata_handoffs: transcribed,
+  return nativeRecoveryCapacity(recovery, row, current, {...candidate, metadata_handoffs: transcribed,
     ...(adopted === null && recovery.source_verified === true ? {retain_metadata_result: true} : {})});
+}
+
+/** A quota error alone never permits replay. One exact native input/error pair,
+ * no later source input, fresh capacity and the original source permit a new
+ * queue Turn. Effects, ambiguous terminal state and missing anchors stay held.
+ */
+function planNativeQuotaRecovery(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  failed: JsonObject, version: number): JsonObject {
+  const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
+  const originalClient = `external-${ref(row.request_ref, "original request")}`;
+  if (failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
+      || failed.client_turn_id !== originalClient || failed.message !== row.message || failed.origin !== row.origin
+      || failed.status !== "failed" || failed.response !== null || failed.delta_count !== 0
+      || typeof failed.upstream_turn_id !== "string" || !failed.upstream_turn_id
+      || recovery.attachments_present !== false || recovery.steering_observed !== false) return no;
+  const client = `${originalClient}-recovery-${version}-quota-1`;
+  const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "quota reservation");
+  if (row.context_recovery_history != null
+      && (!Array.isArray(row.context_recovery_history) || row.context_recovery_history.length)
+      || previous !== null && (previous.version !== version || previous.quota_attempt !== 1
+        || previous.failed_turn_id !== failed.turn_id || previous.client_turn_id !== client
+        || ["routing_attempt", "preparation_attempt", "read_only_review", "metadata_review", "work_attempt"]
+          .some(key => previous[key] != null))) return no;
+  if (recovery.admitted_turn != null && previous !== null) {
+    const admitted = requireJsonObject(recovery.admitted_turn, "admitted quota Turn");
+    if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
+        || admitted.turn_id === failed.turn_id || admitted.message !== row.message || admitted.origin !== row.origin
+        || !Array.isArray(admitted.attachments ?? []) || (admitted.attachments as unknown[] | undefined)?.length) return no;
+    return {...no, recovery_candidate: true, recovery_eligible: recovery.source_verified === true,
+      client_turn_id: client, admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted quota Turn"),
+      session_id: current.session_id, native_thread_ids: []};
+  }
+  const now = Date.parse(String(recovery.observed_at));
+  const notBefore = Date.parse(String(failed.completed_at)) + 60_000;
+  const anchor = recovery.native_input as JsonObject | null | undefined;
+  if (recovery.stop_observed !== false || recovery.later_source_input_present !== false
+      || current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false
+      || !Number.isFinite(now) || !Number.isFinite(notBefore) || now < notBefore || !anchor
+      || anchor.thread_id !== current.upstream_thread_id || !Number.isSafeInteger(anchor.start_step_index)
+      || Number(anchor.start_step_index) < 0 || typeof anchor.input_sha256 !== "string"
+      || !BARE_SHA256_PATTERN.test(anchor.input_sha256)) return no;
+  const candidate = {...no, recovery_candidate: true, quota_attempt: 1, client_turn_id: client,
+    not_before: new Date(notBefore).toISOString(), failed_turn_id: failed.turn_id, session_id: current.session_id,
+    native_thread_ids: [current.upstream_thread_id]};
+  const proof = recovery.native_observation as JsonObject | null | undefined;
+  if (!proof) return candidate;
+  const created = Date.parse(String(proof.input_created_at));
+  const started = Date.parse(String(failed.started_at)), completed = Date.parse(String(failed.completed_at));
+  if (proof.thread_id !== anchor.thread_id || proof.request_ref !== row.request_ref
+      || proof.start_step_index !== anchor.start_step_index || proof.input_sha256 !== anchor.input_sha256
+      || proof.total_steps !== Number(anchor.start_step_index) + 2 || proof.latest_input_verified !== true
+      || proof.pre_execution_quota_failure !== true || proof.only_original_user_item !== true
+      || proof.model_id !== (current.agent_model_id ?? "gemini-4-argon-high")
+      || typeof proof.execution_id !== "string" || !proof.execution_id
+      || typeof proof.observed_at !== "number" || !Number.isFinite(proof.observed_at)
+      || now / 1000 < proof.observed_at || now / 1000 - proof.observed_at > 120
+      || ![created, started, completed].every(Number.isFinite) || created < started || created > completed) return candidate;
+  return nativeRecoveryCapacity(recovery, row, current, candidate);
 }
 
 /** A model list/positive remainder is not proof a known quota failure cleared.
  * Keep the existing request pending without reserving its one format attempt.
  */
-function metadataReviewCapacity(recovery: JsonObject, row: JsonObject, current: JsonObject,
+function nativeRecoveryCapacity(recovery: JsonObject, row: JsonObject, current: JsonObject,
   candidate: JsonObject): JsonObject {
   if (recovery.source_verified !== true) return candidate;
   const capacity = recovery.metadata_capacity as JsonObject | null | undefined;
@@ -923,7 +984,8 @@ function metadataReviewCapacity(recovery: JsonObject, row: JsonObject, current: 
       && configuration.eligible_endpoints.includes("antigravity") && configuration.eligible_endpoints.includes("codex")
       && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
       && allocation.configuration_revision === configuration.configuration_revision) {
-    return {...candidate, recovery_eligible: true, metadata_executor: "codex"};
+    return {...candidate, recovery_eligible: true,
+      ...(candidate.metadata_review === true ? {metadata_executor: "codex"} : {quota_executor: "codex"})};
   }
   const waiting = row.metadata_quota_wait as JsonObject | null | undefined;
   if (waiting != null && (typeof waiting.model_id !== "string" || typeof waiting.remaining_fraction !== "number"

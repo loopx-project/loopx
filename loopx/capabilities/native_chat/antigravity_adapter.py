@@ -381,6 +381,70 @@ class AntigravityAdapter:
     adapter_kind = "antigravity_ls"
 
     @staticmethod
+    def quota_failure_observation(*, cascade_id: str, request_ref: str, message: str,
+                                  started_at: str, completed_at: str,
+                                  input_anchor: dict[str, Any]) -> dict[str, Any] | None:
+        """Prove one native input ended at quota before any model/tool output.
+
+        An unconfirmed cancel is not proof of effects or of their absence. Read
+        the exact original input twice from a stable idle cascade instead. Only
+        the latest two-step input/quota-error sequence qualifies; any output,
+        tool, later input, cleared step or unknown native state fails closed.
+        """
+        try:
+            found = discover_antigravity_language_server()
+            start = input_anchor.get("start_step_index")
+            if found is None or input_anchor.get("thread_id") != cascade_id or type(start) is not int or start < 0:
+                return None
+            def read(method: str, **payload: Any) -> dict[str, Any]:
+                return _rpc_post(found["url"], found["csrf_token"], method,
+                                 {"cascadeId": cascade_id, **payload}, timeout=5.0)
+            before = read("GetCascadeTrajectory")
+            total = before.get("numTotalSteps")
+            if (before.get("status") != "CASCADE_RUN_STATUS_IDLE" or type(total) is not int or total != start + 2
+                    or (before.get("trajectory") or {}).get("cascadeId") != cascade_id):
+                return None
+            raw = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total)["steps"]
+            indexed, covered = _observed_turn_steps(raw, start, total)
+            again = read("GetCascadeTrajectorySteps", startIndex=start, endIndex=total)["steps"]
+            after = read("GetCascadeTrajectory")
+            if covered != total or raw != again or before != after or len(indexed) != 2:
+                return None
+            user, terminal = [step for _, step in indexed]
+            if (user.get("type") != "CORTEX_STEP_TYPE_USER_INPUT"
+                    or terminal.get("type") != "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                    or any(step.get("status") != "CORTEX_STEP_STATUS_DONE" for step in (user, terminal))
+                    or set(user) - {"type", "status", "metadata", "userInput"}
+                    or set(terminal) - {"type", "status", "metadata", "errorMessage"}):
+                return None
+            metadata = user["metadata"]
+            execution = metadata.get("executionId")
+            created = datetime.fromisoformat(metadata["createdAt"])
+            ended = datetime.fromisoformat(terminal["metadata"]["createdAt"])
+            prompt = _native_user_input_text(user)
+            if (not isinstance(execution, str) or not execution
+                    or terminal["metadata"].get("executionId") not in (None, execution)
+                    or not datetime.fromisoformat(started_at) <= created <= ended <= datetime.fromisoformat(completed_at)
+                    or prompt is None or not manager_input_matches(prompt, message=message, request_ref=request_ref)):
+                return None
+            digest = hashlib.sha256(prompt.encode()).hexdigest()
+            if input_anchor.get("input_sha256") != digest:
+                return None
+            error = terminal["errorMessage"]["error"]
+            details = [json.loads(value) for value in error.get("rpcErrorDetails", [])]
+            quota = [value for value in details if value.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo"
+                     and value.get("domain") == "cloudcode-pa.googleapis.com" and value.get("reason") == "QUOTA_EXHAUSTED"]
+            if error.get("errorCode") != 429 or len(quota) != 1 or not quota[0].get("metadata", {}).get("model"):
+                return None
+            return {"thread_id": cascade_id, "request_ref": request_ref, "execution_id": execution,
+                "input_created_at": metadata["createdAt"], "start_step_index": start, "total_steps": total,
+                "input_sha256": digest, "model_id": quota[0]["metadata"]["model"],
+                "pre_execution_quota_failure": True, "only_original_user_item": True,
+                "latest_input_verified": True, "observed_at": time.time()}
+        except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
+            return None
+
+    @staticmethod
     def metadata_review_capacity(*, cascade_id: str, model_id: str) -> dict[str, Any] | None:
         """Observe the existing model's quota; never probe it with generation.
 

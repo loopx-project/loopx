@@ -114,6 +114,10 @@ class ChatExternalConversations:
                 "preparation_observation": preparation,
                 "later_equivalent_input_present": later_equivalent,
                 "preparation_scope_available": preparation_scope_available,
+                "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
+                    and item.get("source") == row["source"] and item.get("command") is None
+                    and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
+                    for item in self.pending()) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 "response_literal_open": bool(open_literal),
                 "metadata_capacity": metadata_capacity,
@@ -250,12 +254,20 @@ class ChatExternalConversations:
             # checks and the typed eligibility decision remain below that fence.
             proof = None
             capacity = None
-            if not plan.get("admitted_turn_id") and metadata_review:
-                proof = self._original_native_result(row, session, turn, context, include_raw_response=True,
-                    include_retained_result=turn.get("status") == "completed")
+            if not plan.get("admitted_turn_id") and (metadata_review or turn.get("error_code") == "antigravity_step_error"):
+                from .antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
+                events = self.controller.store.events_after(row["session_id"], row["turn_id"], None)
+                anchors = [item["payload"]["native_input"] for item in events
+                    if item.get("kind") == "turn.started" and item.get("payload", {}).get("native_input")]
+                native_session = self._original_native_session(session, anchors)
+                if metadata_review:
+                    proof = self._original_native_result(row, session, turn, context, include_raw_response=True,
+                        include_retained_result=turn.get("status") == "completed")
+                elif len(anchors) == 1:
+                    proof = AntigravityAdapter.quota_failure_observation(cascade_id=native_session["upstream_thread_id"],
+                        request_ref=row["request_ref"], message=row["message"], started_at=turn["started_at"],
+                        completed_at=turn["completed_at"], input_anchor=anchors[0])
                 if proof is not None:
-                    from .antigravity_adapter import AntigravityAdapter, ANTIGRAVITY_DEFAULT_MODEL
-                    native_session = self._original_native_session(session, [proof])
                     capacity = AntigravityAdapter.metadata_review_capacity(
                         cascade_id=native_session["upstream_thread_id"],
                         model_id=native_session.get("agent_model_id") or ANTIGRAVITY_DEFAULT_MODEL)
@@ -342,6 +354,8 @@ class ChatExternalConversations:
                             recovery.update({f"{kind}_attempt": plan[f"{kind}_attempt"],
                                 "presentation_key": f"{MANAGER_CONTEXT_VERSION}.{kind}.{plan[f'{kind}_attempt']}",
                                 "not_before": plan["not_before"]})
+                    if plan.get("quota_executor"):
+                        recovery["quota_executor"] = plan["quota_executor"]
                     if preparation_retry:
                         recovery["preparation_observation"] = plan["preparation_observation"]
                     row["context_recovery"] = recovery

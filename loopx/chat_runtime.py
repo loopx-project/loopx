@@ -832,14 +832,15 @@ class ChatRuntimeController:
             recovery = ChatExternalConversations(self).queued_recovery_context(session, active, accepted_turn_id)
         quota_route = None
         metadata_fallback = recovery.get("metadata_review") is True and recovery.get("metadata_executor") == "codex"
+        quota_fallback = bool(recovery.get("quota_attempt") and recovery.get("quota_executor") == "codex")
         if (manager_runtime is not None and active and active_id == accepted_turn_id
                 and active.get("status") == "queued" and not active.get("upstream_turn_id")
-                and active.get("origin") != "native_loopx" and (not recovery or metadata_fallback)
-                and ("-recovery-" not in str(active.get("client_turn_id")) or metadata_fallback)
+                and active.get("origin") != "native_loopx" and (not recovery or metadata_fallback or quota_fallback)
+                and ("-recovery-" not in str(active.get("client_turn_id")) or metadata_fallback or quota_fallback)
                 and session.get("upstream_mode") in {"default", "chat"}):
             quota_route = manager_session_quota_route(self, session)
-            if metadata_fallback and (not quota_route or quota_route["allocation"]["executor_endpoint"] != "codex"):
-                raise CodexChatAgentError("The reserved formatter no longer has verified Codex capacity.", error_code="manager_authorization_unavailable", gate=None)
+            if (metadata_fallback or quota_fallback) and (not quota_route or quota_route["allocation"]["executor_endpoint"] != "codex"):
+                raise CodexChatAgentError("The reserved recovery no longer has verified Codex capacity.", error_code="manager_authorization_unavailable", gate=None)
             if quota_route and quota_route["allocation"]["executor_endpoint"] == session.get("agent_id"):
                 quota_route = None
             if quota_route is not None:
@@ -971,6 +972,7 @@ class ChatRuntimeController:
                     session.get("manager_context_version") != MANAGER_CONTEXT_VERSION
                     or manager_profile_changed
                     or model_allocation is not None
+                    or quota_fallback  # Do not resume a prior tools-disabled formatter as business execution.
                 )
             )
             legacy_codex_goal_thread = (
@@ -1096,6 +1098,7 @@ class ChatRuntimeController:
                             agent_model_id=adapter.current_model_id, **observed_settings,
                             manager_quota_block=quota_route["blocked_primary"],
                             metadata_review=metadata_fallback,
+                            quota_recovery=quota_fallback,
                             expected_upstream_thread_id=session["upstream_thread_id"])
                         if selected_agent == "codex":
                             changes["codex_home"] = str(selected_codex_home)

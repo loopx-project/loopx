@@ -19,6 +19,71 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("an anchored pre-execution Argon quota failure resumes only through fresh original-source admission", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+    observation, available_projects: [project], ...source}).context;
+  const ref = "f".repeat(24), message = "Explain the original change";
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "antigravity",
+    agent_model_id: "gemini-4-argon-high", upstream_mode: "default", status: "ready", upstream_thread_id: "native",
+    active_turn_id: null, channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+  const failed = {session_id: "original", turn_id: "failed", client_turn_id: `external-${ref}`, message, origin: "lark",
+    status: "failed", delta_count: 0, response: null, upstream_turn_id: "native-failed", error_code: "antigravity_step_error",
+    started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:00:10Z"};
+  const at = Date.parse("2026-01-01T00:10:00Z") / 1000;
+  const anchor = {thread_id: "native", start_step_index: 10, input_sha256: "a".repeat(64)};
+  const proof = {...anchor, request_ref: ref, execution_id: "original-execution", total_steps: 12,
+    input_created_at: "2026-01-01T00:00:05Z", model_id: session.agent_model_id,
+    pre_execution_quota_failure: true, only_original_user_item: true, latest_input_verified: true, observed_at: at};
+  const allocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "codex", allocation_reason: "flexible_availability_fallback",
+    configuration_revision: "current-pool", available: true, eligible_endpoints: ["antigravity", "codex"]};
+  const configuration = {status: "ready", selection_policy: "flexible", executor_endpoint: "antigravity",
+    eligible_endpoints: ["antigravity", "codex"], configuration_revision: "current-pool"};
+  const capacity = {model_id: session.agent_model_id, account_ref: "c".repeat(64), remaining_fraction: 0,
+    reset_time: "2026-01-08T00:00:00Z", observed_at: at, quota_exhausted: true, normal_completion: false,
+    alternate_executor: {allocation, observed_at: at}};
+  const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+    message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+    binding: selected, current_session: session, context_recovery: {version: 22, failed_turn: failed,
+      observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: false,
+      source_verified: true, queued_input_present: false, later_source_input_present: false,
+      native_input: anchor, native_observation: proof, metadata_capacity: capacity, executor_configuration: configuration}};
+  const plan = planBoundConversationRequest(packet);
+  assert.equal(plan.recovery_eligible, true);
+  assert.equal(plan.quota_executor, "codex");
+  assert.equal(plan.quota_attempt, 1);
+  assert.equal(plan.client_turn_id, `external-${ref}-recovery-22-quota-1`);
+  for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+    {attachments_present: true}, {queued_input_present: true}, {later_source_input_present: true},
+    {native_input: null}, {native_observation: null}, {metadata_capacity: null},
+    {executor_configuration: {...configuration, configuration_revision: "changed"}},
+    {metadata_capacity: {...capacity, alternate_executor: null}},
+    ...[{pre_execution_quota_failure: false}, {only_original_user_item: false}, {latest_input_verified: false},
+      {total_steps: 13}, {input_sha256: "b".repeat(64)}, {request_ref: "foreign"}, {model_id: "other-model"},
+      {observed_at: at - 121}, {observed_at: NaN}].map(value => ({native_observation: {...proof, ...value}})),
+    ...[{delta_count: 1}, {response: {}}, {client_turn_id: "foreign"}, {origin: "web"}, {started_at: "unknown"}]
+      .map(value => ({failed_turn: {...failed, ...value}}))]) {
+    assert.notEqual(planBoundConversationRequest({...packet,
+      context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+  }
+  const reserved = {...packet.request, context_recovery: {version: 22, failed_turn_id: "failed",
+    quota_attempt: 1, client_turn_id: plan.client_turn_id}};
+  const admitted = {session_id: "original", turn_id: "continued", client_turn_id: plan.client_turn_id, message, origin: "lark"};
+  const adopted = planBoundConversationRequest({...packet, request: reserved,
+    context_recovery: {...packet.context_recovery, native_observation: null, admitted_turn: admitted}});
+  assert.equal(adopted.admitted_turn_id, "continued");
+  assert.equal(adopted.recovery_eligible, true);
+  const correlation = planBoundConversationRequest({...packet, request: reserved,
+    current_session: {...session, status: "busy", active_turn_id: "newer"},
+    context_recovery: {...packet.context_recovery, native_observation: null, stop_observed: true,
+      later_source_input_present: true, queued_input_present: true, admitted_turn: admitted}});
+  assert.equal(correlation.admitted_turn_id, "continued", "Later control may not lose already admitted correlation");
+  assert.equal(correlation.recovery_eligible, true);
+});
+
 test("Core preparation failures resume through one bounded original-source queue, never from missing native evidence", () => {
   for (const endpoint of ["codex", "antigravity"]) {
     const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: endpoint};

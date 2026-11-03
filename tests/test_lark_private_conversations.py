@@ -19,6 +19,112 @@ from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 from loopx.extensions.lark.goal_topic_runtime import poll_lark_goal_topic_profile_once
 
 
+@pytest.mark.parametrize("fault", [None, "stop", "source-changed", "later-source", "no-capacity", "native-tool"])
+def test_original_worker_continues_proven_unstarted_argon_quota_on_codex(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
+    from copy import deepcopy
+    from datetime import timedelta
+    from pathlib import Path
+    from test_native_steward_private import steward
+    from test_chat_manager_model_adoption import configure
+    from loopx.chat_manager import manager_executor_allocation
+    import loopx.chat_manager as manager_module
+    import loopx.chat_runtime as runtime_module
+    from loopx.capabilities.native_chat import external_conversations, antigravity_adapter
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        language_server.update(quota_error_indices=[0], quota_fraction=0)
+        event = provider.event("steward-app", "quota-before-execution", "Explain this change")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        failed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
+        assert failed["status"] == "failed" and failed["error_code"] == "antigravity_step_error"
+        original_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
+        original_events = store.events_after(original["session_id"], original["turn_id"], None)
+        path = transport.root / f"{ref}.json"
+        transport.reconcile_request(path)  # Preserve original failure delivery.
+        configure(runtime.coordination_runtime_root, model="gemini-4-argon-high", effort="high",
+            endpoint="antigravity", policy="flexible")
+        capabilities = [{"agent_id": name, "available": True, "adapter_kind": kind} for name, kind in
+            [("antigravity", "antigravity_ls"), ("codex", "codex_app_server")]]
+        monkeypatch.setattr(runtime, "capabilities", lambda: capabilities)
+        allocation = manager_executor_allocation(runtime, environ={}, endpoint_capabilities=[
+            {**item, "available": item["agent_id"] == "codex"} for item in capabilities])
+        fake = Path(runtime.codex_bin)
+        fake.write_text(fake.read_text().replace('result = {"thread": {"id": "durable-thread"}}',
+            'result = {"thread": {"id": "durable-thread"}, "model": "gpt-6.1-sol"}'))
+        route = lambda *_: None if fault == "no-capacity" else {"allocation": allocation,
+            "blocked_primary": None, "observed_at": time.time()}
+        monkeypatch.setattr(manager_module, "manager_session_quota_route", route)
+        monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
+        class Ahead(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return super().now(tz) + timedelta(seconds=65)
+        monkeypatch.setattr(external_conversations, "datetime", Ahead)
+        update_session = store.update_session
+        transitions = []
+        def checked_update(session_id, **changes):
+            if changes.get("quota_recovery"):
+                before = store.load_session(session_id)
+                without_proof = {key: value for key, value in changes.items() if key != "quota_recovery"}
+                with pytest.raises(ValueError, match="executor transition"):
+                    update_session(session_id, **without_proof)
+                assert store.load_session(session_id) == before
+                transitions.append(session_id)
+            return update_session(session_id, **changes)
+        monkeypatch.setattr(store, "update_session", checked_update)
+        if fault == "stop":
+            store.append_event(original["session_id"], original["turn_id"], kind="turn.interrupt_requested", payload={})
+            original_events = store.events_after(original["session_id"], original["turn_id"], None)
+        elif fault == "source-changed":
+            provider.messages[event["message_id"]]["content"] = "Changed original input"
+        elif fault == "later-source":
+            transport.admit("steward-app", provider.event("steward-app", "source-correction", "/status"))
+            # A later ordinary source is observed without creating model work.
+            later = deepcopy(original)
+            later.update(request_ref="e" * 24, created_at=(datetime.now().astimezone() + timedelta(seconds=1)).isoformat())
+            from loopx.chat_store import _atomic_write_json
+            _atomic_write_json(transport.core.root / f"{later['request_ref']}.json", later)
+        elif fault == "native-tool":
+            post = antigravity_adapter._rpc_post
+            def with_tool(*args, **kwargs):
+                result = post(*args, **kwargs)
+                if args[2] == "GetCascadeTrajectorySteps":
+                    result["steps"][0]["runCommand"] = {"commandLine": "unknown effects"}
+                return result
+            monkeypatch.setattr(antigravity_adapter, "_rpc_post", with_tool)
+        transport.reconcile_request(path)
+        recovered = transport.core.read_request(ref)
+        assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_bytes
+        assert store.events_after(original["session_id"], original["turn_id"], None) == original_events
+        if fault:
+            assert recovered["turn_id"] == original["turn_id"]
+            assert not recovered.get("context_recovery")
+        else:
+            assert recovered["context_recovery"]["quota_executor"] == "codex"
+            done = runtime.wait_for_turn(session_id=recovered["session_id"], turn_id=recovered["turn_id"], timeout_sec=15)
+            assert done["status"] == "completed", done
+            transport.reconcile_request(path)
+            assert transport.core.read_request(ref)["delivery_verified"]
+            session = store.load_session(recovered["session_id"])
+            assert session["agent_id"] == "codex" and session["agent_model_id"] == "gpt-6.1-sol"
+            assert transitions == [session["session_id"]]
+            after = capture.read_bytes()
+            transport.reconcile_request(path)
+            assert capture.read_bytes() == after  # Original worker reentry cannot dispatch twice.
+        assert language_server["sent_count"] == 1  # The quota-failed Argon business is never sent again.
+    finally:
+        runtime.close()
+        fixture.close()
+
+
 class Provider:
     def __init__(self):
         self.messages = {}

@@ -440,6 +440,7 @@ class ChatSessionStore(ChatIngressStore):
 
     def update_session(self, session_id: str, *, expected_statuses: set[str] | None = None,
                        expected_upstream_thread_id: str | None = None, metadata_review: bool = False,
+                       quota_recovery: bool = False,
                        **changes: Any) -> dict[str, Any]:
         path = self._session_path(session_id)
         with self._session_lock(session_id):
@@ -502,9 +503,10 @@ class ChatSessionStore(ChatIngressStore):
                             or payload.get("upstream_mode") not in {"default", "chat"}
                             or not active or active.get("status") != "queued" or active.get("upstream_turn_id")
                             or active.get("origin") == "native_loopx"
-                            or ("-recovery-" in str(active.get("client_turn_id")) and not (metadata_review
+                            or ("-recovery-" in str(active.get("client_turn_id")) and not ((metadata_review or quota_recovery)
                                 and payload.get("steward_context") is not None and endpoint == "codex"
-                                and str(active.get("client_turn_id")).endswith("-metadata-1")))
+                                and str(active.get("client_turn_id")).endswith(
+                                    "-metadata-1" if metadata_review else "-quota-1")))
                             or allocation["selection_policy"] != "flexible"
                             or allocation["configured_endpoint"] != "antigravity"
                             or set(allocation["eligible_endpoints"]) != {"antigravity", "codex"}
