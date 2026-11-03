@@ -920,6 +920,74 @@ def test_transient_idle_cannot_reset_the_no_progress_deadline(tmp_path, language
     assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
 
 
+@pytest.mark.parametrize("kind", ["RUN_COMMAND", "PLANNER_RESPONSE", "CHECKPOINT"])
+def test_settled_native_cancellation_fails_without_waiting_or_cancelling_again(
+    tmp_path, language_server, monkeypatch, kind,
+):
+    from loopx.chat_agent import CodexChatAgentError
+
+    user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
+    cancelled = {"type": f"CORTEX_STEP_TYPE_{kind}", "status": "CORTEX_STEP_STATUS_CANCELED"}
+    frames = [{"at": at, "steps": [user, cancelled], "status": "CASCADE_RUN_STATUS_IDLE"}
+              for at in (1, 302)]
+    _native_clock(monkeypatch, language_server, frames)
+    events = []
+    with pytest.raises(CodexChatAgentError) as error:
+        adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn(
+            "one original request", lambda kind, data: events.append((kind, data)))
+    assert error.value.error_code == "upstream_transport_failure"
+    assert "execution may have occurred" in str(error.value)
+    assert language_server["now"] == 1
+    assert not language_server["cancelled"].is_set()
+    assert not any(kind == "answer.final" for kind, _ in events)
+    assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+
+
+def test_settled_native_cancellation_releases_core_without_replaying(tmp_path, language_server, monkeypatch):
+    from loopx.chat_runtime import ChatRuntimeController
+    from loopx.chat_store import ChatSessionStore
+
+    steps = [{"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"},
+             {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_CANCELED"}]
+    _native_clock(monkeypatch, language_server, [
+        {"at": at, "steps": steps, "status": "CASCADE_RUN_STATUS_IDLE"} for at in (1, 302)])
+    store = ChatSessionStore(tmp_path / "runtime")
+    controller = ChatRuntimeController(store=store, codex_bin="unused-codex")
+    session, _ = controller.open_session(goal_id="synthetic-goal", agent_id="antigravity", work_dir=tmp_path,
+        objective="Synthetic conversation", mode="new", channel_id="synthetic-argon-chat")
+    sid = session["session_id"]
+    try:
+        turn, _ = controller.submit_turn(session_id=sid, client_turn_id="cancelled-original",
+            message="one original request", work_dir=tmp_path, objective="Synthetic conversation")
+        result = controller.wait_for_turn(session_id=sid, turn_id=turn["turn_id"], timeout_sec=8)
+        assert result["status"] == "failed"
+        assert result["error_code"] == "upstream_transport_failure"
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert language_server["now"] == 1
+        assert not language_server["cancelled"].is_set()
+        assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+        assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == ["one original request"]
+        assert not any(e["kind"] == "answer.final" for e in store.events_after(sid, turn["turn_id"], None))
+    finally:
+        controller.close_session(sid)
+
+
+def test_cancelled_tail_with_running_native_work_remains_transient(tmp_path, language_server, monkeypatch):
+    frames = _native_frames()
+    running = deepcopy(frames[0]["steps"])
+    running.append({"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_CANCELED"})
+    completed = [{**step, "status": "CORTEX_STEP_STATUS_DONE"} for step in running]
+    final = deepcopy(frames[-1]["steps"][-1])
+    final["metadata"]["sourceTrajectoryStepInfo"]["stepIndex"] = 3
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1, "steps": running, "status": "CASCADE_RUN_STATUS_IDLE"},
+        {"at": 2, "steps": [*completed, final], "status": "CASCADE_RUN_STATUS_IDLE"}])
+    result = adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("original task")
+    assert result["message"] == "native final"
+    assert language_server["now"] == 2
+    assert not language_server["cancelled"].is_set()
+
+
 @pytest.mark.parametrize("hard_limit,stagnant", [(300.0, False), (None, True)])
 def test_explicit_deadline_and_default_no_progress_timeout_still_stop(tmp_path, language_server, monkeypatch, hard_limit, stagnant):
     from loopx.chat_agent import CodexChatAgentError
