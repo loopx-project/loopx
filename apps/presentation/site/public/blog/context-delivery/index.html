@@ -6,8 +6,8 @@
 <meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="en_US"><meta property="og:title" content="An Agent needs a way to look things up, too"><meta property="og:description" content="Follow one voice task through progressive reads, JSON Pointers, exact sharing, compaction-cycle deltas, and complete recovery."><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../blog.css">
 </head><body><a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header"><a class="brand" href="../../"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="Main navigation"><a href="../">Blog</a><a href="../../docs/book/">Docs</a></nav><div class="header-actions"><a class="language" href="../zh/context-delivery/" lang="zh-CN" hreflang="zh-CN">中文</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">Context delivery</p><h1>An Agent needs a way to look things up, too</h1><p class="lead">Follow one voice task through progressive reads, JSON Pointers, exact sharing, compaction-cycle deltas, and complete recovery.</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">November 1, 2026</time></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← All articles</a><p class="eyebrow">Context delivery</p><h1>An Agent needs a way to look things up, too</h1><p class="lead">Follow one voice task through progressive reads, JSON Pointers, exact sharing, compaction-cycle deltas, and complete recovery.</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">November 1, 2026</time><span>·</span><span>Updated November 3</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>On this page</summary><nav aria-label="On this page"><a href="#example">Follow one task: give an assistant voice input</a><a href="#known-paths">When you know the locations, read them together</a><a href="#discover">When the structure is unfamiliar, index the relevant subtree</a><a href="#requirements">See requirements first, then open their evidence</a><a href="#sharing">Share exact records within one delivery</a><a href="#cycle">On the next continuation, deliver what changed</a><a href="#native-path">When enabled, the default output is a reading entrypoint</a><a href="#recovery">Recover missing context while preserving the original work</a><a href="#evidence">What the measurements establish</a><a href="#ablation-evidence">Multi-task and layered ablation</a><a href="#reproduce">Read the same material yourself</a></nav></details></aside><article class="prose"><p>Long-running work accumulates material: the original goal, later constraints, attempted routes, failed experiments and current progress. Sending everything again on each continuation repeats more and more content; keeping only a summary can make the original basis of a decision difficult to recover.</p>
 <p>LoopX's context delivery separates these jobs: <strong>preserve complete sources, read the facts needed for the current decision, expand supporting material around questions, and reuse unchanged structures exactly within a valid compaction cycle.</strong></p>
 <p>This article describes the native Codex path in released <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a>. Supported POSIX Codex App/SSH sessions and new benchmark heartbeat trials default to context delivery; saved off remains effective and explicit off is available. When enabled, complete content is saved first and the Agent receives a reading entrypoint for current facts. See the <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 release notes</a> for publication and validation scope. The synthetic measurements below retain their original source and experimental conditions.</p>
 <p>Think of a capture as a complete book. An index locates its chapters; a JSON Pointer addresses a place inside it. Progressive reading determines how deeply to open the material now. Differential delivery determines what can be reused on the next continuation.</p>
@@ -174,7 +174,7 @@ Restore:  the complete current context
 <h2 id="native-path">When enabled, the default output is a reading entrypoint</h2>
 <p>Connect these operations back to the currently supported native Codex quota path:</p>
 
-<figure class="diagram"><p class="diagram-label">One capture, from saved source to reading</p><a href="../images/context-delivery/context-native-path-v10-en.svg" target="_blank" rel="noopener" aria-label="Open the path diagram at full size"><img src="../images/context-delivery/context-native-path-v10-en.svg" alt="Default Mechanism Path with Context Delivery Enabled: projection.json, required-context.json, compact reference envelope, and progressive readback" width="1360" height="1020" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><pre style="padding:0;margin:0;border:0;background:transparent"><code class="language-text">decision-&lt;id&gt;/
+<figure class="diagram"><p class="diagram-label">One capture, from saved source to reading</p><pre><code class="language-text">decision-&lt;id&gt;/
 ├─ projection.json        source
 ├─ required-context.json  facts
 ├─ delivery.json          full/delta
@@ -205,7 +205,67 @@ loopx --format json quota context-read \
 <h2 id="evidence">What the measurements establish</h2>
 <p>The example separates three mechanisms: <strong>avoid repeatedly moving history not currently needed, combine reads that belong together, and avoid retransmitting unchanged verified structures.</strong> Complete sources, requirements and recovery connect them.</p>
 <p>Reader figures include actual CLI page metadata; local path length affects a small amount of framing. Projection figures compare capture bodies; the cycle table compares codec output. The reproduction script checks these distinct measurements and exact reconstruction.</p>
-<p>Real long-running tasks must also count necessary later reads, recovery, cache hits, model input/output, tool calls, waiting and human attention. Effectiveness depends on constraints understood, decisions made and accepted outcomes. This synthetic example measures the mechanical path; real model benefit still needs comparable-task evidence.</p>
+<p>Real long-running tasks must also count necessary later reads, recovery, cache hits, model input/output, tool calls, waiting and human attention. Effectiveness depends on constraints understood, decisions made and accepted outcomes. The synthetic voice example above measures the mechanical path; below we examine multi-task and layered ablation observations on 18-hour trajectories.</p>
+<h3 id="ablation-evidence">Multi-task and layered ablation: benefit chain and boundary counterexamples</h3>
+<p>In <strong>EdgeBench ANN vector search optimization (<code>gpt-6.1-sol / xhigh</code>, 18h, subject to <code>Recall@10 ≥ 0.95</code>)</strong> and cross-task ablations, we separate <code>Context Delivery</code> (progressive selection and cycle deltas) from <code>Stride</code> (evidence-conditioned experiment sizing), auditing selected control-packet bytes, main-session model input tokens, and local/early-window counterexamples side by side (reconciled from archived trajectories and receipts by <code>@shangzh0</code>):</p>
+<figure class="diagram"><p class="diagram-label">Multi-task ablation and layered accounting</p><a href="../images/context-delivery/context-delivery-ablation-en.svg" target="_blank" rel="noopener" aria-label="Open the Context Delivery and Stride ablation chart at full size"><img src="../images/context-delivery/context-delivery-ablation-en.svg" alt="Progressive Context Delivery and Stride Ablation: ANN 18h Peak QPS Progression and Layered Token/Byte Savings vs Boundary Counterexamples" width="1180" height="860" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>Top (A): ANN 18h six-arm peak valid throughput QPS (<code>Recall@10 ≥ 0.95</code>). Bottom (B): Layered control-packet byte and main-session input token savings vs <code>Context off</code> (left, negative) alongside disclosed local/early-window overhead and cross-task counterexamples (right, positive). Open image for full size.</figcaption></figure>
+<div class="table-scroll" role="region" tabindex="0" aria-label="ANN 18h and layered accounting ablation table"><table>
+<thead>
+<tr>
+<th>Dimension or experimental arm</th>
+<th style="text-align:right">Observed figure</th>
+<th>Scope and interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ANN 18h: Official / Single / Native-Goal</td>
+<td style="text-align:right">5,753 / 5,706 / 4,372 QPS</td>
+<td>Official peaked at 1.05h and remained on a plateau afterward</td>
+</tr>
+<tr>
+<td>ANN 18h: Explore · Context off</td>
+<td style="text-align:right">5,766 QPS (+0.2%)</td>
+<td>Peaked at 11.37h; repeated full-context delivery consumed main-session budget</td>
+</tr>
+<tr>
+<td>ANN 18h: Explore · Context on</td>
+<td style="text-align:right">6,020 QPS (+4.6%)</td>
+<td>Peaked at 14.43h; progressive reads and cycle deltas preserved late-stage headroom</td>
+</tr>
+<tr>
+<td>ANN 18h: Explore · Context on + Stride</td>
+<td style="text-align:right"><strong>7,159 QPS (+24.4%)</strong></td>
+<td>Breakthrough at 9.19h (<code>QT_8bit_direct</code> HNSW-SQ8, <code>Recall@10 = 0.9585</code>)</td>
+</tr>
+<tr>
+<td>Control-packet bytes: 24 delta events / 46 paired events</td>
+<td style="text-align:right">−74.25% / −38.54%</td>
+<td>Paired selected bytes dropped from 3,089,841 B to 1,898,889 B (−25.75% across 34 Stride-arm events)</td>
+</tr>
+<tr>
+<td>Main-session input tokens: full-18h uncached / total</td>
+<td style="text-align:right">−12.07% / −7.46%</td>
+<td>Uncached input 8.57M → 7.53M (−7.91% on the 16h common window); total input 272.03M → 251.74M</td>
+</tr>
+<tr>
+<td><strong>Counterexample 1:</strong> <code>project+read</code> process stdout</td>
+<td style="text-align:right">+57% to +83% (1.57×–1.83×)</td>
+<td>CLI JSON framing and pagination metadata make process stdout larger than raw selected file bytes</td>
+</tr>
+<tr>
+<td><strong>Counterexample 2:</strong> First-2h early-window uncached input</td>
+<td style="text-align:right">+304.7% (0.25M → 1.00M)</td>
+<td>Initial baseline establishment and staged discovery add upfront overhead that only amortizes over longer horizons</td>
+</tr>
+<tr>
+<td><strong>Counterexample 3:</strong> Historical Grid (lower is better)</td>
+<td style="text-align:right">Official 1967 &lt; Off 2054 &lt; On+Stride 2088 &lt; On 2242</td>
+<td>Cross-task counterexample under differing durations and resources; retained without causal overclaim</td>
+</tr>
+</tbody>
+</table></div>
+<p>This dual-track audit shows why <strong>control-packet byte reduction (−74.25% / −38.54%) must not be equated with whole-episode model token savings (−12.07% uncached, −7.46% total), nor used to hide early-window indexing overhead (4.05× in the first 2 hours) or cross-task counterexamples.</strong> Context Delivery’s practical value lies in slowing context bloat across 10–18 hour runs so that, together with Stride, preserved attention converts into effective late-stage experiments (see <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench late-stage breakthroughs and five-arm attribution</a>).</p>
 <p>2.2.0 ships complete sources, file entrypoints, batch selection, index depth, applicable acceptance layering, exact sharing, cycle deltas and recovery. Broader decision-stage candidate, preference and Explore delivery and consistency across all entrypoints remain unfinished. Disable in Settings → This machine → Capabilities → Differential context → Codex; saved off survives upgrade. A command or new benchmark trial can use <code>--context-delivery off</code>. Trials do not inherit the machine switch, and existing frozen trials are not rewritten. Under the default policy, ordinary CLI, unsupported hosts and non-heartbeat benchmarks retain their full paths; an explicit unsupported on request is rejected. Unavailable hooks use full delivery. Saving configuration, actual installation and model adoption remain separate checks.</p>
 <h2 id="reproduce">Read the same material yourself</h2>
 <p><a href="example.py">example.py</a> generates this complete synthetic voice task and invokes the existing reader, progressive projection and delta owners. It checks selected values, directory addresses, all ten requirements, shared references and complete recovery. It registers no Goal, admits or settles no Turn, and calls no model or speech service.</p>

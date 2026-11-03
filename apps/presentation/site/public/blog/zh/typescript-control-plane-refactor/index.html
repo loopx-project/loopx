@@ -178,6 +178,7 @@
 <p><strong>第三，replay 的对象所有权会影响正确性。</strong> <a href="https://github.com/loopx-project/loopx/pull/4931">#4931</a> 减少未改变子树的复制、排序、编码，以及 receipt lookup 中无用的完整 projection 构造。同时保证返回给调用方的对象被修改后，不会污染下一次 replay 的内部基础状态；持久证明字节也保持不变。</p>
 <p>这轮优化在一些路径上有明显收益，但大状态、扫描延迟和内存成本仍有缺口，PR 保留了未达到的目标。把这些差异留下，比给所有路径写一个统一“性能提升”更有用。</p>
 <p>10 月的 <a href="https://github.com/loopx-project/loopx/pull/5805">#5805</a> 又更新了未配置的新建 Goal 默认值，选择 canonical SQLite 与 hard lease。已有 Goal、显式选择和旧 operation retry 继续遵守各自合同。新建默认值、旧数据迁移、旧 writer 退役，是三件发生在不同阶段的事。</p>
+<p>到 11 月初的 <a href="https://github.com/loopx-project/loopx/pull/7834">#7834</a>，<code>sqlite_v0</code> 进一步接管了已完成与已替代 Todo 的归档权威（<code>todo_archive</code> 表）：在 <code>todo complete</code> 与 <code>todo supersede</code> 提交事务内自动将超出有界窗口（最近 <em>N</em> = 5 条终态项）的历史项迁入 SQLite 归档，使活跃 <code>ACTIVE_GOAL_STATE.md</code> 投影体积与完整历史解耦，同时保留按 ID 精确回读与恢复回执的能力。</p>
 <h2 id="section-7">7. Song 的 Semantics：定义、生产、解释要接起来</h2>
 <p>新 maintainer <strong>Song（@songoow）</strong> 从 9 月 15 日的 <a href="https://github.com/loopx-project/loopx/pull/4433">#4433</a> 发起并实现 Semantics RFC、registry 和提交路径检查，之后持续推进收敛。这条线让我们开始系统约束“概念怎样增长”。</p>
 <p>跨语言迁移很容易产生重复知识：同名状态在 Python Enum、<code>Literal</code>、TS <code>as const</code>、展示层和判断分支中各出现一次。即使今天字符串一样，明天也可能有一处多加了值或换了解释。</p>
@@ -236,6 +237,7 @@
 <p>当前路径先解码并定位正确权威，核验原身份、意图与回执。确属同一笔已生效操作，就恢复原结果；无匹配原结果的工作，再走当前准入。选定 provider 的可用性与证明仍需要成立，不能在故障后偷偷换到 Markdown。</p>
 <p>返回原结果不会续租，不会覆盖后来提交，也不会复活旧 writer。租约转交、epoch 改变和后续状态，都有自己的保护。</p>
 <p>类型也表达这种区别：历史解码仍认识 <code>legacy</code>，当前新执行的 handoff 配置只接受 <code>soft_claim</code> 与 <code>hard_lease</code>。旧记录可读、原操作可恢复、当前执行获准，各自有独立条件。</p>
+<p>2.2.0 的 CLI 原子自认领（<a href="https://github.com/loopx-project/loopx/pull/7510">#7510</a>、<a href="https://github.com/loopx-project/loopx/pull/7793">#7793</a>）同样遵循这一边界：单条命令在 <code>hard_lease</code> 下原子完成认领与租约授予，并直接返回绑定当前 <code>lease_epoch</code> 的后续进度写回与完成结算命令；重放旧认领只恢复原回执，不隐式顺延已过期的执行代际。</p>
 <p>内部回执保护的范围也有限。一次外部远端 effect 若没有可核验的幂等身份与回读，不能只凭控制面只结算一次，就宣称远端恰好执行一次。unknown 应在它实际发生的边界上保留。</p>
 <h2 id="section-10">10. CLI 输出约束：压缩前先保护决策语义</h2>
 <p>对 Agent 来说，CLI 的文字会参与决策。这项工程约束早于最后的 writer 退役，在迁移中继续作为验证边界。</p>
