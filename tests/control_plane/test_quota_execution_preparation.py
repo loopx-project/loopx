@@ -265,8 +265,9 @@ def test_preparation_does_not_replace_explicit_action_selection(monkeypatch):
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("lease_state", ["missing", "expired"])
 def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
-    tmp_path, monkeypatch, provider,
+    tmp_path, monkeypatch, provider, lease_state,
 ):
     from loopx.control_plane.turn_driver.codex_context import (
         codex_context_hook,
@@ -277,7 +278,7 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         tmp_path,
         monkeypatch,
         provider,
-        [],
+        [] if lease_state == "missing" else [_lease(expired=True)],
         "--runtime-profile", "codex_app_ssh_goal",
         "--context-delivery", "off",
         "--begin-turn",
