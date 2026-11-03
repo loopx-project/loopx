@@ -41,6 +41,7 @@ class ExecutionMode(str, Enum):
 class SchedulerRuntimeProfile(str, Enum):
     ARK_MANAGED_AGENT_GOAL = "ark_managed_agent_goal"
     CODEX_APP_HEARTBEAT = "codex_app_heartbeat"
+    CODEX_APP_NATIVE_GOAL = "codex_app_goal"
     CODEX_APP_SSH_VISIBLE = "codex_app_ssh_goal"
     CODEX_CLI_VISIBLE = "codex_cli"
     TRAE_APP = "trae_app"
@@ -59,6 +60,7 @@ class SchedulerRuntimeProfile(str, Enum):
 NATIVE_GOAL_RUNTIME_PROFILES = frozenset(
     {
         SchedulerRuntimeProfile.ARK_MANAGED_AGENT_GOAL,
+        SchedulerRuntimeProfile.CODEX_APP_NATIVE_GOAL,
         SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE,
         SchedulerRuntimeProfile.CODEX_CLI_VISIBLE,
     }
@@ -83,6 +85,7 @@ VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES = frozenset(
 GUIDED_START_TURN_RUNTIME_PROFILES = frozenset(
     {
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
+        SchedulerRuntimeProfile.CODEX_APP_NATIVE_GOAL,
         SchedulerRuntimeProfile.TRAE_APP,
         SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE,
     }
@@ -111,6 +114,11 @@ _SCHEDULER_RUNTIME_PROFILE_CONTEXTS = {
         HostSurface.CODEX_APP,
         SchedulerOwner.HOST_AUTOMATION,
         ExecutionMode.HOSTED_AUTOMATION,
+    ),
+    SchedulerRuntimeProfile.CODEX_APP_NATIVE_GOAL: (
+        HostSurface.CODEX_APP,
+        SchedulerOwner.GOAL_RUNTIME,
+        ExecutionMode.INTERACTIVE,
     ),
     SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE: (
         HostSurface.CODEX_APP_SSH,
@@ -257,7 +265,10 @@ def _validation_errors(context: SchedulerExecutionContext) -> list[str]:
         HostSurface.KUNLUNCODE,
         HostSurface.KIRO_CLI,
     }
-    if context.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP}:
+    if context.host_surface in {HostSurface.CODEX_APP, HostSurface.TRAE_APP} and not (
+        context.host_surface is HostSurface.CODEX_APP
+        and context.scheduler_owner is SchedulerOwner.GOAL_RUNTIME
+    ):
         host_name = context.host_surface.value
         if context.scheduler_owner is not SchedulerOwner.HOST_AUTOMATION:
             errors.append(f"{host_name} requires scheduler_owner=host_automation")
@@ -299,8 +310,11 @@ def _validation_errors(context: SchedulerExecutionContext) -> list[str]:
         if context.execution_mode is ExecutionMode.HOSTED_AUTOMATION:
             errors.append("agent_cli_loop cannot use execution_mode=hosted_automation")
     if context.scheduler_owner is SchedulerOwner.GOAL_RUNTIME:
-        if context.host_surface is not HostSurface.ARK_MANAGED_AGENT:
-            errors.append("goal_runtime requires host_surface=ark_managed_agent")
+        if context.host_surface not in {
+            HostSurface.ARK_MANAGED_AGENT,
+            HostSurface.CODEX_APP,
+        }:
+            errors.append("goal_runtime requires host_surface=ark_managed_agent or codex_app")
         if context.execution_mode is not ExecutionMode.INTERACTIVE:
             errors.append("goal_runtime requires execution_mode=interactive")
     if (

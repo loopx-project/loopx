@@ -18,8 +18,10 @@ from .paths import (
 from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
 from .control_plane.scheduler.execution_context import (
     GENERIC_CLI_OUTER_CONTROLLER_SCHEDULER_CONTEXT,
-    SchedulerRuntimeProfile,
+    GUIDED_START_TURN_RUNTIME_PROFILES,
+    NATIVE_GOAL_RUNTIME_PROFILES,
     render_scheduler_execution_args,
+    scheduler_execution_context_for_runtime_profile,
     scheduler_runtime_profile_for_execution_context,
 )
 from .control_plane.todos.contract import normalize_required_capabilities
@@ -185,15 +187,14 @@ def render_quota_guard_command(
     begin_turn: bool = False,
     include_shared_registry: bool = True,
 ) -> str:
+    profile = scheduler_runtime_profile_for_execution_context(
+        scheduler_execution_context_for_runtime_profile(runtime_profile)
+        if runtime_profile is not None
+        else scheduler_execution_context
+    )
     if not heartbeat_turn_receipt and agent_id and (
-        runtime_profile == SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE.value
-        or (
-            runtime_profile is None
-            and scheduler_runtime_profile_for_execution_context(
-                scheduler_execution_context
-            )
-            is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE
-        )
+        profile in NATIVE_GOAL_RUNTIME_PROFILES
+        and profile in GUIDED_START_TURN_RUNTIME_PROFILES
     ):
         begin_turn = True
     if heartbeat_turn_receipt and begin_turn:

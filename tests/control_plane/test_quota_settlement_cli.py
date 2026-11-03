@@ -4093,8 +4093,10 @@ def test_guided_start_begins_one_turn_and_executes_returned_selection(
     assert _heartbeat_receipt_count(runtime, turn_instance_id) == 2
 
 
+@pytest.mark.parametrize("runtime_profile", ["codex_app_ssh_goal", "codex_app_goal"])
 def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     tmp_path: Path,
+    runtime_profile: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
@@ -4102,7 +4104,7 @@ def test_visible_goal_continuation_begins_turn_and_executes_returned_selection(
     prompt = build_heartbeat_prompt(
         goal_id=GOAL_ID,
         agent_id=AGENT_ID,
-        runtime_profile="codex_app_ssh_goal",
+        runtime_profile=runtime_profile,
         thin=True,
     )
     guard_command = prompt["quota_guard_command"].replace(
@@ -4325,20 +4327,29 @@ def test_unclaimed_candidate_does_not_create_an_unsettled_work_obligation(
     assert "action_portfolio" not in replay
 
 
+@pytest.mark.parametrize("runtime_profile", ["codex_app_ssh_goal", "codex_app_goal"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     tmp_path: Path,
+    runtime_profile: str,
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    if provider == "sqlite":
+        from canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_read_only_todo(project)
 
-    _initialize_fixture_authority(project, runtime)
+    _initialize_fixture_authority(project, runtime, provider=provider)
     guard_rc, guard = _run_cli(
         registry_path,
         runtime,
         "quota",
         "should-run",
         "--runtime-profile",
-        "codex_app_ssh_goal",
+        runtime_profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -4396,6 +4407,10 @@ def test_visible_goal_refresh_and_spend_preserve_selected_todo_causality(
     assert spend["settlement_identity"] == identity
     assert spend["delivery_workspace_causality"]["todo_id"] == TODO_ID
     assert spend["delivery_workspace_causality"]["requirement"] == "not_required"
+    assert _spend_run_count(runtime) == 1
+
+    replay_rc, replay = _run_cli(registry_path, runtime, *shlex.split(command)[1:])
+    assert replay_rc == 0, replay
     assert _spend_run_count(runtime) == 1
 
 
@@ -4707,7 +4722,7 @@ def test_visible_goal_unbound_spend_recovers_delivery_after_capability_replan(
     assert _spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
+@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_app_goal", "codex_cli", "ark_managed_agent_goal"])
 def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     tmp_path: Path, profile: str,
 ) -> None:
@@ -4729,7 +4744,7 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     assert guard_rc == 0, guard
     actions = guard["interaction_contract"]["cli_channel"]["next_cli_actions"]
     assert len(actions) == 1
-    if profile == "codex_app_ssh_goal":
+    if profile in {"codex_app_ssh_goal", "codex_app_goal"}:
         assert actions[0].endswith("--begin-turn")
     else:
         assert "--turn-instance-id" in actions[0]
@@ -4767,7 +4782,7 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
     plan = bound["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO_ID
     assert plan["identity"]["agent_id"] == AGENT_ID
-    if profile != "codex_app_ssh_goal":
+    if profile not in {"codex_app_ssh_goal", "codex_app_goal"}:
         assert plan["identity"]["turn_instance_id"] == TURN_ID
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",
@@ -4799,7 +4814,7 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     # generic_cli and mint their own identity instead.
     assert guard["reason"] == (
         "--begin-turn requires runtime-profile codex_app_heartbeat, "
-        "trae_app, or codex_app_ssh_goal; every other host starts its turn by "
+        "trae_app, codex_app_goal, or codex_app_ssh_goal; every other host starts its turn by "
         "passing its own --turn-instance-id"
     )
 
@@ -6892,9 +6907,12 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
     assert replay.get("unsettled_host_turn_recovery") is None
 
 
+@pytest.mark.parametrize("runtime_profile", ["codex_app_ssh_goal", "codex_app_goal"])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
-    tmp_path: Path, provider: str,
+    tmp_path: Path,
+    runtime_profile: str,
+    provider: str,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
@@ -6906,7 +6924,7 @@ def test_unbound_visible_goal_todoless_replan_reenters_through_guided_turn(
         "quota",
         "should-run",
         "--runtime-profile",
-        "codex_app_ssh_goal",
+        runtime_profile,
         "--goal-id",
         GOAL_ID,
         "--agent-id",

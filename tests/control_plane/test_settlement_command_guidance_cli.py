@@ -15,7 +15,7 @@ from test_quota_settlement_cli import (
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("profile", ["codex_app", "generic_cli"])
+@pytest.mark.parametrize("profile", ["codex_app", "codex_app_goal", "generic_cli"])
 @pytest.mark.parametrize("handoff_mode", ["soft_claim", "hard_lease"])
 def test_returned_completion_prepares_and_preserves_original_execution(
     tmp_path: Path, provider: str, profile: str, handoff_mode: str,
@@ -23,13 +23,16 @@ def test_returned_completion_prepares_and_preserves_original_execution(
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode=handoff_mode)
     host = ["--codex-app"] if profile == "codex_app" else ["--runtime-profile", profile]
+    turn = ["--begin-turn"] if profile == "codex_app_goal" else ["--turn-instance-id", "claim-guidance"]
     rc, guard = _run_cli(registry, runtime, "quota", "should-run", *host,
                         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
-                        "--todo-id", TODO_ID, "--turn-instance-id", "claim-guidance")
+                        "--todo-id", TODO_ID, *turn)
     assert rc == 0, guard
     assert guard["goal_boundary"]["handoff_mode"] == handoff_mode
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
     assert build_turn_envelope(guard)["writeback"]["settlement_plan"] == plan
+    if profile == "codex_app_goal":
+        assert plan["identity"] == guard["heartbeat_receipt"]["settlement_identity"]
     step = next(s for s in plan["ordered_steps"] if s["kind"] == "validation")
     preparation = re.search(r"ordinary Todo claim: `([^`]+)`", step["precondition"])
     command = step["command_template"].replace("<validated evidence>", "evidence:accepted-deliverable")
@@ -57,6 +60,47 @@ def test_returned_completion_prepares_and_preserves_original_execution(
     assert rc == 0 and todo["todo"]["status"] == "done", todo
     rc, replay = _run_generated_cli(command, registry_path=registry)
     assert rc == 0 and replay["changed"] is False, replay
+
+    writeback = next(s["command_template"] for s in plan["ordered_steps"]
+                     if s["kind"] == "durable_writeback")
+    for placeholder, value in {
+        "<validated_progress>": "accepted_deliverable",
+        "<scale>": "test_only",
+        "<outcome>": "outcome_progress",
+        "<boundary>": "semantic_closeout",
+    }.items():
+        writeback = writeback.replace(placeholder, value)
+    writeback += " " + shlex.join([
+        "--delivery-workspace-path", str(project),
+        "--vision-state", "vision_closed",
+        "--vision-summary", "The bounded deliverable is complete.",
+        "--vision-acceptance", "The deliverable evidence is independently validated.",
+        "--no-global-sync", "--suppress-external-sinks",
+    ])
+    rc, written = _run_generated_cli(writeback, registry_path=registry)
+    assert rc == 0, written
+    spend = next(s["command_template"] for s in plan["ordered_steps"]
+                 if s["kind"] == "quota_spend")
+    if profile == "codex_app_goal":
+        assert "--source visible-goal" in spend
+    rc, spent = _run_generated_cli(spend, registry_path=registry)
+    assert rc == 0, spent
+    terminal = next(s["command_template"] for s in plan["ordered_steps"]
+                    if s["kind"] == "terminal_closeout")
+    terminal = terminal.replace("<validated evidence>", "evidence:accepted-deliverable")
+    if handoff_mode == "hard_lease":
+        terminal = terminal.replace("<original claim_operation_id>", claim["claim_operation_id"])
+    rc, closed = _run_generated_cli(terminal, registry_path=registry)
+    assert rc == 0 and closed["completion_continuation"] == "no_followup", closed
+    rc, replay = _run_generated_cli(terminal, registry_path=registry)
+    assert rc == 0 and replay["idempotent_replay"] is True, replay
+    rc, inspected = _run_cli(registry, runtime, "task-lease", "inspect",
+                             "--goal-id", GOAL_ID, "--todo-id", TODO_ID)
+    assert rc == 0, inspected
+    if handoff_mode == "hard_lease":
+        assert inspected["lease"]["status"] == "released", inspected
+    else:
+        assert inspected["lease"] is None, inspected
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

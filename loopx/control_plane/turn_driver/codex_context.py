@@ -78,14 +78,21 @@ def context_delivery_activation(setting: str, *, runtime_profile: str | None = N
             resolution = resolve_scheduler_execution_context(scheduler_execution_context)
         context = resolution.context if resolution.ok else None
         if context is not None:
-            # The machine's application row selects Codex. Other explicitly
-            # resolved hosts keep full delivery; an explicit CLI on still
+            # The machine preference leaves unsupported declared modes on
+            # full delivery; an explicit CLI on still
             # rejects them. Unknown/conflicting declarations never bypass this
             # adapter, and generic_cli still needs the benchmark declaration.
-            if codex_machine_preference and context.host_surface in {
-                HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.CLAUDE_CODE,
-                HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI, HostSurface.LOCAL_SCHEDULER,
-            }:
+            if codex_machine_preference and (
+                context.host_surface in {
+                    HostSurface.ARK_MANAGED_AGENT, HostSurface.TRAE_APP, HostSurface.CLAUDE_CODE,
+                    HostSurface.KUNLUNCODE, HostSurface.KIRO_CLI, HostSurface.LOCAL_SCHEDULER,
+                }
+                or (
+                    context.host_surface is HostSurface.CODEX_APP
+                    and context.scheduler_owner is SchedulerOwner.GOAL_RUNTIME
+                    and context.execution_mode is ExecutionMode.INTERACTIVE
+                )
+            ):
                 return context_delivery_activation("off")
             if (context.host_surface is HostSurface.CODEX_APP
                     and context.scheduler_owner is SchedulerOwner.HOST_AUTOMATION

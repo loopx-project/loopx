@@ -81,7 +81,7 @@ def uses_native_goal_host_loop(
     context = resolution.context
     if context.execution_mode is not ExecutionMode.INTERACTIVE:
         return False
-    if context.host_surface is HostSurface.ARK_MANAGED_AGENT:
+    if context.host_surface in {HostSurface.ARK_MANAGED_AGENT, HostSurface.CODEX_APP}:
         return context.scheduler_owner is SchedulerOwner.GOAL_RUNTIME
     return (
         context.host_surface in {HostSurface.CODEX_APP_SSH, HostSurface.CODEX_CLI}

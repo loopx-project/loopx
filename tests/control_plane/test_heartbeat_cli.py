@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,27 @@ def test_heartbeat_output_and_format_precedence(tmp_path, global_format, local_f
             assert "--registry" in payload["task_body"]
             assert str(registry) in payload["task_body"]
             assert "--runtime-root" in payload["task_body"]
+
+
+def test_codex_app_goal_bootstrap_loads_the_live_native_contract(tmp_path):
+    registry, runtime = write_command_fixture(tmp_path)
+    args = ["--format=json", *heartbeat_args(registry, runtime),
+            "--runtime-profile=codex_app_goal", "--thin", "--bootstrap"]
+    bootstrap = run_cli_main("loopx.entrypoint", args)
+    assert bootstrap.returncode == 0, bootstrap.stderr
+    payload = json.loads(bootstrap.stdout)
+    assert payload["ok"] is True
+    command = shlex.split(payload["task_body"].split("```sh\n", 1)[1].split("\n```", 1)[0])
+    assert "--bootstrap" not in command
+    assert command[command.index("--runtime-profile") + 1] == "codex_app_goal"
+
+    loaded = run_cli_main("loopx.entrypoint", command[1:])
+    assert loaded.returncode == 0, loaded.stderr
+    prompt = json.loads(loaded.stdout)
+    assert prompt["ok"] is True
+    assert "--begin-turn" in prompt["quota_guard_command"]
+    assert "LOOPX_TURN=" not in prompt["task_body"]
+    assert "--source visible-goal" in prompt["quota_spend_command"]
 
 
 def test_heartbeat_semantic_errors_keep_recovery_and_exit_status(tmp_path):
