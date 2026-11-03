@@ -151,7 +151,7 @@ test("initial navigation coalesces complete branches without changing selected f
     single: {only: "A single address need not grow a container."}, unread: {history: "optional body"}};
   // The owner's discovery order differs from object key order. A merged parent
   // occupies its first selected child's position, preserving that priority.
-  const pointers = ["/single/only", "/facts/1/evidence", "/facts/0/a~1b", "/facts/0/~0", "/facts/1/allowed"];
+  const pointers = ["/single/only", "/facts/0/a~1b", "/facts/0/~0", "/facts/1/evidence", "/facts/1/allowed"];
   const before = structuredClone(context);
   const explicit = select(context, pointers);
   const initial = capturedContextSelection({context, initial_read: true}, pointers);
@@ -166,6 +166,21 @@ test("initial navigation coalesces complete branches without changing selected f
   assert.deepEqual(discovery.selections, [{pointer: "", path: [], children: [
     {pointer: "/facts", path: ["facts"]}, {pointer: "/single", path: ["single"]}, {pointer: "/unread", path: ["unread"]},
   ]}]);
+  assert.deepEqual(context, before);
+});
+
+test("initial navigation retains prioritized array elements through complete ancestors", () => {
+  const context = {complete: {facts: [{text: "Supporting evidence."}, {text: "Current Goal and final stop."}]}};
+  const before = structuredClone(context);
+  const pointers = ["/complete/facts/1/text", "/complete/facts/0/text"];
+  const initial = capturedContextSelection({context, initial_read: true}, pointers);
+  // A complete array or ancestor would replay evidence before the current Goal.
+  const expected = pointers;
+  assert.deepEqual((initial.selections as {pointer: string}[]).map(row => row.pointer), expected);
+  assert.deepEqual(selectedFacts(context, initial.selections as {path: (string | number)[]}[]),
+    selectedFacts(context, select(context, pointers).selections as {path: (string | number)[]}[]));
+  const discovery = capturedContextSelection({context, select: [""], list_fields: true}, pointers);
+  assert.deepEqual(discovery.initial_read_pointers, expected);
   assert.deepEqual(context, before);
 });
 

@@ -611,6 +611,18 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     from loopx.control_plane.turn_driver.decision_capture import write_decision_capture
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
 
+    release_root = Path(__file__).resolve().parents[2]
+    release_cli = release_root / "scripts" / "loopx"
+    stale_root = tmp_path / "stale-system-module"
+    stale_package = stale_root / "loopx"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text("")
+    (stale_package / "entrypoint.py").write_text(
+        "raise SystemExit('stale system LoopX must not handle captured readers')\n"
+    )
+    monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
+    monkeypatch.setenv("PYTHONPATH", str(stale_root))
+
     source = _quota_payload()
     outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
         "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
@@ -623,7 +635,9 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     args = {"captured_decision_path": str(capture), "turn_instance_id": "original-native-turn", "turn_key": "sha256:" + "0" * 64}
     legacy = bind_turn_decision_capture(source, envelope, **args)
     assert "read autonomous_replan_obligation.replan_context" in render_prompt(extract_turn_authority({"turn_envelope": legacy}))
-    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=current_loopx_cli_argv())
+    reader_argv = current_loopx_cli_argv()
+    assert reader_argv == [str(release_cli), "--cli-bin", str(release_cli)]
+    bound = bind_turn_decision_capture(source, envelope, **args, reader_argv=reader_argv)
     authority = extract_turn_authority({"turn_envelope": bound})
     trap = tmp_path / "bin"
     trap.mkdir()

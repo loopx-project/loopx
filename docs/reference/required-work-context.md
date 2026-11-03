@@ -175,10 +175,13 @@ model retention. These separate boundaries prevent transport loss from becoming
 either a repeated full-input loop or permission to act on missing requirements.
 No token savings or accepted outcome gains follow from instruction delivery alone.
 
-An enabled native **full** reference for a recognized decision can include
-`first_read_command`. It batches current admission/stop facts, the selected task,
+An enabled native **full or delta** reference for a recognized decision can include
+`first_read_command`, reading its current full capture without an older baseline.
+It batches current admission/stop facts, the current action, the selected task,
 whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
 history and optional authoring recipes remain expandable from the same capture.
+Current narrative sources and their provenance precede other sources, including
+large scoped preferences; both retain their complete selected values.
 The preference source's complete `current` view also stays in the initial read:
 corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the
@@ -207,8 +210,10 @@ legacy readers still require reconciliation of their unfinished original Turns
 before retirement; this slice retains their decoder and full-capture recovery.
 Initial navigation can replace fully
 selected children with their complete captured parent to avoid repeating addresses.
-An unselected child, including optional or unknown material, prevents that merge;
-the selected facts and obligations stay identical. Explicit selectors and index
+An unselected child, including optional or unknown material, prevents that merge.
+An array also stays separate when merging would restore an earlier element order
+and undo the owner's reading priority; ancestors cannot erase that boundary.
+The selected facts and obligations stay identical. Explicit selectors and index
 entries keep their original addresses. The option is read-only and exclusive with explicit
 selectors or discovery; unknown schemas use generic discovery.
 Pinned explicit references replay their recorded address order after the same
@@ -231,8 +236,9 @@ This reorders the same selected facts without reducing the total body or
 guaranteeing that all requirements fit one page. Earlier initial-selection
 digests still reject a changed profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
-fits; unknown schemas or a tight reference budget keep generic discovery. Warm
-deltas keep their existing reader, and disabled native delivery is unchanged.
+fits; unknown schemas or a tight reference budget keep generic discovery. A warm
+delta's existing `command` still reads its wire delta; its initial read and
+recovery read current facts directly. Disabled native delivery is unchanged.
 This is a starting selection, not all required sources: read applicable criteria,
 evidence and the complete operation/settlement contract before depending on them.
 The original SHA-bound full recovery remains available; a selected page's EOF
@@ -249,14 +255,17 @@ index/detail route. Folded supporting material still has its original read
 obligations. The generic reader needs no Session Hook for this selection;
 activation defaults, saved files, Delta and full-read receipts are unchanged.
 
-中文：已启用原生传输的完整引用可给出 `first_read_command`，合并当前准入、停止条件、
-任务和完整 Goal/Todo 正文，以及来源状态、版本与读取入口；历史和可选格式说明仍在
+中文：已启用原生传输的 full 或 delta 引用可给出 `first_read_command`，直接读取本次
+完整捕获，无须先读旧基线。首读合并当前准入、停止条件、动作、任务和完整 Goal/Todo
+正文，以及来源状态、版本与读取入口；正文来源及其 provenance 先于其他来源，
+包括较大的 scoped preferences，双方完整选中值均保留。历史和可选格式说明仍在
 同一捕获中按需展开。它是起始选读，不代表已读全部必要来源；依赖具体验收、证据或
 执行/结算契约前仍须完整读取。
 偏好来源的完整 `current` 视图也直接呈现：纠偏、退役/过期和空视图替换均保留
 原来源、版本及 advisory 权限边界。本次捕获的工作前视图不能替代偏好 owner 要求的
 后续偏好相关外部动作前精确作用域新读；偏好及其交付均不授予权限。
-未知 schema、过小引用预算和 warm delta 保留既有路线，
+未知 schema 和过小引用预算保留既有路线；warm delta 的 `command` 仍读取原 wire delta，
+首读和恢复入口直接读取当前事实。
 关闭原生传输的输出不变；完整恢复和原 SHA 校验均保留。只读的 `--initial-read` 不与
 显式选读或索引混用。新私有选读引用固定已解析路径和完整选读摘要，续页复用显式
 reader，不重新运行首读导航；后续导航改变不能替换原选读。历史仅保存导航配方的引用
@@ -264,7 +273,8 @@ reader，不重新运行首读导航；后续导航改变不能替换原选读�
 准入或改写旧描述文件。退役这些 legacy reader 前仍须对账原未完成 Turn；本切片
 保留历史解码与完整捕获恢复。
 首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
-可选或未知内容都会阻止合并，选中事实和义务不变。显式选读和索引仍保留原地址。
+可选或未知内容都会阻止合并；若数组合并会恢复原元素顺序、覆盖 owner 的读取优先级，
+该数组及其祖先也不合并。选中事实和义务不变。显式选读和索引仍保留原地址。
 固定显式引用在既有规范地址校验后，按记录的地址顺序重放。旧描述符若保存调用方顺序
 却绑定规范排序正文的摘要，仅在摘要不匹配后，对同一已验证来源及相同地址集合重试
 一次原规范 planner；只返回摘要完全匹配的字节。此兼容路径每个旧分页最多增加一次

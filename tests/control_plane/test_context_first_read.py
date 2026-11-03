@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
+from loopx.cli_commands.quota_capture import model_context_reference, native_context_capture_view, read_context_capture
 from loopx.cli_commands.quota_capture import handle_native_context_command
 from loopx.control_plane.turn_driver import codex_context
 from loopx.control_plane.turn_driver.decision_capture import capture_page_range
@@ -162,6 +162,57 @@ def test_initial_read_coalesces_whole_contract_with_exact_values_and_unknown_obl
     assert json.loads(raw) == decision
     assert hashlib.sha256(raw).hexdigest() == page["sha256"]
     assert "older-evidence-" not in page["content"]
+
+
+@pytest.mark.parametrize("complete_sources", [False, True])
+def test_cli_current_goal_and_action_precede_complete_scoped_preferences(tmp_path, decision, complete_sources):
+    sources = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    goal = sources[0]["content"]
+    goal["text"] = "CURRENT GOAL: compare accepted outcomes; STOP at the original budget."
+    preferences = {"source": "agent_preferences", "content": {
+        "status": "loaded", "revision": "preference-current", "source_authority": "advisory_only",
+        "current": {"items": ["complete scoped preference " * 2000], "future_constraint": False},
+    }}
+    sources.insert(0, preferences)
+    if complete_sources:
+        # Even when the entire array is selected, merging it back into its
+        # original order must not move the large preference ahead of the Goal.
+        goal.pop("full_criteria")
+        sources[2:] = []
+    channel = decision["interaction_contract"]["agent_channel"]
+    channel.update(primary_action="Read the current review before writing back.",
+        delivery_allowed=False, must_attempt=False, quiet_noop_allowed=False)
+    view = native_context_capture_view(decision, tmp_path)
+    raw = Path(view["recovery"]["path"]).read_bytes()
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    command = view["first_read_command"]
+    content, pages = b"", []
+    while True:
+        words = shlex.split(command)
+        for option in ("--page-bytes", "--max-page-output-bytes"):
+            words[words.index(option) + 1] = "8192"
+        result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+            "--runtime-root", str(runtime), "--format", "json", *words[words.index("quota"):]],
+            cwd=tmp_path, capture_output=True, text=True, check=False)
+        page = json.loads(result.stdout)
+        assert result.returncode == 0 and page["ok"] and page["offset"] == len(content), page
+        assert len(result.stdout.encode()) <= 8192
+        assert capture_page_range(page, raw=raw, digest=view["recovery"]["sha256"]) is None
+        pages.append(page)
+        content += page["content"].encode()
+        if page["eof"]:
+            break
+        command = page["next_command"]
+    first = pages[0]["content"]
+    for value in (goal["text"], goal["status"], goal["revision"], goal["recovery"], channel["primary_action"]):
+        assert value in first
+    assert first.index(goal["text"]) < first.index("complete scoped preference")
+    values = selected_context_values(content)
+    assert values["/interaction_contract/agent_channel/work_context/sources/0"] == preferences
+    assert values["/interaction_contract/agent_channel/primary_action"] == channel["primary_action"]
+    assert values["/interaction_contract/agent_channel/delivery_allowed"] is False
+    assert json.loads(raw) == decision and Path(view["recovery"]["path"]).read_bytes() == raw
+    assert not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -508,7 +559,8 @@ def test_initial_read_is_rejected_before_quota_or_machine_access(tmp_path):
     assert not (tmp_path / "unopened-registry.json").exists()
 
 
-def test_warm_delta_keeps_its_existing_reader_and_current_recovery(tmp_path, monkeypatch, decision):
+@pytest.mark.parametrize("opaque", [False, True])
+def test_warm_delta_initial_read_uses_current_action_without_the_old_base(tmp_path, monkeypatch, decision, opaque):
     tmp_path.chmod(0o700)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CODEX_THREAD_ID", "fixture-session")
@@ -518,10 +570,41 @@ def test_warm_delta_keeps_its_existing_reader_and_current_recovery(tmp_path, mon
         directory = tmp_path / name
         directory.mkdir(mode=0o700)
         decision["agent_lane_next_action"]["next_action_basis"] = marker
+        decision["effective_action"] = "normal_run" if marker == "before" else "autonomous_replan_required"
+        decision["interaction_contract"]["agent_channel"].update(
+            primary_action=f"Read {marker} action.", delivery_allowed=marker == "before")
         wire = codex_context.project_codex_context(decision, directory=str(tmp_path), capture_directory=directory,
             goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id=name)
         view = native_context_capture_view(wire, directory, context_directory=str(tmp_path))
-    assert view["mode"] == "delta" and "first_read_command" not in view
+    assert view["mode"] == "delta" and "first_read_command" in view
     current = json.loads(Path(view["recovery"]["path"]).read_bytes())
     assert current["agent_lane_next_action"]["next_action_basis"] == "after"
     assert view["sha256"] != view["recovery"]["sha256"]
+    baseline = Path(view["baseline_reference"]["path"])
+    baseline.rename(baseline.with_suffix(".unavailable"))
+    navigation = model_context_reference(view) if opaque else view
+    words = shlex.split(navigation["first_read_command"])
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    command = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json", *words[words.index("quota"):]]
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, check=False)
+    page = json.loads(result.stdout)
+    assert result.returncode == 0 and page["ok"] and page["eof"], page
+    values = selected_context_values(page["content"])
+    assert values["/agent_lane_next_action/next_action_basis"] == "after"
+    assert values["/effective_action"] == "autonomous_replan_required"
+    assert values["/interaction_contract/agent_channel/primary_action"] == "Read after action."
+    assert values["/interaction_contract/agent_channel/delivery_allowed"] is False
+    if opaque:
+        assert "sha256" not in page
+    else:
+        assert page["sha256"] == view["recovery"]["sha256"]
+    assert "Read before action." not in page["content"]
+    delta = read_context_capture(Namespace(capture_file=view["path"], capture_sha256=view["sha256"],
+        format="json", offset=0, page_bytes=64000, max_page_output_bytes=64000))
+    assert delta["ok"] and json.loads(delta["content"])["mode"] == "delta"
+    Path(view["recovery"]["path"]).write_text("{}\n")
+    failed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, check=False)
+    failure = json.loads(failed.stdout)
+    assert failed.returncode != 0 and not failure["ok"] and "content" not in failure
+    assert not registry.exists() and not runtime.exists()
