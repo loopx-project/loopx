@@ -7,6 +7,7 @@ import json
 import os
 import re
 import textwrap
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1291,6 +1292,11 @@ def _has_static_member_hint(content: str) -> bool:
     return False
 
 
+def _normalized_python_symbols(symbols: set[str]) -> dict[str, str]:
+    """Map NFKC-normalized Python identifier to the declared target string."""
+    return {unicodedata.normalize("NFKC", symbol): symbol for symbol in symbols}
+
+
 def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> bool:
     """Cheap gate before parsing a workspace file.
 
@@ -1298,11 +1304,21 @@ def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> b
     a target through an escape (``old\\u005fapi``) must also be parsed; if the
     escape cannot be decoded leniently, route it to the parser so malformed
     executable forms can fail closed with AE004 rather than be skipped.
+
+    Python identifiers are NFKC-normalized by the language. A raw substring
+    check loses identity for fullwidth/ligature/combining forms, so a non-ASCII
+    Python file is also checked against the NFKC-normalized source.
     """
     if any(symbol in content for symbol in symbols):
         return True
     if not is_ts:
-        return False
+        if content.isascii():
+            return False
+        normalized_content = unicodedata.normalize("NFKC", content)
+        return any(
+            normalized in normalized_content
+            for normalized in _normalized_python_symbols(symbols)
+        )
     # A composed static member key (parentheses, concatenation, template,
     # comments/newlines, String(...)) need not contain the literal symbol, so
     # a literal-only prefilter would skip the file before the parser sees it.
@@ -1369,11 +1385,21 @@ def _scan_workspace(workspace: Path, symbols: tuple[str, ...]) -> _WorkspaceEvid
                 refs = _extract_python_refs_from_code(content)
                 if defs is None or refs is None:
                     # Unparseable source cannot prove absence; treat the symbol
-                    # as still defined to avoid false certification.
-                    for s in symbol_set:
-                        if s in content:
-                            evidence.defined_symbols.setdefault(s, set()).add(rel)
+                    # as still defined to avoid false certification. NFKC keeps
+                    # the check aligned with Python identifier identity.
+                    normalized_content = unicodedata.normalize("NFKC", content)
+                    for target, normalized in _normalized_python_symbols(
+                        symbol_set
+                    ).items():
+                        if normalized in normalized_content:
+                            evidence.defined_symbols.setdefault(target, set()).add(rel)
                     continue
+                for target, normalized in _normalized_python_symbols(symbol_set).items():
+                    if normalized in defs:
+                        evidence.defined_symbols.setdefault(target, set()).add(rel)
+                    if normalized in refs:
+                        evidence.referenced_symbols.setdefault(target, set()).add(rel)
+                continue
             else:
                 content_lines = content.splitlines()
                 defs = _extract_ts_defs(content_lines)

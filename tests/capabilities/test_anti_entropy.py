@@ -1937,3 +1937,93 @@ def test_typescript_asi_contextual_identifier_receiver_blocks_retirement(
     receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
     assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
     assert receipt.retired_symbols == ()
+
+
+def test_python_nfkc_identifiers_block_retirement(tmp_path: Path) -> None:
+    """Python NFKC identifiers must reach AST analysis, not be skipped by raw substring."""
+    fullwidth = "old_\uff41\uff50\uff49"  # old_ + fullwidth a p i; NFKC -> old_api
+    diff = """
+--- a/service.py
++++ b/service.py
+@@ -1,2 +1,2 @@
+-def old_api():
+-    return 1
++def new_api():
++    return 2
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_python_nfkc",
+        {
+            "service.py": "def new_api():\n    return 2\n",
+            "legacy.py": f"def {fullwidth}():\n    return 3\n",
+            "client.py": f"import legacy\nprint(legacy.{fullwidth}())\n",
+            "consumer.py": f"from legacy import {fullwidth}\nprint({fullwidth}())\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_python_nfkc_correct_deletion_passes(tmp_path: Path) -> None:
+    """Normalized identity must not block a correct deletion with no retained reference."""
+    diff = """
+--- a/service.py
++++ b/service.py
+@@ -1,2 +1,2 @@
+-def old_api():
+-    return 1
++def new_api():
++    return 2
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_python_nfkc_clean",
+        {
+            "service.py": "def new_api():\n    return 2\n",
+            "client.py": "import service\nprint(service.new_api())\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+@pytest.mark.parametrize(
+    "target,source_name",
+    (
+        ("old_fi", "old_\ufb01"),          # Latin small ligature fi
+        ("old_\u00e1", "old_a\u0301"),     # a + combining acute
+    ),
+)
+def test_python_nfkc_ligature_and_combining_identifiers(
+    tmp_path: Path, target: str, source_name: str
+) -> None:
+    """NFKC-equivalent identifiers are the same Python name for reference analysis."""
+    diff = """
+--- a/service.py
++++ b/service.py
+@@ -1,2 +1,2 @@
+-def old_api():
+-    return 1
++def new_api():
++    return 2
+"""
+    # The target symbol is intentionally different from the surrounding
+    # old_api wrapper: source_name normalizes to `target`.
+    workspace = _make_workspace(
+        tmp_path / "ws_python_nfkc_variant",
+        {
+            "service.py": "def new_api():\n    return 2\n",
+            "legacy.py": f"def {source_name}():\n    return 3\n",
+            "client.py": f"import legacy\nprint(legacy.{source_name}())\n",
+        },
+    )
+    variant_basis = RetirementBasis(target_symbols=(target,))
+    receipt = evaluate_diff_hygiene(diff, variant_basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ()
