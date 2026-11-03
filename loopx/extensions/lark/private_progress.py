@@ -1,7 +1,8 @@
 """Lark presentation of persisted Core events; never execution authority.
 
-The original private owner can also see qualified public summaries and redacted
-activity titles. Hidden reasoning, tool arguments and output never travel here.
+The original private owner sees bounded reasoning summaries in the same shape
+as Codex, without repeating tool/command titles. Hidden reasoning, tool
+arguments and output never travel here.
 """
 from __future__ import annotations
 

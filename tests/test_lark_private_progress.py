@@ -117,7 +117,7 @@ def test_native_preparation_is_visible_without_answer_or_private_labels():
         "phase": "unrecognized", "label": "private output"}}]) is None
 
 
-def test_public_summary_and_recent_tools_are_private_owner_only_and_bounded():
+def test_reasoning_summary_is_private_owner_only_bounded_and_omits_tool_titles():
     events = [{"event_id": f"summary_{index}", "kind": "agent.phase", "payload": {
         "method": "item/reasoning/summaryTextDelta", "step": {"id": f"summary_{index}", "kind": "reasoning",
         "state": "running", "reasoning_summary": True, "detail": f"思考步骤 {index}：" + "公开摘要。" * 100}}}

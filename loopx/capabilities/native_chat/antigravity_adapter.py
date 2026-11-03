@@ -40,6 +40,27 @@ ANTIGRAVITY_MODEL_PLACEHOLDERS: dict[str, str] = {
     "gemini-4-argon-low": "MODEL_PLACEHOLDER_M419",
 }
 
+_SETTLED_STEP_STATUSES = {
+    "CORTEX_STEP_STATUS_DONE",
+    "CORTEX_STEP_STATUS_ERROR",
+    "CORTEX_STEP_STATUS_CANCELED",
+    "CORTEX_STEP_STATUS_CLEARED",
+}
+
+
+def _step_allows_completed_turn(step: dict[str, Any], *, final: dict[str, Any]) -> bool:
+    """Only a settled intermediate step may precede a final planner answer."""
+    error = step.get("errorMessage") or {}
+    return (
+        step.get("status") in _SETTLED_STEP_STATUSES
+        and not (step is final and step.get("status") != "CORTEX_STEP_STATUS_DONE")
+        and not (
+            step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+            and (step is final or (isinstance(error, dict) and error.get("shouldShowUser") is True))
+        )
+    )
+
+
 ANTIGRAVITY_MODEL_OPTIONS: tuple[dict[str, Any], ...] = tuple(
     {
         "id": f"gemini-4-argon-{effort}",
@@ -416,18 +437,11 @@ class AntigravityAdapter:
                 return None
             execution = metadata.get("executionId")
             current = [(index, step) for index, step in indexed if start <= index < end]
+            if not current:
+                return None
             final = current[-1][1]
-            settled_statuses = {
-                "CORTEX_STEP_STATUS_DONE",
-                "CORTEX_STEP_STATUS_ERROR",
-                "CORTEX_STEP_STATUS_CANCELED",
-                "CORTEX_STEP_STATUS_CLEARED",
-            }
             if not isinstance(execution, str) or not execution or any(
-                    step.get("status") not in settled_statuses
-                    or (step is final and step.get("status") != "CORTEX_STEP_STATUS_DONE")
-                    or (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-                        and (step is final or (step.get("errorMessage") or {}).get("shouldShowUser") is True))
+                    not _step_allows_completed_turn(step, final=final)
                     or (step.get("metadata") or {}).get("executionId") != execution
                     for _, step in current):
                 return None
@@ -954,18 +968,10 @@ class AntigravityAdapter:
                                 or (step.get("metadata") or {}).get("executionId") != execution for _, step in current_steps)):
                         raise CodexChatAgentError("The format review lacks exact normal text-only completion; no actions were admitted.",
                                                   gate=None, error_code="upstream_transport_failure")
-                settled_statuses = {
-                    "CORTEX_STEP_STATUS_DONE",
-                    "CORTEX_STEP_STATUS_ERROR",
-                    "CORTEX_STEP_STATUS_CANCELED",
-                    "CORTEX_STEP_STATUS_CLEARED",
-                }
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
                         or any(
-                            step.get("status") not in settled_statuses
-                            or (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-                                and (step.get("errorMessage") or {}).get("shouldShowUser") is True)
+                            not _step_allows_completed_turn(step, final=final)
                             for _, step in current_steps
                         )
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()

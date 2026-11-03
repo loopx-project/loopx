@@ -18,7 +18,7 @@ def _clean_thinking_summary(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     lines = [line.strip() for line in value.splitlines() if line.strip()]
-    while len(lines) > 1 and lines[0].lower() in _BOILERPLATE_THINKING_PREFIXES:
+    while lines and lines[0].lower() in _BOILERPLATE_THINKING_PREFIXES:
         lines.pop(0)
     return "\n\n".join(lines).strip()
 

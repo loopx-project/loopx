@@ -36,6 +36,19 @@ def test_repeated_native_observations_do_not_invent_tool_completion_or_publish_r
     assert not any(row["step"]["kind"] == "tool" and row["method"] == "item/completed" for row in events + done_events)
 
 
+def test_thinking_summary_drops_a_boilerplate_only_preamble(tmp_path):
+    activity = AntigravityActivity(tmp_path)
+    planner = {
+        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+        "status": "CORTEX_STEP_STATUS_GENERATING",
+        "plannerResponse": {"thinking": "I'm thinking through how to approach this."},
+    }
+    events = activity.observe(4, planner)
+    assert [(row["method"], row["step"]["kind"]) for row in events] == [("item/started", "reasoning")]
+    assert events[0]["step"].get("reasoning_summary") is None
+    assert events[0]["step"]["title"] == ""
+
+
 def test_command_redaction_failure_and_output_observation_use_shared_contract(tmp_path):
     activity = AntigravityActivity(tmp_path)
     native = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_GENERATING",
