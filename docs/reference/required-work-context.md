@@ -175,6 +175,14 @@ model retention. These separate boundaries prevent transport loss from becoming
 either a repeated full-input loop or permission to act on missing requirements.
 No token savings or accepted outcome gains follow from instruction delivery alone.
 
+Reader commands emitted by native quota, saved-context projection, bounded
+settlement results and a running `context-read` keep the explicit CLI selection,
+or the current Python interpreter when no CLI was specified. This covers initial
+navigation, complete reads, continuations and rejected-selection recovery.
+Capture bytes, digests, cursors and authority are unchanged; native full/delta
+byte comparisons include this reader command metadata. Existing in-process
+reference constructors keep their default command route.
+
 An enabled native **full or delta** reference for a recognized decision can include
 `first_read_command`, reading its current full capture without an older baseline.
 It batches current admission/stop facts, the current action, the selected task,
@@ -272,6 +280,10 @@ reader，不重新运行首读导航；后续导航改变不能替换原选读�
 及显式文件首读游标在选读摘要变化时仍拒绝，沿同一完整原 capture 引用恢复，不重新
 准入或改写旧描述文件。退役这些 legacy reader 前仍须对账原未完成 Turn；本切片
 保留历史解码与完整捕获恢复。
+原生 quota、已保存上下文投影、有界结算结果和实际运行的 `context-read` 生成读取
+命令时，保留显式指定的 CLI；未指定 CLI 则使用当前 Python 解释器。首读导航、
+完整读取、续页及选读拒绝恢复均沿用该程序。捕获正文、摘要、游标和权限不变，原生
+full/delta 字节比较计入这些 reader 命令元数据；既有进程内引用构造器保留默认路由。
 首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
 可选或未知内容都会阻止合并；若数组合并会恢复原元素顺序、覆盖 owner 的读取优先级，
 该数组及其祖先也不合并。选中事实和义务不变。显式选读和索引仍保留原地址。

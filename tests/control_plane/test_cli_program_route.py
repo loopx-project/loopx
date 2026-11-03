@@ -1,6 +1,8 @@
 """An explicitly selected runtime must execute its own generated control loop."""
 from __future__ import annotations
 
+import json
+import hashlib
 import os
 import shlex
 import subprocess
@@ -13,6 +15,23 @@ import test_quota_authority_settlement_journey as journey
 from codex_checkpoint_fixture import read_cli_policy_payload
 
 cli = journey.cli
+
+
+def _reader_program(tmp_path, monkeypatch, program):
+    bin_dir = tmp_path / "candidate bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "wrong-runtime"
+    poison = bin_dir / "loopx"
+    poison.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                      f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
+    poison.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    prefix = [sys.executable, "-m", "loopx.entrypoint"]
+    if program != "module":
+        alias = bin_dir / program
+        alias.symlink_to(Path(sys.executable).parent / "loopx")
+        prefix = [str(alias), "--cli-bin", str(alias)]
+    return prefix, marker
 
 
 def test_manager_required_read_uses_the_same_invocation_route(tmp_path):
@@ -146,3 +165,163 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
     settled = run(guard_args)
     assert settled["effective_action"] == "heartbeat_settled_skip"
     assert not marker.exists(), "A generated command escaped to the global runtime"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Exercises a POSIX console alias and poisoned PATH")
+@pytest.mark.parametrize("program", ["module", "candidate's cli"])
+@pytest.mark.parametrize("output_limit", [8192, 64000])
+@pytest.mark.parametrize("selection", ["raw", "selected", "index", "rejected"])
+def test_native_reader_continuation_and_recovery_execute_the_same_runtime(
+    tmp_path, monkeypatch, program, output_limit, selection,
+):
+    from loopx.cli_commands.quota_capture import native_context_capture_view, _native_context_read_bytes
+    from loopx.control_plane.turn_driver import codex_context as context
+    from test_codex_context_lifecycle import project, setup
+
+    setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "goal_id": "fixture", "requirements": "Keep the complete 原始条件。\n" * 8000,
+               "items": [{"source": "original"} for _ in range(1000)]}
+    _, wire = project(tmp_path, payload=payload)
+    view = native_context_capture_view(wire, Path(wire["recovery"]["path"]).parent,
+                                      context_directory=str(tmp_path))
+    capture = Path(view["recovery"]["path"])
+    original, state = capture.read_bytes(), (tmp_path / "session.json").read_bytes()
+    prefix, marker = _reader_program(tmp_path, monkeypatch, program)
+    instructions = context.codex_context_recovery_instructions(str(tmp_path), goal_id="fixture",
+        agent_id="agent", cli_argv=prefix)
+    command = instructions.split("Read missing necessary facts from this same capture with: ", 1)[1]
+    words = shlex.split(command.split(" --select '<pointer>'.", 1)[0])
+    for option in ("--page-bytes", "--max-page-output-bytes"):
+        words[words.index(option) + 1] = str(output_limit)
+    if selection == "selected":
+        words += ["--select", "/requirements"]
+    elif selection == "index":
+        words += ["--select", "/items", "--list"]
+    elif selection == "rejected":
+        words += ["--select", "/missing"]
+
+    content, pages, page_bytes = b"", 0, 0
+    while True:
+        assert words[:len(prefix)] == prefix
+        # Execute generated commands unchanged; do not strip or repair their launcher.
+        result = subprocess.run(words, cwd=tmp_path, capture_output=True, timeout=30)
+        page = json.loads(result.stdout)
+        assert len(result.stdout) <= output_limit
+        assert not marker.exists(), "The reader escaped to the global installation"
+        if not page["ok"]:
+            assert selection == "rejected" and pages == 0 and result.returncode == 1
+            assert "content" not in page
+            words = shlex.split(page["recovery_command"])
+            continue
+        assert result.returncode == 0 and page["offset"] == len(content), page
+        content += page["content"].encode()
+        pages += 1
+        page_bytes += len(result.stdout)
+        if page["eof"]:
+            break
+        assert page["next_offset"] == len(content)
+        words = shlex.split(page["next_command"])
+
+    if selection == "raw":
+        assert content == original and pages > 1
+        # Compare the real public printer against the production full/delta cost oracle.
+        from loopx.command_invocation import loopx_cli_route
+        with loopx_cli_route(None if program == "module" else prefix[0]):
+            reference_bytes = len((json.dumps(view["recovery"], ensure_ascii=False,
+                separators=(",", ":")) + "\n").encode())
+            assert _native_context_read_bytes(view["recovery"], original,
+                page_bytes=output_limit, output_bytes=output_limit) == reference_bytes + page_bytes
+    else:
+        [selected] = json.loads(content)["selections"]
+        if selection == "selected":
+            assert selected == {"pointer": "/requirements", "value": payload["requirements"]} and pages > 1
+        elif selection == "index":
+            assert [field["pointer"] for field in selected["fields"]] == [f"/items/{i}" for i in range(1000)]
+            assert pages > 1
+        else:
+            assert {field["pointer"] for field in selected["fields"]} == {"/ok", "/goal_id", "/requirements", "/items"}
+    assert capture.read_bytes() == original and (tmp_path / "session.json").read_bytes() == state
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Exercises a POSIX console alias and poisoned PATH")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("program", ["module", "candidate's cli"])
+@pytest.mark.parametrize("entry", ["guard", "project"])
+@pytest.mark.parametrize("output_limit", [8192, 64000])
+def test_native_cli_navigation_runs_initial_and_complete_reads_on_same_program(
+    tmp_path, monkeypatch, provider, program, entry, output_limit,
+):
+    from loopx.control_plane.turn_driver import codex_context as context
+
+    project, runtime, registry, _, _ = journey._source(tmp_path, provider=provider,
+        extra=f"claimed_by={cli.AGENT_ID}")
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    monkeypatch.setenv("CODEX_THREAD_ID", "native-navigation")
+    root, captures = tmp_path / "context", tmp_path / "captures"
+    root.mkdir(mode=0o700)
+    captures.mkdir(mode=0o700)
+    directory = context.codex_context_directory(root=str(root), create=True)
+    context.codex_context_hook(directory, dict(session_id="native-navigation", cwd=str(project),
+        hook_event_name="SessionStart", source="startup"))
+    prefix, marker = _reader_program(tmp_path, monkeypatch, program)
+    options = ["--codex-app", "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+        "--turn-instance-id", cli.TURN_ID, "--context-delivery", "on",
+        "--codex-context-root", str(root), "--decision-output-root", str(captures),
+        "--max-page-output-bytes", str(output_limit)]
+
+    def run(words, expected_code=0):
+        result = subprocess.run(words, cwd=project, capture_output=True, timeout=60)
+        assert result.returncode == expected_code, (result.returncode, result.stdout, result.stderr)
+        assert not marker.exists(), "Native navigation escaped to the global program"
+        return json.loads(result.stdout)
+
+    view = run([*prefix, "--format", "json", "--registry", str(registry),
+        "--runtime-root", str(runtime), "quota", "should-run", "--todo-id", cli.TODO_ID, *options])
+    [decision] = captures.glob("decision-*/decision.json")
+    original = decision.read_bytes()
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1 and cli._spend_run_count(runtime) == 0
+    if entry == "project":
+        context.codex_context_hook(directory, dict(session_id="native-navigation", cwd=str(project),
+            hook_event_name="PostCompact"))
+        view = run([*prefix, "--format", "json", "quota", "context-project", *options,
+            "--capture-file", str(decision), "--capture-sha256", hashlib.sha256(original).hexdigest()])
+    state = (Path(directory) / "session.json").read_bytes()
+
+    def read(command):
+        content = b""
+        while True:
+            words = shlex.split(command)
+            page = run(words)  # Execute exactly what the real CLI returned.
+            assert words[:len(prefix)] == prefix
+            assert page["offset"] == len(content)
+            content += page["content"].encode()
+            if page["eof"]:
+                return json.loads(content)
+            assert page["next_offset"] == len(content)
+            command = page["next_command"]
+
+    complete = read(view["recovery"]["command"])
+    assert read(view["command"]) == complete
+    first = read(view["first_read_command"])
+    assert any(row.get("pointer") == "/goal_id" and row.get("value") == cli.GOAL_ID
+               for row in first["selections"])
+    for row in first["selections"]:
+        if "value" not in row:
+            continue
+        expected = complete
+        for token in row["pointer"].split("/")[1:]:
+            token = token.replace("~1", "/").replace("~0", "~")
+            expected = expected[int(token)] if isinstance(expected, list) else expected[token]
+        assert row["value"] == expected
+    # A refused spend is still an evaluated result: read its bounded diagnostic,
+    # rather than replaying the operation or escaping to another installation.
+    refused = run([*prefix, "--format", "json", "--registry", str(registry),
+        "--runtime-root", str(runtime), "quota", "spend-slot", "--goal-id", cli.GOAL_ID,
+        "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
+        "--execute", "--max-page-output-bytes", "4096"], expected_code=1)
+    assert refused["ok"] is False
+    result = read(refused["result_details"]["command"])
+    assert result["ok"] is False and result["goal_id"] == cli.GOAL_ID
+    assert result["mode"] == "spend-slot" and not result["appended"] and not result["registry_mutated"]
+    assert decision.read_bytes() == original and (Path(directory) / "session.json").read_bytes() == state
+    assert cli._heartbeat_receipt_count(runtime, cli.TURN_ID) == 1 and cli._spend_run_count(runtime) == 0
