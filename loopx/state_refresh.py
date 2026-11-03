@@ -1213,21 +1213,6 @@ def refresh_state_run(
         # mutations and conflicting vision decisions before this fence. The
         # supplement repairs only the missing vision decision, so terminal
         # validation remains attached to the original Todo completion.
-        if (
-            normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
-            and not checkpoint_supplement
-        ):
-            require_accountable_completion_validation(
-                state_text,
-                todo_fields=todo_fields,
-                todo_id=(settlement_identity.todo_id if settlement_identity else None),
-                agent_id=normalized_agent_id or None,
-                delivery_boundary=normalized_delivery_boundary,
-                delivery_outcome=normalized_delivery_outcome,
-                semantic_replan_recorded=(
-                    effective_autonomous_replan_recorded
-                ),
-            )
         vision_checkpoint = build_vision_checkpoint(
             agent_id=normalized_agent_id or None,
             agent_vision=agent_vision,
@@ -1241,6 +1226,31 @@ def refresh_state_run(
             autonomous_replan_recorded=effective_autonomous_replan_recorded,
             blocked_retry=blocked_retry,
         )
+        if (
+            normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
+            and not checkpoint_supplement
+        ):
+            require_accountable_completion_validation(
+                state_text,
+                todo_fields=todo_fields,
+                todo_id=(settlement_identity.todo_id if settlement_identity else None),
+                agent_id=normalized_agent_id or None,
+                delivery_boundary=normalized_delivery_boundary,
+                delivery_outcome=normalized_delivery_outcome,
+                semantic_replan_recorded=effective_autonomous_replan_recorded,
+                goal_id=safe_goal_id,
+                progress_writeback=({
+                    "goal_id": safe_goal_id,
+                    "agent_id": normalized_agent_id,
+                    "todo_id": settlement_identity.todo_id,
+                    "turn_instance_id": settlement_identity.turn_instance_id,
+                    "settlement_identity": settlement_identity.as_dict(),
+                    "delivery_outcome": normalized_delivery_outcome,
+                    "vision_checkpoint": vision_checkpoint,
+                    "agent_vision": agent_vision,
+                    "completion_todo_id": completion_todo_id,
+                } if settlement_identity is not None else None),
+            )
         if checkpoint_supplement and not vision_checkpoint.get("satisfied"):
             raise ValueError(
                 "checkpoint supplement did not satisfy the missing decision; "
