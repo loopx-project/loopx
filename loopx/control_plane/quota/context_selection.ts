@@ -38,8 +38,13 @@ function coalescedInitialPointers(context: JsonObject, pointers: string[]): stri
       return {complete: false, pointers: []};
     const children = Object.entries(value).map(([key, child]) =>
       visit(child, pointer + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1")));
-    const complete = children.length > 0 && children.every(child => child.complete);
     const fields = children.flatMap(child => child.pointers);
+    // A whole array replays its original element order. Keep prioritized
+    // elements separate when merging would undo the owner's navigation order;
+    // propagate that boundary so an ancestor cannot merge them back either.
+    const preservesOrder = !Array.isArray(value) || fields.every((field, index) =>
+      index === 0 || positions.get(fields[index - 1])! < positions.get(field)!);
+    const complete = children.length > 0 && children.every(child => child.complete) && preservesOrder;
     // A single child needs no wrapper; grouping it can increase output bytes.
     return {complete, pointers: complete && fields.length > 1 ? [pointer] : fields};
   };

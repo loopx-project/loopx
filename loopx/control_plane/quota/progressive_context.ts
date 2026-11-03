@@ -226,13 +226,22 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
+  for (const field of ["primary_action", "delivery_allowed", "must_attempt", "quiet_noop_allowed"])
+    include("interaction_contract", "agent_channel", field);
   include("interaction_contract", "agent_channel", "required_reads");
   const work = ["interaction_contract", "agent_channel", "work_context"];
   include(...work, "instruction");
   include(...work, "user_todos");
   const channel = object(interaction.agent_channel);
   const sources = object(channel?.work_context)?.sources;
-  if (Array.isArray(sources)) sources.forEach((_source, index) => {
+  const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
+  // A complete scoped preference can be larger than a reader page. Visit
+  // current narrative sources first, with their availability and provenance,
+  // before selecting other sources' metadata: complete-parent coalescing keeps
+  // the first selected child's position. Preserve stable order within each group.
+  const hasText = (source: unknown): boolean => typeof object(object(source)?.content)?.text === "string";
+  sourceRows.sort((left, right) => Number(hasText(right.source)) - Number(hasText(left.source)));
+  sourceRows.forEach(({source: _source, index}) => {
     const source = [...work, "sources", index];
     for (const field of ["source", "kind", "reason", "ordering", "command"])
       include(...source, field);
