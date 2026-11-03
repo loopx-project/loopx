@@ -422,20 +422,29 @@ def _review_openings(text: str, code_ticks: int = 0) -> tuple[list[int], int, in
                 code_ticks = len(value)
             elif len(value) == code_ticks:
                 code_ticks = 0
-        elif code_ticks:
-            if not any(len(ticks.group()) == code_ticks for ticks in re.finditer(r"`+", text[cursor:])):
-                # A later chunk may close this example. Until then, withhold
-                # the possible envelope rather than leaking its metadata.
-                return openings, code_ticks, token.start()
         else:
-            openings.append(token.start())
             body_start = len(text) - len(text[cursor:].lstrip())
             try:
                 _, body_end = json.JSONDecoder().raw_decode(text, body_start)
             except json.JSONDecodeError:
-                pass
+                body_end = None
+            if code_ticks:
+                if text[body_start:body_start + 1] == "{":
+                    # Backticks in metadata cannot close a visible example.
+                    # Only release a JSON example after its complete envelope
+                    # and the code delimiter have both arrived.
+                    if body_end is None:
+                        return openings, code_ticks, token.start()
+                    close = len(text) - len(text[body_end:].lstrip())
+                    if not text.startswith(CHAT_REVIEW_CLOSE_TAG, close):
+                        return openings, code_ticks, token.start()
+                    cursor = close + len(CHAT_REVIEW_CLOSE_TAG)
+                if not any(len(ticks.group()) == code_ticks for ticks in re.finditer(r"`+", text[cursor:])):
+                    return openings, code_ticks, token.start()
             else:
-                cursor = body_end
+                openings.append(token.start())
+                if body_end is not None:
+                    cursor = body_end
     return openings, code_ticks, None
 
 

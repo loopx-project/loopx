@@ -180,9 +180,10 @@ def test_legacy_message_can_contain_literal_review_markers():
     assert parse_agent_response(raw)["message"] == message
 
 
-def test_unclosed_code_does_not_expose_a_possible_review_envelope():
+@pytest.mark.parametrize("summary", ["hidden", "hidden ` detail"])
+def test_unclosed_code_does_not_expose_a_possible_review_envelope(summary):
     visible = "An unfinished `example."
-    raw = visible + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "", "GlobalSummary": "hidden"}) + CHAT_REVIEW_CLOSE_TAG
+    raw = visible + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "", "GlobalSummary": summary}) + CHAT_REVIEW_CLOSE_TAG
     assert parse_agent_response(raw)["message"] == visible
     for split in range(len(raw) + 1):
         stream = VisibleResponseStreamFilter()
