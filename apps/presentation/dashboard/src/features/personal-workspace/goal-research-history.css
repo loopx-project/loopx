@@ -92,29 +92,7 @@
 .research-history button:focus-visible, .research-history-canvas:focus-visible, .research-history-detail:focus-visible { outline: 2px solid var(--pw-blue); outline-offset: -2px; }
 @media (max-width: 640px) {
   .research-history-heading { flex-wrap: wrap; gap: 12px; }
-  .research-history-controls {
-    --research-control-height: 40px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    padding: 6px;
-  }
-  .research-history-controls .research-lens {
-    flex: none;
-  }
-  .research-history-controls .research-analysis-entry-actions {
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  .research-history-controls > .research-history-search {
-    flex: none;
-    margin-left: auto;
-  }
-  .research-history-controls > button {
-    flex: none;
-  }
+  .research-history-controls { --research-control-height: 44px; width: 100%; column-gap: 4px; }
   .research-history-canvas { max-height: 350px; }
   .research-history-detail { padding: 20px; }
   .research-history-read-error, .research-history-empty { flex-wrap: wrap; }
