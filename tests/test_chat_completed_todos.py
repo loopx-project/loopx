@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 
 import pytest
 
-from loopx.chat_completed_todos import CompletedTodoPages, _verify_goal_result_page
+from loopx.chat.completed_todos import CompletedTodoPages, _verify_goal_result_page
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.todos.contract import encode_metadata_value
 
@@ -127,7 +127,7 @@ def test_snapshot_expiry_starts_when_loading_finishes(monkeypatch):
     pages = CompletedTodoPages()
     pages.ttl_seconds = 1
     clock = [0]
-    monkeypatch.setattr("loopx.chat_completed_todos.monotonic", lambda: clock[0])
+    monkeypatch.setattr("loopx.chat.completed_todos.monotonic", lambda: clock[0])
     rows = [{"todo_id": f"todo_{index}"} for index in range(41)]
 
     def load():

@@ -171,7 +171,7 @@ def test_return_rechecks_actual_typed_binding_after_owner_disconnect(ordinary): 
 @pytest.mark.parametrize("installed", [False, True])
 def test_real_chat_entrypoint_composes_one_store_controller_and_return_service(tmp_path, monkeypatch, installed):
     import loopx.chat_server as chat
-    import loopx.chat_endpoint_catalog as endpoints
+    import loopx.chat.endpoint_catalog as endpoints
     from loopx.cli import build_parser
     from loopx.cli_commands.support_control_chat import chat_server_options
     from loopx.extensions.lark.cli_resolution import LarkCliResolution

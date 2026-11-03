@@ -22,7 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .chat_manager import open_manager_session
+from ..chat_manager import open_manager_session
 
 # The executor a Goal-scoped session runs on when the caller makes no explicit
 # pick. The steward channel does not use this: it resolves its own default.

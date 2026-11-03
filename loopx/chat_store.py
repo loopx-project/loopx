@@ -25,7 +25,7 @@ from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id, normalize_session_model_settings,
     session_model_settings_supported,
 )
-from .chat_event_cache import ChatEventCache
+from .chat.event_cache import ChatEventCache
 from .chat_ingress import (
     ChatIngressStore,
     SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,

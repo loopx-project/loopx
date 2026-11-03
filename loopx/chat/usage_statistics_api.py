@@ -4,7 +4,7 @@ from __future__ import annotations
 import subprocess
 from typing import Any
 
-from .usage_ping import UsageSettingsInputError, control
+from ..usage_ping import UsageSettingsInputError, control
 
 CHAT_USAGE_STATISTICS_PATH = "/api/chat/usage-statistics"
 

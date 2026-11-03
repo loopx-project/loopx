@@ -243,7 +243,7 @@ def test_writable_project_turns_use_project_skills_without_manager_work_selectio
 def test_workspace_only_rejects_other_executor_before_session_creation(ordinary, monkeypatch, grant):
     store, runtime, contexts, request, _, _, _ = ordinary
     contexts.filesystem_scope, contexts.workspace_grant = "workspace_only", grant
-    monkeypatch.setattr("loopx.chat_endpoint_catalog.shutil.which",
+    monkeypatch.setattr("loopx.chat.endpoint_catalog.shutil.which",
         lambda executable: executable if executable == "kiro-cli" else None)
     monkeypatch.setattr(runtime, "_start_adapter", lambda **_: pytest.fail("must reject before starting a host"))
     status, result = request("/api/chat/sessions", {
@@ -263,7 +263,7 @@ def test_read_only_project_rejects_executor_with_workspace_write_scope(ordinary,
             pass
 
     monkeypatch.setattr(
-        "loopx.chat_endpoint_catalog.shutil.which",
+        "loopx.chat.endpoint_catalog.shutil.which",
         lambda executable: executable if executable == "kiro-cli" else None,
     )
     kiro_capability = next(row for row in runtime.capabilities() if row["agent_id"] == "kiro-cli")

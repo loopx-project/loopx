@@ -30,7 +30,7 @@ def current_session_settings(tmp_path, monkeypatch):
     session = store.create_session(goal_id="fixture", agent_id="codex", adapter_kind="codex_app_server",
         upstream_thread_id="original-thread", agent_model_id="first", agent_reasoning_effort="low",
         requested_agent_model_id="first", requested_agent_reasoning_effort="low", upstream_mode="chat")
-    from loopx.chat_coordination import PROJECT_CONTEXT_VERSION
+    from loopx.chat.coordination import PROJECT_CONTEXT_VERSION
     session = store.update_session(session["session_id"], coordination_context_version=PROJECT_CONTEXT_VERSION)
     server = chat_server.ChatHTTPServer(("127.0.0.1", 0), chat_server.ChatRequestHandler)
     server.verbose = False

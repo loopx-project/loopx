@@ -12,8 +12,8 @@ from typing import Any
 
 from .chat_manager import manager_model_config
 from .capabilities.steward_executor import load_effective_steward_executor_defaults
-from .chat_manager_details import read_manager_goal_details
-from .chat_manager_history import read_manager_delivery_history
+from .chat.manager_details import read_manager_goal_details
+from .chat.manager_history import read_manager_delivery_history
 from .capabilities.manager_context.inspection import agent_work_summary
 from .history import decode_registry_snapshot
 from .goal_portfolio import build_goal_portfolio, lifecycle_readback_unavailable

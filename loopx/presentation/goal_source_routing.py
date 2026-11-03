@@ -70,7 +70,7 @@ class GoalSourceRequestMixin:
             self._send_error("The original Task is unavailable; retry after reconnecting.", status=503)
 
     def _goal_source_links(self):
-        from ..chat_workspace_directory import workspace_goal_directory
+        from ..chat.workspace_directory import workspace_goal_directory
         from ..registry import load_registry
         from urllib.parse import parse_qs, urlparse
         import subprocess

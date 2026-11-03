@@ -36,7 +36,7 @@ from .chat_attachments import (
 )
 from .chat_actions import ChatActionService, ProtectedActionGate, goal_workspace_labels, goal_workspace_ref
 from .chat_action_store import ACTION_KINDS, ActionConflictError, ChatActionStore
-from .chat_goal_subagent_api import (
+from .chat.goal_subagent_api import (
     GoalSubagentConfigurationRequestMixin,
     add_goal_subagent_capability,
     add_goal_subagent_routes,
@@ -53,8 +53,8 @@ from .chat_manager import (
     MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE, is_manager_channel,
     manager_capabilities_projection, manager_workspace,
 )
-from .chat_session_open import open_chat_session
-from .chat_ssh_source_api import SshSourceRequestMixin
+from .chat.session_open import open_chat_session
+from .chat.ssh_source_api import SshSourceRequestMixin
 from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .capabilities.native_chat.model_settings import normalize_agent_reasoning_effort, normalize_agent_model_id
 from .extensions.lark.private_conversation_api import PrivateConversationRequestMixin, PRIVATE_CONVERSATIONS_PATH
@@ -101,11 +101,11 @@ from .extensions.runtime import (
     default_extension_state_file,
     resolve_extension_activation,
 )
-from .chat_completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
+from .chat.completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GoalSourceRequestMixin
-from .chat_todo_detail import TodoDetailRequestMixin
+from .chat.todo_detail import TodoDetailRequestMixin
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity

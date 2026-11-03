@@ -5,26 +5,26 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
-from .capabilities.configuration_inspection import (
+from ..capabilities.configuration_inspection import (
     GOAL_CONFIGURATION_INSPECTION_SCHEMA,
     inspect_machine_namespaces,
     project_goal_configuration as _public_goal_configuration,
 )
-from .capabilities.multi_subagent import (
+from ..capabilities.multi_subagent import (
     apply_codex_subagent_capacity,
     plan_codex_subagent_capacity,
     public_codex_host_capacity,
 )
-from .configuration_transaction import (
+from ..configuration_transaction import (
     build_configuration_update_plan,
     configuration_payload_revision,
     require_expected_configuration_plan_revision,
 )
-from .control_plane.goals.configure_goal_service import (
+from ..control_plane.goals.configure_goal_service import (
     configure_goal_with_global_sync,
     read_goal_configuration_with_source_route,
 )
-from .orchestration import subagent_model_configuration_options
+from ..orchestration import subagent_model_configuration_options
 
 CHAT_GOAL_CONFIGURATION_PATH = "/api/chat/goal-configuration"
 CHAT_GOAL_CONFIGURATION_PREVIEW_PATH = f"{CHAT_GOAL_CONFIGURATION_PATH}/preview"
@@ -145,7 +145,7 @@ def _change_quality_options(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _progress_review_options(config: Mapping[str, Any]) -> dict[str, Any]:
-    from .capabilities.progress_review.policy import (
+    from ..capabilities.progress_review.policy import (
         normalize_progress_review_contract_revision,
         normalize_progress_review_drift_threshold,
         normalize_progress_review_mode,
@@ -248,8 +248,8 @@ def _goal_capability_options(
     if capability_id == "goal_capability_organization":
         return {"capability_improvement_configuration": config}
     if capability_id == "todo_replan_cadence":
-        from .capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
-        from .control_plane.work_items.stride_policy_codec import normalize_stride_strategy
+        from ..capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
+        from ..control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         horizon = {"clear_execution_planning_horizon_goal": True}
         if "planning_horizon_goal" in config:
             if not isinstance(config["planning_horizon_goal"], bool):
@@ -272,7 +272,7 @@ def _goal_capability_options(
         return {option: cadence["count"], **horizon, **({"execution_stride_strategy": cadence["stride_strategy"]}
             if "stride_strategy" in cadence else {})}
     if capability_id == "periodic_report":
-        from .capabilities.periodic_report.goal_configuration import normalize_configuration
+        from ..capabilities.periodic_report.goal_configuration import normalize_configuration
         # Validate the payload before the Session guard reads native sources.
         return {"periodic_report_configuration": normalize_configuration(config)}
     if capability_id == "reward_memory":
@@ -314,7 +314,7 @@ def _goal_capability_options(
     if capability_id == "explore_harness":
         return _explore_harness_options(config)
     if capability_id == "pull_request_review":
-        from .capabilities.pr_review_queue.goal_configuration import normalize_configuration
+        from ..capabilities.pr_review_queue.goal_configuration import normalize_configuration
         return {"pull_request_review_configuration": normalize_configuration(config)}
     if capability_id == "change_quality_qualification":
         return _change_quality_options(config)
@@ -445,7 +445,7 @@ class GoalConfigurationRequestMixin:
         capability_id: str, actual: object, desired: object, applied: Mapping[str, Any]
     ) -> bool:
         if capability_id == "reward_memory" and isinstance(actual, Mapping) and isinstance(desired, Mapping):
-            from .capabilities.reward_memory.configuration import reward_memory_configuration_readback_matches
+            from ..capabilities.reward_memory.configuration import reward_memory_configuration_readback_matches
             return reward_memory_configuration_readback_matches(actual, desired, applied)
         return actual == desired
 
@@ -472,8 +472,8 @@ class GoalConfigurationRequestMixin:
                 result,
                 machine_namespaces=self._goal_configuration_machine_namespaces(),
             )
-            from .agent_registry import load_goal_from_registry
-            from .capabilities.progress_review.context import external_progress_review_context
+            from ..agent_registry import load_goal_from_registry
+            from ..capabilities.progress_review.context import external_progress_review_context
             goal = load_goal_from_registry(self.server.registry_path, goal_ids[0].strip())
             observation = external_progress_review_context(goal or {}, getattr(self.server, "runtime_root", None))
             if observation is not None:
@@ -681,7 +681,7 @@ class GoalConfigurationRequestMixin:
             options = _goal_capability_options(capability_id, configuration)
             machine_namespaces = self._goal_configuration_machine_namespaces()
             from contextlib import nullcontext
-            from .capabilities.native_chat.steward_reports import session_report_configuration_guard
+            from ..capabilities.native_chat.steward_reports import session_report_configuration_guard
             controller = getattr(self.server, "runtime_controller", None)
             guard = (session_report_configuration_guard(controller, goal_id, configuration)
                 if capability_id == "periodic_report" and controller is not None else nullcontext())

@@ -11,14 +11,14 @@ from . import goal_ownership_api as ownership_api
 from . import goal_amendment_api as amendment_api
 from . import request_control_api as request_api
 from . import goal_storage_api as storage_api
-from .. import chat_usage_statistics_api as usage_api
-from .. import chat_goal_configuration_api as goal_api
+from ..chat import usage_statistics_api as usage_api
+from ..chat import goal_configuration_api as goal_api
 from . import goal_direction_api as direction_api
 from . import decision_context_api as context_api
 from . import content_media_api as media_api
-from .. import chat_machine_configuration_api as machine_api
+from ..chat import machine_configuration_api as machine_api
 from .. import chat_operator_provider_api as operator_api
-from .. import chat_automation_cadence_api as cadence_api
+from ..chat import automation_cadence_api as cadence_api
 
 
 class ChatConfigurationRequestMixin(

@@ -40,7 +40,7 @@ def _read(path: Path) -> dict[str, Any]:
 
 def _source_facts(source: dict[str, Any], *, local: bool) -> list[dict[str, Any]]:
     """Derive editorial references from the same frozen source on every read."""
-    from ...chat_manager_history import _recorded_web_references
+    from ...chat.manager_history import _recorded_web_references
 
     facts = [{"fact_id": "local_coverage" if local else "portfolio_coverage",
         "title": "本期来源范围" if local else "本期来源覆盖",
