@@ -588,7 +588,7 @@ export function prepareContextDelivery(request: JsonObject, legacyQuotaFields: r
 /** Shared encoding within one presentation transaction; callers publish once
  * against their original source so numeric facts never round-trip through JS. */
 export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: readonly string[],
-    values: ProjectionSourceValues): JsonObject {
+    values: ProjectionSourceValues, fileNavigation: Path[] = []): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
   const identity = contextSourceIdentity(request, request.source_number_tokens);
   const surface = surfaceOf(request.surface ?? "work_context"), target = targetBinding(request, context, surface);
@@ -612,7 +612,9 @@ export function encodeContextDelivery(request: JsonObject, legacyQuotaFields: re
   if (!Number.isSafeInteger(depth) || Number(depth) < 0 || Number(depth) >= MAX_ANCESTRY) return fullResult("full_refresh_due");
   const before = freshPaths(prior, surface, legacyQuotaFields, binding), after = freshPaths(context, surface, legacyQuotaFields, target);
   if (!fileBacked && (!before.valid || !after.valid)) return fullResult("source_not_reusable");
-  const changes = changeTree(prior, context, fileBacked ? [] : after.paths, fileBacked,
+  // The presentation owner may require navigation without opening the base.
+  // This does not turn file continuity into confirmed model delivery.
+  const changes = changeTree(prior, context, fileBacked ? fileNavigation : after.paths, fileBacked,
     {identity, before: ["baseline", "context"], after: ["context"],
       ...(request.source_edits === true ? {values} : {})});
   const delta: JsonObject = {schema_version: VERSION, mode: "delta", target, base: binding,

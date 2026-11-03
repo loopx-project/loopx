@@ -249,6 +249,38 @@ Agent、所选 Todo、成果版本及 provider revision 一致时，首读完整
 原索引/详情路线；折叠的支持材料仍遵守原读取义务。此选读使用无需 Session Hook 的
 通用 reader，不改变启用默认值、落盘文件、Delta 或完整读取回执。
 
+For supporting fields folded by the existing native Progressive owner,
+`context_details.unread_context_index` contains the current complete
+`projection.json` source path/digest and exact `pointers`. The initial reader
+shows that index; a file-backed warm delta repeats it in full even when its
+pointers are unchanged. Each pointer uses the ordinary `context-read`
+`--capture-file`, `--capture-sha256` and `--select` route, independently of any
+previous packet, retained model input or patch chain. These addresses belong to
+the complete source, not the derived `required-context.json` recovery view.
+
+`coverage_confirmed=false` conservatively reports no trusted model-visible
+coverage witness. A previous select, reader EOF or file receipt does not clear
+an entry or create `confirmed_read_sections`/`consumed_pointers` state.
+`read_before_dependent_work` preserves the original obligation to read material
+when the decision or verification needs it; it is not an automatic full-read or
+execution gate. Updated/reordered material binds to its current addresses;
+removed material does not retain a predecessor route. The actual index and
+guidance count toward the existing byte guard, including fallback to the
+complete file when folding is not smaller. In-view deduplication alone adds no
+index. This bounded native slice changes no activation defaults or off path;
+cross-host rollout and trusted coverage observation remain C1/C2 work.
+
+中文：现有原生 Progressive owner 折叠的支持字段，在
+`context_details.unread_context_index` 中列出当前完整 `projection.json` 的路径、
+摘要和精确 `pointers`。首读呈现该索引；文件 warm delta 即使指针未变也完整重发。
+各指针通过普通 `context-read --capture-file ... --capture-sha256 ... --select ...`
+独立读取，不依赖旧包、模型保留或补丁链；它们属于完整源，不属于派生 required view。
+`coverage_confirmed=false` 表示没有可信模型可见覆盖见证，选读、EOF或文件回执不会
+清除条目，也不新建已读账本。`read_before_dependent_work` 保留原先按决策/验证需要
+读取的义务，不成为自动全读或执行门。变化/重排绑定当前地址，移除材料不沿用前序入口。
+索引和指导计入原字节守卫，不更小时回退完整文件；仅视图内去重不新增索引。本原生切片
+不改启用默认值或 off 路径，跨宿主推广和可信覆盖观察仍属 C1/C2 未完成工作。
+
 Checkpoint Host preflight uses the hidden `--defer-context-presentation` option
 with an explicitly enabled native JSON `should-run` capture. It collects the
 same complete Goal source for admitted work-context reads and writes the ordinary
@@ -479,19 +511,22 @@ the existing Turn or its recovery files.
 
 ### Machine default
 
-**Settings → This machine → Capabilities → Differential context → Codex** uses the
+**Settings → This machine → Capabilities → Differential context** exposes independent
+application rows for **Codex** (`mode`) and **Antigravity** (`antigravity_mode`), using the
 existing revision-locked preview, apply and readback operations in one switch action.
 Switching off uses the same transaction. A saved preference does not certify native
 host setup or actual delta use; the settings view states this explicitly. Its
 `context_delivery` machine namespace accepts
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}` or
-the same object with `"mode":"on"`. The CLI exposes that same owner through
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off","antigravity_mode":"on"}`
+(or `"off"`/`"on"` for either field; omitting `antigravity_mode` defaults it to `"on"` while
+preserving the saved `mode`). The CLI exposes that same owner through
 `machine-config preview/apply --namespace context_delivery --config-json FILE`;
-apply requires the exact preview revision. Removing the namespace restores the on default for supported native Codex sessions; save `mode: "off"` to keep it disabled.
-Sibling settings and Goal records are preserved. The application row selects Codex
-within this capability; the existing `mode` remains that Codex preference, with no
-additional global switch or host configuration authority. Read-only editors cannot
-save it. The UI does not alter other hosts or initialize the current native session.
+apply requires the exact preview revision. Removing the namespace restores the on defaults for supported native Codex sessions and trusted-owner Antigravity manager history reads; save `mode: "off"` or `antigravity_mode: "off"` to keep either application disabled independently.
+Sibling settings and Goal records are preserved. The Codex row (`mode`) remains scoped to Codex,
+while `antigravity_mode` controls progressive private-capture reads of `recent_delivery_history`
+in trusted-owner Antigravity manager turns (`off` or `LOOPX_CONTEXT_DELIVERY=off` keeps full inline input),
+with no additional global switch or host configuration authority. Read-only editors cannot
+save it. Each application row leaves the other host unchanged and does not initialize the current native session.
 
 An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
 machine preference, preserving a saved off. An absent preference defaults on only
@@ -840,15 +875,14 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 
 ### 机器级默认
 
-在**设置 → 本机设置 → 能力中心 → 差分上下文 → Codex**选择关闭或开启，沿用现有
-精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
+在**设置 → 本机设置 → 能力中心 → 差分上下文**分别提供 **Codex**（`mode`）与 **Antigravity**
+（`antigravity_mode`）两行独立开关，沿用现有精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
 设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
-把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
---config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复受支持 Codex 原生会话的默认开启；保持关闭须保存 `mode: "off"`，
-不改写其他配置和 Goal 记录。应用行选择的是此能力下的 Codex；既有 `mode` 仍表示
-该 Codex 偏好，不新增总开关或宿主配置 authority。只读编辑器不能保存；界面不会
-改变其他应用或初始化当前原生会话。
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off","antigravity_mode":"on"}`
+（两个字段各自支持 `"off"` 或 `"on"`；省略 `antigravity_mode` 时默认 `"on"` 并保留所选 `mode`）。CLI 的 `machine-config preview/apply --namespace context_delivery
+--config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复受支持 Codex 原生会话与强能力 Antigravity 管家历史渐进读取的默认开启；保持关闭须分别保存 `mode: "off"` 或 `antigravity_mode: "off"`，
+不改写其他配置和 Goal 记录。`mode` 仍表示 Codex 偏好，`antigravity_mode` 控制强能力 Antigravity 管家是否将 `recent_delivery_history` 移至私有快照渐进读取（`off` 或 `LOOPX_CONTEXT_DELIVERY=off` 保持完整内联），
+不新增总开关或宿主配置 authority。只读编辑器不能保存；两行应用开关互不影响，也不会初始化当前原生会话。
 
 显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，已保存的关闭继续生效。
 未配置时，仅在受支持的 POSIX Codex App／SSH 和已声明的 benchmark 心跳入口默认开启；

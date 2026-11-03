@@ -79,6 +79,8 @@ def register_manager_inbox(subparsers, add_format):
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
     parser.add_argument("--reply-text")
+    parser.add_argument("--remaining-work", help="For report: accepted work still owed after this partial conclusion; pair with --resume-when. No Todo or execution is created.")
+    parser.add_argument("--resume-when", help="For report: concrete continuation condition for --remaining-work; descriptive only, not a scheduler rule.")
     parser.add_argument("--attachment-ref", action="append", default=[],
                         help="For report: explicit relative file in the registered Goal workspace; bound-owner App only, at most four files.")
     parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
@@ -95,6 +97,11 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        remainder = getattr(args, "remaining_work", None)
+        resume = getattr(args, "resume_when", None)
+        if remainder is not None or resume is not None:
+            if args.manager_inbox_action != "report" or remainder is None or resume is None:
+                raise ValueError("--remaining-work and --resume-when require report and each other")
         if args.manager_inbox_action == "original-conversation":
             from ..control_plane.collaboration.peers import original_conversation_request
             if not args.conversation_operation or not args.conversation_file:
@@ -295,6 +302,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 update_id=getattr(args, "update_id", None),
                 attachment_refs=getattr(args, "attachment_ref", None),
                 request_revision=getattr(args, "request_revision", None),
+                remaining_work={"summary": remainder, "resume_when": resume} if remainder is not None else None,
                 workspace=Path.cwd(),
                 registry=registry_path,
             )
