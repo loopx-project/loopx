@@ -1044,7 +1044,13 @@ Reader failures preserve the runtime's `error_kind` and `diagnostic_code` so
 programs need not parse `reason`. Selector rejections use `request_rejected`
 with `context_selection_invalid_pointer`, `context_selection_invalid_index`
 or `context_selection_missing_pointer`. Repair the pointer syntax or inspect
-the known parent in the same capture, then retry the corrected batch. Other
+the known parent in the same capture, then retry the corrected batch. Missing
+members and invalid array indexes also return `recovery_command`: it lists the
+nearest verified container from the caller's original pointer, using the same
+capture digest and page budgets. If traversal reached a scalar, it lists that
+scalar's containing object/array instead. This command repeats only the supplied
+address prefix, never source values, and starts a new index at offset zero;
+it is not continuation of the failed selection or proof of reading its body. Other
 runtime failures retain their own classification; startup failures retain
 their diagnostic code. These failures do not require restoring a healthy
 capture. Missing or damaged capture files still fail closed through the
@@ -1100,7 +1106,11 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 读取失败保留 runtime 的 `error_kind` 与 `diagnostic_code`，程序无需解析 `reason`。
 选择错误使用 `request_rejected`，原因码分别为 `context_selection_invalid_pointer`、
 `context_selection_invalid_index` 或 `context_selection_missing_pointer`。
-修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。其他 runtime
+修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。字段缺失和
+数组索引错误还返回 `recovery_command`：用同一 capture 摘要与分页预算列出原始
+输入路径中最近的已验证容器；若已走到标量，则列出包含它的对象或数组。命令仅重复
+调用方提供的路径前缀，不包含源正文，并从偏移零开始新目录；它不是失败选择的续读，
+也不证明读过正文。其他 runtime
 故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
 文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
 
