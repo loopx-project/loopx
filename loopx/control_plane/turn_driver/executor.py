@@ -1679,8 +1679,9 @@ def run_loopx_turn_once(
             journal.pop("host_failure", None)
             journal["status"] = "in_progress"
             persist_journal(journal)
-        if journal is None:
-            journal = {
+        reserved_start = admission is not None and admission.get("reserved") is True
+        if journal is None or reserved_start:
+            journal = journal or {
                 "schema_version": LOOPX_TURN_JOURNAL_SCHEMA_VERSION,
                 "turn_key": turn_key,
                 "goal_id": goal_id,
@@ -1690,9 +1691,10 @@ def run_loopx_turn_once(
                 "host_attempt_count": 0,
                 "plan": dict(plan),
             }
-            persist_journal(journal)
-        if admission is not None and admission.get("reserved") is True:
-            journal["admission"] = admission
+            if reserved_start:
+                journal["admission"] = admission
+            # The accepted reservation belongs to the initial snapshot. Keep
+            # the later durable Host-attempt checkpoint and confirmation separate.
             persist_journal(journal)
 
         effects = dict(empty_effects)
@@ -1730,11 +1732,7 @@ def run_loopx_turn_once(
             journal=journal,
             persist_journal=persist_journal,
             effects=effects,
-            confirm_start=(
-                confirm_start
-                if admission is not None and admission.get("reserved") is True
-                else None
-            ),
+            confirm_start=confirm_start if reserved_start else None,
         )
         if terminal is not None:
             return finish_recovery(terminal)
