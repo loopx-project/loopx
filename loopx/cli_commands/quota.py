@@ -321,6 +321,9 @@ def _emit_quota_result(
     print_payload: PrintPayload,
 ) -> int:
     """Capture the full decision before projecting and printing the CLI view."""
+    from ..command_invocation import current_loopx_cli_argv
+
+    reader_argv = current_loopx_cli_argv()
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
     cli = (payload.get("interaction_contract") or {}).get("cli_channel")
@@ -341,7 +344,7 @@ def _emit_quota_result(
             and getattr(args, "max_page_output_bytes", None) is not None):
         try:
             view = budgeted_settlement_result(payload, runtime_root=context.runtime_root,
-                output_bytes=args.max_page_output_bytes)
+                output_bytes=args.max_page_output_bytes, reader_argv=reader_argv)
         except QuotaDecisionTransportError as exc:
             # Transport failure cannot replace an already evaluated refusal or
             # committed receipt. Preserve unknown controls as well as identity;
@@ -367,10 +370,8 @@ def _emit_quota_result(
     delivery_request = None
     decision_identity = ("", "")
     if capture_directory is not None and payload.get("replan_action_packet"):
-        from ..command_invocation import current_loopx_cli_argv
-
         payload = {**payload, "replan_read_path": str(capture_directory / "decision.json"),
-            "replan_read_argv": current_loopx_cli_argv()}
+            "replan_read_argv": reader_argv}
     if args.quota_command == "should-run" and context is not None:
         # Capture the one liveness observation with the decision that produced
         # it. Presentation and evidence recovery must not record it again.
@@ -452,8 +453,8 @@ def _emit_quota_result(
             # The original authority decision remains separately captured.
             payload = native_context_capture_view(payload, capture_directory, context_directory=directory,
                 metadata={"capture_sha256": capture_id, **({"recovery": recovery} if recovery is not None else {})},
-                max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
-            payload = model_context_reference(payload)
+                max_page_output_bytes=getattr(args, "max_page_output_bytes", None), reader_argv=reader_argv)
+            payload = model_context_reference(payload, reader_argv=reader_argv)
         except (QuotaDecisionTransportError, OSError, ValueError) as exc:
             if not isinstance(exc, QuotaDecisionTransportError):
                 exc = QuotaDecisionTransportError(

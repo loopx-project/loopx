@@ -87,8 +87,11 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     assert code == 0 and page["ok"], (page.get("reason"), page.get("error"), page.get("error_code"))
     digest = reference_metadata_oracle(page)["sha256"]
     if page.get("schema_version") != "context_capture_page_v1":
-        page = read_context_capture(build_parser().parse_args(
-            shlex.split(page["command"])[1:] + ["--page-bytes", "3072"]))
+        from test_context_delivery_cli import _native_reader_args
+
+        args = _native_reader_args(page["command"])
+        args.page_bytes = 3072
+        page = read_context_capture(args)
         assert page["ok"], page
     while True:
         assert page["offset"] == len(raw) and page["sha256"] == digest

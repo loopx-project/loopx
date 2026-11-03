@@ -27,6 +27,15 @@ from test_quota_settlement_cli import (
 )
 
 
+def _native_reader_args(command):
+    from loopx.cli import build_parser
+    from loopx.command_invocation import current_loopx_cli_argv
+
+    words, prefix = shlex.split(command), current_loopx_cli_argv()
+    assert words[:len(prefix)] == prefix
+    return build_parser().parse_args(words[len(prefix):])
+
+
 def test_relocated_current_source_overlay_crosses_the_real_typed_codec(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     scope = dict(goal_id="fixture", agent_id="reader", session_id="native", context_epoch="epoch")
@@ -495,7 +504,7 @@ def test_native_context_cli_without_retention_exposes_files_and_preserves_receip
             assert wire["mode"] == "full"
         # Autonomous readers can choose the current full file directly, whether
         # the advertised transport is full or delta. No hook/read ACK is needed.
-        args = build_parser().parse_args(shlex.split(wire["recovery"]["command"])[1:])
+        args = _native_reader_args(wire["recovery"]["command"])
         assert args.max_page_output_bytes == limit
         observed = consume(read_context_capture(args))
         recovery = read_context_read_reference(wire["recovery"]["reference_file"])[1]
@@ -508,7 +517,7 @@ def test_native_context_cli_without_retention_exposes_files_and_preserves_receip
                 "--decision-output-root", str(projection_root), "--context-delivery", "on",
                 "--codex-context-dir", str(root), "--max-page-output-bytes", str(limit), cwd=project)
             assert rc == 0 and projected["ok"], projected
-            args = build_parser().parse_args(shlex.split(projected["recovery"]["command"])[1:])
+            args = _native_reader_args(projected["recovery"]["command"])
             assert consume(read_context_capture(args)) == observed
     assert _heartbeat_receipt_count(runtime, "native-full") == 1
     assert _spend_run_count(runtime) == 0 and state.read_bytes() == original
@@ -546,7 +555,7 @@ def test_native_fresh_work_turn_reads_current_full_without_old_recovery(tmp_path
         return view
 
     def consume(view):
-        page = read_context_capture(build_parser().parse_args(shlex.split(view["recovery"]["command"])[1:]))
+        page = read_context_capture(_native_reader_args(view["recovery"]["command"]))
         observed = b""
         while True:
             assert page["offset"] == len(observed)
