@@ -16,6 +16,8 @@ AddFormat = Callable[[argparse.ArgumentParser], None]
 
 
 def render_usage_ping_markdown(payload: dict[str, object]) -> str:
+    if payload.get("ok") is False:
+        return str(payload["message"])
     lines = [f"LoopX basic usage statistics: {payload['consent']}",
              f"- Sending eligible: {payload['sending']}; blocked by: {payload['blocked_by'] or 'none'}",
              f"- Endpoint: {payload['endpoint'] or 'not configured'}",
@@ -64,5 +66,8 @@ def handle_usage_ping_command(args: argparse.Namespace, print_payload: PrintPayl
     except usage_ping.UsageSettingsInputError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    except usage_ping.UsageSettingsUnavailable as exc:
+        print_payload(exc.as_payload(), output_format(args), render_usage_ping_markdown)
+        return 1
     print_payload(payload, output_format(args), render_usage_ping_markdown)
     return 0
