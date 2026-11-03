@@ -155,7 +155,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
             assert words[0] == "loopx"
             code, page = run_json_cli_result(*words[1:], registry_path=registry, runtime_root=root)
             assert code == 0 and page["ok"] and page["eof"], page
-            values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+            values = selected_context_values(page["content"])
             pointer = next(key for key in values if key.endswith("/content/unfinished_delegations"))
             content = {"unfinished_delegations": values[pointer],
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
