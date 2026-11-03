@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from loopx.capabilities.manager_context.inspection import ManagerInspection, TOOL_NAME
+from loopx.control_plane.runtime.public_safety import validate_public_safe_value
 
 
 def setup(tmp_path, *, owner=True, scope=None, valid=lambda: True):
@@ -109,6 +110,63 @@ def test_directory_binding_summary_keeps_multiple_and_shared_addresses(tmp_path)
         "address_shared": True, "scope": "goals_supplied",
     }
     assert page["rows"][0]["execution_readiness"] == "not_checked"
+
+
+@pytest.mark.parametrize(
+    "unsafe_surface",
+    [
+        "/Users/alice/private-host",
+        "~/private-host",
+        "file:///tmp/private-host",
+        "./local-host",
+        "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz1234",
+        "token:secret-value",
+    ],
+)
+def test_private_host_surface_is_withheld_from_discovery_and_cli_export(tmp_path, unsafe_surface):
+    registry, reader, _ = setup(tmp_path, owner=False)
+    data = json.loads(registry.read_text())
+    data["goals"][0]["coordination"]["thread_agent_bindings"] = [
+        {"agent_id": "worker-00", "host_surface": unsafe_surface, "thread_id": "bound-only-unsafe"},
+        {"agent_id": "worker-34", "host_surface": unsafe_surface, "thread_id": "bound-unsafe"},
+        {"agent_id": "worker-34", "host_surface": "codex-app", "thread_id": "bound-safe"},
+    ]
+    registry.write_text(json.dumps(data))
+
+    restricted = reader.read(TOOL_NAME, {"view": "agents", "goal_id": "research", "limit": 12})
+    validate_public_safe_value(restricted, path="manager_inspection.agents")
+    assert unsafe_surface not in json.dumps(restricted)
+    rows = {row["agent_id"]: row for row in restricted["rows"]}
+    assert rows["worker-00"]["host_surfaces"] == []
+    assert rows["worker-00"]["registered_host_binding"] == {
+        "outcome": "single_candidate",
+        "candidate_count": 1,
+        "address_shared": False,
+        "scope": "goals_supplied",
+    }
+    assert reader.read(TOOL_NAME, {"view": "agents", "query": unsafe_surface})["matched"] == 0
+
+    exported = subprocess.run(
+        [
+            sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+            "--runtime-root", str(tmp_path / "runtime"), "--format", "json",
+            "goal-portfolio", "--manager-view", "agents", "--query", "worker-34",
+            "--goal-id", "research",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert unsafe_surface not in exported.stdout
+    page = json.loads(exported.stdout)
+    validate_public_safe_value(page, path="goal_portfolio.agents")
+    assert page["rows"][0]["host_surfaces"] == ["codex-app"]
+    assert page["rows"][0]["registered_host_binding"] == {
+        "outcome": "multiple_candidates",
+        "candidate_count": 2,
+        "address_shared": False,
+        "scope": "goals_supplied",
+    }
 
 
 def test_stopped_is_historical_not_a_delivery_target(tmp_path):
