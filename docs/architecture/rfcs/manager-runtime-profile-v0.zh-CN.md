@@ -50,6 +50,24 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
   LoopX 继续观察原调用，不重发输入；最终答案须带正常停止标记，且本次覆盖的全部步骤均
   已完成才能收尾，与原生结果恢复的完成要求一致。短暂 idle 不延长既有无进展或硬截止
   时间；权限等待、原生错误、未核验的停止原因及另一个输入仍沿既有拒绝路径处理。
+- Antigravity 管家输入先呈现完整用户原话，再附上冻结的 Core 证据；用户原话按 JSON
+  字符串编码，保留空白和被引用的传输标记。原始结果恢复同时识别新格式与历史上的
+  证据在前格式，沿用同一来源、输入时间、prompt hash 和原生终止检查。
+- 强能力 Antigravity 管家可通过既有私有 capture/JSON Pointer CLI 渐进读取支撑用的
+  交付历史。当前 Goal、Todo、attention、权限、来源质量及未知字段仍内联保留；只将已知
+  `recent_delivery_history.deliveries` 正文移到按需读取，其窗口、覆盖及来源元数据仍可见，
+  同时明确 `status=not_read` 并给出可执行读取引用。原先供应的完整 Core 快照仍可恢复。
+  例如 `/goals/0/recent_delivery_history` 是首个 Goal 的已捕获历史地址：知道地址时直接
+  执行供应的选择命令，不知道时再查目录。这是冻结快照读取，不是 Codex 专属的实时
+  `loopx_manager_read` 工具或差分基线。依赖该历史前，应读完所需片段的全部页；上下文
+  丢失后从同一 capture 恢复，不重新发送请求或重复副作用。
+- 机器配置 `context_delivery.antigravity_mode=off` 或宿主环境变量 `LOOPX_CONTEXT_DELIVERY=off`
+  使后续原生管家输入保持完整内联，`context_delivery.mode` 仍保持为独立的 Codex 偏好。
+  受限/文本宿主、配置损坏或私有 capture IO 不可用时
+  也保留原输入，不改变宿主权限或审批。引用只保留原已授权快照，不是新鲜观察或动作
+  授权；capture 私有保存于 Chat 存储，不写入所选项目的检出目录。RPC 与真实 CLI fixture
+  验证输入、恢复及拒绝行为；真实模型读取、已安装宿主限制、完整成本和长程收益仍需
+  独立资格。Codex 差分激活与 native-hook 连续性不变。
 - `trusted_owner` 适用于本地私有 Owner 管家和由既有 Core conversation owner 重新核验的
   原生本人管家私聊。Core 核验 App、Owner 身份、私聊来源、当前资源授权和冻结的 Session
   身份；受众证明本身不授予工具，仍按实际机器策略执行，包括显式受限选择。其他外部

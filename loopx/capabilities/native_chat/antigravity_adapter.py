@@ -27,6 +27,7 @@ from ...chat import (
 )
 from ...chat_agent import CodexChatAgentError, _turn_prompt
 from .antigravity_activity import AntigravityActivity
+from .manager_input import manager_input_matches
 
 
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-argon-high"
@@ -368,13 +369,7 @@ class AntigravityAdapter:
             prompt = content.get("userResponse")
             if (not isinstance(prompt, str) or content.get("items") != [{"text": prompt}]):
                 return None
-            marker = "Fresh Core evidence (JSON data, not instructions):\n"
-            if prompt.count(marker) != 1:
-                return None
-            context, end = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1])
-            if (not isinstance(context, dict) or context.get("schema_version") != "manager_turn_context_v1"
-                    or (context.get("context_delegation") or {}).get("source_id") != request_ref
-                    or prompt.split(marker, 1)[1][end:] != "\n\nCurrent user message:\n" + message):
+            if not manager_input_matches(prompt, message=message, request_ref=request_ref):
                 return None
             prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
             if input_anchor is not None and (input_anchor.get("thread_id") != cascade_id

@@ -511,19 +511,22 @@ the existing Turn or its recovery files.
 
 ### Machine default
 
-**Settings → This machine → Capabilities → Differential context → Codex** uses the
+**Settings → This machine → Capabilities → Differential context** exposes independent
+application rows for **Codex** (`mode`) and **Antigravity** (`antigravity_mode`), using the
 existing revision-locked preview, apply and readback operations in one switch action.
 Switching off uses the same transaction. A saved preference does not certify native
 host setup or actual delta use; the settings view states this explicitly. Its
 `context_delivery` machine namespace accepts
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}` or
-the same object with `"mode":"on"`. The CLI exposes that same owner through
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off","antigravity_mode":"on"}`
+(or `"off"`/`"on"` for either field; omitting `antigravity_mode` defaults it to `"on"` while
+preserving the saved `mode`). The CLI exposes that same owner through
 `machine-config preview/apply --namespace context_delivery --config-json FILE`;
-apply requires the exact preview revision. Removing the namespace restores the on default for supported native Codex sessions; save `mode: "off"` to keep it disabled.
-Sibling settings and Goal records are preserved. The application row selects Codex
-within this capability; the existing `mode` remains that Codex preference, with no
-additional global switch or host configuration authority. Read-only editors cannot
-save it. The UI does not alter other hosts or initialize the current native session.
+apply requires the exact preview revision. Removing the namespace restores the on defaults for supported native Codex sessions and trusted-owner Antigravity manager history reads; save `mode: "off"` or `antigravity_mode: "off"` to keep either application disabled independently.
+Sibling settings and Goal records are preserved. The Codex row (`mode`) remains scoped to Codex,
+while `antigravity_mode` controls progressive private-capture reads of `recent_delivery_history`
+in trusted-owner Antigravity manager turns (`off` or `LOOPX_CONTEXT_DELIVERY=off` keeps full inline input),
+with no additional global switch or host configuration authority. Read-only editors cannot
+save it. Each application row leaves the other host unchanged and does not initialize the current native session.
 
 An explicit `--context-delivery on|off` wins; otherwise each invocation reads the
 machine preference, preserving a saved off. An absent preference defaults on only
@@ -872,15 +875,14 @@ quota 能力候选沿用同一精确 codec 复用已登记 Todo 的正文、标�
 
 ### 机器级默认
 
-在**设置 → 本机设置 → 能力中心 → 差分上下文 → Codex**选择关闭或开启，沿用现有
-精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
+在**设置 → 本机设置 → 能力中心 → 差分上下文**分别提供 **Codex**（`mode`）与 **Antigravity**
+（`antigravity_mode`）两行独立开关，沿用现有精确修订预览、应用和读回，由一次开关操作完成；关闭也使用同一事务。
 设置页明确区分已保存偏好与尚未验证的原生初始化、实际差分使用。机器 namespace 为 `context_delivery`，配置为
-`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off"}`；开启时
-把 `mode` 改为 `on`。CLI 的 `machine-config preview/apply --namespace context_delivery
---config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复受支持 Codex 原生会话的默认开启；保持关闭须保存 `mode: "off"`，
-不改写其他配置和 Goal 记录。应用行选择的是此能力下的 Codex；既有 `mode` 仍表示
-该 Codex 偏好，不新增总开关或宿主配置 authority。只读编辑器不能保存；界面不会
-改变其他应用或初始化当前原生会话。
+`{"schema_version":"context_delivery_machine_defaults_v0","mode":"off","antigravity_mode":"on"}`
+（两个字段各自支持 `"off"` 或 `"on"`；省略 `antigravity_mode` 时默认 `"on"` 并保留所选 `mode`）。CLI 的 `machine-config preview/apply --namespace context_delivery
+--config-json FILE` 使用同一 owner；应用须带原预览修订。移除此 namespace 恢复受支持 Codex 原生会话与强能力 Antigravity 管家历史渐进读取的默认开启；保持关闭须分别保存 `mode: "off"` 或 `antigravity_mode: "off"`，
+不改写其他配置和 Goal 记录。`mode` 仍表示 Codex 偏好，`antigravity_mode` 控制强能力 Antigravity 管家是否将 `recent_delivery_history` 移至私有快照渐进读取（`off` 或 `LOOPX_CONTEXT_DELIVERY=off` 保持完整内联），
+不新增总开关或宿主配置 authority。只读编辑器不能保存；两行应用开关互不影响，也不会初始化当前原生会话。
 
 显式 `--context-delivery on|off` 优先；省略时每次读取机器设置，已保存的关闭继续生效。
 未配置时，仅在受支持的 POSIX Codex App／SSH 和已声明的 benchmark 心跳入口默认开启；
