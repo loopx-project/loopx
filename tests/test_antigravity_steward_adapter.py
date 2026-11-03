@@ -263,6 +263,39 @@ def test_process_discovery_decodes_utf8_before_verifying_the_local_endpoint(
     assert language_server["sent_count"] == 0
 
 
+def test_readiness_budget_includes_process_listing_but_execution_discovery_stays_fresh(monkeypatch):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(provider.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(provider.os, "getuid", lambda: 501, raising=False)
+
+    def listing(command, **kwargs):
+        calls.append(command[0])
+        duration = 2.8 if command[0] == "ps" else 1.4
+        clock[0] += min(duration, kwargs["timeout"])
+        if duration > kwargs["timeout"]:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return ("123 /Applications/Antigravity.app/language_server --csrf_token synthetic-token\n"
+                if command[0] == "ps" else "server 123 user TCP 127.0.0.1:12345 (LISTEN)\n")
+
+    def rpc(*args, **kwargs):
+        calls.append("rpc")
+        return {}
+
+    monkeypatch.setattr(provider.subprocess, "check_output", listing)
+    monkeypatch.setattr(provider, "_rpc_post", rpc)
+    assert provider.probe_antigravity_endpoint(env={})[0] is False
+    assert clock[0] == pytest.approx(4.0)
+    assert calls == ["ps", "lsof"]
+    # A readiness timeout is not a cached denial for the next real operation.
+    discovered = provider.discover_antigravity_language_server(env={})
+    assert discovered is not None
+    assert discovered["url"] == "http://127.0.0.1:12345"
+    assert calls == ["ps", "lsof", "ps", "lsof", "rpc"]
+
+
 def test_cancel_failure_cannot_replace_the_original_provider_error(tmp_path, language_server):
     from loopx.chat_agent import CodexChatAgentError
 
