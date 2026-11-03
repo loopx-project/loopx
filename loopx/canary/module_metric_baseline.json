@@ -14,11 +14,6 @@
       "any_count": 22,
       "dict_any_count": 0
     },
-    "loopx/capabilities/anti_entropy/oracles.py": {
-      "any_count": 3,
-      "dict_any_count": 0,
-      "lines": 2355
-    },
     "loopx/capabilities/catalog.py": {
       "any_count": 8,
       "dict_any_count": 0
@@ -51,12 +46,12 @@
     "loopx/chat_store.py": {
       "lines": 2066
     },
+    "loopx/collaboration_mcp.py": {
+      "lines": 2058
+    },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,
       "dict_any_count": 0
-    },
-    "loopx/collaboration_mcp.py": {
-      "lines": 2058
     },
     "loopx/control_plane/agents/agent_scope.py": {
       "any_count": 107,
@@ -97,12 +92,12 @@
       "any_count": 51,
       "dict_any_count": 0
     },
-    "loopx/pr_review.py": {
-      "any_count": 49,
-      "dict_any_count": 0
-    },
     "loopx/presentation/renderers/status_markdown.py": {
       "any_count": 47,
+      "dict_any_count": 0
+    },
+    "loopx/pr_review.py": {
+      "any_count": 49,
       "dict_any_count": 0
     },
     "loopx/quota.py": {
