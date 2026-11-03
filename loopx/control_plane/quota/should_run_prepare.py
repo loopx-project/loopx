@@ -616,6 +616,43 @@ def _receipt_delivery_continuity(
     return anchor, todo
 
 
+def _prepare_gate_selection_candidates(
+    *, agent_identity: dict[str, Any] | None,
+    source_items: list[dict[str, Any]], planning_items: list[dict[str, Any]],
+    available_capabilities: Any, requested_todo_id: str | None,
+    receipt_bound_todo_id: str | None,
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
+    """Transport exact candidates through the existing selection/gate owners."""
+    # Resolve the exact choice before selecting a gate-independent route. The
+    # ranked fallback is advice, not an additional permission boundary.
+    requested_action_candidate = (
+        build_explicit_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=planning_items,
+            available_capabilities=available_capabilities,
+            todo_id=requested_todo_id,
+            selection_binding="pending_action_selection",
+        )
+        if requested_todo_id
+        else None
+    )
+    # Recovery keeps the committed work identity. Requalify that exact work
+    # against the current gate instead of borrowing an unrelated default's
+    # independence after the explicit selection has become a receipt.
+    fallback_todo_id = receipt_bound_todo_id or requested_todo_id
+    fallback_candidate = (
+        build_receipt_bound_advancement_next_action(
+            agent_identity=agent_identity,
+            agent_todo_items=source_items,
+            available_capabilities=available_capabilities,
+            receipt_bound_todo_id=receipt_bound_todo_id,
+        ) if receipt_bound_todo_id else requested_action_candidate
+    )
+    source_candidate = next((item for item in source_items
+        if item.get("todo_id") == fallback_todo_id), None) if fallback_candidate else None
+    return requested_action_candidate, fallback_todo_id, source_candidate
+
+
 def _prepare_quota_should_run_item(
     status_payload: dict[str, Any],
     *,
@@ -817,18 +854,14 @@ def _prepare_quota_should_run_item(
     if task_orchestration_contract_is_actionable(task_orchestration_contract):
         capability_monitor_contract = capability_monitor_fallback = None
     work_lane_contract = capability_monitor_contract or work_lane_contract
-    # Resolve the exact choice before selecting a gate-independent route. The
-    # ranked fallback is advice, not an additional permission boundary.
-    requested_action_candidate = (
-        build_explicit_advancement_next_action(
-            agent_identity=agent_identity,
-            agent_todo_items=agent_todo_planning_source_items,
+    requested_action_candidate, fallback_todo_id, fallback_source_candidate = (
+        _prepare_gate_selection_candidates(
+            agent_identity=agent_identity, source_items=agent_todo_source_items,
+            planning_items=agent_todo_planning_source_items,
             available_capabilities=effective_available_capabilities,
-            todo_id=requested_action_todo_id,
-            selection_binding="pending_action_selection",
+            requested_todo_id=requested_action_todo_id,
+            receipt_bound_todo_id=receipt_bound_todo_id,
         )
-        if requested_action_todo_id
-        else None
     )
     scoped_user_gate_fallback = _scoped_user_gate_fallback(
         user_todo_summary,
@@ -836,11 +869,8 @@ def _prepare_quota_should_run_item(
         capability_gate=capability_gate,
         allow_unrelated_gate=bool(quota.get("safe_bypass_allowed")),
         monitor_debt_backoff_active=bool(monitor_debt_arbitration.get("active")),
-        requested_todo_id=requested_action_todo_id,
-        requested_candidate=next((
-            item for item in agent_todo_planning_source_items
-            if item.get("todo_id") == requested_action_todo_id
-        ), None) if requested_action_candidate is not None else None,
+        requested_todo_id=fallback_todo_id,
+        requested_candidate=fallback_source_candidate,
     )
     work_lane_contract = (
         scoped_user_gate_due_monitor_contract(
