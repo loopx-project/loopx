@@ -917,12 +917,6 @@ def _merge_managed_hooks_json(
     cli_bin: str,
     uninstall: bool,
     execute: bool,
-    goal_id: str | None = None,
-    agent_id: str | None = None,
-    conversation_id: str | None = None,
-    registry: str | None = None,
-    runtime_root: str | None = None,
-    resolve_local_executable: bool = True,
 ) -> str:
     """Add or remove the managed ``loopx`` Stop recovery hook in Antigravity ``hooks.json``."""
     marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
@@ -976,15 +970,7 @@ def _merge_managed_hooks_json(
 
     if existing is not None and not loopx_owned:
         return "skipped_user_owned_hooks_entry"
-    entry = build_antigravity_hooks_template(
-        cli_bin=cli_bin,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        conversation_id=conversation_id,
-        registry=registry,
-        runtime_root=runtime_root,
-        resolve_local_executable=resolve_local_executable,
-    )[MANAGED_MCP_KEY]
+    entry = build_antigravity_hooks_template(cli_bin=cli_bin)[MANAGED_MCP_KEY]
     if not execute:
         return "unchanged" if existing == entry and not legacy_owned else "would_write"
     if existing == entry and not legacy_owned:

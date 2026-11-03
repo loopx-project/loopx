@@ -303,18 +303,12 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
     sidecar_json = mutation["sidecar_template"]["sidecar_json"]
     assert sidecar_json["builtin"] == "schedule"
     assert sidecar_json["restart_policy"] == "always"
-    assert sidecar_json["args"][1:8] == [
-        "python3",
-        "-E",
-        "-P",
-        "-m",
-        "loopx.agy_goal_mode.host_runtime",
-        "sidecar-tick",
-        "--cli-bin",
+    assert sidecar_json["args"][1:5] == [
+        "agentapi",
+        "new-conversation",
+        "--model=pro",
+        "--",
     ]
-    assert "new-conversation" not in sidecar_json["args"]
-    assert "bind-session" in mutation["bind_session_command"]
-    assert "--conversation-id auto" not in mutation["bind_session_command"]
     assert (
         "antigravity_app"
         in mutation["sidecar_template"]["sidecar"]["loopx-heartbeat"]["gate_command"]
@@ -563,7 +557,6 @@ def test_antigravity_dual_skills_mcp_hooks_workflow_skills_and_doctor(
 
 def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify Antigravity App (`--antigravity_app`) runs real CLI `quota should-run`,
     `quota scheduler-ack-current`, and `quota scheduler-fail-current` with independent
@@ -577,12 +570,10 @@ def test_antigravity_app_real_cli_ack_and_stateful_backoff_identity(
         load_scheduler_state,
     )
     from loopx.control_plane.testing.canary_harness import (
-        REPO_ROOT,
         run_json_cli,
         run_json_cli_result,
     )
 
-    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
     goal_id = "needs-operator"
     registry_path, runtime_root, project = write_cli_fixture(
         tmp_path / "fixture",

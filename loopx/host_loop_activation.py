@@ -1324,11 +1324,6 @@ def build_host_loop_activation_packet(
             cli_bin,
             goal_id=goal_id,
             agent_id=str(selected_agent_id) if selected_agent_id else None,
-            conversation_id=(
-                str(thread_binding.get("thread_id"))
-                if isinstance(thread_binding, dict) and thread_binding.get("thread_id")
-                else None
-            ),
             runtime_root=runtime_root,
         )
     elif canonical == "kiro-cli":

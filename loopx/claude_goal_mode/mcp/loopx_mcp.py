@@ -24,22 +24,7 @@ CONFIG = GoalModeMCPConfig(
     legacy_host_surface="claude_code",
     setup_hint="run /loopx <task> first",
 )
-def _resolve_mcp_context() -> dict | None:
-    cwd = Path.cwd()
-    ctx = goal_context(cwd)
-    if ctx is not None:
-        return ctx
-    try:
-        if cwd.resolve() == Path("/"):
-            from loopx.agy_goal_mode.host_runtime import resolve_bound_mcp_goal_context
-
-            return resolve_bound_mcp_goal_context()
-    except Exception:
-        return None
-    return None
-
-
-mcp, control = create_fastmcp_server(CONFIG, _resolve_mcp_context)
+mcp, control = create_fastmcp_server(CONFIG, lambda: goal_context(Path.cwd()))
 
 # Compatibility names used by existing smoke tests and local integrations.
 should_run = control.should_run
