@@ -2129,16 +2129,22 @@ when Markdown is absent, and carries an authority receipt in the response.
 Provider missing, corruption, protocol drift, or Todo read-model semantic drift
 all fail closed; no post-cutover Markdown fallback is permitted.
 
-Durable completion continuation read-back
-(`durable_completion.py`: `read_persisted_todo_record` /
-`project_durable_completion_outcome`) is a provider read point: it re-reads
-the persisted lifecycle record (Markdown first, event projection fallback)
-after the completion write and before settlement. The persisted record
-carries an explicit `completion_continuation`; the seam fails closed when a
-done record omits it or when it contradicts the recorded successor or
-no-follow-up fields, so a provider that holds completion state must store
-that field byte for byte. Once a remote provider becomes canonical, this seam
-flips to provider-first without changing the typed outcome contract below.
+Durable completion continuation read-back uses `read_durable_completion_evidence`
+in `loopx/control_plane/todos/durable_completion.py` as the provider read point
+after the completion write and before settlement. With `runtime_root` and
+`goal_id`, the adapter reads the persisted lifecycle record through the
+TypeScript `todo.read` transaction of kind `completion_evidence`:
+`readCompletionEvidence` in `loopx/control_plane/todos/read_transaction.ts`
+first collects the canonical provider snapshot, then selects the Todo and
+passes its record and the existing Todo ids to `projectCompletionEvidence` in
+`loopx/control_plane/todos/read_projection.ts`. This canonical path has no
+Markdown or event-projection fallback; the adapter's explicit legacy path
+reads Markdown only. The persisted record carries an explicit
+`completion_continuation`; the seam fails closed when a done record omits it
+or when it contradicts the recorded successor or no-follow-up fields, so a
+provider that holds completion state must store that field byte for byte.
+Once a remote provider becomes canonical, this seam flips to provider-first
+without changing the typed outcome contract below.
 
 #### Stage 2 slice status (2026-08-23)
 

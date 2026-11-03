@@ -142,6 +142,12 @@ def local_authority_is_promoted(*, runtime_root: Path, goal_id: str) -> bool:
     return True
 
 
+def claim_worktree_candidate() -> Path | None:
+    """Locate the caller; the TS lease owner still verifies physical isolation."""
+    worktree = _git_worktree_root(Path.cwd())
+    return worktree if worktree is not None and (worktree / ".git").is_file() else None
+
+
 def claim_canonical_todo_if_promoted(
     *,
     registry_path: Path,
@@ -164,9 +170,7 @@ def claim_canonical_todo_if_promoted(
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     # This is only a candidate location. The lease owner observes physical
     # isolation and the current canonical scopes before granting execution.
-    worktree = _git_worktree_root(Path.cwd()) if manage_execution else None
-    if worktree is not None and not (worktree / ".git").is_file():
-        worktree = None
+    worktree = claim_worktree_candidate() if manage_execution else None
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {
@@ -285,63 +289,8 @@ def read_canonical_todos_if_promoted(
             projection_readback=projection_readback,
             timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
         )
-    if not isinstance(result, Mapping):
-        raise LocalCoordinationAuthorityUnavailable(
-            "local coordination authority returned an invalid Todo list",
-            code="local_authority_todo_list_invalid_result",
-            payload={"source_authority": "file_v0"},
-        )
-    payload = dict(result)
-    if payload.get("reason_code") == "canonical_authority_required":
-        raise CanonicalAuthorityRequired(
-            goal_id=goal_id, operation="todo_read", payload=payload,
-        )
-    todos = payload.get("todos")
-    todo_read_model = payload.get("todo_read_model")
-    if (
-        payload.get("status") != "loaded"
-        or payload.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
-        or payload.get("decision_read_from_provider") is not True
-        or payload.get("legacy_fallback_used") is not False
-        or not isinstance(todos, list)
-        or any(not isinstance(item, Mapping) for item in todos)
-        or not isinstance(todo_read_model, Mapping)
-        or todo_read_model.get("schema_version")
-        not in {
-            TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
-            TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
-        }
-        or todo_read_model.get("todo_count") != len(todos)
-    ):
-        raise LocalCoordinationAuthorityUnavailable(
-            str(payload.get("reason") or "canonical Todo authority is unavailable"),
-            code=str(
-                payload.get("reason_code") or "local_authority_todo_list_unavailable"
-            ),
-            payload=payload,
-        )
-    payload["todos"] = [dict(item) for item in todos]
-    if include_leases and (
-        not isinstance(payload.get("leases"), list)
-        or any(not isinstance(item, Mapping) for item in payload["leases"])
-        or not isinstance(payload.get("provider_revision"), str)
-    ):
-        raise LocalCoordinationAuthorityUnavailable(
-            "canonical Todo/lease snapshot is incomplete", code="local_authority_snapshot_incomplete",
-            payload=payload,
-        )
-    if projection_readback is not None:
-        confirmation = payload.get("projection_readback")
-        if (not isinstance(confirmation, Mapping)
-            or confirmation.get("provider_revision") != projection_readback["provider_revision"]
-            or confirmation.get("observed_provider_revision") != payload.get("provider_revision")
-            or confirmation.get("status") not in {"pending", "delivered", "current"}
-            or confirmation.get("next_action") not in {"retry", "finish"}
-            or (confirmation.get("next_action") == "retry" and confirmation.get("status") != "pending")):
-            raise LocalCoordinationAuthorityUnavailable(
-                "canonical projection confirmation is missing or invalid",
-                code="local_authority_projection_confirmation_invalid", payload=payload,
-            )
+    payload = validate_canonical_todo_read(result, goal_id=goal_id, include_leases=include_leases,
+        projection_readback=projection_readback)
     if projected is not None and "fields" in projected:
         from ..todos.goal_todo_projection import restore_todo_field_evaluations
         payload["_todo_fields"] = restore_todo_field_evaluations(projected)
@@ -402,6 +351,71 @@ class CanonicalTodoSnapshot:
         # Summary enrichment mutates nested records. Never share those mutations
         # with contract checks, another role, or the retained snapshot itself.
         return deepcopy(result)
+
+
+def validate_canonical_todo_read(
+    result: Any, *, goal_id: str, include_leases: bool = False,
+    projection_readback: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Decode a native source result without adding another provider read."""
+    if not isinstance(result, Mapping):
+        raise LocalCoordinationAuthorityUnavailable(
+            "local coordination authority returned an invalid Todo list",
+            code="local_authority_todo_list_invalid_result",
+            payload={"source_authority": "file_v0"},
+        )
+    payload = dict(result)
+    if payload.get("reason_code") == "canonical_authority_required":
+        raise CanonicalAuthorityRequired(
+            goal_id=goal_id, operation="todo_read", payload=payload,
+        )
+    todos = payload.get("todos")
+    todo_read_model = payload.get("todo_read_model")
+    if (
+        payload.get("status") != "loaded"
+        or payload.get("source_authority") not in LOCAL_AUTHORITY_SOURCES
+        or payload.get("decision_read_from_provider") is not True
+        or payload.get("legacy_fallback_used") is not False
+        or not isinstance(todos, list)
+        or any(not isinstance(item, Mapping) for item in todos)
+        or not isinstance(todo_read_model, Mapping)
+        or todo_read_model.get("schema_version")
+        not in {
+            TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
+            TODO_DOMAIN_READ_RECORD_SCHEMA_VERSION,
+        }
+        or todo_read_model.get("todo_count") != len(todos)
+    ):
+        raise LocalCoordinationAuthorityUnavailable(
+            str(payload.get("reason") or "canonical Todo authority is unavailable"),
+            code=str(
+                payload.get("reason_code") or "local_authority_todo_list_unavailable"
+            ),
+            payload=payload,
+        )
+    payload["todos"] = [dict(item) for item in todos]
+    if include_leases and (
+        not isinstance(payload.get("leases"), list)
+        or any(not isinstance(item, Mapping) for item in payload["leases"])
+        or not isinstance(payload.get("provider_revision"), str)
+    ):
+        raise LocalCoordinationAuthorityUnavailable(
+            "canonical Todo/lease snapshot is incomplete", code="local_authority_snapshot_incomplete",
+            payload=payload,
+        )
+    if projection_readback is not None:
+        confirmation = payload.get("projection_readback")
+        if (not isinstance(confirmation, Mapping)
+            or confirmation.get("provider_revision") != projection_readback["provider_revision"]
+            or confirmation.get("observed_provider_revision") != payload.get("provider_revision")
+            or confirmation.get("status") not in {"pending", "delivered", "current"}
+            or confirmation.get("next_action") not in {"retry", "finish"}
+            or (confirmation.get("next_action") == "retry" and confirmation.get("status") != "pending")):
+            raise LocalCoordinationAuthorityUnavailable(
+                "canonical projection confirmation is missing or invalid",
+                code="local_authority_projection_confirmation_invalid", payload=payload,
+            )
+    return payload
 
 
 def read_canonical_todo_fields_if_promoted(

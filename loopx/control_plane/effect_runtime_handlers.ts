@@ -269,7 +269,6 @@ export function createEffectRuntimeHandlers(
     ["turn_journal.write", lazyHandler(() => import("./turn_driver/turn_journal_effects.ts"), ({commitTurnJournal}) => commitTurnJournal)],
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
-    ["todo.completion_fence.evaluate", lazyHandler(() => import("./todos/completion_fence.ts"), ({evaluateTodoCompletionFence}) => evaluateTodoCompletionFence)],
     ["todo.priority.plan", lazyHandler(() => import("./todos/priority.ts"), ({evaluateTodoPriority}) => evaluateTodoPriority)],
     ["todo.read", lazyHandler(() => import("./todos/read_transport.ts"), ({readTodoRuntime}) => readTodoRuntime)],
     ["capabilities.periodic_report.progress.select", lazyHandler(() => import("./capabilities/periodic_report_progress.ts"), ({selectPeriodicReportProgress}) => selectPeriodicReportProgress)],
