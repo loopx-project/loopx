@@ -1,6 +1,7 @@
 """An explicitly selected runtime must execute its own generated control loop."""
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import subprocess
@@ -146,3 +147,91 @@ def test_generated_commands_stay_on_candidate_through_once_only_settlement(
     settled = run(guard_args)
     assert settled["effective_action"] == "heartbeat_settled_skip"
     assert not marker.exists(), "A generated command escaped to the global runtime"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Exercises a POSIX console alias and poisoned PATH")
+@pytest.mark.parametrize("program", ["module", "candidate's cli"])
+@pytest.mark.parametrize("output_limit", [8192, 64000])
+@pytest.mark.parametrize("selection", ["raw", "selected", "index", "rejected"])
+def test_native_reader_continuation_and_recovery_execute_the_same_runtime(
+    tmp_path, monkeypatch, program, output_limit, selection,
+):
+    from loopx.cli_commands.quota_capture import native_context_capture_view, _native_context_read_bytes
+    from loopx.control_plane.turn_driver import codex_context as context
+    from test_codex_context_lifecycle import project, setup
+
+    setup(tmp_path, monkeypatch)
+    payload = {"ok": True, "goal_id": "fixture", "requirements": "Keep the complete 原始条件。\n" * 8000,
+               "items": [{"source": "original"} for _ in range(1000)]}
+    _, wire = project(tmp_path, payload=payload)
+    view = native_context_capture_view(wire, Path(wire["recovery"]["path"]).parent,
+                                      context_directory=str(tmp_path))
+    capture = Path(view["recovery"]["path"])
+    original, state = capture.read_bytes(), (tmp_path / "session.json").read_bytes()
+    bin_dir = tmp_path / "candidate bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "wrong-runtime"
+    poison = bin_dir / "loopx"
+    poison.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                      f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
+    poison.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    prefix = [sys.executable, "-m", "loopx.entrypoint"]
+    if program != "module":
+        alias = bin_dir / program
+        alias.symlink_to(Path(sys.executable).parent / "loopx")
+        prefix = [str(alias), "--cli-bin", str(alias)]
+    instructions = context.codex_context_recovery_instructions(str(tmp_path), goal_id="fixture",
+        agent_id="agent", cli_argv=prefix)
+    command = instructions.split("Read missing necessary facts from this same capture with: ", 1)[1]
+    words = shlex.split(command.split(" --select '<pointer>'.", 1)[0])
+    for option in ("--page-bytes", "--max-page-output-bytes"):
+        words[words.index(option) + 1] = str(output_limit)
+    if selection == "selected":
+        words += ["--select", "/requirements"]
+    elif selection == "index":
+        words += ["--select", "/items", "--list"]
+    elif selection == "rejected":
+        words += ["--select", "/missing"]
+
+    content, pages, page_bytes = b"", 0, 0
+    while True:
+        assert words[:len(prefix)] == prefix
+        # Execute generated commands unchanged; do not strip or repair their launcher.
+        result = subprocess.run(words, cwd=tmp_path, capture_output=True, timeout=30)
+        page = json.loads(result.stdout)
+        assert len(result.stdout) <= output_limit
+        assert not marker.exists(), "The reader escaped to the global installation"
+        if not page["ok"]:
+            assert selection == "rejected" and pages == 0 and result.returncode == 1
+            assert "content" not in page
+            words = shlex.split(page["recovery_command"])
+            continue
+        assert result.returncode == 0 and page["offset"] == len(content), page
+        content += page["content"].encode()
+        pages += 1
+        page_bytes += len(result.stdout)
+        if page["eof"]:
+            break
+        assert page["next_offset"] == len(content)
+        words = shlex.split(page["next_command"])
+
+    if selection == "raw":
+        assert content == original and pages > 1
+        # Compare the real public printer against the production full/delta cost oracle.
+        from loopx.command_invocation import loopx_cli_route
+        with loopx_cli_route(None if program == "module" else prefix[0]):
+            reference_bytes = len((json.dumps(view["recovery"], ensure_ascii=False,
+                separators=(",", ":")) + "\n").encode())
+            assert _native_context_read_bytes(view["recovery"], original,
+                page_bytes=output_limit, output_bytes=output_limit) == reference_bytes + page_bytes
+    else:
+        [selected] = json.loads(content)["selections"]
+        if selection == "selected":
+            assert selected == {"pointer": "/requirements", "value": payload["requirements"]} and pages > 1
+        elif selection == "index":
+            assert [field["pointer"] for field in selected["fields"]] == [f"/items/{i}" for i in range(1000)]
+            assert pages > 1
+        else:
+            assert {field["pointer"] for field in selected["fields"]} == {"/ok", "/goal_id", "/requirements", "/items"}
+    assert capture.read_bytes() == original and (tmp_path / "session.json").read_bytes() == state

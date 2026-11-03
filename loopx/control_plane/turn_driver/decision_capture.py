@@ -219,14 +219,16 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  list_fields: bool = False,
                                  list_depth: int | None = None,
                                  initial_read: bool = False,
-                                 reference_file: Path | None = None) -> str:
+                                 reference_file: Path | None = None,
+                                 reader_argv: list[str] | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
         page_bytes = NATIVE_CONTEXT_PAGE_BYTES
         if max_page_output_bytes is None:
             max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
-    return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
+    return shlex.join([*(reader_argv if reader_argv is not None else loopx_cli_argv()),
+        "--format", "json", "quota", "context-read",
         *(["--reference-file", str(reference_file)] if reference_file is not None
           else ["--capture-file", str(path), "--capture-sha256", digest]),
         "--offset", str(offset), "--page-bytes", str(page_bytes),

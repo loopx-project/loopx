@@ -46,7 +46,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                   list_fields: bool = False,
                   list_depth: int | None = None,
                   initial_read: bool = False,
-                  reference_file: Path | None = None) -> dict[str, Any]:
+                  reference_file: Path | None = None,
+                  reader_argv: list[str] | None = None) -> dict[str, Any]:
     end = min(offset + size, len(raw))
     while end < len(raw) and raw[end] & 0xC0 == 0x80:
         end -= 1
@@ -94,7 +95,8 @@ def _capture_page(path: Path, raw: bytes, digest: str, *, offset: int, size: int
                 selection_sha256=selection_sha256 if reference_file is None else None,
                 list_fields=list_fields if reference_file is None else False,
                 list_depth=list_depth if reference_file is None else None,
-                initial_read=initial_read if reference_file is None else False, reference_file=reference_file)
+                initial_read=initial_read if reference_file is None else False, reference_file=reference_file,
+                reader_argv=reader_argv)
         return result
 
     def fits(result: dict[str, Any]) -> bool:
@@ -181,7 +183,8 @@ def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str,
 
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
-                         next_page_output_bytes: int | None = None) -> dict[str, Any]:
+                         next_page_output_bytes: int | None = None,
+                         reader_argv: list[str] | None = None) -> dict[str, Any]:
     """Bounded local IO over immutable JSON, not a new context/authority owner.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
@@ -286,7 +289,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                 parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
                 command = context_capture_read_command(path, digest, select=[parent], list_fields=True,
                     page_bytes=next_page_bytes or size,
-                    max_page_output_bytes=next_page_output_bytes or output_limit)
+                    max_page_output_bytes=next_page_output_bytes or output_limit,
+                    reader_argv=reader_argv)
                 return {"ok": False, "schema_version": "context_capture_page_v1",
                     "error_kind": "request_rejected", "diagnostic_code": rejection["code"],
                     "reason": rejection["message"], "recovery_command": command,
@@ -324,7 +328,8 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
             next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
-            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file)
+            list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file,
+            reader_argv=reader_argv)
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -484,6 +489,7 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
     Stop once this candidate cannot win. This measures one complete wire read,
     not model tokens, retention or the caller's later selective/recovery reads.
     """
+    from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
 
     if len(raw) > MAX_REQUEST_BYTES:
@@ -493,9 +499,11 @@ def _native_context_read_bytes(reference: dict[str, Any], raw: bytes, *,
     path = Path(reference["path"]).expanduser().absolute()
     path = path.parent.resolve(strict=True) / path.name
     total, offset = len(_native_output_bytes(reference)), 0
+    reader_argv = current_loopx_cli_argv()
     while True:
         page = _capture_page(path, raw, reference["sha256"],
-            offset=offset, size=page_bytes, output_limit=output_bytes, instruction=False)
+            offset=offset, size=page_bytes, output_limit=output_bytes, instruction=False,
+            reader_argv=reader_argv)
         total += len(_native_output_bytes(page))
         if page["eof"] or (stop_after is not None and total > stop_after):
             return total
@@ -1115,9 +1123,11 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
         return 0 if payload["ok"] else 1
     if args.quota_command == "context-read":
+        from ..command_invocation import current_loopx_cli_argv
+
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.
-        payload = read_context_capture(args)
+        payload = read_context_capture(args, reader_argv=current_loopx_cli_argv())
         print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
         return 0 if payload["ok"] else 1
     return None

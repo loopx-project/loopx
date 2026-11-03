@@ -10,6 +10,7 @@ import shlex
 import pytest
 
 from loopx.cli import build_parser
+from loopx.command_invocation import current_loopx_cli_argv
 from loopx.cli_commands.quota_capture import native_context_capture_view, read_context_capture
 from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
 from loopx.control_plane.quota.turn_envelope import prepare_context_delivery, restore_context_delivery
@@ -27,14 +28,21 @@ def _payload(repeats=24):
     }
 
 
+def _reader_args(command):
+    words, prefix = shlex.split(command), current_loopx_cli_argv()
+    if words[:len(prefix)] == prefix:
+        return build_parser().parse_args(words[len(prefix):])
+    assert words[0] == "loopx"  # existing in-process reference constructors
+    return build_parser().parse_args(words[1:])
+
+
 def _pages(reference):
     """Follow the actual advertised CLI reader, including its page budgets."""
-    parser = build_parser()
     command = reference["command"]
     pages = []
     while True:
-        args = parser.parse_args(shlex.split(command)[1:])
-        page = read_context_capture(args)
+        args = _reader_args(command)
+        page = read_context_capture(args, reader_argv=current_loopx_cli_argv())
         assert page["ok"], page
         pages.append(page)
         if page["eof"]:
@@ -296,7 +304,7 @@ def test_native_cost_matches_public_pages_through_a_parent_alias(tmp_path):
     assert len(pages) > 1 and "read_instruction" in pages[0]
     # The first command preserves the alias, but real continuation commands use
     # the longer physical parent. Cost all of them with the public reader.
-    continuation = build_parser().parse_args(shlex.split(pages[0]["next_command"])[1:])
+    continuation = _reader_args(pages[0]["next_command"])
     assert Path(continuation.capture_file) == capture
     assert b"".join(page["content"].encode() for page in pages) == raw
     assert _native_context_read_bytes(
