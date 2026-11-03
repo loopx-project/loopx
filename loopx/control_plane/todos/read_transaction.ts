@@ -12,6 +12,9 @@ import {compactTodoReadSummary, compactThinTodoRead, compactTodoQueueSummary, to
 import {projectTodoContextPage} from "./context_projection.ts";
 import {sealProjectionEnvelope, PROJECTION_ENVELOPE_SEAL_REQUEST} from "../projection_envelope.ts";
 
+const includesArchivedRows = (query: JsonObject): boolean =>
+  query.read_scope === "completed_history" || query.include_archived === true;
+
 export async function readCanonicalTodoProjection(input: JsonObject): Promise<JsonObject> {
   const canonical = await collectCanonicalTodoSource(requireJsonObject(input.source, "canonical Todo read source"));
   if (canonical.status !== "loaded") return {schema_version: TODO_READ_RESULT, canonical};
@@ -19,8 +22,9 @@ export async function readCanonicalTodoProjection(input: JsonObject): Promise<Js
   const guards = canonical.goal_acceptance_work_guards ?? {};
 
   const query = requireJsonObject(input.query ?? {}, "Todo query");
-  const retained = query.read_scope === "completed_history" || query.include_archived === true;
-  const projected = await projectCanonicalTodoFields({...input, todos, retained,
+  const includeArchived = includesArchivedRows(query);
+  const retained = query.read_scope === "completed_history";
+  const projected = await projectCanonicalTodoFields({...input, todos, retained, include_archived: includeArchived,
     goal_acceptance_contract: canonical.goal_acceptance_contract ?? null,
     goal_acceptance_work_guards: guards});
   if (input.query == null || projected.rejection) return {...projected, canonical};
@@ -67,6 +71,7 @@ export async function readHistoricalTodoProjection(input: JsonObject): Promise<J
 
 async function todoListPayload(input: JsonObject, original: JsonObject[], fields: JsonObject, canonical: JsonObject): Promise<JsonObject> {
   const query = requireJsonObject(input.query, "Todo list query");
+  const includeArchived = includesArchivedRows(query);
   const fullText = query.full_text === undefined ? false : requireBoolean(query.full_text, "full_text");
   const summary = query.summary === undefined ? false : requireBoolean(query.summary, "Todo summary view");
   if (fullText && (query.thin === true || query.json_references === true || summary))
@@ -120,7 +125,6 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     item.text = String(matching[0]!.text ?? "");
   }
   const matchedCount = todos.length;
-  const includeArchived = query.read_scope === "completed_history" || query.include_archived === true;
   const hot = !fullText && !includeArchived && query.agent_id && query.limit == null &&
     query.role == null && query.status == null && query.todo_id == null;
   if (hot && !summary) {

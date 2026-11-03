@@ -202,12 +202,13 @@ export async function projectCanonicalTodoFields(input: JsonObject): Promise<Jso
   const checksConfigured = configuredGoalChecks(acceptance) !== null;
   const lineage = Array.isArray(input.lineage) ? input.lineage.map(value => requireJsonObject(value, "Todo lineage")) : all;
   const lineageFacts = input.lineage_facts ?? lineage.map(successionFacts);
+  const includeArchived = input.include_archived === true || input.retained === true;
   const query = input.kind === "query" && input.selection == null ? object(input.query) : {};
   const detailId = query.agent_id == null && query.limit == null ? query.todo_id : null;
   const fields: JsonObject = {}, evaluations: JsonObject = {};
   for (const role of ["user", "agent"]) {
     const section = role === "agent" ? "Agent Todo" : "User Todo / Owner Review Reading Queue";
-    const items = all.filter(row => (row.role === "user" ? "user" : "agent") === role && (input.retained === true || !archived.has(row.todo_id)))
+    const items = all.filter(row => (row.role === "user" ? "user" : "agent") === role && (includeArchived || !archived.has(row.todo_id)))
       .map(row => structureCanonicalTodo({...row,
         ...(input.retained !== true && checksConfigured && guards[text(row.todo_id)] ? {goal_acceptance_guard: guards[text(row.todo_id)]} : {})}, role, section,
         input.retained === true ? null : 500, input.retained !== true));
