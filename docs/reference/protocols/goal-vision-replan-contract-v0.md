@@ -917,14 +917,57 @@ receipts retain their checkpoint semantics:
 }
 ```
 
-CLI in-flight settlement omits the material-closeout Vision authoring schema.
-Use the projected continuation command and its original boundary/identity flags;
-this does not waive validation, writeback or debit rules. Material CLI closeout
-and MCP `complete_task` retain their evidence-linked Vision authoring contract.
+Ordinary CLI Todo settlement includes the existing Vision authoring schema even
+when its default boundary is in-flight. The durable-writeback step also exposes
+`semantic_closeout_command_template`: the same admitted Goal, Todo and Turn,
+with `--delivery-boundary semantic_closeout --agent-vision-json <file>` selected.
+It is an alternative for that step, not another plan, claim, debit or admission.
+Material CLI closeout and MCP `complete_task` retain their existing evidence gates.
 
-CLI 进行中结算不附带实质收尾的 Vision 编写结构。沿用投影命令及原边界、身份
-参数，仍须验证、写回与原 debit；实质 CLI 收尾和 MCP `complete_task` 保留
-证据关联的 Vision 编写契约。
+Choose `command_template` for ordinary in-flight progress without new decision
+evidence; use `semantic_closeout_command_template` for new evidence from this
+admitted work, a route change or Todo completion. Bind the evaluated artifact/input
+and actual decision in fresh Vision/path_delta, including `continue`/`no_change`
+when retaining the route. Keep the original Goal/Todo/Turn, follow the remaining
+writeback/spend steps and yield for freshly guarded Host continuation; an unfinished
+Todo stays open. Prior-feedback readback, bookkeeping and deterministic rechecks
+without new information are context, not progress: advance the task first.
+Unchanged polls alone need no checkpoint. This is Agent guidance, not automatic
+tool-text classification, a Stride trigger or proof of adoption/benefit.
+
+An open Todo with controller-declared completion validation can use this
+semantic checkpoint for `outcome_progress` with a fresh, open Vision and an
+evidence-linked `continue` or `no_change` path. The shared settlement owner
+qualifies the admitted writeback and its exact receipted spend through the same
+rule. This closes only the original Turn: the Todo remains open and its final
+completion validator remains pending. Primary-outcome, closed-Vision and
+terminal declarations retain that validator gate.
+
+For explicitly continuing/optimization objectives, candidate usability alone is not completion:
+before stop/no_followup, weigh acceptance gaps, plausible headroom and feasible next work's
+full marginal cost against accepted stops in an evidence-linked path_delta.
+Continue/replan useful authorized work; preserve Stop, budget/permission limits
+and genuine waits. Neither submission nor unused budget alone establishes completion
+or requires invented work, pivots or successors.
+
+普通 CLI Todo 的默认 in-flight 结算也提供 Vision 编写结构。无新决策证据的普通
+推进选 `command_template`；本次准入工作产生或取得新证据、改变路线或完成 Todo，
+选 `semantic_closeout_command_template`，以 fresh Vision/path_delta 关联评估产物、
+输入版本和实际决策，保留路线也可用 `continue` / `no_change`。沿用原 Goal、Todo、
+Turn，按原计划继续写回和扣额，再由宿主以新 guard 接续；未完成 Todo 保持 open，
+不另建 plan、认领、扣额或准入。旧反馈读回、记账、无新信息的确定性重验只是上下文，
+应先用于推进任务；未变化轮询不要求新 checkpoint。它是 Agent 指导，不自动分类
+工具文本、不触发 Stride，也不证明模型采用或收益。
+
+持续优化目标不能仅因候选可用就完成：停止前在 path_delta 中用证据对照剩余验收、
+改进空间、可行后续工作的完整边际成本和原停止条件；继续或重规划有用且获授权的工作，
+保留 Stop、预算/权限限制与真实等待。提交或剩余额度均不证明完成，也不要求制造工作、
+换路或后继 Todo。
+
+声明完成验证器的开放 Todo，可以用 fresh、open 的 Vision 和有证据关联的
+`continue` / `no_change` 路径记录 `outcome_progress`；准入写回与精确回执的扣额
+复用同一 TS 资格规则。它只结算原 Turn，不完成 Todo，也不满足最终完成验证器。
+primary outcome、已闭合 Vision 与终态声明仍须通过原完成验证门。
 
 One explicit exception exists for in-flight delivery. When quota admits an
 open advancement Todo for normal delivery, its settlement guidance may add the
@@ -954,7 +997,7 @@ decision merely because the scheduler woke up. Agents must start from
 projected boundary and identity flags; reconstructing a generic
 `semantic_closeout` command discards that continuity contract.
 
-If the work actually replanned or completed the Todo, explicitly choose
+If this admitted work obtains new decision evidence, actually replans or completes the Todo, explicitly choose
 `semantic_closeout` and provide its required vision checkpoint. Do not simply
 remove the replan ACK to make a real replan pass as in-flight work. Conversely,
 ordinary within-Todo progress must not add `--autonomous-replan-recorded`.

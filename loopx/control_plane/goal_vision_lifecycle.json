@@ -1,0 +1,3 @@
+{
+  "closed_states": ["vision_closed", "retired", "retired_or_superseded", "superseded", "no_followup"]
+}
