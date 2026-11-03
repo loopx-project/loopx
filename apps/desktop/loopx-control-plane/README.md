@@ -194,6 +194,55 @@ cannot qualify a broken executable. Core also qualifies non-editable wheel
 fingerprints: a local reuse fence, not publisher or source attestation. Older
 CLIs without that readback can use the automatic App-owned fallback.
 
+When the App selects a different runtime, the standard macOS status and Chat
+LaunchAgents must load that executable too. Restarting an unchanged LaunchAgent
+only starts its previous runtime again. Before opening the workspace, the App
+uses Core's existing `update activate` owner to align the pair, preserving their
+registry, runtime root, accounts, tool arguments and log configuration. The
+user's CLI command and installation remain unchanged. Already matching services
+are reused without another activation command or restart.
+
+The transition holds the existing Chat ingress fence and waits for accepted
+work before changing either service. It verifies the loaded manager arguments,
+qualifies the selected executable, reloads the pair and checks both HTTP runtime
+identities. A failed start restores the original configuration; a private,
+locked handoff journal recovers interrupted transitions. Custom shell effects,
+changed manager configurations and unrelated service labels are not rewritten.
+Archive CLI updates recognize the runtime binding and move the same pair to the
+new CLI runtime; other managed services retain their existing restart behavior.
+
+版本选择与系统服务启动使用同一个运行时。已有请求会继续执行；只有请求完成且原服务
+来源可验证时才切换。切换保留原数据、账号和启动参数，并确认两个 HTTP 服务都使用
+目标版本；失败恢复原配置，中断由本地记录恢复。已匹配的服务直接复用，不反复重启。
+
+If alignment cannot complete, the native supervisor automatically retries with
+increasing delays (2, 4, 8, 16, 32, then at most 60 seconds between attempts).
+The cooldown starts after an attempt finishes; it does not expire while a slow
+attempt is still running. Each attempt rediscovers the runtime and reuses the
+same manager/Chat fences and interrupted-handoff recovery. There is no permanent
+retry-count latch. Once the services qualify, the workspace opens without a
+click or reload. The startup screen shows the next automatic retry; waiting is
+visually idle, with details available in **Recovery & updates**. **Retry now**
+is optional and resets the delay through the native supervisor, preserving the
+selected runtime. Pending Chat work retains its existing automatic retry.
+Before any stop or write, alignment verifies the original literal launcher,
+the actual `serve-status`/`chat` command position and its loopback endpoint;
+a standard label alone never qualifies a custom service. Interrupted handoffs
+apply the same role and unchanged-data-route checks before restoring services.
+
+恢复是默认流程：暂时切换失败会自动退避重试，中断的切换会先恢复原服务。服务就绪后
+自动进入工作区，无需点击按钮；「立即重试」只是跳过等待的可选入口。自定义来源仍需
+可验证，已有请求仍受保护；检查更新、安装重启和显式运行时选择保留原有边界。旧 Core
+尚不支持对齐时会继续检测可用运行时，不回退到反复终止旧服务。
+
+开发诊断可使用 `loopx --format json update activate --service all
+--runtime-executable /absolute/path/to/loopx`：这是会切换服务的操作，保留原工作区和
+请求保护，不安装软件或更改终端 CLI。结果中的 `runtime_identity` 与
+`readiness_verified` 分别表示目标身份与真实 HTTP 验证；安装检查成功不等于工作区
+资源齐全。`service_runtime_route_unverified` 表示配置来源无法验证，
+`service_runtime_alignment_failed` 表示切换失败并尝试恢复，
+`service_runtime_rollback_failed` 表示仍需恢复服务。不要删除工作区数据来处理这些错误。
+
 Wheel qualification has a separate ten-second subprocess deadline because it
 starts Core, checks the TypeScript runtime and hashes package contents. The
 one-second environment/version probes remain unchanged. A slow valid wheel can
@@ -622,6 +671,26 @@ Both opt-in tests require the telemetry opt-out before invoking Core. A
 disposable registry does not isolate machine-wide usage reporting; this
 synthetic run must not contribute adoption or installation telemetry. The
 opt-out applies only to this test invocation and leaves user consent unchanged.
+
+The managed-service regression additionally exercises real launchd and both
+HTTP backends, switching an explicitly selected older Core to the current
+checkout after `npm ci && npm run build:chat` in the dashboard directory:
+
+```sh
+LOOPX_USAGE_PING=0 LOOPX_TEST_OLD_RUNTIME=/absolute/path/to/older/loopx \
+  uv run --extra test python -m pytest tests/test_managed_service_runtime.py -q -s
+```
+
+Run from the checkout root. Only test service labels are redirected to unique
+disposable labels; the manager, Core processes, HTTP and stores are real. The
+fixture uses temporary registry/account directories and ports, removes its own
+services afterwards, and never unloads the machine's standard services. It
+checks the target identity, original registry and repeated alignment without
+PID changes, including a real manager failure followed by rollback and successful
+recovery. Unit cases cover busy Chat, changed configuration, unsupported shells,
+failed startup/rollback and interrupted handoff. Native tests cover exact
+identity/readiness receipts, automatic recovery without user input, capped
+backoff after slow attempts, and preservation of update admission.
 
 This installs only in the disposable root. The second test uses an explicit
 local launch pin to route the production supervisor's two services to its own

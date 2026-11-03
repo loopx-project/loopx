@@ -878,7 +878,10 @@ def test_native_http_progress_reaches_owner_before_final_without_hidden_reasonin
 
     user = {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE"}
     think = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING",
-             "plannerResponse": {"thinking": "hidden native reasoning"}}
+             "plannerResponse": {
+                 "thinking": f"Inspecting {tmp_path}/source.txt before answering.",
+                 "rawThinking": "hidden native reasoning",
+             }}
     command = {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_GENERATING",
                "runCommand": {"commandLine": f"cat {tmp_path}/source.txt --token private-value",
                               "combinedOutput": "private stdout"}}
@@ -902,7 +905,8 @@ def test_native_http_progress_reaches_owner_before_final_without_hidden_reasonin
     result = adapter.start_turn("read the source", observed)
     assert result["message"] == "verified final"
     assert any(at < 4 and view and "正在思考" in view for at, view in views)
-    assert any(at < 4 and view and "source.txt" in view for at, view in views)
+    assert any(at < 4 and view and "思考摘要" in view and "Inspecting source.txt before answering." in view for at, view in views)
+    assert not any(view and "最近步骤" in view for _, view in views)
     assert not any(secret in json.dumps(events) for secret in (
         "hidden native reasoning", "private-value", "private stdout", str(tmp_path)))
     command_events = [event for event in events if event["payload"].get("step", {}).get("kind") == "command"]
@@ -1359,3 +1363,54 @@ def test_native_terminal_error_preserves_structured_cause(tmp_path, language_ser
     assert raised.value.error_code == "antigravity_step_error"
     assert str(raised.value) == "Network interrupted"
     assert raised.value.native_error_info == detail
+
+
+def test_settled_intermediate_tool_error_or_cancellation_does_not_abort_completed_turn(
+    tmp_path, language_server, monkeypatch
+):
+    steps = [
+        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}}},
+        {"type": "CORTEX_STEP_TYPE_VIEW_FILE", "status": "CORTEX_STEP_STATUS_ERROR",
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+         "viewFile": {"absolutePathUri": (tmp_path / "missing.txt").as_uri()}},
+        {"type": "CORTEX_STEP_TYPE_RUN_COMMAND", "status": "CORTEX_STEP_STATUS_CANCELED",
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+         "runCommand": {"commandLine": "echo cancelled"}},
+        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+         "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 3}},
+         "plannerResponse": {"response": "Recovered after tool error.", "stopReason": "STOP_REASON_STOP_PATTERN"}},
+    ]
+    _native_clock(monkeypatch, language_server, [
+        {"at": 1.0, "steps": steps, "status": "CASCADE_RUN_STATUS_IDLE"},
+    ])
+    result = adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn("recover from missing file")
+    assert result["message"] == "Recovered after tool error."
+    assert not language_server["cancelled"].is_set()
+
+
+def test_antigravity_attachment_turn_sends_inline_media(tmp_path, language_server):
+    import base64
+    from loopx.capabilities.native_chat.codex_adapter import start_attachment_turn
+
+    png_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+    data_url = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+    adapter = adapter_for(tmp_path, runtime_profile="trusted_owner")
+    result = start_attachment_turn(
+        adapter,
+        {"agent_id": "antigravity", "session_mode": "managed_runtime"},
+        {"origin": "lark"},
+        "inspect screenshot",
+        lambda *_: None,
+        [{"id": "img-1", "name": "screen.png", "mime_type": "image/png", "size": len(png_bytes), "data_url": data_url}],
+    )
+    assert result["message"] == "Argon answer 1"
+    sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
+    assert len(sends) == 1
+    assert sends[0]["media"] == [{
+        "mimeType": "image/png",
+        "inlineData": base64.b64encode(png_bytes).decode("ascii"),
+        "description": "screen.png",
+    }]

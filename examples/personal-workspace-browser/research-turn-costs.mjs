@@ -79,15 +79,33 @@ Path(sys.argv[1]).write_text(json.dumps(dict(goal_id=goal,display_name='Syntheti
       assert.match(await source.innerText(), /unfinished/);
       await source.getByRole('button', {name: '关闭原文', exact: true}).click();
       await costs.getByRole('combobox').selectOption('input');
+      const helpButton = costs.getByRole('button', {name: '轮次耗时与输入说明', exact: true});
+      const helpPopover = costs.locator('.context-help-popover');
+      await helpButton.focus();
+      await helpPopover.waitFor({state: 'visible'});
+      assert.match(await helpPopover.innerText(), /仅比较当前捕获内的轮次/);
+      assert.match(await helpPopover.innerText(), /轮次输入不等于 LoopX 控制输入/);
+      await page.keyboard.press('Escape');
+      await helpPopover.waitFor({state: 'hidden'});
+      assert.equal(await helpButton.evaluate(element => element === document.activeElement), true);
       for (const width of [1440, 390]) {
         await page.setViewportSize({width, height: 1000});
         await costs.locator('summary').evaluate((element, offset) => {element.style.scrollMarginTop = `${offset}px`; element.scrollIntoView({block: 'start'});}, width < 600 ? 190 : 125);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+        const sortBox = await costs.getByRole('combobox').boundingBox();
+        assert(sortBox && sortBox.width >= 80 && sortBox.height >= (width < 600 ? 44 : 36));
+        await helpButton.click();
+        await helpPopover.waitFor({state: 'visible'});
+        const helpBox = await helpPopover.boundingBox();
+        assert(helpBox && helpBox.x >= 12 && helpBox.x + helpBox.width <= width - 12);
         await page.screenshot({path: resolve(outputDir, `research-turn-costs-${width}.png`), animations: 'disabled'});
+        await page.keyboard.press('Escape');
+        await helpPopover.waitFor({state: 'hidden'});
+        assert.equal(await helpButton.evaluate(element => element === document.activeElement), true);
       }
       assert.deepEqual(errors, []);
       assert.deepEqual(writes, [], 'Cost inspection never starts analysis or mutates Goal state');
-      return {coverageEntries: [], note: 'Real registered capture, typed reduction, HTTP and packaged UI: sort, pagination, incomplete/unknown counters, exact source evidence, keyboard return and mobile. No model or live benchmark.'};
+      return {coverageEntries: [], note: 'Real registered capture, typed reduction, HTTP and source UI: sort, pagination, incomplete/unknown counters, accessible contextual help, exact source evidence, keyboard return and mobile. No model or live benchmark.'};
     } catch (error) {
       if (page && !page.isClosed()) await page.screenshot({path: resolve(outputDir, 'research-turn-costs-failed.png')});
       throw error;
