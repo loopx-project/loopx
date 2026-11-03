@@ -230,6 +230,28 @@ def test_unknown_settlement_plan_is_not_compacted(tmp_path, decision):
     assert values["/interaction_contract/cli_channel/settlement_plan"] == plan
 
 
+@pytest.mark.parametrize("current", [None, {}, {
+    "schema_version": "agent_preferences_v1", "authority": "advisory_only",
+    "revision": "empty-current", "instructions": "Replace prior scoped context, including an empty view.",
+    "items": [], "future_context": {"a/b~c": [None, False, 0, "Keep this complete current value."]},
+}])
+def test_initial_read_preserves_empty_and_unknown_current_preference_values(tmp_path, decision, current):
+    source = {"source": "turn_start_capability_hook", "kind": "agent_preferences",
+        "content": {"ok": current is not None, "status": "read" if current is not None else "unavailable",
+            "current": current}}
+    sources = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    sources.append(source)
+    before = json.loads(json.dumps(decision))
+    view = native_context_capture_view(decision, tmp_path)
+    page, values = read_selection(view["first_read_command"])
+    pointer = f"/interaction_contract/agent_channel/work_context/sources/{len(sources) - 1}/content/current"
+    assert values[pointer] == current
+    assert not any(key.startswith(pointer + "/") for key in values)  # No duplicate delivered descendants.
+    raw = Path(view["recovery"]["path"]).read_bytes()
+    assert json.loads(raw) == before == decision
+    assert capture_page_range(page, raw=raw, digest=page["sha256"]) is None
+
+
 def test_initial_read_exposes_existing_outcome_addresses_without_loading_all_criteria(tmp_path, decision):
     pointer = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes/0"
     outcome = {"id": "current-work", "supporting_material_pointer": pointer,
