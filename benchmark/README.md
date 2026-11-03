@@ -58,6 +58,10 @@ helper delivery neither launches trials nor changes frozen historical arms.
 
 ## Current work
 
+- [FrontierCS-2 compatibility repair v2](frontiercs2/README.md) provides an opt-in
+  patch and synthetic HTTP/client/Docker checks for the frozen single-host v1
+  sources. It preserves historical attribution and does not launch a model or
+  native-grader trial.
 - [Execution observations through ordinary Goal planning](runtime/EXECUTION_OBSERVATIONS.md)
   covers independent local measurements with ordinary Goal/Todo planning and
   stride selection, complete initial Goal retention, and migration from the
