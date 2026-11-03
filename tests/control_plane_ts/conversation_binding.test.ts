@@ -301,6 +301,24 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   const held = planBoundConversationRequest(low);
   assert.equal(held.recovery_eligible, false, "A small positive fraction cannot override the actual quota failure");
   assert.deepEqual(held.metadata_quota_wait, lowCapacity);
+
+  const allocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "codex", allocation_reason: "flexible_availability_fallback",
+    configuration_revision: "route-revision", available: true, eligible_endpoints: ["antigravity", "codex"]};
+  const configuration = {status: "ready", selection_policy: "flexible", executor_endpoint: "antigravity",
+    eligible_endpoints: ["antigravity", "codex"], configuration_revision: "route-revision"};
+  const alternate = {allocation, observed_at: lowCapacity.observed_at};
+  const fallbackPacket = {...direct, context_recovery: {...direct.context_recovery,
+    executor_configuration: configuration, metadata_capacity: {...lowCapacity, alternate_executor: alternate}}};
+  const fallback = planBoundConversationRequest(fallbackPacket);
+  assert.equal(fallback.recovery_eligible, true);
+  assert.equal(fallback.metadata_executor, "codex");
+  for (const change of [{executor_configuration: {...configuration, selection_policy: "pinned"}},
+    {executor_configuration: {...configuration, configuration_revision: "changed"}},
+    {metadata_capacity: {...lowCapacity, alternate_executor: {...alternate, observed_at: alternate.observed_at - 121}}}]) {
+    assert.equal(planBoundConversationRequest({...fallbackPacket,
+      context_recovery: {...fallbackPacket.context_recovery, ...change}}).recovery_eligible, false);
+  }
   const waitingRow = {...completedRow, metadata_quota_wait: held.metadata_quota_wait};
   assert.equal(planBoundConversationRequest({...low, request: waitingRow}).recovery_eligible, false);
   assert.equal(planBoundConversationRequest({...low, request: waitingRow,
@@ -1138,4 +1156,28 @@ test("delivered partial results remain pending without authorizing another execu
     response: {...gated.response, gate: null}}, stop_observed: false}}).pending, false);
   assert.equal(planBoundConversationRequest({...waiting,
     pending_observation: {turn: gated, stop_observed: true}}).pending, false);
+});
+
+
+test("a steward quota endpoint change preserves its exact bound audience", () => {
+  const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
+  const configured = planConversationBinding({...request, binding: selected}).state;
+  const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+  const packet = {current: configured, binding_id: row.binding_id, observation, available_projects: [project], ...source};
+  const context = resolveBoundConversation(packet).context;
+  const allocation = {schema_version: "manager_executor_allocation_v0", selection_policy: "flexible",
+    configured_endpoint: "antigravity", executor_endpoint: "codex", configuration_revision: "revision-1",
+    allocation_reason: "flexible_availability_fallback", eligible_endpoints: ["antigravity", "codex"]};
+  const session = {session_id: "original", goal_id: "loopx-manager", agent_id: "codex", executor_endpoint_id: "codex",
+    session_mode: "managed_runtime", status: "ready", upstream_thread_id: "codex-native",
+    channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context,
+    manager_executor_allocation: allocation, upstream_context_history: [{agent_id: "antigravity", thread_id: "original-native"}]};
+  assert.deepEqual(resolveBoundConversation({...packet, session, session_context: context}).context, context);
+  for (const changed of [{upstream_context_history: []}, {agent_id: "other"}, {status: "closed"},
+    {manager_executor_allocation: {...allocation, eligible_endpoints: ["codex"]}},
+    {manager_executor_allocation: {...allocation, selection_policy: "pinned"}},
+    {steward_context: {...context as object, source_ref: "f".repeat(24)}}]) {
+    assert.throws(() => resolveBoundConversation({...packet, session: {...session, ...changed}, session_context: context}));
+  }
+  assert.throws(() => resolveBoundConversation({...packet, sender_ref: "f".repeat(24), session, session_context: context}));
 });

@@ -20,6 +20,54 @@ export type Account = {
 export type Policy = { enabled: boolean; slots: string[]; cooldown_seconds: number;
   restart_clients?: boolean; force_quit_clients?: boolean; api_fallback?: boolean };
 
+/** The steward's endpoint pool is separate from the native account ring.
+ * Selection observes allowance only; it never changes a login or retries work.
+ */
+export function stewardRoute(input: {
+  now: number; primary: string; pool: string[]; current: string;
+  native: Record<string, any>; primary_capacity: Record<string, any> | null;
+  blocked_primary?: Record<string, any> | null;
+}) {
+  const no = {endpoint: null, blocked_primary: input.blocked_primary ?? null};
+  if (!Number.isFinite(input.now) || !["antigravity", "codex"].includes(input.current)
+      || input.primary !== "antigravity" || !Array.isArray(input.pool)
+      || input.pool.length !== 2 || new Set(input.pool).size !== 2
+      || !input.pool.includes("antigravity") || !input.pool.includes("codex")) return no;
+  const validCapacity = (row: Record<string, any> | null | undefined) => row
+    && Number.isFinite(row.observed_at) && typeof row.account_ref === "string" && /^[a-f0-9]{64}$/.test(row.account_ref)
+    && typeof row.model_id === "string" && row.model_id.length > 0
+    && Number.isFinite(row.remaining_fraction) && row.remaining_fraction >= 0 && row.remaining_fraction <= 1
+    && typeof row.reset_time === "string" && Number.isFinite(Date.parse(row.reset_time))
+    && typeof row.execution_id === "string" && row.execution_id.length > 0
+    && typeof row.quota_exhausted === "boolean" && typeof row.normal_completion === "boolean"
+    && row.quota_exhausted !== row.normal_completion;
+  const capacity = input.primary_capacity;
+  if (!validCapacity(capacity) || !capacity || input.now < capacity.observed_at
+      || input.now - capacity.observed_at > 120
+      || input.blocked_primary != null && !validCapacity(input.blocked_primary)) return no;
+  let blocked = input.blocked_primary ?? null;
+  if (capacity.quota_exhausted && (!blocked || blocked.execution_id !== capacity.execution_id)) blocked = capacity;
+  const restored = blocked && (blocked.account_ref !== capacity.account_ref
+    || blocked.model_id !== capacity.model_id || blocked.reset_time !== capacity.reset_time
+    || input.now >= Date.parse(blocked.reset_time) / 1000);
+  if (capacity.remaining_fraction > 0 && (!blocked || restored) && (!capacity.quota_exhausted || restored)) {
+    return {endpoint: "antigravity", blocked_primary: blocked};
+  }
+  const native = input.native;
+  // API connection/model-list checks do not prove generation allowance. An
+  // already active, explicitly authorized API route remains the native owner's
+  // selection; its pre-output key failover retains that owner's own guards.
+  const current = Array.isArray(native.accounts)
+    ? native.accounts.find((a: any) => a.slot === native.active_slot) : null;
+  const fresh = current && Number.isFinite(current.observed_at)
+    && current.observed_at <= input.now && input.now - current.observed_at <= 120;
+  const usable = native.policy?.enabled === true && native.login_matches === true
+    && native.recovery_required === false && (native.api_active === true
+      ? native.policy.api_fallback === true && native.action === "api_active"
+      : native.action === "ready" && fresh && current.availability === "available");
+  return {endpoint: usable ? "codex" : null, blocked_primary: blocked};
+}
+
 /** Diagnostic liveness only; this never grants switching or process authority. */
 export type ObserverHealthState = "unavailable" | "stopped" | "unverified" | "upgrade_required"
   | "overdue" | "retrying" | "healthy";

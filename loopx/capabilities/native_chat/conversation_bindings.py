@@ -300,7 +300,8 @@ class ChatConversationBindings:
     def _session_observation(session: dict[str, Any]) -> dict[str, Any]:
         return {key: session.get(key) for key in (
             "session_id", "goal_id", "agent_id", "executor_endpoint_id", "channel_id",
-            "session_mode", "status", "project_context", "steward_context")}
+            "session_mode", "status", "project_context", "steward_context",
+            "manager_executor_allocation", "upstream_context_history")}
 
     def local_sessions(self, binding_id: str, *, app_steward_entry: bool = False) -> list[dict[str, Any]]:
         return self.local_session_snapshot(binding_id, app_steward_entry=app_steward_entry)["sessions"]

@@ -119,6 +119,17 @@ export function normalizeStewardContext(value: unknown): Record<string, unknown>
 
 export function stewardConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeStewardContext(input.context);
+  if (input.metadata_review === true) {
+    // Reuse the narrower native result-review policy without turning a
+    // portfolio grant into project execution authority. Only frozen text is
+    // supplied; host instructions, network, tools and delegation stay off.
+    const review = projectConversationIdentity({context: {...context,
+      kind: "project_workspace", grant: "workspace_read"}, read_only_review: true});
+    const config = review.host_config as Record<string, unknown>;
+    config.features = {...config.features as object, shell_tool: false,
+      apply_patch_freeform: false};
+    return {...review, context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
+  }
   return {context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
 }
 

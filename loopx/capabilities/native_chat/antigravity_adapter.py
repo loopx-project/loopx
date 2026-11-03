@@ -443,6 +443,7 @@ class AntigravityAdapter:
                 return None
             return {"model_id": model_id, "account_ref": hashlib.sha256(account.strip().casefold().encode()).hexdigest(),
                 "remaining_fraction": fraction, "reset_time": reset,
+                "execution_id": (latest[0].get("metadata") or {}).get("executionId"),
                 "observed_at": time.time(), "quota_exhausted": exhausted, "normal_completion": normal}
         except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
             return None

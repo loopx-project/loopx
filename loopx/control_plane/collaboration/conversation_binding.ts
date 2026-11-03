@@ -323,6 +323,22 @@ function boundProject(params: JsonObject, row: JsonObject): Record<string, strin
   return projects[0];
 }
 
+function boundExecutorMatches(row: JsonObject, session: JsonObject): boolean {
+  if (session.agent_id === row.executor_endpoint_id && session.executor_endpoint_id === row.executor_endpoint_id) return true;
+  const allocation = session.manager_executor_allocation as JsonObject | undefined;
+  return row.context_kind === "steward" && row.audience !== "group"
+    && row.executor_endpoint_id === "antigravity" && session.agent_id === "codex"
+    && session.executor_endpoint_id === "codex" && allocation?.schema_version === "manager_executor_allocation_v0"
+    && allocation.selection_policy === "flexible" && allocation.configured_endpoint === "antigravity"
+    && allocation.executor_endpoint === "codex" && allocation.allocation_reason === "flexible_availability_fallback"
+    && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
+    && Array.isArray(allocation.eligible_endpoints) && allocation.eligible_endpoints.length === 2
+    && allocation.eligible_endpoints.includes("antigravity") && allocation.eligible_endpoints.includes("codex")
+    && Array.isArray(session.upstream_context_history) && session.upstream_context_history.some(value =>
+      value && typeof value === "object" && !Array.isArray(value) && (value as JsonObject).agent_id === "antigravity"
+      && typeof (value as JsonObject).thread_id === "string");
+}
+
 export function resolveBoundConversation(params: JsonObject): JsonObject {
   const current = state(params.current);
   const id = ref(params.binding_id, "binding identity");
@@ -378,7 +394,7 @@ export function resolveBoundConversation(params: JsonObject): JsonObject {
     sessionIdentity(session.session_id, "bound Session identity");
     if (session.status === "closed" || session.channel_id !== channel
         || session.goal_id !== (steward ? "loopx-manager" : null)
-        || session.agent_id !== row.executor_endpoint_id || session.executor_endpoint_id !== row.executor_endpoint_id
+        || !boundExecutorMatches(row, session)
         || session.session_mode !== "managed_runtime" || (steward ? session.project_context : session.steward_context) != null
         || params.session_context === undefined
         || !isDeepStrictEqual(steward ? session.steward_context : session.project_context, params.session_context)) {
@@ -601,7 +617,7 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
   const selected = binding(params.binding);
   if (selected.audience === "group") return no;
   const steward = selected.context_kind === "steward";
-  if (selected.executor_endpoint_id !== current.agent_id || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
+  if (!boundExecutorMatches(selected, {...current, executor_endpoint_id: current.executor_endpoint_id ?? current.agent_id}) || current.goal_id !== (steward ? "loopx-manager" : null)) return no;
   const saved = steward ? normalizeStewardContext(current.steward_context)
     : normalizeProjectContext(current.project_context);
   const source = requireJsonObject(row.source, "original conversation source");
@@ -826,6 +842,7 @@ function planNativeMetadataReview(recovery: JsonObject, row: JsonObject, current
         || (admitted.attachments as unknown[] | undefined)?.length) return no;
     return {...candidate, recovery_eligible: recovery.source_verified === true,
       admitted_turn_id: sessionIdentity(admitted.turn_id, "admitted metadata review"),
+      ...(previous.metadata_executor === "codex" ? {metadata_executor: "codex"} : {}),
       metadata_handoffs: previous.metadata_handoffs};
   }
   if (current.status !== "ready" || current.active_turn_id != null || recovery.queued_input_present !== false) return no;
@@ -889,6 +906,25 @@ function metadataReviewCapacity(recovery: JsonObject, row: JsonObject, current: 
       || typeof capacity.quota_exhausted !== "boolean" || typeof capacity.normal_completion !== "boolean"
       || typeof capacity.reset_time !== "string"
       || !Number.isFinite(Date.parse(String(capacity.reset_time)))) return candidate;
+  const alternate = capacity.alternate_executor as JsonObject | undefined;
+  const allocation = alternate?.allocation as JsonObject | undefined;
+  const configuration = recovery.executor_configuration as JsonObject | undefined;
+  if (alternate && typeof alternate.observed_at === "number" && Number.isFinite(alternate.observed_at)
+      && alternate.observed_at <= now && now - alternate.observed_at <= 120
+      && allocation?.selection_policy === "flexible" && allocation.configured_endpoint === "antigravity"
+      && allocation.executor_endpoint === "codex" && allocation.available === true
+      && Array.isArray(allocation.eligible_endpoints) && allocation.eligible_endpoints.length === 2
+      && allocation.eligible_endpoints.includes("antigravity") && allocation.eligible_endpoints.includes("codex")
+      && allocation.schema_version === "manager_executor_allocation_v0"
+      && allocation.allocation_reason === "flexible_availability_fallback"
+      && configuration?.status === "ready" && configuration.selection_policy === "flexible"
+      && configuration.executor_endpoint === "antigravity"
+      && Array.isArray(configuration.eligible_endpoints) && configuration.eligible_endpoints.length === 2
+      && configuration.eligible_endpoints.includes("antigravity") && configuration.eligible_endpoints.includes("codex")
+      && typeof allocation.configuration_revision === "string" && allocation.configuration_revision.length > 0
+      && allocation.configuration_revision === configuration.configuration_revision) {
+    return {...candidate, recovery_eligible: true, metadata_executor: "codex"};
+  }
   const waiting = row.metadata_quota_wait as JsonObject | null | undefined;
   if (waiting != null && (typeof waiting.model_id !== "string" || typeof waiting.remaining_fraction !== "number"
       || typeof waiting.account_ref !== "string" || !BARE_SHA256_PATTERN.test(waiting.account_ref)

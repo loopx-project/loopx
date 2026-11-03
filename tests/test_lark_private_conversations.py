@@ -811,7 +811,7 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
         fixture.close()
 
 
-@pytest.mark.parametrize("fault", [None, "quota-restore", "quota-unchanged", "quota-unknown",
+@pytest.mark.parametrize("fault", [None, "codex-fallback", "quota-restore", "quota-unchanged", "quota-unknown",
     "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer", "wrong-target", "changed-brief", "tool-step",
     "cleared-before-proof", "retention-io"])
 def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):
@@ -861,7 +861,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         # Another native input is historical context, not authority to replay it.
         language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
         language_server["sent_count"] += 1
-        if fault in {"quota-restore", "quota-unchanged"}:
+        if fault in {"quota-restore", "quota-unchanged", "codex-fallback"}:
             language_server.update(quota_error_indices=[1], quota_fraction=0.006)
         elif fault == "quota-unknown":
             language_server["quota_unknown"] = True
@@ -910,6 +910,47 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
                     result["response"]["message"] += "Changed original answer"
                 return result
             monkeypatch.setattr(AntigravityAdapter, "completed_result_observation", staticmethod(changed))
+        codex_sends = []
+        if fault == "codex-fallback":
+            from types import SimpleNamespace
+            from test_chat_manager_model_adoption import configure
+            from loopx.chat_manager import manager_executor_allocation
+            from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+            import loopx.chat_manager as manager_module
+            import loopx.chat_runtime as runtime_module
+            configure(runtime.coordination_runtime_root, model="gemini-4-argon-high", effort="high",
+                endpoint="antigravity", policy="flexible")
+            capabilities = [{"agent_id": name, "available": True, "adapter_kind": kind} for name, kind in
+                [("antigravity", "antigravity_ls"), ("codex", "codex_app_server")]]
+            monkeypatch.setattr(runtime, "capabilities", lambda: capabilities)
+            allocation = manager_executor_allocation(runtime, environ={}, endpoint_capabilities=[
+                {**item, "available": item["agent_id"] == "codex"} for item in capabilities])
+            route = lambda *args: {"allocation": allocation, "blocked_primary": None,
+                "observed_at": time.time()}
+            monkeypatch.setattr(manager_module, "manager_session_quota_route", route)
+            monkeypatch.setattr(runtime_module, "manager_session_quota_route", route)
+            class Formatter(CodexAppServerAdapter):
+                def __init__(self):
+                    import queue
+                    from loopx.chat_agent import CodexChatAgentSession
+                    super().__init__(CodexChatAgentSession(process=SimpleNamespace(poll=lambda: None),
+                        messages=queue.Queue(), thread_id="formatter-native", work_dir=workspace,
+                        metadata_review=True, read_only_review=True, resolved_model="gpt-6.1-sol",
+                        model="gpt-6.1-sol", reasoning_effort="high", sandbox="read-only"))
+                def start_turn(self, message, event_sink):
+                    codex_sends.append(message)
+                    event_sink("turn.started", {"upstream_turn_id": "format-only"})
+                    return deepcopy(response)
+                def close_session(self):
+                    pass
+                def healthcheck(self):
+                    return True
+            def start(**kwargs):
+                assert kwargs["agent_id"] == "codex" and kwargs["read_only_review"] is True
+                assert kwargs["metadata_review_context"] == session["steward_context"]
+                assert kwargs["resume_thread_id"] is None
+                return Formatter()
+            monkeypatch.setattr(runtime, "_start_adapter", start)
         path = transport.root / f"{ref}.json"
         transport.reconcile_request(path)
         if fault in {"quota-restore", "quota-unchanged"}:
@@ -944,7 +985,7 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
         reviewed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
         transport.reconcile_request(path)
         entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
-        if fault in {None, "quota-restore"}:
+        if fault in {None, "quota-restore", "codex-fallback"}:
             assert reviewed["status"] == "completed", reviewed
             assert len(entries) == 1 and entries[0]["source_id"] == ref
             assert entries[0]["brief"]["context"] == context
@@ -957,10 +998,33 @@ def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, la
             for item in provider.messages.values()) == 1
         assert not any("Unverified model delivery claim" in write[1] for write in provider.writes)
         sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
-        assert len(sends) == 2 and sends[-1]["cascadeConfig"]["plannerConfig"]["toolConfig"]["forceDisableToolCalling"] is True
+        if fault == "codex-fallback":
+            assert len(sends) == 1 and len(codex_sends) == 1
+            actual = store.load_session(session["session_id"])
+            assert actual["agent_id"] == "codex" and actual["agent_model_id"] == "gpt-6.1-sol"
+            assert actual["steward_context"] == session["steward_context"]
+            assert actual["upstream_context_history"][-1]["thread_id"] == session["upstream_thread_id"]
+        else:
+            assert len(sends) == 2 and sends[-1]["cascadeConfig"]["plannerConfig"]["toolConfig"]["forceDisableToolCalling"] is True
         before = (len(sends), len(provider.writes))
         transport.reconcile_request(path)
         assert (len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]), len(provider.writes)) == before
+        if fault == "codex-fallback":
+            # The next original-source input/status must reuse this canonical
+            # Session even though the binding's preferred endpoint is Argon.
+            monkeypatch.setattr(runtime, "enqueue_turn", lambda **kw: store.create_queued_turn(
+                kw["session_id"], client_turn_id=kw["client_turn_id"], message=kw["message"], origin=kw["origin"]))
+            followup = provider.event("steward-app", "after-fallback", "Continue in this original conversation")
+            transport.admit("steward-app", followup)
+            admitted = transport.core.read_request(identity_ref(binding["provider_ref"], followup["message_id"]))
+            assert admitted["status"] == "accepted" and admitted["session_id"] == session["session_id"]
+            assert store.load_turn(admitted["session_id"], admitted["turn_id"])["status"] == "queued"
+            status = provider.event("steward-app", "status-after-fallback", "/status")
+            transport.admit("steward-app", status)
+            observed = transport.core.read_request(identity_ref(binding["provider_ref"], status["message_id"]))
+            assert observed["session_id"] == session["session_id"]
+            assert len(store.list_sessions(channel_id=session["channel_id"])) == 1
+            assert len(codex_sends) == 1
     finally:
         fixture.close()
 

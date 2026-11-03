@@ -31,12 +31,12 @@
       "dict_any_count": 0
     },
     "loopx/chat_agent.py": {
-      "lines": 2008
+      "lines": 2031
     },
     "loopx/chat_runtime.py": {
       "any_count": 37,
       "dict_any_count": 0,
-      "lines": 2333
+      "lines": 2395
     },
     "loopx/chat_server.py": {
       "any_count": 25,
@@ -44,7 +44,7 @@
       "lines": 2035
     },
     "loopx/chat_store.py": {
-      "lines": 2074
+      "lines": 2111
     },
     "loopx/codex_cli_probe.py": {
       "any_count": 37,
@@ -89,12 +89,12 @@
       "any_count": 51,
       "dict_any_count": 0
     },
-    "loopx/presentation/renderers/status_markdown.py": {
-      "any_count": 47,
-      "dict_any_count": 0
-    },
     "loopx/pr_review.py": {
       "any_count": 49,
+      "dict_any_count": 0
+    },
+    "loopx/presentation/renderers/status_markdown.py": {
+      "any_count": 47,
       "dict_any_count": 0
     },
     "loopx/quota.py": {

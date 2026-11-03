@@ -544,3 +544,39 @@ images do not qualify a real credential switch.
 ![Shared account policy, narrow / 窄屏](docs/assets/native-policy-owner-narrow.png)
 
 ![Unknown allowance preserves selection / 额度未知保留当前账号](docs/assets/native-policy-owner-unknown-narrow.png)
+
+
+## Chat and steward quota routing (0.14.0)
+
+Chat observes the same native account owner at an unstarted input boundary. When
+its login selection revision changes, Chat reopens its adapter on the same native
+thread and reads the effective provider. It does not select accounts, start another
+watcher, replace conversation history, or retry a running/unknown-effect request.
+An explicit `LOOPX_CHAT_CODEX_MODEL_PROVIDER` override still pins the transport;
+remove an obsolete override from the original service configuration to follow the
+native owner again.
+
+The steward has a separate endpoint pool. In the existing **Steward executor**
+machine configuration, select `flexible`, primary `antigravity`, and eligible
+endpoints `[antigravity, codex]`. Argon remains preferred. Verified exhaustion can
+select the Codex GPT-6.1 Sol default; subscription/API selection inside Codex stays
+with the existing native account policy. This setting does not edit that policy's
+account candidates or grant API spending. Explicit conversation model picks,
+pinned policies, and registered native Goal execution remain outside this switch.
+Unknown/stale quota does not authorize fallback. A tiny positive remainder cannot
+clear a recorded hard failure in the same account/model/reset epoch.
+
+The Core Session, source audience and queue remain unchanged across endpoint
+migration; each old native binding is retained for result verification. Completed
+original text with malformed delegation metadata may use one restricted GPT
+format review when Core has verified the exact original result, source and grant.
+That review cannot run shell tools, use MCP/apps, access the network, or change the
+original recipients/context. Actual handoff and original-message reply still need
+their normal receipts. Unknown-effect failures remain pending rather than being
+blindly replayed.
+
+Chat 与管家复用同一个原生额度 owner；账号/API 切换仍由原有策略执行。
+管家的端点候选集独立配置为 Argon 优先、Codex GPT-6.1 Sol 备用，不修改
+Codex App 的账号候选集。切换只发生在尚未执行的输入边界，原会话、来源、队列
+和旧原生执行证据保留。已完成答案的格式复核使用受限上下文；未确认效果的失败
+继续保留，不能把格式修正或模型的“已发送”文字当成真实交付。

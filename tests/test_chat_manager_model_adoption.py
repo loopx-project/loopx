@@ -28,7 +28,7 @@ def configure(root, *, model, effort, endpoint="codex", policy="preferred"):
         "namespaces": {"steward_executor": {
             "schema_version": "steward_executor_machine_defaults_v1",
             "selection_policy": policy,
-            "eligible_endpoints": [],
+            "eligible_endpoints": ["antigravity", "codex"] if policy == "flexible" else [],
             "executor_endpoint": endpoint,
             "executor_model": model,
             "executor_reasoning_effort": effort,
@@ -352,3 +352,117 @@ def test_same_effective_value_still_records_explicit_selection_before_clear(upst
 
     assert (starts[-1][0]["model"], starts[-1][0]["reasoning_effort"]) == ("gpt-6-sol", "high")
     assert updated["manager_executor_allocation"]["model"] == "gpt-6-sol"
+
+
+@pytest.mark.parametrize("status,client,fault", [("queued", "new-input", None), ("running", "new-input", None),
+    ("queued", "external-original-recovery-22-quota-1", None),
+    ("queued", "new-input", "startup"), ("queued", "new-input", "configuration")])
+def test_quota_fallback_keeps_original_session_and_only_routes_unstarted_input(monkeypatch, tmp_path, status, client, fault):
+    import loopx.chat_runtime as runtime_module
+    root = tmp_path / "runtime"
+    configure(root, model="gemini-4-argon-high", effort="high", endpoint="antigravity", policy="flexible")
+    store = ChatSessionStore(root)
+    runtime = ChatRuntimeController(store=store, codex_bin="codex")
+    capabilities = [{"agent_id": name, "available": True, "adapter_kind": kind} for name, kind in
+        [("antigravity", "antigravity_ls"), ("codex", "codex_app_server")]]
+    monkeypatch.setattr(runtime, "capabilities", lambda: capabilities)
+    starts = []
+
+    def start(**kwargs):
+        if len(starts) == 1 and fault == "startup":
+            raise ValueError("Synthetic provider startup failure")
+        if len(starts) == 1 and fault == "configuration":
+            configure(root, model="gemini-4-argon-high", effort="high", endpoint="antigravity", policy="pinned")
+        adapter = Adapter(len(starts))
+        adapter.current_model_id = kwargs["executor_model"]["model"]
+        starts.append((kwargs, adapter))
+        return adapter
+
+    monkeypatch.setattr(runtime, "_start_adapter", start)
+    original, _ = runtime.open_session(goal_id="loopx-manager", agent_id="antigravity",
+        work_dir=tmp_path, objective="manager", mode="new", channel_id="manager.external.fixture",
+        manager_executor_allocation=manager_executor_allocation(runtime, environ={}))
+    sid = original["session_id"]
+    store.update_session(sid, agent_model_id="gemini-4-argon-high")
+    store.append_message(sid, role="user", text="Keep the original audience and outstanding work.")
+    turn, _ = store.create_turn(sid, client_turn_id=client, message="New work.")
+    store.update_turn(sid, turn["turn_id"], status=status)
+    queued = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    fallback = manager_executor_allocation(runtime, environ={}, endpoint_capabilities=[
+        {**row, "available": row["agent_id"] == "codex"} for row in capabilities])
+    observed = []
+    monkeypatch.setattr(runtime_module, "manager_session_quota_route", lambda *args:
+        observed.append(True) or {"allocation": fallback, "blocked_primary": None})
+    before = store.load_turn(sid, turn["turn_id"])
+    if fault:
+        with pytest.raises(CodexChatAgentError):
+            runtime._ensure_adapter(queued, work_dir=root, objective="manager")
+        held = store.load_session(sid)
+        assert held["agent_id"] == "antigravity" and held["upstream_thread_id"] == original["upstream_thread_id"]
+        assert not held.get("upstream_context_history")
+        assert store.load_turn(sid, turn["turn_id"]) == before
+        return
+    runtime._ensure_adapter(queued, work_dir=root, objective="manager")
+    current = store.load_session(sid)
+    if status == "queued" and client == "new-input":
+        assert observed == [True] and len(starts) == 2
+        assert current["agent_id"] == current["executor_endpoint_id"] == "codex"
+        assert current["agent_model_id"] == "gpt-6.1-sol" and current["upstream_mode"] == "chat"
+        assert current["channel_id"] == original["channel_id"] and current["active_turn_id"] == turn["turn_id"]
+        assert current["upstream_context_history"][-1]["thread_id"] == original["upstream_thread_id"]
+        assert current["upstream_context_history"][-1]["agent_id"] == "antigravity"
+        assert starts[-1][0]["agent_id"] == "codex" and starts[-1][0]["resume_thread_id"] is None
+        assert starts[-1][0]["history"] == [{"role": "user", "content": "Keep the original audience and outstanding work."}]
+    else:
+        assert observed == [] and len(starts) == 1 and current["agent_id"] == "antigravity"
+    assert store.load_turn(sid, turn["turn_id"]) == before
+
+    if status == "queued" and client == "new-input":
+        store.update_turn(sid, turn["turn_id"], status="completed")
+        store.update_session(sid, active_turn_id=None, status="ready")
+        next_turn, _ = store.create_turn(sid, client_turn_id="after-reset", message="Next authorized input")
+        store.update_turn(sid, next_turn["turn_id"], status="queued")
+        queued = store.update_session(sid, active_turn_id=next_turn["turn_id"], status="busy")
+        primary = manager_executor_allocation(runtime, environ={})
+        monkeypatch.setattr(runtime_module, "manager_session_quota_route", lambda *args:
+            {"allocation": primary, "blocked_primary": None})
+        runtime._ensure_adapter(queued, work_dir=root, objective="manager")
+        restored = store.load_session(sid)
+        assert restored["agent_id"] == "antigravity" and restored["agent_model_id"] == "gemini-4-argon-high"
+        assert [item["agent_id"] for item in restored["upstream_context_history"]] == ["antigravity", "codex"]
+        assert restored["channel_id"] == original["channel_id"]
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_native_account_epoch_reopens_only_unstarted_codex_adapter(conversation, monkeypatch, status):
+    import sys
+    from types import ModuleType
+    root, store, runtime, session, starts = conversation
+    sid = session["session_id"]
+    parent, module = ModuleType("loopx_codex_provider_routing"), ModuleType("loopx_codex_provider_routing.native")
+    epoch = ["new-owner-revision", "subscription-b"]
+    observed = []
+    class Accounts:
+        def __init__(self, path):
+            assert path == runtime.coordination_runtime_root
+        def conversation_epoch(self, *, codex_home):
+            observed.append(codex_home)
+            return tuple(epoch)
+    module.NativeAccounts = Accounts
+    monkeypatch.setitem(sys.modules, parent.__name__, parent)
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    turn, _ = store.create_turn(sid, client_turn_id="new-message", message="Current authorized work")
+    store.update_turn(sid, turn["turn_id"], status=status)
+    queued = store.update_session(sid, active_turn_id=turn["turn_id"], status="busy")
+    before = store.load_turn(sid, turn["turn_id"])
+    runtime._ensure_adapter(queued, work_dir=root, objective="manager")
+    if status == "queued":
+        assert len(starts) == 2 and observed == [runtime.codex_home]
+        assert starts[-1][0]["resume_thread_id"] == session["upstream_thread_id"]
+        assert starts[-1][0]["history"] is None
+        # Same owner revision does not churn the connection on an idle read.
+        runtime._ensure_adapter(store.load_session(sid), work_dir=root, objective="manager")
+        assert len(starts) == 2
+    else:
+        assert len(starts) == 1 and not observed
+    assert store.load_turn(sid, turn["turn_id"]) == before

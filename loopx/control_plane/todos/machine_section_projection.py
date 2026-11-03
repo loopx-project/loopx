@@ -621,24 +621,12 @@ def _extract_frontmatter_goal_id(markdown: str) -> str | None:
     return None
 
 
-def render_canonical_todo_sections(
-    markdown: str,
-    records: Sequence[Mapping[str, object]],
-    *,
-    provider_revision: str,
-    private_validation_declarations: Mapping[str, Mapping[str, Any]] | None = None,
-    bounded_active_view: bool = False,
-    goal_id: str | None = None,
-) -> TodoSectionProjectionResult:
-    """Replace only Todo sections and verify deterministic parse/render parity."""
-
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", provider_revision):
-        raise TodoSectionProjectionError("provider_revision must be a public-safe token")
-    canonical = _canonical_records(records)
-    try:
-        source_document = TodoProjectionDocument.parse(markdown)
-    except ValueError as error:
-        raise TodoSectionProjectionError(str(error)) from error
+def _canonical_private_validation(
+    source_document: TodoProjectionDocument,
+    canonical: Sequence[Mapping[str, object]],
+    private_validation_declarations: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, Mapping[str, object]]:
+    """Bind private declarations to canonical digests before rendering any view."""
     private_source = _private_validation_metadata(source_document)
     canonical_validation_digests = {
         str(record.get("todo_id") or ""): record.get("completion_validation_sha256")
@@ -687,6 +675,30 @@ def render_canonical_todo_sections(
                 f"Todo {todo_id!r} private validation declaration does not match authority"
             )
         private_validation[todo_id] = source[1]
+    return private_validation
+
+
+def render_canonical_todo_sections(
+    markdown: str,
+    records: Sequence[Mapping[str, object]],
+    *,
+    provider_revision: str,
+    private_validation_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+    bounded_active_view: bool = False,
+    goal_id: str | None = None,
+) -> TodoSectionProjectionResult:
+    """Replace only Todo sections and verify deterministic parse/render parity."""
+
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", provider_revision):
+        raise TodoSectionProjectionError("provider_revision must be a public-safe token")
+    canonical = _canonical_records(records)
+    try:
+        source_document = TodoProjectionDocument.parse(markdown)
+    except ValueError as error:
+        raise TodoSectionProjectionError(str(error)) from error
+    private_validation = _canonical_private_validation(
+        source_document, canonical, private_validation_declarations
+    )
     raw_active_by_role = {
         role: sorted(
             [
