@@ -5,6 +5,7 @@ import {useMemo, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
 import {searchResearchRecords, type ResearchRecordDisplay} from "./research-record-search";
 import {exportResearchRecords} from "./research-record-export";
+import {exportResearchReport} from "./research-record-report";
 import {downloadReport} from "./report-download";
 
 /** Local read controls over the existing validated history snapshot. */
@@ -20,6 +21,7 @@ export function ResearchRecordSearch({goalId, events, displayEvents, displaySect
   const [status, setStatus] = useState("");
   const [limit, setLimit] = useState(50);
   const [downloadFailed, setDownloadFailed] = useState(false);
+  const [format, setFormat] = useState("json");
   const displayed = useMemo(() => new Map(displayEvents?.map(event => [event.event_id, event])), [displayEvents]);
   const display = useMemo(() => ({events: displayed, sections: displaySections}), [displayed, displaySections]);
   const matches = useMemo(() => searchResearchRecords(events, query, status, display), [events, query, status, display]);
@@ -38,13 +40,18 @@ export function ResearchRecordSearch({goalId, events, displayEvents, displaySect
         {[...new Set([...statuses, ...(status ? [status] : [])])].map(item => <option key={item} value={item}>{stateLabel(item)}</option>)}
       </select>
       {query || status ? <button type="button" onClick={reset}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
+      <select aria-label={zh ? "下载格式" : "Download format"} value={format} onChange={event => setFormat(event.target.value)}>
+        <option value="json">JSON</option>
+        <option value="md">{zh ? "阅读报告（Markdown）" : "Reading report (Markdown)"}</option>
+      </select>
       <button type="button" disabled={busy || !matches.length} onClick={() => {
         setDownloadFailed(false);
         try {
-          const text = exportResearchRecords({goalId, events, query, status, complete, stale, display, exportedAt: new Date().toISOString()});
-          downloadReport(`research-${goalId}.json`, "", text);
+          const input = {goalId, events, query, status, complete, stale, display, exportedAt: new Date().toISOString()};
+          const text = format === "md" ? exportResearchReport(input, zh) : exportResearchRecords(input);
+          downloadReport(`research-${goalId}.${format}`, "", text);
         } catch {setDownloadFailed(true);}
-      }}>{zh ? "下载匹配记录（JSON）" : "Download matches (JSON)"}</button>
+      }}>{format === "md" ? (zh ? "下载阅读报告" : "Download reading report") : (zh ? "下载匹配记录（JSON）" : "Download matches (JSON)")}</button>
     </div>
     {downloadFailed ? <p role="alert">{zh ? "无法开始下载，记录未改变。请重试下载。" : "Could not start the download. Records are unchanged; try downloading again."}</p> : null}
     <div className="research-record-count">
