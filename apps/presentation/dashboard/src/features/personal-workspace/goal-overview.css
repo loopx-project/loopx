@@ -205,7 +205,6 @@
   .goal-overview-since { gap: 8px 12px; font-size: 13px; }
   .goal-overview-heading { gap: 8px 12px; }
   .goal-overview-worker-state { padding: 12px; }
-  .goal-overview-worker-state dl { grid-template-columns: 1fr; }
 }
 /* Driver observations remain separate from the Goal's activation and acceptance. */
 .goal-overview-worker-state {
