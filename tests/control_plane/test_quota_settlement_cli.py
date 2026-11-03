@@ -5523,11 +5523,23 @@ def test_due_successor_replan_replays_until_the_same_task_is_reopened(
     assert _spend_run_count(runtime) == 0
 
 
+@pytest.mark.parametrize("scoped_gate,pending_selection", [
+    (False, False), (False, True), (True, False),
+])
 def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
-    tmp_path: Path,
+    tmp_path: Path, scoped_gate: bool, pending_selection: bool,
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
+    if scoped_gate:
+        state = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        state.write_text(state.read_text() + (
+            "\n## User Todo\n\n- [ ] [P0] Approve unrelated publication.\n"
+            "  <!-- loopx:todo todo_id=todo_publication_gate status=open "
+            f"task_class=user_gate blocks_agent={AGENT_ID} "
+            "decision_scope=write_scope:action:release "
+            "unblocks_todo_id=todo_publication -->\n"
+        ))
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(
         "codex-settlement-peer"
@@ -5567,12 +5579,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     )
 
     _initialize_fixture_authority(project, runtime)
-    first_rc, first = _run_cli(
-        registry_path,
-        runtime,
-        *guard_args,
-        cwd=project,
-    )
+    if pending_selection:
+        first_rc, first = _run_cli(
+            registry_path, runtime, *guard_args, cwd=project,
+        )
+        assert first_rc == 0, first
+        assert "settlement_identity" not in first["heartbeat_receipt"]
     repair_rc, repair = _run_cli(
         registry_path,
         runtime,
@@ -5582,8 +5594,6 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         cwd=project,
     )
 
-    assert first_rc == 0, first
-    assert "settlement_identity" not in first["heartbeat_receipt"]
     assert repair_rc == 0, repair
     assert repair.get("error_code") != "heartbeat_receipt_identity_conflict"
     assert repair["effective_action"] == "agent_workspace_repair"
@@ -5595,7 +5605,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
         "create or switch to an independent worktree/branch, then rerun quota "
         "guard before file edits"
     )
-    assert repair["heartbeat_receipt"]["status"] == "upgraded"
+    assert repair["heartbeat_receipt"]["status"] == (
+        "upgraded" if pending_selection else "committed"
+    )
+    assert repair["interaction_contract"]["agent_channel"]["delivery_allowed"] is False
+    assert repair["normal_delivery_allowed"] is False
+    assert repair["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
     assert repair["heartbeat_receipt"]["settlement_identity"]["todo_id"] == (
         ALTERNATIVE_TODO_ID
     )
@@ -5616,8 +5631,14 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     )
 
     assert resumed_rc == 0, resumed
-    assert resumed["effective_action"] == "normal_run"
-    assert resumed["normal_delivery_allowed"] is True
+    assert resumed["effective_action"] == (
+        "operator_gate_notify" if scoped_gate else "normal_run"
+    )
+    assert resumed["normal_delivery_allowed"] is (not scoped_gate)
+    assert resumed["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+    if scoped_gate:
+        assert resumed["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == ALTERNATIVE_TODO_ID
+        assert resumed["requires_user_action"] is True
     assert resumed["workspace_repair_allowed"] is False
     assert resumed["selected_todo"]["todo_id"] == ALTERNATIVE_TODO_ID
     assert resumed["selected_todo"]["selection_binding"] == "heartbeat_receipt"
@@ -5627,12 +5648,12 @@ def test_pending_selection_preserves_workspace_repair_then_reenters_same_turn(
     assert resumed["heartbeat_receipt"]["status"] == "upgraded"
     assert resumed["heartbeat_receipt"]["settlement_identity"] == repair["heartbeat_receipt"]["settlement_identity"]
     assert resumed["heartbeat_receipt"]["event_id"] != repair["heartbeat_receipt"]["event_id"]
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == (3 if pending_selection else 2)
     replay_rc, replay = _run_cli(registry_path, runtime, *guard_args,
         "--todo-id", ALTERNATIVE_TODO_ID, cwd=linked_worktree)
     assert replay_rc == 0 and replay["heartbeat_receipt"]["status"] == "replayed", replay
     assert replay["heartbeat_receipt"]["event_id"] == resumed["heartbeat_receipt"]["event_id"]
-    assert _heartbeat_receipt_count(runtime, turn_instance_id) == 3
+    assert _heartbeat_receipt_count(runtime, turn_instance_id) == (3 if pending_selection else 2)
 
 
 def test_boundary_projection_repair_keeps_same_turn_alternative_selectable(
