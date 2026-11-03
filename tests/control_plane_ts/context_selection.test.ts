@@ -120,7 +120,10 @@ test("full decision discovery points to current controls and whole source obliga
     {selections: [{pointer: "/interaction_contract/agent_channel/work_context/sources/0/content/full_criteria",
       path: ["interaction_contract", "agent_channel", "work_context", "sources", 0, "content", "full_criteria"]}]});
   assert.deepEqual(context, before);
-  assert.deepEqual(evaluateTurnEnvelope({operation: "context_select", context, initial_read: true}), select(context, pointers));
+  const initial = evaluateTurnEnvelope({operation: "context_select", context, initial_read: true});
+  assert.deepEqual((initial.selections as {pointer: string}[]).map(row => row.pointer), pointers);
+  assert.deepEqual(selectedFacts(context, initial.selections as {path: (string | number)[]}[]),
+    selectedFacts(context, select(context, pointers).selections as {path: (string | number)[]}[]));
 });
 
 // Compare the selected facts independently of their parent/child packaging.
@@ -152,7 +155,9 @@ test("initial navigation coalesces complete branches without changing selected f
   const before = structuredClone(context);
   const explicit = select(context, pointers);
   const initial = capturedContextSelection({context, initial_read: true}, pointers);
-  assert.deepEqual(initial, select(context, ["/facts", "/single/only"]));
+  assert.deepEqual(initial, {selections: [
+    {pointer: "/single/only", path: ["single", "only"]}, {pointer: "/facts", path: ["facts"]},
+  ]});
   assert.deepEqual(selectedFacts(context, initial.selections as {path: (string | number)[]}[]),
     selectedFacts(context, explicit.selections as {path: (string | number)[]}[]));
   assert.deepEqual((explicit.selections as {pointer: string}[]).map(row => row.pointer), [...pointers].sort());
@@ -191,11 +196,89 @@ test("partial coverage never expands unknown or optional facts through a parent"
     required: {unknown_obligation: "This selected unknown obligation stays whole."}};
   const pointers = ["/controls/allowed", "/controls/instruction", "/attachment/required", "/attachment/command", "/required"];
   const initial = capturedContextSelection({context, initial_read: true}, pointers);
-  assert.deepEqual(initial, select(context, pointers));
+  assert.deepEqual((initial.selections as {pointer: string}[]).map(row => row.pointer), pointers);
+  assert.deepEqual(selectedFacts(context, initial.selections as {path: (string | number)[]}[]),
+    selectedFacts(context, select(context, pointers).selections as {path: (string | number)[]}[]));
   const facts = selectedFacts(context, initial.selections as {path: (string | number)[]}[]);
   assert.ok(facts.some(value => value.includes("selected unknown obligation")));
   assert.ok(!facts.some(value => /not selected|deferred recipe/.test(value)));
   assert.throws(() => capturedContextSelection({context, initial_read: true}, [...pointers, "/missing"]), /does not exist/);
+});
+
+test("initial reads deliver current controls and required sources before the optional unread index", () => {
+  const context = {ok: true, goal_id: "fixture", execution_obligation: {must_attempt_work: false},
+    goal_boundary: {stop_condition: "Stop before dependent work."}, selected_todo: {todo_id: "current"},
+    context_details: {unread_context_index: {pointers: Array.from({length: 4000}, (_, i) => `/history/${i}`)}},
+    interaction_contract: {schema_version: "loopx_interaction_contract_v0", agent_channel: {
+      required_reads: ["Read the full current source."], work_context: {sources: [
+        {source: "goal", content: {text: "Complete current Goal.", unknown: "Unselected detail."}},
+        {source: "preferences", content: {current: {unknown_constraint: "Preserve this current preference."}}},
+      ]}}, cli_channel: {spend_allowed_now: false, settlement_plan: {
+        schema_version: "future", unknown_stop: "Keep the complete future settlement obligation."}}},
+  };
+  const before = structuredClone(context);
+  const initial = evaluateTurnEnvelope({operation: "context_select", context, initial_read: true});
+  const rows = initial.selections as {pointer: string; path: (string | number)[]}[];
+  const optional = rows.findIndex(row => row.path.includes("context_details"));
+  assert.ok(optional > 0);
+  for (const path of [["execution_obligation"], ["goal_boundary"], ["selected_todo"],
+    ["interaction_contract", "agent_channel", "required_reads"],
+    ["interaction_contract", "agent_channel", "work_context", "sources", 0, "content", "text"],
+    ["interaction_contract", "agent_channel", "work_context", "sources", 1, "content", "current"],
+    ["interaction_contract", "cli_channel", "settlement_plan"]]) {
+    const position = rows.findIndex(row => row.path.every((key, i) => key === path[i]) && row.path.length <= path.length);
+    assert.ok(position >= 0 && position < optional, JSON.stringify(path));
+  }
+  const discovery = evaluateTurnEnvelope({operation: "context_select", context, select: [""], list_fields: true});
+  assert.deepEqual(rows.map(row => row.pointer), discovery.initial_read_pointers);
+  const explicit = select(context, discovery.initial_read_pointers);
+  assert.deepEqual(selectedFacts(context, rows), selectedFacts(context, explicit.selections as {path: (string | number)[]}[]));
+  assert.deepEqual(context, before);
+});
+
+test("initial pointer deduplication preserves owner priority without changing explicit sorting", () => {
+  const context = {last: false, first: null, unselected: []};
+  const pointers = ["/last", "/last", "/first"];
+  const initial = capturedContextSelection({context, initial_read: true}, pointers);
+  assert.deepEqual((initial.selections as {pointer: string}[]).map(row => row.pointer), ["/last", "/first"]);
+  assert.deepEqual((select(context, pointers).selections as {pointer: string}[]).map(row => row.pointer), ["/first", "/last"]);
+  assert.throws(() => capturedContextSelection({context, initial_read: true}, [...pointers, "/missing"]), /does not exist/);
+});
+
+test("pinned rendering preserves recorded order after canonical address validation", () => {
+  const context = {z: {tail: "Keep this stop."}, "\ue000": null, "😀": 3, unselected: false};
+  const pointers = ["/z", "/\ue000", "/z", "/😀"];
+  const canonical = select(context, pointers);
+  const pinned = evaluateTurnEnvelope({operation: "context_select", context, select: pointers, preserve_selection_order: true});
+  assert.deepEqual((pinned.selections as {pointer: string}[]).map(row => row.pointer), ["/z", "/\ue000", "/😀"]);
+  assert.deepEqual((canonical.selections as {pointer: string}[]).map(row => row.pointer), ["/z", "/😀", "/\ue000"]);
+  assert.deepEqual(selectedFacts(context, pinned.selections as {path: (string | number)[]}[]),
+    selectedFacts(context, canonical.selections as {path: (string | number)[]}[]));
+  assert.deepEqual(evaluateTurnEnvelope({operation: "context_select", context, select: pointers,
+    preserve_selection_order: false}), canonical);
+  const index = evaluateTurnEnvelope({operation: "context_select", context, select: pointers,
+    list_fields: true, preserve_selection_order: true});
+  assert.deepEqual((index.selections as {pointer: string}[]).map(row => row.pointer), ["/z", "/\ue000", "/😀"]);
+});
+
+test("recorded order does not change rejected-batch precedence or diagnostics", () => {
+  const context = {z: {}, a: {}};
+  for (const recover_selection_errors of [false, true]) {
+    const request = {operation: "context_select", context, select: ["/z/missing", "/a/missing"], recover_selection_errors};
+    if (recover_selection_errors) {
+      assert.deepEqual(evaluateTurnEnvelope({...request, preserve_selection_order: true}), evaluateTurnEnvelope(request));
+    } else {
+      let canonical: unknown;
+      try { evaluateTurnEnvelope(request); } catch (error) { canonical = effectRuntimeErrorPayload(error); }
+      assert.throws(() => evaluateTurnEnvelope({...request, preserve_selection_order: true}), error => {
+        assert.deepEqual(effectRuntimeErrorPayload(error), canonical);
+        return true;
+      });
+    }
+  }
+  for (const preserve_selection_order of ["true", null, 0, {}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context, select: ["/z"],
+      preserve_selection_order}), /must be boolean/);
 });
 
 test("unknown decision schemas and ordinary selections keep generic discovery", () => {

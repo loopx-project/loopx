@@ -209,8 +209,27 @@ Initial navigation can replace fully
 selected children with their complete captured parent to avoid repeating addresses.
 An unselected child, including optional or unknown material, prevents that merge;
 the selected facts and obligations stay identical. Explicit selectors and index
-entries keep their original addresses. The option is read-only and exclusive with
-explicit selectors or discovery; unknown schemas use generic discovery.
+entries keep their original addresses. The option is read-only and exclusive with explicit
+selectors or discovery; unknown schemas use generic discovery.
+Pinned explicit references replay their recorded address order after the same
+canonical address validation. Older descriptors may contain caller-ordered
+addresses but a digest of canonical output: only after a digest mismatch, the
+reader tries that original canonical planner once over the same verified source
+and address set. Only exact matching bytes are returned. This may add one
+read-only planner call per legacy page; it adds no model-input receipt or state
+write. Historical recipe-only references and raw initial cursors keep their
+strict profile-change refusal and full-capture recovery.
+The existing internal `context_select` request accepts the validated boolean
+`preserve_selection_order` for this rendering step. Public explicit selectors
+and diagnostics are unchanged; the stored descriptor shape and CLI options are
+unchanged.
+Initial selections retain the typed owner's priority rather than alphabetical
+pointer order. Current controls, required sources and settlement obligations
+precede the complete unread-material index. A coalesced parent keeps
+its first selected child's position; explicit selectors retain canonical order.
+This reorders the same selected facts without reducing the total body or
+guaranteeing that all requirements fit one page. Earlier initial-selection
+digests still reject a changed profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. Warm
 deltas keep their existing reader, and disabled native delivery is unchanged.
@@ -246,6 +265,17 @@ reader，不重新运行首读导航；后续导航改变不能替换原选读�
 保留历史解码与完整捕获恢复。
 首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
 可选或未知内容都会阻止合并，选中事实和义务不变。显式选读和索引仍保留原地址。
+固定显式引用在既有规范地址校验后，按记录的地址顺序重放。旧描述符若保存调用方顺序
+却绑定规范排序正文的摘要，仅在摘要不匹配后，对同一已验证来源及相同地址集合重试
+一次原规范 planner；只返回摘要完全匹配的字节。此兼容路径每个旧分页最多增加一次
+只读 planner 调用，不写状态或证明模型输入覆盖。历史 recipe-only 引用和原始首读
+游标仍在 profile 变化时严格拒绝，并保留完整捕获恢复。既有内部 `context_select`
+请求为重放接受严格 boolean 的 `preserve_selection_order`；公开显式选读及错误诊断
+不变，reader 描述符字段结构和 CLI 选项不变。
+首读按 TypeScript owner 的优先顺序呈现，不再按指针字母序重排；当前控制条件、必读
+来源和结算义务先于完整的未读材料索引。合并父节点保留首个已选子节点的位置，
+显式选读仍按既有规范排序。这只调整相同事实的顺序，不缩减总正文，也不保证全部
+要求能放入一页。旧首读选读摘要遇到 profile 变化仍拒绝混读，可从原完整捕获恢复。
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
