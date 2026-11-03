@@ -1690,8 +1690,13 @@ CLI-produced ACK hints bind that argument vector to the exact registry and
 effective runtime root that produced `quota should-run`. Hosts must execute the
 complete vector; stripping its leading global options can route a
 project-launched ACK into project-local scheduler state instead of the shared
-control plane. When the decision is heartbeat-receipted, ACK and failure hints
-also bind the originating `turn_instance_id`. The follow-up rebuilds the same
+control plane. `fallback_hint.cli_args` receives the same registry binding, and
+its `--turn-instance-id` value is always the reference the current host shell can
+expand: `"${LOOPX_TURN:?}"` on POSIX and `$LOOPX_TURN` on native Windows, so a
+PowerShell host does not replay an empty Turn. When the decision is
+heartbeat-receipted, ACK, failure, and fallback hints also bind the originating
+concrete `turn_instance_id`, and `fallback_hint.route_binding.turn_instance_bound`
+records whether that binding is present. The follow-up rebuilds the same
 receipt-bound live decision before validating its reset token and identity;
 later Todos or a different unscoped wait lane cannot replace the decision that
 requested the host action.
