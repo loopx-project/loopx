@@ -205,6 +205,13 @@ requester or missing/conflicting original return route keeps coverage incomplete
 Reading a result does not consume it, and observing the agenda never dispatches
 work or acknowledges a request.
 
+A correction updates the current brief without acknowledging earlier results.
+An older revision's undelivered return or unconsumed peer result remains in the
+agenda at its original `request_revision`, even after the current result is
+delivered and consumed. Resolved historical returns leave this compact view;
+the full Inbox/result reader retains their history. This does not certify that
+an earlier result satisfies the corrected request or authorize replaying work.
+
 Each item names its request, receiving/source Agent where recorded, current
 revision, related Todo ids and the remaining receipt step. Counts are request
 records (`count_unit=request`), not distinct tasks: follow-up requests can link

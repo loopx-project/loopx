@@ -64,6 +64,33 @@ test("current revisions, cancellation and unavailable receipts retain independen
   assert.equal(project({receipt: {kind: "receipt_unavailable", recorded_decision: null}})[0].step, "recover_evidence");
 });
 
+test("a correction does not consume an earlier peer result", () => {
+  const receipt = {...settled, request_control_view: {revision: 2, control_state: "active", active_reservation: null}};
+  const peer = {direction: "outgoing", request: {...request, source_kind: "peer"}, receipt,
+    results: [{...conclusion, status: "delivered"},
+      {...conclusion, result_key: "conclusion-00000001", request_revision: 2, status: "delivered", consumed: true}]};
+  const row = project(peer)[0];
+  assert.equal(row?.step, "consume_peer_result");
+  assert.equal(row.request_revision, 2);
+  assert.equal(row.unconsumed_return_count, 1);
+  assert.equal((row.returns as Array<Record<string, unknown>>)[0].request_revision, 1);
+  assert.deepEqual(project({...peer, results: peer.results.map(result => ({...result, consumed: true}))}), []);
+});
+
+test("a new brief retains unresolved original-route delivery without reopening resolved history", () => {
+  const receipt = {...settled, request_control_view: {revision: 2, control_state: "active", active_reservation: null}};
+  const current = {...conclusion, result_key: "conclusion-00000001", request_revision: 2, status: "delivered"};
+  for (const status of ["queued", "retry_pending", "verification_required", "explicit_unverified", "admitted"]) {
+    const row = project({receipt, results: [{...conclusion, status}, current]})[0];
+    assert.equal(row.step, "await_return_delivery");
+    assert.equal(row.pending_return_count, 1);
+    assert.equal((row.returns as Array<Record<string, unknown>>)[0].request_revision, 1);
+  }
+  for (const status of ["delivered", "superseded"]) {
+    assert.deepEqual(project({receipt, results: [{...conclusion, status}, current]}), []);
+  }
+});
+
 test("a bounded agenda never mistakes omitted or unavailable work for an empty queue", () => {
   const items = Array.from({length: 26}, (_, i) => ({...project()[0], request_id: String(i), direction: i < 23 ? "incoming" : "outgoing"}));
   const result = projectDelegationTurnContext({batches: [{items, incoming_count: 23, outgoing_count: 3}], scan_complete: true, unavailable_count: 0,

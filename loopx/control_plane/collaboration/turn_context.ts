@@ -20,8 +20,13 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
   // Cancellation of a request does not release an in-flight publication reservation.
   if (cancelled && control?.active_reservation == null) return null;
   if (!Array.isArray(row.results)) throw new EffectRuntimeRequestError("delegation results are required");
+  // A correction changes the work brief, not an earlier result's delivery or
+  // consumption receipt. Keep unresolved returns at their original revision;
+  // resolved historical results remain available through the full reader.
   const results = row.results.map(value => requireJsonObject(value, "delegation result"))
-    .filter(result => result.request_revision === (control?.revision ?? 1));
+    .filter(result => result.request_revision === (control?.revision ?? 1)
+      || result.status !== "delivered" && result.status !== "superseded"
+      || request.source_kind === "peer" && result.consumed !== true);
   const incomplete = results.filter(result => result.status !== "delivered" && result.status !== "superseded");
   // Peer returns require their requester acknowledgement. An original Chat
   // return has a delivery receipt, not a synthetic peer-consumption receipt.
@@ -52,7 +57,8 @@ export function projectDelegationTurnItem(value: unknown): JsonObject | null {
     ...(todos.length ? {todo_ids: todos.slice(0, 4), additional_todo_count: Math.max(0, todos.length - 4)} : {}),
     ...(results.length ? {pending_return_count: incomplete.length, unconsumed_return_count: unconsumed.length,
       returns: results.slice(-3).map(result => ({result_key: result.result_key,
-        status: result.status, consumed: result.consumed})), additional_return_count: Math.max(0, results.length - 3)} : {}),
+        request_revision: result.request_revision, status: result.status, consumed: result.consumed})),
+      additional_return_count: Math.max(0, results.length - 3)} : {}),
   };
 }
 
