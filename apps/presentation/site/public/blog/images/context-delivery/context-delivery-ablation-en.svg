@@ -330,17 +330,17 @@ L 347.06794 322.750472
     </g>
     <g id="xtick_8">
      <g id="line2d_22">
-      <path d="M 430.759881 569.664
-L 430.759881 322.750472
+      <path d="M 470.214653 569.664
+L 470.214653 322.750472
 " clip-path="url(#p2891d18ce6)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.28; stroke-width: 0.8"/>
      </g>
      <g id="line2d_23">
       <g>
-       <use xlink:href="#me1cbec31af" x="430.759881" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me1cbec31af" x="470.214653" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_24">
-      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="430.759881" y="585.694" transform="rotate(-0 430.759881 585.694)">-50</text>
+      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="470.214653" y="585.694" transform="rotate(-0 470.214653 585.694)">-50</text>
      </g>
     </g>
     <g id="xtick_9">
@@ -360,47 +360,47 @@ L 514.451821 322.750472
     </g>
     <g id="xtick_10">
      <g id="line2d_26">
-      <path d="M 598.143761 569.664
-L 598.143761 322.750472
+      <path d="M 602.926158 569.664
+L 602.926158 322.750472
 " clip-path="url(#p2891d18ce6)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.28; stroke-width: 0.8"/>
      </g>
      <g id="line2d_27">
       <g>
-       <use xlink:href="#me1cbec31af" x="598.143761" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me1cbec31af" x="602.926158" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_26">
-      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="598.143761" y="585.694" transform="rotate(-0 598.143761 585.694)">50</text>
+      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="602.926158" y="585.694" transform="rotate(-0 602.926158 585.694)">100</text>
      </g>
     </g>
     <g id="xtick_11">
      <g id="line2d_28">
-      <path d="M 681.835701 569.664
-L 681.835701 322.750472
+      <path d="M 691.400495 569.664
+L 691.400495 322.750472
 " clip-path="url(#p2891d18ce6)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.28; stroke-width: 0.8"/>
      </g>
      <g id="line2d_29">
       <g>
-       <use xlink:href="#me1cbec31af" x="681.835701" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me1cbec31af" x="691.400495" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_27">
-      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="681.835701" y="585.694" transform="rotate(-0 681.835701 585.694)">100</text>
+      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="691.400495" y="585.694" transform="rotate(-0 691.400495 585.694)">200</text>
      </g>
     </g>
     <g id="xtick_12">
      <g id="line2d_30">
-      <path d="M 765.527642 569.664
-L 765.527642 322.750472
+      <path d="M 779.874832 569.664
+L 779.874832 322.750472
 " clip-path="url(#p2891d18ce6)" style="fill: none; stroke-dasharray: 2.96,1.28; stroke-dashoffset: 0; stroke: #94a3b8; stroke-opacity: 0.28; stroke-width: 0.8"/>
      </g>
      <g id="line2d_31">
       <g>
-       <use xlink:href="#me1cbec31af" x="765.527642" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
+       <use xlink:href="#me1cbec31af" x="779.874832" y="569.664" style="stroke: #000000; stroke-width: 0.8"/>
       </g>
      </g>
      <g id="text_28">
-      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="765.527642" y="585.694" transform="rotate(-0 765.527642 585.694)">150</text>
+      <text style="font-size: 10.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: middle" x="779.874832" y="585.694" transform="rotate(-0 779.874832 585.694)">300</text>
      </g>
     </g>
     <g id="text_29">
@@ -501,91 +501,91 @@ L 824.112 569.664
    </g>
    <g id="patch_16">
     <path d="M 514.451821 350.600988
-L 390.16929 350.600988
-L 390.16929 333.973814
+L 448.759626 350.600988
+L 448.759626 333.973814
 L 514.451821 333.973814
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #15803d; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_17">
     <path d="M 514.451821 380.292369
-L 449.942073 380.292369
-L 449.942073 363.665196
+L 480.353812 380.292369
+L 480.353812 363.665196
 L 514.451821 363.665196
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #16a34a; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_18">
     <path d="M 514.451821 409.983751
-L 471.350472 409.983751
-L 471.350472 393.356577
+L 491.669679 409.983751
+L 491.669679 393.356577
 L 514.451821 393.356577
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #22c55e; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_19">
     <path d="M 514.451821 439.675132
-L 494.248587 439.675132
-L 494.248587 423.047959
+L 503.772969 439.675132
+L 503.772969 423.047959
 L 514.451821 423.047959
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #0284c7; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_20">
     <path d="M 514.451821 469.366514
-L 501.211756 469.366514
-L 501.211756 452.73934
+L 507.453501 469.366514
+L 507.453501 452.73934
 L 514.451821 452.73934
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #0369a1; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_21">
     <path d="M 514.451821 499.057895
-L 501.964983 499.057895
-L 501.964983 482.430721
+L 507.851635 499.057895
+L 507.851635 482.430721
 L 514.451821 482.430721
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #2563eb; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_22">
     <path d="M 514.451821 528.749276
-L 609.860633 528.749276
-L 609.860633 512.122103
+L 564.882193 528.749276
+L 564.882193 512.122103
 L 514.451821 512.122103
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #d97706; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="patch_23">
     <path d="M 514.451821 558.440658
-L 634.968215 558.440658
-L 634.968215 541.813484
+L 784.033125 558.440658
+L 784.033125 541.813484
 L 514.451821 541.813484
 z
 " clip-path="url(#p2891d18ce6)" style="fill: #dc2626; stroke: #ffffff; stroke-linejoin: miter"/>
    </g>
    <g id="text_38">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #14532d" x="386.821612" y="345.200339" transform="rotate(-0 386.821612 345.200339)">-74.25% (delta-event byte reduction)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #14532d" x="441.759626" y="345.200339" transform="rotate(-0 441.759626 345.200339)">-74.25% (delta-event byte reduction)</text>
    </g>
    <g id="text_39">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #14532d" x="446.594396" y="374.93572" transform="rotate(-0 446.594396 374.93572)">-38.54% (3,089,841 B → 1,898,889 B)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #14532d" x="473.353812" y="374.93572" transform="rotate(-0 473.353812 374.93572)">-38.54% (3,089,841 B → 1,898,889 B)</text>
    </g>
    <g id="text_40">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #14532d" x="468.002794" y="404.627101" transform="rotate(-0 468.002794 404.627101)">-25.75% (Stride arm, 34 events)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #14532d" x="484.669679" y="404.627101" transform="rotate(-0 484.669679 404.627101)">-25.75% (Stride arm, 34 events)</text>
    </g>
    <g id="text_41">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #0c4a6e" x="490.900909" y="434.529545" transform="rotate(-0 490.900909 434.529545)">-12.07% (8.57M → 7.53M tokens)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #0c4a6e" x="496.772969" y="434.529545" transform="rotate(-0 496.772969 434.529545)">-12.07% (8.57M → 7.53M tokens)</text>
    </g>
    <g id="text_42">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #0c4a6e" x="497.864078" y="464.220927" transform="rotate(-0 497.864078 464.220927)">-7.91% (16h common window)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #0c4a6e" x="500.453501" y="464.220927" transform="rotate(-0 500.453501 464.220927)">-7.91% (16h common window)</text>
    </g>
    <g id="text_43">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #0c4a6e" x="498.617306" y="493.657246" transform="rotate(-0 498.617306 493.657246)">-7.46% (272.03M → 251.74M, responses -6.46%)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #0c4a6e" x="500.851635" y="493.657246" transform="rotate(-0 500.851635 493.657246)">-7.46% (272.03M → 251.74M, responses -6.46%)</text>
    </g>
    <g id="text_44">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #92400e" x="613.20831" y="523.348627" transform="rotate(-0 613.20831 523.348627)">+57% to +83% (stdout is 1.57x–1.83x selected bytes)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #92400e" x="779.033125" y="523.348627" transform="rotate(-0 779.033125 523.348627)">+57% to +83% (stdout is 1.57x–1.83x selected bytes)</text>
    </g>
    <g id="text_45">
-    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #991b1b" x="638.315893" y="553.040009" transform="rotate(-0 638.315893 553.040009)">+304.7% (4.05x first-2h early-window counterexample)</text>
+    <text style="font-weight: 700; font-size: 8.8px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: end; fill: #991b1b" x="779.033125" y="553.040009" transform="rotate(-0 779.033125 553.040009)">+304.7% (4.05x first-2h early-window counterexample)</text>
    </g>
    <g id="text_46">
     <text style="font-weight: 700; font-size: 11.5px; font-family: 'PingFang SC', 'Heiti TC', 'Arial Unicode MS', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #0f172a" x="263.376" y="314.750472" transform="rotate(-0 263.376 314.750472)">B. Layered Accounting Audit: Control-Packet Bytes, Main-Session Input Tokens &amp; Boundary Counterexamples</text>

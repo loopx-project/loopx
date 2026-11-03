@@ -146,6 +146,7 @@ export async function validateBilingualBlog(blogDir) {
   }
 
   await validateEventClockLabels(blogDir);
+  await validateEmpiricalEvidenceClaims(blogDir);
   return { articleSlugs: englishSlugs };
 }
 
@@ -201,6 +202,67 @@ async function validateEventClockLabels(blogDir) {
         `Article must state the same measured value as its chart: ${contract.slug} ${value}`,
       );
     }
+  }
+}
+
+const EMPIRICAL_CLAIM_CONTRACTS = [
+  {
+    article: "edgebench-feedback-and-memory/index.html",
+    required: [
+      "44 + 36 + 24 = 104",
+      "27 taxonomy vs 5 + 11 + 15 = 31",
+      "0.74329",
+      "conditional estimate for that fixed component vector",
+    ],
+    rejected: "tracing 86 replan events",
+  },
+  {
+    article: "zh/edgebench-feedback-and-memory/index.html",
+    required: [
+      "44 + 36 + 24 = 104",
+      "分类表 27 次，分臂合计 5 + 11 + 15 = 31 次",
+      "0.74329",
+      "固定分量向量的条件估算",
+    ],
+    rejected: "对 86 次重规划事件进行了逐次因果回溯",
+  },
+];
+
+async function validateEmpiricalEvidenceClaims(blogDir) {
+  const fixedComponentEstimate = 0.4 * 0.7088 + 0.3 * 0.7251 + 0.2 * 0.7112 + 0.1;
+  if (Math.abs(fixedComponentEstimate - 0.74329) > 1e-6) {
+    throw new Error("Graph fixed-component arithmetic drifted");
+  }
+  for (const contract of EMPIRICAL_CLAIM_CONTRACTS) {
+    const article = await readFile(resolve(blogDir, contract.article), "utf8");
+    for (const value of contract.required) {
+      assertIncludes(article, value, `Empirical article must retain reconciled claim: ${contract.article} ${value}`);
+    }
+    if (article.includes(contract.rejected)) {
+      throw new Error(`Empirical article restored an unreconciled total: ${contract.article}`);
+    }
+  }
+  for (const figure of [
+    "images/context-delivery/context-delivery-ablation-en.svg",
+    "images/context-delivery/context-delivery-ablation-zh.svg",
+  ]) {
+    const svg = await readFile(resolve(blogDir, figure), "utf8");
+    const ticks = new Map(
+      [...svg.matchAll(/<text[^>]*x="([\d.]+)" y="585\.694"[^>]*>(-?\d+)<\/text>/g)]
+        .map((match) => [Number(match[2]), Number(match[1])]),
+    );
+    const zero = ticks.get(0), tenth = ticks.get(300);
+    if (zero === undefined || tenth === undefined) {
+      throw new Error(`Ablation chart must expose a linear 0–300 percent axis: ${figure}`);
+    }
+    const patch = svg.match(/<g id="patch_23">([\s\S]*?)<\/g>/)?.[1];
+    const points = patch ? [...patch.matchAll(/[ML] ([\d.]+) /g)].map((match) => Number(match[1])) : [];
+    if (points.length < 2) throw new Error(`Ablation chart is missing its 304.7% bar: ${figure}`);
+    const expected = zero + 304.7 * ((tenth - zero) / 300);
+    if (Math.abs(points[1] - expected) > 0.11) {
+      throw new Error(`Ablation chart must plot +304.7% at linear scale: ${figure}`);
+    }
+    assertIncludes(svg, "+304.7%", `Ablation chart must label the corrected bar: ${figure}`);
   }
 }
 
