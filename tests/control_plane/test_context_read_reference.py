@@ -132,6 +132,58 @@ def test_initial_reference_rejects_changed_selection_profile(tmp_path, monkeypat
     assert "content" not in rejected
 
 
+@pytest.mark.parametrize("legacy", [False, True], ids=["pinned-addresses", "historical-profile"])
+def test_initial_reference_navigation_change_preserves_original_read_boundary(tmp_path, monkeypatch, legacy):
+    payload, machine, model = fixture(tmp_path)
+    expected = read(model["first_read_command"])
+    assert expected["ok"] and expected["eof"]
+    first = read(model["first_read_command"], max_page_output_bytes=3000, page_bytes=3000)
+    assert first["ok"] and not first["eof"]
+    reference = Path(first["reference_file"])
+    if legacy:
+        # Historical documents stored the navigation recipe, not its addresses.
+        _, descriptor = read_context_read_reference(str(reference))
+        reference = write_context_read_reference(Path(machine["path"]), machine["sha256"], selection={
+            **descriptor["selection"], "select": None, "initial_read": True})
+    reference_before, capture_before = reference.read_bytes(), Path(machine["path"]).read_bytes()
+    from loopx.control_plane.quota import turn_envelope
+
+    original = turn_envelope._turn_envelope_result
+
+    def changed_navigation(operation, **kwargs):
+        if kwargs.get("initial_read"):
+            kwargs = {**kwargs, "initial_read": False, "select": ["/criterion"]}
+        return original(operation, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", changed_navigation)
+    # A fresh initial read now has different navigation over the same source.
+    current = read(model["first_read_command"])
+    assert json.loads(current["content"])["selections"] == [{"pointer": "/criterion", "value": payload["criterion"]}]
+    following = read(first["next_command"], reference_file=str(reference))
+    if legacy:
+        assert following["ok"] is False and "digest changed" in following["reason"]
+        assert "content" not in following
+        recovered = read(model["recovery"]["command"], select=["/goal_boundary", "/selected_todo"])
+        assert recovered["ok"] and recovered["eof"]
+        values = {row["pointer"]: row["value"] for row in json.loads(recovered["content"])["selections"]}
+    else:
+        parts = [first["content"]]
+        while True:
+            assert following["ok"] and following["schema_version"] == "context_capture_selection_page_v1"
+            assert _context_pages(following) == []
+            assert following["offset"] == len("".join(parts).encode())
+            parts.append(following["content"])
+            if following["eof"]:
+                break
+            following = read(following["next_command"])
+        assert "".join(parts) == expected["content"]
+        values = {row["pointer"]: row["value"] for row in json.loads("".join(parts))["selections"]}
+    assert values["/goal_boundary"] == payload["goal_boundary"]
+    assert values["/selected_todo"] == payload["selected_todo"]
+    assert reference.read_bytes() == reference_before
+    assert Path(machine["path"]).read_bytes() == capture_before
+
+
 @pytest.mark.parametrize("selection", ["fields", "index", "initial"])
 def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypatch, selection):
     import errno
