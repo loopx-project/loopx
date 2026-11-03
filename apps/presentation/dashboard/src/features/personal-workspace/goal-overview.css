@@ -225,6 +225,11 @@
   letter-spacing: 0.04em;
   margin: 0;
 }
+.goal-overview-worker-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .goal-overview-worker-state p {
   margin-block: .35rem;
   overflow-wrap: anywhere;
