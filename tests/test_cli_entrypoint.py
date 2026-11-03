@@ -378,10 +378,21 @@ from loopx.capabilities.steward_executor import (
     steward_executor_endpoints,
 )
 
-assert steward_executor_endpoints() == frozenset({"codex", "dsh"})
-normalize_steward_executor_machine_defaults(
-    {"schema_version": "steward_executor_machine_defaults_v0", "executor_endpoint": "dsh"}
-)
+expected_kinds = {"codex": "individual", "dsh": "managed", "antigravity": "individual"}
+assert steward_executor_endpoints() == frozenset(expected_kinds)
+for endpoint in expected_kinds:
+    normalized = normalize_steward_executor_machine_defaults(
+        {"schema_version": "steward_executor_machine_defaults_v0", "executor_endpoint": endpoint}
+    )
+    assert normalized["executor_endpoint"] == endpoint
+try:
+    normalize_steward_executor_machine_defaults(
+        {"schema_version": "steward_executor_machine_defaults_v0", "executor_endpoint": "unknown"}
+    )
+except ValueError:
+    pass
+else:
+    raise AssertionError("an unknown executor endpoint must be rejected")
 for name in ("loopx.chat_manager", "loopx.chat_agent", "loopx.chat_store"):
     assert name not in sys.modules, name
 
@@ -392,7 +403,7 @@ for name in (
     "MANAGER_EXECUTOR_KIND_INDIVIDUAL", "MANAGER_EXECUTOR_KIND_MANAGED",
 ):
     assert getattr(manager, name) is getattr(machine_defaults, name), name
-assert manager.MANAGER_ENDPOINT_KINDS == {"codex": "individual", "dsh": "managed"}
+assert manager.MANAGER_ENDPOINT_KINDS == expected_kinds
 """
 	completed = run_isolated_script(script)
 	assert completed.returncode == 0, completed.stderr
