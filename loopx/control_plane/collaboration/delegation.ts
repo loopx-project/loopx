@@ -7,7 +7,7 @@ import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts
 import {acceptanceValidationEffects, goalAcceptanceTodoDigest, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
-import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {PROJECTION_ENVELOPE_SEAL_REQUEST, sealProjectionEnvelope} from "../projection_envelope.ts";
 import {readRequestControl, requestOriginalDigest, requestRevisionDigest} from "./request_control.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
@@ -344,26 +344,6 @@ function boundedReason(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const reason = value.trim();
   return reason.length > 0 ? reason.slice(0, 4096) : fallback;
-}
-
-/** Preserve a rejected Turn plan as data before the host adapter reads its transaction. */
-export function delegationTurnPlanDecision(params: JsonObject): JsonObject {
-  const plan = requireJsonObject(params.plan, "Turn plan");
-  if (plan.ok !== true) return {
-    schema_version: "loopx_delegation_turn_plan_decision_v0",
-    state: "rejected",
-    turn_key: null,
-    reason: boundedReason(plan.error ?? plan.reason, "Turn plan rejected without a reason"),
-  };
-  const transaction = requireJsonObject(plan.transaction, "Turn plan transaction");
-  requireThat(typeof transaction.turn_key === "string"
-    && ENVELOPED_SHA256_PATTERN.test(transaction.turn_key), "Turn plan transaction requires a valid turn_key");
-  return {
-    schema_version: "loopx_delegation_turn_plan_decision_v0",
-    state: "planned",
-    turn_key: transaction.turn_key,
-    reason: null,
-  };
 }
 
 /** Preserve the host owner's public diagnosis, not its private configuration.

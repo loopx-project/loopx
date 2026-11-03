@@ -106,3 +106,25 @@ test("explicit result files participate in immutable retry identity", () => {
     assert.throws(() => planCollaborationResult({...source, attachments: [{...attachment, ...patch}]}), /attachment/);
   }
 });
+
+test("a reported remainder is bounded immutable result scope, not a completion switch", () => {
+  const remaining_work = {summary: "Qualify the installed repair", resume_when: "The isolated package is available"};
+  const source = {...input, update_id: null, results: [], remaining_work};
+  const plan = planCollaborationResult(source);
+  const replay = {...source, results: [observation("conclusion", plan.value as JsonObject)]};
+  assert.equal(planCollaborationResult(replay).replay, true);
+  assert.deepEqual((plan.value as JsonObject).remaining_work, remaining_work);
+  for (const change of [null, {...remaining_work, summary: "Everything done"}, {...remaining_work, resume_when: "Now"}]) {
+    assert.throws(() => planCollaborationResult({...replay, remaining_work: change}), /conflicting/);
+  }
+  for (const invalid of [{summary: "Only a summary"}, {...remaining_work, owner: "another-agent"},
+    {...remaining_work, summary: " "}, {...remaining_work, resume_when: "😀".repeat(601)},
+    {...remaining_work, summary: "\ud800"}]) {
+    assert.throws(() => planCollaborationResult({...source, remaining_work: invalid}), /remaining work/);
+  }
+  assert.throws(() => planCollaborationResult({...source, phase: "decision"}), /conclusion/);
+  assert.throws(() => planCollaborationResult({...source, text: "x".repeat(20000)}), /result budget/);
+  const final = planCollaborationResult({...input, results: replay.results});
+  assert.equal(Object.hasOwn(final.value as JsonObject, "remaining_work"), false);
+  assert.deepEqual((replay.results[0].value as JsonObject).remaining_work, remaining_work);
+});

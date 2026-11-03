@@ -377,7 +377,7 @@ def test_cli_repairs_missing_selection_using_typed_error_and_same_capture(tmp_pa
     assert "--list" in failure["recovery"] and "Restore" not in failure["recovery"]
     # Branch on the typed cause, not wording in reason; discover and retry
     # against the original capture without another guard or admission.
-    code, index = _run_cli(registry, runtime, *command, "--select", "/rows/0", "--list", cwd=tmp_path)
+    code, index = _run_cli(registry, runtime, *shlex.split(failure["recovery_command"])[3:], cwd=tmp_path)
     assert code == 0 and index["ok"] and index["eof"], index
     fields = json.loads(index["content"])["selections"][0]["fields"]
     pointer = next(field["pointer"] for field in fields if field["pointer"] == "/rows/0/tail")
@@ -451,3 +451,44 @@ def test_capture_failure_cannot_be_repaired_as_a_selector_error(tmp_path, monkey
     assert result["ok"] is False and "content" not in result and "next_command" not in result
     assert "diagnostic_code" not in result and "error_kind" not in result
     assert "Restore the original digest-bound capture" in result["recovery"]
+
+
+@pytest.mark.parametrize("reference", [False, True])
+@pytest.mark.parametrize("mode", ["normal", "replan"])
+@pytest.mark.parametrize("pointer,parent", [
+    ("/interaction_contract/cli_channel/settlement_plan/absent", "/interaction_contract/cli_channel"),
+    ("/sources/4/content", "/sources"),
+    ("/a~1b/~0/child", "/a~1b"),
+    ("/missing/child", ""),
+])
+def test_cli_recovery_command_uses_current_capture_and_nearest_container(tmp_path, mode, pointer, parent, reference):
+    original = {"interaction_contract": {"cli_channel": {"settlement_plan": None} if mode == "normal"
+        else {"settlement_read_ref": "opaque-reference"}}, "sources": [], "a/b": {"~": False},
+        "unrelated": "private-value" * 1000}
+    path = tmp_path / "capture with ' quote.json"
+    raw = json.dumps(original).encode()
+    path.write_bytes(raw)
+    registry, runtime = tmp_path / "absent.json", tmp_path / "absent-runtime"
+    command = ["quota", "context-read", "--capture-file", str(path),
+        "--capture-sha256", hashlib.sha256(raw).hexdigest(), "--select", "/unrelated", "--select", pointer]
+    if reference:
+        from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
+        reader = write_context_read_reference(path, hashlib.sha256(raw).hexdigest())
+        command = ["quota", "context-read", "--reference-file", str(reader),
+            "--select", "/unrelated", "--select", pointer]
+    code, failure = _run_cli(registry, runtime, *command, cwd=tmp_path)
+    assert code != 0 and not failure["ok"] and "content" not in failure
+    assert "private-value" not in json.dumps(failure)
+    recovery = shlex.split(failure["recovery_command"])
+    assert recovery[recovery.index("--select") + 1] == parent
+    assert "--list" in recovery and recovery[recovery.index("--offset") + 1] == "0"
+    code, index = _run_cli(registry, runtime, *recovery[3:], cwd=tmp_path)
+    assert code == 0 and index["ok"] and index["eof"]
+    assert json.loads(index["content"])["selections"][0]["pointer"] == parent
+    assert "private-value" not in index["content"]
+    assert capture_page_range(index, raw=raw, digest=index["sha256"]) is None
+    path.write_bytes(raw + b" ")
+    code, changed = _run_cli(registry, runtime, *recovery[3:], cwd=tmp_path)
+    assert code != 0 and not changed["ok"] and "content" not in changed
+    assert "recovery_command" not in changed
+    assert not registry.exists() and not runtime.exists()

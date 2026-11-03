@@ -1,6 +1,19 @@
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+from control_plane.canonical_authority_fixture import (
+    initialize_canonical_source_fixture,
+    isolate_sqlite_runtime,
+)
+
 import loopx.summary_all as summary_all
+from loopx.paths import global_registry_path
 
 
 def patch_manager_reads(
@@ -616,3 +629,356 @@ def test_global_gates_error_redacts_paths_and_renderer_stays_focused(tmp_path) -
     assert "Recent Progress" not in markdown
     assert "Risks" not in markdown
     assert "## Lanes" not in markdown
+
+
+def test_summary_all_resolves_registered_agent_for_unscoped_peer_v1_goal(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    status_payload = {
+        "ok": True,
+        "attention_queue": {
+            "items": [
+                {
+                    "goal_id": "peer-goal",
+                    "status": "eligible",
+                    "waiting_on": "codex",
+                    "agent_lane_recommendation": {
+                        "agent_id": "review-b",
+                        "recommended_action": "Continue review-b queue.",
+                    },
+                }
+            ]
+        },
+        "global_registry": {"findings": []},
+        "run_history": {
+            "goals": [
+                {
+                    "id": "peer-goal",
+                    "coordination": {
+                        "registered_agents": ["review-a", "review-b"],
+                    },
+                }
+            ],
+            "recent_runs": [],
+        },
+    }
+    unscoped_quota = {
+        "ok": True,
+        "goal_id": "peer-goal",
+        "state": "eligible",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+        "reason": (
+            "coordination.registered_agents is configured for peer_v1, "
+            "but quota should-run was called without --agent-id"
+        ),
+        "recommended_action": (
+            "Regenerate each installed heartbeat with its registered --agent-id, "
+            "then rerun quota should-run with the same identity."
+        ),
+        "heartbeat_recommendation": {
+            "recommended_mode": "automation_prompt_upgrade",
+        },
+    }
+    scoped_quota = {
+        "ok": True,
+        "goal_id": "peer-goal",
+        "state": "eligible",
+        "should_run": True,
+        "normal_delivery_allowed": True,
+        "agent_identity": {"agent_id": "review-b", "registered": True},
+        "selected_todo": {
+            "todo_id": "todo-review-b",
+            "status": "open",
+            "priority": "P1",
+            "text": "Review exact PR queue.",
+        },
+        "agent_lane_next_action": {
+            "todo_id": "todo-review-b",
+            "status": "open",
+            "agent_id": "review-b",
+            "text": "Review exact PR queue.",
+        },
+        "recommended_action": "Review exact PR queue.",
+    }
+
+    def build_quota(_status, *, goal_id, agent_id=None):
+        assert goal_id == "peer-goal"
+        return unscoped_quota if agent_id is None else scoped_quota
+
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", build_quota)
+
+    payload = summary_all.build_summary_all(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        agent_id=None,
+        time_range="24h",
+        limit=5,
+    )
+
+    assert len(payload["lanes"]) == 1
+    assert payload["lanes"][0]["agent_id"] == "review-b"
+    assert payload["lanes"][0]["top_todo_id"] == "todo-review-b"
+    assert payload["lanes"][0]["next_safe_action"] == "Review exact PR queue."
+
+
+def test_summary_all_and_global_gates_preserve_scoped_user_gate_alongside_runnable_peer_lane(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    agents = [f"agent-{idx}" for idx in range(1, 10)]
+    status_payload = {
+        "ok": True,
+        "attention_queue": {
+            "items": [
+                {
+                    "goal_id": "peer-mixed-goal",
+                    "status": "eligible",
+                    "waiting_on": "user",
+                    "agent_lane_recommendation": {
+                        "agent_id": "agent-1",
+                        "recommended_action": "Run agent-1 delivery.",
+                    },
+                }
+            ]
+        },
+        "global_registry": {"findings": []},
+        "run_history": {
+            "goals": [
+                {
+                    "id": "peer-mixed-goal",
+                    "coordination": {
+                        "registered_agents": agents,
+                    },
+                }
+            ],
+            "recent_runs": [],
+        },
+    }
+    unscoped_quota = {
+        "ok": True,
+        "goal_id": "peer-mixed-goal",
+        "state": "eligible",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+    }
+    runnable_lane_quota = {
+        "ok": True,
+        "goal_id": "peer-mixed-goal",
+        "state": "eligible",
+        "should_run": True,
+        "normal_delivery_allowed": True,
+        "agent_identity": {"agent_id": "agent-1", "registered": True},
+        "selected_todo": {
+            "todo_id": "todo-agent-1",
+            "status": "open",
+            "priority": "P1",
+            "text": "Run agent-1 delivery.",
+        },
+        "agent_lane_next_action": {
+            "todo_id": "todo-agent-1",
+            "status": "open",
+            "agent_id": "agent-1",
+            "text": "Run agent-1 delivery.",
+        },
+        "recommended_action": "Run agent-1 delivery.",
+    }
+    gated_ninth_quota = {
+        "ok": True,
+        "goal_id": "peer-mixed-goal",
+        "state": "operator_gate",
+        "should_run": False,
+        "normal_delivery_allowed": False,
+        "agent_identity": {"agent_id": "agent-9", "registered": True},
+        "gate_id": "gate-agent-9",
+        "user_todo_summary": {
+            "open_count": 1,
+            "first_open_items": [
+                {
+                    "todo_id": "user-gate-9",
+                    "task_class": "user_gate",
+                    "text": "Approve agent-9 schema migration?",
+                }
+            ],
+            "gate_open_items": [
+                {
+                    "todo_id": "user-gate-9",
+                    "task_class": "user_gate",
+                    "text": "Approve agent-9 schema migration?",
+                }
+            ],
+        },
+        "interaction_contract": {
+            "user_channel": {
+                "action_required": True,
+                "question": "Approve agent-9 schema migration?",
+            }
+        },
+        "recommended_action": "Wait for user approval on agent-9.",
+    }
+
+    def build_quota(_status, *, goal_id, agent_id=None):
+        assert goal_id == "peer-mixed-goal"
+        if agent_id is None:
+            return unscoped_quota
+        if agent_id == "agent-1":
+            return runnable_lane_quota
+        if agent_id == "agent-9":
+            return gated_ninth_quota
+        return {
+            "ok": True,
+            "goal_id": "peer-mixed-goal",
+            "state": "eligible",
+            "should_run": False,
+            "normal_delivery_allowed": False,
+            "agent_identity": {"agent_id": agent_id, "registered": True},
+        }
+
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status_payload)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", build_quota)
+
+    summary_payload = summary_all.build_summary_all(
+        registry_path=tmp_path / "registry.json",
+        runtime_root_override=None,
+        agent_id=None,
+        time_range="24h",
+        limit=5,
+    )
+    gates_payload = build_global_gates(tmp_path)
+
+    assert len(summary_payload["lanes"]) == 1
+    assert summary_payload["lanes"][0]["agent_id"] == "agent-1"
+    assert summary_payload["lanes"][0]["top_todo_id"] == "todo-agent-1"
+    assert len(summary_payload["gates"]) == 1
+    assert summary_payload["gates"][0]["gate_id"] == "gate-agent-9"
+    assert (
+        summary_payload["gates"][0]["question"]
+        == "Approve agent-9 schema migration?"
+    )
+    assert len(gates_payload["gates"]) == 1
+    assert gates_payload["gates"][0]["gate_id"] == "gate-agent-9"
+
+
+@pytest.mark.parametrize("origin", [
+    {},
+    {"source": "active_state", "status": "active_state_user_gate", "gate_id": "distinct-decision"},
+])
+@pytest.mark.parametrize("command", ["global-summary", "global-gates"])
+def test_foreign_todo_counts_preserve_an_independent_decision_through_native_projection(
+    monkeypatch, tmp_path, origin, command,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    question = "Confirm independent recovery?"
+    status = {"ok": True, "attention_queue": {"items": [
+        {"goal_id": "synthetic", "waiting_on": "controller"},
+    ]}, "global_registry": {"findings": []}, "run_history": {"recent_runs": []}}
+    quota = {**origin, "ok": True, "agent_identity": {"agent_id": "peer-a"},
+             "interaction_contract": {"user_channel": {"action_required": True, "question": question}},
+             "user_todo_summary": {"agent_scope_filter": {
+                 "agent_id": "peer-a", "current_agent_blocking_open_count": 0,
+                 "other_agent_scoped_open_count": 1,
+             }}}
+    before = json.dumps([status, quota], sort_keys=True)
+    monkeypatch.setattr(summary_all, "collect_status", lambda **_: status)
+    monkeypatch.setattr(summary_all, "build_quota_should_run", lambda *_, **__: quota)
+    kwargs = {"registry_path": tmp_path / "registry.json", "runtime_root_override": None,
+              "agent_id": "peer-a", "limit": 8}
+    result = (summary_all.build_summary_all(**kwargs, time_range="24h")
+              if command == "global-summary" else summary_all.build_global_gates(**kwargs))
+    assert result["summary"]["open_gate_count"] == 1
+    assert result["gates"][0]["question"] == question
+    assert json.dumps([status, quota], sort_keys=True) == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("mixed", [False, True], ids=["ninth-worker", "worker-and-peer-gate"])
+@pytest.mark.parametrize("extra_gate", [False, True], ids=["original-gates", "another-peer-gate"])
+def test_real_peer_manager_reads_preserve_work_gates_and_authority(
+    tmp_path, monkeypatch, provider, reverse, mixed, extra_gate,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project = tmp_path / "synthetic project"
+    project.mkdir()
+    state, runtime = project / "state.md", tmp_path / "runtime"
+    runtime.mkdir()
+    registry = global_registry_path(runtime)
+    goal = "synthetic-peer-manager"
+    worker = "agent-1" if mixed else "agent-9"
+    gate = (
+        "- [ ] Approve synthetic peer output?\n"
+        "  <!-- loopx:todo todo_id=todo_peer_gate status=open task_class=user_gate "
+        "blocks_agent=agent-9 unblocks_todo_id=todo_held -->\n"
+    ) if mixed else ""
+    held = (
+        "- [ ] Verify held peer output.\n"
+        "  <!-- loopx:todo todo_id=todo_held status=open task_class=advancement_task "
+        "claimed_by=agent-9 action_kind=verify task_domain=validation -->\n"
+    ) if mixed else ""
+    if extra_gate:
+        gate += (
+            "- [ ] Approve another peer output?\n"
+            "  <!-- loopx:todo todo_id=todo_other_gate status=open task_class=user_gate "
+            "blocks_agent=agent-2 unblocks_todo_id=todo_other_held -->\n"
+        )
+        held += (
+            "- [ ] Verify another held peer output.\n"
+            "  <!-- loopx:todo todo_id=todo_other_held status=open task_class=advancement_task "
+            "claimed_by=agent-2 action_kind=verify task_domain=validation -->\n"
+        )
+    state.write_text(
+        "---\nstatus: active\nobjective: Read synthetic peer work without executing it.\n---\n"
+        "# Synthetic Goal\n\n## Objective\n\nRead synthetic peer work without executing it.\n"
+        "\n## Operating Contract\n\n- Read-only synthetic qualification.\n"
+        "\n## User Todo\n\n" + gate + "\n## Agent Todo\n\n"
+        "- [ ] Verify runnable synthetic output.\n"
+        f"  <!-- loopx:todo todo_id=todo_ready status=open task_class=advancement_task "
+        f"claimed_by={worker} action_kind=verify task_domain=validation -->\n" + held
+        + "\n## Completed Work Archive\n"
+    )
+    agents = [f"agent-{i}" for i in range(1, 10)]
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
+        "id": goal, "repo": str(project), "state_file": state.name, "status": "active",
+        "objective": "Read synthetic peer work without executing it.", "domain": "test",
+        "adapter": {"kind": "read_only_project_map_v0", "status": "connected-read-only"},
+        "coordination": {"agent_model": "peer_v1", "registered_agents": agents[::-1] if reverse else agents},
+    }]}))
+    initialize_canonical_source_fixture(runtime, goal, state_path=state, provider=provider)
+    repo = Path(__file__).resolve().parents[1]
+    prefix = [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+              "--runtime-root", str(runtime), "--format", "json"]
+
+    def read(*args):
+        result = subprocess.run([*prefix, *args], cwd=repo, text=True, capture_output=True,
+                                env={**os.environ, "LOOPX_USAGE_PING": "0"}, timeout=45)
+        assert result.returncode == 0, result.stdout + result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is True
+        return payload
+
+    before = read("todo", "list", "--goal-id", goal)
+    source_bytes, registry_bytes = state.read_bytes(), registry.read_bytes()
+    todos = read("global-todos")
+    summary = read("global-summary")
+    gates = read("global-gates")
+    assert "todo_ready" in {row["todo_id"] for row in todos["groups"]["runnable"]}
+    assert len(summary["lanes"]) == 1
+    assert summary["lanes"][0]["agent_id"] == worker
+    assert summary["lanes"][0]["top_todo_id"] == "todo_ready"
+    assert summary["summary"]["open_gate_count"] == gates["summary"]["open_gate_count"] == int(mixed) + int(extra_gate)
+    if mixed:
+        original_gate = next(row for row in gates["gates"] if row["blocks"] == ["todo_held"])
+        assert "Approve synthetic peer output?" in original_gate["question"]
+        explicit = read("global-gates", "--agent-id", "agent-1")
+        assert explicit["gates"] == []
+    if extra_gate:
+        other_gate = next(row for row in gates["gates"] if row["blocks"] == ["todo_other_held"])
+        assert "Approve another peer output?" in other_gate["question"]
+    after = read("todo", "list", "--goal-id", goal)
+    assert before["todos"] == after["todos"]
+    assert before["authority_read"] == after["authority_read"]
+    assert state.read_bytes() == source_bytes and registry.read_bytes() == registry_bytes
+    for payload in (todos, summary, gates):
+        assert str(tmp_path) not in json.dumps(payload)

@@ -1188,6 +1188,15 @@ goal-level refresh in a multi-agent goal must use a registered peer with
 Use agent-lane scope for a peer-local recommendation that should not replace the
 durable goal route.
 
+`connected_without_run` means a connected Goal has no recorded runs. When all
+recorded runs are agent-lane notes or status-neutral events, `latest_status_run`
+remains null; this does not mean the Goal never ran. Attention uses the current
+authoritative active-state Todo projection when available, otherwise it retains
+`unknown`. The full-history `unique_runs` count preserves this distinction when
+the displayed `latest_runs` window is empty. Neither history nor an open Todo
+proves a host is currently executing; Agent execution state still requires its
+separate lane, worker and lease facts.
+
 If a peer self-merged slice materially advanced the public product or case
 path, that peer or another registered peer should also write a project-level
 refresh with the matching `delivery_outcome=outcome_progress` (or skip the

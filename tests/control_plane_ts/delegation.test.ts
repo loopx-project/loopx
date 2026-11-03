@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationTurnWorkContext, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnWorkContext, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -740,17 +740,4 @@ test("workspace faults are bounded observations, not authority or launch permits
   const unavailable = {...input, authority: {ready: false, reason: "canonical read failed"}};
   assert.deepEqual(delegationPreflight({...unavailable, workspace: {state: "available"}}),
     delegationPreflight(unavailable));
-});
-
-test("Turn plan decision preserves a rejection and validates a successful transaction", () => {
-  const rejected = delegationTurnPlanDecision({plan: {ok: false,
-    error: "Requested Turn Todo is not accepted by canonical authority"}});
-  assert.deepEqual(rejected, {
-    schema_version: "loopx_delegation_turn_plan_decision_v0", state: "rejected",
-    turn_key: null, reason: "Requested Turn Todo is not accepted by canonical authority",
-  });
-  const turnKey = `sha256:${"a".repeat(64)}`;
-  assert.equal(delegationTurnPlanDecision({plan: {ok: true,
-    transaction: {turn_key: turnKey}}}).turn_key, turnKey);
-  assert.throws(() => delegationTurnPlanDecision({plan: {ok: true, transaction: {}}}));
 });

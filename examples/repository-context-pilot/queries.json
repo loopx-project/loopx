@@ -1,0 +1,23 @@
+[
+  {
+    "id": "windows-worktree",
+    "issue": "https://github.com/loopx-project/loopx/issues/7805",
+    "objective": "Why does --write-worktree reject existing in-scope paths on native Windows?",
+    "terms": ["write-worktree", "realpath"],
+    "relevant_files": ["loopx/control_plane/work_items/task_lease_workspace.ts"]
+  },
+  {
+    "id": "provider-key-shapes",
+    "issue": "https://github.com/loopx-project/loopx/issues/7799",
+    "objective": "Why are unlabeled sk-proj and sk-ant keys accepted by the public boundary scan?",
+    "terms": ["sk-proj", "sk-ant", "PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE"],
+    "relevant_files": ["loopx/public_safe_text.py", "loopx/contract.py"]
+  },
+  {
+    "id": "absent-symbol",
+    "issue": "https://github.com/loopx-project/loopx/issues/4926",
+    "objective": "Locate loopx_quantum_shuffle_v999 for this issue",
+    "terms": ["loopx_quantum_shuffle_v999"],
+    "relevant_files": []
+  }
+]

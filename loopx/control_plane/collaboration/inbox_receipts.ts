@@ -4,7 +4,7 @@ import { jsonObject, requireBoolean, requireJsonObject, requireStringLiteral } f
 import {receiverDecision, sameRequest} from "./semantic_request.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {requestControlView} from "./request_control.ts";
-import {collaborationResultObservations} from "./result_publication.ts";
+import {collaborationResultObservations, resultRemainingWork} from "./result_publication.ts";
 
 type Observation =
   | Readonly<{ state: "absent" | "unavailable" }>
@@ -33,10 +33,10 @@ function receiverFollowthrough(value: unknown): JsonObject {
   const evidenceUnavailable = requireBoolean(params.evidence_unavailable, "receiver evidence availability");
   // Only explicit request links can establish its work. A busy Agent, a
   // matching title, and an unrelated rolling review task are not such links.
-  const unresolved = work.some((todo) => todo.status !== "done");
   const step = kind === "receipt_unavailable" || evidenceUnavailable ? "recover_evidence"
+    : kind === "settled" ? "inspect_recorded_result"
     : decision === null ? "assess_request"
-    : decision === "adopt" && (unresolved || work.length === 0) ? "review_request_work"
+    : decision === "adopt" ? "review_request_work"
     : "return_answer";
   return {
     step,
@@ -86,14 +86,18 @@ function inspect(value: unknown): JsonObject {
         card_read_status: readUnavailable ? "unavailable" : readAt !== null ? "supplied" : "pending",
         card_decision: recorded ?? (view.assessment_readback === "unavailable" ? "unavailable" : "pending")};
       const results = collaborationResultObservations(request, row.results, recorded, legacy);
-      const answered = results.some(result => result.value.phase === "conclusion"
-        && (result.value.request_revision ?? 1) === view!.revision);
+      const latest = results.filter(result => result.value.phase === "conclusion"
+        && (result.value.request_revision ?? 1) === view!.revision)
+        .sort((a, b) => a.key.localeCompare(b.key)).at(-1);
+      const remaining = latest?.remainingWork;
+      const answered = latest !== undefined && !remaining;
       const warnings: Warning[] = view.assessment_readback === "unavailable" ? ["decision_unreadable_or_conflicting"] : [];
       const kind: InboxState = warnings.length ? "receipt_unavailable"
         : view.control_state === "cancelled" ? "settled"
         : view.active_reservation !== null ? "awaiting_conclusion"
         : !recorded ? "pending" : answered ? "settled" : "awaiting_conclusion";
       return {kind, recorded_decision: recorded, warnings, request_control_view: view, readback,
+        ...(remaining ? {remaining_work: remaining} : {}),
         result_revisions: results.map(result => ({result_key: result.key, request_revision: result.value.request_revision ?? 1}))};
     } catch (error) {
       if (!(error instanceof EffectRuntimeRequestError)) throw error;
@@ -105,6 +109,7 @@ function inspect(value: unknown): JsonObject {
   const recorded = decision.state === "read" && sameRequest(decision.value, request, false)
     ? receiverDecision(decision.value.decision) : null;
   const warnings: Warning[] = [];
+  let remaining: JsonObject | null = null;
   if (decision.state !== "absent" && !recorded) warnings.push("decision_unreadable_or_conflicting");
   if (conclusion.state !== "absent") {
     const result = conclusion.state === "read" ? conclusion.value : null;
@@ -116,12 +121,26 @@ function inspect(value: unknown): JsonObject {
     }
     if (decision.state === "absent") warnings.push("decision_missing_for_conclusion");
   }
+  try {
+    // An explicit partial result stays owed even after its reply is delivered.
+    // Later append-only results supersede its scope, never its stored receipt.
+    if (row.results !== undefined) {
+      const latest = collaborationResultObservations(request, row.results, recorded)
+        .filter(result => result.value.phase === "conclusion")
+        .sort((a, b) => a.key.localeCompare(b.key)).at(-1);
+      remaining = latest?.remainingWork ?? null;
+    } else if (conclusion.state === "read" && conclusion.value) remaining = resultRemainingWork(conclusion.value.remaining_work);
+  } catch (error) {
+    if (!(error instanceof EffectRuntimeRequestError)) throw error;
+    if (!warnings.includes("conclusion_unreadable_or_conflicting")) warnings.push("conclusion_unreadable_or_conflicting");
+  }
   // This is receipt/readback state only. Settled means a receiver reply exists
   // (or a legacy ACK owes no return), never accepted work or verified delivery.
   const kind: InboxState = warnings.length ? "receipt_unavailable"
     : !recorded ? "pending"
+    : remaining ? "awaiting_conclusion"
     : conclusion.state === "read" || !routePresent ? "settled" : "awaiting_conclusion";
-  return { kind, recorded_decision: recorded, warnings };
+  return { kind, recorded_decision: recorded, warnings, ...(remaining ? {remaining_work: remaining} : {}) };
 }
 
 /** One bounded read-model batch; no store writes, execution or authority. */

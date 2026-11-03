@@ -7,7 +7,7 @@ does not authorize borrowing another session's identity or changing providers.
 | Missing fact | First useful surface |
 | --- | --- |
 | Why the current operation was rejected | Its existing JSON error, typed recovery and operation receipt; look up the error before opening other projections |
-| Whether a receipt defect still needs a source fix | Resolve the failing executable and source revision, then run the same synthetic sequence on the intended current base. An installed release can predate an already merged repair; source tests do not prove installed behavior. |
+| Whether a receipt defect still needs a source fix | Resolve the failing executable, imported package and source revision in the same process mode/environment, then run the same synthetic sequence on the intended current base. An inherited `PYTHONPATH` can shadow an editable install in `uv run loopx` while `python -c` or `-m` from the checkout imports correctly. Bind or clear it only for the source-validation command and exercise the real console. An installed release can predate an already merged repair; source tests do not prove installed behavior. |
 | Whether an ambiguous Todo create committed | `loopx --format json todo receipt --goal-id <goal> --operation-id <original-id>`; inspect the receipt before any retry with the same identity |
 | Current lease ownership/version | `loopx --format json task-lease inspect --goal-id <goal> --todo-id <todo>` |
 | One Todo's current state | `loopx --format json todo list --goal-id <goal> --todo-id <todo>`; use `--agent-id` when needed by the existing lane |

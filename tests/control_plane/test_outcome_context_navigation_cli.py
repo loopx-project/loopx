@@ -12,6 +12,7 @@ from loopx.control_plane.testing.canary_harness import run_json_cli_result, writ
 from loopx.control_plane.todos.machine_section_projection import render_canonical_todo_sections
 from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 from loopx.cli_commands.quota_capture import read_context_capture
+from tests.control_plane.codex_checkpoint_fixture import reference_metadata_oracle
 
 
 @pytest.mark.parametrize("inherited", [False, True])
@@ -71,6 +72,7 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
         *([] if inherited else ["--context-delivery", "on"]),
         "--runtime-profile", "generic_cli", "--codex-context-dir", str(native),
         "--decision-output-root", str(tmp_path / "captures"), "--turn-instance-id", "scope-turn")
+    first = reference_metadata_oracle(first)
     page = read_context_capture(argparse.Namespace(capture_file=first["recovery"]["path"],
         capture_sha256=first["recovery"]["sha256"], offset=0, page_bytes=64000, max_page_output_bytes=64000, format="json"))
     parts = []
@@ -98,6 +100,26 @@ def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_pa
     # Use the shared exact selector, without a specialized outcome reader.
     source_index = next(i for i, row in enumerate(presentation["interaction_contract"]["agent_channel"]["work_context"]["sources"])
         if row.get("source") == "goal_acceptance")
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{source_index}/content/goal_acceptance_contract/outcome_requirements/outcomes"
+    # The same public reader works without native/session flags. Its starting
+    # selection adopts the existing owner's suggestions, not an ownership rule.
+    native_before = (native / "session.json").read_bytes()
+    initial_parts, offset, selection = [], 0, []
+    while True:
+        initial = cli("quota", "context-read", "--capture-file", first["recovery"]["path"],
+            "--capture-sha256", first["recovery"]["sha256"], "--initial-read", "--offset", str(offset),
+            "--page-bytes", "16000", "--max-page-output-bytes", "20000", *selection)
+        initial_parts.append(initial["content"])
+        assert initial["sha256"] == first["recovery"]["sha256"]
+        if initial["eof"]:
+            break
+        offset = initial["next_offset"]
+        selection = ["--selection-sha256", initial["selection_sha256"]]
+    values = {row["pointer"]: row["value"] for row in json.loads("".join(initial_parts))["selections"]}
+    assert values[prefix + "/0"] == observed["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert values[prefix + "/1/id"] == "peer"
+    assert "peer exact requirement 11" not in "".join(initial_parts)
+    assert (native / "session.json").read_bytes() == native_before
     pointer = f"/interaction_contract/agent_channel/work_context/sources/{source_index}/content/goal_acceptance_contract/outcome_requirements/outcomes/1"
     detail = cli("quota", "context-read", "--capture-file", first["recovery"]["path"],
         "--capture-sha256", first["recovery"]["sha256"], "--select", pointer,

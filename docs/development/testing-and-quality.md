@@ -729,6 +729,25 @@ and a global `loopx` may resolve to a different installed source tree.
 与测试依赖；能否自动下载 Python 取决于下载配置与网络。系统 `python3` 可能过旧，
 全局 `loopx` 也可能指向另一个已安装版本。
 
+An inherited `PYTHONPATH` can also shadow the editable checkout when running
+`uv run loopx`: the console script starts in its scripts directory, while
+`python -c` and `python -m` start with the working directory on their import
+path. A successful checkout import in either mode does not qualify the console
+process. For source validation on POSIX, use command-local
+`env -u PYTHONPATH uv run --extra test loopx ...`; test subprocesses launched
+outside the checkout should explicitly bind `PYTHONPATH` to that checkout.
+Exercise the actual console and its semantic result. Keep installed-runtime
+qualification separate; do not edit a shared environment, promote a release or
+restart a shared service to repair a source-validation mismatch.
+
+继承的 `PYTHONPATH` 也可能让 `uv run loopx` 越过可编辑安装，加载其他源码。
+控制台脚本从 scripts 目录启动，而 `python -c`、`python -m` 会把当前目录放在
+导入路径前面；后两者导入成功不能证明控制台进程正确。POSIX 下源码验证可使用
+仅对本条命令生效的 `env -u PYTHONPATH uv run --extra test loopx ...`；在仓库外
+启动的测试子进程应显式将 `PYTHONPATH` 绑定到被测 checkout。验证真实控制台及其
+语义结果，并与安装版验收分开；不要为源码验收偏差修改共享环境、提升安装版或
+重启共享服务。
+
 Fixtures that model a child without LoopX must isolate that child from an
 inherited source-checkout `PYTHONPATH`. Check imports with the same interpreter
 mode and environment as the command under test: an isolated `python -I` probe

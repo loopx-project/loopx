@@ -93,6 +93,8 @@ class LarkGoalTopicRuntimeService:
         attention_due = 0.0
         reports: Future[int] | None = None
         reports_due = 0.0
+        feedback: Future[int] | None = None
+        feedback_due = 0.0
         ingress: Future[list[str]] | None = None
         ingress_due = time.monotonic() + 60
         wakeup_scope = getattr(self.runtime_controller, "turn_release_wakeup", None)
@@ -101,10 +103,17 @@ class LarkGoalTopicRuntimeService:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loopx-lark-private-reply") as pool, \
                 (wakeup_scope(self._delivery_wakeup) if callable(wakeup_scope) else nullcontext()):
             def step() -> None:
-                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due
+                nonlocal attempted, attention, attention_due, reports, reports_due, ingress, ingress_due, feedback, feedback_due
                 # Clear BEFORE scanning: an arrival during the scan must also
                 # wake the following wait, rather than disappear in that gap.
                 self._delivery_wakeup.clear()
+                if feedback is not None and feedback.done():
+                    try:
+                        feedback.result()
+                    except Exception:
+                        logging.getLogger(__name__).warning("App input reaction reconciliation is pending")
+                    feedback = None
+                    feedback_due = time.monotonic() + 5
                 if reports is not None and reports.done():
                     try:
                         reports.result()
@@ -160,19 +169,26 @@ class LarkGoalTopicRuntimeService:
                     if report_provider is not None and reports is None and time.monotonic() >= reports_due:
                         reports_due = time.monotonic() + 30
                     for path in sorted(paths, key=lambda path: attempted.get(path, 0)):
-                        if (len(pending) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
+                        if (len(pending) + int(feedback is not None) + int(reports is not None or reports_ready) + int(attention is not None or attention_ready)
                                 + int(ingress is not None or ingress_ready) >= 4 or self._closed.is_set()):
                             break
                         if path in pending:
                             continue
                         pending[path] = pool.submit(transport.reconcile_request, path)
                         attempted[path] = attempted.get(path, 0) + 1
-                    if reports_ready and len(pending) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if reports_ready and len(pending) + int(feedback is not None) + int(attention is not None or attention_ready) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
                         reports = pool.submit(report_provider.reconcile)
-                    if attention_ready and len(pending) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
+                    if attention_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(ingress is not None or ingress_ready) < 4 and not self._closed.is_set():
                         attention = pool.submit(owner_attention.reconcile)
-                    if ingress_ready and len(pending) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
+                    if ingress_ready and len(pending) + int(feedback is not None) + int(reports is not None) + int(attention is not None) < 4 and not self._closed.is_set():
                         ingress = pool.submit(observer.observe, cancelled=self._closed.is_set)
+                    app_feedback = getattr(transport, "reconcile_app_feedback", None)
+                    # Optional feedback uses one slot in this same bounded
+                    # pool and leaves capacity for canonical body deliveries.
+                    if (callable(app_feedback) and feedback is None and time.monotonic() >= feedback_due
+                            and len(pending) + int(reports is not None) + int(attention is not None)
+                            + int(ingress is not None) < 3 and not self._closed.is_set()):
+                        feedback = pool.submit(app_feedback)
                 except Exception:
                     logging.getLogger(__name__).warning("Private Chat delivery discovery is pending")
 

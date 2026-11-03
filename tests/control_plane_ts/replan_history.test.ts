@@ -35,88 +35,25 @@ function trigger(runs: JsonObject[], patch: JsonObject = {}): JsonObject | null 
 }
 const many = (count: number, build = run): JsonObject[] => Array.from({ length: count }, (_, i) => build(count - i));
 
-test("settled stride feedback scales only the next periodic interval from its configured baseline", () => {
-  const ack = run(0, {accepted_ack: true});
-  const key = JSON.stringify(["worker-a", "turn-0"]);
-  const project = (count: number, decision: JsonObject, patch: JsonObject = {}) => {
-    const rows = [...many(count), ack];
-    return projectReplanHistory(request(rows, {operation: "periodic", periodic_threshold: 6,
-      stride_strategy: "evidence_conditioned_v1", ...patch}),
-    new Set(rows.map(row => JSON.stringify([row.agent_id, row.turn_id]))),
-    new Map([[key, decision]])).trigger as JsonObject | null;
-  };
-  const grow = {action: "grow", basis: "supported_progress", previous_review: {
-    goal_gain: "improved", evidence_refs: ["evidence:subsequent-work"]}};
-  assert.equal(project(8, grow), null);
-  assert.equal(project(9, grow)?.threshold, 9);
-  assert.equal(project(20, grow)?.threshold, 9, "feedback does not compound on every read");
-  for (const decision of [{action: "verify", basis: "supported_progress"},
-    ...["uncertain_evidence", "unexplained_gap", "decision_failure"].map(basis => ({action: "grow", basis}))]) {
-    assert.equal(project(2, decision), null);
-    assert.equal(project(3, decision)?.threshold, 3);
-    assert.equal(project(3, decision, {periodic_threshold: 5})?.threshold, 3, "round fractional counts up");
-    assert.equal(project(1, decision, {periodic_threshold: 1})?.threshold, 1);
+test("work-shape decisions never silently change the configured review count", () => {
+  for (const strategy of ["off", "evidence_conditioned_v1"]) {
+    for (const action of ["grow", "verify", "switch"]) {
+      for (const threshold of [1, 3, 6]) {
+        const ack = run(0, {accepted_ack: true, agent_vision: {stride_decision: {
+          action, basis: "supported_progress", previous_review: {goal_gain: "improved"},
+        }}});
+        const project = (count: number) => {
+          const rows = [...many(count), ack];
+          return projectReplanHistory(request(rows, {operation: "periodic",
+            periodic_threshold: threshold, stride_strategy: strategy}),
+          new Set(rows.map(row => JSON.stringify([row.agent_id, row.turn_id])))).trigger as JsonObject | null;
+        };
+        assert.equal(project(threshold - 1), null);
+        assert.equal(project(threshold)?.threshold, threshold);
+        assert.equal(project(threshold + 2)?.threshold, threshold);
+      }
+    }
   }
-  for (const decision of [{action: "switch", basis: "unexplained_gap"},
-    {...grow, previous_review: {goal_gain: "flat", evidence_refs: ["evidence:negative"]}},
-    {...grow, previous_review: {goal_gain: "improved", evidence_refs: []}},
-    {...grow, previous_review: undefined}, {...grow, basis: "useful_new_route"}]) {
-    assert.equal(project(5, decision), null);
-    assert.equal(project(6, decision)?.threshold, 6);
-  }
-  assert.equal(project(6, grow, {stride_strategy: "off"})?.threshold, 6);
-  assert.equal(project(6, grow, {stride_strategy: undefined})?.threshold, 6);
-});
-
-test("cadence feedback cannot borrow a peer, unsettled decision or a decision before the current ACK", () => {
-  const verify = {action: "verify", basis: "uncertain_evidence"};
-  const key = (agent: string, turn: string) => JSON.stringify([agent, turn]);
-  const old = run(0, {accepted_ack: true});
-  const rows = [...many(3), old];
-  const qualified = new Set(rows.map(row => key(String(row.agent_id), String(row.turn_id))));
-  const project = (history: JsonObject[], decisions: Map<string, JsonObject>) =>
-    projectReplanHistory(request(history, {periodic_threshold: 6, stride_strategy: "evidence_conditioned_v1"}),
-      qualified, decisions).trigger as JsonObject | null;
-  assert.equal(project(rows, new Map()), null, "a projected decision is not settlement");
-  assert.equal(project(rows, new Map([[key("peer", "turn-0"), verify]])), null);
-  assert.equal(project([...many(3), run(4, {accepted_ack: true}), old],
-    new Map([[key("worker-a", "turn-0"), verify]])), null, "do not cross a newer ACK without stride feedback");
-  const decisions = new Map([[key("worker-a", "turn-0"), verify]]);
-  assert.equal(project([run(9, {agent_id: "peer", accepted_ack: true}), ...rows], decisions)?.threshold, 3);
-  const stalled = [run(2, {progress: observation}), run(1, {progress: observation}), old];
-  const before = projectReplanHistory(request(stalled), qualified).trigger;
-  assert.deepEqual(project(stalled, decisions), before, "typed stalls retain their original priority and threshold");
-});
-
-test("late observations cannot revive an older settled stride decision by reusing its Turn", () => {
-  const key = (turn: string) => JSON.stringify(["worker-a", turn]);
-  const old = run(0, {accepted_ack: true});
-  const current = run(4, {accepted_ack: true});
-  const decisions = new Map<string, JsonObject>([
-    [key("turn-0"), {action: "verify", basis: "uncertain_evidence"}],
-    [key("turn-4"), {action: "switch", basis: "useful_new_route"}],
-  ]);
-  const qualified = new Set([key("turn-1"), key("turn-2")]);
-  const project = (rows: JsonObject[], feedback = decisions, patch: JsonObject = {}) =>
-    projectReplanHistory(request(rows, {operation: "periodic", periodic_threshold: 2,
-      stride_strategy: "evidence_conditioned_v1", ...patch}), qualified, feedback).trigger as JsonObject | null;
-  // These are request-local history observations, not synthetic settlements.
-  // Neutral inventory omitted by an older caller must retain the same rule.
-  for (const classification of ["replan_noop", "repair_noop", ...neutral, "status_readback"]) {
-    const alias = run(9, {turn_id: "turn-0", classification});
-    assert.equal(project([alias, run(1), current, old]), null, classification);
-    assert.equal(project([alias, run(2), run(1), current, old])?.threshold, 2, classification);
-    assert.equal(project([alias, run(1), current, old],
-      new Map([[key("turn-0"), decisions.get(key("turn-0"))!]])), null,
-    "the newer ACK stops lookup even when it has no settled decision");
-    assert.equal(project([alias, run(1), current, old], decisions, {stride_strategy: "off"}), null);
-  }
-  // A neutral ACK still cuts the existing window, but cannot supply feedback.
-  assert.equal(project([run(1), {...old, classification: "replan_noop"}],
-    new Map([[key("turn-0"), decisions.get(key("turn-0"))!]])), null);
-  assert.equal(project([run(1), old],
-    new Map([[key("turn-0"), decisions.get(key("turn-0"))!]]))?.threshold, 1,
-  "the genuine latest ACK remains inclusive");
 });
 
 test("effective cadence uses qualified lane identities, independent of Todo completion", () => {
