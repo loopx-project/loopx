@@ -245,6 +245,42 @@ test("initial pointer deduplication preserves owner priority without changing ex
   assert.throws(() => capturedContextSelection({context, initial_read: true}, [...pointers, "/missing"]), /does not exist/);
 });
 
+test("pinned rendering preserves recorded order after canonical address validation", () => {
+  const context = {z: {tail: "Keep this stop."}, "\ue000": null, "😀": 3, unselected: false};
+  const pointers = ["/z", "/\ue000", "/z", "/😀"];
+  const canonical = select(context, pointers);
+  const pinned = evaluateTurnEnvelope({operation: "context_select", context, select: pointers, preserve_selection_order: true});
+  assert.deepEqual((pinned.selections as {pointer: string}[]).map(row => row.pointer), ["/z", "/\ue000", "/😀"]);
+  assert.deepEqual((canonical.selections as {pointer: string}[]).map(row => row.pointer), ["/z", "/😀", "/\ue000"]);
+  assert.deepEqual(selectedFacts(context, pinned.selections as {path: (string | number)[]}[]),
+    selectedFacts(context, canonical.selections as {path: (string | number)[]}[]));
+  assert.deepEqual(evaluateTurnEnvelope({operation: "context_select", context, select: pointers,
+    preserve_selection_order: false}), canonical);
+  const index = evaluateTurnEnvelope({operation: "context_select", context, select: pointers,
+    list_fields: true, preserve_selection_order: true});
+  assert.deepEqual((index.selections as {pointer: string}[]).map(row => row.pointer), ["/z", "/\ue000", "/😀"]);
+});
+
+test("recorded order does not change rejected-batch precedence or diagnostics", () => {
+  const context = {z: {}, a: {}};
+  for (const recover_selection_errors of [false, true]) {
+    const request = {operation: "context_select", context, select: ["/z/missing", "/a/missing"], recover_selection_errors};
+    if (recover_selection_errors) {
+      assert.deepEqual(evaluateTurnEnvelope({...request, preserve_selection_order: true}), evaluateTurnEnvelope(request));
+    } else {
+      let canonical: unknown;
+      try { evaluateTurnEnvelope(request); } catch (error) { canonical = effectRuntimeErrorPayload(error); }
+      assert.throws(() => evaluateTurnEnvelope({...request, preserve_selection_order: true}), error => {
+        assert.deepEqual(effectRuntimeErrorPayload(error), canonical);
+        return true;
+      });
+    }
+  }
+  for (const preserve_selection_order of ["true", null, 0, {}])
+    assert.throws(() => evaluateTurnEnvelope({operation: "context_select", context, select: ["/z"],
+      preserve_selection_order}), /must be boolean/);
+});
+
 test("unknown decision schemas and ordinary selections keep generic discovery", () => {
   for (const context of [{value: true}, {interaction_contract: {schema_version: "future"}}]) {
     const result = evaluateTurnEnvelope({operation: "context_select", context, select: [""], list_fields: true});

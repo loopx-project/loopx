@@ -162,6 +162,23 @@ def _context_selection_transport(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _context_selection_bytes(payload: dict[str, Any], selections: list[dict[str, Any]],
+                             *, list_fields: bool, list_depth: int | None) -> bytes:
+    """Render TS-verified addresses from original, digest-checked JSON values."""
+    views: list[dict[str, Any]] = []
+    for item in selections:
+        selected: Any = payload
+        for key in item["path"]:
+            selected = selected[key]
+        if list_fields:
+            views.append({"pointer": item["pointer"], "fields": _context_index_fields(payload, item["children"])})
+        else:
+            views.append({"pointer": item["pointer"], "value": selected})
+    view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
+    return json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1",
+        "selections": views, **view_options}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+
+
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None) -> dict[str, Any]:
@@ -257,8 +274,10 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
             depth_options = {"list_depth": list_depth} if list_depth is not None else {}
             selection_options = {"initial_read": True} if initial_read else {"select": selectors}
             planning_context = payload if initial_read or list_fields else _context_selection_transport(payload)
+            pinned_explicit = pinned_selection is not None and not initial_read
+            order_options = {"preserve_selection_order": True} if pinned_explicit else {}
             plan = _turn_envelope_result("context_select", context=planning_context, list_fields=list_fields,
-                recover_selection_errors=not initial_read, **selection_options, **depth_options)
+                recover_selection_errors=not initial_read, **selection_options, **depth_options, **order_options)
             if rejection := plan.get("rejected_selection"):
                 # TS alone resolves the nearest container. Reuse the original
                 # escaped tokens, without parsing diagnostic prose or traversing
@@ -273,23 +292,20 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     "reason": rejection["message"], "recovery_command": command,
                     "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
                         "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
-            views: list[dict[str, Any]] = []
-            for item in plan["selections"]:
-                selected: Any = payload
-                for key in item["path"]:
-                    selected = selected[key]
-                if list_fields:
-                    views.append({"pointer": item["pointer"], "fields": _context_index_fields(payload, item["children"])})
-                else:
-                    views.append({"pointer": item["pointer"], "value": selected})
-            view_options = {"list_depth": list_depth} if list_depth is not None and list_depth != 1 else {}
-            raw = json.dumps({"schema_version": "context_capture_index_v1" if list_fields else "context_capture_selection_v1", "selections": views, **view_options},
-                ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            raw = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
             expected = hashlib.sha256(raw).hexdigest()
+            if pinned_explicit and selection_digest != expected:
+                # Older explicit metadata could retain caller order while its
+                # digest covered canonical output. Try that original owner
+                # once, over the same verified source and exact address set.
+                plan = _turn_envelope_result("context_select", context=planning_context,
+                    list_fields=list_fields, **selection_options, **depth_options)
+                raw = _context_selection_bytes(payload, plan["selections"], list_fields=list_fields, list_depth=list_depth)
+                expected = hashlib.sha256(raw).hexdigest()
             if selection_digest is not None and selection_digest != expected:
                 raise ValueError("selected view digest changed; restore the original selection and reader")
             selection_digest = expected
-            selectors = [item["pointer"] for item in views]
+            selectors = [item["pointer"] for item in plan["selections"]]
             if reference_file is not None and pinned_selection is None:
                 try:
                     reference_file = write_context_read_reference(path, digest, selection={

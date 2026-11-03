@@ -132,6 +132,87 @@ def test_initial_reference_rejects_changed_selection_profile(tmp_path, monkeypat
     assert "content" not in rejected
 
 
+@pytest.mark.parametrize("layout", ["recorded", "legacy_canonical"])
+def test_pinned_explicit_replay_keeps_the_digest_bound_order_and_original_values(tmp_path, monkeypatch, layout):
+    from loopx.control_plane.quota import turn_envelope
+
+    payload = {"z": {"text": "保留完整来源🙂" * 240, "numbers": [2**60 + 1, 1.0, -0.0], "tail": "Stop before effects."},
+        "\ue000": None, "😀": {"unknown_constraint": False}}
+    machine = native_context_capture_view(payload, tmp_path)
+    path, digest = Path(machine["path"]), machine["sha256"]
+    pointers = ["/z", "/\ue000", "/z", "/😀"]
+    order = ["/z", "/\ue000", "/😀"] if layout == "recorded" else ["/z", "/😀", "/\ue000"]
+    expected = json.dumps({"schema_version": "context_capture_selection_v1", "selections": [
+        {"pointer": pointer, "value": payload[pointer[1:]]} for pointer in order]},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    reference = write_context_read_reference(path, digest, selection={"select": pointers, "initial_read": False,
+        "list_fields": False, "list_depth": None, "sha256": hashlib.sha256(expected).hexdigest()})
+    before = {f: f.read_bytes() for f in tmp_path.iterdir() if f.is_file()}
+    invoke = turn_envelope._turn_envelope_result
+    requests = []
+
+    def observe(operation, **kwargs):
+        requests.append(kwargs)
+        return invoke(operation, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observe)
+    command = f"loopx --format json quota context-read --reference-file {shlex.quote(str(reference))} --page-bytes 3000 --max-page-output-bytes 3500"
+    content, pages = b"", 0
+    while True:
+        page = read(command)
+        assert page["ok"] and page["offset"] == len(content), page
+        assert _context_pages(page) == []
+        assert capture_page_range(page, raw=path.read_bytes(), digest=digest) is None
+        content += page["content"].encode()
+        pages += 1
+        if page["eof"]:
+            break
+        command = page["next_command"]
+    assert pages > 1 and content == expected
+    assert len(requests) == pages * (2 if layout == "legacy_canonical" else 1)
+    assert requests[0]["preserve_selection_order"] is True
+    if layout == "legacy_canonical":
+        assert all(not request.get("preserve_selection_order", False) for request in requests[1::2])
+    assert {f: f.read_bytes() for f in before} == before
+
+
+def test_resolved_initial_addresses_replay_without_replanning_the_initial_profile(tmp_path, monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+
+    _, machine, model = fixture(tmp_path)
+    page = read(model["first_read_command"], page_bytes=3000, max_page_output_bytes=3500)
+    initial = b""
+    while True:
+        assert page["ok"] and page["offset"] == len(initial), page
+        initial += page["content"].encode()
+        if page["eof"]:
+            break
+        page = read(page["next_command"])
+    addresses = [row["pointer"] for row in json.loads(initial)["selections"]]
+    # The existing metadata writer can pin the exact resolved selection,
+    # independently of which producer supplied those addresses.
+    pinned = write_context_read_reference(Path(machine["path"]), machine["sha256"], selection={
+        "select": addresses, "initial_read": False, "list_fields": False, "list_depth": None,
+        "sha256": hashlib.sha256(initial).hexdigest()})
+    before = {f: f.read_bytes() for f in tmp_path.iterdir() if f.is_file()}
+    first = read(model["command"], reference_file=str(pinned), page_bytes=3000, max_page_output_bytes=3500)
+    assert first["ok"] and not first["eof"]
+    invoke = turn_envelope._turn_envelope_result
+
+    def changed_initial(operation, **kwargs):
+        assert not kwargs.get("initial_read"), "Pinned addresses must not rerun a changed initial profile"
+        return invoke(operation, **kwargs)
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", changed_initial)
+    replay, page = first["content"].encode(), first
+    while not page["eof"]:
+        page = read(page["next_command"])
+        assert page["ok"] and page["offset"] == len(replay), page
+        replay += page["content"].encode()
+    assert replay == initial
+    assert {f: f.read_bytes() for f in before} == before
+
+
 @pytest.mark.parametrize("selection", ["fields", "index", "initial"])
 def test_selected_read_survives_unwritable_reference_metadata(tmp_path, monkeypatch, selection):
     import errno
