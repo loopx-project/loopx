@@ -211,6 +211,7 @@ const EMPIRICAL_CLAIM_CONTRACTS = [
     required: [
       "44 + 36 + 24 = 104",
       "27 taxonomy vs 5 + 11 + 15 = 31",
+      "rather than a matched repeated C2 comparison",
       "0.74329",
       "conditional estimate for that fixed component vector",
     ],
@@ -221,6 +222,7 @@ const EMPIRICAL_CLAIM_CONTRACTS = [
     required: [
       "44 + 36 + 24 = 104",
       "分类表 27 次，分臂合计 5 + 11 + 15 = 31 次",
+      "不是经过匹配重复的 C2 比较",
       "0.74329",
       "固定分量向量的条件估算",
     ],
