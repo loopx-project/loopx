@@ -50,6 +50,7 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
     guard = fixture.run_quota(registry, runtime)
     assert guard["effective_action"] == "autonomous_replan_required"
     assert guard["requires_user_action"] is False
+    assert guard["replan_action_packet"].get("stride_control") is None
     contract = guard["replan_action_packet"]["writeback_contract"]["vision_authoring"]
     packet = copy.deepcopy(contract["minimal_example"])
     assert "JSON replaces the complete packet" in contract["authoring_hint"]
