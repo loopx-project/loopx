@@ -104,7 +104,7 @@ def todo_error_payload(
     from ..control_plane.coordination.shadow_management import ShadowManagementError
     from ..control_plane.todos.external_wait_contract import TodoExternalWaitAuthoringError
     from ..control_plane.todos.handoff_mode import HandoffModeError
-    from ..control_plane.work_items.task_lease import TaskLeaseError
+    from ..control_plane.work_items.local_lease_record import TaskLeaseError
     from .todo_argument_validation import TodoClaimArgumentError
 
     payload: dict[str, object] = {
@@ -219,8 +219,8 @@ def append_todo_rollout_event(
             "mutation_authority": payload.get("mutation_authority"),
             "replan_transition": payload.get("replan_transition"),
             "settlement_effect_id": (
-                payload.get("settlement_identity", {}).get("effect_id")
-                if isinstance(payload.get("settlement_identity"), dict)
+                identity.get("effect_id")
+                if isinstance(identity, dict)
                 else None
             ),
         },
