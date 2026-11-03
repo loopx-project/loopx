@@ -210,13 +210,15 @@ The repository shares one policy entry: `AGENTS.md` for Codex and the explicit
 a prose request to read the file does not ensure startup loading. Do not eagerly
 import the detailed procedures: read their linked owner when its task applies.
 
-Codex's default `project_doc_max_bytes` is 32 KiB across discovered instructions.
-The root regression checks that this file fits, but ancestor instructions, nested
-files and user overrides still require a host-specific loading check. Claude's
-import/discovery settings have different semantics; 32 KiB is not a universal
-Claude limit. Inspect actual startup context after changing the entry or its
-alias, and distinguish assembled text from model compliance and live effects.
-Existing sessions may retain an older copy.
+Codex's default `project_doc_max_bytes` is 32 KiB across discovered instructions,
+and Antigravity caps individual rule files (`AGENTS.md`) at 24,000 bytes (24 KB).
+The root regression checks that `AGENTS.md` fits within the stricter 24,000-byte
+per-file host cap as well as the 32 KiB discovery budget, while ancestor
+instructions, nested files and user overrides still require a host-specific
+loading check. Claude's import/discovery settings have different semantics;
+neither cap is a universal Claude limit. Inspect actual startup context after
+changing the entry or its alias, and distinguish assembled text from model
+compliance and live effects. Existing sessions may retain an older copy.
 
 Run `uv run --extra test python -m pytest -q tests/test_repository_instruction_delivery.py`
 for root size, shared import, local routes and existing inbound anchors. Review
