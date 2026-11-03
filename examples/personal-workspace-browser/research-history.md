@@ -48,6 +48,45 @@ below. No model or solver is called by this scenario.
 
 ## Earlier research checkpoints
 
+### Saved analysis reference
+
+The core scenario also opens the [actual Graph saved analysis](../../apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json)
+from the 11–12 October native run in Chinese and English. Its six purposively
+selected episodes preserve all 36 model judgments, complete explanations,
+negative/unknown verdicts and original pack/run/revision identities. This older
+case supplements the recent Grid logs; it is not another recent complete history.
+The analysis headline preserves the mixed result: five recorded utility tests
+and one unknown, without turning a test into a positive benefit.
+
+| Judgment | Yes / no / unknown |
+| --- | --- |
+| Goal alignment | 4 / 0 / 2 |
+| Utility tested | 5 / 0 / 1 |
+| Discrimination | 0 / 2 / 4 |
+| Information gain | 6 / 0 / 0 |
+| Evidence adoption | 2 / 0 / 4 |
+| Avoidable repetition | 0 / 3 / 3 |
+
+The recorded analysis used **447.0 seconds, 53,768 input and 19,278 output
+tokens**. These are analysis costs; solver token usage and money remain unknown.
+The invalid first submission remains missing rather than zero, and the native
+best/retained result remains distinct from the final submitted candidate.
+
+This fixture freezes the real HTTP readbacks, including the Chinese/English
+cache misses and the saved unspecified-language original. The packaged frontend
+must recover that original without inventing a translation, changing its usage
+or invoking a model. The preview replays captured GET responses; it does **not**
+import the original analysis store or qualify the live execution backend. The
+existing synthetic process fixture separately protects that owner boundary.
+Tests pin the original HTTP byte digests and read all 36 explanations in both
+interfaces at desktop/390px widths.
+
+Only one public-safe native-result citation range is bundled. Other cited ranges
+return an explicit unavailable response; no transcript or failure stack is
+substituted. The selected Goal has no Explore log: its empty history is preserved.
+Pass `--fixture apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json`
+to the same read-only preview to inspect this case. All mutation verbs are denied.
+
 The broader `research-history` regression explicitly loads three actual EdgeBench checkpoints
 sealed on 15 October 2026 and **restored by subsequent experiments**. It replaces
 the older Squirrel example. The Explore records retain their original text,

@@ -65,6 +65,11 @@ def main():
         assert capture["goal_id"] not in {item["goal_id"] for item in captures}, "Duplicate captured Goal"
         captures.append(capture)
         original[source] = source_bytes
+        # Frozen API responses retain real analysis identity and usage without
+        # registering execution state or launching a synthetic analysis job.
+        for record in [*capture.get("analysis_readbacks", {}).values(), *capture.get("analysis_citations", [])]:
+            encoded = json.dumps(record["response"], ensure_ascii=False, separators=(",", ":")).encode()
+            assert hashlib.sha256(encoded).hexdigest() == record["response_sha256"], "Changed analysis readback"
     goal_id = captures[0]["goal_id"]
     source_digests = {capture["goal_id"]: hashlib.sha256(original[source]).hexdigest()
         for source, capture in zip(sources, captures)}
@@ -118,7 +123,7 @@ def main():
                         "print('{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}')\n")
                     selected = inspect_pack(**scope, pack_id=registered["pack_id"], output_language=language)
                     execute_pack(**scope, pack_id=registered["pack_id"], analysis_key=selected["analysis_key"], output_language=language, codex=str(provider))
-        metrics = {"history_reads": 0, "mutation_attempts": 0}
+        metrics = {"history_reads": 0, "analysis_reads": 0, "citation_reads": 0, "mutation_attempts": 0}
 
         class Handler(ChatRequestHandler):
             def _send_json(self, payload, *, status=200):
@@ -146,6 +151,21 @@ def main():
                         "fixture_sha256": source_digests[goal_id], "fixtures": source_digests})
                 if path == "/api/chat/explore-results":
                     metrics["history_reads"] += 1
+                query = parse_qs(parsed.query)
+                capture = next((item for item in captures if query.get("goal_id") == [item["goal_id"]]), None)
+                if capture and capture.get("analysis_readbacks") and path.startswith("/api/chat/research-analysis"):
+                    if path == "/api/chat/research-analysis":
+                        metrics["analysis_reads"] += 1
+                        language = query.get("output_language", ["original"])[0]
+                        record = capture["analysis_readbacks"].get(language)
+                        if record and query.get("pack_id", [record["response"]["pack"]["pack_id"]]) == [record["response"]["pack"]["pack_id"]]:
+                            return self._send_json(record["response"])
+                    elif path == "/api/chat/research-analysis/citation":
+                        metrics["citation_reads"] += 1
+                        for record in capture.get("analysis_citations", []):
+                            if query == parse_qs(urlparse(record["request_path"]).query):
+                                return self._send_json(record["response"])
+                    return self._send_error("This readback was not captured; the fixture cannot recover the original source.", status=404)
                 if path in {"/healthz", "/status.json", "/api/chat/explore-results",
                     "/api/chat/capabilities", "/api/chat/endpoints", "/api/chat/sessions", "/api/chat/goal-configuration",
                     "/api/chat/research-analysis", "/api/chat/research-analysis/citation", "/api/chat/research-analysis/usage-turn",
@@ -163,6 +183,7 @@ def main():
 
             do_PUT = do_POST
             do_DELETE = do_POST
+            do_PATCH = do_POST
 
         server = ChatHTTPServer(("127.0.0.1", args.port), Handler)
         server.registry_path, server.runtime_root = registry, runtime

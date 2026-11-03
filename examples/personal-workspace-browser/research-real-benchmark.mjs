@@ -4,6 +4,75 @@ import {resolve} from "node:path";
 import {outputDir, repoRoot} from "./fixture.mjs";
 import {startHistoryOwner} from "./research-history.mjs";
 
+async function readSavedGraphAnalysis(browser, collectCoverage) {
+  const path = resolve(repoRoot, "apps/presentation/dashboard/src/data/fixtures/edgebench-graph-saved-analysis.json");
+  const capture = JSON.parse(await readFile(path, "utf8"));
+  const saved = capture.analysis_readbacks.original.response.pack;
+  const owner = await startHistoryOwner(path);
+  let page;
+  const coverageEntries = [];
+  try {
+    page = await browser.newPage({viewport: {width: 1440, height: 900}});
+    if (collectCoverage) await page.coverage.startJSCoverage({resetOnNavigation: false});
+    for (const language of ["zh", "en"]) {
+      await page.addInitScript(value => localStorage.setItem("loopx-pw-locale", value), language);
+      await page.goto(`${owner.base}/chat/?goalId=${capture.goal_id}&view=research`);
+      const history = page.locator(".research-history");
+      await history.getByRole("button", {name: language === "zh" ? "查看分析" : "View analysis", exact: true}).click();
+      const analysis = history.locator(".research-analysis[role=region]");
+      await analysis.locator(".analysis-episode").first().waitFor();
+      assert.match(await analysis.locator(".analysis-warning").first().innerText(), language === "zh" ? /已保存的原文/ : /saved original/);
+      assert.match(await analysis.locator(".analysis-finding h4").innerText(), language === "zh"
+        ? /5 \/ 6 个片段.*1 个证据不足/ : /5 \/ 6 episodes.*1 remains unknown/,
+      "One unknown episode must not hide five recorded utility tests; testing still does not establish positive benefit");
+      assert.equal(await analysis.locator(".analysis-episode").count(), 6);
+      assert.equal(await analysis.locator("[data-analysis-judgment]").count(), 36, "All real judgments retain negative and unknown verdicts");
+      for (const episode of saved.episodes) {
+        const item = analysis.locator(`[data-analysis-episode="${episode.id}"]`);
+        await item.locator(":scope > summary").click();
+        for (const summary of await item.locator(".analysis-judgments > details > summary").all()) await summary.click();
+        const text = await item.innerText();
+        for (const assessment of saved.result.assessments.filter(row => row.episode_id === episode.id)) {
+          assert(text.includes(assessment.reason), `${episode.id}/${assessment.metric}: complete original reasoning remains readable`);
+        }
+      }
+      const citation = capture.analysis_citations[0].response;
+      const cited = saved.result.assessments.find(row => row.citations.some(c => c.source_id === citation.source_id
+        && c.first_line === citation.first_line && c.last_line === citation.last_line));
+      assert(cited, "The portable excerpt is an actual judgment citation");
+      const episode = analysis.locator(`[data-analysis-episode="${cited.episode_id}"]`);
+      await episode.locator(":scope > summary").click();
+      for (const summary of await episode.locator(".analysis-judgments > details:not([open]) > summary").all()) await summary.click();
+      await episode.getByRole("button", {name: `${citation.source_id} · ${language === "zh" ? "行" : "lines"} ${citation.first_line}–${citation.last_line}`, exact: true}).first().click();
+      const source = history.locator(".analysis-source");
+      await source.locator("pre").waitFor();
+      assert.equal(await source.locator("pre").innerText(), citation.text);
+      await source.getByRole("button", {name: language === "zh" ? "关闭原文" : "Close source", exact: true}).click();
+      const method = analysis.locator(".analysis-method");
+      await method.locator(":scope > summary").click();
+      assert.match(await method.innerText(), /447\.0s.*53,768.*19,278/);
+      assert.match(await method.innerText(), /graph-official-native3600-integration-20261011-04/);
+      assert.equal(await analysis.getByRole("button", {name: /用中文分析|Analyze selected scope/}).count(), 0, "A frozen readback never offers execution");
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await analysis.scrollIntoViewIfNeeded();
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+        await page.screenshot({path: resolve(outputDir, `research-real-graph-analysis-${language}-${width}.png`), animations: "disabled"});
+      }
+      await page.setViewportSize({width: 1440, height: 900});
+    }
+    const readback = await (await page.request.get(`${owner.base}/fixture/readback`)).json();
+    assert.equal(readback.source_unchanged, true);
+    assert.equal(readback.mutation_attempts, 0);
+    assert(readback.analysis_reads >= 4, "Both interfaces read their cache miss and the same saved original");
+    if (collectCoverage) coverageEntries.push(...await page.coverage.stopJSCoverage());
+    return coverageEntries;
+  } finally {
+    if (page) await page.close();
+    await owner.close();
+  }
+}
+
 // Core whole-page reference: unmodified display state from two real terminal
 // runs. Synthetic scenarios remain separate boundary/race/overflow tests.
 export const researchRealBenchmarkScenario = {
@@ -87,6 +156,7 @@ export const researchRealBenchmarkScenario = {
       }
     }
     assert.notEqual(observations[0].source_run_id, observations[1].source_run_id);
+    coverageEntries.push(...await readSavedGraphAnalysis(browser, collectCoverage));
     return {coverageEntries, observations};
   },
 };

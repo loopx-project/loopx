@@ -534,6 +534,8 @@ export function ResearchAnalysisPanel({analysis: a, onHistory}: {analysis: Contr
   const available = sourceAvailable && !a.readOnly && !a.readError;
   const benefit = result?.metrics.find(m => m.metric === "benefit_test");
   const headline = !result ? null : benefit?.no ? (zh ? "仍有研究片段尚未检验原目标收益" : "Some episodes have not tested original-objective utility")
+    : benefit?.yes && benefit.unknown ? (zh ? `${benefit.yes} / ${benefit.eligible} 个片段记录了原目标收益检验；${benefit.unknown} 个证据不足`
+      : `${benefit.yes} / ${benefit.eligible} episodes recorded original-objective utility tests; ${benefit.unknown} ${benefit.unknown === 1 ? "remains" : "remain"} unknown`)
     : benefit?.unknown ? (zh ? "原目标收益的检验情况仍未知" : "Original-objective utility testing remains unknown")
       : benefit?.yes ? (zh ? "模型记录了收益检验；这不等于收益为正" : "The model identified a utility test; this does not imply positive utility")
         : (zh ? "此方法未覆盖原目标收益检验" : "This method does not cover original-objective utility testing");
