@@ -72,6 +72,50 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
+@pytest.mark.parametrize("output_limit", [8192, 64000])
+def test_cli_initial_reference_pages_keep_original_selection(tmp_path, decision, output_limit):
+    import subprocess
+    import sys
+    from loopx.cli_commands.quota_capture import model_context_reference
+
+    decision["context_details"] = {"unread_context_index": {
+        "coverage_confirmed": False, "pointers": [f"/history/{i}" for i in range(6000)]}}
+    view = native_context_capture_view(decision, tmp_path)
+    model = model_context_reference(view)
+    raw = Path(view["recovery"]["path"]).read_bytes()
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    base = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+        "--registry", str(registry), "--runtime-root", str(runtime)]
+
+    def drain(command):
+        words = shlex.split(command)
+        for flag in ("--page-bytes", "--max-page-output-bytes"):
+            words[words.index(flag) + 1] = str(output_limit)
+        content, pages = b"", 0
+        while True:
+            result = subprocess.run([*base, *words[words.index("quota"):]], cwd=tmp_path,
+                capture_output=True, text=True, check=False)
+            page = json.loads(result.stdout)
+            assert result.returncode == 0 and page["ok"] and page["offset"] == len(content), page
+            assert len(result.stdout.encode()) <= output_limit
+            assert capture_page_range(page, raw=raw, digest=view["recovery"]["sha256"]) is None
+            content += page["content"].encode()
+            pages += 1
+            if page["eof"]:
+                return content, pages
+            words = shlex.split(page["next_command"])
+
+    expected, pages = drain(view["first_read_command"])
+    actual, reference_pages = drain(model["first_read_command"])
+    assert actual == expected and reference_pages > 1 and pages > 1
+    values = selected_context_values(actual)
+    assert values["/goal_boundary"] == decision["goal_boundary"]
+    assert values["/context_details/unread_context_index"] == decision["context_details"]["unread_context_index"]
+    assert "This new obligation must remain visible." in actual.decode()
+    assert Path(view["recovery"]["path"]).read_bytes() == raw
+    assert not registry.exists() and not runtime.exists()
+
+
 def test_initial_read_coalesces_whole_contract_with_exact_values_and_unknown_obligations(tmp_path, decision):
     cli = decision["interaction_contract"]["cli_channel"]
     cli["settlement_plan"]["ordered_steps"] = [{

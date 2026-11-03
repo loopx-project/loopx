@@ -273,6 +273,13 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     "reason": rejection["message"], "recovery_command": command,
                     "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
                         "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
+            if pinned_selection is not None and not initial_read and selectors is not None:
+                # TS validates the addresses; this IO reference already froze
+                # their serialization order, independent of fresh selection policy.
+                positions = {pointer: index for index, pointer in enumerate(dict.fromkeys(selectors))}
+                if positions.keys() != {item["pointer"] for item in plan["selections"]}:
+                    raise ValueError("selected view digest changed; restore the original selection and reader")
+                plan["selections"].sort(key=lambda item: positions[item["pointer"]])
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload

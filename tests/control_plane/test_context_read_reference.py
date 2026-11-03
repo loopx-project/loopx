@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
+import subprocess
+import sys
 
 import pytest
 
@@ -130,6 +132,67 @@ def test_initial_reference_rejects_changed_selection_profile(tmp_path, monkeypat
     rejected = read(first["next_command"])
     assert rejected["ok"] is False and "digest changed" in rejected["reason"]
     assert "content" not in rejected
+
+
+@pytest.mark.parametrize("output_limit", [8192, 64000])
+def test_cli_frozen_selection_replays_its_order_without_changing_explicit_reads(tmp_path, output_limit):
+    payload = {"ok": True, "goal_boundary": {"stop": "Keep the original budget."},
+        "selected_todo": {"text": "Compare 原始条件。" * 4000},
+        "criterion": {"value": 9007199254740993}}
+    machine = native_context_capture_view(payload, tmp_path)
+    capture, digest = Path(machine["path"]), machine["sha256"]
+    before = capture.read_bytes()
+    pointers = ["/goal_boundary", "/selected_todo", "/criterion"]
+
+    def selected_bytes(order):
+        return (json.dumps({"schema_version": "context_capture_selection_v1", "selections": [
+            {"pointer": pointer, "value": payload[pointer[1:]]} for pointer in order]},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+    expected = selected_bytes(pointers)
+    selection = {"select": pointers, "initial_read": False, "list_fields": False,
+        "list_depth": None, "sha256": hashlib.sha256(expected).hexdigest()}
+    reference = write_context_read_reference(capture, digest, selection=selection)
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    base = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+        "--registry", str(registry), "--runtime-root", str(runtime)]
+    options = f" --page-bytes {output_limit} --max-page-output-bytes {output_limit}"
+
+    def invoke(command):
+        words = shlex.split(command)
+        result = subprocess.run([*base, *words[words.index("quota"):]], cwd=tmp_path,
+            capture_output=True, text=True, check=False)
+        assert len(result.stdout.encode()) <= output_limit
+        return result.returncode, json.loads(result.stdout)
+
+    def drain(command):
+        content, count = b"", 0
+        while True:
+            code, page = invoke(command)
+            assert code == 0 and page["ok"] and page["offset"] == len(content), page
+            assert capture_page_range(page, raw=before, digest=digest) is None
+            content += page["content"].encode()
+            count += 1
+            if page["eof"]:
+                return content, count
+            command = page["next_command"]
+
+    frozen = "loopx quota context-read --reference-file " + shlex.quote(str(reference)) + options
+    actual, pages = drain(frozen)
+    assert actual == expected and pages > 1
+    _, pinned = read_context_read_reference(str(reference))
+    assert pinned["selection"] == selection
+    # A fresh explicit request still has canonical order, even with the same
+    # arguments that an immutable reference has already resolved and frozen.
+    original = write_context_read_reference(capture, digest)
+    explicit = "loopx quota context-read --reference-file " + shlex.quote(str(original)) + options
+    explicit += " " + " ".join("--select " + pointer for pointer in pointers)
+    assert drain(explicit)[0] == selected_bytes(sorted(pointers))
+    damaged = write_context_read_reference(capture, digest, selection={**selection, "sha256": "f" * 64})
+    code, rejected = invoke("loopx quota context-read --reference-file " + shlex.quote(str(damaged)) + options)
+    assert code != 0 and not rejected["ok"] and "digest changed" in rejected["reason"]
+    assert "content" not in rejected
+    assert capture.read_bytes() == before and not registry.exists() and not runtime.exists()
 
 
 @pytest.mark.parametrize("selection", ["fields", "index", "initial"])
