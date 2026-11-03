@@ -79,6 +79,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"performance-diagnosis",
 	"heartbeat-prompt",
 	"goal-acceptance",
+	"host-mode-plan",
 }
 
 
@@ -404,6 +405,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.goal_acceptance import register_goal_acceptance_command
 
 		register_goal_acceptance_command(subparsers, add_subcommand_format)
+	elif command == "host-mode-plan":
+		from .cli_commands.host_mode_plan import register_host_mode_plan_command
+
+		register_host_mode_plan_command(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -415,6 +420,12 @@ def _dispatch_common_command(
 	registry_path: Path,
 	allow_missing_registry: bool,
 ) -> int | None:
+	if args.command == "host-mode-plan":
+		from .cli_commands.host_mode_plan import handle_host_mode_plan_command
+
+		return handle_host_mode_plan_command(
+			args, output_format=output_format, print_payload=print_payload,
+		)
 	if args.command == "heartbeat-prompt":
 		from .cli_commands.support_control_heartbeat import handle_heartbeat_prompt_command
 

@@ -530,6 +530,27 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
   待处理的入口收据仍不被该栅栏覆盖；要覆盖它是一次带自有验收的运行时变更，
   而不是文档变更。
 
+### 2026-11-03 — 所选宿主模式发现路径的加载
+
+- **基线：** `6a6a8590e`。此前 `performance-diagnosis` 与 `goal-acceptance`
+  的 selected 路由已在该基线上；第 4 节审计仍为历史记录，不是当前实现清单。
+- **变化：** `host-mode-plan` 经 `cli_runtime` 使用原有 registrar 与 handler，
+  合法请求不再加载完整 CLI 或 Chat 依赖图。非法语法保留完整 parser 的诊断路径。
+  宿主选择器、预览命令、readiness 与 authority 规则均不移动、不改变。
+- **M1 集成：** [#7878](https://github.com/loopx-project/loopx/pull/7878) 已在
+  `ffe84a693` 合入：17 个仅内部使用的 Chat owner 位于 `loopx/chat/`，顶层模块
+  数量和预算均为 128（该移动组之前为 145）。这是结构变化，不代表性能或完整 M1 合格。
+- **证据：** `tests/test_cli_entrypoint.py` 覆盖仅加载 owner 的 help、JSON 与
+  Markdown 一致性、宿主不可用预览、非法请求及零进程、网络或文件写入激活。
+  独立安装的 wheel 在没有 Node 或实时 registry 时验证 help、ready／unavailable
+  预览及拒绝。每个版本／负载做 20 次本地成对新进程测量，丢弃一次预热、交替
+  顺序、关闭遥测并保留热文件缓存。在 macOS arm64／Python 3.13.5 上，help／
+  preview 的 LoopX 加载闭包从 1,149 降到 57 个模块，输出字节保持一致。时间／RSS
+  留在 PR 的限定证据中，不作为可移植阈值或任务成果收益声明。
+- **剩余：** 将 R0 类型的加载验证扩展到发现路径；不关闭 R0 的完整 V10 清点、
+  M1 公开 import 迁移、发行物拆分或 R1 managed minimal。D1–D7 仍未决，
+  不新增预设或改变默认值。
+
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 负责人 / 批准 | 备选 | 变更的规范章节 |
