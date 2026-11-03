@@ -121,8 +121,9 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
     },
     {
       kind: "quota_spend", owner: "agent",
-      precondition: "matching durable writeback exists and any declared completion validation " +
-        "has completed the Todo, or the same Turn has qualified in-flight/replan progress; " +
+      precondition: "exact original-identity durable writeback receipt exists; any declared completion validation " +
+        "has completed the Todo, or that receipt qualifies same-Turn in-flight/replan progress " +
+        "or a fresh open-Todo semantic checkpoint. Progress does not waive terminal completion validation; " +
         "skip this step after typed_blocked_writeback_no_spend",
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "quota_spend_receipt",
       command_template: spend,
