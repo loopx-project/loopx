@@ -26,17 +26,21 @@ from .native_context_profile import (
 )
 
 
+def private_capture_supported() -> bool:
+    """Whether this host has the POSIX identity needed for private capture IO."""
+    return os.name == "posix" and callable(getattr(os, "getuid", None))
+
+
 def private_capture_uid() -> int:
     """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
 
     POSIX mode bits cannot establish Windows privacy. Check before creating or
     reading private captures, and before evaluating bounded settlement commands.
     """
-    getuid = getattr(os, "getuid", None)
-    if os.name != "posix" or not callable(getuid):
+    if not private_capture_supported():
         raise ValueError("private capture validation is unsupported on this platform; "
                          "use the same Turn command without --max-page-output-bytes")
-    return getuid()
+    return getattr(os, "getuid")()
 
 
 def write_decision_capture(

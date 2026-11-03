@@ -30,6 +30,7 @@ from ..effect_program import (
 from ..goals.goal_ref_validation import exact_goal_ref
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
 from ..turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
+from ..turn_driver.decision_capture import private_capture_supported
 
 _PLATFORM_IS_POSIX = os.name == "posix"
 
@@ -269,7 +270,7 @@ def build_turn_scoped_cli_settlement_plan(
     )
     max_output_arg = (
         f" --max-page-output-bytes {NATIVE_CONTEXT_PAGE_OUTPUT_BYTES}"
-        if _PLATFORM_IS_POSIX
+        if private_capture_supported()
         else ""
     )
     spend = (
