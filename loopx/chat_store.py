@@ -1390,6 +1390,28 @@ class ChatSessionStore(ChatIngressStore):
         payload = _read_json(self._turn_path(session_id, turn_id))
         return payload if payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION else None
 
+    def native_result(self, session_id: str, turn_id: str) -> dict[str, Any]:
+        """Private provider facts, outside public Turn/event projections."""
+        token = _opaque_id(turn_id, field="turn_id")
+        return _read_json(self._session_dir(session_id) / "native-results" / f"{token}.json")
+
+    def retain_native_result(self, session_id: str, turn_id: str, result: dict[str, Any]) -> None:
+        """Freeze once under the original Turn fence, before response handling."""
+        with exclusive_file_lock(self._turn_path(session_id, turn_id), agent_id="loopx-chat", operation="retain_native_result"):
+            turn = self.load_turn(session_id, turn_id)
+            if turn is None or turn.get("status") != "running":
+                return
+            if not result.get("upstream_turn_id") or result["upstream_turn_id"] != turn.get("upstream_turn_id"):
+                raise ValueError("native result belongs to another invocation")
+            token = _opaque_id(turn_id, field="turn_id")
+            path = self._session_dir(session_id) / "native-results" / f"{token}.json"
+            if path.exists():
+                if _read_json(path) != result:
+                    raise ValueError("the original native result is immutable")
+                return
+            path.parent.mkdir(mode=0o700, exist_ok=True)
+            _atomic_write_json(path, result)
+
     def update_turn(
         self,
         session_id: str,
