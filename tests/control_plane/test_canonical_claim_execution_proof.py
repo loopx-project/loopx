@@ -155,8 +155,10 @@ def test_expired_claim_packet_recovers_without_help_or_list(expired_managed_clai
     assert recovery["action"] == "claim_task" and recovery["lease_state"] == "expired"
     assert recovery["execution_authority_granted"] is False
     assert "inspect" not in recovery and "acquire" not in recovery
+    assert recovery["claim"]["command"].split()[:3] == ["loopx", "todo", "claim"]
+    assert recovery["retry"]["command"].split()[:3] == ["loopx", "todo", command]
     rendered = render_todo_markdown(rejected)
-    assert "todo claim" in rendered and f"loopx todo {command}" in rendered
+    assert "todo claim" in rendered and f"todo {command}" in rendered
     assert "--claim-operation-id" in rendered and "task-lease" not in rendered
     assert snapshot() == before, "a rejected operation and its recovery preview have no effects"
     prepared = cli(recovery["claim"]["cli_args"], use_fixture_route=False)
