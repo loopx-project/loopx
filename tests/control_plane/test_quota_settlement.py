@@ -46,6 +46,7 @@ from loopx.control_plane.scheduler.execution_context import (
     SchedulerRuntimeProfile,
     scheduler_execution_context_for_runtime_profile,
 )
+from loopx.control_plane.turn_driver import decision_capture as decision_capture_module
 from loopx.control_plane.work_items.interaction_contract import (
     build_interaction_contract,
     interaction_next_cli_actions,
@@ -805,10 +806,27 @@ def test_codex_app_windows_settlement_command_substitutes_powershell_turn(
     assert '"${LOOPX_TURN:?}"' not in command
 
 
-def test_windows_settlement_command_omits_unsupported_max_page_output_bytes() -> None:
-    # Non-POSIX platforms fail closed on private capture validation; settlement
-    # spend recipes must omit --max-page-output-bytes on Windows.
-    with patch.object(quota_effect_program, "_PLATFORM_IS_POSIX", False):
+@pytest.mark.parametrize(("platform", "supported"), [
+    (SimpleNamespace(name="nt", getuid=lambda: 0), False),
+    (SimpleNamespace(name="posix", getuid=None), False),
+    (SimpleNamespace(name="posix", getuid=lambda: 0), True),
+])
+def test_private_capture_support_matches_uid_boundary(
+    platform: SimpleNamespace, supported: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(decision_capture_module, "os", platform)
+    assert decision_capture_module.private_capture_supported() is supported
+    if supported:
+        assert decision_capture_module.private_capture_uid() == 0
+    else:
+        with pytest.raises(ValueError, match="unsupported on this platform"):
+            decision_capture_module.private_capture_uid()
+
+
+def test_settlement_command_uses_private_capture_support() -> None:
+    # The generated command and the CLI's private-capture check must share one
+    # platform qualification; a POSIX-looking host without getuid is unsupported.
+    with patch.object(quota_effect_program, "private_capture_supported", return_value=False):
         plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
@@ -817,7 +835,7 @@ def test_windows_settlement_command_omits_unsupported_max_page_output_bytes() ->
         assert command is not None
         assert "--max-page-output-bytes" not in command
 
-    with patch.object(quota_effect_program, "_PLATFORM_IS_POSIX", True):
+    with patch.object(quota_effect_program, "private_capture_supported", return_value=True):
         plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
             goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
             turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
