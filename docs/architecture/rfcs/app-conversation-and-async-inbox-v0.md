@@ -878,14 +878,14 @@ receipt → observed work or actionable failure → readable answer in the same 
   upstream observations; never simulate phases, expose hidden reasoning, or
   infer progress from elapsed time. A period without new events has an explicit
   waiting caption, not an invented failure or continually changing animation.
-- The original private Lark owner can read the latest qualified public reasoning
-  summary (up to 1,200 characters) and four redacted activity titles alongside
-  the existing answer stream. Recent steps precede a potentially long summary.
-  Group and unqualified projections retain coarse
-  labels. Antigravity reports observed thinking spans and native command/tool
-  steps through the shared activity contract; its raw `thinking` field is not a
-  public summary, and planner completion is not tool completion. Final answers
-  still replace the draft on the original source-bound post.
+- The original private Lark owner sees the same bounded recent reasoning-summary
+  model as Codex (up to four summaries, rendered within the 1,200-character
+  projection) alongside the existing answer stream. Tool and command titles are
+  not repeated in the Lark tree view. Group and unqualified projections retain
+  coarse labels. Antigravity maps its redacted `plannerResponse.thinking`
+  summary through the shared activity contract; `rawThinking`, planner
+  completion and tool completion remain separate, and final answers still
+  replace the draft on the original source-bound post.
 - Generate the visible answer once, then append a complete hidden review envelope
   with `message: ""`. The production parser reuses the preceding Markdown and
   applies the same redaction and typed metadata normalization. Legacy nonempty
