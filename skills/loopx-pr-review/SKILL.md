@@ -135,11 +135,13 @@ owner/GitHub authority, preserving discussion and unresolved reviews. Merge rout
 `loopx-pr-merge`; `APPROVE` is not merge authority; a public blocker belongs on the PR.
 
 Immediately before every merge, run `loopx --format json pr-review --repo OWNER/REPO
---check-merge-readiness NUMBER@HEAD_OID`; require `ready=true`. Pass `--goal-id GOAL`
-when the work is already Goal-managed; its compact observation suppresses only unchanged
-requalification. Standalone work requires no Goal and writes no Goal observation.
-Material change reopens qualification, admin bypass never overrides this gate, and author
-fallback needs user authority.
+--check-merge-readiness NUMBER@HEAD_OID`. Pass `--goal-id GOAL` when the work is already
+Goal-managed; its compact observation suppresses only unchanged requalification.
+Standalone work requires no Goal and writes no Goal observation. `ready=true` needs no
+bypass. Explicit maintainer authorization means admin bypass may override a readiness
+or GitHub policy hold, but never missing exact-head review,
+required validation, unresolved findings or threads, a changed head, an unmergeable
+conflict, or absent merge authority. Material change reopens qualification.
 
 ## Full PR Review And Bilingual Format
 

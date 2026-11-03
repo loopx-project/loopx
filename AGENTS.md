@@ -178,12 +178,15 @@ capability-owned review.
 Control-plane, runtime and product surfaces (`loopx/**`, `apps/**`, `packages/**`,
 permissions/authority, persisted state/receipts, quota/scheduler/todo rules, and
 CLI/API contracts) require explicit maintainer merge authorization. Propose and
-review the exact head, pass required validation, and obtain ready merge-readiness
+review the exact head, pass required validation, and run merge-readiness
 (`uv run --extra test loopx pr-review --check-merge-readiness NUMBER@HEAD_OID`,
-plus `--goal-id GOAL` for Goal-managed work) for that unchanged head before any
-explicitly authorized merge or admin bypass. Small diffs, green CI or published
-reviews do not grant merge authority; without authorization, leave the merge to
-the maintainer.
+plus `--goal-id GOAL` for Goal-managed work) for that unchanged head. A
+`ready=true` result permits the normal path. Explicit maintainer authorization
+may use admin bypass to override a `ready=false` readiness or GitHub policy
+hold, but never missing exact-head review, required validation, unresolved
+findings or threads, a changed head, an unmergeable conflict, or absent merge
+authority. Small diffs, green CI or published reviews do not grant merge
+authority; without authorization, leave the merge to the maintainer.
 
 For author-owned PRs, GitHub blocks formal self-approval: publish a `COMMENTED`
 review on the exact head carrying the approval conclusion and an English verdict.
