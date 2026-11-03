@@ -1,6 +1,6 @@
 /** Canonical provider IO and full-source summaries share one read transaction. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireBoolean, requireJsonObject} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {readCanonicalSnapshot} from "../coordination/canonical_snapshot_page.ts";
 import {readLocalCoordinationTodoSource} from "../coordination/local_authority_read.ts";
@@ -65,7 +65,7 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
   if (fullText && (query.thin === true || query.json_references === true || summary))
     throw new EffectRuntimeRequestError("Full Todo body reads cannot use compact presentation");
   if (summary && (query.thin || query.todo_id)) throw new EffectRuntimeRequestError("Todo summary cannot be combined with thin or exact reads");
-  const sourceName = "file_authority";
+  const sourceName = requireNonEmptyString(canonical.source_authority, "canonical Todo source authority");
   const roles: unknown[] = query.role == null ? ["user", "agent"] : [query.role];
   const select = async (source: JsonObject) => selectTodoReadFields({...input, fields: source.fields,
     field_evaluations: source.field_evaluations, roles, status: query.status ?? null,

@@ -114,17 +114,79 @@ Implementations may read only compact LoopX control-plane surfaces:
 - rollout event log summaries;
 - review packets for explicit goal drilldown.
 
-`loopx global-gates` reads the compact status projection. Status internally
-consumes compact run-history state to build its current attention queue, but
-the gates builder does not issue a second history read or expose history items
-in its response.
+`loopx global-todos`, `loopx global-summary`, and `loopx global-gates` each read
+status exactly once and reuse that observation when collecting quota facts.
+Status internally consumes compact run-history state to build its attention
+queue. These manager builders do not fetch a second history projection or read
+the authority store directly; source reads inside the quota owner retain their
+existing semantics. Manager queries invoke the read-only quota builder, not a
+Turn admission, claim, scheduler mutation or quota spend.
 
-`loopx global-todos` reads status exactly once, inspects a bounded set of unique
-attention-queue goals, and builds at most one authoritative quota packet for
-each inspected goal. Status may consume the compact run-history projection,
-but the todos builder does not issue a second history or store read. It derives
-todo candidates only from the selected lane and structured quota/todo
-projections; it does not parse active-state prose.
+The per-goal quota-evaluation budget is:
+
+- With an explicit `--agent-id`, at most one packet for that exact identity.
+  The successful packet must confirm the requested identity; an unscoped or
+  default-lane packet cannot satisfy the filter.
+- Without an agent filter and without discovered agent candidates, one
+  unscoped packet.
+- Without an agent filter and with `A` distinct agent candidates, at most one
+  unscoped packet plus one scoped packet per candidate. With a discoverable
+  roster, collect its complete identities and existing lane recommendations;
+  repeated identities or queue entries must not multiply reads.
+
+This replaces the former one-packet-per-goal budget for unscoped goals with
+agent candidates. The current implementation evaluates the scoped packets
+sequentially; its quota-builder call count is `O(G + sum(A))` for `G` inspected
+unique goals. Individual evaluation cost also depends on goal/history size.
+The existing goal scan and result limits remain command-specific: a display
+limit does not cap the roster or the complete counts within an inspected goal.
+For `global-todos`, `goal_scan_limit` and `goal_scan_truncated` still describe
+the earlier goal scan. Projection-envelope goal counts describe coverage, not
+physical store reads or the number of scoped quota evaluations.
+
+Keep each agent's eligibility with the quota owner. The manager may aggregate
+its structured facts but must not infer eligibility from a title, a registry
+entry or the first healthy lane. A failed scoped read cannot establish complete
+coverage: `global-todos` retains healthy lanes with its redacted source warnings
+and degraded-goal count, or omits the goal if no lane can be verified. Summary
+and gate reads retain their own source-failure rules. Warning-list truncation
+must not erase the full warning count. No result authorizes the suggested work.
+
+The cost tradeoff was checked on the same synthetic nine-agent goal: runnable
+work belongs only to agent nine, while agents one and two each have a distinct
+user gate. Immutable base `f941b5939345c6d1c3d770a982182624e7ef393f`
+used one quota evaluation per command; the complete collection at
+`afb3b5c1787dad1293da1150d93da8c22afe729a` used ten, with one status call
+in both. The base omitted the ninth runnable entry from `global-todos` and
+showed only one gate; the complete collection retained the work and both gates.
+An isolated one-quota shortcut using the current gate consumer again lost one
+gate on File and SQLite. A future complete batch may reduce the read count;
+truncating candidates or returning the first healthy lane is not an equivalent
+optimization.
+
+The following are instrumented CLI-entrypoint wall-time medians in seconds over
+three invocations per cell on macOS, Python 3.14.8 and Node 24.21.0. The first todos invocation in each
+isolated runtime was cold; later calls reused that runtime. These small,
+contended samples explain the additional cost, not a latency limit or a speedup.
+
+| Provider | Command | One-packet base | Complete collection |
+| --- | --- | ---: | ---: |
+| File | global-todos | 1.154 | 1.611 |
+| File | global-summary | 0.344 | 1.513 |
+| File | global-gates | 0.319 | 1.563 |
+| SQLite | global-todos | 0.478 | 1.246 |
+| SQLite | global-summary | 0.412 | 1.172 |
+| SQLite | global-gates | 0.375 | 0.892 |
+
+Across those cells, Python caller CPU medians were 0.170–0.187 seconds for the
+base and 0.352–0.372 for complete collection; caller peak-RSS medians were
+46.4–46.8 MiB and 47.1–49.2 MiB. Wall time includes service waits, but Node
+CPU/RSS and fixture setup are outside those resource figures. Canonical Todo
+records/provider revisions and source/registry bytes remained unchanged.
+These five-Todo fixtures do not qualify large histories, hundred-agent scale,
+installed-host adoption or long-horizon efficiency. The original budget failure
+remains recorded; this revision changes the declared source budget, not a frozen
+experiment, runtime deadline, transport size limit or execution allowance.
 
 `loopx global-risks` reads status exactly once. It accepts structured contract
 diagnostics, global registry findings, attention-queue stale-run warnings, and,
@@ -263,10 +325,14 @@ the global limit.
 
 Global and per-goal failures have different envelopes. If the global status
 source is unhealthy, the command returns `ok=false` with a public-safe error
-and exits non-zero; it must not look like a successful empty inbox. If one
-goal's quota read raises or returns `ok=false`, the command skips that
-unverifiable goal, records one bounded redacted warning, and retains results
-from healthy goals.
+and exits non-zero; it must not look like a successful empty inbox. A known
+out-of-scope agent identity remains a filter miss. If a goal's other initial
+quota read raises or returns `ok=false`, the command skips that
+unverifiable goal and records a bounded redacted warning. During scoped
+collection, a failed agent read warns without hiding verified peers; if every
+scoped read fails, the goal is omitted. The full source-warning count and
+degraded-goal coverage remain visible, including when displayed warnings are
+capped. Healthy goals remain available.
 
 ### Focused Global Risks Response
 

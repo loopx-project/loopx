@@ -14,6 +14,7 @@ import re
 import subprocess
 import tempfile
 import tomllib
+from urllib.parse import urlsplit
 import uuid
 
 API_KEY_SLOTS_VERSION = 1
@@ -26,6 +27,47 @@ def api_endpoint(value):
     if not 1024 <= port <= 65535:
         raise ValueError('API fallback requires an unprivileged loopback port')
     return value
+
+
+def gateway_endpoint(value):
+    """Accept a Responses API gateway without allowing credentials in the URL."""
+    try:
+        parts = urlsplit(value) if isinstance(value, str) else None
+        port = parts.port if parts is not None else None
+    except ValueError:
+        parts = None
+        port = None
+    if (parts is None or parts.scheme not in ('http', 'https') or not parts.hostname
+            or parts.username is not None or parts.password is not None
+            or parts.query or parts.fragment or port == 0):
+        raise ValueError('API gateway requires a clean HTTP(S) Responses endpoint')
+    if parts.scheme == 'http' and parts.hostname not in ('127.0.0.1', '::1', 'localhost'):
+        raise ValueError('Unencrypted API gateways must stay on the loopback interface')
+    return value
+
+
+def provider_route(cfg):
+    """Return the selected provider after validating launch-safe configuration."""
+    providers = cfg.get('model_providers') or {}
+    if not isinstance(providers, dict):
+        raise ValueError('Invalid Codex provider definitions')
+    if 'openai' in providers:
+        raise ValueError('A custom provider must not shadow the built-in OpenAI provider')
+    provider = cfg.get('model_provider', 'openai')
+    if not isinstance(provider, str) or not provider:
+        raise ValueError('Invalid Codex provider selection')
+    if provider == 'openai':
+        endpoint = cfg.get('openai_base_url')
+        if endpoint is not None:
+            gateway_endpoint(endpoint)
+        return provider
+    definition = providers.get(provider)
+    if not isinstance(definition, dict):
+        raise ValueError('Selected Codex provider is not a configured API gateway')
+    if definition.get('wire_api', 'responses') != 'responses':
+        raise ValueError('API gateways must use the Responses protocol')
+    gateway_endpoint(definition.get('base_url'))
+    return provider
 
 
 def auth_kind(raw):
@@ -108,6 +150,10 @@ def identity(raw):
             if (not isinstance(key, str) or not key.startswith('sk-loopx-relay-')
                     or not 32 <= len(key) <= 512 or any(c.isspace() for c in key) or obj.get('tokens')):
                 raise ValueError()
+            provider = obj.get('loopx_model_provider')
+            if provider is not None and (not isinstance(provider, str) or not provider
+                                         or any(c.isspace() for c in provider)):
+                raise ValueError()
             endpoint = api_endpoint(obj.get('loopx_api_base_url'))
             return digest(encoded(['apikey', key, endpoint]))
         tokens = obj['tokens']
@@ -131,37 +177,61 @@ def identity(raw):
         raise ValueError('Invalid native account cache; inspect the local login or relay configuration') from None
 
 
+def routed_auth(raw, provider):
+    """Bind a relay credential to the provider restored when its slot is selected."""
+    if auth_kind(raw) != 'api' or not isinstance(provider, str) or not provider:
+        raise ValueError('Invalid API gateway account route')
+    obj = json.loads(raw)
+    obj['loopx_model_provider'] = provider
+    return encoded(obj)
+
+
+def toml_string(value):
+    if not isinstance(value, str) or any(ord(c) < 0x20 or ord(c) == 0x7f for c in value):
+        raise ValueError('Invalid TOML setting value')
+    return json.dumps(value, ensure_ascii=False)
+
+
 def file_config(raw, auth=None):
     try:
         text = raw.decode()
         cfg = tomllib.loads(text)
     except (ValueError, UnicodeError):
         raise ValueError('Invalid GPT config; repair locally without printing its contents') from None
-    # Preserve unused custom definitions; they do not change the native route.
-    if (cfg.get('model_provider', 'openai') != 'openai'
-            or 'openai' in (cfg.get('model_providers') or {})
-            or cfg.get('model_catalog_json') or cfg.get('profiles') or cfg.get('profile')):
-        raise ValueError('Account switching requires an ordinary native GPT config')
+    current_provider = provider_route(cfg)
+    # A profile can replace the checked provider at runtime, so account switching
+    # cannot safely infer which route the credential transaction owns.
+    if cfg.get('profiles') or cfg.get('profile'):
+        raise ValueError('Account switching does not support provider profile overrides')
     if cfg.get('cli_auth_credentials_store') not in (None, 'auto', 'file'):
         raise ValueError('Explicit keyring/ephemeral storage is preserved; use native sign-in or review file storage locally')
     if cfg.get('forced_login_method') not in (None, 'chatgpt', 'api'):
         raise ValueError('Unsupported account login method')
     mode = 'api' if auth is not None and auth_kind(auth) == 'api' else 'chatgpt'
+    target_provider = 'openai'
     endpoint = None
     if mode == 'api':
         identity(auth)
-        endpoint = api_endpoint(json.loads(auth)['loopx_api_base_url'])
-    # Change auth settings and the owned API endpoint; preserve model and other config.
+        auth_obj = json.loads(auth)
+        endpoint = api_endpoint(auth_obj['loopx_api_base_url'])
+        target_provider = auth_obj.get('loopx_model_provider', 'openai')
+        candidate = dict(cfg, model_provider=target_provider)
+        provider_route(candidate)
+    # Subscription slots use the built-in provider. API slots restore the
+    # provider bound to that credential, so a gateway request never inherits a
+    # ChatGPT login and a subscription never inherits a relay endpoint.
     section = re.search(r'^\s*\[', text, re.M)
     head, tail = (text[:section.start()], text[section.start():]) if section else (text, '')
     settings = [('cli_auth_credentials_store', 'file'), ('forced_login_method', mode)]
-    if mode == 'api':
+    if target_provider != current_provider:
+        settings.insert(0, ('model_provider', target_provider))
+    if mode == 'api' and target_provider == 'openai':
         if cfg.get('openai_base_url') and cfg.get('forced_login_method') != 'api':
             raise ValueError('An existing OpenAI base URL must not be replaced by API fallback')
         if cfg.get('openai_base_url'):
             api_endpoint(cfg['openai_base_url'])
         settings.append(('openai_base_url', endpoint))
-    elif cfg.get('forced_login_method') == 'api' and cfg.get('openai_base_url'):
+    elif mode == 'chatgpt' and cfg.get('openai_base_url'):
         api_endpoint(cfg['openai_base_url'])
         pattern = r'^openai_base_url\s*=.*(?:\n|$)'
         if len(re.findall(pattern, head, re.M)) != 1:
@@ -169,13 +239,26 @@ def file_config(raw, auth=None):
         head = re.sub(pattern, '', head, flags=re.M)
     for key, value in settings:
         pattern = rf'^{key}\s*=.*$'
+        rendered = f'{key} = {toml_string(value)}'
         if key in cfg:
             if len(re.findall(pattern, head, re.M)) != 1:
                 raise ValueError('Nonstandard auth setting syntax requires local review')
-            head = re.sub(pattern, f'{key} = "{value}"', head, flags=re.M)
+            head = re.sub(pattern, lambda _: rendered, head, flags=re.M)
         else:
-            head = f'{key} = "{value}"\n' + head
-    return (head + tail).encode()
+            head = f'{rendered}\n' + head
+    converted = (head + tail).encode()
+    try:
+        updated = tomllib.loads(converted.decode())
+    except (ValueError, UnicodeError):
+        raise ValueError('Nonstandard auth setting syntax requires local review') from None
+    expected_base_url = endpoint if mode == 'api' and target_provider == 'openai' else (
+        None if mode == 'chatgpt' else cfg.get('openai_base_url'))
+    if (provider_route(updated) != target_provider
+            or updated.get('cli_auth_credentials_store') != 'file'
+            or updated.get('forced_login_method') != mode
+            or updated.get('openai_base_url') != expected_base_url):
+        raise ValueError('Nonstandard auth setting syntax requires local review')
+    return converted
 
 
 class Accounts:
@@ -338,8 +421,12 @@ class Accounts:
 
     def enroll_api(self, name, *, api_key, base_url):
         """Enroll an explicit local relay credential without selecting it."""
+        provider = 'openai'
+        if self.config.exists():
+            provider = provider_route(tomllib.loads(self.config.read_text()))
         raw = encoded({'auth_mode': 'apikey', 'OPENAI_API_KEY': api_key,
-                       'loopx_api_base_url': api_endpoint(base_url)})
+                       'loopx_api_base_url': api_endpoint(base_url),
+                       'loopx_model_provider': provider})
         ident = identity(raw)
         target = self.slot(name)
         with self.lock(enrollment=True):
@@ -404,8 +491,13 @@ class Accounts:
         if self.pending.exists():
             raise ValueError('Interrupted account operation; run codex app recover with GPT closed')
         raw = read_private(target)
+        config_raw = self.config.read_bytes() if self.config.exists() else b''
+        current_provider = provider_route(tomllib.loads(config_raw.decode()) if config_raw else {})
+        if auth_kind(raw) == 'api' and not json.loads(raw).get('loopx_model_provider'):
+            provider = current_provider if current_provider != 'openai' else 'openai'
+            raw = routed_auth(raw, provider)
         ident = identity(raw)
-        converted = file_config(self.config.read_bytes() if self.config.exists() else b'', raw)
+        converted = file_config(config_raw, raw)
         state, outgoing = self.selected()
         if dry_run:
             return {'preview': True, 'slot': name, 'home': str(self.spec['home']),
@@ -415,9 +507,20 @@ class Accounts:
             # Reread under the lock: retain refresh-token rotation from the last use.
             state, outgoing = self.selected()
             raw = outgoing if state and state['slot'] == name else read_private(target)
+            config_raw = self.config.read_bytes() if self.config.exists() else b''
+            current_provider = provider_route(tomllib.loads(config_raw.decode()) if config_raw else {})
+            if state and state['slot'] == 'openai-api' and auth_kind(outgoing) == 'api':
+                outgoing = routed_auth(outgoing, current_provider)
+            if auth_kind(raw) == 'api' and not json.loads(raw).get('loopx_model_provider'):
+                provider = current_provider if current_provider != 'openai' else 'openai'
+                raw = routed_auth(raw, provider)
             ident = identity(raw)
-            converted = file_config(self.config.read_bytes() if self.config.exists() else b'', raw)
-            updates = [('slot:' + state['slot'], outgoing)] if state else []
+            converted = file_config(config_raw, raw)
+            updates = []
+            if state:
+                updates.append(('slot:' + state['slot'], outgoing))
+            if not state or state['slot'] != name:
+                updates.append(('slot:' + name, raw))
             updates += [('config', converted), ('auth', raw),
                         ('active', encoded({'slot': name, 'identity': ident, 'binding': self.binding}))]
             return dict(self.transaction(updates, 'switch'), slot=name,

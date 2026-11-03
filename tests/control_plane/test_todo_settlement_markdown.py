@@ -100,3 +100,6 @@ def test_real_cli_recovery_markdown_exposes_the_same_semantic_command(tmp_path, 
         env={**os.environ, "PYTHONPATH": str(fixture.REPO_ROOT)}, capture_output=True, text=True)
     assert markdown.returncode == 1, markdown.stdout
     assert "semantic closeout: `" + expected + "`" in markdown.stdout
+    spend_precondition = recovery["settlement_plan"]["ordered_steps"][2]["precondition"]
+    assert "fresh open-Todo semantic checkpoint" in spend_precondition
+    assert "- quota_spend: " + spend_precondition in markdown.stdout

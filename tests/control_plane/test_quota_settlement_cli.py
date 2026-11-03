@@ -2404,6 +2404,12 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         _initialize_git_checkout(project)
         todo_id = SELECTED_REPLAN_TODO_ID
     _initialize_fixture_authority(project, runtime, provider=provider)
+    if writeback_kind == "replan":
+        # This replay fixture supplies the ordinary typed replan delta. Keep
+        # its strategy explicit; Stride decision followthrough is tested separately.
+        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                                  "--execution-stride-strategy", "off", "--execute")
+        assert rc == 0, configured
     turn_id = "turn-same-todo-writeback"
     host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
     guard_args = (
@@ -6407,6 +6413,11 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    # This case owns ordinary settlement/recovery, independently of Stride.
+    # Enabled decision adoption has separate real native coverage.
+    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                              "--execution-stride-strategy", "off", "--execute")
+    assert rc == 0, configured
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["control_plane"] = {
         "periodic_report": {
@@ -6648,6 +6659,11 @@ def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, m
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    # This case owns ordinary settlement/recovery, independently of Stride.
+    # Enabled decision adoption has separate real native coverage.
+    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                              "--execution-stride-strategy", "off", "--execute")
+    assert rc == 0, configured
     _initialize_fixture_authority(project, runtime, provider=provider)
     stamp = "2026-01-01T00:00:00+00:00"
     prior = {
@@ -6724,6 +6740,11 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
+    # This case owns ordinary settlement/recovery, independently of Stride.
+    # Enabled decision adoption has separate real native coverage.
+    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
+                              "--execution-stride-strategy", "off", "--execute")
+    assert rc == 0, configured
     _initialize_git_checkout(project)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(

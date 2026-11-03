@@ -106,6 +106,10 @@ from .control_plane.goals.vision_checkpoint import (
     prepare_vision_refresh,
 )
 from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
+from .control_plane.goals.goal_frontier.outcome_continuity import (
+    acceptance_gaps_from_outcome_checkpoint,
+    outcome_vision_checkpoint_from_run,
+)
 from .control_plane.goals.checkpoint_context_io import (
     checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
 )
@@ -604,6 +608,10 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
                 "- vision_checkpoint_required_resolution: "
                 f"{','.join(str(item) for item in required_resolution)}"
             )
+        for gap in vision_checkpoint.get("acceptance_gaps", []):
+            if isinstance(gap, dict):
+                failed = [name for name, passed in (gap.get("component_checks") or {}).items() if not passed]
+                lines.append(f"- outcome qualification gap: {', '.join(failed)}. {gap.get('resolution_hint', '')}")
         lines.extend(render_first_refresh_checkpoint_hint(payload))
 
     projection_gap = (
@@ -1366,6 +1374,17 @@ def refresh_state_run(
             settlement_identity=settlement_identity,
             todo_fields=todo_fields,
         )
+        # Report qualification gaps in the write receipt, using the same owner
+        # as quota/history. A committed checkpoint is not outcome acceptance;
+        # this read-only diagnostic neither rejects nor repairs the write.
+        outcome_checkpoint = outcome_vision_checkpoint_from_run(
+            record, goal_id=safe_goal_id, agent_id=normalized_agent_id or None,
+        )
+        outcome_gaps = acceptance_gaps_from_outcome_checkpoint(
+            agent_vision or existing_agent_vision, outcome_checkpoint,
+        )
+        if outcome_gaps:
+            record["vision_checkpoint"] = {**vision_checkpoint, "acceptance_gaps": outcome_gaps}
         source_snapshot = (
             prior_writeback_run.get("todo_source")
             if checkpoint_supplement and prior_writeback_run

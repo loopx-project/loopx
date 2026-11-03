@@ -328,6 +328,70 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
         fixture.close()
 
 
+def test_active_original_reply_does_not_wait_for_older_native_result_probes(tmp_path, language_server, monkeypatch):  # noqa: F811
+    from concurrent.futures import ThreadPoolExecutor
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.chat_agent import CodexChatAgentError
+    import time
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, *_ = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        start = AntigravityAdapter.start_turn
+
+        def lose_commit(adapter, message, event_sink):
+            start(adapter, message, event_sink)
+            raise CodexChatAgentError("Synthetic lost Core commit", gate=None, error_code="antigravity_rpc_error")
+
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", lose_commit)
+        first = provider.event("steward-app", "older-result", "Older original request")
+        transport.admit("steward-app", first)
+        ref = identity_ref(binding["provider_ref"], first["message_id"])
+        row = transport.core.read_request(ref)
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)["status"] == "failed"
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
+        assert transport.core.context_recovery_candidate(ref)  # Idle discovery is preserved.
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", start)
+        from loopx.capabilities.native_chat import antigravity_adapter
+        post = antigravity_adapter._rpc_post
+
+        def keep_new_request_running(url, token, method, payload, **kwargs):
+            result = post(url, token, method, payload, **kwargs)
+            if method == "SendUserCascadeMessage" and language_server["sent_count"] == 2:
+                language_server["mode"] = "running"
+            return result
+
+        monkeypatch.setattr(antigravity_adapter, "_rpc_post", keep_new_request_running)
+        later = provider.event("steward-app", "current-work", "Current original work")
+        transport.admit("steward-app", later)
+        current = transport.core.read_request(identity_ref(binding["provider_ref"], later["message_id"]))
+        deadline = time.monotonic() + 5
+        while not store.load_turn(current["session_id"], current["turn_id"]).get("upstream_turn_id"):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not transport.core.context_recovery_candidate(ref)
+        monkeypatch.setattr(AntigravityAdapter, "completed_result_observation", staticmethod(
+            lambda **_: pytest.fail("Historical native IO while current original work is active")))
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 0
+        with ThreadPoolExecutor(max_workers=1) as replies:
+            try:
+                replies.submit(transport.reconcile_request, transport.root / f"{current['request_ref']}.json").result(timeout=2)
+                record = json.loads((transport.root / f"{current['request_ref']}.json").read_text())
+                assert record["deliveries"]["progress"]["verified"]
+                assert store.load_turn(current["session_id"], current["turn_id"])["status"] in {"starting", "running"}
+            finally:
+                language_server["mode"] = "complete"
+        assert language_server["sent_count"] == 2
+    finally:
+        language_server["mode"] = "complete"
+        fixture.close()
+
+
 @pytest.mark.parametrize("fault", [None, "wrong-target", "changed-brief", "other-action", "still-invalid",
     "revoked", "new-input", "stop", "unknown-send", "post-enqueue-crash", "reservation-crash", "revoke-during-review",
     "tool-call", "tool-step", "mixed-execution", "missing-stop"])

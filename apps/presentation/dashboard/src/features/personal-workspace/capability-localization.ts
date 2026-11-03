@@ -250,6 +250,10 @@ export function localizedCapabilityFieldCopy(locale: WorkspaceLocale, capability
     label: "Codex", description: "仅作用于支持的 Codex 心跳；显式关闭的实验保持关闭。", options: {off: "关闭", on: "开启"},
   } : {
     label: "Codex", description: "Applies only to supported Codex heartbeats; explicitly disabled runs stay disabled.", options: {off: "Off", on: "On"},
+  }, antigravity_mode: locale === "zh-CN" ? {
+    label: "Antigravity", description: "仅作用于强能力 Antigravity 管家的交付历史渐进读取；关闭时保持完整内联。", options: {off: "关闭", on: "开启"},
+  } : {
+    label: "Antigravity", description: "Applies only to progressive history reads in trusted-owner Antigravity manager sessions; off keeps full inline input.", options: {off: "Off", on: "On"},
   }};
   if (capabilityId === "codex_chat") return {...fieldCopy[locale], ...(locale === "zh-CN" ? {
     codex_profile: {label: "Codex 配置来源", description: "选择已有本机配置，例如 codex-gpt。账户和凭据留在原目录，不复制；留空继承服务配置。"},

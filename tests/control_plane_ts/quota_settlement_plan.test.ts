@@ -135,6 +135,10 @@ test("semantic feedback checkpoint is an exact variant of the current writeback,
     assert.deepEqual(plan.steps[1].vision_authoring, visionAuthoringContract());
     const serialized = settlementPlanPayload(plan).ordered_steps as Record<string, unknown>[];
     assert.equal(serialized[1].semantic_closeout_command_template, checkpoint);
+    assert.match(String(serialized[2].precondition), /exact original-identity durable writeback receipt/);
+    assert.match(String(serialized[2].precondition), /that receipt qualifies.*fresh open-Todo semantic checkpoint/);
+    assert.match(String(serialized[2].precondition), /does not waive terminal completion validation/);
+    assert.match(String(serialized[2].precondition), /skip this step after typed_blocked_writeback_no_spend/);
     assert.match(visionAuthoringContract().continuation_review as string,
       /candidate usability alone is not completion.*full marginal cost/);
     assert.match(visionAuthoringContract().continuation_review as string,

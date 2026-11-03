@@ -1,5 +1,6 @@
 """Worker returns use the original Core-bound private App, including recovery."""
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from loopx.extensions.lark.manager_returns import LarkManagerReturnTransport
 from loopx.chat_store import ChatSessionStore
 from loopx.capabilities.manager_context import acknowledge
 from loopx.capabilities.manager_context.roundtrip import drain, report, reply_status
+from loopx.control_plane.collaboration.turn_context_observation import read_delegation_turn_context
 
 
 @pytest.fixture(params=["shared", "separate"])
@@ -82,7 +84,7 @@ def private_return(steward, request, return_root, monkeypatch):  # noqa: F811
                 _write(_root(return_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {}})
         else:
             replies.append(list(args))
-            ref = "om_out_worker"
+            ref = f"om_out_worker_{len(replies)}"
             provider.messages[ref] = {"message_id": ref, "msg_type": "post", "body": {"content": content}}
             data = {"data": {"message_id": ref}}
         return {"returncode": 0, "stdout": json.dumps(data)}
@@ -192,7 +194,6 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     assert reply_status(sender.root, route)[0]["status"] == "verification_required"
     provider.verify_replies = True
     # Reload the actual Chat store; the persisted attempt drives read-only recovery.
-    from datetime import datetime, timedelta, timezone
     recovered = ChatSessionStore(store.root.parent)
     drain(sender.root, controller.registry_path, recovered, sender, now=datetime.now(timezone.utc) + timedelta(minutes=10))
     assert reply_status(sender.root, route)[0]["status"] == "delivered"
@@ -207,4 +208,85 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
         assert not any("+chat-members-list" in call for call in provider.calls)
     assert "Receiver independently" not in returned[0]["text"]
     assert sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json")) == before_turns
+    assert capture.read_bytes() == before_host_calls
+
+
+@pytest.mark.parametrize("revoke_before_recovery", [False, True])
+def test_partial_return_survives_saved_attempt_recovery_until_final_delivery(private_return, revoke_before_recovery):
+    sender, session, turn, route, _, provider, transport, replies = private_return
+    controller = transport.core.controller
+    store = controller.store
+    capture = store.root.parent.parent / "requests.jsonl"
+    before_host_calls = capture.read_bytes()
+    original_turn = store._turn_path(session["session_id"], turn["turn_id"]).read_bytes()
+    turns = sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json"))
+    remainder = {"summary": "Validate the installed repair", "resume_when": "The isolated package is available"}
+    rid = route["request_id"]
+    acknowledge(sender.root, route["goal_id"], route["agent_id"], rid, "adopt", "Repair and validate")
+    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion",
+           "The source repair is ready.", remaining_work=remainder)
+    partial = _root(sender.root) / "replies" / rid / "conclusion.json"
+    original_result = partial.read_bytes()
+    provider.verify_replies = False
+    drain(sender.root, controller.registry_path, store, sender)
+    assert len(replies) == 1
+    assert reply_status(sender.root, route)[0]["status"] == "verification_required"
+    partial_content = replies[0][replies[0].index("--content") + 1]
+    assert all(value in partial_content for value in remainder.values())
+
+    # Reload the saved attempt. Revocation still wins over that historical proof.
+    recovered = ChatSessionStore(store.root.parent)
+    resumed_sender = LarkManagerReturnTransport(sender.server, sender.root)
+    provider.verify_replies = True
+    clock = datetime.now(timezone.utc) + timedelta(minutes=10)
+    if revoke_before_recovery:
+        policy_path = _root(sender.root) / "policy.json"
+        policy = policy_path.read_bytes()
+        _write(policy_path, {"schema_version": POLICY_SCHEMA, "sources": {}})
+        drain(sender.root, controller.registry_path, recovered, resumed_sender, now=clock)
+        status = reply_status(sender.root, route)[0]
+        assert (status["status"], status["error"]) == ("explicit_unverified", "return_authorization_unavailable")
+        assert len(replies) == 1
+        policy_path.write_bytes(policy)
+        # Restoring access does not automatically resume a stopped publication.
+        clock += timedelta(minutes=10)
+    drain(sender.root, controller.registry_path, recovered, resumed_sender, now=clock)
+    partial_status = "explicit_unverified" if revoke_before_recovery else "delivered"
+    assert reply_status(sender.root, route)[0]["status"] == partial_status
+    assert len(replies) == 1
+    agenda = read_delegation_turn_context(sender.root, controller.registry_path,
+                                          route["goal_id"], route["agent_id"])["unfinished_delegations"]
+    assert [(item["request_id"], item["step"], item.get("remaining_work")) for item in agenda["items"]] == [
+        (rid, "review_request_work", remainder)]
+
+    report(sender.root, route["goal_id"], route["agent_id"], rid, "conclusion",
+           "The isolated repair passed the agreed validation.", update_id="qualified-result")
+    drain(sender.root, controller.registry_path, recovered, resumed_sender, now=clock + timedelta(minutes=20))
+    drain(sender.root, controller.registry_path, ChatSessionStore(store.root.parent), resumed_sender,
+          now=clock + timedelta(minutes=30))
+    statuses = [item["status"] for item in reply_status(sender.root, route)]
+    agenda = read_delegation_turn_context(sender.root, controller.registry_path,
+        route["goal_id"], route["agent_id"])["unfinished_delegations"]["items"]
+    returned = [item for item in recovered.messages(session["session_id"])
+                if item.get("origin") == "manager_followup"]
+    if revoke_before_recovery:
+        # A newer result cannot overtake an uncertain predecessor, even after
+        # access returns. Preserve the exact failure instead of resending it.
+        assert len(replies) == 1 and statuses == ["explicit_unverified", "queued"]
+        assert [(item["request_id"], item["step"], item["pending_return_count"]) for item in agenda] == [
+            (rid, "await_return_delivery", 2)]
+        assert len(returned) == 1
+    else:
+        assert len(replies) == 2 and statuses == ["delivered", "delivered"]
+        assert agenda == []
+        assert len(returned) == 2
+        final_content = replies[1][replies[1].index("--content") + 1]
+        assert "The isolated repair passed" in final_content
+        assert "The isolated repair passed" in returned[1]["text"]
+        assert remainder["summary"] not in returned[1]["text"]
+    assert all(item["turn_id"] == turn["turn_id"] for item in returned)
+    assert all(value in returned[0]["text"] for value in remainder.values())
+    assert partial.read_bytes() == original_result
+    assert store._turn_path(session["session_id"], turn["turn_id"]).read_bytes() == original_turn
+    assert sorted((store.root / "sessions" / session["session_id"] / "turns").glob("*.json")) == turns
     assert capture.read_bytes() == before_host_calls

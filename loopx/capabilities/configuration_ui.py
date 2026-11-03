@@ -89,9 +89,14 @@ def capability_configuration_editor(
     definitions: dict[str, dict[str, Any]] = {
         "context_delivery": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
-            "fields": [_field("mode", "Codex App / benchmark heartbeats", "select",
-                options=CONTEXT_DELIVERY_SETTINGS, required=True,
-                description="On accepts only declared Codex App or benchmark heartbeats. Native host setup is still required; unsupported or unknown modes return an error.")],
+            "fields": [
+                _field("mode", "Codex App / benchmark heartbeats", "select",
+                    options=CONTEXT_DELIVERY_SETTINGS, required=True,
+                    description="On accepts only declared Codex App or benchmark heartbeats. Native host setup is still required; unsupported or unknown modes return an error."),
+                _field("antigravity_mode", "Antigravity manager history", "select",
+                    options=CONTEXT_DELIVERY_SETTINGS, required=True,
+                    description="On defers trusted-owner Antigravity manager delivery histories to private capture reads while keeping current facts inline; off keeps full inline input."),
+            ],
         },
         "codex_chat": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],

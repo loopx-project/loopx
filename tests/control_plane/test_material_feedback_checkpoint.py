@@ -83,6 +83,9 @@ def test_feedback_checkpoint_reaches_next_actual_experiment(
         "--todo-id", fixture.TODO_ID, "--turn-instance-id", "route-feedback-1")
     assert guard["should_run"] and guard["selected_todo"]["todo_id"] == fixture.TODO_ID
     plan = guard["interaction_contract"]["cli_channel"]["settlement_plan"]
+    spend_precondition = plan["ordered_steps"][2]["precondition"]
+    assert "exact original-identity durable writeback receipt" in spend_precondition
+    assert "fresh open-Todo semantic checkpoint" in spend_precondition
     writeback = plan["ordered_steps"][1]
     checkpoint = writeback["semantic_closeout_command_template"]
     assert "--delivery-boundary semantic_closeout" in checkpoint and "<boundary>" not in checkpoint
