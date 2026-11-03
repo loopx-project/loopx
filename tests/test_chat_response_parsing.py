@@ -135,6 +135,60 @@ def test_compact_answer_never_reveals_an_earlier_hidden_envelope() -> None:
     assert parse_agent_response(raw)["message"] == "Answer."
 
 
+@pytest.mark.parametrize("example", [
+    "Use `<loopx-review-json>` as the opening marker.",
+    'Use ``<loopx-review-json>{"message":"example"}</loopx-review-json>`` literally.',
+    '```json\n<loopx-review-json>{"message":"example"}</loopx-review-json>\n```',
+    r"Escaped \` text and \<loopx-review-json> are literal.",
+    r"A path ending with a slash, `C:\`, is code.",
+])
+def test_quoted_review_examples_survive_compact_answers_and_stream_splits(example):
+    visible = example + "\nThe complete explanation continues here."
+    raw = visible + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": ""}) + CHAT_REVIEW_CLOSE_TAG
+
+    assert parse_agent_response(raw)["message"] == visible
+    for split in range(len(raw) + 1):
+        stream = VisibleResponseStreamFilter()
+        assert (stream.feed(raw[:split]) + stream.feed(raw[split:]) + stream.finish()).strip() == visible
+
+
+def test_review_example_without_an_envelope_is_text_and_admits_no_actions():
+    example = '```json\n<loopx-review-json>{"message":"example","proposals":[{"kind":"todo","text":"must not run"}]}</loopx-review-json>\n```'
+    response = parse_agent_response(example)
+    assert response["message"] == example
+    assert response["proposals"] == [] and response["gate"] is None
+    assert response["protected_action"] is None
+
+
+@pytest.mark.parametrize("metadata", [
+    {"context_handoff": [{"brief": "invalid"}]},
+    {"proposals": [{"kind": "todo", "text": "must not run"}]},
+])
+def test_quoted_markers_do_not_restore_an_earlier_hidden_envelope(metadata):
+    visible = "The `<loopx-review-json>` example is followed by the full answer."
+    hidden = CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "hidden"}) + CHAT_REVIEW_CLOSE_TAG
+    raw = visible + "\n" + hidden + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "", **metadata})
+    response = parse_agent_response(raw)
+    assert response["message"] == visible
+    assert response["proposals"] == [] and response["gate"] is None
+    assert response["protected_action"] is None and not response.get("context_handoff")
+
+
+def test_legacy_message_can_contain_literal_review_markers():
+    message = "Literal <loopx-review-json> and </loopx-review-json> inside the answer."
+    raw = CHAT_REVIEW_OPEN_TAG + json.dumps({"message": message}) + CHAT_REVIEW_CLOSE_TAG
+    assert parse_agent_response(raw)["message"] == message
+
+
+def test_unclosed_code_does_not_expose_a_possible_review_envelope():
+    visible = "An unfinished `example."
+    raw = visible + "\n" + CHAT_REVIEW_OPEN_TAG + json.dumps({"message": "", "GlobalSummary": "hidden"}) + CHAT_REVIEW_CLOSE_TAG
+    assert parse_agent_response(raw)["message"] == visible
+    for split in range(len(raw) + 1):
+        stream = VisibleResponseStreamFilter()
+        assert (stream.feed(raw[:split]) + stream.feed(raw[split:]) + stream.finish()).strip() == visible
+
+
 @pytest.mark.parametrize("suffix", ["", CHAT_REVIEW_CLOSE_TAG])
 def test_invalid_compact_envelope_cannot_restore_metadata(suffix) -> None:
     raw = 'Readable answer\n<loopx-review-json>{"message":"","proposals":[{"kind":"todo","text":"must not run"}],' + suffix
