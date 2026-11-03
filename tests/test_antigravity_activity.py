@@ -6,16 +6,34 @@ from loopx.capabilities.native_chat.antigravity_activity import AntigravityActiv
 
 def test_repeated_native_observations_do_not_invent_tool_completion_or_publish_reasoning(tmp_path):
     activity = AntigravityActivity(tmp_path)
-    planner = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
-               "plannerResponse": {"thinking": "hidden thought content", "toolCalls": [
-                   {"name": "read_file", "arguments": {"secret": "private arguments"}}]}}
+    planner = {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_GENERATING",
+               "plannerResponse": {
+                   "thinking": f"I'm thinking through how to approach this.\n\n\nChecking {tmp_path}/source.txt",
+                   "rawThinking": "hidden thought content",
+                   "toolCalls": [{"name": "read_file", "arguments": {"secret": "private arguments"}}],
+               }}
     events = activity.observe(1, planner)
     assert [(row["method"], row["step"]["kind"]) for row in events] == [
-        ("item/started", "reasoning"), ("item/completed", "reasoning"), ("item/started", "tool")]
+        ("item/started", "reasoning"), ("item/started", "tool")]
+    assert events[0]["step"]["reasoning_summary"] is True
+    assert events[0]["step"]["detail"] == "Checking source.txt"
+    assert activity.observe(1, planner) == []
+    planner["plannerResponse"]["thinking"] = (
+        f"I'm thinking through how to approach this.\n\n\nChecking {tmp_path}/source.txt and verifying state."
+    )
+    delta_events = activity.observe(1, planner)
+    assert [(row["method"], row["step"]["detail"]) for row in delta_events] == [
+        ("item/reasoning/summaryTextDelta", "Checking source.txt and verifying state.")
+    ]
+    planner["status"] = "CORTEX_STEP_STATUS_DONE"
+    done_events = activity.observe(1, planner)
+    assert [(row["method"], row["step"]["kind"]) for row in done_events] == [("item/completed", "reasoning")]
     assert activity.observe(1, planner) == []
     assert events[-1]["step"]["title"] == "read_file"
-    assert "hidden thought" not in json.dumps(events) and "private arguments" not in json.dumps(events)
-    assert not any(row["step"]["kind"] == "tool" and row["method"] == "item/completed" for row in events)
+    serialized = json.dumps(events + delta_events + done_events)
+    assert "hidden thought" not in serialized and "private arguments" not in serialized
+    assert str(tmp_path) not in serialized
+    assert not any(row["step"]["kind"] == "tool" and row["method"] == "item/completed" for row in events + done_events)
 
 
 def test_command_redaction_failure_and_output_observation_use_shared_contract(tmp_path):

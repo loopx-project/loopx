@@ -8,12 +8,27 @@ from urllib.parse import unquote
 
 from ...presentation.codex_activity import CodexActivitySteps
 
+_BOILERPLATE_THINKING_PREFIXES = (
+    "i'm thinking through how to approach this.",
+    "thinking through how to approach this.",
+)
+
+
+def _clean_thinking_summary(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    while len(lines) > 1 and lines[0].lower() in _BOILERPLATE_THINKING_PREFIXES:
+        lines.pop(0)
+    return "\n\n".join(lines).strip()
+
 
 class AntigravityActivity:
     def __init__(self, work_dir: Path) -> None:
         self.steps = CodexActivitySteps(protected_paths=[work_dir])
         self.started: set[str] = set()
         self.completed: set[str] = set()
+        self.thinking_digests: dict[str, str] = {}
         self.output_digests: dict[str, str] = {}
 
     def observe(self, index: int, native: dict[str, Any]) -> list[dict[str, Any]]:
@@ -42,11 +57,27 @@ class AntigravityActivity:
             planner = native.get("plannerResponse")
             if not isinstance(planner, dict):
                 return events
-            if planner.get("thinking"):
-                # The native field is not a qualified public summary. Report
-                # the observed thinking span without publishing its contents.
-                item: dict[str, Any] = {"id": f"agy_think_{index}", "type": "reasoning"}
-                start(item)
+            summary = _clean_thinking_summary(planner.get("thinking"))
+            if summary or planner.get("thinking"):
+                # Project only the native thinking summary (`thinking`), never
+                # `rawThinking`, through the shared path/secret redacting owner.
+                item_id = f"agy_think_{index}"
+                item: dict[str, Any] = {
+                    "id": item_id,
+                    "type": "reasoning",
+                    **({"summary": [summary]} if summary else {}),
+                }
+                digest = hashlib.sha256(summary.encode("utf-8")).hexdigest() if summary else ""
+                if item_id not in self.started:
+                    if digest:
+                        self.thinking_digests[item_id] = digest
+                    start(item)
+                elif digest and self.thinking_digests.get(item_id) != digest and item_id not in self.completed:
+                    self.thinking_digests[item_id] = digest
+                    emit(
+                        "item/reasoning/summaryTextDelta",
+                        self.steps._reasoning_step(item_id, "running", [summary]),
+                    )
                 if status == "CORTEX_STEP_STATUS_DONE":
                     finish(item)
             calls = planner.get("toolCalls")

@@ -369,7 +369,7 @@ class AntigravityAdapter:
                     return None
                 def read(method: str, **payload: Any) -> dict[str, Any]:
                     return _rpc_post(found["url"], found["csrf_token"], method,
-                                     {"cascadeId": cascade_id, **payload}, timeout=5.0)
+                                     {"cascadeId": cascade_id, **payload}, timeout=10.0)
 
                 before = read("GetCascadeTrajectory")
                 total = before.get("numTotalSteps")
@@ -416,16 +416,21 @@ class AntigravityAdapter:
                 return None
             execution = metadata.get("executionId")
             current = [(index, step) for index, step in indexed if start <= index < end]
+            final = current[-1][1]
+            settled_statuses = {
+                "CORTEX_STEP_STATUS_DONE",
+                "CORTEX_STEP_STATUS_ERROR",
+                "CORTEX_STEP_STATUS_CANCELED",
+                "CORTEX_STEP_STATUS_CLEARED",
+            }
             if not isinstance(execution, str) or not execution or any(
-                    (step.get("status") != "CORTEX_STEP_STATUS_DONE"
-                     and not (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-                              and step.get("status") == "CORTEX_STEP_STATUS_CLEARED"))
+                    step.get("status") not in settled_statuses
+                    or (step is final and step.get("status") != "CORTEX_STEP_STATUS_DONE")
                     or (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-                        and (step.get("errorMessage") or {}).get("shouldShowUser") is True)
+                        and (step is final or (step.get("errorMessage") or {}).get("shouldShowUser") is True))
                     or (step.get("metadata") or {}).get("executionId") != execution
                     for _, step in current):
                 return None
-            final = current[-1][1]
             planner = final.get("plannerResponse") or {}
             answer = planner.get("modifiedResponse") or planner.get("response")
             if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
@@ -649,14 +654,34 @@ class AntigravityAdapter:
         return {"adapter_kind": self.adapter_kind, "streaming": True,
                 "resume": True, "interrupt": True, "steering": False}
 
+    def start_turn_with_attachments(
+        self,
+        message: str,
+        event_sink: Callable[[str, dict[str, Any]], None] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        from ...chat_attachments import normalize_chat_image_attachments
+
+        normalized = normalize_chat_image_attachments(attachments or [])
+        media = [
+            {
+                "mimeType": row["mime_type"],
+                "inlineData": row["data_url"].split(",", 1)[1],
+                "description": row["name"],
+            }
+            for row in normalized
+        ]
+        return self.start_turn(message, event_sink, media=media)
+
     def start_turn(self, message: str,
                    event_sink: Callable[[str, dict[str, Any]], None] | None = None,
-                   *, read_only_review: bool = False) -> dict[str, Any]:
+                   *, read_only_review: bool = False,
+                   media: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         self._read_only_review = read_only_review
         self._interrupted.clear()
         self._cancel_acknowledged = False
         try:
-            return self._run_turn(message, event_sink)
+            return self._run_turn(message, event_sink, media=media)
         except BaseException as failure:
             # A timeout/transport or permission failure is not a successful turn.
             # Retain an unconfirmed cancellation as an error for the caller fence.
@@ -676,6 +701,8 @@ class AntigravityAdapter:
         self,
         message: str,
         event_sink: Callable[[str, dict[str, Any]], None] | None = None,
+        *,
+        media: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if self._closed:
             raise CodexChatAgentError(
@@ -690,7 +717,7 @@ class AntigravityAdapter:
             self.csrf_token,
             "GetCascadeTrajectory",
             {"cascadeId": self.cascade_id},
-            timeout=5.0,
+            timeout=10.0,
         )
         if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
             raise CodexChatAgentError(
@@ -705,6 +732,7 @@ class AntigravityAdapter:
             "cascadeId": self.cascade_id,
             "items": [{"text": full_prompt}],
             "cascadeConfig": user_config,
+            **({"media": media} if media else {}),
         }
         with self._send_lock:
             self._check_interrupted()
@@ -741,7 +769,7 @@ class AntigravityAdapter:
                     self.csrf_token,
                     "GetCascadeTrajectory",
                     {"cascadeId": self.cascade_id},
-                    timeout=2.0,
+                    timeout=10.0,
                 )
             except CodexChatAgentError as exc:
                 # Losing an idempotent observation does not mean that the
@@ -770,7 +798,7 @@ class AntigravityAdapter:
                             "startIndex": start_step_index,
                             "endIndex": total_steps,
                         },
-                        timeout=2.0,
+                        timeout=10.0,
                     )
                 except CodexChatAgentError as exc:
                     if exc.error_code != "antigravity_transport_error":
@@ -926,9 +954,20 @@ class AntigravityAdapter:
                                 or (step.get("metadata") or {}).get("executionId") != execution for _, step in current_steps)):
                         raise CodexChatAgentError("The format review lacks exact normal text-only completion; no actions were admitted.",
                                                   gate=None, error_code="upstream_transport_failure")
+                settled_statuses = {
+                    "CORTEX_STEP_STATUS_DONE",
+                    "CORTEX_STEP_STATUS_ERROR",
+                    "CORTEX_STEP_STATUS_CANCELED",
+                    "CORTEX_STEP_STATUS_CLEARED",
+                }
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
-                        or any(step.get("status") != "CORTEX_STEP_STATUS_DONE" for _, step in current_steps)
+                        or any(
+                            step.get("status") not in settled_statuses
+                            or (step.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
+                                and (step.get("errorMessage") or {}).get("shouldShowUser") is True)
+                            for _, step in current_steps
+                        )
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
                         or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"):
                     raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",

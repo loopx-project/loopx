@@ -118,24 +118,27 @@ def test_native_preparation_is_visible_without_answer_or_private_labels():
 
 
 def test_public_summary_and_recent_tools_are_private_owner_only_and_bounded():
-    events = [{"event_id": "summary", "kind": "agent.phase", "payload": {
-        "method": "item/reasoning/summaryTextDelta", "step": {"id": "summary", "kind": "reasoning",
-        "state": "running", "reasoning_summary": True, "detail": "公开摘要。" * 500}}}]
+    events = [{"event_id": f"summary_{index}", "kind": "agent.phase", "payload": {
+        "method": "item/reasoning/summaryTextDelta", "step": {"id": f"summary_{index}", "kind": "reasoning",
+        "state": "running", "reasoning_summary": True, "detail": f"思考步骤 {index}：" + "公开摘要。" * 100}}}
+        for index in range(6)]
     events += [{"event_id": str(index), "kind": "agent.phase", "payload": {
         "method": "item/started", "step": {"id": str(index), "kind": "tool", "state": "running",
         "title": f"read_{index}", "detail": "not a tool result"}}} for index in range(7)]
-    state = {}
+    state = {"activities": [{"id": "legacy", "title": "legacy_tool", "state": "running"}]}
     view = project_progress(state, events, owner_private=True)
-    assert "思考摘要" in view and "公开摘要" in view and "read_6" in view and "read_0" not in view
-    assert view.index("read_6") < view.index("思考摘要")
-    assert len(state["public_summary"]) == 1200 and len(state["activities"]) == 4
+    assert "思考摘要" in view and "公开摘要" in view
+    assert "思考步骤 5" in view and "思考步骤 0" not in view
+    assert "最近步骤" not in view and "read_6" not in view and "legacy_tool" not in view
+    assert len(state["public_summary"]) <= 1200 and len(state["thinking_summaries"]) == 4
+    assert "activities" not in state
     assert "not a tool result" not in view
     events += [{"event_id": "raw", "kind": "agent.phase", "payload": {
         "method": "item/reasoning/textDelta", "step": {"id": "raw", "kind": "reasoning",
         "state": "running", "reasoning_summary": True, "detail": "hidden reasoning"}}}]
     assert "hidden reasoning" not in project_progress(state, events[-1:], owner_private=True)
     assert "公开摘要" not in project_progress(state, [], owner_private=False)
-    assert "activities" not in state and "public_summary" not in state
+    assert "thinking_summaries" not in state and "public_summary" not in state
     assert "公开摘要" not in project_progress({}, events)
 
 
@@ -154,7 +157,7 @@ def test_original_private_post_shows_native_public_summary_before_final_answer(o
     try:
         draft = provider.writes[0][1]
         assert "思考摘要" in draft and "先核对原始请求与已保存结果" in draft
-        assert "source.txt" in draft and "synthetic private reasoning" not in draft
+        assert "source.txt" not in draft and "synthetic private reasoning" not in draft
         assert store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
         transport.reconcile()
         assert len(provider.writes) == 1
@@ -202,7 +205,7 @@ def test_output_activity_updates_the_original_post_then_preserves_terminal_answe
             transport.reconcile()
             assert f"已运行 {duration // 1000} 秒" in provider.edits[-1][2]
             assert "第一段回答" in provider.edits[-1][2] and "private" not in provider.edits[-1][2]
-            assert "source.txt" in provider.edits[-1][2]
+            assert "source.txt" not in provider.edits[-1][2]
         count = len(provider.edits)
         allow_update(transport, row)
         transport.reconcile()
