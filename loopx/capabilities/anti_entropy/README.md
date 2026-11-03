@@ -172,8 +172,12 @@ no model runs and measures no agent-runtime behavior.
 
 ## Known Limitations
 
-- Dynamic computed member access (`api[dynamicKey]`, concatenated keys, template-interpolated keys) is not analyzed. Target-scoped detection needs import/alias provenance and remains a named follow-up; the tool must not claim an absence it cannot prove.
+- Static computed member keys are resolved as a bounded expression subset: string/template literals, legal whitespace/comments/line terminators between tokens, parentheses, constant string `+` concatenation, `String(...)`, `String.raw`, and simple TypeScript `as`/`satisfies`/non-null wrappers. Malformed static forms fail closed with AE004.
+- Dynamic computed member keys (`api[dynamicKey]`, a dynamic concatenation/template operand, `Reflect.get`, `eval`) are not analyzed. Target-scoped detection needs import/alias provenance and remains a named follow-up; the tool must not claim an absence it cannot prove.
+- Destructuring property reads (`const { ['old_api']: fn } = api`) are not detected by the member-expression parser; this is a known executable-read gap that needs pattern analysis or a real JS/TS parser, not a wider text heuristic.
+- Reference extraction is token-kind conservative: object-literal keys, regex-literal text, type-only positions, JSX text and same-named properties on unrelated receivers can be reported as references (false reject). This is the opposite direction from the retirement false pass and is tracked for a token-kind-aware parser.
 - Regex-literal detection for escape normalization is heuristic; escape-like text inside a regex literal is treated as pattern text, not a reference.
 - A canonical work-context Todo record without `todo_id` is assumed to be the selected task's own record (the canonical producer emits the goal-state record and the selected Todo record). Direct-caller payloads with multiple id-less records should provide `todo_id`.
 - A malformed explicit `retirement_basis` value is inert and fails closed; it cannot activate partial policy and may shadow a later valid declaration in the same carrier.
 - Escaped definition names and escapes outside value-position member/identifier references are outside the reference model.
+- The hand-rolled lexer is not a complete JavaScript/TypeScript parser; closing arbitrary expression syntax requires a real parser and remains a bounded follow-up.

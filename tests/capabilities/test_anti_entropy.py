@@ -1455,3 +1455,485 @@ def test_typescript_escaped_regex_pattern_is_not_a_reference(tmp_path: Path) -> 
     receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
     assert receipt.verdict == "passed", f"findings: {receipt.findings}"
     assert receipt.retired_symbols == ("old_api",)
+
+
+_STATIC_MEMBER_TRIVIA = (
+    "",
+    " ",
+    "\t",
+    "\n",
+    "\r\n",
+    "/* c */",
+    "// c\n",
+    "/*\n c\n*/",
+)
+
+
+@pytest.mark.parametrize("before", _STATIC_MEMBER_TRIVIA)
+@pytest.mark.parametrize("after", _STATIC_MEMBER_TRIVIA)
+def test_typescript_static_member_trivia_blocks_retirement(
+    tmp_path: Path, before: str, after: str
+) -> None:
+    """Legal JS whitespace/comments between member tokens are not an escape hatch."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_trivia",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api[{before}'old_api'{after}]();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize("trivia", ("\n", "\r\n", "/* c */", "// c\n"))
+def test_typescript_escaped_key_with_trivia_blocks_retirement(
+    tmp_path: Path, trivia: str
+) -> None:
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_escaped_trivia",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api[{trivia}'old\\u005fapi'{trivia}]();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize(
+    "key_expression",
+    (
+        "('old_api')",
+        "( 'old_api' )",
+        "('old' + '_api')",
+        "('old' + '\\u005fapi')",
+        "`old${'_api'}`",
+        "`old_api`",
+        "String('old_api')",
+        "String.raw`old_api`",
+        "('old_api' + '')",
+    ),
+)
+def test_typescript_static_key_expression_blocks_retirement(
+    tmp_path: Path, key_expression: str
+) -> None:
+    """A static key expression is the same executable member reference."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_key_expr",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api[{key_expression}]();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_optional_chain_with_member_trivia_blocks_retirement(
+    tmp_path: Path,
+) -> None:
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_optional_trivia",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "const value = api?.[ /* key */ (\n'old_api'\n) ]();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_type_level_member_forms_block_retirement(
+    tmp_path: Path,
+) -> None:
+    """TS non-null/assertion wrappers are erased at runtime but the call still runs."""
+    cases = (
+        "api!['old_api']()",
+        "api[('old_api' as const)]()",
+        "api['old_api' as const]()",
+        "api['old_api' as string[]]()",
+        "api[('old_api' satisfies string)]()",
+        "api['old_api'!]()",
+    )
+    for index, caller in enumerate(cases):
+        diff = """
+--- a/service.ts
++++ b/service.ts
+@@ -1,2 +1,2 @@
+-export function old_api(): number { return 1; }
++export function new_api(): number { return 2; }
+"""
+        basis = RetirementBasis(target_symbols=("old_api",))
+        workspace = _make_workspace(
+            tmp_path / f"ws_ts_member_{index}",
+            {
+                "service.ts": "export function new_api(): number { return 2; }\n",
+                "client.ts": (
+                    "import * as api from './service';\n"
+                    f"declare const value: number;\nconst x = {caller}\n"
+                ),
+            },
+        )
+        receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+        assert receipt.verdict == "rejected", (caller, receipt.findings)
+        assert receipt.retired_symbols == ()
+
+
+def test_typescript_static_member_trivia_migrated_and_harmless_pass(
+    tmp_path: Path,
+) -> None:
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_trivia_harmless",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "const migrated = api[ /* key */ (\n'new_api'\n) ]();\n"
+                "const harmless = obj[\n'hello world'\n];\n"
+                "export function names() { return [\n'old_api'\n]; }\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+def test_typescript_unclosed_member_comment_fails_closed(tmp_path: Path) -> None:
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_unclosed_member_comment",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "const value = api[ /* unclosed 'old_api']();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE004") for f in receipt.findings)
+    assert "old_api" not in receipt.retired_symbols
+
+
+def test_typescript_multiline_member_preserves_later_direct_reference(
+    tmp_path: Path,
+) -> None:
+    """Consuming member newlines must not shift later line mapping."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_line_mapping",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "const harmless = obj[\n  'hello world'\n];\n"
+                "const direct = old_api();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_member_trivia_real_cli_exit_code(tmp_path: Path) -> None:
+    """Reviewer-shaped real CLI cases: newline, block comment, line comment."""
+    import subprocess
+    import sys
+
+    cases = (
+        "api[\n'old_api'\n]()",
+        "api[ /* key */ 'old_api']()",
+        "api[ // key\n'old_api']()",
+    )
+    for index, caller in enumerate(cases):
+        diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+        workspace = _make_workspace(
+            tmp_path / f"ws_cli_trivia_{index}",
+            {
+                "service.mjs": "export function new_api() { return 2; }\n",
+                "client.mjs": (
+                    "import * as api from './service.mjs';\n"
+                    f"console.log({caller});\n"
+                ),
+            },
+        )
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "anti-entropy",
+                "verify",
+                "--diff-file",
+                "-",
+                "--basis-json",
+                '{"target_symbols": ["old_api"]}',
+                "--workspace",
+                str(workspace),
+                "--format",
+                "json",
+            ],
+            input=diff.encode("utf-8"),
+            capture_output=True,
+        )
+        assert proc.returncode == 1, (caller, proc.stdout, proc.stderr)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("\ufeff", ""),
+        ("", "\ufeff"),
+        ("// c\u2028", "\u2028"),
+        ("// c\u2029", "\u2029"),
+        ("/* c */\ufeff", "\u2028"),
+    ),
+)
+def test_typescript_unicode_trivia_static_member_blocks_retirement(
+    tmp_path: Path, before: str, after: str
+) -> None:
+    """Legal non-ASCII whitespace/line terminators are trivia, not an escape hatch."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_unicode_trivia",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api[{before}('old' + '_api'){after}]();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize(
+    "key_expression",
+    (
+        "String('old_api', 'ignored')",
+        "String('old'+'_api',)",
+        "String(('old' + '_api'))",
+    ),
+)
+def test_typescript_string_key_extra_arguments_blocks_retirement(
+    tmp_path: Path, key_expression: str
+) -> None:
+    """String() returns its first static argument; extra args do not change the key."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_string_extra_args",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                f"const value = api[{key_expression}]();\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_for_of_array_literal_is_not_member_access(tmp_path: Path) -> None:
+    """A contextual keyword before an array literal must not become member access."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_for_of",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "for (const key of ['old'+'_api']) { console.log(key); }\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+def test_typescript_contextual_keyword_identifiers_are_valid_receivers(
+    tmp_path: Path,
+) -> None:
+    """`of`/`as`/`satisfies` are legal identifiers when not used as keywords."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_contextual_receivers",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "const of = api;\n"
+                "of['old_api']();\n"
+                "const as = api;\n"
+                "as['old'+'_api']();\n"
+                "const satisfies = api;\n"
+                "satisfies[('old_api')]();\n"
+                "function read(of) { return of['old_api'](); }\n"
+                "for (const item of of['old_api']()) { console.log(item); }\n"
+                "for (const item of as['old_api']) { console.log(item); }\n"
+                "function readAs() { return as['old_api'](); }\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_asi_contextual_identifier_receiver_blocks_retirement(
+    tmp_path: Path,
+) -> None:
+    """ASI/no-semicolon identifiers named as/satisfies are still receivers."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_asi_receivers",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs'\n"
+                "const as = api\n"
+                "as['old_api']()\n"
+                "const satisfies = api\n"
+                "satisfies['old' + '_api']()\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ()

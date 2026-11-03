@@ -543,91 +543,379 @@ class _ComputedMember:
     name: str
     next_index: int
     resolved: bool
+    newlines: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class _StaticKey:
+    """A statically evaluated computed-member key expression."""
 
-def _previous_identifier_word(out: list[str]) -> str:
-    """Return the identifier word immediately before the current position."""
-    chars: list[str] = []
-    seen = False
+    value: str
+    next_index: int
+    resolved: bool
+
+
+_JS_EXTRA_WHITESPACE = "\u00a0\u2028\u2029\ufeff"
+_TS_ASSERTION_KEYWORDS = ("as", "satisfies")
+_TS_IDENTIFIER_AT_RE = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+
+def _is_js_whitespace(char: str) -> bool:
+    return char.isspace() or char in _JS_EXTRA_WHITESPACE
+
+
+def _skip_js_trivia(text: str, index: int) -> tuple[int, bool]:
+    """Skip JS whitespace and comments between tokens.
+
+    Returns ``(index, True)`` on success and ``(index, False)`` for an unclosed
+    block comment; callers fail closed in that case.
+    """
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if _is_js_whitespace(char):
+            index += 1
+            continue
+        if text.startswith("//", index):
+            cursor = index + 2
+            while cursor < length and text[cursor] not in "\r\n\u2028\u2029":
+                cursor += 1
+            index = cursor
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            if close == -1:
+                return index, False
+            index = close + 2
+            continue
+        break
+    return index, True
+
+
+def _previous_receiver_char(out: list[str]) -> str:
+    """Return the code character before the member bracket, skipping ``!`` suffix."""
     for position in range(len(out) - 1, -1, -1):
         for char in reversed(out[position]):
-            if char.isspace():
-                if seen:
-                    return "".join(reversed(chars))
+            if char.isspace() or char == "!":
                 continue
-            if char.isalnum() or char in "_$":
-                chars.append(char)
-                seen = True
-                continue
-            return "".join(reversed(chars))
-    return "".join(reversed(chars))
-
-
-def _previous_code_char(out: list[str]) -> str:
-    for position in range(len(out) - 1, -1, -1):
-        stripped = out[position].rstrip()
-        if stripped:
-            return stripped[-1]
+            return char
     return ""
+
+
+def _previous_receiver_word_info(out: list[str]) -> tuple[str, str]:
+    """Return the identifier before the member bracket and its prefix text."""
+    code = "".join(out)
+    end = len(code)
+    while end and (code[end - 1].isspace() or code[end - 1] == "!"):
+        end -= 1
+    start = end
+    while start and (code[start - 1].isalnum() or code[start - 1] in "_$"):
+        start -= 1
+    return code[start:end], code[:start]
+
+
+_TS_CONTEXTUAL_MEMBER_WORDS = frozenset({"of"})
+
+
+def _is_contextual_member_keyword(prefix: str, word: str) -> bool:
+    """Distinguish the ``for (... of ...)`` keyword from an identifier named ``of``."""
+    if word != "of":
+        return False
+    # ``for (const k of [ ... ])``: the current word is the first top-level
+    # ``of`` after a binding, not a later variable expression.
+    return (
+        re.search(
+            r"\bfor\s*\(\s*(?:(?:const|let|var)\s+)?"
+            r"[A-Za-z_$][A-Za-z0-9_$]*\s*$",
+            prefix,
+            re.S,
+        )
+        is not None
+    )
+
+
+def _parse_static_string(text: str, index: int) -> _StaticKey:
+    quote = text[index]
+    length = len(text)
+    cursor = index + 1
+    while cursor < length:
+        char = text[cursor]
+        if char == "\\":
+            if cursor + 1 >= length:
+                return _StaticKey("", length, False)
+            cursor += 2
+            continue
+        if char == quote:
+            decoded = _decode_js_escape_text(text[index + 1 : cursor])
+            if decoded is None:
+                return _StaticKey("", cursor + 1, False)
+            return _StaticKey(decoded, cursor + 1, True)
+        if char in "\r\n\u2028\u2029":
+            return _StaticKey("", cursor, False)
+        cursor += 1
+    return _StaticKey("", length, False)
+
+
+def _parse_static_template(
+    text: str, index: int, *, raw_mode: bool = False
+) -> _StaticKey | None:
+    length = len(text)
+    cursor = index + 1
+    literal_start = cursor
+    pieces: list[str] = []
+
+    def append_literal(end: int) -> _StaticKey | None:
+        segment = text[literal_start:end]
+        if raw_mode:
+            pieces.append(segment)
+            return None
+        decoded = _decode_js_escape_text(segment)
+        if decoded is None:
+            return _StaticKey("", end, False)
+        pieces.append(decoded)
+        return None
+
+    while cursor < length:
+        char = text[cursor]
+        if char == "\\":
+            if cursor + 1 >= length:
+                return _StaticKey("", length, False)
+            cursor += 2
+            continue
+        if char == "`":
+            failure = append_literal(cursor)
+            if failure is not None:
+                return failure
+            return _StaticKey("".join(pieces), cursor + 1, True)
+        if char == "$" and cursor + 1 < length and text[cursor + 1] == "{":
+            failure = append_literal(cursor)
+            if failure is not None:
+                return failure
+            inner = _parse_static_key_expression(text, cursor + 2)
+            if inner is None:
+                return None
+            if not inner.resolved:
+                return _StaticKey("", inner.next_index, False)
+            close, ok = _skip_js_trivia(text, inner.next_index)
+            if not ok:
+                return _StaticKey("", close, False)
+            if close >= length or text[close] != "}":
+                return None
+            pieces.append(inner.value)
+            cursor = close + 1
+            literal_start = cursor
+            continue
+        if char in "\r\n":
+            cursor += 1
+            continue
+        cursor += 1
+    return _StaticKey("", length, False)
+
+
+def _skip_ts_assertions(text: str, index: int) -> tuple[int, bool]:
+    """Skip simple TS type assertions/postfixes in a key expression."""
+    length = len(text)
+    while True:
+        index, ok = _skip_js_trivia(text, index)
+        if not ok:
+            return index, False
+        match = _TS_IDENTIFIER_AT_RE.match(text, index)
+        if match is not None and match.group(0) in _TS_ASSERTION_KEYWORDS:
+            index = match.end()
+            index, ok = _skip_js_trivia(text, index)
+            if not ok:
+                return index, False
+            type_match = _TS_IDENTIFIER_AT_RE.match(text, index)
+            if type_match is None:
+                return index, False
+            index = type_match.end()
+            # ``as string[]`` / ``as T[][]``: empty array suffixes keep the value.
+            while index + 1 < length and text[index] == "[" and text[index + 1] == "]":
+                index += 2
+            continue
+        if index < length and text[index] == "!":
+            index += 1
+            continue
+        return index, True
+
+
+def _skip_call_tail(text: str, index: int) -> int | None:
+    """Skip a call argument tail to the closing ``)`` (strings/comments aware)."""
+    length = len(text)
+    depth = 1
+    while index < length:
+        char = text[index]
+        if char in ('"', "'", "`"):
+            quote = char
+            index += 1
+            while index < length:
+                if text[index] == "\\":
+                    index += 2
+                    continue
+                if text[index] == quote:
+                    index += 1
+                    break
+                index += 1
+            continue
+        if text.startswith("//", index):
+            while index < length and text[index] not in "\r\n\u2028\u2029":
+                index += 1
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            if close == -1:
+                return None
+            index = close + 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return None
+
+
+def _parse_string_call(text: str, index: int) -> _StaticKey | None:
+    length = len(text)
+    index, ok = _skip_js_trivia(text, index)
+    if not ok:
+        return _StaticKey("", index, False)
+    if index < length and text[index] == ".":
+        index, ok = _skip_js_trivia(text, index + 1)
+        if not ok:
+            return _StaticKey("", index, False)
+        if not text.startswith("raw", index):
+            return None
+        index += 3
+        index, ok = _skip_js_trivia(text, index)
+        if not ok:
+            return _StaticKey("", index, False)
+        if index < length and text[index] == "`":
+            return _parse_static_template(text, index, raw_mode=True)
+        return None
+    if index < length and text[index] == "(":
+        inner = _parse_static_key_expression(text, index + 1)
+        if inner is None:
+            return None
+        if not inner.resolved:
+            return _StaticKey("", inner.next_index, False)
+        close, ok = _skip_js_trivia(text, inner.next_index)
+        if not ok:
+            return _StaticKey("", close, False)
+        if close < length and text[close] == ")":
+            return _StaticKey(inner.value, close + 1, True)
+        if close < length and text[close] == ",":
+            tail = _skip_call_tail(text, close + 1)
+            if tail is not None:
+                return _StaticKey(inner.value, tail, True)
+    return None
+
+
+def _parse_static_primary(text: str, index: int) -> _StaticKey | None:
+    index, ok = _skip_js_trivia(text, index)
+    if not ok:
+        return _StaticKey("", index, False)
+    if index >= len(text):
+        return None
+    char = text[index]
+    if char == "`":
+        return _parse_static_template(text, index)
+    if char in _TS_QUOTE_CHARS:
+        return _parse_static_string(text, index)
+    if char == "(":
+        inner = _parse_static_key_expression(text, index + 1)
+        if inner is None:
+            return None
+        if not inner.resolved:
+            return _StaticKey("", inner.next_index, False)
+        close, ok = _skip_js_trivia(text, inner.next_index)
+        if not ok:
+            return _StaticKey("", close, False)
+        if close < len(text) and text[close] == ")":
+            return _StaticKey(inner.value, close + 1, inner.resolved)
+        return _StaticKey("", close, False)
+    if text.startswith("String", index):
+        after = index + 6
+        if after >= len(text) or not (
+            text[after].isalnum() or text[after] in "_$"
+        ):
+            return _parse_string_call(text, after)
+    return None
+
+
+def _parse_static_key_expression(text: str, index: int) -> _StaticKey | None:
+    first = _parse_static_primary(text, index)
+    if first is None:
+        return None
+    if not first.resolved:
+        return first
+    value = first.value
+    cursor = first.next_index
+    while True:
+        cursor, ok = _skip_ts_assertions(text, cursor)
+        if not ok:
+            return _StaticKey("", cursor, False)
+        cursor, ok = _skip_js_trivia(text, cursor)
+        if not ok:
+            return _StaticKey("", cursor, False)
+        if cursor < len(text) and text[cursor] == "+":
+            right = _parse_static_primary(text, cursor + 1)
+            if right is None:
+                return None
+            if not right.resolved:
+                return _StaticKey("", right.next_index, False)
+            value += right.value
+            cursor = right.next_index
+            continue
+        return _StaticKey(value, cursor, True)
 
 
 def _static_computed_member(
     text: str, start: int, out: list[str]
 ) -> _ComputedMember | None:
-    """Preserve a statically named computed member access (api[name]).
+    """Preserve a static computed member access (api[key]) in value position.
 
-    Only a member name in a value position is preserved. Array literals,
-    declarations, and dynamic expressions stay string-literal text and never
-    become executable references. A quoted member body that cannot be decoded
-    (malformed escape) is reported as unresolved so the caller can fail closed
-    with AE004 instead of certifying absence.
+    The key is parsed as a bounded static expression: string/template literals,
+    parenthesized static keys, constant ``+`` concatenation, ``String(...)``
+    and simple TypeScript assertions. Any legal JS trivia (whitespace, line
+    terminators, comments) is skipped at every token boundary. A malformed
+    static form is reported as unresolved so the tokenizer fails closed with
+    AE004; a dynamic expression keeps the documented dynamic-key limitation.
     """
-    index = start + 1
     length = len(text)
-    while index < length and text[index] in " \t":
-        index += 1
-    if index >= length or text[index] not in _TS_QUOTE_CHARS:
+    index, ok = _skip_js_trivia(text, start + 1)
+    if not ok:
+        return _ComputedMember("", length, False)
+    key = _parse_static_key_expression(text, index)
+    if key is None:
         return None
-    quote = text[index]
-    cursor = index + 1
-    content_start = cursor
-    while cursor < length:
-        char = text[cursor]
-        if char == "\\":
-            if cursor + 1 >= length:
-                return None
-            cursor += 2
-            continue
-        if char == quote:
-            break
-        if char == "\n":
-            return None
-        cursor += 1
-    if cursor >= length:
-        return None
-    raw_member = text[content_start:cursor]
-    after = cursor + 1
-    while after < length and text[after] in " \t":
-        after += 1
+    if not key.resolved:
+        return _ComputedMember("", key.next_index, False)
+    after, ok = _skip_js_trivia(text, key.next_index)
+    if not ok:
+        return _ComputedMember("", length, False)
     if after >= length or text[after] != "]":
         return None
-    previous = _previous_code_char(out)
+    previous = _previous_receiver_char(out)
     if not (previous.isalnum() or previous in "_$)]."):
         return None
-    if _previous_identifier_word(out) in _TS_MEMBER_KEYWORDS:
+    previous_word, prefix = _previous_receiver_word_info(out)
+    if previous_word in _TS_MEMBER_KEYWORDS:
+        return None
+    if previous_word in _TS_CONTEXTUAL_MEMBER_WORDS and _is_contextual_member_keyword(
+        prefix, previous_word
+    ):
         return None
     next_index = after + 1
-    if quote == "`" and "${" in raw_member:
-        return _ComputedMember("", next_index, False)
-    decoded = _decode_js_escape_text(raw_member)
-    if decoded is None:
-        return _ComputedMember("", next_index, False)
-    if not _TS_IDENTIFIER_RE.match(decoded):
-        # A statically named key that cannot be an identifier cannot equal a
-        # target symbol; it is a property name, not an active reference.
-        return _ComputedMember("", next_index, True)
-    return _ComputedMember(decoded, next_index, True)
+    name = key.value if _TS_IDENTIFIER_RE.match(key.value) else ""
+    return _ComputedMember(
+        name,
+        next_index,
+        True,
+        text.count("\n", start, next_index),
+    )
 
 
 def _tokenize_ts_code(text: str) -> tuple[str, bool]:
@@ -654,6 +942,8 @@ def _tokenize_ts_code(text: str) -> tuple[str, bool]:
                     return "".join(out), False
                 out.append(" ")
                 out.append(computed.name)
+                if computed.newlines:
+                    out.append("\n" * computed.newlines)
                 i = computed.next_index
                 continue
         if not stack:
@@ -977,6 +1267,30 @@ def _extract_python_refs_from_code(code: str) -> set[str] | None:
     return refs
 
 
+def _has_static_member_hint(content: str) -> bool:
+    """True when a file contains a bracket followed by a static-key start.
+
+    Uses the same JS trivia skipper as the parser so non-ASCII whitespace and
+    line terminators (U+FEFF, U+2028/U+2029) cannot hide a composed key before
+    the candidate gate runs.
+    """
+    index = content.find("[")
+    while index != -1:
+        after, ok = _skip_js_trivia(content, index + 1)
+        if ok and after < len(content):
+            char = content[after]
+            if char in _TS_QUOTE_CHARS or char == "(":
+                return True
+            if content.startswith("String", after):
+                boundary = after + 6
+                if boundary >= len(content) or not (
+                    content[boundary].isalnum() or content[boundary] in "_$"
+                ):
+                    return True
+        index = content.find("[", index + 1)
+    return False
+
+
 def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> bool:
     """Cheap gate before parsing a workspace file.
 
@@ -987,7 +1301,14 @@ def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> b
     """
     if any(symbol in content for symbol in symbols):
         return True
-    if not is_ts or "\\" not in content:
+    if not is_ts:
+        return False
+    # A composed static member key (parentheses, concatenation, template,
+    # comments/newlines, String(...)) need not contain the literal symbol, so
+    # a literal-only prefilter would skip the file before the parser sees it.
+    if _has_static_member_hint(content):
+        return True
+    if "\\" not in content:
         return False
     if any(symbol in _decode_js_escapes_lenient(content) for symbol in symbols):
         return True
