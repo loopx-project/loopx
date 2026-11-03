@@ -805,6 +805,28 @@ def test_codex_app_windows_settlement_command_substitutes_powershell_turn(
     assert '"${LOOPX_TURN:?}"' not in command
 
 
+def test_windows_settlement_command_omits_unsupported_max_page_output_bytes() -> None:
+    # Non-POSIX platforms fail closed on private capture validation; settlement
+    # spend recipes must omit --max-page-output-bytes on Windows.
+    with patch.object(quota_effect_program, "_PLATFORM_IS_POSIX", False):
+        plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+        ).as_dict()
+        command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+        assert command is not None
+        assert "--max-page-output-bytes" not in command
+
+    with patch.object(quota_effect_program, "_PLATFORM_IS_POSIX", True):
+        plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+        ).as_dict()
+        command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+        assert command is not None
+        assert "--max-page-output-bytes" in command
+
+
 def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> None:
     plan = build_codex_app_settlement_plan(
         goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,

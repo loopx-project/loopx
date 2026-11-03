@@ -31,6 +31,8 @@ from ..goals.goal_ref_validation import exact_goal_ref
 from ..work_items.delivery_batch_scale import DELIVERY_BATCH_SCALE_INPUT_CHOICES
 from ..turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
 
+_PLATFORM_IS_POSIX = os.name == "posix"
+
 __all__ = [
     "SETTLEMENT_IDENTITY_SCHEMA_VERSION",
     "SETTLEMENT_PLAN_SCHEMA_VERSION",
@@ -265,10 +267,15 @@ def build_turn_scoped_cli_settlement_plan(
         writeback_command(" --delivery-boundary semantic_closeout")
         + " --agent-vision-json <file>"
     )
+    max_output_arg = (
+        f" --max-page-output-bytes {NATIVE_CONTEXT_PAGE_OUTPUT_BYTES}"
+        if _PLATFORM_IS_POSIX
+        else ""
+    )
     spend = (
         f"{cli_prefix} quota spend-slot --goal-id {shlex.quote(goal_id)} --slots 1 "
         f"--source {quota_spend_source} --execute{binding_arg}{turn_arg}{goal_ref_arg}"
-        f"{scoped_cli_args} --max-page-output-bytes {NATIVE_CONTEXT_PAGE_OUTPUT_BYTES}"
+        f"{scoped_cli_args}{max_output_arg}"
     )
     payload = effect_runtime_result("settlement.turn_scoped_cli_plan", {
         "identity": identity.as_dict(), "delivery_boundary": delivery_boundary,
