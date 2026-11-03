@@ -84,21 +84,20 @@ def _typed_route(envelope: Mapping[str, Any]) -> LoopXTurnRoute:
 
 
 def selected_turn_todo(envelope: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve the todo that owns one Turn across adaptive bundle execution."""
+    """Transport historical selection to the shared work/settlement owner.
+
+    Only Python's original scalar codec remains here. Pure source edits retain
+    unknown fields and exact numbers without another JSON value decoder.
+    """
+    from ..quota.cli_projection import _apply_context_projection_changes
 
     orchestration = _mapping(envelope.get("task_orchestration_contract"))
-    primary_todo_id = str(orchestration.get("primary_todo_id") or "").strip()
-    if (
-        orchestration.get("schema_version") == "task_orchestration_contract_v2"
-        and orchestration.get("mode") == "adaptive"
-        and primary_todo_id
-    ):
-        return {
-            "todo_id": primary_todo_id,
-            "source": "task_orchestration_contract.primary_todo_id",
-        }
-    action = _mapping(envelope.get("action"))
-    return _mapping(action.get("selected_todo"))
+    source = {"selected_todo": _mapping(_mapping(envelope.get("action")).get("selected_todo")),
+              "task_orchestration_contract": orchestration}
+    edits = _turn_envelope_result("selected_work_todo", payload=source,
+        historical_primary_text=str(orchestration.get("primary_todo_id") or "").strip())
+    selected: dict[str, Any] = _apply_context_projection_changes(source, edits)["selected_todo"]
+    return selected
 
 
 def _receipt_bound_scoped_identity(
