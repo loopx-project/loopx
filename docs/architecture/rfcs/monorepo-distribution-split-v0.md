@@ -736,6 +736,28 @@ Approval needs a reviewed decision, not implementation progress or silence.
   by the guard, and covering it would be a runtime change with its own
   acceptance, not a documentation change.
 
+### 2026-11-03 — Selected host-mode discovery loading
+
+- **Baseline:** `6a6a8590e`. Earlier selected routes for `performance-diagnosis`
+  and `goal-acceptance` are already on this baseline; the Section 4 audit above
+  remains historical, not the current implementation inventory.
+- **Delta:** `host-mode-plan` uses its existing registrar and handler through
+  `cli_runtime`, without loading the full CLI or Chat graph on valid requests.
+  Rejected syntax retains the full-parser diagnostic path. The host selector,
+  preview commands, readiness and authority rules do not move or change.
+- **Evidence:** `tests/test_cli_entrypoint.py` checks owner-only help, JSON and
+  Markdown parity, unavailable-host previews, invalid requests and zero process,
+  network or file-write activation. A separately installed wheel exercises help,
+  ready/unavailable previews and rejection without Node or a live registry.
+  Local paired fresh-process measurements use 20 samples per revision/workload,
+  one discarded warm-up and alternating order, with telemetry off and warm file
+  caches. On macOS arm64/Python 3.13.5, the help/preview LoopX closure falls
+  from 1,149 to 57 modules; byte-identical output is retained. Timing/RSS belong
+  to the PR's scoped evidence, not a portable threshold or task-outcome claim.
+- **Remaining:** this extends R0-style loading qualification to discovery;
+  it does not complete R0's full V10 census, M1 public-import migration, split
+  packaging or R1 managed minimal. D1–D7 remain open. No new preset or default.
+
 ## Appendix B: Decision log
 
 | Date | Decision | Owner / approval | Alternatives | Normative sections changed |

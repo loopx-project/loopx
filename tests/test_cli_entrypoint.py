@@ -286,6 +286,7 @@ assert payload["groups"]
 		(["agent-directory", "--help"], "loopx.cli_commands.agent_directory", "loopx.cli_commands.agent_directory"),
 		(["agent-capabilities", "--help"], "loopx.cli_commands.agent_capabilities", "loopx.cli_commands.agent_capabilities"),
 		(["goal-acceptance", "--help"], "loopx.cli_commands.goal_acceptance", "loopx.cli_commands.goal_acceptance"),
+		(["host-mode-plan", "--help"], "loopx.cli_commands.host_mode_plan", "loopx.cli_commands.host_mode_plan"),
 		(["goal-portfolio", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-summary", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
@@ -835,6 +836,86 @@ def test_selected_goal_acceptance_refusals_match_without_full_cli(tmp_path, argu
 	assert selected.stderr == full.stderr
 	assert json.loads(selected.stdout)["ok"] is False
 	assert registry.read_bytes() == before
+
+
+@pytest.mark.parametrize("format_name", ["json", "markdown"])
+@pytest.mark.parametrize("arguments, expected_code", [
+	(["--intent", "watch_each_turn", "--host-capability", "visible_session",
+	  "--host-identity", "codex-cli", "--registered-agent", "fixture-agent"], 0),
+	(["--intent", "watch_each_turn", "--host-capability", "visible_session"], 0),
+	(["--intent", "unsupported-intent"], 1),
+	(["--host-capability", "unsupported-capability"], 1),
+])
+def test_selected_host_mode_plan_preserves_results_without_activation(
+	tmp_path, format_name, arguments, expected_code,
+):
+	registry, runtime = tmp_path / "absent.json", tmp_path / "runtime"
+	argv = ["--registry", str(registry), "--runtime-root", str(runtime),
+		"--format", "markdown", "host-mode-plan", "--goal-id", "fixture-goal",
+		"--cli-bin", "fixture-loopx", "--format", format_name, *arguments]
+	# An explicit absent registry must not turn a read-only selector into an
+	# authority read. Its preview is not permission to launch the named host.
+	environment = {"LOOPX_USAGE_PING": "0"}
+	selected = run_cli_main("loopx.entrypoint", argv,
+		forbidden_modules=("loopx.cli", "loopx.chat_server", "loopx.chat_runtime",
+			"loopx.cli_commands.benchmark_dispatch", "loopx.capabilities.content_ops.cli"),
+		environment=environment)
+	full = run_cli_main("loopx.cli", argv, environment=environment)
+	assert selected.returncode == full.returncode == expected_code, (selected.stderr, full.stderr)
+	assert selected.stdout == full.stdout
+	assert selected.stderr == full.stderr == ""
+	assert not registry.exists() and not runtime.exists()
+	if format_name == "json" and expected_code == 0:
+		payload = json.loads(selected.stdout)
+		assert payload["schema_version"] == "host_mode_plan_v0"
+		assert payload["goal_id"] == "fixture-goal"
+		if "--host-identity" in arguments:
+			assert payload["agent_id"] == "fixture-agent"
+			assert payload["selected_connector_id"] == "codex_cli_tui"
+		else:
+			# A valid preview may expose missing readiness; it must not silently
+			# select or activate a default host to make the plan executable.
+			assert payload["selected_connector_id"] is None
+			assert payload["selected_capability_ready"] is False
+
+
+def test_selected_host_mode_plan_diagnostics_keep_full_parser_fallback():
+	cases = [
+		["host-mode-plan"], ["host-mode-plan", "--help"],
+		["host-mode-plan", "--goal-id", "fixture-goal", "--unknown"],
+		["host-mode-plan", "--goal-id", "fixture-goal", "--format", "yaml"],
+		["host-mode-plan", "--goal-id", "fixture-goal", "--host-identity", "unknown"],
+		["host-mode-plan", "--goal-id", "fixture-goal", "--host-cap"],
+	]
+	assert run_cli_batch("loopx.entrypoint", cases) == run_cli_batch("loopx.cli", cases)
+
+
+def test_selected_host_mode_plan_does_not_start_processes_or_use_network(tmp_path):
+	script = f"""
+import os
+import sys
+os.environ["LOOPX_USAGE_PING"] = "0"
+sys.dont_write_bytecode = True
+os.chdir({str(tmp_path)!r})
+
+def reject_activation(event, args):
+    assert event not in ("subprocess.Popen", "os.system", "os.posix_spawn", "socket.connect"), event
+    if event == "open":
+        mode, flags = args[1:3]
+        assert not (isinstance(mode, str) and any(c in mode for c in "wax+")), args
+        assert not (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT)), args
+
+sys.addaudithook(reject_activation)
+from loopx.entrypoint import main
+assert main(["host-mode-plan", "--goal-id", "fixture-goal", "--intent", "watch_each_turn",
+             "--host-capability", "visible_session", "--host-identity", "codex-cli",
+             "--agent-id", "fixture-agent", "--format", "json"]) == 0
+assert "loopx.cli" not in sys.modules
+"""
+	result = run_isolated_script(script)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["selected_connector_id"] == "codex_cli_tui"
+	assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
