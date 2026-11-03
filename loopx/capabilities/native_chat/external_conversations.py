@@ -1145,6 +1145,13 @@ class ChatExternalConversations:
                 # delivering their pending response; do not add an idle probe.
                 if row["status"] == "command_completed" and not row.get("commission_adoption_pending"):
                     continue
+                if (row["status"] == "accepted" and not row.get("agent_target")
+                        and not row.get("commission_adoption_pending")):
+                    turn = self.controller.store.load_turn(row["session_id"], row["turn_id"])
+                    if turn and turn.get("status") == "completed":
+                        # A committed answer needs delivery, not workspace or
+                        # queue preparation. The transport checks its source.
+                        continue
                 if row["status"] == "prepared":
                     # Admission resolves current authority after both request
                     # and route fences. A separate pre-fence network probe

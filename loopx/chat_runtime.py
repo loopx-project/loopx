@@ -53,7 +53,7 @@ from .control_plane.turn_driver.execution_profile import managed_execution_profi
 from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
-    _lock_id, lock_holder_host_label, lock_holder_liveness, try_exclusive_file_lock,
+    _lock_id, lock_holder_host_label, lock_holder_liveness, process_is_alive, try_exclusive_file_lock,
 )
 from .kiro_cli_goal_mode import (
     KIRO_CLI_BIN,
@@ -1581,6 +1581,10 @@ class ChatRuntimeController:
                 return
             session = self.store.load_session(session_id)
             turn = self.store.load_turn(session_id, turn_id)
+            if turn and turn.get("status") == "interrupting" and process_is_alive(current["pid"]):
+                # Stop deliberately retires the execution worker before its
+                # caller commits `interrupted`; a free fence is expected here.
+                return
             if managed_turn_recovery_allowed(
                 session, turn, managed=bool(session and session.get("session_mode") == CHAT_SESSION_MODE_MANAGED),
                 owner_dead=True,
