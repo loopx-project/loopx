@@ -108,6 +108,11 @@ def apply_context_machine_options(
             value = machine_registry.resolve("context_delivery").public_descriptor()["configuration_template"]
         if value["mode"] == "off" or (using_default and os.name != "posix"):
             return
+        if command == "should-run" and not (
+            getattr(args, "turn_instance_id", None) or bool(getattr(args, "begin_turn", False))
+        ):
+            args.context_delivery = "off"
+            return
     # Recovery does not activate a run mode or create a missing session.
     if command != "context-read":
         args.context_delivery = "on"

@@ -80,6 +80,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     "-A",
     "--codex-app",
     "--trae_app",
+    "--antigravity_app",
     "--execute",
     "--dry-run",
     "--host-match-observed",
@@ -248,6 +249,15 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
       );
     }
   }
+  if (parsed.booleans.has("--antigravity_app")) {
+    matchingText(facts, "surface", "antigravity_app", "--antigravity_app");
+    if (legacyCodexObservedRrule) {
+      throw new EffectRuntimeRequestError(
+        "Antigravity App cannot use the Codex RRULE compatibility alias",
+        "scheduler_host_facts_identity_mismatch",
+      );
+    }
+  }
   if (parsed.booleans.has("-A") || parsed.booleans.has("--codex-app")) {
     matchingText(facts, "surface", "codex_app", "--codex-app");
   }
@@ -292,6 +302,8 @@ function requestFromArgs(argv: string[]): { request: Record<string, unknown>; fo
           Object.hasOwn(values, "--codex-app-current-rrule")
         )
           ? { observed_host_rrule: neutralObservedRrule || legacyCodexObservedRrule }
+          : expectedOperation === "ack" && facts.surface !== "codex_app"
+          ? { observed_host_rrule: values["--applied-rrule"] ?? facts.applied_rrule }
           : {}),
         operation: expectedOperation,
         runtime_root: parsed.runtime_root,

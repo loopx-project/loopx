@@ -48,8 +48,20 @@ def register_workflow_skills_command(
     )
     parser.add_argument(
         "--host-surface",
-        choices=["ark-managed-agent", "deepseek-harness-native"],
+        choices=[
+            "ark-managed-agent",
+            "deepseek-harness-native",
+            "agy",
+            "antigravity-app",
+        ],
         help="Generate the managed $loopx entry for one exact host surface.",
+    )
+    parser.add_argument(
+        "--agy-home",
+        help=(
+            "Antigravity config home (defaults to AGY_HOME or ~/.gemini/config); "
+            "selects <agy_home>/skills when --skills-dir is omitted."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -72,6 +84,7 @@ def handle_workflow_skills_command(
         uninstall=bool(args.uninstall),
         cli_bin=args.cli_bin,
         host_surface=args.host_surface,
+        agy_home=getattr(args, "agy_home", None),
     )
     print_payload(
         payload,

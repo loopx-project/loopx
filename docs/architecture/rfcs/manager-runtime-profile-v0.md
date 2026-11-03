@@ -62,6 +62,11 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   steps to be done, matching native result recovery's completion requirement.
   Transient idle does not extend the existing no-progress or hard deadline. Permission gates,
   native errors, unverified stop reasons and another input retain their existing refusal paths.
+  Read-only polling transport loss does not resend the input or reset its idle/hard deadline.
+  Native retry/error steps remain owned by the running cascade; only a settled terminal error
+  fails the adapter, with its structured native cause retained. Host heartbeat and bounded
+  Stop-hook recovery use the separate [Antigravity host procedure](../../../skills/loopx-project/references/heartbeat-hosts.md#antigravity-app).
+  These source boundaries do not establish upstream network repair or sustained long-run reliability.
 - Antigravity manager inputs place the complete original user message before the frozen Core
   evidence, encoding that message as a JSON string so whitespace and quoted transport markers
   remain exact. Original-result recovery recognizes both this framing and historical
