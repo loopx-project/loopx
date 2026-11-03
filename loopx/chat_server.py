@@ -922,20 +922,24 @@ class ChatRequestHandler(
     def _session_snapshot(self, session_id: str) -> None:
         try:
             query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-            if (set(query) - {"message_limit", "message_cursor"}
+            if (set(query) - {"message_limit", "message_cursor", "turn_id"}
                     or any(len(values) != 1 or not values[0] for values in query.values())
-                    or ("message_cursor" in query and "message_limit" not in query)):
+                    or (any(key in query for key in ("message_cursor", "turn_id")) and "message_limit" not in query)):
                 raise ValueError("invalid history page arguments")
             message_limit = int(query["message_limit"][0]) if "message_limit" in query else None
             if message_limit is not None and not 1 <= message_limit <= 200:
                 raise ValueError("message_limit must be between 1 and 200")
-            self.server.runtime_controller.recover_exited_turn(session_id)
+            # Reading one historical Turn must not recover an unrelated active
+            # execution. Ordinary Chat refresh keeps its existing recovery path.
+            if "turn_id" not in query:
+                self.server.runtime_controller.recover_exited_turn(session_id)
             snapshot = cast(Callable[..., dict[str, object]], project_chat_session_snapshot)
             payload = snapshot(
                 self.server.runtime_controller.coordination_runtime_root,
                 self.server.chat_store, session_id,
                 registry=self.server.registry_path, message_limit=message_limit,
-                message_cursor=query.get("message_cursor", [None])[0])
+                message_cursor=query.get("message_cursor", [None])[0],
+                turn_id=query.get("turn_id", [None])[0])
             # The HTTP composition root joins provider history onto the selected page.
             payload["messages"] = project_private_reply_history(
                 self.server.chat_store, self.server.chat_store.load_session(session_id) or {},

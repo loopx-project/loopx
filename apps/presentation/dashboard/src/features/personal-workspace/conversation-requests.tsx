@@ -174,7 +174,7 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
     setError(false);
     if (!open || !active) {setMessages(null); return;}
     const abort = new AbortController();
-    void fetchChatSessionHistory(row.source_session_id, abort.signal).then(value => {
+    void fetchChatSessionHistory(row.source_session_id, abort.signal, row.source_turn_id).then(value => {
       if (abort.signal.aborted) return;
       const source = value.messages.filter(message => message.turn_id === row.source_turn_id);
       if (!source.length) throw new Error("Original turn unavailable.");

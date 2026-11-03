@@ -31,12 +31,16 @@ def main():
     args.add_argument("--status-file", type=Path, required=True)
     args.add_argument("--assets-dir", type=Path)
     args.add_argument("--long-history", action="store_true")
+    args.add_argument("--earlier-messages", type=int, default=199,
+        help="Unrelated message prefix when --long-history is selected")
     args.add_argument("--multi-recipient", action="store_true")
     args.add_argument("--canonical-storage", choices=("sqlite", "file"), default="sqlite")
     args.add_argument("--requests", type=int, default=13)
     selected = args.parse_args()
     if not 1 <= selected.requests <= 120:
         args.error("--requests must be between 1 and 120")
+    if not 0 <= selected.earlier_messages <= 5000:
+        args.error("--earlier-messages must be between 0 and 5000")
     status = json.loads(selected.status_file.read_text())
     with TemporaryDirectory(prefix="loopx-steward-requests-") as directory, ExitStack() as cleanup:
         root = Path(directory).resolve()
@@ -77,7 +81,7 @@ def main():
             agent_model_id="gpt-6.1-sol", agent_reasoning_effort="xhigh")
         if selected.long_history:
             # The first delegated question and its answer straddle a real page.
-            for index in range(199):
+            for index in range(selected.earlier_messages):
                 store.append_message(session["session_id"], role="user", text=f"Earlier original message {index}")
         titles = ["核对账单导出的字段映射", "检查重复导出是否会生成重复记录", "复核历史账单的金额差异",
             "整理迁移后的回滚步骤", "补齐取消导出时的错误提示", "核对欧洲地区的税额精度",

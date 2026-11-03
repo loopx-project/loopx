@@ -277,6 +277,26 @@ provider、授权、回执及结束时的来源检查仍实时执行。
 会话和 Goal 范围复用该次选择；检查点及请求之间不缓存权限。自定义范围解析器沿用
 原验证路径。
 
+Expanding **Original conversation** reads the complete original Turn through
+`GET /api/chat/sessions/<session>?message_limit=200&turn_id=<original-turn>`.
+The optional selector excludes unrelated Turns before history projection and
+paging; it does not shorten any selected message or relax strict journal reads.
+`message_page.turn_id` echoes the selection, and opaque cursors bind both the
+Session and Turn. Append boundaries, prefix integrity, collaboration carriers,
+return delivery and provider-owned reply context retain their existing owners.
+A missing Turn, changed cursor scope or damaged journal fails visibly. This
+historical read does not recover an unrelated active execution. Unscoped Chat
+history keeps its existing response and recovery behavior. The scoped client
+needs the matching server; a paged response without its exact scope is rejected,
+while an older complete snapshot can still be filtered locally.
+
+展开**原对话**时，通过同一历史接口按原 Turn 完整读取，再沿原分页协议补齐这一轮的
+全部消息；不再为了筛选一轮而读完会话的其它轮次。完整正文、附件、原引用与返回状态
+仍由原 owner 投影，严格日志检查、快照前缀和跨 Session/Turn 游标隔离保留。读取历史
+不恢复其它正在执行的轮次；不带选择器的普通历史及其恢复行为不变。缺失、损坏或来源
+不匹配时显示失败，可重新展开重试。新分页客户端需要配套服务端；旧版完整快照仍可在
+本地筛选。此路径不新增权限、缓存、执行入口或独立能力。
+
 The automatic agenda is a partial read (`read_complete=false`): it cannot fulfill
 the full Inbox read or replace its requirements. Before acting, read the current
 brief and independently assess its authority, evidence and constraints. The

@@ -109,9 +109,20 @@ try {
     let historyMode = 'hold';
     const seenHistory = new Promise(resolve => sawHistory = resolve);
     await page.route(`**/api/chat/sessions/${ready.session_id}?*`, async route => {
-      if (!new URL(route.request().url()).searchParams.has('message_cursor')) return route.continue();
+      const url = new URL(route.request().url());
+      assert.ok(url.searchParams.get('turn_id'), 'Original reading must select its exact Turn');
+      // The real owner serves one-message pages to exercise full-Turn staging
+      // without fetching hundreds of unrelated messages to force a boundary.
+      url.searchParams.set('message_limit', '1');
+      if (!url.searchParams.has('message_cursor')) return route.fulfill({response: await route.fetch({url: url.href})});
       if (historyMode === 'fault') return route.fulfill({status: 503, json: {ok: false}});
-      const response = await route.fetch();
+      const response = await route.fetch({url: url.href});
+      if (historyMode === 'wrong-turn' || historyMode === 'foreign-message') {
+        const body = await response.json();
+        if (historyMode === 'wrong-turn') body.message_page.turn_id = 'other-original';
+        else body.messages[0].turn_id = 'other-original';
+        return route.fulfill({json: body});
+      }
       if (historyMode === 'hold') {sawHistory(); await new Promise(resolve => releaseHistory = resolve);}
       return route.fulfill({response}).catch(() => {});
     });
@@ -130,6 +141,10 @@ try {
     await page.setViewportSize({width: 1440, height: 1000});
     await original.click(); historyMode = 'fault'; await original.click();
     await dialog.getByRole('alert').waitFor(); assert.equal(await articles.count(), 0);
+    for (const invalid of ['wrong-turn', 'foreign-message']) {
+      await original.click(); historyMode = invalid; await original.click();
+      await dialog.getByRole('alert').waitFor(); assert.equal(await articles.count(), 0);
+    }
     await original.click(); historyMode = 'normal'; await original.click(); await articles.nth(1).waitFor();
     await original.click(); historyMode = 'hold';
     const lateHistory = new Promise(resolve => sawHistory = resolve);
