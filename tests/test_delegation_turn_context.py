@@ -1,7 +1,10 @@
 """Real receipt/store journeys: a Turn agenda does not complete or replay work."""
 import json
 import os
+from pathlib import Path
 import shlex
+import subprocess
+import sysconfig
 
 import pytest
 
@@ -100,11 +103,28 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider, delivery, partial):
     from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+    from loopx.control_plane.testing.canary_harness import write_fixture_registry
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
     from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # A module launched from the checkout can mask a stale inherited package.
+    # Exercise the installed console from the fixture project instead.
+    stale_package = tmp_path / "stale-release" / "loopx"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text('raise RuntimeError("wrong source checkout")\n')
+    monkeypatch.setenv("PYTHONPATH", str(stale_package.parent))
+    console = Path(sysconfig.get_path("scripts")) / ("loopx.exe" if os.name == "nt" else "loopx")
+    assert console.is_file(), "Install this checkout's console with uv sync --extra test."
+
+    def run_console(*arguments):
+        result = subprocess.run([str(console), "--registry", str(registry),
+            "--runtime-root", str(root), "--format", "json", *arguments], cwd=tmp_path,
+            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+            capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert result.stdout.strip(), result.stderr
+        return result.returncode, json.loads(result.stdout)
+
     root, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     text = ("---\nstatus: active\n---\n# Goal\n## Objective\nQualify the report.\n## Agent Todo\n"
         "- [ ] [P1] Inspect the current report and return findings.\n"
@@ -143,9 +163,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
         presentation = ["--turn-envelope"] if delivery == "host_envelope" else [
             "--codex-app", "--context-delivery", "on", "--decision-output-root", str(tmp_path / "captures"),
             "--codex-context-root", str(tmp_path / "context")]
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "research",
+        code, packet = run_console("quota", "should-run", "--goal-id", "research",
             "--agent-id", "worker",  "--turn-instance-id", turn_id,
-            *presentation, registry_path=registry, runtime_root=root)
+            *presentation)
         assert code == 0, (packet.get("error_code"), packet.get("reason"), packet.get("recovery"))
         if delivery == "native_files":
             if turn_id == "agenda-turn-one":
@@ -158,7 +178,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
                 command = packet["recovery"]["command"] + " --initial-read"
             words = shlex.split(command)
             assert words[0] == "loopx"
-            code, page = run_json_cli_result(*words[1:], registry_path=registry, runtime_root=root)
+            code, page = run_console(*words[1:])
             assert code == 0 and page["ok"] and page["eof"], page
             from tests.control_plane.codex_checkpoint_fixture import selected_context_values
 
