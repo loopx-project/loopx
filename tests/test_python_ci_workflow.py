@@ -355,6 +355,45 @@ def test_windows_lifecycle_suite_references_existing_tests() -> None:
     }
 
 
+# The settlement plan renders the Turn reference for the shell that runs it,
+# so only a native Windows host can observe that the generated command
+# forwards $LOOPX_TURN instead of the POSIX-only ${LOOPX_TURN:?}. The case is
+# guarded by ``skipif(os.name != "nt")``, so a lane that does not run the file
+# reports green while the Windows-only rendering stays unqualified.
+SETTLEMENT_TURN_SUITE = "tests/control_plane/test_quota_settlement.py"
+SETTLEMENT_TURN_NODE_ID = (
+    SETTLEMENT_TURN_SUITE
+    + "::test_codex_app_windows_settlement_command_substitutes_powershell_turn"
+)
+
+
+def test_windows_lane_qualifies_the_host_native_settlement_turn_rendering() -> None:
+    suite = WORKFLOW_ROOT / SETTLEMENT_TURN_SUITE
+    assert suite.is_file(), f"{SETTLEMENT_TURN_SUITE} is not a suite in this checkout"
+    assert 'skipif(os.name != "nt"' in suite.read_text(encoding="utf-8"), (
+        "the settlement Turn rendering case must stay native Windows only"
+    )
+
+    steps = yaml.safe_load(WORKFLOW)["jobs"]["windows-powershell"]["steps"]
+    step = next(
+        (
+            candidate
+            for candidate in steps
+            if candidate.get("name") == "Qualify native Windows quota settlement Turn rendering"
+        ),
+        None,
+    )
+    assert step is not None, "the native Windows settlement step is missing"
+    assert "if" not in step, "the native Windows settlement step must not be skipped"
+    assert "continue-on-error" not in step, (
+        "the native Windows settlement step must block the lane"
+    )
+    arguments = shlex.split(step["run"])
+    assert SETTLEMENT_TURN_NODE_ID in arguments, (
+        "the native Windows lane must run the exact settlement rendering case"
+    )
+
+
 def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
     tmp_path: Path,
 ) -> None:

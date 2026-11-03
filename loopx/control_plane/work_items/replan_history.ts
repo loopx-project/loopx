@@ -204,41 +204,6 @@ function historyWindow(request: Request): Run[] {
   return result;
 }
 
-/** Feedback changes only the next periodic count, never work/stall/authority.
- * Decisions come from the settled writeback, not projected history or Vision's
- * carried-forward value. Include the last ACK itself; otherwise a decision made
- * at that boundary could never affect its following interval. Never cross it.
- */
-function periodicThreshold(request: Request, decisions: ReadonlyMap<string, JsonObject>): number {
-  const lane = historyLane(request);
-  if (request.stride === "off" || !lane) return request.periodic;
-  for (const run of request.runs) {
-    if (run.agent && run.agent !== lane) continue;
-    // A later observation can reuse an older Turn id without being its
-    // writeback. Only the current ACK may select its settled feedback.
-    if (!run.ack) continue;
-    const decision = !request.neutral.has(run.classification) && run.agent === lane && run.turn
-      ? decisions.get(JSON.stringify([lane, run.turn])) : undefined;
-    if (decision) {
-      // Switching starts a new route at the configured baseline even if its
-      // basis names a gap. Uncertainty does not silently veto that action.
-      if (decision.action === "switch") return request.periodic;
-      if (decision.action === "verify" ||
-          ["uncertain_evidence", "unexplained_gap", "decision_failure"].includes(String(decision.basis))) {
-        return Math.max(1, Math.ceil(request.periodic / 2));
-      }
-      const review = jsonObject(decision.previous_review);
-      if (decision.action === "grow" && decision.basis === "supported_progress" &&
-          review?.goal_gain === "improved" && Array.isArray(review.evidence_refs) && review.evidence_refs.length) {
-        return Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(request.periodic * 1.5));
-      }
-      return request.periodic;
-    }
-    return request.periodic;
-  }
-  return request.periodic;
-}
-
 /** De-duplicate accepted evidence, not arbitrary records sharing its turn.
  * A leading untyped row cannot erase an older typed observation from that turn.
  * Null legacy identities remain independent; neutral rows were already removed.
@@ -389,10 +354,9 @@ function monitorStreak(request: Request): Trigger | null {
   };
 }
 
-export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>,
-    settledDecisions: ReadonlyMap<string, JsonObject> = new Map()): JsonObject {
-  const decoded = decode(value);
-  const request = {...decoded, periodic: periodicThreshold(decoded, settledDecisions)};
+export function projectReplanHistory(value: unknown, qualified?: ReadonlySet<string>): JsonObject {
+  // Work-shape decisions do not silently reconfigure the review interval.
+  const request = decode(value);
   const runs = historyWindow(request);
   let trigger: Trigger | null;
   switch (request.operation) {
