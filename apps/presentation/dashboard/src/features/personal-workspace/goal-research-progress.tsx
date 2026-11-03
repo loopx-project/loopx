@@ -5,6 +5,7 @@ import type {AssessmentCitation, AssessmentVerdict, TrajectoryAssessment, Trajec
 import type {TrajectoryNativeOutcomes} from "../../../../../../loopx/control_plane/capabilities/trajectory_native_outcomes.js";
 import {ContextHelp} from "./context-help";
 import {ResearchSynthesis} from "./goal-research-synthesis";
+import {ResearchTurnCosts} from "./research-turn-costs";
 import {ToolContextInventory} from "./goal-tool-context";
 import "./goal-research-progress.css";
 
@@ -253,7 +254,7 @@ function ResearchMetrics({pack: p, zh, onCitation}: {pack: ResearchProgressPack 
   </div>;
 }
 
-export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
+export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCitation, onUsageTurn, analysisOpen = false, includeReport = true}: {pack: ResearchProgressPack | null; packs: Pick<ResearchProgressPack, "pack_id" | "title">[]; selectedId: string; zh: boolean; analysisOpen?: boolean; includeReport?: boolean; onSelect: (id: string) => void; onUsageTurn?: (turnId: string, origin: HTMLButtonElement) => void; onCitation: (citation: AssessmentCitation, origin?: HTMLButtonElement) => void}) {
   const measured = p?.solver_usage, usage = measured?.projection, result = p?.result;
   const historical = p?.applicability === "historical";
   const resultHelp = historical ? (result ? (zh ? "历史分析 · 当前判断未核验" : "Historical analysis · Current judgments unverified")
@@ -334,6 +335,7 @@ export function ResearchProgress({pack: p, packs, selectedId, zh, onSelect, onCi
             </> : null}
           </div> : null}
           </div>
+          {usage && onUsageTurn ? <ResearchTurnCosts key={p.pack_id} usage={usage} zh={zh} onRead={onUsageTurn}/> : null}
           {usage && measured ? <details className="research-usage-detail"><summary>{zh ? "计数明细与来源" : "Counter details and source"}</summary>
             <dl className="research-usage-basis">
               <dt>{zh ? "捕获时间（UTC）" : "Capture window (UTC)"}</dt><dd><time dateTime={usage.start}>{stamp(usage.start)}</time> — <time dateTime={usage.end}>{stamp(usage.end)}</time></dd>

@@ -3,13 +3,76 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 
+// Local selection diagnostics: counts only, never source keys or values.
+class SelectionLookupError extends EffectRuntimeRequestError {
+  readonly argumentIndex: number;
+  readonly parentTokenCount: number;
+
+  constructor(message: string, code: string, argumentIndex: number, parentTokenCount: number) {
+    super(message, code);
+    this.argumentIndex = argumentIndex;
+    this.parentTokenCount = parentTokenCount;
+  }
+}
+
+/** Initial navigation may share a complete parent instead of repeating every
+ * child address. The selected facts stay exact; unselected children prevent
+ * sharing. Explicit selectors and discovery keep their original addresses. */
+function coalescedInitialPointers(context: JsonObject, pointers: string[]): string[] {
+  if (pointers.length < 2) return pointers;
+  const selected = new Set(pointers), positions = new Map<string, number>(), visited = new Set<string>();
+  pointers.forEach((pointer, position) => {
+    if (!positions.has(pointer)) positions.set(pointer, position);
+    for (let index = 0; index < pointer.length; index++) {
+      if (pointer[index] !== "/") continue;
+      const parent = pointer.slice(0, index);
+      if (!positions.has(parent)) positions.set(parent, position);
+    }
+  });
+  const visit = (value: unknown, pointer: string): {complete: boolean; pointers: string[]} => {
+    if (selected.has(pointer)) {
+      visited.add(pointer);
+      return {complete: true, pointers: [pointer]};
+    }
+    if (!positions.has(pointer) || value === null || typeof value !== "object")
+      return {complete: false, pointers: []};
+    const children = Object.entries(value).map(([key, child]) =>
+      visit(child, pointer + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1")));
+    const complete = children.length > 0 && children.every(child => child.complete);
+    const fields = children.flatMap(child => child.pointers);
+    // A single child needs no wrapper; grouping it can increase output bytes.
+    return {complete, pointers: complete && fields.length > 1 ? [pointer] : fields};
+  };
+  const result = visit(context, "").pointers;
+  // Keep malformed/missing or overlapping addresses for the ordinary validator;
+  // an optimization must not turn a rejected read into a successful subset.
+  // A merged parent takes its first selected child's navigation position.
+  return visited.size === selected.size
+    ? result.sort((left, right) => positions.get(left)! - positions.get(right)!) : pointers;
+}
+
 export function capturedContextSelection(request: JsonObject, initialPointers: string[] = []): JsonObject {
+  if (request.recover_selection_errors !== undefined && typeof request.recover_selection_errors !== "boolean")
+    throw new EffectRuntimeRequestError("recover-selection-errors must be boolean");
+  try {
+    return resolveSelection(request, initialPointers);
+  } catch (error) {
+    if (!(error instanceof SelectionLookupError) || request.recover_selection_errors !== true) throw error;
+    // No partial selections survive. The IO adapter can bind a discovery
+    // command to this verified prefix of the caller's original argument.
+    return {rejected_selection: {message: error.message, code: error.code,
+      argument_index: error.argumentIndex, parent_token_count: error.parentTokenCount}};
+  }
+}
+
+function resolveSelection(request: JsonObject, initialPointers: string[]): JsonObject {
   const context = requireJsonObject(request.context, "captured context");
   if (request.initial_read !== undefined && typeof request.initial_read !== "boolean")
     throw new EffectRuntimeRequestError("initial-read must be boolean");
   if (request.initial_read === true && (request.select !== undefined || request.list_fields === true || request.list_depth !== undefined))
     throw new EffectRuntimeRequestError("initial-read cannot be combined with select or list");
-  const selectors = request.initial_read === true ? initialPointers : request.select;
+  const initial = request.initial_read === true ? coalescedInitialPointers(context, initialPointers) : [];
+  const selectors = request.initial_read === true ? initial : request.select;
   if (request.initial_read === true && !(selectors as string[]).length)
     throw new EffectRuntimeRequestError("initial-read is unavailable for this capture schema; use generic discovery");
   if (!Array.isArray(selectors) || !selectors.length || selectors.some(value => typeof value !== "string"))
@@ -33,18 +96,20 @@ export function capturedContextSelection(request: JsonObject, initialPointers: s
     const tokens = pointer === "" ? [] : pointer.slice(1).split("/").map(token => token.replace(/~1/g, "/").replace(/~0/g, "~"));
     const path: (string | number)[] = [];
     let value: unknown = context;
+    let parentTokenCount = 0;
     for (const token of tokens) {
+      if (value !== null && typeof value === "object") parentTokenCount = path.length;
       if (Array.isArray(value)) {
         if (!/^(0|[1-9][0-9]*)$/.test(token) || !Number.isSafeInteger(Number(token)) || Number(token) >= value.length)
-          throw new EffectRuntimeRequestError(`context selection array index is missing or invalid (${argument}, token ${path.length + 1}; positions are 1-based)`,
-            "context_selection_invalid_index");
+          throw new SelectionLookupError(`context selection array index is missing or invalid (${argument}, token ${path.length + 1}; positions are 1-based)`,
+            "context_selection_invalid_index", argumentsByPointer.get(pointer)!, parentTokenCount);
         path.push(Number(token));
         value = value[Number(token)];
       } else if (value !== null && typeof value === "object" && Object.hasOwn(value, token)) {
         path.push(token);
         value = (value as JsonObject)[token];
-      } else throw new EffectRuntimeRequestError(`context selection pointer does not exist (${argument}, token ${path.length + 1}; positions are 1-based)`,
-        "context_selection_missing_pointer");
+      } else throw new SelectionLookupError(`context selection pointer does not exist (${argument}, token ${path.length + 1}; positions are 1-based)`,
+        "context_selection_missing_pointer", argumentsByPointer.get(pointer)!, parentTokenCount);
     }
     // Return the verified address, not a JS-number-coerced copy of the value.
     // The file adapter retains original JSON values and owns byte serialization.
@@ -64,7 +129,9 @@ export function capturedContextSelection(request: JsonObject, initialPointers: s
     }
     return {pointer, path};
   });
-  const initial = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
-    ? initialPointers : [];
-  return {selections, ...(initial.length ? {initial_read_pointers: initial} : {})};
+  // Discovery follows the validated, deduplicated selection. Repeating the root
+  // cannot drop its navigation; ordinary explicit reads need no initial plan.
+  const navigation = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
+    ? coalescedInitialPointers(context, initialPointers) : [];
+  return {selections, ...(navigation.length ? {initial_read_pointers: navigation} : {})};
 }

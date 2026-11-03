@@ -322,13 +322,18 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         "For a bound-owner App return, attachment_refs explicitly attaches up to four "
         "relative Goal-workspace files; a filename in text does not attach a file. "
         "Neither a blocker nor a returned result certifies completion of the work. "
+        "For a partial result, supply remaining_work with summary and resume_when; "
+        "it stays visible for the receiver without creating a Todo or wakeup. "
         + conversation_answer_instruction()
     ))
     def return_result(request_id: str, text: str, update_id: str | None = None,
-                      attachment_refs: list[str] | None = None, request_revision: int | None = None) -> dict:
+                      attachment_refs: list[str] | None = None, request_revision: int | None = None,
+                      remaining_work: dict[str, str] | None = None) -> dict:
         """Return a conclusion to the original requester. For a later changed fact,
         append an update with a stable update_id; retry with the same id and text.
         Neither a blocker nor a returned result certifies completion of the work.
+        For a partial result, remaining_work contains summary and resume_when;
+        the receiving Agent still owns this remainder. It creates no Todo or wakeup.
         """
         check_scope()
         # The host adapter selects Chat/Lark transport; the shared collaboration
@@ -345,6 +350,7 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             update_id=update_id,
             attachment_refs=attachment_refs,
             request_revision=request_revision,
+            remaining_work=remaining_work,
             workspace=workspace,
             registry=registry,
             caller_goal_ref=caller_goal_ref,

@@ -31,6 +31,7 @@ from loopx.control_plane.testing.quota_fixtures import (
 from loopx.control_plane.todos.quota_summary import (
     compact_quota_todo_summary_for_payload,
 )
+from loopx.control_plane.quota import effect_program as quota_effect_program
 from loopx.control_plane.work_items.interaction_contract import (
     finalize_user_gate_notification_cooldown,
     interaction_next_cli_actions,
@@ -1626,7 +1627,19 @@ def test_generic_outer_controller_rerun_actions_are_typed() -> None:
     assert all(" -H " not in action for action in actions)
 
 
-def test_codex_app_monitor_quiet_retry_uses_turn_receipt() -> None:
+@pytest.mark.parametrize(
+    ("windows_host", "turn_arg"),
+    (
+        (False, '--turn-instance-id "${LOOPX_TURN:?}"'),
+        (True, "--turn-instance-id $LOOPX_TURN"),
+    ),
+)
+def test_codex_app_monitor_quiet_retry_uses_turn_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    windows_host: bool,
+    turn_arg: str,
+) -> None:
+    monkeypatch.setattr(quota_effect_program, "_is_windows_host", lambda: windows_host)
     actions = interaction_next_cli_actions(
         {
             "goal_id": "codex-heartbeat-fixture",
@@ -1642,7 +1655,7 @@ def test_codex_app_monitor_quiet_retry_uses_turn_receipt() -> None:
         (
             "on missing/write_failed heartbeat_receipt only: loopx --format json "
             "quota should-run --goal-id codex-heartbeat-fixture --agent-id "
-            'codex-fixture --codex-app --turn-instance-id "${LOOPX_TURN:?}"'
+            f"codex-fixture --codex-app {turn_arg}"
         )
     ]
 

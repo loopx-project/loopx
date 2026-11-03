@@ -24,6 +24,41 @@ def test_invalid_action_metadata_preserves_answer_without_admitting_actions(meta
     assert response["proposals"] == [] and response["protected_action"] is None
 
 
+@pytest.mark.parametrize("message_field", [{}, {"message": None}, {"message": " "}])
+def test_invalid_legacy_handoff_keeps_visible_answer_when_envelope_has_no_answer(message_field):
+    visible = "已核对 [报告](/custom-volume/project/report.md)。结论已保留。"
+    payload = {**message_field, "GlobalSummary": "hidden metadata", "context_handoff": [{
+        "goal_id": "existing-work", "agent_id": "existing-worker", "brief": "invalid brief",
+    }], "proposals": [{"kind": "todo", "text": "must not run"}]}
+    response = parse_agent_response(visible + "\n" + CHAT_REVIEW_OPEN_TAG
+        + json.dumps(payload) + CHAT_REVIEW_CLOSE_TAG, protected_paths=["/custom-volume/project"])
+
+    assert response["message"].startswith("已核对 报告。结论已保留。\n\n待处理：")
+    assert response["gate"]["kind"] == "response_metadata_invalid"
+    assert not response.get("context_handoff") and not response.get("goal_draft")
+    assert response["proposals"] == [] and response["protected_action"] is None
+    assert "hidden metadata" not in response["message"]
+    assert "invalid brief" not in response["message"]
+
+
+def test_invalid_handoff_without_any_answer_still_fails_closed():
+    raw = CHAT_REVIEW_OPEN_TAG + json.dumps({"context_handoff": [{
+        "goal_id": "existing-work", "agent_id": "existing-worker", "brief": "invalid brief",
+    }]}) + CHAT_REVIEW_CLOSE_TAG
+    with pytest.raises(ValueError):
+        parse_agent_response(raw)
+
+
+def test_invalid_handoff_never_recovers_an_earlier_hidden_envelope_as_prose():
+    raw = 'Answer.\n<loopx-review-json>{"message":"hidden"}</loopx-review-json>\n'
+    raw += CHAT_REVIEW_OPEN_TAG + json.dumps({"context_handoff": [{
+        "goal_id": "existing-work", "agent_id": "existing-worker", "brief": "invalid brief",
+    }]}) + CHAT_REVIEW_CLOSE_TAG
+    response = parse_agent_response(raw)
+    assert response["message"].startswith("Answer.\n\n待处理：")
+    assert "hidden" not in response["message"] and "loopx-review-json" not in response["message"]
+
+
 @pytest.mark.parametrize("change", [None, {"effects_settled": False}, {"effects_settled": "true"},
     {"remaining": ""}, {"remaining": "x" * 1001}, {"dependency": 4}, {"grant": "workspace_write"}])
 def test_unfinished_work_is_explicit_bounded_data_never_inferred_from_prose(change):

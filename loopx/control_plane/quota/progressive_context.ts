@@ -248,8 +248,10 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     // incomplete observations visible without expanding full request bodies.
     include(...source, "content", "read_complete");
     include(...source, "content", "unfinished_delegations");
-    include(...source, "content", "current", "revision");
-    include(...source, "content", "current", "instruction");
+    // The preference owner already supplies the complete current scoped view,
+    // including corrections, retirement, provenance and advisory authority.
+    // Its revision/instructions alone cannot fulfill that pre-work delivery.
+    include(...source, "content", "current");
     include(...source, "content", "outcome_context");
     const sourceRow = object(_source), content = object(sourceRow?.content);
     const requirements = object(object(content?.goal_acceptance_contract)?.outcome_requirements);

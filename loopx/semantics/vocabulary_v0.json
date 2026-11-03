@@ -1210,7 +1210,7 @@
       "contexts": [
         {
           "id": "global_risks",
-          "owner": "loopx/global_risks.py::SOURCE_SURFACES"
+          "owner": "loopx/control_plane/presentation/global_risk_read.ts::SOURCE_SURFACES"
         },
         {
           "id": "global_todos",

@@ -5,7 +5,8 @@ availability is display-only fixture metadata; POSTs cannot execute it. Requests
 decisions and return delivery below use the production owners in a temp runtime.
 Commands on stdin: inspect, fault, fault-window, deliver-window, report-window, recover,
 deliver, source-unavailable, source-recover, local-source-unavailable,
-local-source-recover, history-corrupt/history-recover (--long-history only), stop. Window faults/returns apply
+local-source-recover, history-corrupt/history-recover (--long-history only),
+report-partial, complete-partial, stop. Window faults/returns apply
 after the first page to challenge multi-window refresh readback.
 """
 from __future__ import annotations
@@ -221,6 +222,20 @@ def main():
                         caller_goal_ref=last_receipt["goal_ref"])
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "deliver":
+                    drain(runtime, registry, store, lambda *_: None)
+                elif command == "report-partial":
+                    prior = _root(runtime) / "replies" / first_receipt["request_id"] / "conclusion.json"
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "字段映射的修改已完成，安装后的核验仍需继续。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"],
+                        update_id="remaining-installed-check" if prior.exists() else None,
+                        remaining_work={"summary": "在隔离安装包中验证账单字段映射与失败恢复。",
+                            "resume_when": "隔离安装包就绪后，由原负责人继续核验并返回实际结果。"})
+                    drain(runtime, registry, store, lambda *_: None)
+                elif command == "complete-partial":
+                    report(runtime, "billing-exports", "builder", first_receipt["request_id"], "conclusion",
+                        "隔离包的字段映射与失败恢复已核验，原检查记录保留。", registry=registry,
+                        caller_goal_ref=first_receipt["goal_ref"], update_id="qualified-installed-check")
                     drain(runtime, registry, store, lambda *_: None)
                 elif command == "conversation-arrival":
                     store.append_message(session["session_id"], role="assistant", text="新的委派阅读测试消息。", origin="manager_followup")

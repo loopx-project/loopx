@@ -18,10 +18,12 @@ from ..control_plane.effect_runtime import EffectRuntimeRejected, EffectRuntimeR
 from ..control_plane.quota.error_codes import QuotaCommandValidationError, QuotaDecisionTransportError
 from ..control_plane.turn_driver.decision_capture import (
     validate_handoff_socket, CONTEXT_CAPTURE_READ_GUIDANCE, CONTEXT_CAPTURE_PAGE_GUIDANCE, context_capture_read_command,
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
-    native_context_page_budget,
+    CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,
     read_context_capture_file as _read_capture,
-    read_context_read_reference, write_context_read_reference,
+    read_context_read_reference, write_context_read_reference, private_capture_uid,
+)
+from ..control_plane.turn_driver.native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES, native_context_page_budget,
 )
 
 
@@ -231,7 +233,22 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
 
             depth_options = {"list_depth": list_depth} if list_depth is not None else {}
             selection_options = {"initial_read": True} if initial_read else {"select": selectors}
-            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields, **selection_options, **depth_options)
+            plan = _turn_envelope_result("context_select", context=payload, list_fields=list_fields,
+                recover_selection_errors=not initial_read, **selection_options, **depth_options)
+            if rejection := plan.get("rejected_selection"):
+                # TS alone resolves the nearest container. Reuse the original
+                # escaped tokens, without parsing diagnostic prose or traversing
+                # the payload again in Python. A failed batch delivers no body.
+                pointer = selectors[rejection["argument_index"] - 1]
+                parent = "/".join(pointer.split("/")[:rejection["parent_token_count"] + 1])
+                command = context_capture_read_command(path, digest, select=[parent], list_fields=True,
+                    page_bytes=next_page_bytes or size,
+                    max_page_output_bytes=next_page_output_bytes or output_limit)
+                return {"ok": False, "schema_version": "context_capture_page_v1",
+                    "error_kind": "request_rejected", "diagnostic_code": rejection["code"],
+                    "reason": rejection["message"], "recovery_command": command,
+                    "recovery": "Use recovery_command to --list the nearest verified container in the same capture, "
+                        "then retry the corrected batch. No values were delivered and no guard, admission or spend was performed."}
             views: list[dict[str, Any]] = []
             for item in plan["selections"]:
                 selected: Any = payload
@@ -753,6 +770,74 @@ def capture_decision(directory: Path | None, payload: dict[str, object]) -> None
         ) from exc
 
 
+def budgeted_settlement_result(
+    payload: dict[str, object], *, runtime_root: Path, output_bytes: int,
+) -> dict[str, object]:
+    """Present one evaluated result with its complete immutable diagnostic.
+
+    This is output IO, not native continuity or another quota decision.
+    Unbudgeted callers retain their existing full result.
+    """
+    from ..control_plane.effect_runtime import MAX_REQUEST_BYTES
+    from ..control_plane.turn_driver.decision_capture import write_decision_capture
+
+    def fits(value: dict[str, object]) -> bool:
+        # Match the JSON CLI serializer, including print's newline.
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= output_bytes
+
+    if fits(payload):
+        return payload
+    try:
+        uid = private_capture_uid()
+        root = runtime_root.expanduser().resolve() / "context-delivery"
+        root.mkdir(mode=0o700, exist_ok=True)
+        metadata = root.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
+                or metadata.st_mode & 0o077):
+            raise ValueError("result capture requires a private physical directory owned by this user")
+        directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
+        saved = directory / "result.json"
+        write_decision_capture(saved, payload)
+        raw = saved.read_bytes()
+        if len(raw) > MAX_REQUEST_BYTES:
+            raise ValueError(f"complete result exceeds the existing reader limit: {saved}")
+        digest = hashlib.sha256(raw).hexdigest()
+        reference = write_context_read_reference(saved, digest)
+        details = {"reference_file": str(reference),
+            "command": context_capture_read_command(saved, digest, reference_file=reference,
+                page_bytes=min(NATIVE_CONTEXT_PAGE_BYTES, output_bytes),
+                max_page_output_bytes=output_bytes)}
+        deferred = [key for key in ("before", "after") if key in payload]
+        view = {key: value for key, value in payload.items() if key not in deferred}
+        view["result_details"] = {**details, "deferred_fields": deferred}
+        view["instruction"] = (
+            "The operation was already evaluated. before/after are complete in the immutable result; "
+            "read only needed details with context-read --select. Preserve the original Turn and effect "
+            "identity during recovery; do not repeat admission or infer authority from this presentation."
+        )
+        if fits(view) and "result_details" not in payload and "instruction" not in payload:
+            return view
+        # Large or unknown controls are mandatory selected reads, never cut text.
+        pointers = ["/" + key.replace("~", "~0").replace("/", "~1")
+            for key in payload if key not in deferred]
+        view = {"ok": payload.get("ok"), "result_details": details,
+            "command": context_capture_read_command(saved, digest, reference_file=reference, select=pointers,
+                page_bytes=min(NATIVE_CONTEXT_PAGE_BYTES, output_bytes),
+                max_page_output_bytes=output_bytes),
+            "instruction": "Read the complete selected result controls before acting. The operation was "
+                "already evaluated; preserve its original Turn/effect identity. No execution authority "
+                "or context baseline is granted. before/after remain available in the same immutable result."}
+        if fits(view):
+            return view
+        raise ValueError(f"result reader metadata exceeds the output budget; complete result: {saved}")
+    except (OSError, ValueError) as exc:
+        raise QuotaDecisionTransportError(
+            "The quota operation was already evaluated, but bounded result delivery failed. "
+            "Recover the original operation/receipt; do not repeat admission or assume it did not commit. "
+            f"{exc}"
+        ) from exc
+
+
 def bind_capture_selection_transport(payload: dict[str, Any], args: argparse.Namespace, *,
                                      capture_root: Path | None = None) -> None:
     """Retain caller display/capture options in the existing selection command.
@@ -874,9 +959,11 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
         print_payload({"ok": False, "reason": "--list is only supported by context-read"}, args.format, str)
         return 1
     has_output_limit = getattr(args, "max_page_output_bytes", None) is not None
+    settlement_output = (args.quota_command == "spend-slot" and args.format == "json"
+        and bool(getattr(args, "turn_instance_id", None)) and bool(getattr(args, "agent_id", None)))
     budget_scope_error = ("max-page-output-bytes is only supported by JSON context-read "
-        "or enabled native should-run/context-project")
-    if has_output_limit and args.quota_command != "context-read" and (
+        "or enabled native should-run/context-project, or Turn-bound JSON spend-slot")
+    if has_output_limit and args.quota_command != "context-read" and not settlement_output and (
         args.quota_command not in ("should-run", "context-project") or args.format != "json"
         or getattr(args, "context_delivery", None) == "off"):
         print_payload({"ok": False, "reason": budget_scope_error},
@@ -891,7 +978,17 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             print_payload({"ok": False, "reason": str(exc)}, args.format,
                 lambda value: json.dumps(value, ensure_ascii=False, indent=2))
             return 1
-    if has_output_limit and args.quota_command != "context-read":
+    if has_output_limit and settlement_output:
+        try:
+            private_capture_uid()
+        except ValueError as exc:
+            print_payload({"ok": False, "reason": str(exc), "appended": False,
+                "registry_mutated": False}, args.format, str)
+            return 1
+    if has_output_limit and settlement_output and args.max_page_output_bytes <= 0:
+        print_payload({"ok": False, "reason": "max-page-output-bytes must be positive"}, args.format, str)
+        return 1
+    if has_output_limit and args.quota_command != "context-read" and not settlement_output:
         try:
             if not native_context_activation(args)["enabled"]:
                 raise QuotaCommandValidationError(budget_scope_error)

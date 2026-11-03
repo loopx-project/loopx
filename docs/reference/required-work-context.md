@@ -179,6 +179,11 @@ An enabled native **full** reference for a recognized decision can include
 `first_read_command`. It batches current admission/stop facts, the selected task,
 whole Goal/Todo narrative, source availability/revisions and read routes. Detailed
 history and optional authoring recipes remain expandable from the same capture.
+The preference source's complete `current` view also stays in the initial read:
+corrections, retirement/expiry and empty replacements retain their provenance,
+revision and advisory authority. This captured pre-work view does not replace the
+preference owner's fresh exact-scope read before a later preference-dependent
+external action, and neither delivery nor a preference grants authority.
 The existing bounded `unfinished_delegations` projection and `read_complete`
 flag also remain visible. Adoption or a queued return does not establish
 completion. Pending peer results, counts, omitted items and unavailable
@@ -193,7 +198,11 @@ versions remain whole. Initial pages do not repeat pointers already present in
 their content; the selection digest still prevents a full-input receipt.
 Its `context-read --initial-read` uses the same exact-address selector; paged
 continuations retain the short option and pin the selection digest. A changed
-profile rejects rather than mixing views. The option is read-only and exclusive with explicit
+profile rejects rather than mixing views. Initial navigation can replace fully
+selected children with their complete captured parent to avoid repeating addresses.
+An unselected child, including optional or unknown material, prevents that merge;
+the selected facts and obligations stay identical. Explicit selectors and index
+entries keep their original addresses. The option is read-only and exclusive with explicit
 selectors or discovery; unknown schemas use generic discovery.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. Warm
@@ -217,9 +226,15 @@ activation defaults, saved files, Delta and full-read receipts are unchanged.
 中文：已启用原生传输的完整引用可给出 `first_read_command`，合并当前准入、停止条件、
 任务和完整 Goal/Todo 正文，以及来源状态、版本与读取入口；历史和可选格式说明仍在
 同一捕获中按需展开。它是起始选读，不代表已读全部必要来源；依赖具体验收、证据或
-执行/结算契约前仍须完整读取。未知 schema、过小引用预算和 warm delta 保留既有路线，
+执行/结算契约前仍须完整读取。
+偏好来源的完整 `current` 视图也直接呈现：纠偏、退役/过期和空视图替换均保留
+原来源、版本及 advisory 权限边界。本次捕获的工作前视图不能替代偏好 owner 要求的
+后续偏好相关外部动作前精确作用域新读；偏好及其交付均不授予权限。
+未知 schema、过小引用预算和 warm delta 保留既有路线，
 关闭原生传输的输出不变；完整恢复和原 SHA 校验均保留。只读的 `--initial-read` 不与
 显式选读或索引混用；续页保留短选项和固定的选读摘要，profile 改变则拒绝混读。
+首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
+可选或未知内容都会阻止合并，选中事实和义务不变。显式选读和索引仍保留原地址。
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。
@@ -1067,7 +1082,13 @@ Reader failures preserve the runtime's `error_kind` and `diagnostic_code` so
 programs need not parse `reason`. Selector rejections use `request_rejected`
 with `context_selection_invalid_pointer`, `context_selection_invalid_index`
 or `context_selection_missing_pointer`. Repair the pointer syntax or inspect
-the known parent in the same capture, then retry the corrected batch. Other
+the known parent in the same capture, then retry the corrected batch. Missing
+members and invalid array indexes also return `recovery_command`: it lists the
+nearest verified container from the caller's original pointer, using the same
+capture digest and page budgets. If traversal reached a scalar, it lists that
+scalar's containing object/array instead. This command repeats only the supplied
+address prefix, never source values, and starts a new index at offset zero;
+it is not continuation of the failed selection or proof of reading its body. Other
 runtime failures retain their own classification; startup failures retain
 their diagnostic code. These failures do not require restoring a healthy
 capture. Missing or damaged capture files still fail closed through the
@@ -1123,7 +1144,11 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 读取失败保留 runtime 的 `error_kind` 与 `diagnostic_code`，程序无需解析 `reason`。
 选择错误使用 `request_rejected`，原因码分别为 `context_selection_invalid_pointer`、
 `context_selection_invalid_index` 或 `context_selection_missing_pointer`。
-修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。其他 runtime
+修正路径语法或在同一 capture 中检查已知父节点，再重试修正后的批次。字段缺失和
+数组索引错误还返回 `recovery_command`：用同一 capture 摘要与分页预算列出原始
+输入路径中最近的已验证容器；若已走到标量，则列出包含它的对象或数组。命令仅重复
+调用方提供的路径前缀，不包含源正文，并从偏移零开始新目录；它不是失败选择的续读，
+也不证明读过正文。其他 runtime
 故障保留自身分类；启动故障保留原诊断码。这些故障不要求恢复健康的 capture。
 文件缺失或损坏仍由原文件/摘要检查拒绝，重新读取不会重新准入。
 
@@ -1133,6 +1158,50 @@ pointer 从原始摘要绑定的 capture 批量读取详情。提供已有 `--ca
 的受影响范围，保留原 Turn/操作身份，不重新准入。列出字段不表示读过其正文。
 包括根选择在内的目录/详情 EOF 不证明全量模型保留；原生文件比较与此独立。
 模型可直接查当前完整文件，也可查基线和差分，无须先通读。
+
+### Bounded settlement results / 有界结算结果
+
+Generated Turn-bound JSON `quota spend-slot` commands include
+`--max-page-output-bytes 64000`. This output option does not enable Context
+Delivery or create a native continuity baseline. Small results remain complete;
+when a result exceeds the budget, its `before` / `after` snapshots move to a
+private immutable JSON capture. The other fields, including the actual append
+outcome, workspace refusal and settlement receipts, remain visible. Use
+`result_details.command` with `--select` for needed diagnostic facts; the reader
+keeps the same output budget and verifies the full capture digest on every page.
+If the remaining controls also exceed the limit, the returned command selects
+all of them: read those pages completely before acting. No control text is cut.
+
+Omitting the option preserves the existing full-result API. A nonpositive
+budget is rejected before execution. Platforms without qualified POSIX private
+capture validation reject this option before settlement; remove only the output
+option to use the same Turn's full-result API. Reader references also fail closed
+there; mode bits are not a substitute for Windows ACL verification.
+A capture failure after evaluation keeps every original control field (including
+`ok`, refusal reason, identity and receipts), omits only `before` / `after`, and
+adds `result_delivery_error`; the process exits nonzero. This fallback prioritizes
+complete controls over the display budget. A refused operation need not have a
+spend receipt. Repair capture privacy or read the same operation without the
+output option; a delivery failure does not prove that the effect failed to commit.
+Never rerun admission or change the original Turn/effect identity to recover
+output. This transport change alone does not prove model retention or savings.
+
+生成的 Turn 绑定 JSON `quota spend-slot` 命令携带
+`--max-page-output-bytes 64000`。此输出选项不启用 Context Delivery，也不建立原生
+连续性基线。小结果保持完整；超出预算时，将 `before` / `after` 快照存入私有、
+不可变的完整 JSON，其他字段仍直接返回，包括实际追加结果、工作目录拒绝和结算
+回执。按需在 `result_details.command` 后添加 `--select`；读取器保留相同输出预算，
+每页校验完整摘要。如果其余控制信息也超限，返回命令会选择全部控制字段，必须
+完整读完这些页再行动，不截断控制正文。
+
+省略选项保留原有完整结果 API；非正预算在执行前拒绝。缺少已验证 POSIX 私有捕获
+校验的平台在结算前拒绝此选项；仅移除输出选项即可使用同一 Turn 的完整结果 API。
+reader reference 在该平台也安全拒绝，不能用 mode bits 代替 Windows ACL 校验。
+求值后捕获失败时保留全部原始控制字段（包括 `ok`、拒绝原因、身份和回执），只省略
+`before`／`after`，追加 `result_delivery_error` 并非零退出。此故障兜底优先保全控制
+信息，不保证展示预算；被拒绝的操作不一定存在 spend receipt。修复捕获权限或以
+原身份读取无输出预算的结果，不能据投递失败认定效果未提交。恢复不重新准入或
+更换原 Turn／effect 身份。此传输变化本身不证明模型保留或成本收益。
 
 ### Saved context cache / 已保存上下文缓存
 
@@ -1156,6 +1225,13 @@ Oversized or missing tool output is recovered from the affected range of this
 same capture, never by another admission. Off responses retain their original
 contract. Reader/output sizing alone proves neither model retention nor savings.
 
+Republishing a reader reference through a normal parent-path alias reuses the
+existing immutable descriptor when the resolved parent, exact leaf name, full
+digest and all other metadata agree. The stored descriptor is never rewritten.
+Different leaf names, including hardlinks, remain distinct; capture and descriptor
+leaf symlinks are still rejected by the reader. This compatibility does not
+establish retention or authorize another admission.
+
 `quota context-project` 开启上下文投递后，不再要求另外手工准备缓存目录。
 省略 `--decision-output-root` 时复用原生会话的私有上下文目录；显式指定的新目录
 在已存在的父目录下以 `0700` 创建。已有目录仍须属于当前用户、权限私有且不是
@@ -1168,3 +1244,8 @@ contract. Reader/output sizing alone proves neither model retention nor savings.
 上限 64000 字节；Markdown 保留 4096 字节正文默认值。显式上限和 UTF-8 字节 cursor
 语义不变。工具输出过大或缺失时，只恢复同一捕获的受影响范围，不重新准入。
 关闭态保持原有契约。页大小与输出预算本身不证明模型保留或成本收益。
+
+通过正常父路径别名再次发布读取引用时，只有解析后的父目录、精确末级文件名、完整
+摘要及其余元数据均一致，才复用已有不可变描述文件；不重写其内容。不同末级文件名
+仍是不同引用，即使它们是硬链接；读取器仍拒绝 capture 或描述文件的末级符号链接。
+此兼容不证明模型保留，也不授权再次准入。

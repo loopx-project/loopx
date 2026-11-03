@@ -26,6 +26,7 @@ from ...chat import (
     parse_agent_response,
 )
 from ...chat_agent import CodexChatAgentError, _turn_prompt
+from .antigravity_activity import AntigravityActivity
 
 
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-argon-high"
@@ -178,6 +179,8 @@ def discover_antigravity_language_server(
         ps_out = subprocess.check_output(
             ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stderr=subprocess.DEVNULL,
             timeout=3.0,
         )
@@ -206,6 +209,8 @@ def discover_antigravity_language_server(
             lsof_out = subprocess.check_output(
                 ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stderr=subprocess.DEVNULL,
                 timeout=max(0.1, deadline - time.monotonic()),
             )
@@ -660,7 +665,7 @@ class AntigravityAdapter:
         stream_filter = VisibleResponseStreamFilter()
         emitted_visible_delta = False
         emitted_text_by_step: dict[int, str] = {}
-        announced_phases: set[tuple[int, str]] = set()
+        activity = AntigravityActivity(self.work_dir)
         latest_response_text = ""
         last_progress_at = time.monotonic()
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
@@ -731,37 +736,19 @@ class AntigravityAdapter:
                                       "next_action": "Review permissions in Antigravity, then resend this request in LoopX."},
                                 error_code="host_tool_gate",
                             )
+                        planner = step.get("plannerResponse")
+                        if (step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                                and isinstance(planner, dict) and planner.get("toolCalls")
+                                and (self.runtime_profile == "restricted" or self._read_only_review)):
+                            raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
+                                                      gate=None, error_code="unsupported_configuration")
+                        if event_sink is not None:
+                            for phase in activity.observe(step_idx, step):
+                                event_sink("agent.phase", phase)
                         if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
                             pr = step.get("plannerResponse") or {}
                             if not isinstance(pr, dict):
                                 continue
-                            thinking = str(pr.get("thinking") or "").strip()
-                            if thinking and (step_idx, "thinking") not in announced_phases:
-                                announced_phases.add((step_idx, "thinking"))
-                                if event_sink is not None:
-                                    event_sink(
-                                        "agent.phase",
-                                        {
-                                            "phase": "thinking",
-                                            "label": f"Gemini 4 Argon 思考中 ({self.model_id})",
-                                        },
-                                    )
-                            tool_calls = pr.get("toolCalls") or []
-                            if tool_calls and (self.runtime_profile == "restricted" or self._read_only_review):
-                                raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
-                                                          gate=None, error_code="unsupported_configuration")
-                            if isinstance(tool_calls, list) and tool_calls and (step_idx, "tool") not in announced_phases:
-                                announced_phases.add((step_idx, "tool"))
-                                first_tool = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
-                                tool_name = str(first_tool.get("name") or "tool")
-                                if event_sink is not None:
-                                    event_sink(
-                                        "agent.phase",
-                                        {
-                                            "phase": "tool_call",
-                                            "label": f"正在调用 {tool_name}",
-                                        },
-                                    )
                             text = str(pr.get("modifiedResponse") or pr.get("response") or "")
                             if text:
                                 prev_text = emitted_text_by_step.get(step_idx, "")
@@ -769,13 +756,43 @@ class AntigravityAdapter:
                                     delta_chunk = text[len(prev_text) :]
                                 else:
                                     delta_chunk = text
-                                emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
+                                    if not prev_text:
+                                        combined_marker = stream_filter.marker_pending + delta_chunk.lstrip()
+                                        continues_control_tag = bool(
+                                            combined_marker
+                                            and (
+                                                combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                                or CHAT_REVIEW_OPEN_TAG.startswith(combined_marker)
+                                            )
+                                        )
+                                        if (
+                                            continues_control_tag
+                                            and not combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                            and step_status != "CORTEX_STEP_STATUS_DONE"
+                                        ):
+                                            continue
+                                        prior_texts = [
+                                            val
+                                            for idx, val in sorted(emitted_text_by_step.items())
+                                            if idx != step_idx and val
+                                        ]
+                                        if (
+                                            prior_texts
+                                            and not delta_chunk.startswith("\n")
+                                            and not continues_control_tag
+                                        ):
+                                            last_prior = prior_texts[-1]
+                                            if not last_prior.endswith("\n"):
+                                                delta_chunk = "\n\n" + delta_chunk
+                                            elif not last_prior.endswith("\n\n"):
+                                                delta_chunk = "\n" + delta_chunk
                                     visible_delta = stream_filter.feed(delta_chunk)
                                     if visible_delta:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
+                                emitted_text_by_step[step_idx] = text
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
                             err_obj = step.get("errorMessage") or {}
                             err_msg = str(
@@ -809,6 +826,16 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 planner = final.get("plannerResponse") or {}
+                # Native IDLE can occur between input, tool and planner steps.
+                # Keep observing this invocation; only a finished answer after
+                # all current work settles can close it. The existing idle and
+                # hard deadlines, permission gates and cancellation still apply.
+                if (planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
+                        and (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
+                        or (planner.get("stopReason") is None and not self._read_only_review)
+                        or any(step.get("status") in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}
+                               for _, step in current_steps))):
+                    continue
                 if self._read_only_review:
                     inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
                     execution = (inputs[0].get("metadata") or {}).get("executionId") if len(inputs) == 1 else None
@@ -820,8 +847,9 @@ class AntigravityAdapter:
                                                   gate=None, error_code="upstream_transport_failure")
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
+                        or any(step.get("status") != "CORTEX_STEP_STATUS_DONE" for _, step in current_steps)
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
-                        or planner.get("stopReason") not in {None, "STOP_REASON_STOP_PATTERN"}):
+                        or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"):
                     raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",
                                               gate=None, error_code="upstream_transport_failure")
                 break

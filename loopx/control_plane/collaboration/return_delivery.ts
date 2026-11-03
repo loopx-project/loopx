@@ -16,7 +16,7 @@ import { atomicWriteJson, withFileMutationLock } from "../effect_runtime_io.ts";
 import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { decideCollaborationLifecycle } from "./goal_instance_lifecycle.ts";
 import { resolveConversationScope } from "./conversation_scope.ts";
-import { planCollaborationResult, collaborationResultDeliveryReady } from "./result_publication.ts";
+import { planCollaborationResult, collaborationResultDeliveryReady, collaborationResultText } from "./result_publication.ts";
 
 export const MANAGER_RETURN_DELIVERY_ATTEMPT_SCHEMA =
   "manager_return_delivery_attempt_v0";
@@ -340,6 +340,7 @@ async function inspectReturnPublication(command: ReturnCommand): Promise<{ reply
   catch { /* The shared historical-revision decoder rejects unavailable assessment evidence. */ }
   const inspected = planCollaborationResult({ request: entry, phase: reply.phase, text: reply.text,
     decision: reply.decision, update_id: reply.update_id, attachments: reply.attachments,
+    remaining_work: reply.remaining_work,
     request_revision: reply.request_revision, legacy_assessment: legacy, results });
   if ((reply.result_key ?? reply.phase) !== command.key || entry.request_id !== command.request.request_id) {
     throw new EffectRuntimeRequestError("return reply identity mismatch");
@@ -435,7 +436,7 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
   const verify = priorStatus === "verification_required" || command.exact && state.attempt != null;
   const prefix = command.exact ? (reply.phase === "conclusion" ? "处理结论" : "处理进展")
     : (reply.phase === "conclusion" ? "协作回复" : "协作进展");
-  const text = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}\n\n${reply.text}`;
+  const text = `${prefix} · ${reply.agent_id} · 委托 ${String(reply.request_id).slice(0, 8)}\n\n${collaborationResultText(reply)}`;
 
   return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
     text, message_id: returnMessageId(command), attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],

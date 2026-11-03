@@ -837,10 +837,13 @@ def parse_agent_response(
                 # A bad action envelope must not discard an already generated
                 # answer or turn a formatting failure into a business retry.
                 # Preserve prose, but admit none of the unvalidated actions.
-                if not isinstance(payload.get("message"), str) or not payload["message"].strip():
+                answer = payload.get("message")
+                if not isinstance(answer, str) or not answer.strip():
+                    answer = raw_text[:start].split(CHAT_REVIEW_OPEN_TAG, 1)[0].strip()
+                if not answer:
                     raise
                 summary = "答复正文已保留，但操作或委派元数据未通过校验；相关操作和委派尚未提交。"
-                return normalize_agent_response({"message": payload["message"] + "\n\n待处理：" + summary,
+                return normalize_agent_response({"message": answer + "\n\n待处理：" + summary,
                     "gate": {"kind": "response_metadata_invalid", "summary": summary}},
                     protected_paths=protected)
         key = re.search(r'"message"\s*:\s*', body)

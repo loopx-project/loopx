@@ -1,7 +1,5 @@
 /** Owner eligibility is shared by acquisition, renewal, transfer and observation.
  * It is not a lease grant: time, mode, proof, CAS and release remain with callers. */
-import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
 
 export interface LeaseEligibilityTodo {
   readonly status: string;
@@ -47,36 +45,4 @@ export function leaseOwnerConstraint(todo: LeaseEligibilityTodo | null | undefin
       return {effective: false as const, reason, claimed_by: todo?.claimed_by ?? null};
     default: return {effective: false as const, reason};
   }
-}
-
-function strings(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
-    throw new EffectRuntimeRequestError(`${label} must be an array of strings`);
-  }
-  return value as string[];
-}
-
-function nullableString(value: unknown, label: string): string | null {
-  if (value == null) return null;
-  if (typeof value !== "string") throw new EffectRuntimeRequestError(`${label} must be a string or null`);
-  return value;
-}
-
-/** A narrow adapter for the still-shipped Python coordination/inspection API.
- * Inputs are normalized facts, not Markdown or a second authority snapshot. */
-export function evaluateTaskLeaseOwnerEligibility(value: unknown) {
-  const input = requireJsonObject(value, "task lease owner eligibility");
-  const raw = input.todo == null ? null : requireJsonObject(input.todo, "todo");
-  let todo: LeaseEligibilityTodo | null = null;
-  if (raw !== null) {
-    if (typeof raw.status !== "string") throw new EffectRuntimeRequestError("todo.status must be a string");
-    todo = {status: raw.status, task_class: nullableString(raw.task_class, "todo.task_class"),
-      claimed_by: nullableString(raw.claimed_by, "todo.claimed_by"),
-      excluded_agents: strings(raw.excluded_agents, "todo.excluded_agents")};
-  }
-  const constraint = leaseOwnerConstraint(todo, nullableString(input.owner, "owner"),
-    strings(input.registered_agents, "registered_agents"));
-  return {schema_version: "task_lease_owner_eligibility_v0",
-    outcome: constraint.effective ? "apply" : "rejected",
-    code: constraint.effective ? "lease_owner_allowed" : constraint.reason, constraint};
 }
