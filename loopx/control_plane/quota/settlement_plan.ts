@@ -19,6 +19,8 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
   const commands = requireJsonObject(params.command_templates, "command_templates");
   const writeback = requireNonEmptyString(commands.durable_writeback, "durable_writeback");
   const spend = requireNonEmptyString(commands.quota_spend, "quota_spend");
+  const semanticWriteback = commands.semantic_closeout === undefined ? null
+    : requireNonEmptyString(commands.semantic_closeout, "semantic_closeout");
   // Scale remains CLI-owned. Project its actual accepted inputs rather than
   // copying another enum or asking callers to load the entire command help.
   const scales = requireStringArray(params.delivery_batch_scale_choices, "delivery_batch_scale_choices");
@@ -81,21 +83,27 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
       "an artifact pointer; --result-file requires approved Goal acceptance criteria bound to this Todo, " +
       "not merely a Todo validator. No invented successor " +
       "or --no-follow-up is required. Todo done does not settle the Turn. " +
-      (inFlight ? "For unfinished bounded progress, keep the Todo open with its original declaration. " +
-        "The projected in-flight boundary is not an instruction to retain completed work: " +
-        "when complete or changing route, use --delivery-boundary semantic_closeout with an " +
-        "evidence-linked vision decision on this same Turn; no new guard or binding is needed." : "");
+      "Keep an unfinished Todo open with its original declaration.";
   }
   const steps: SettlementStep[] = [
     validation,
     {
       kind: "durable_writeback", owner: "agent",
-      precondition: (inFlight || identity.binding_kind !== "todo" ? "validation succeeded"
-        : "validation succeeded; " + VISION_MATERIAL_CLOSEOUT_HINT +
-          " Pass a new packet with --agent-vision-json.") +
-        " Route elimination needs evidence; failure alone is not progress. " +
-        (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open; "
-          : "outcome_progress may use in_flight_continuation; ") + "outcome_gap requires " +
+      precondition: "validation succeeded; " +
+        (autonomousReplan ? "Autonomous replan uses --delivery-boundary semantic_closeout even while its Todo remains open. " +
+            "Bind new decision evidence from this admitted work to its artifact/input; follow the remaining plan, " +
+            "then yield for freshly guarded continuation. "
+          : (inFlight ? "Choose one: command_template for ordinary in_flight_continuation without new decision evidence; "
+              : "Use command_template for semantic_closeout; ") +
+            (semanticWriteback !== null ? "semantic_closeout_command_template" : "--delivery-boundary semantic_closeout") +
+            " for new decision evidence, route change or Todo completion. " +
+            "Bind new evidence produced or obtained by this admitted work to its artifact/input in fresh Vision/path_delta " +
+            "with --agent-vision-json, including continue/no_change when retaining the route. " +
+            "Use this same Turn; no new guard or binding. Follow the remaining plan, then yield for freshly guarded continuation. ") +
+        "Prior-feedback readback, bookkeeping and deterministic repetition without new information are context, " +
+        "not this Turn's progress; use them to advance the task first. " +
+        (!inFlight && identity.binding_kind === "todo" ? VISION_MATERIAL_CLOSEOUT_HINT + " " : "") +
+        "Route elimination needs evidence; failure alone is not progress. outcome_gap requires " +
         "semantic_closeout plus blocked + blocker/evidence IDs and continuation checks. " +
         "For an admitted open continuous Monitor whose observation is unavailable, " +
         "use this original identity for typed blocked outcome_gap; it settles without " +
@@ -103,9 +111,12 @@ export function turnScopedCliSettlementPlan(params: JsonObject): SettlementPlan 
         "An already committed Monitor poll needs neither refresh nor spend." + inputHint,
       idempotency_key_ref: "$.identity.effect_id", expected_receipt: "durable_writeback_receipt",
       command_template: writeback,
-      // In-flight continuation uses its projected flags without a material vision packet.
+      ...(identity.binding_kind === "todo" && !autonomousReplan && semanticWriteback !== null
+        ? {semantic_closeout_command_template: semanticWriteback} : {}),
+      // The same open Todo can reach a semantic feedback checkpoint. Deliver
+      // its existing authoring contract with the executable command variant.
       // Autonomous replan already carries this owner in its writeback contract.
-      ...(identity.binding_kind === "todo" && !inFlight
+      ...(identity.binding_kind === "todo" && (!inFlight || semanticWriteback !== null)
         ? {vision_authoring: visionAuthoringContract(autonomousReplan)} : {}),
     },
     {
