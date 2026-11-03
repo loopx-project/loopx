@@ -230,7 +230,12 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
     response: {...proof.response, gate: {kind: "response_metadata_invalid", summary: "Unsubmitted handoffs"}}};
   const owed = {...delivered, native_result_recovery: {...adopted, native_observation: frozen}};
   const metadata = {...packet, request: owed, context_recovery: {...packet.context_recovery,
-    queued_input_present: false, native_observation: {...frozen, raw_response: raw}}};
+    observed_at: "2026-01-01T00:00:30Z",
+    queued_input_present: false, native_observation: {...frozen, raw_response: raw},
+    metadata_capacity: {model_id: "gemini-4-argon-high", remaining_fraction: 1,
+      account_ref: "3".repeat(64),
+      reset_time: "2026-01-10T00:00:00Z", observed_at: Date.parse("2026-01-01T00:00:30Z") / 1000,
+      quota_exhausted: false, normal_completion: true}}};
   const review = planBoundConversationRequest(metadata);
   assert.equal(review.recovery_eligible, true);
   assert.equal(review.metadata_review, true);
@@ -256,6 +261,65 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
   assert.equal(planBoundConversationRequest({request: exhausted, current_session: session,
     pending_observation: {turn: admitted, stop_observed: false}}).pending, true,
     "A held/failed format review retains the original unresolved handoffs without retry authority");
+  const objectBrief = {Hypotheses: ["Original hypothesis"], Evidence: ["Read evidence"],
+    Constraints: ["No changes to frozen work"]};
+  const objectHandoff = {schema_version: "context_handoff_v0", goal_id: "work", agent_id: "worker", brief: objectBrief};
+  const objectRaw = "<loopx-review-json>" + JSON.stringify({message: "Original prose", context_handoff: objectHandoff,
+    proposals: []}) + "</loopx-review-json>";
+  const historical = {...frozen, latest_input_verified: false, end_step_index: 6,
+    answer_sha256: createHash("sha256").update(objectRaw).digest("hex")};
+  const completed = {...failed, status: "completed", error_code: null, response: historical.response};
+  const completedRow = {...packet.request};
+  const direct = {...metadata, request: completedRow, context_recovery: {...metadata.context_recovery,
+    failed_turn: completed, native_input: {thread_id: "native", start_step_index: 4, input_sha256: historical.input_sha256},
+    native_observation: {...historical, raw_response: objectRaw}}};
+  const directPlan = planBoundConversationRequest(direct);
+  assert.equal(directPlan.recovery_eligible, true);
+  assert.equal(directPlan.metadata_review, true);
+  assert.equal(directPlan.recover_native_result, undefined, "Already delivered prose cannot be adopted/sent again");
+  assert.deepEqual(directPlan.metadata_handoffs, [{goal_id: "work", agent_id: "worker", brief: JSON.stringify(objectBrief)}]);
+  for (const handoff of [{...objectHandoff, execution_binding_id: "invented"},
+    {...objectHandoff, schema_version: "unknown-version"}, {...objectHandoff, brief: {budget: 9007199254740992}},
+    {...objectHandoff, brief: {effects_settled: true}}, {...objectHandoff, brief: null}]) {
+    const invalidRaw = "<loopx-review-json>" + JSON.stringify({message: "Original prose", context_handoff: handoff,
+      proposals: []}) + "</loopx-review-json>";
+    assert.equal(planBoundConversationRequest({...direct, context_recovery: {...direct.context_recovery,
+      native_observation: {...historical, raw_response: invalidRaw,
+        answer_sha256: createHash("sha256").update(invalidRaw).digest("hex")}}}).recovery_eligible, false);
+  }
+  for (const change of [{source_verified: false}, {queued_input_present: true}, {stop_observed: true},
+    {steering_observed: true}, {native_input: null}, {metadata_capacity: null},
+    {native_observation: {...historical, raw_response: objectRaw, latest_input_verified: false, end_step_index: 8}},
+    {native_observation: {...historical, raw_response: objectRaw, execution_id: ""}},
+    {native_observation: {...historical, raw_response: objectRaw, input_sha256: "9".repeat(64)}},
+    {native_observation: {...historical, raw_response: objectRaw, response: {...historical.response, message: "Changed prose"}}}]) {
+    assert.equal(planBoundConversationRequest({...direct, context_recovery: {...direct.context_recovery, ...change}}).recovery_eligible, false);
+  }
+  const lowCapacity = {...metadata.context_recovery.metadata_capacity, quota_exhausted: true,
+    normal_completion: false, remaining_fraction: 0.006};
+  const low = {...direct, context_recovery: {...direct.context_recovery, metadata_capacity: lowCapacity}};
+  const held = planBoundConversationRequest(low);
+  assert.equal(held.recovery_eligible, false, "A small positive fraction cannot override the actual quota failure");
+  assert.deepEqual(held.metadata_quota_wait, lowCapacity);
+  const waitingRow = {...completedRow, metadata_quota_wait: held.metadata_quota_wait};
+  assert.equal(planBoundConversationRequest({...low, request: waitingRow}).recovery_eligible, false);
+  assert.equal(planBoundConversationRequest({...low, request: waitingRow,
+    context_recovery: {...low.context_recovery, metadata_capacity: {...lowCapacity, remaining_fraction: 1}}}).recovery_eligible, false);
+  assert.equal(planBoundConversationRequest({...low, request: waitingRow,
+    context_recovery: {...low.context_recovery, metadata_capacity: {...lowCapacity, remaining_fraction: 1,
+      reset_time: "2026-01-11T00:00:00Z"}}}).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest({...low, request: waitingRow,
+    context_recovery: {...low.context_recovery, metadata_capacity: {...lowCapacity, remaining_fraction: 1,
+      account_ref: "4".repeat(64)}}}).recovery_eligible, true);
+  assert.equal(planBoundConversationRequest({...low, request: waitingRow,
+    context_recovery: {...low.context_recovery, metadata_capacity: {...lowCapacity,
+      reset_time: "2026-01-10T00:00:00+00:00"}}}).recovery_eligible, false);
+  for (const capacity of [{...lowCapacity, model_id: "another-model"}, {...lowCapacity, observed_at: 0},
+    {...lowCapacity, remaining_fraction: -1}, {...lowCapacity, remaining_fraction: 2},
+    {...lowCapacity, quota_exhausted: null}, {...lowCapacity, reset_time: "unknown"}]) {
+    assert.equal(planBoundConversationRequest({...low, request: waitingRow,
+      context_recovery: {...low.context_recovery, metadata_capacity: capacity}}).recovery_eligible, false);
+  }
   const unfinished = {...delivered, native_result_recovery: {...adopted,
     native_observation: {...proof, response: {...proof.response,
       unfinished_work: {remaining: "Still owed", dependency: "Original worker", effects_settled: true}}}}};

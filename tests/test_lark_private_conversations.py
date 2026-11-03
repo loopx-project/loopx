@@ -255,7 +255,9 @@ def test_original_worker_recovers_native_result_without_replay(tmp_path, languag
             assert transport.health()[row["binding_id"]]["pending_count"] == 1
             assert "Argon answer 1" in provider.writes[-1][1]
             assert "相关操作和委派尚未提交" in provider.writes[-1][1]
-            assert not transport.core.context_recovery_candidate(ref)  # No business replay.
+            assert transport.core.context_recovery_candidate(ref)
+            plan = transport.core._context_recovery_plan(transport.core.read_request(ref), discovery_only=True)
+            assert plan["metadata_review"] and not plan.get("recover_native_result")  # Format only, no business replay.
             assert language_server["sent_count"] == 1
             return
         assert failed["status"] == "failed" and failed["error_code"] == "antigravity_rpc_error"
@@ -806,6 +808,160 @@ def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, langu
             assert language_server["sent_count"] == count
     finally:
         revoker.shutdown(wait=True)
+        fixture.close()
+
+
+@pytest.mark.parametrize("fault", [None, "quota-restore", "quota-unchanged", "quota-unknown",
+    "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer", "wrong-target", "changed-brief", "tool-step",
+    "cleared-before-proof", "retention-io"])
+def test_completed_invalid_metadata_uses_one_original_format_review(tmp_path, language_server, monkeypatch, fault):
+    """An already delivered, historical answer must not be sent/executed twice."""
+    from copy import deepcopy
+    from datetime import timezone
+    from test_native_steward_private import steward
+    from loopx.capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    from loopx.capabilities.manager_context import POLICY_SCHEMA, _root, _write, pending
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, _, workspace = next(fixture)
+    try:
+        registry = json.loads(runtime.registry_path.read_text())
+        registry["goals"] = [{"id": "work", "repo": str(workspace), "coordination": {"registered_agents": ["worker"]}}]
+        runtime.registry_path.write_text(json.dumps(registry))
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        original_brief = {"schema_version": "collaboration_brief_v0", "Hypotheses": ["Assess this hypothesis"],
+            "Evidence": ["Original authorized evidence"], "Constraints": ["Return here; do not change frozen work"]}
+        handoff = {"schema_version": "context_handoff_v0", "goal_id": "work", "agent_id": "worker", "brief": original_brief}
+        if fault == "unknown-outer":
+            handoff["execution_binding_id"] = "unapproved-binding"
+        language_server.update(invalid_handoff=True, original_handoffs=handoff,
+            answers={0: "Original complete visible answer."})
+        # Emulate an original completion from before durable result capture;
+        # keep its real Core input anchor and same-invocation native history.
+        start_turn = AntigravityAdapter.start_turn
+        def legacy_completion(adapter, message, event_sink, **kwargs):
+            return start_turn(adapter, message, lambda kind, payload: event_sink(kind, payload)
+                if kind != "turn.native_result" else None, **kwargs)
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", legacy_completion)
+        event = provider.event("steward-app", "completed-metadata", "Ask the original worker to assess this hypothesis")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        original = transport.core.read_request(ref)
+        completed = runtime.wait_for_turn(session_id=original["session_id"], turn_id=original["turn_id"], timeout_sec=15)
+        assert completed["status"] == "completed"
+        assert completed["response"]["gate"]["kind"] == "response_metadata_invalid"
+        monkeypatch.setattr(AntigravityAdapter, "start_turn", start_turn)
+        assert transport.reconcile_request(transport.root / f"{ref}.json") == 1
+        original_bytes = store._turn_path(original["session_id"], original["turn_id"]).read_bytes()
+        original_events = store.events_after(original["session_id"], original["turn_id"], None)
+        assert not store.native_result(original["session_id"], original["turn_id"])
+        # Another native input is historical context, not authority to replay it.
+        language_server["inputs"].append({"text": "An unrelated later native input", "created_at": datetime.now(timezone.utc).isoformat()})
+        language_server["sent_count"] += 1
+        if fault in {"quota-restore", "quota-unchanged"}:
+            language_server.update(quota_error_indices=[1], quota_fraction=0.006)
+        elif fault == "quota-unknown":
+            language_server["quota_unknown"] = True
+        elif fault == "cleared-before-proof":
+            language_server["cleared_input_indices"] = [0]
+        elif fault == "retention-io":
+            def cannot_retain(*args, **kwargs):
+                raise OSError("Synthetic supplemental storage unavailable")
+            monkeypatch.setattr(store, "retain_native_result", cannot_retain)
+        context = json.dumps(original_brief, ensure_ascii=False, separators=(",", ":"))
+        brief = {"schema_version": "collaboration_brief_v0", "purpose": "Assess the original hypothesis", "context": context,
+            "constraints": ["Do not change frozen work"], "inputs": [], "acceptance": ["Return the assessment"],
+            "return_requirement": "Return to the original conversation"}
+        response = {"message": "Unverified model delivery claim", "proposals": [], "gate": None,
+            "context_handoff": [{"goal_id": "work", "agent_id": "worker", "brief": brief}]}
+        if fault == "wrong-target":
+            response["context_handoff"][0]["agent_id"] = "other-worker"
+        elif fault == "changed-brief":
+            brief["context"] = "Changed original evidence"
+        elif fault == "tool-step":
+            language_server["review_native_fault"] = "tool-step"
+            language_server["review_fault_start_index"] = 2
+        language_server["review_response"] = response
+        session = store.load_session(original["session_id"])
+        _write(_root(runtime.coordination_runtime_root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+            session["channel_id"]: {"local_delivery_scope": "selected", "sender_ids": [binding["operator_ref"]],
+                "targets": [{"goal_id": "work", "agent_id": "worker"}]}}})
+        if fault == "stop":
+            store.append_event(session["session_id"], original["turn_id"], kind="turn.interrupt_requested", payload={})
+            original_events = store.events_after(original["session_id"], original["turn_id"], None)
+        elif fault == "new-input":
+            store.create_queued_turn(session["session_id"], client_turn_id="new-correction", message="A correction", origin="lark")
+        elif fault == "no-anchor":
+            events_after = store.events_after
+            def without_anchor(*args):
+                rows = deepcopy(events_after(*args))
+                for item in rows:
+                    item.get("payload", {}).pop("native_input", None)
+                return rows
+            monkeypatch.setattr(store, "events_after", without_anchor)
+        elif fault == "changed-proof":
+            observe = AntigravityAdapter.completed_result_observation
+            def changed(**kwargs):
+                result = observe(**kwargs)
+                if result:
+                    result["response"]["message"] += "Changed original answer"
+                return result
+            monkeypatch.setattr(AntigravityAdapter, "completed_result_observation", staticmethod(changed))
+        path = transport.root / f"{ref}.json"
+        transport.reconcile_request(path)
+        if fault in {"quota-restore", "quota-unchanged"}:
+            held = transport.core.read_request(ref)
+            assert held["metadata_quota_wait"]["remaining_fraction"] == 0.006
+            assert not held.get("context_recovery")
+            retained = store.native_result(original["session_id"], original["turn_id"])
+            assert retained["upstream_turn_id"] == completed["upstream_turn_id"]
+            retained_bytes = (store._session_dir(original["session_id"]) / "native-results" / (original["turn_id"] + ".json")).read_bytes()
+            # The original service retained its own verified facts before quota
+            # recovery. Later native compaction cannot erase this obligation.
+            language_server["cleared_input_indices"] = [0]
+            transport.reconcile_request(path)
+            assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+            if fault == "quota-restore":
+                language_server["quota_fraction"] = 1
+                transport.reconcile_request(path)
+                assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+                from datetime import timedelta
+                language_server["quota_reset"] = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+                transport.reconcile_request(path)
+            assert (store._session_dir(original["session_id"]) / "native-results" / (original["turn_id"] + ".json")).read_bytes() == retained_bytes
+        row = transport.core.read_request(ref)
+        assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_bytes
+        if fault in {"quota-unchanged", "quota-unknown", "stop", "new-input", "no-anchor", "changed-proof", "unknown-outer",
+                     "cleared-before-proof", "retention-io"}:
+            assert row["turn_id"] == original["turn_id"]
+            assert not pending(runtime.coordination_runtime_root, "work", "worker")["items"]
+            assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+            return
+        assert row["turn_id"] != original["turn_id"], "Completed invalid metadata was not returned to its original worker"
+        reviewed = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+        transport.reconcile_request(path)
+        entries = pending(runtime.coordination_runtime_root, "work", "worker")["items"]
+        if fault in {None, "quota-restore"}:
+            assert reviewed["status"] == "completed", reviewed
+            assert len(entries) == 1 and entries[0]["source_id"] == ref
+            assert entries[0]["brief"]["context"] == context
+        else:
+            assert reviewed["status"] == "failed" and not entries
+        assert store._turn_path(original["session_id"], original["turn_id"]).read_bytes() == original_bytes
+        assert store.events_after(original["session_id"], original["turn_id"], None) == original_events
+        assert "native_result_recovery" not in row  # Already delivered prose is not sent a second time.
+        assert sum("Original complete visible answer." in str(item.get("body", {}).get("content", item.get("content")))
+            for item in provider.messages.values()) == 1
+        assert not any("Unverified model delivery claim" in write[1] for write in provider.writes)
+        sends = [body for method, body in language_server["calls"] if method == "SendUserCascadeMessage"]
+        assert len(sends) == 2 and sends[-1]["cascadeConfig"]["plannerConfig"]["toolConfig"]["forceDisableToolCalling"] is True
+        before = (len(sends), len(provider.writes))
+        transport.reconcile_request(path)
+        assert (len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]), len(provider.writes)) == before
+    finally:
         fixture.close()
 
 

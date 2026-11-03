@@ -566,6 +566,15 @@ function pureResultText(response: JsonObject | null): boolean {
     && ["gate", "context_handoff", "protected_action", "goal_draft", "unfinished_work"].every(key => response[key] == null);
 }
 
+function unsubmittedMetadata(response: JsonObject | null): boolean {
+  const gate = response?.gate as JsonObject | undefined;
+  return response?.schema_version === "loopx_chat_agent_response_v0"
+    && typeof response.message === "string" && response.message.length > 0
+    && gate?.kind === "response_metadata_invalid" && typeof gate.summary === "string"
+    && Array.isArray(response.proposals) && response.proposals.length === 0
+    && ["context_handoff", "protected_action", "goal_draft", "unfinished_work"].every(key => response[key] == null);
+}
+
 function extendsOriginalText(original: JsonObject, result: JsonObject): boolean {
   const metadata = (value: JsonObject) => Object.fromEntries(Object.entries(value)
     .filter(([key, value]) => key !== "message" && value != null));
@@ -623,17 +632,26 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
       && anchor !== null && anchor.thread_id === current.upstream_thread_id
       && Number.isSafeInteger(anchor.start_step_index) && Number(anchor.start_step_index) >= 0
       && typeof anchor.input_sha256 === "string" && BARE_SHA256_PATTERN.test(anchor.input_sha256);
+    const completedMetadata = failed.status === "completed" && unsubmittedMetadata(originalResponse)
+      && anchor !== null && anchor.thread_id === current.upstream_thread_id
+      && Number.isSafeInteger(anchor.start_step_index) && Number(anchor.start_step_index) >= 0
+      && typeof anchor.input_sha256 === "string" && BARE_SHA256_PATTERN.test(anchor.input_sha256);
     // Result adoption has no admission/dispatch authority. Keep the failed
     // Turn and original failure delivery, even when native tools ran.
     if (!steward || failed.session_id !== current.session_id || failed.turn_id !== row.turn_id
         || failed.client_turn_id !== `external-${row.request_ref}` || failed.message !== row.message
-        || (!completedText && (failed.status !== "failed" || failed.response != null
+        || (!completedText && !completedMetadata && (failed.status !== "failed" || failed.response != null
           || !["response_timeout", "antigravity_rpc_error", "antigravity_transport_error",
             "upstream_transport_failure", "server_restarted"].includes(String(failed.error_code))))
         || recovery.attachments_present !== false || recovery.steering_observed !== false
         || recovery.stop_observed !== false) return no;
     const adopted = row.native_result_recovery == null ? null
       : requireJsonObject(row.native_result_recovery, "adopted native result");
+    if (completedMetadata) {
+      // The original prose was already delivered. Review only its unsubmitted
+      // metadata: no duplicate prose adoption, Turn rewrite or business replay.
+      return planNativeMetadataReview(recovery, row, current, failed, null, version);
+    }
     if (adopted?.delivery_verified === true) {
       if (completedText) return no; // A repaired answer never starts a format review or business continuation.
       return planNativeMetadataReview(recovery, row, current, failed, adopted, version);
@@ -758,22 +776,48 @@ function planContextRecovery(params: JsonObject, row: JsonObject, current: JsonO
 /** A text-only format review of already returned native prose. This is never
  * another business attempt, and any failed/unknown review exhausts the route.
  */
+function textualBrief(value: unknown, depth = 0): boolean {
+  if (depth > 8) return false;
+  if (typeof value === "string") return true;
+  if (Array.isArray(value)) return value.every(item => textualBrief(item, depth + 1));
+  return value !== null && typeof value === "object"
+    && Object.values(value).every(item => textualBrief(item, depth + 1));
+}
+
 function planNativeMetadataReview(recovery: JsonObject, row: JsonObject, current: JsonObject,
-  failed: JsonObject, adopted: JsonObject, version: number): JsonObject {
+  failed: JsonObject, adopted: JsonObject | null, version: number): JsonObject {
   const no = {operation: "admit_turn", recovery_candidate: false, recovery_eligible: false};
-  const frozen = requireJsonObject(adopted.native_observation, "adopted native observation");
-  const response = requireJsonObject(frozen.response, "adopted native response");
-  if (adopted.turn_id !== failed.turn_id || adopted.message_id !== `native.${failed.turn_id}.recovered`
-      || typeof adopted.message_text !== "string" || !adopted.message_text
-      || (response.gate as JsonObject | null)?.kind !== "response_metadata_invalid"
-      || frozen.thread_id !== current.upstream_thread_id || frozen.request_ref !== row.request_ref
-      || frozen.normal_terminal_verified !== true || frozen.latest_input_verified !== true) return no;
   const client = `external-${ref(row.request_ref, "original request")}-recovery-${version}-metadata-1`;
   const previous = row.context_recovery == null ? null : requireJsonObject(row.context_recovery, "metadata review reservation");
   if (previous !== null && (previous.metadata_review !== true || previous.version !== version
       || previous.failed_turn_id !== failed.turn_id || previous.client_turn_id !== client)) return no;
   const candidate = {...no, recovery_candidate: true, metadata_review: true, client_turn_id: client,
     session_id: current.session_id, failed_turn_id: failed.turn_id};
+  if (recovery.admitted_turn == null && (current.status !== "ready" || current.active_turn_id != null
+      || recovery.queued_input_present !== false)) return no;
+  const supplied = adopted?.native_observation ?? previous?.native_observation ?? recovery.native_observation;
+  if (supplied == null) return adopted === null ? candidate : no;
+  const {raw_response: _raw, ...frozen} = requireJsonObject(supplied, "original native observation");
+  const response = requireJsonObject(frozen.response, "original native response");
+  if (!unsubmittedMetadata(response) || frozen.thread_id !== current.upstream_thread_id
+      || frozen.request_ref !== row.request_ref || frozen.normal_terminal_verified !== true) return no;
+  if (adopted !== null) {
+    if (adopted.turn_id !== failed.turn_id || adopted.message_id !== `native.${failed.turn_id}.recovered`
+        || typeof adopted.message_text !== "string" || !adopted.message_text
+        || frozen.latest_input_verified !== true) return no;
+  } else {
+    const anchor = requireJsonObject(recovery.native_input, "original completed input");
+    const created = Date.parse(String(frozen.input_created_at));
+    if (!isDeepStrictEqual(failed.response, response) || frozen.start_step_index !== anchor.start_step_index
+        || typeof frozen.execution_id !== "string" || !frozen.execution_id
+        || frozen.input_sha256 !== anchor.input_sha256 || !Number.isFinite(created)
+        || created < Date.parse(String(failed.started_at)) || created > Date.parse(String(failed.completed_at))
+        || !Number.isSafeInteger(frozen.total_steps) || Number(frozen.total_steps) <= Number(frozen.start_step_index) + 1
+        || ![frozen.input_sha256, frozen.answer_sha256].every(v => typeof v === "string" && BARE_SHA256_PATTERN.test(v))
+        || !(frozen.latest_input_verified === true || frozen.latest_input_verified === false
+          && Number.isSafeInteger(frozen.end_step_index) && Number(frozen.end_step_index) > Number(frozen.start_step_index) + 1
+          && Number(frozen.end_step_index) < Number(frozen.total_steps))) return no;
+  }
   if (previous !== null && recovery.admitted_turn != null) {
     const admitted = requireJsonObject(recovery.admitted_turn, "admitted metadata review");
     if (admitted.client_turn_id !== client || admitted.session_id !== current.session_id
@@ -791,7 +835,9 @@ function planNativeMetadataReview(recovery: JsonObject, row: JsonObject, current
   if (!isDeepStrictEqual(observed, frozen) || typeof raw !== "string" || raw.length > 100000
       || createHash("sha256").update(raw).digest("hex") !== frozen.answer_sha256) return candidate;
   // The parser retained prose but admitted none of the malformed action batch.
-  // Only string-brief handoffs qualify; other bad/unknown actions stay held.
+  // Transcribe bounded JSON briefs as exact evidence strings; this does not
+  // interpret their fields or grant actions. The normal owner must still
+  // validate the formatter's canonical brief and each current recipient.
   let payload: JsonObject;
   try {
     const start = raw.lastIndexOf("<loopx-review-json>"), end = raw.lastIndexOf("</loopx-review-json>");
@@ -802,21 +848,62 @@ function planNativeMetadataReview(recovery: JsonObject, row: JsonObject, current
         "goal_draft", "protected_action", "unfinished_work"].includes(key))
       || [payload.goal_draft, payload.protected_action, payload.gate, payload.unfinished_work].some(v => v != null)
       || !Array.isArray(payload.proposals ?? []) || (payload.proposals as unknown[] | undefined)?.length
-      || !Array.isArray(payload.context_handoff) || !payload.context_handoff.length
-      || payload.context_handoff.length > 32) return candidate;
+      ) return candidate;
+  const handoffs = Array.isArray(payload.context_handoff) ? payload.context_handoff : [payload.context_handoff];
+  if (!handoffs.length || handoffs.length > 32) return candidate;
   const targets = new Set<string>();
-  for (const value of payload.context_handoff) {
+  const transcribed: JsonObject[] = [];
+  for (const value of handoffs) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return candidate;
     const item = value as JsonObject;
-    if (Object.keys(item).sort().join(",") !== "agent_id,brief,goal_id"
+    const keys = Object.keys(item).filter(key => key !== "schema_version").sort().join(",");
+    if (keys !== "agent_id,brief,goal_id" || item.schema_version != null && item.schema_version !== "context_handoff_v0"
         || [item.goal_id, item.agent_id].some(v => typeof v !== "string" || !/^[A-Za-z0-9._-]{1,160}$/.test(v))
-        || typeof item.brief !== "string" || !item.brief.trim() || item.brief.length > 6000) return candidate;
+        || !(typeof item.brief === "string" || item.brief && typeof item.brief === "object" && !Array.isArray(item.brief))
+        || !textualBrief(item.brief)) return candidate;
+    const brief = typeof item.brief === "string" ? item.brief : JSON.stringify(item.brief);
+    if (!brief.trim() || brief.length > 6000) return candidate;
     const target = JSON.stringify([item.goal_id, item.agent_id]);
     if (targets.has(target)) return candidate;
     targets.add(target);
+    transcribed.push({goal_id: item.goal_id, agent_id: item.agent_id, brief});
   }
-  return {...candidate, recovery_eligible: recovery.source_verified === true,
-    metadata_handoffs: payload.context_handoff};
+  return metadataReviewCapacity(recovery, row, current, {...candidate, metadata_handoffs: transcribed,
+    ...(adopted === null && recovery.source_verified === true ? {retain_metadata_result: true} : {})});
+}
+
+/** A model list/positive remainder is not proof a known quota failure cleared.
+ * Keep the existing request pending without reserving its one format attempt.
+ */
+function metadataReviewCapacity(recovery: JsonObject, row: JsonObject, current: JsonObject,
+  candidate: JsonObject): JsonObject {
+  if (recovery.source_verified !== true) return candidate;
+  const capacity = recovery.metadata_capacity as JsonObject | null | undefined;
+  const now = Date.parse(String(recovery.observed_at)) / 1000;
+  if (!capacity || capacity.model_id !== (current.agent_model_id ?? "gemini-4-argon-high")
+      || typeof capacity.account_ref !== "string" || !BARE_SHA256_PATTERN.test(capacity.account_ref)
+      || typeof capacity.remaining_fraction !== "number" || !Number.isFinite(capacity.remaining_fraction)
+      || capacity.remaining_fraction < 0 || capacity.remaining_fraction > 1
+      || typeof capacity.observed_at !== "number" || !Number.isFinite(capacity.observed_at)
+      || !Number.isFinite(now) || now < capacity.observed_at || now - capacity.observed_at > 120
+      || typeof capacity.quota_exhausted !== "boolean" || typeof capacity.normal_completion !== "boolean"
+      || typeof capacity.reset_time !== "string"
+      || !Number.isFinite(Date.parse(String(capacity.reset_time)))) return candidate;
+  const waiting = row.metadata_quota_wait as JsonObject | null | undefined;
+  if (waiting != null && (typeof waiting.model_id !== "string" || typeof waiting.remaining_fraction !== "number"
+      || typeof waiting.account_ref !== "string" || !BARE_SHA256_PATTERN.test(waiting.account_ref)
+      || !Number.isFinite(waiting.remaining_fraction) || waiting.remaining_fraction < 0 || waiting.remaining_fraction > 1
+      || typeof waiting.reset_time !== "string" || !Number.isFinite(Date.parse(waiting.reset_time)))) return candidate;
+  const sameEpoch = waiting?.model_id === capacity.model_id && waiting.account_ref === capacity.account_ref
+    && Date.parse(String(waiting.reset_time)) === Date.parse(capacity.reset_time);
+  // Fractions can fluctuate across refreshes. Only a quota/account epoch
+  // change or the known reset boundary can clear this recorded hard failure.
+  const restored = waiting != null && (!sameEpoch || now >= Date.parse(String(waiting.reset_time)) / 1000);
+  if (capacity.remaining_fraction <= 0 || waiting != null && !restored
+      || waiting == null && capacity.quota_exhausted === true) {
+    return {...candidate, metadata_quota_wait: waiting ?? capacity};
+  }
+  return {...candidate, recovery_eligible: true};
 }
 
 /** A completed model Turn can explicitly report unfinished business. The
