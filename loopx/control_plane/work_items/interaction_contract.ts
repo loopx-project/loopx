@@ -242,7 +242,7 @@ export function selectPrimaryActionInstruction(value: unknown, mode: string): st
   if (mode === "autonomous_replan") {
     const lifecycle = object("lifecycle");
     if (requireBoolean(lifecycle.present, "lifecycle.present")) return text(lifecycle, "action") ||
-      "settle the exact completed Todo lifecycle or link a real runnable successor; do not create lifecycle-only filler";
+      "follow the exact Todo lifecycle recovery actions; preserve independent work and gates, and do not add links to terminal Todos or create lifecycle-only filler";
     const packet = object("replan_packet");
     if (requireBoolean(packet.settlement_only, "settlement_only")) return text(packet, "rule");
     if (requireBoolean(packet.has_required_outcome, "has_required_outcome") && requireBoolean(packet.has_successor_command, "has_successor_command")) {
@@ -735,14 +735,23 @@ function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./:-]+$/.test(value) ? value : `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** The adaptive primary is the work identity for both reads and settlement. */
-export function selectedWorkTodoId(packet: JsonObject): string | null {
+/** The adaptive primary is the work identity for both reads and settlement.
+ * Historical callers may supply their already-decoded text: reapplying JS
+ * trim would change Python whitespace/BOM identities in persisted journals.
+ */
+export function selectedWorkTodo(packet: JsonObject, historicalPrimaryText?: string): JsonObject {
   const orchestration = jsonObject(packet.task_orchestration_contract) ?? {};
-  const primaryTodoId = typeof orchestration.primary_todo_id === "string"
-    ? orchestration.primary_todo_id.trim() : "";
+  const primaryTodoId = historicalPrimaryText ?? (typeof orchestration.primary_todo_id === "string"
+    ? orchestration.primary_todo_id.trim() : "");
   if (orchestration.schema_version === "task_orchestration_contract_v2"
-      && orchestration.mode === "adaptive" && primaryTodoId) return primaryTodoId;
-  const selected = jsonObject(packet.selected_todo) ?? {};
+      && orchestration.mode === "adaptive" && primaryTodoId) {
+    return {todo_id: primaryTodoId, source: "task_orchestration_contract.primary_todo_id"};
+  }
+  return jsonObject(packet.selected_todo) ?? {};
+}
+
+export function selectedWorkTodoId(packet: JsonObject): string | null {
+  const selected = selectedWorkTodo(packet);
   return typeof selected.todo_id === "string" && selected.todo_id.trim() ? selected.todo_id : null;
 }
 

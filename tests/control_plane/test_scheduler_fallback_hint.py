@@ -203,6 +203,148 @@ def test_fallback_hint_cli_route_binds_registry(tmp_path: Path) -> None:
     assert fallback["route_binding"]["runtime_root_bound"] is False
 
 
+def _fallback_payload() -> dict:
+    return {
+        "scheduler_hint": {
+            "app_automation": {
+                "fallback_hint": {
+                    "cli_args": [
+                        "loopx-apply-rrule",
+                        "--goal-id",
+                        GOAL_ID,
+                        "--agent-id",
+                        AGENT_ID,
+                        "--automation-id",
+                        "loopx",
+                        "--turn-instance-id",
+                        "${LOOPX_TURN:?}",
+                    ],
+                    "args": {
+                        "goal_id": GOAL_ID,
+                        "agent_id": AGENT_ID,
+                        "automation_id": "loopx",
+                        "turn_instance_id": "${LOOPX_TURN:?}",
+                    },
+                }
+            }
+        }
+    }
+
+
+def test_fallback_hint_binds_the_receipted_turn(tmp_path: Path) -> None:
+    payload = _fallback_payload()
+
+    bind_scheduler_followup_cli_routes(
+        payload,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        turn_instance_id="turn-fallback-receipt-001",
+    )
+
+    fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+    turn_index = fallback["cli_args"].index("--turn-instance-id")
+    assert fallback["cli_args"][turn_index + 1] == "turn-fallback-receipt-001"
+    assert fallback["args"]["turn_instance_id"] == "turn-fallback-receipt-001"
+    assert fallback["route_binding"]["turn_instance_bound"] is True
+
+
+def test_fallback_hint_renders_the_turn_reference_of_the_host_shell(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from loopx.control_plane.quota import effect_program as quota_effect_program
+
+    for windows_host, expected in (
+        (False, "${LOOPX_TURN:?}"),
+        (True, "$LOOPX_TURN"),
+    ):
+        monkeypatch.setattr(
+            quota_effect_program, "_is_windows_host", lambda value=windows_host: value
+        )
+        payload = _fallback_payload()
+
+        bind_scheduler_followup_cli_routes(
+            payload,
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+        )
+
+        fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+        turn_index = fallback["cli_args"].index("--turn-instance-id")
+        assert fallback["cli_args"][turn_index + 1] == expected
+        assert fallback["args"]["turn_instance_id"] == expected
+        assert fallback["route_binding"]["turn_instance_bound"] is False
+
+
+def test_fallback_hint_re_renders_every_posix_turn_reference(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from loopx.control_plane.quota import effect_program as quota_effect_program
+
+    monkeypatch.setattr(quota_effect_program, "_is_windows_host", lambda: True)
+    for posix_form in ("${LOOPX_TURN:?}", "${LOOPX_TURN}"):
+        payload = _fallback_payload()
+        fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+        turn_index = fallback["cli_args"].index("--turn-instance-id")
+        fallback["cli_args"][turn_index + 1] = posix_form
+        fallback["args"]["turn_instance_id"] = posix_form
+
+        bind_scheduler_followup_cli_routes(
+            payload,
+            registry_path=tmp_path / "registry.json",
+            runtime_root=tmp_path / "runtime",
+        )
+
+        bound_index = fallback["cli_args"].index("--turn-instance-id")
+        assert fallback["cli_args"][bound_index + 1] == "$LOOPX_TURN"
+        assert fallback["args"]["turn_instance_id"] == "$LOOPX_TURN"
+
+
+def test_fallback_hint_appends_a_missing_turn_argument(tmp_path: Path) -> None:
+    payload = _fallback_payload()
+    fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+    fallback["cli_args"] = [
+        argument
+        for argument in fallback["cli_args"]
+        if argument != "--turn-instance-id"
+    ]
+    fallback["cli_args"].remove("${LOOPX_TURN:?}")
+    del fallback["args"]["turn_instance_id"]
+
+    bind_scheduler_followup_cli_routes(
+        payload,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+        turn_instance_id="turn-fallback-receipt-002",
+    )
+
+    assert fallback["cli_args"][-2:] == [
+        "--turn-instance-id",
+        "turn-fallback-receipt-002",
+    ]
+    assert fallback["route_binding"]["turn_instance_bound"] is True
+
+
+def test_fallback_hint_keeps_a_concrete_projected_turn(tmp_path: Path) -> None:
+    payload = _fallback_payload()
+    fallback = payload["scheduler_hint"]["app_automation"]["fallback_hint"]
+    turn_index = fallback["cli_args"].index("--turn-instance-id")
+    fallback["cli_args"][turn_index + 1] = "turn-projected-003"
+    fallback["args"]["turn_instance_id"] = "turn-projected-003"
+
+    bind_scheduler_followup_cli_routes(
+        payload,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+
+    bound_index = fallback["cli_args"].index("--turn-instance-id")
+    assert fallback["cli_args"][bound_index + 1] == "turn-projected-003"
+    assert fallback["args"]["turn_instance_id"] == "turn-projected-003"
+    assert fallback["route_binding"]["turn_instance_bound"] is False
+
+
 def test_scheduler_followup_routes_preserve_turn_lineage(tmp_path: Path) -> None:
     payload = {
         "scheduler_hint": {

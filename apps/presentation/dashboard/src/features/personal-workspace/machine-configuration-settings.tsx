@@ -279,10 +279,10 @@ export function MachineConfigurationSettings({ section, onChanged }: {
     setNotice(null);
   }
 
-  async function setContextDelivery(mode: "off" | "on") {
+  async function setContextDelivery(mode: "off" | "on", key: "mode" | "antigravity_mode" = "mode") {
     if (busy || !editorAvailable || selected?.capability_id !== "context_delivery" || !selected.machine_namespace) return;
     const namespace = selected.machine_namespace;
-    const configuration = {...selected.default, mode};
+    const configuration = {...selected.default, ...selectedCurrent, [key]: mode};
     const generation = editorGeneration.current;
     setBusy("apply"); setError(null); setNotice(null);
     try {
@@ -295,10 +295,11 @@ export function MachineConfigurationSettings({ section, onChanged }: {
       if (generation !== editorGeneration.current) return;
       setInspection(next);
       setReadbackPending(null);
-      if (next.machine_configuration?.namespaces[namespace]?.mode !== mode) {
+      if (next.machine_configuration?.namespaces[namespace]?.[key] !== mode) {
         throw new Error(locale === "zh-CN" ? "保存后的配置已变化，请刷新后重试。" : "The saved configuration changed. Refresh and retry.");
       }
-      setNotice(locale === "zh-CN" ? "Codex 偏好已保存。" : "Codex preference saved.");
+      const targetLabel = key === "antigravity_mode" ? "Antigravity" : "Codex";
+      setNotice(locale === "zh-CN" ? `${targetLabel} 偏好已保存。` : `${targetLabel} preference saved.`);
       onChanged?.();
     } catch (cause) {
       if (generation === editorGeneration.current) setError(cause instanceof Error ? cause.message : t("machine.applyError"));
@@ -530,16 +531,24 @@ export function MachineConfigurationSettings({ section, onChanged }: {
               <span>Codex</span>
               <input aria-label={locale === "zh-CN" ? "在 Codex 中使用差分上下文" : "Use differential context in Codex"}
                 type="checkbox" role="switch" checked={(selectedCurrent?.mode ?? selected.default?.mode) === "on"} disabled={Boolean(busy) || !editorAvailable}
-                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off")} />
+                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off", "mode")} />
+            </label><label className="is-boolean">
+              <span>Antigravity</span>
+              <input aria-label={locale === "zh-CN" ? "在 Antigravity 中渐进读取管家历史" : "Use progressive manager history in Antigravity"}
+                type="checkbox" role="switch" checked={(selectedCurrent?.antigravity_mode ?? selected.default?.antigravity_mode ?? "on") === "on"} disabled={Boolean(busy) || !editorAvailable}
+                onChange={(event) => void setContextDelivery(event.target.checked ? "on" : "off", "antigravity_mode")} />
             </label></div>
             <p role="status">{(selectedCurrent?.mode ?? selected.default?.mode) === "on"
               ? selectedCurrent
                 ? locale === "zh-CN" ? "已开启；原生初始化与实际使用尚未验证。" : "On; native setup and use unverified."
                 : locale === "zh-CN" ? "默认开启；原生初始化与实际使用尚未验证。" : "Default on; native setup and use unverified."
               : locale === "zh-CN" ? "Codex 已关闭。" : "Off for Codex."}</p>
-            <ContextHelp label={locale === "zh-CN" ? "Codex 支持范围与生效条件" : "Codex support and activation requirements"}><p>{locale === "zh-CN"
-              ? "受支持的 POSIX Codex App／SSH 和 benchmark 心跳默认开启；已保存的关闭继续生效，benchmark trial 可单独显式关闭。其他应用和平台保留完整交付；显式开启遇到未知或冲突跑法会报错。保存偏好不代表当前会话已采用差分。宿主就绪且旧上下文完整时才使用差分，否则完整恢复；私有存储与会话隔离自动管理。"
-              : "Defaults on for supported POSIX Codex App/SSH and benchmark heartbeats. Saved off is preserved; benchmark trials can explicitly disable it independently. Other applications and platforms retain full delivery. Explicit on rejects unknown or conflicting modes. Saving a preference does not establish current-session adoption. Delta needs a ready host and complete retained context; otherwise full context is restored. Private storage and session isolation are automatic."}</p></ContextHelp>
+            <p role="status">{(selectedCurrent?.antigravity_mode ?? selected.default?.antigravity_mode ?? "on") === "on"
+              ? locale === "zh-CN" ? "Antigravity 管家历史渐进读取已开启。" : "Antigravity progressive manager history is on."
+              : locale === "zh-CN" ? "Antigravity 已关闭。" : "Off for Antigravity."}</p>
+            <ContextHelp label={locale === "zh-CN" ? "Codex 与 Antigravity 支持范围与生效条件" : "Codex and Antigravity support and activation requirements"}><p>{locale === "zh-CN"
+              ? "Codex（mode）与 Antigravity（antigravity_mode）独立控制：受支持的 POSIX Codex App／SSH 和 benchmark 心跳默认开启差分，已保存的关闭继续生效，benchmark trial 可单独显式关闭；强能力 Antigravity 管家默认开启私有快照的交付历史渐进读取，关闭时保持完整内联。其他应用和平台保留完整交付；显式开启遇到未知或冲突跑法会报错。保存偏好不代表当前会话已采用差分。宿主就绪且旧上下文完整时才使用差分，否则完整恢复；私有存储与会话隔离自动管理。"
+              : "Codex (mode) and Antigravity (antigravity_mode) are controlled independently: supported POSIX Codex App/SSH and benchmark heartbeats default on (saved off is preserved; benchmark trials can disable it independently), while trusted-owner Antigravity manager turns default on for progressive private-capture history reads and keep full inline input when off. Other applications and platforms retain full delivery. Explicit on rejects unknown or conflicting modes. Saving a preference does not establish current-session adoption. Delta needs a ready host and complete retained context; otherwise full context is restored. Private storage and session isolation are automatic."}</p></ContextHelp>
           </section> : null}
           {editorAvailable && selected.capability_id !== "context_delivery" ? <>{editorMode === "json" || !selected.configuration_editor.fields.some((field) => field.key === "enabled" && field.input_kind === "boolean") ? <div className="personal-capability-editor-mode">
             <button disabled={Boolean(busy)} onClick={() => changeMode(editorMode === "guided" ? "json" : "guided")} type="button">

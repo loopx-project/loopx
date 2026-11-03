@@ -37,6 +37,7 @@ def opaque_digest(*values: Any) -> str:
 
 def manager_failure_reply(
     error: Exception | Mapping[str, Any], *, retry_info: Any = None,
+    preparation_recovery: bool = False,
 ) -> tuple[str, str]:
     labels = {
         "cyber_policy": "上游安全策略拦截",
@@ -72,6 +73,9 @@ def manager_failure_reply(
         else getattr(error, "error_code", "")
     )
     code = code if code in labels else "processing_failed"
+    if code == "manager_authorization_unavailable" and preparation_recovery:
+        return code, ("已收到你的消息，但本轮在准备授权上下文时失败。请求已保留；只有核验为模型调用前失败、"
+                      "连接恢复且没有后续重交时，原队列才会限次接续。可用 /status 查看状态。")
     # Old hosts can terminate with `other` after typed disconnect retries.
     # Describe that observed history without changing the terminal category,
     # inferring an authorization failure, or granting permission to replay.

@@ -636,6 +636,7 @@ class SettlementStep:
     conditional: bool = False
     command_condition: str | None = None
     vision_authoring: Mapping[str, Any] | None = None
+    semantic_closeout_command_template: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         step: dict[str, Any] = {
@@ -653,6 +654,8 @@ class SettlementStep:
             step["command_condition"] = self.command_condition
         if self.vision_authoring is not None:
             step["vision_authoring"] = dict(self.vision_authoring)
+        if self.semantic_closeout_command_template is not None:
+            step["semantic_closeout_command_template"] = self.semantic_closeout_command_template
         return step
 
 

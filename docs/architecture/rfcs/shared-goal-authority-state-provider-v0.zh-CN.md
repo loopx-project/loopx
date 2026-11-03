@@ -1704,14 +1704,20 @@ pipeline；Markdown 缺失时仍可执行 provider-only read，并在响应中�
 receipt。provider 缺失、损坏、协议漂移或 Todo read-model 语义漂移都会 fail closed；
 cutover 后禁止回退 Markdown。
 
-完成续接（continuation）的持久化读回
-（`durable_completion.py`：`read_persisted_todo_record` /
-`project_durable_completion_outcome`）是一个 provider read point：它在完成写入之后、
-settlement 之前重新读取已落盘的 lifecycle record（Markdown 优先，event projection
-兜底）。落盘记录带有显式的 `completion_continuation`；done 记录缺少该字段、或该字段
-与 successor / no-follow-up 字段矛盾时，seam 都 fail closed，因此持有完成状态的
-provider 必须逐字节保存这个字段。一旦远端 provider 成为 canonical，这个 seam 翻转为
-provider-first，且不改变下述 typed outcome 合同。
+完成续接（continuation）的持久化读回以
+`loopx/control_plane/todos/durable_completion.py` 中的
+`read_durable_completion_evidence` 为 provider read point，在完成写入之后、
+settlement 之前执行。提供 `runtime_root` 和 `goal_id` 时，adapter 通过 kind 为
+`completion_evidence` 的 TypeScript `todo.read` transaction 读取已落盘的 lifecycle
+record：`loopx/control_plane/todos/read_transaction.ts` 中的
+`readCompletionEvidence` 先收集 canonical provider snapshot，再选出 Todo，并将其
+record 与已有 Todo id 传给 `loopx/control_plane/todos/read_projection.ts` 中的
+`projectCompletionEvidence`。这条 canonical 路径不回退 Markdown 或 event projection；
+adapter 的显式 legacy 路径只读取 Markdown。落盘记录带有显式的
+`completion_continuation`；done 记录缺少该字段、或该字段与 successor / no-follow-up
+字段矛盾时，seam 都 fail closed，因此持有完成状态的 provider 必须逐字节保存这个
+字段。一旦远端 provider 成为 canonical，这个 seam 翻转为 provider-first，且不改变
+下述 typed outcome 合同。
 
 #### Stage 2 切片状态（2026-08-23）
 

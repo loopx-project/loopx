@@ -208,7 +208,7 @@ def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 class ChatSessionStore(ChatIngressStore):
     """Filesystem store kept outside project and public LoopX run history."""
 
-    def __init__(self, runtime_root: Path) -> None:
+    def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True) -> None:
         self.root = runtime_root.expanduser().resolve() / "chat"
         self.sessions_root = self.root / "sessions"
         self._session_lock_guard = threading.Lock()
@@ -220,8 +220,11 @@ class ChatSessionStore(ChatIngressStore):
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
-        self.compact_completed_events()
-        self._recover_turn_completions()
+        # A scoped lifecycle repair must not compact unrelated history or finish
+        # other pending completions merely by opening their data owner.
+        if startup_maintenance:
+            self.compact_completed_events()
+            self._recover_turn_completions()
 
     def _session_dir(self, session_id: str) -> Path:
         token = _opaque_id(session_id, field="session_id")
@@ -1198,31 +1201,6 @@ class ChatSessionStore(ChatIngressStore):
                     dispatch_required=plan.dispatch_required,
                     dispatch_reason=plan.dispatch_reason,
                 )
-
-    def queued_turns(self, session_id: str) -> list[dict[str, Any]]:
-        session = self.load_session(session_id)
-        if session is None:
-            raise KeyError("chat session was not found")
-        active_turn_id = str(session.get("active_turn_id") or "")
-        turns_dir = self._session_dir(session_id) / "turns"
-        rows: list[dict[str, Any]] = []
-        for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-            if path.name.endswith(".events.json"):
-                continue
-            payload = _read_json(path)
-            if (
-                payload.get("schema_version") == CHAT_TURN_SCHEMA_VERSION
-                and payload.get("status") == "queued"
-                and str(payload.get("turn_id") or "") != active_turn_id
-            ):
-                rows.append(payload)
-        return sorted(
-            rows,
-            key=lambda item: (
-                str(item.get("created_at") or ""),
-                str(item.get("turn_id") or ""),
-            ),
-        )
 
     def _settle_expired_queued_turns(
         self,

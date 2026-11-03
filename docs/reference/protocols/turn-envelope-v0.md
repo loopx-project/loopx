@@ -134,12 +134,19 @@ interpreter's `-m loopx.entrypoint` route rather than an unrelated PATH executab
 Native reads propagate that route through review, acceptance and writeback; the
 complete original observation is not rewritten to carry a new command.
 The review stage provides structured facts without a prescribed diagnostic
-method. Writeback omits filled-in Vision/stride examples while retaining field
-limits, legal options, source bindings and settlement rules. Stride exposes its
-required field names and basis options independently of examples. The unchanged
-full capture remains available for optional examples and source inspection.
-This intentionally reduces advisory prompting; it does not remove acceptance,
-authority or stop obligations, nor demonstrate better autonomous decisions.
+method. Writeback omits the generic filled-in Vision example while retaining
+field limits, legal options, source bindings and settlement rules. Enabled
+Stride retains its owner's current `minimal_example`, including the nested
+previous-decision and Explore review fields when applicable. Top-level required
+field names alone do not describe that authoring shape. The example supplies
+syntax, not a recommended decision or evidence of adoption; replace its claims
+with the reviewed facts. Decision evidence remains in review/Explore and the
+unchanged full capture. This changes no acceptance, authority, stop rule or
+validation budget, and does not establish fewer model retries or better results.
+
+中文：写回保留 Stride owner 的当前格式示例，包含适用的上次决策与 Explore 复盘
+嵌套字段。示例只说明语法，判断与证据仍来自本次复盘；验收、权限、停止条件和校验
+预算不变。字段完整性不代表模型已采用，也不证明重试减少或结果改善。
 
 Cumulative outcome requirements are indexed by exact content hash. Every
 objective, revision and requirement count remains visible; the acceptance read
@@ -303,9 +310,10 @@ TurnEnvelope 先给出 `review` 状态读取，再给出 `writeback` 格式读�
 
 捕获后的读取沿用调用方显式选择的 `--cli-bin`，后续验收和 Explore 读取也不会
 悄悄切换到环境中的其他版本。复盘视图提供结构化事实，不预设诊断方法；写回视图
-移除预填的 Vision／stride 答案示例，保留字段限制、合法选项、来源绑定和结算规则。
-stride 的必需字段与 basis 选项独立展示，完整快照仍可用于按需查看示例与源材料。
-这是有意减少建议性提示，不删除验收、权限或停止义务，也不证明自主决策质量提升。
+只移除通用 Vision 的预填示例，保留字段限制、合法选项、来源绑定和结算规则。
+启用 Stride 时保留当前 owner 的嵌套语法示例，必需字段与 basis 选项也独立展示；
+判断和证据仍须来自实际复盘，完整快照仍可按需读取。示例不代表推荐决定或已采用
+证据，不删除验收、权限或停止义务，也不证明自主决策质量提升。
 
 新决定用精简的目标、证据和权限边界替换原方法清单及重复的 stride 规划建议：复盘
 一次交付这些边界与事实，写回提供既有格式。可执行 Todo 的次序和 agent 自拟候选

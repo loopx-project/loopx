@@ -1,4 +1,5 @@
-import {claimExecutionReference, claimExecutionProof} from "./claim_execution.ts";
+import {claimExecutionReference, claimExecutionProof, type ClaimWorkspaceObserver} from "./claim_execution.ts";
+import {claimExecutionRecovery} from "./claim_execution_recovery.ts";
 import {executeCoordinationTodoClaim} from "./todo_claim.ts";
 import {HANDOFF_MODE_RETIRED_REASON} from "./handoff_mode_policy.ts";
 import {planUserCompletion, requireCompletionDecisionOutcome} from "../todos/user_completion.ts";
@@ -1207,6 +1208,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
   authoritySourcesCurrent: AuthoritySourceCheck = uncheckedAuthoritySource,
   terminalEvidenceGuard: TodoTerminalEvidenceGuard | null = null,
   verifyLifecycleSettlement?: (input: CoordinationTodoTerminalLifecycleInput) => Promise<JsonObject>,
+  observeWorkspace?: ClaimWorkspaceObserver,
 ): Promise<CoordinationTodoTerminalLifecycleResult> {
   let normalized: CoordinationTodoTerminalLifecycleInput;
   try {
@@ -1275,9 +1277,16 @@ export async function executeCoordinationTodoTerminalLifecycle(
     }
     head = observation.authority;
   }
-  if (input.claim_operation_id !== undefined) {
-    try { input = {...input, ...await claimExecutionProof(store, head.head, input, input.claim_operation_id, input.requested_no_followup), claim_operation_id: undefined}; }
-    catch (error) { return terminalFailure("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable"); }
+  const claimReference = input.claim_operation_id;
+  if (claimReference !== undefined) {
+    try { input = {...input, ...await claimExecutionProof(store, head.head, input, claimReference, input.requested_no_followup), claim_operation_id: undefined}; }
+    catch (error) {
+      const recovery = input.command === "complete" ? await claimExecutionRecovery(store,
+        {...input, claim_operation_id: claimReference, expected_provider_revision: head.provider_revision},
+        "complete", error, authoritySourcesCurrent, observeWorkspace) : undefined;
+      return terminalFailure("claim_execution_unavailable", error instanceof Error ? error.message : "Original task claim unavailable",
+        recovery === undefined ? {} : {handoff_mode: head.head.handoff_mode, recovery});
+    }
   }
   let update: NormalizedCoordinationTodoUpdateInput | undefined;
   if (input.user_update !== undefined) {
@@ -1427,7 +1436,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
         operation_id: `terminal-claim-preview-${canonicalAuthoritySha256({operation_id: input.operation_id,
           goal_id: input.goal_id, todo_id: input.todo_id, actor_agent_id: input.actor_agent_id}).slice(0, 32)}`,
         now: input.now,
-      }, authoritySourcesCurrent).catch(() => null);
+      }, authoritySourcesCurrent, observeWorkspace).catch(() => null);
       // Optional guidance cannot replace the already established rejection
       // with an unrelated provider/read failure.
       if (preview?.dry_run === true && ["planned", "no_change"].includes(String(preview.status))) {

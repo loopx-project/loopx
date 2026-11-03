@@ -14,8 +14,10 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
     if not isinstance(recovery, dict) or not recovery.get("reason") or not payload.get("handoff_mode"):
         return []
     retry = recovery.get("retry")
+    retry_args = retry.get("cli_args", []) if isinstance(retry, dict) else []
     complete_claim_recovery = (recovery.get("action") == "claim_task"
-        and isinstance(retry, dict) and retry.get("command") == "loopx todo complete")
+        and isinstance(retry_args, list)
+        and any(retry_args[i:i + 2] == ["todo", "complete"] for i in range(len(retry_args) - 1)))
     lines = ([] if complete_claim_recovery
         else [f"- handoff_mode: `{payload['handoff_mode']}`"])
     lines.append(f"- recovery: {recovery['reason']}")
@@ -23,7 +25,14 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
         instruction = recovery.get(step)
         if isinstance(instruction, dict) and instruction.get("command"):
             arguments = instruction.get("cli_args")
-            command = shlex.join(["loopx", *arguments]) if isinstance(arguments, list) else instruction["command"]
+            command = instruction["command"]
+            if isinstance(arguments, list):
+                try:
+                    program = shlex.split(command)[0]
+                except (ValueError, IndexError):
+                    pass  # Keep the original diagnostic when guidance is malformed.
+                else:
+                    command = shlex.join([program, *arguments])
             lines.append(f"- {step}: `{command}`")
             if instruction.get("requires_flags"):
                 lines.append(f"  - supply: `{', '.join(instruction['requires_flags'])}`")
@@ -44,6 +53,8 @@ def _render_settlement_plan(plan: object) -> list[str]:
         lines.append(f"- {step.get('kind')}: {step.get('precondition')}")
         if step.get("command_template"):
             lines.append(f"  - command{f' ({condition})' if condition else ''}: `{step['command_template']}`")
+        if step.get("semantic_closeout_command_template"):
+            lines.append(f"  - semantic closeout: `{step['semantic_closeout_command_template']}`")
     return lines
 
 

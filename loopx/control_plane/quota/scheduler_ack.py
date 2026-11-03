@@ -32,7 +32,7 @@ def _scheduler_packet(
         if isinstance(before.get("scheduler_hint"), dict)
         else {}
     )
-    if surface == "trae_app":
+    if surface in {"trae_app", "antigravity_app"}:
         packet_key = "app_automation"
     elif (
         surface == CODEX_APP_SURFACE

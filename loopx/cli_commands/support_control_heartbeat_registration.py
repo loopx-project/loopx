@@ -93,6 +93,11 @@ def register_heartbeat_control_commands(
         ),
     )
     heartbeat_prompt_parser.add_argument(
+        "--antigravity_app",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    heartbeat_prompt_parser.add_argument(
         "--visible-goal-host",
         choices=["traex-cli"],
         help=(
@@ -109,6 +114,7 @@ def register_heartbeat_control_commands(
             "codex_app_ssh",
             "codex_cli",
             "trae_app",
+            "antigravity_app",
             "generic_cli",
             "claude_code",
             "kunluncode",

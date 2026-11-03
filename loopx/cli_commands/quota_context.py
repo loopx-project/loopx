@@ -74,10 +74,11 @@ def _scheduler_execution_context_from_args(
     )
     codex_app = bool(getattr(args, "codex_app", False))
     trae_app = bool(getattr(args, "trae_app", False))
-    app_alias_count = int(codex_app) + int(trae_app)
+    antigravity_app = bool(getattr(args, "antigravity_app", False))
+    app_alias_count = int(codex_app) + int(trae_app) + int(antigravity_app)
     if app_alias_count > 1:
         raise QuotaCommandValidationError(
-            "--codex-app and --trae_app are mutually exclusive"
+            "--codex-app, --trae_app, and --antigravity_app are mutually exclusive"
         )
     if app_alias_count and (args.runtime_profile or any(explicit_scheduler_fields)):
         raise QuotaCommandValidationError(
@@ -94,6 +95,8 @@ def _scheduler_execution_context_from_args(
         if codex_app
         else SchedulerRuntimeProfile.TRAE_APP.value
         if trae_app
+        else SchedulerRuntimeProfile.ANTIGRAVITY_APP.value
+        if antigravity_app
         else args.runtime_profile
     )
     if runtime_profile:
@@ -200,10 +203,16 @@ def validate_quota_command_context_request(
         legacy_codex_rrule
         and resolved_scheduler_context.ok
         and resolved_scheduler_context.context is not None
-        and resolved_scheduler_context.context.host_surface is HostSurface.TRAE_APP
+        and resolved_scheduler_context.context.host_surface
+        in {HostSurface.TRAE_APP, HostSurface.ANTIGRAVITY_APP}
     ):
+        app_label = (
+            "Trae App"
+            if resolved_scheduler_context.context.host_surface is HostSurface.TRAE_APP
+            else "Antigravity App"
+        )
         raise QuotaCommandValidationError(
-            "Trae App uses --app-automation-current-rrule, not the Codex compatibility alias"
+            f"{app_label} uses --app-automation-current-rrule, not the Codex compatibility alias"
         )
     args.app_automation_current_rrule = neutral_rrule or legacy_codex_rrule or None
     if command in QUOTA_SCHEDULER_FOLLOWUP_COMMANDS:
@@ -225,16 +234,23 @@ def validate_quota_command_context_request(
         ).strip()
         default_state_key = (
             APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
-            if selected_surface == HostSurface.TRAE_APP.value
+            if selected_surface
+            in {HostSurface.TRAE_APP.value, HostSurface.ANTIGRAVITY_APP.value}
             else None
         )
         if (
-            selected_surface == HostSurface.TRAE_APP.value
+            selected_surface
+            in {HostSurface.TRAE_APP.value, HostSurface.ANTIGRAVITY_APP.value}
             and supplied_state_key
             and supplied_state_key != APP_AUTOMATION_STATEFUL_BACKOFF_STATE_KEY
         ):
+            app_label = (
+                "Trae App"
+                if selected_surface == HostSurface.TRAE_APP.value
+                else "Antigravity App"
+            )
             raise QuotaCommandValidationError(
-                "Trae App scheduler follow-up requires the app_automation state key"
+                f"{app_label} scheduler follow-up requires the app_automation state key"
             )
         args.state_key = supplied_state_key or default_state_key
     validate_quota_command_request(args)

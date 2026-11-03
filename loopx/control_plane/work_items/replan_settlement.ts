@@ -159,8 +159,13 @@ export function projectTodoLifecycleSettlementReentry(value: unknown): JsonObjec
     );
   });
   nextCliActions.push(
-    "otherwise link or create one real runnable successor for the exact " +
-      "completed Todo; do not create lifecycle-only filler",
+    "A terminal Todo cannot accept new successor links through complete or update. " +
+      "For genuine dependent work, author its dependency on the mutable successor " +
+      "(resume_when=todo_done:<completed-id>) only when that is its real readiness condition; " +
+      "preserve existing deferral, claims and gates. Independent work needs no artificial edge: " +
+      "when this completed scope has no remaining follow-up, use its original completion identity " +
+      "with --no-follow-up above. This closes only that scope, not the Goal or other Todos. " +
+      "Do not create lifecycle-only filler",
     `${commandPrefix} --format json quota should-run --goal-id ${shellArgument(goalId)}` +
       argumentSuffix(quotaScopedArgs),
   );

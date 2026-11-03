@@ -248,3 +248,128 @@ def test_reference_publication_never_overwrites_an_existing_document(tmp_path):
     assert write_context_read_reference(path, "a" * 64) == original
     with pytest.raises(ValueError, match="reference changed"):
         write_context_read_reference(path, "b" * 64)
+
+
+@pytest.mark.parametrize("alias_first", [False, True])
+def test_reference_reuses_a_parent_alias_without_rewriting(tmp_path, alias_first):
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(physical, target_is_directory=True)
+    path = physical / "capture.json"
+    raw = b'{"ok":true,"last_stop":"Keep the original budget."}\n'
+    path.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    spellings = [path, alias / path.name]
+    if alias_first:
+        spellings.reverse()
+    first = write_context_read_reference(spellings[0], digest)
+    before = first.read_bytes()
+    second = write_context_read_reference(spellings[1], digest)
+    assert second.resolve() == first.resolve()
+    assert first.read_bytes() == before
+    from loopx.control_plane.turn_driver.decision_capture import context_capture_read_command
+
+    page = read(context_capture_read_command(path, digest, reference_file=second))
+    assert page["ok"] and page["eof"] and json.loads(page["content"]) == json.loads(raw)
+    assert first.read_bytes() == before
+
+
+@pytest.mark.parametrize("damage", ["digest", "other_file", "leaf_symlink", "hardlink", "selection", "navigation", "extra"])
+def test_parent_alias_reuse_preserves_other_reference_checks(tmp_path, damage):
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(physical, target_is_directory=True)
+    path = physical / "capture.json"
+    path.write_text('{}\n')
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    reference = write_context_read_reference(path, digest)
+    payload = json.loads(reference.read_bytes())
+    if damage == "digest":
+        digest = "0" * 64
+    elif damage in {"other_file", "leaf_symlink", "hardlink"}:
+        other = physical / "different.json"
+        if damage == "leaf_symlink":
+            other.symlink_to(path)
+        elif damage == "hardlink":
+            other.hardlink_to(path)
+        else:
+            other.write_bytes(path.read_bytes())
+        payload["path"] = str(other)
+    else:
+        payload[damage] = {"changed": True}
+    reference.write_text(json.dumps(payload))
+    before = reference.read_bytes()
+    with pytest.raises(ValueError, match="reference changed"):
+        write_context_read_reference(alias / path.name, digest)
+    assert reference.read_bytes() == before
+
+
+@pytest.mark.parametrize("parent_alias", [False, True], ids=["physical", "parent-alias"])
+def test_native_warm_opaque_reference_and_current_recovery(tmp_path, monkeypatch, parent_alias):
+    from loopx.control_plane.turn_driver import codex_context as context
+    from test_codex_context_lifecycle import setup, project
+    from test_progressive_native_context import payload as native_payload, outcome
+    from test_quota_settlement_cli import _run_cli
+
+    parent = tmp_path / "physical"
+    parent.mkdir(mode=0o700)
+    physical = parent / "session"
+    physical.mkdir(mode=0o700)
+    root = physical
+    if parent_alias:
+        root = tmp_path / "alias"
+        root.symlink_to(parent, target_is_directory=True)
+        root = root / "session"
+    event = setup(root, monkeypatch)
+    payload = native_payload()
+    payload["interaction_contract"] = {"schema_version": "loopx_interaction_contract_v0",
+        "agent_channel": {"work_context": {"sources": []}}}
+    outcome(payload)["requirements"][0]["description"] = "Keep every original requirement. " * 600
+    payload["last"] = {"value": 9007199254740991, "stop": "Do not extend the budget. 不发布。"}
+    _, cold = project(root, "cold", payload=payload)
+    cold_view = native_context_capture_view(cold, root / "cold", context_directory=str(root),
+        max_page_output_bytes=12000)
+    cold_model = model_context_reference(cold_view)
+    reference = Path(cold_model["recovery"]["reference_file"])
+    descriptor_before = reference.read_bytes()
+    _, warm = project(root, "warm", payload=payload)
+    assert warm["mode"] == "delta" and warm["continuity_basis"] == "captured_file", warm.get("reason")
+    warm_view = native_context_capture_view(warm, root / "warm", context_directory=str(root),
+        max_page_output_bytes=12000)
+    warm_model = model_context_reference(warm_view)
+    assert "reference_file" in warm_model and warm_model["mode"] == "delta"
+    assert reference.read_bytes() == descriptor_before
+    assert Path(warm_model["baseline_reference"]["reference_file"]).resolve() == reference.resolve()
+    for file in (root / "cold").iterdir():
+        if not file.name.endswith(".reader.json"):
+            file.unlink()
+
+    def read_cli(command):
+        parts, offset = [], 0
+        while True:
+            words = shlex.split(command)
+            code, page = _run_cli(root / "no-registry.json", root / "no-runtime",
+                *words[words.index("quota"):], "--context-delivery", "off", cwd=physical)
+            assert code == 0 and page["ok"] and page["offset"] == offset, page
+            parts.append(page["content"])
+            if page["eof"]:
+                return json.loads("".join(parts))
+            offset = page["next_offset"]
+            command = page["next_command"]
+
+    expected = json.loads(Path(warm["recovery"]["path"]).read_bytes())
+    assert read_cli(warm_model["recovery"]["command"]) == expected
+    context.codex_context_hook(str(root), {**event, "source": "compact"})
+    assert "candidate" not in context._state(root)
+    assert read_cli(warm_model["recovery"]["command"]) == expected
+    _, after_compact = project(root, "after", payload=payload)
+    assert after_compact["mode"] == "full"
+    fresh = model_context_reference(native_context_capture_view(after_compact, root / "after",
+        context_directory=str(root), max_page_output_bytes=12000))
+    current = read_cli(fresh["recovery"]["command"])
+    assert current["last"] == payload["last"]
+    assert outcome(current)["requirements"][0]["description"] == outcome(payload)["requirements"][0]["description"]
+    assert reference.read_bytes() == descriptor_before
+    assert not (root / "no-registry.json").exists() and not (root / "no-runtime").exists()

@@ -11,7 +11,6 @@ import { readGoalRolloutEventSnapshot, strictGoalRolloutEvents } from "../rollou
 import { parseQuotaAccountingOwner, withQuotaAccountingOwner,
   withBorrowedQuotaAccountingOwner, quotaOwnerOwnsProjection } from "../quota/source_admission.ts";
 import { projectReplanHistory } from "./replan_history.ts";
-import { normalizeRecordedStrideDecision, STRIDE_DECISION_SCHEMA } from "./stride_policy.ts";
 
 export async function projectSettledReplanHistory(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "replan history");
@@ -52,7 +51,6 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
     }
     const snapshot = await readQuotaSettlementSnapshot(runtimeRoot, goalId, rolloutSnapshot);
     const qualified = new Set<string>();
-    const decisions = new Map<string, JsonObject>();
     const seen = new Set<string>();
     for (const raw of settlementRuns) {
       const row = jsonObject(raw);
@@ -72,22 +70,8 @@ export async function projectSettledReplanHistory(value: unknown): Promise<JsonO
           settlement.replay_phase === "settled" && settlement.writeback_run != null &&
           settlement.monitor_phase !== "settled") {
         qualified.add(key);
-        const writeback = jsonObject(settlement.writeback_run)!;
-        const ack = jsonObject(writeback.autonomous_replan_ack);
-        const delta = jsonObject(ack?.semantic_delta);
-        // Only a fresh, accepted path review can supply cadence feedback.
-        // Ordinary work may retain an older Vision decision; that is not new.
-        if (request.stride_strategy === "evidence_conditioned_v1" &&
-            ack?.recorded === true && delta?.accepted === true &&
-            Array.isArray(delta.satisfying_outcomes) && delta.satisfying_outcomes.includes("fresh_vision_path_outcome")) {
-          const raw = jsonObject(jsonObject(writeback.agent_vision)?.stride_decision);
-          if (raw?.schema_version === STRIDE_DECISION_SCHEMA) {
-            const decision = normalizeRecordedStrideDecision(raw);
-            if (decision) decisions.set(key, decision);
-          }
-        }
       }
     }
-    return projectReplanHistory({...request, runs}, qualified, decisions);
+    return projectReplanHistory({...request, runs}, qualified);
   });
 }

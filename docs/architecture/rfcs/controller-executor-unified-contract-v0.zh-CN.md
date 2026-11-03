@@ -132,6 +132,13 @@ Journal owner 在原子发布前恢复这些数值，并在重放与不可变 pl
 负载与上限下比较，包括数值密集时的元数据开销。该前置或组件字节减少，都不
 构成统一 writer/consumer 切换或长程净收益的资格。
 
+本次提议的 Turn 选择 reader 切片删除 driver 中 Python 的 adaptive 选择判断。
+现有 plan、Host、Session、completion 和 settlement 调用方经既有 source-edit
+传输复用 interaction owner 的 `selectedWorkTodo` 规则。此选择 adapter 仅保留
+Python 标量与空白解码，原记录和数字值不变。这退役的是一条重复规则，不是历史
+envelope 格式；完整 writer/consumer 切换和相对原 quota 的成果／完整成本资格仍
+开放。新增 bridge 调用必须计入，代码收敛本身不证明成本降低。
+
 | 当前来源 / 义务 | 当前 envelope 处理 | C1 必须保留的归属与语义 |
 | --- | --- | --- |
 | `interaction_contract.agent_channel.work_context` 与未完成必读 | `work_context` 加 `required_reads`；相同内联材料可改用引用 | 一份完整要求/证据来源与可解析引用；保留未完成必读及其完成条件 |
@@ -928,6 +935,13 @@ backoff 继续归当前 scheduler owner。本文不引入模型空轮询或新�
 不代表原 quota 成果/完整成本验收，也不交付未读台账。
 顶层 decision 字段清单保留在 TurnEnvelope owner，由其传给 Progressive 选读；迁移
 selector 不跨 owner 重复声明该词汇，也不放宽语义模块预算。
+
+原生 Progressive 支持材料发现增加有界前置实现：保守未确认索引将延迟字段的精确
+指针绑定当前完整 projection，首读和文件 warm delta 均完整呈现，不依赖旧包或模型
+retention。选读不会清除覆盖未知状态或新增第二账本。当前源 CLI 读取覆盖变化、重排
+及前序不可用，并进入合成后继产物；这只资格化运输，不证明自然模型采用。跨宿主默认、
+其他省略材料、可信 Host 覆盖、writer/reader 切换及第9节成果/完整成本对照仍开放。
+索引开销计入原完整/折叠字节守卫。
 
 C1 盘点是可用替换的一部分，不单独建设架构框架。C1 契约稳定后，C3/C4/C5 可以独立
 推进；C7 可以提前准备测量，但不能提前宣称双会话成果。实现 PR 列明替换的调用方、剩余

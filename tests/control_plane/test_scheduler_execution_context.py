@@ -43,6 +43,7 @@ VALID_COMBINATIONS = {
     ("ark_managed_agent", "goal_runtime", "interactive"),
     ("codex_app", "host_automation", "hosted_automation"),
     ("trae_app", "host_automation", "hosted_automation"),
+    ("antigravity_app", "host_automation", "hosted_automation"),
     ("codex_app_ssh", "agent_cli_loop", "interactive"),
     ("local_scheduler", "host_automation", "hosted_automation"),
     *{
@@ -79,6 +80,11 @@ FIRST_CLASS_RUNTIME_PROFILES = (
         SchedulerRuntimeProfile.TRAE_APP,
         ("trae_app", "host_automation", "hosted_automation"),
         " --trae_app",
+    ),
+    (
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
+        ("antigravity_app", "host_automation", "hosted_automation"),
+        " --antigravity_app",
     ),
     (
         SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE,
@@ -215,7 +221,11 @@ def test_scheduler_execution_context_decision_table(
 
     assert resolution.ok is (values in VALID_COMBINATIONS)
     context_projection = resolution.projection()
-    if host_surface is HostSurface.TRAE_APP:
+    neutral_app_surface = host_surface in {
+        HostSurface.TRAE_APP,
+        HostSurface.ANTIGRAVITY_APP,
+    }
+    if neutral_app_surface:
         assert context_projection["app_automation_applicability"] == (
             "applicable" if resolution.ok else "blocked_invalid_context"
         )
@@ -230,17 +240,16 @@ def test_scheduler_execution_context_decision_table(
     if values not in VALID_COMBINATIONS:
         assert hint["execution_phase"]["disposition"] == "contract_error"
         assert hint["execution_phase"]["completed"] is False
-        packet_key = (
-            "app_automation" if host_surface is HostSurface.TRAE_APP else "codex_app"
-        )
+        packet_key = "app_automation" if neutral_app_surface else "codex_app"
         assert hint[packet_key]["applicability"] == "blocked_invalid_context"
-        assert ("app_automation" in hint) is (host_surface is HostSurface.TRAE_APP)
-        assert ("codex_app" in hint) is (host_surface is not HostSurface.TRAE_APP)
+        assert ("app_automation" in hint) is neutral_app_surface
+        assert ("codex_app" in hint) is (not neutral_app_surface)
         return
 
     app_expected = values in {
         ("codex_app", "host_automation", "hosted_automation"),
         ("trae_app", "host_automation", "hosted_automation"),
+        ("antigravity_app", "host_automation", "hosted_automation"),
     }
     packet_key = "app_automation" if app_expected else "codex_app"
     assert hint[packet_key]["applicability"] == (
@@ -248,7 +257,7 @@ def test_scheduler_execution_context_decision_table(
     )
     assert ("stateful_backoff" in hint[packet_key]) is app_expected
     assert ("app_automation" in hint) is app_expected
-    assert ("codex_app" in hint) is (host_surface is not HostSurface.TRAE_APP)
+    assert ("codex_app" in hint) is (not neutral_app_surface)
     if app_expected:
         assert "execution_context" not in hint
         assert "execution_phase" not in hint
@@ -1595,6 +1604,7 @@ def test_stale_unbound_guard_converges_after_profile_regeneration(
     app_profile = profile in {
         SchedulerRuntimeProfile.CODEX_APP_HEARTBEAT,
         SchedulerRuntimeProfile.TRAE_APP,
+        SchedulerRuntimeProfile.ANTIGRAVITY_APP,
     }
     packet_key = "app_automation" if app_profile else "codex_app"
     assert regenerated_hint[packet_key]["applicability"] == (
@@ -1602,7 +1612,11 @@ def test_stale_unbound_guard_converges_after_profile_regeneration(
     )
     assert ("app_automation" in regenerated_hint) is app_profile
     assert ("codex_app" in regenerated_hint) is (
-        profile is not SchedulerRuntimeProfile.TRAE_APP
+        profile
+        not in {
+            SchedulerRuntimeProfile.TRAE_APP,
+            SchedulerRuntimeProfile.ANTIGRAVITY_APP,
+        }
     )
 
 

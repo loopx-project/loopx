@@ -20,7 +20,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
-import { projectInteractionRequiredReads, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
+import { projectInteractionRequiredReads, selectedWorkTodo, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
 
@@ -506,7 +506,9 @@ function replanView(request: JsonObject): JsonObject {
     // Preserve executable shape and all settlement rules; decision advice and
     // duplicate context are available in the unchanged full captured source.
     const stride = {...object(packet.stride_control)};
-    for (const key of ["decision_followthrough", "explore_basis", "decision_value_review", "minimal_example"]) delete stride[key];
+    // The current nested review syntax belongs to authoring, not duplicate
+    // decision evidence. Top-level required_fields cannot describe that shape.
+    for (const key of ["decision_followthrough", "explore_basis", "decision_value_review"]) delete stride[key];
     const contract = {...object(packet.writeback_contract)};
     if (contract.vision_authoring) {
       const authoring = {...object(contract.vision_authoring)};
@@ -1453,6 +1455,11 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
         work_context: replanWorkContext(payload, object(agent.work_context))}},
       autonomous_replan_obligation: {...obligation, context_read: reads.review},
       replan_action_packet: replanActionPacket(payload)};
+  }
+  if (operation === "selected_work_todo") {
+    const source = requireJsonObject(request.payload, "Turn work selection source");
+    const historical = scalarString(request.historical_primary_text, "historical primary Todo");
+    return contextProjectionChanges(source, {...source, selected_todo: selectedWorkTodo(source, historical)});
   }
   if (operation === "driver_route") return {route: turnEnvelopeRoute(requireJsonObject(request.envelope, "Turn route envelope"),
     request.historical_route_text === undefined ? undefined : requireJsonObject(request.historical_route_text, "historical route text"))};
