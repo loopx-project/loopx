@@ -72,6 +72,14 @@ def agent_page(
             continue
         for aid in sorted(registered_agent_ids_for_goal(goal)):
             profile = agent_profile_for_goal(goal, aid) or {}
+            bindings = summarize_agent_binding_routes([goal], agent_id=aid)
+            host_surfaces = sorted(
+                {
+                    c["host_surface"]
+                    for c in bindings["candidates"]
+                    if isinstance(c.get("host_surface"), str) and c["host_surface"]
+                }
+            )
             row = {
                 "goal_id": gid, "agent_id": aid, "registered": True,
                 "goal_description": public_safe_compact_text(
@@ -87,22 +95,30 @@ def agent_page(
                     ContextDelivery.ALLOWED if delivery_known and (gid, aid) in allowed else
                     ContextDelivery.NOT_GRANTED if delivery_known else ContextDelivery.NOT_CHECKED
                 ),
+                "host_surfaces": host_surfaces,
+                "registered_host_binding": {
+                    key: bindings[key] for key in
+                    ("outcome", "candidate_count", "address_shared", "scope")
+                },
             }
             if needle and needle not in " ".join(
-                str(row[k] or "") for k in
-                ("goal_id", "agent_id", "goal_description", "profile_role", "scope_summary")
+                [
+                    *(
+                        str(row[k] or "")
+                        for k in (
+                            "goal_id",
+                            "agent_id",
+                            "goal_description",
+                            "profile_role",
+                            "scope_summary",
+                        )
+                    ),
+                    *host_surfaces,
+                ]
             ).casefold():
                 continue
             rows.append(row)
     page = rows[offset:offset + limit]
-    by_goal = {goal["id"]: goal for goal in visible}
-    for row in page:
-        bindings = summarize_agent_binding_routes(
-            [by_goal[row["goal_id"]]], agent_id=row["agent_id"])
-        row["registered_host_binding"] = {
-            key: bindings[key] for key in
-            ("outcome", "candidate_count", "address_shared", "scope")
-        }
     end = offset + len(page)
     return {
         "ok": True, "view": "agents", "rows": page, "offset": offset,
