@@ -3,7 +3,7 @@
 import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
 import {setTimeout as delay} from "node:timers/promises";
 import {StringDecoder} from "node:string_decoder";
-import {descendantProcessGroups, waitForProcessGroupStop} from "./host_process_group.ts";
+import {HostDescendantTracker, waitForProcessGroupStop} from "./host_process_group.ts";
 
 export interface HostProcessRequest {
   argv: string[];
@@ -73,25 +73,10 @@ export async function runHostProcess(request: HostProcessRequest,
   let outcome: HostProcessResult["outcome"] = "exited";
   let complete = true, forcedDrain = false, stdoutBytes = 0;
   let cleanup: Promise<void> | undefined;
-  const ownedGroups = new Set<number>();
-  const observeDescendants = async () => {
-    if (!trackDescendants || !child.pid || child.exitCode !== null || child.signalCode !== null) return;
-    for (const group of await descendantProcessGroups(child.pid, child.pid)) ownedGroups.add(group);
-    if (descendants) {
-      try { await descendants({kind: "descendants", process_groups: [...ownedGroups]}); }
-      catch {
-        // The Python owner may have died. Lost evidence makes output incomplete,
-        // but must not prevent signals for the groups we already observed.
-        complete = false;
-      }
-    }
-  };
-  const signalDescendants = (signal: NodeJS.Signals) => {
-    for (const group of ownedGroups) {
-      try { process.kill(-group, signal); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-    }
-  };
+  const tracker = trackDescendants && process.platform !== "win32"
+    ? new HostDescendantTracker(child,
+      async groups => { await descendants?.({kind: "descendants", process_groups: groups}); },
+      () => stop("cancelled")) : undefined;
   const clean = () => cleanup ??= (async () => {
     if (process.platform === "win32") {
       if (!child.pid) return;
@@ -109,24 +94,23 @@ export async function runHostProcess(request: HostProcessRequest,
     // Observe before signalling: detached SDK descendants would otherwise be
     // reparented and invisible after their OAR owner exits. A second observation
     // covers a runtime still opening during the graceful shutdown window.
-    await observeDescendants();
-    signalDescendants("SIGTERM");
+    await tracker?.observe();
+    tracker?.signal("SIGTERM");
     // Always signal the owned group, including after the leader's exit.
     const sent = signalGroup(child, "SIGTERM");
     base.group_signal_sent ||= sent;
     if (sent) {
       await delay(terminationGraceMs);
-      await observeDescendants();
-      signalDescendants("SIGKILL");
+      await tracker?.observe();
+      tracker?.signal("SIGKILL");
       signalGroup(child, "SIGKILL");
       // KILL delivery is asynchronous. Closed pipes and a reaped leader do not
       // establish that descendants have stopped executing or writing.
       await waitForProcessGroupStop(child.pid!);
     }
-    if (trackDescendants) {
-      signalDescendants("SIGKILL");
-      await Promise.all([...ownedGroups].map(waitForProcessGroupStop));
-      base.descendant_cleanup_complete = true;
+    if (tracker) {
+      base.descendant_cleanup_complete = await tracker.finish();
+      complete &&= tracker.outputComplete && base.descendant_cleanup_complete;
     }
   })();
   const stop = (reason: HostProcessResult["outcome"]) => {
@@ -141,6 +125,11 @@ export async function runHostProcess(request: HostProcessRequest,
     child.once("error", () => { outcome = "spawn_failed"; resolve(); });
     child.once("exit", (code, sig) => {
       base.returncode = code; base.signal = sig;
+      // Polling can retain known groups but cannot recover children spawned
+      // between the final observation and an unplanned owner crash.
+      // An orderly nonzero exit can carry an OAR failed-turn cleanup receipt;
+      // the Python owner separately requires that typed receipt before drain.
+      if (sig !== null) tracker?.unexpectedExit();
       // Descendants may hold inherited pipes forever after the leader exits.
       drainTimer = setTimeout(() => {
         complete = false; forcedDrain = true;
@@ -175,6 +164,7 @@ export async function runHostProcess(request: HostProcessRequest,
       process_group: process.platform === "win32" ? null : child.pid}); }
     catch { complete = false; stop("cancelled"); }
   }
+  await tracker?.start();
   if (openInput) {
     // The private preflight transport retains stdin between read-only requests.
     // It owns framing/backpressure, not child lifetime or process-group cleanup.
@@ -193,8 +183,13 @@ export async function runHostProcess(request: HostProcessRequest,
     await reads;
     if (drainTimer) clearTimeout(drainTimer);
     await clean();
+    if (tracker) {
+      base.descendant_cleanup_complete = Boolean(base.descendant_cleanup_complete && tracker.ownershipConfirmed);
+      complete &&= tracker.outputComplete && base.descendant_cleanup_complete;
+    }
     return {...base, outcome, output_complete: complete};
   } finally {
+    await tracker?.stop();
     if (deadline) clearTimeout(deadline);
     if (drainTimer) clearTimeout(drainTimer);
     signal?.removeEventListener("abort", abort);

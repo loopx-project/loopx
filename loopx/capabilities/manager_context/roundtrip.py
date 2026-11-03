@@ -7,10 +7,13 @@ routing, receiver-authored replies, and publication receipts. No model polling.
 from __future__ import annotations
 
 import logging
+import json
 import threading
 from itertools import islice
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
+
+from ...extensions.background_runtime import HostedWorker
 
 from . import _root, _read, _write, _hash, authority, target_authority
 from .tracking import _entry, _now
@@ -136,10 +139,14 @@ def _route(root, row, *, scope=None):
                     # An unrelated damaged/oversized historical turn cannot
                     # prevent recovery of this exact request's return receipt.
                     continue
-                receipt = (turn.get("response") or {}).get(
-                    "context_handoff_receipt"
-                ) or {}
-                if receipt.get("request_id") == row["request_id"]:
+                response = turn.get("response") or {}
+                receipts = response.get("context_handoff_receipts")
+                if receipts is None:
+                    receipts = [response.get("context_handoff_receipt") or {}]
+                if isinstance(receipts, list) and sum(
+                    isinstance(receipt, dict) and receipt.get("request_id") == row["request_id"]
+                    for receipt in receipts
+                ) == 1:
                     matches.append((session, turn))
         if len(matches) != 1:
             raise ReturnResolutionBlocked(
@@ -173,6 +180,7 @@ def report(
     attachment_refs=None,
     workspace=None,
     request_revision=None,
+    remaining_work=None,
 ):
     """Chat audience adapter; the shared Inbox owns result validation/persistence."""
     if scope is None and registry is not None:
@@ -198,13 +206,15 @@ def report(
                 attachment_refs=attachment_refs,
                 workspace=workspace,
                 request_revision=request_revision,
+                remaining_work=remaining_work,
             )
     row = _entry(root, goal_id, agent_id, request_id, scope=scope)
     route = _route(root, row, scope=scope)
     if route.get("kind") == "peer" and phase != "conclusion":
         raise ValueError("peer replies require a conclusion; report a concrete result or blocker")
+    audience_text = text + ("\n" + json.dumps(remaining_work, ensure_ascii=False) if remaining_work is not None else "")
     if (route["channel_id"] != "peer" and not conversation_scope(route)["private_conversation"]
-            and not scan_public_boundary_text(text)["ok"]):
+            and not scan_public_boundary_text(audience_text)["ok"]):
         raise ValueError("reply contains private boundary material; write an audience-safe conclusion")
     from ...control_plane.collaboration.inbox import record_result
     attachments = None
@@ -228,6 +238,7 @@ def report(
             update_id=update_id,
             attachments=attachments,
             request_revision=request_revision,
+            remaining_work=remaining_work,
         ),
         "status": (
             "queued_for_requester"
@@ -237,8 +248,10 @@ def report(
     }
 
 
-def project_chat_return_deliveries(root, session_id, messages):
+def project_chat_return_deliveries(root, session_id, messages, *, source_store=None):
     """Attach public-safe delivery readback to returned Chat transcript rows."""
+
+    from ...control_plane.collaboration.source_chat_observation import is_source_chat_host
 
     pending_message_ids = {
         message_id
@@ -250,11 +263,49 @@ def project_chat_return_deliveries(root, session_id, messages):
     if not pending_message_ids:
         return list(messages)
     statuses = {}
-    paths = sorted((_root(root) / "roundtrips").glob("*.json"))
-    for path in paths:
+    routes = _root(root) / "roundtrips"
+
+    def candidate_paths():
+        # The original Turn normally names its requests. Prefer those locators
+        # over scanning every conversation's routes for every history page.
+        # They are only hints: the route, source host and result identity below
+        # still have to match. Lost/older receipts retain the exhaustive fallback.
+        known = set()
+        if source_store is not None:
+            turn_ids = dict.fromkeys(
+                message.get("turn_id") for message in messages
+                if message.get("message_id") in pending_message_ids
+                and isinstance(message.get("turn_id"), str) and message.get("turn_id")
+            )
+            for turn_id in turn_ids:
+                try:
+                    turn = source_store.load_turn(session_id, turn_id) or {}
+                    if turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+                        continue
+                    response = turn.get("response") or {}
+                    if not isinstance(response, dict):
+                        continue
+                    receipts = response.get("context_handoff_receipts")
+                    if receipts is None:
+                        receipts = [response.get("context_handoff_receipt")]
+                    for receipt in receipts if isinstance(receipts, list) else []:
+                        request_id = receipt.get("request_id") if isinstance(receipt, dict) else None
+                        if (isinstance(request_id, str) and BARE_SHA256_PATTERN.fullmatch(request_id)
+                                and request_id not in known):
+                            known.add(request_id)
+                            yield routes / (request_id + ".json")
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        # This part is lazy: a fully resolved page never enumerates the directory.
+        for path in sorted(routes.glob("*.json")):
+            if path.stem not in known:
+                yield path
+
+    for path in candidate_paths():
         try:
             route = _read(path)
-            if route.get("session_id") != session_id:
+            if (route.get("session_id") != session_id
+                    or (source_store is not None and not is_source_chat_host(root, route, source_store))):
                 continue
             request_id = str(route.get("request_id") or "")
             if path.stem != request_id or not BARE_SHA256_PATTERN.fullmatch(request_id):
@@ -296,7 +347,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         context_messages = context_messages[:page["message_page"]["total"]]
         snapshot["messages"] = page["messages"]
     snapshot["messages"] = project_chat_return_deliveries(
-        root, session_id, snapshot["messages"]
+        root, session_id, snapshot["messages"], source_store=store
     )
     from .presentation import project_collaboration
     # Use the frozen context to choose the carrier, projecting only this page.
@@ -304,8 +355,8 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     # or re-reading every off-page Turn for each page.
     snapshot["messages"] = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
-    from ...extensions.lark.private_conversations import project_private_reply_history
-    snapshot["messages"] = project_private_reply_history(store, store.load_session(session_id) or {}, snapshot["messages"])
+    # Provider-owned history joins the selected page at the composition root.
+    # Core capabilities never import an extension projection sink.
     if page is not None:
         snapshot["message_page"] = page["message_page"]
     return snapshot
@@ -489,7 +540,7 @@ def _pending_return_paths(host, paths):
 
 
 @effect_runtime_request_scope()
-def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False):
+def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda: False, progress=lambda: None):
     """Run the typed return transaction with the existing Chat/provider adapters."""
     if cancelled():
         return 0
@@ -502,6 +553,7 @@ def drain(root, registry, store, external_sender, *, now=None, cancelled=lambda:
     host = {"root": root, "registry": registry, "store": store, "now": now, "exact": exact, "cancelled": cancelled}
     paths = iter_result_paths(_root(root) / "replies")
     for path in _pending_return_paths(host, paths):
+        progress()
         if cancelled():
             break
         if not _belongs_to_chat_host(root, store, path):
@@ -581,45 +633,50 @@ class ReturnService:
     def __init__(self, root, registry, store, external_sender):
         self.args = (root, registry, store, external_sender)
         self.stop = threading.Event()
-        self.thread = threading.Thread(
-            target=self.run, daemon=True, name="loopx-manager-returns"
-        )
-        self.execution_thread = threading.Thread(
-            target=self.run_executions, daemon=True, name="loopx-manager-executions"
-        )
+        self._execution_pump = None
+        self._return_worker = HostedWorker(target=self.run, stop=self.stop,
+                                          name="loopx-manager-returns", retry_seconds=3)
+        self._execution_worker = HostedWorker(target=self.run_executions, stop=self.stop,
+                                             name="loopx-manager-executions", retry_seconds=3)
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def start(self) -> None:
-        self.thread.start()
-        self.execution_thread.start()
+        self._return_worker.start()
+        self._execution_worker.start()
+        self.thread = self._return_worker.thread
+        self.execution_thread = self._execution_worker.thread
 
     def run(self):
         try:
             recover_source_chat_provenance(*self.args[:3], cancelled=self.stop.is_set)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError):
             logging.getLogger(__name__).warning("Source Chat provenance recovery unavailable")
-        while not self.stop.is_set():
-            try:
-                drain(*self.args, cancelled=self.stop.is_set)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning(
-                    "Manager return receipts unavailable; retrying"
-                )
-            self.stop.wait(3)
+        self._return_worker.repeat(
+            self._return_step, interval_seconds=3,
+            on_error=lambda: logging.getLogger(__name__).warning(
+                "Manager return receipts unavailable; retrying"),
+        )
+
+    def _return_step(self) -> None:
+        drain(*self.args, cancelled=self.stop.is_set, progress=self._return_worker.checkpoint)
 
     def run_executions(self) -> None:
         # Native previews may wait on a subprocess. Keep result publication
         # independent, using the same server lifetime and one serial probe.
         from .execution import QueuedSourcePump
-        execution_pump = QueuedSourcePump(*self.args[:3])
-        while not self.stop.is_set():
-            try:
-                execution_pump.tick(cancelled=self.stop.is_set)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                logging.getLogger(__name__).warning("Queued source execution unavailable; retrying")
-            self.stop.wait(3)
+        if self._execution_pump is None:
+            self._execution_pump = QueuedSourcePump(*self.args[:3])
+        execution_pump = self._execution_pump
+
+        def step() -> None:
+            execution_pump.tick(cancelled=self.stop.is_set)
+
+        self._execution_worker.repeat(step, interval_seconds=3,
+            on_error=lambda: logging.getLogger(__name__).warning(
+                "Queued source execution unavailable; retrying"))
 
     def close(self) -> None:
         self.stop.set()
-        for thread in (self.thread, self.execution_thread):
-            if thread.ident is not None:
-                thread.join(timeout=1.5)
+        self._return_worker.close(timeout=1.5)
+        self._execution_worker.close(timeout=1.5)

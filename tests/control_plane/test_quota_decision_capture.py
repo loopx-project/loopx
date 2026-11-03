@@ -32,6 +32,21 @@ def test_disabled_capture_does_not_touch_disk(tmp_path):
 
 
 @pytest.mark.parametrize('overrides', [
+    {'context_delivery': 'off'}, {'format': 'markdown'}, {'quota_command': 'plan'},
+    {'decision_output_dir': None}, {'decision_handoff_socket': '/unused/socket'},
+])
+def test_deferred_native_presentation_requires_original_capture_before_admission(tmp_path, overrides):
+    from loopx.cli_commands.quota_capture import prepare_quota_capture
+    values = dict(defer_context_presentation=True, format='json', context_delivery='on',
+                  codex_app=True, decision_output_dir=tmp_path / 'capture')
+    values.update(overrides)
+    path = values.pop('decision_output_dir')
+    with pytest.raises(QuotaCommandValidationError, match='deferred context presentation'):
+        prepare_quota_capture(request(path, **values), None)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize('overrides', [
     {'quota_command': 'spend-slot'}, {'turn_instance_id': None},
 ])
 def test_invalid_request_does_not_create_directory(tmp_path, overrides):
@@ -68,6 +83,72 @@ def test_existing_symlink_is_not_followed(tmp_path):
     with pytest.raises(QuotaCommandValidationError):
         prepare_decision_capture(request(target))
     assert not (tmp_path / 'absent').exists()
+
+
+@pytest.mark.parametrize('provider', ['file', 'sqlite'])
+def test_native_refusal_is_bounded_without_pending_context_or_admission(tmp_path, monkeypatch, provider):
+    import hashlib
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+    from tests.control_plane.test_quota_settlement_cli import (
+        _configure_selectable_alternative, _initialize_fixture_authority, _spend_run_count,
+    )
+
+    project, runtime, registry = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    capture, native = tmp_path / 'refused-capture', tmp_path / 'native-session'
+    native.mkdir(mode=0o700)
+    monkeypatch.setenv('CODEX_THREAD_ID', 'refusal-session')
+    monkeypatch.delenv('CODEX_ROLLOUT_TRACE_ROOT', raising=False)
+    codex_context_hook(str(native), dict(session_id='refusal-session', cwd=str(project),
+        hook_event_name='SessionStart', source='startup'))
+    journal = (native / 'session.json').read_bytes()
+    guard = ['quota', 'should-run', '--goal-id', GOAL_ID, '--agent-id', AGENT_ID,
+             '--todo-id', 'todo_missing', '--turn-instance-id', TURN_ID, '--codex-app']
+    rc, refused = _run_cli(registry, runtime, *guard, '--decision-output-dir', str(capture),
+        '--context-delivery', 'on', '--codex-context-dir', str(native), '--max-page-output-bytes', '4096')
+    raw = (capture / 'decision.json').read_bytes()
+    original = json.loads(raw)
+    assert rc == 1 and refused['ok'] is False
+    assert len(raw) > 4096
+    assert len(json.dumps(refused, ensure_ascii=False, separators=(',', ':')).encode()) + 1 <= 4096
+    assert refused['error_code'] == original['error_code'] == 'quota_action_selection_rejected'
+    assert refused['reason'] == original['reason']
+    assert refused['heartbeat_receipt'] == original['heartbeat_receipt']
+    assert refused['next_cli_actions'] == original['interaction_contract']['cli_channel']['next_cli_actions']
+    assert refused['captured_decision']['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert (native / 'session.json').read_bytes() == journal
+    assert _heartbeat_receipt_count(runtime, TURN_ID) == _spend_run_count(runtime) == 0
+    # Explicitly disabled delivery preserves the ordinary failure view.
+    rc, disabled = _run_cli(registry, runtime, *guard, '--context-delivery', 'off')
+    assert rc == 1 and disabled['error_code'] == refused['error_code']
+    assert 'action_selection_qualification' in disabled and 'captured_decision' not in disabled
+
+
+def test_large_refusal_diagnostics_remain_reachable_by_selected_read(tmp_path):
+    from loopx.cli_commands.quota_failure_report import captured_quota_failure_view
+    from loopx.cli_commands.quota_capture import read_context_capture
+
+    payload = {'ok': False, 'reason': '必要的诊断证据' * 10000,
+               'heartbeat_receipt': {'status': 'not_committed'},
+               'unrelated_history': 'optional history ' * 10000}
+    capture_decision(tmp_path, payload)
+    result = captured_quota_failure_view(payload, capture_directory=tmp_path, max_page_output_bytes=4096)
+    assert result['ok'] is False and len(json.dumps(result).encode()) < 4096
+    from loopx.cli import build_parser
+
+    command = result['command']
+    content = []
+    while command:
+        tokens = shlex.split(command)
+        args = build_parser().parse_args(tokens[tokens.index('--format'):])
+        page = read_context_capture(args)
+        assert page['ok'], page
+        content.append(page['content'])
+        command = page.get('next_command')
+    selected = {item['pointer']: item['value'] for item in json.loads(''.join(content))['selections']}
+    assert selected['/reason'] == payload['reason']
+    assert '/unrelated_history' not in selected
 
 
 @pytest.mark.parametrize('provider', ['file', 'sqlite'])
@@ -386,6 +467,43 @@ def test_handoff_requires_explicit_capture_before_guard(tmp_path):
     with pytest.raises(QuotaCommandValidationError, match='invalid decision handoff'):
         prepare_decision_capture(request(None, decision_handoff_socket=str(tmp_path / 'missing')))
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("root_source", ["saved", "explicit", "fallback"])
+@pytest.mark.parametrize("output_limit", [None, 32000])
+def test_saved_selection_transport_preserves_identity_and_rebinds_once(tmp_path, root_source, output_limit):
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import bind_capture_selection_transport
+
+    saved, explicit, fallback, native = (tmp_path / name for name in
+        ("saved captures", "explicit captures", "private cache", "native session"))
+    words = ["quota", "should-run", "--goal-id", "goal", "--agent-id", "agent",
+        "--todo-id", "{todo_id}", "--turn-instance-id", "original-turn", "--codex-app",
+        "--context-delivery", "on", "--codex-context-root", str(tmp_path / "old native"), "--turn-envelope",
+        "--max-page-output-bytes", "64000"]
+    if root_source != "fallback":
+        words += ["--decision-output-root", str(saved)]
+    selection = {"command_args_template": shlex.join(words)}
+    payload = {"interaction_contract": {"cli_channel": {"selection_command": selection}}}
+    args = request(None, decision_output_root=explicit if root_source == "explicit" else None,
+        context_delivery="on", codex_context_dir=str(native), turn_envelope=True,
+        max_page_output_bytes=output_limit)
+    bind_capture_selection_transport(payload, args, capture_root=fallback)
+    first = selection["command_args_template"]
+    bind_capture_selection_transport(payload, args, capture_root=fallback)
+    assert selection["command_args_template"] == first
+    argv = shlex.split(first)
+    parsed = build_parser().parse_args(argv)
+    assert (parsed.goal_id, parsed.agent_id, parsed.todo_id, parsed.turn_instance_id) == (
+        "goal", "agent", "{todo_id}", "original-turn")
+    assert parsed.decision_output_root == str({"saved": saved, "explicit": explicit, "fallback": fallback}[root_source])
+    assert parsed.context_delivery == "on" and parsed.codex_context_dir == str(native)
+    assert parsed.codex_context_root is None and parsed.turn_envelope
+    assert parsed.max_page_output_bytes == (output_limit or 64000)
+    assert all(argv.count(option) == 1 for option in
+        ("--decision-output-root", "--context-delivery", "--codex-context-dir", "--turn-envelope",
+         "--max-page-output-bytes"))
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='Unix local Host transport')

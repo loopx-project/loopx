@@ -37,10 +37,17 @@ export const conversationReturnContinuityScenario = {
       if (api.turnRequests.at(-1).sessionId === oldSessionId) throw new Error("Fixture did not replace the active session");
       const turnsBeforeReturn = api.turnRequests.length;
       let droppedRead = false;
-      await page.route(`**/api/chat/sessions/${oldSessionId}`, async (route) => {
+      const failedRead = page.waitForEvent("requestfailed", {
+        predicate: (request) => new URL(request.url()).pathname === `/api/chat/sessions/${oldSessionId}`,
+        timeout: 10_000,
+      });
+      await page.route((url) => url.pathname === `/api/chat/sessions/${oldSessionId}`, async (route) => {
         if (!droppedRead) { droppedRead = true; await route.abort("connectionreset"); }
         else await route.fallback();
       });
+      // A streamed return can arrive before the next snapshot poll. Observe
+      // the injected read failure before publishing the late result.
+      await failedRead;
       const answer = "核对完成：现金流期间和单位一致。";
       page.__loopxRuntime.messages.get(oldSessionId).push({
         message_id: "handoff.old-result", turn_id: "old-turn", role: "agent", origin: "manager_followup",

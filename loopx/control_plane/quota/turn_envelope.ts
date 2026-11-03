@@ -1,3 +1,6 @@
+import {capturedContextSelection} from "./context_selection.ts";
+import {initialContextReadPointers, prepareProgressiveContextDelivery} from "./progressive_context.ts";
+import {contextProjectionChanges, projectQuotaDiagnostics} from "./diagnostic_projection.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { createHash } from "node:crypto";
@@ -15,7 +18,7 @@ import {
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
-import { requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
+import { jsonObject, requireBoolean, requireJsonObject, requireNonEmptyString, requireStringLiteral } from "../runtime_decode.ts";
 import { projectPendingCapabilityIntent } from "../work_items/pending_capability_intent.ts";
 import { projectInteractionRequiredReads, selectedWorkTodoId, USER_CHANNEL_NOTIFICATION_POLICIES } from "../work_items/interaction_contract.ts";
 import { measureTurnEnvelope, TURN_ENVELOPE_SECTION_TARGETS } from "./turn_envelope_budget.ts";
@@ -503,7 +506,9 @@ function replanView(request: JsonObject): JsonObject {
     // Preserve executable shape and all settlement rules; decision advice and
     // duplicate context are available in the unchanged full captured source.
     const stride = {...object(packet.stride_control)};
-    for (const key of ["decision_followthrough", "explore_basis", "decision_value_review", "minimal_example"]) delete stride[key];
+    // The current nested review syntax belongs to authoring, not duplicate
+    // decision evidence. Top-level required_fields cannot describe that shape.
+    for (const key of ["decision_followthrough", "explore_basis", "decision_value_review"]) delete stride[key];
     const contract = {...object(packet.writeback_contract)};
     if (contract.vision_authoring) {
       const authoring = {...object(contract.vision_authoring)};
@@ -1402,10 +1407,23 @@ export function turnEnvelopeRoute(envelope: JsonObject, historicalText?: JsonObj
   return action.quiet_noop_allowed === true ? "wait" : "blocked";
 }
 
+/** Navigation over captured facts, never a summary or a source-read receipt. */
+// Quota field vocabulary stays with its decision owner; the RFC 6901 reader
+// receives addresses and remains independent of Goal/permission policy.
+function capturedDecisionSelection(request: JsonObject): JsonObject {
+  const initial = request.initial_read === true || request.list_fields === true
+    && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
+  return capturedContextSelection(request, initial ? initialContextReadPointers(requireJsonObject(request.context, "captured context"), ["ok", "schema_version", "goal_id", "agent_id", "should_run", "effective_action",
+    "normal_delivery_allowed", "recovery_delivery_allowed", "self_repair_allowed", "capability_repair_allowed", "workspace_repair_allowed",
+    "safe_bypass_allowed", "safe_bypass_kind", "blocked_action_scope", "reason",
+    "execution_obligation", "goal_boundary", "heartbeat_receipt", "work_lane_contract", "selected_todo"]) : []);
+}
+
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
   if (operation === "replan_view") return replanView(request);
+  if (operation === "context_select") return capturedDecisionSelection(request);
   if (operation === "replan_cli_view") {
     const payload = requireJsonObject(request.payload, "replan CLI payload");
     const reads = replanReadCommands(payload);
@@ -1455,16 +1473,24 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return {ok: true};
   }
   if (operation === "reference_context") {
-    let payload = requireJsonObject(request.payload, "quota decision");
+    const source = requireJsonObject(request.payload, "quota decision");
+    let payload = source;
+    if (jsonObject(request.diagnostics)) payload = projectQuotaDiagnostics(payload, request.diagnostics as JsonObject);
     if (request.task_title === true) payload = referenceCurrentTaskTitle(payload);
     if (request.explore_guidance === true) payload = referenceExploreGuidance(payload);
-    return payload;
+    // References and diagnostic caps share one edit transport. Untouched facts
+    // stay in the original caller, including numbers JSON.parse cannot retain.
+    return contextProjectionChanges(source, payload);
   }
   if (operation === "build") return buildTurnEnvelope(request);
-  if (operation === "context_delivery") return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
+  if (operation === "context_delivery") return request.native_projection === undefined
+    ? prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS)
+    : prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
+  if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(
+    requireJsonObject(request.envelope, "envelope"), request.turn_instance_id)};
   if (operation === "replan_settlement_identity") return {identity: turnEnvelopeReplanSettlementIdentity(
     requireJsonObject(request.envelope, "turn_envelope"), request.turn_instance_id,
   )};
@@ -1480,28 +1506,35 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
 /** A scoped planning identity comes from the signed quota plan, never a Host
  * session or a missing Todo. Journal validation reuses this exact binding rule.
  */
-export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+export function turnEnvelopeScopedSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
   assertSupportedQuotaPacket(envelope);
   const writeback = object(envelope.writeback);
   const plan = Object.keys(object(writeback.settlement_plan)).length ? object(writeback.settlement_plan)
     : {identity: writeback.settlement_identity};
   const raw = object(plan.identity);
-  if (raw.replan_obligation_id == null && raw.binding_kind !== "autonomous_replan") return null;
+  if (raw.replan_obligation_id == null && raw.request_subject == null && raw.binding_kind !== "autonomous_replan") return null;
   const parsed = settlementIdentityFromPlan({settlement_plan: plan});
   if (parsed.failure !== null) throw new EffectRuntimeRequestError(parsed.failure.reason);
   const identity = parsed.value;
   const signature = object(envelope.action_signature);
   if (envelope.schema_version !== TURN_ENVELOPE_SCHEMA_VERSION
-      || envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+      || (identity.binding_kind === "request" ? envelope.effective_action !== EffectiveAction.NORMAL_RUN
+        : envelope.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED)
       || selectedWorkTodoId({selected_todo: object(envelope.action).selected_todo,
         task_orchestration_contract: envelope.task_orchestration_contract}) !== null
-      || identity.binding_kind !== "autonomous_replan"
+      || !["autonomous_replan", "request"].includes(identity.binding_kind)
       || identity.goal_id !== envelope.goal_id || identity.agent_id !== envelope.agent_id
       || turnInstanceId != null && identity.turn_instance_id !== turnInstanceId
-      || identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
+      || identity.binding_kind === "autonomous_replan" && identity.replan_obligation_id !== object(envelope.replan_action_packet).obligation_id
       || signature.matches !== true || signature.source_hash !== signature.envelope_hash
       || signature.envelope_hash !== canonicalHash(turnEnvelopeActionSignatureDocument(envelope))) {
     throw new EffectRuntimeRequestError("Turn replan settlement identity does not match its signed quota admission");
   }
   return settlementIdentityPayload(identity);
+}
+
+/** Persisted planning callers retain their narrow compatibility entrypoint. */
+export function turnEnvelopeReplanSettlementIdentity(envelope: JsonObject, turnInstanceId?: unknown): JsonObject | null {
+  const identity = turnEnvelopeScopedSettlementIdentity(envelope, turnInstanceId);
+  return identity?.binding_kind === "autonomous_replan" ? identity : null;
 }

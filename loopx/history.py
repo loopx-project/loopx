@@ -407,18 +407,14 @@ def collect_history(
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .capabilities.machine_configuration.builtins import (
-        build_builtin_machine_configuration_registry,
+        read_builtin_goal_machine_configuration,
         project_goal_with_builtin_machine_configuration,
     )
-    from .capabilities.machine_configuration.store import read_machine_configuration
     from .quota import goal_quota_with_spend_ledger
 
     if registry is None:
         registry = load_registry(registry_path)
-    machine_configuration = read_machine_configuration(
-        runtime_root,
-        registry=build_builtin_machine_configuration_registry(),
-    )
+    machine_configuration = read_builtin_goal_machine_configuration(runtime_root)
     registry_goal_rows = registry_goals(registry)
     registry_goal_digests = {
         str(goal.get("id")): goal_registry_digest(goal)

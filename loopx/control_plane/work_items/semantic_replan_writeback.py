@@ -374,7 +374,11 @@ def qualify_replan_writeback(
             context.get("replan_transition_candidates", [])
             if isinstance(candidate.get("obligation"), dict) and
             candidate["obligation"].get("obligation_id") == guard_semantic_replan_obligation_id), None)
-    if guard_scoped and receipt_bound_replan_review is not None:
+    # Every selected replan retains its exact receipt-bound source. A missing
+    # reconstruction must not fall through as an unselected future obligation
+    # and commit an unqualified writeback. Plain outcome reviews additionally
+    # carry a scalar source; lifecycle/transition reviews need the same owner.
+    if guard_scoped and guard_semantic_replan_obligation_id:
         obligation = project_replan_semantics({
             "operation": "receipt_bound_obligation", "guard_scoped": True,
             "selected_obligation_id": guard_semantic_replan_obligation_id,

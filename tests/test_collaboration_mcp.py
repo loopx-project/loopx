@@ -5,6 +5,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -139,13 +141,14 @@ def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
     asyncio.run(exercise())
 
 
-def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(tmp_path, monkeypatch, provider):
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
     from loopx.control_plane.collaboration.peers import request, read_inbox
     from loopx.control_plane.collaboration.inbox import _root
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
-    registry, root, _ = promoted_create_fixture(tmp_path)
+    registry, root, _ = promoted_create_fixture(tmp_path, provider=provider)
     config = json.loads(registry.read_text())
     config["goals"][0]["coordination"]["registered_agents"].append("agent-b")
     registry.write_text(json.dumps(config))
@@ -208,7 +211,20 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
             assert [(t["todo_id"], t["title"], t["status"]) for t in resumed["linked_todos"]] == [
                 (own, "[P1] Current accepted work", "open")
             ]
-            await call("return_result", {"request_id": rid, "text": conclusion})
+            cli("todo", "complete", "--goal-id", "goal-a", "--todo-id", own,
+                "--agent-id", "agent-a", "--evidence", "Verified result", "--no-follow-up")
+            cli("todo", "archive-completed", "--goal-id", "goal-a",
+                "--max-active-done", "0", "--execute")
+            resumed = (await call("read_context", {}))["items"][0]["receiver_followthrough"]
+            assert resumed["step"] == "review_request_work" and resumed["answer_owed"]
+            assert [(t["todo_id"], t["status"]) for t in resumed["linked_todos"]] == [(own, "done")]
+            assert path.read_bytes() == original
+            remainder = {"summary": "Check the installed repair", "resume_when": "The isolated package is ready"}
+            await call("return_result", {"request_id": rid, "text": "Implementation ready", "remaining_work": remainder})
+            pending = (await call("read_context", {}))["items"][0]
+            assert pending["remaining_work"] == remainder
+            assert pending["receiver_followthrough"]["step"] == "review_request_work"
+            await call("return_result", {"request_id": rid, "text": conclusion, "update_id": "checked-repair"})
             assert (await call("read_context", {}))["items"] == []
             # A short factual answer requires neither a fabricated task nor a link.
             quick = request(root, registry, "goal-a", "agent-b", "agent-a", "short-answer", brief)["request_id"]
@@ -228,6 +244,7 @@ def test_stdio_receiver_links_existing_work_and_returns_without_duplicate_tasks(
 
     asyncio.run(exercise())
     received = read_inbox(root, registry, "goal-a", "agent-b")["peer_returns"]["items"]
-    assert len(received) == 2
-    assert next(item for item in received if item["request_id"] == rid)["text"] == conclusion
-    assert len(cli("todo", "list", "--goal-id", "goal-a")["todos"]) == 2
+    assert len(received) == 3
+    assert next(item for item in received if item.get("result_key") == "conclusion-00000001")["text"] == conclusion
+    assert [row["todo_id"] for row in cli("todo", "list", "--goal-id", "goal-a")["todos"]] == [foreign]
+    assert cli("todo", "list", "--goal-id", "goal-a", "--todo-id", own)["todo"]["archive_state"] == "archive"

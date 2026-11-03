@@ -149,6 +149,12 @@ def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: st
                "--runtime-profile", "generic_cli", "--turn-instance-id", receipt["turn_id"],
                "--available-capability", "shell", "--available-capability", "filesystem_write",
                "--decision-output-root", str(capture_root)]
+    if env.get("LOOPX_CONTEXT_DELIVERY") == "on" and env.get("LOOPX_CODEX_CONTEXT_DIR"):
+        # Capture the complete Goal now, but let the actual native tool select
+        # full/delta after SessionStart. Do not consume or invalidate continuity
+        # while the Host is preparing a checkpoint outside the model session.
+        command += ["--context-delivery", "on", "--codex-context-dir", env["LOOPX_CODEX_CONTEXT_DIR"],
+                    "--defer-context-presentation"]
     guard_run = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env, capture_output=True,
                                text=True, timeout=120, check=True)
     projected = json.loads(guard_run.stdout)
@@ -334,12 +340,13 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             components, research = research_participants(env, components, metadata, destination, evidence, deadline)
         opportunity = None
         if request.get("evaluation_opportunity") and not request.get("controller_handoff"):
-            from .sforge_checkpoint import capture_opportunity
+            from . import sforge_json
+            from .sforge_checkpoint import capture_opportunity, RELEASED_FIELDS
 
             evidence = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-opportunity.json"
             incumbent = evidence.with_name("checkpoint-incumbent.tar.gz")
             opportunity = capture_opportunity(env, timeout=max(.1, deadline - time.time()), incumbent_path=incumbent)
-            evidence.write_text(json.dumps(opportunity), encoding="utf-8")
+            evidence.write_text(sforge_json.dumps(opportunity, fields=RELEASED_FIELDS), encoding="utf-8")
             evidence.chmod(0o600)
             opportunity_id = _participant_id(components, "evaluation_opportunity")
             components = [*components, {"id": opportunity_id, "source_path": str(evidence)}]

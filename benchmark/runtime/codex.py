@@ -28,11 +28,13 @@ class Execution:
     validation_command: tuple[str, ...] = ()
     task_entry: str | None = None
     turn_envelope: bool = False
-    context_delivery: str = "off"
+    context_delivery: str | None = None
 
     def __post_init__(self) -> None:
         if self.context is None:
             object.__setattr__(self, "context", "resume" if self.mode in {"heartbeat", "turn"} else "fresh")
+        if self.context_delivery is None:
+            object.__setattr__(self, "context_delivery", "on" if self.mode == "heartbeat" else "off")
         if self.context_delivery not in ("off", "on") or (self.context_delivery != "off" and self.mode != "heartbeat"):
             raise ValueError("context_delivery supports only off or on with heartbeat execution")
         if not isinstance(self.turn_envelope, bool) or (self.turn_envelope and self.mode != "heartbeat"):
@@ -115,6 +117,77 @@ def validate_model_catalog(model_catalog: Path, model: str) -> dict:
         )
     return entry
 
+def codex_settings(
+    *, execution: Execution, workspace: Path, model: str, effort: str,
+    base_url: str, wire_api: str, web_search: str = "disabled",
+    model_catalog: Path | None = None, model_catalog_destination: Path | None = None,
+) -> str:
+    """Render fixed settings for the worker and its fresh checkpoint receiver.
+
+    Rendering does not create a home, change a session or handle credentials.
+    """
+    if not model or not effort:
+        raise ValueError("model and effort are required")
+    if wire_api not in {"responses", "chat"}:
+        raise ValueError("unsupported provider wire_api")
+    if web_search not in {"disabled", "cached", "live"}:
+        raise ValueError("unsupported web_search setting")
+    if model_catalog is not None:
+        validate_model_catalog(model_catalog, model)
+    if model_catalog_destination is not None and (
+        model_catalog is None or not model_catalog_destination.is_absolute()
+    ):
+        raise ValueError("catalog destination requires a validated catalog and an absolute guest path")
+    return "\n".join(
+        [
+            f"model = {json.dumps(model)}",
+            f"model_reasoning_effort = {json.dumps(effort)}",
+        ]
+        + (
+            # Codex resolves this path from its own working directory, not the
+            # caller's; a relative path validates here yet silently fails there.
+            [f"model_catalog_json = {json.dumps(str(model_catalog_destination or model_catalog.resolve()))}"]
+            if model_catalog is not None
+            else []
+        )
+        + [
+            'approval_policy = "never"',
+            f"sandbox_mode = {json.dumps(execution.sandbox)}",
+            f"web_search = {json.dumps(web_search)}",
+            f'model_provider = "{"harbor" if base_url else "openai"}"',
+            # Codex filters its inherited shell environment. Set the trial
+            # policy explicitly so model tools cannot silently lose it.
+            "[shell_environment_policy.set]",
+            'LOOPX_USAGE_PING = "0"',
+            f"LOOPX_CONTEXT_DELIVERY = {json.dumps(execution.context_delivery)}",
+            *(['LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
+            "[features]",
+            f"goals = {str(execution.native_goal).lower()}",
+            "unified_exec = true",
+            "[memories]",
+            "generate_memories = false",
+            "use_memories = false",
+            f"[projects.{json.dumps(str(workspace))}]",
+            'trust_level = "trusted"',
+        ]
+        + (
+            [
+                "[model_providers.harbor]",
+                'name = "harbor"',
+                f"base_url = {json.dumps(base_url)}",
+                f"wire_api = {json.dumps(wire_api)}",
+                'env_key = "OPENAI_API_KEY"',
+                "request_max_retries = 8",
+                "stream_max_retries = 8",
+                "stream_idle_timeout_ms = 300000",
+            ]
+            if base_url
+            else []
+        )
+        + [""]
+    )
+
+
 def prepare_codex_home(
     home: Path,
     *,
@@ -155,64 +228,12 @@ def prepare_codex_home(
         raise ValueError("custom provider requires OPENAI_API_KEY")
     if not base_url and not (home / "auth.json").is_file():
         raise ValueError("provide a gateway and API key, or stage CODEX_AUTH_JSON_PATH")
-    if wire_api not in {"responses", "chat"}:
-        raise ValueError("unsupported provider wire_api")
-    if web_search not in {"disabled", "cached", "live"}:
-        raise ValueError("unsupported web_search setting")
-    if model_catalog is not None:
-        validate_model_catalog(model_catalog, model)
-    if model_catalog_destination is not None and (
-        model_catalog is None or not model_catalog_destination.is_absolute()
-    ):
-        raise ValueError("catalog destination requires a validated catalog and an absolute guest path")
-    home.mkdir(parents=True, exist_ok=True)
-    settings = "\n".join(
-        [
-            f"model = {json.dumps(model)}",
-            f"model_reasoning_effort = {json.dumps(effort)}",
-        ]
-        + (
-            # Codex resolves this path from its own working directory, not the
-            # caller's; a relative path validates here yet silently fails there.
-            [f"model_catalog_json = {json.dumps(str(model_catalog_destination or model_catalog.resolve()))}"]
-            if model_catalog is not None
-            else []
-        )
-        + [
-            'approval_policy = "never"',
-            f"sandbox_mode = {json.dumps(execution.sandbox)}",
-            f"web_search = {json.dumps(web_search)}",
-            f'model_provider = "{"harbor" if base_url else "openai"}"',
-            # Codex filters its inherited shell environment. Set the trial
-            # policy explicitly so model tools cannot silently lose it.
-            "[shell_environment_policy.set]",
-            'LOOPX_USAGE_PING = "0"',
-            *(['LOOPX_CONTEXT_DELIVERY = "on"', 'LOOPX_EXECUTION_MODE = "heartbeat"'] if execution.context_delivery != "off" else []),
-            "[features]",
-            f"goals = {str(execution.native_goal).lower()}",
-            "unified_exec = true",
-            "[memories]",
-            "generate_memories = false",
-            "use_memories = false",
-            f"[projects.{json.dumps(str(workspace))}]",
-            'trust_level = "trusted"',
-        ]
-        + (
-            [
-                "[model_providers.harbor]",
-                'name = "harbor"',
-                f"base_url = {json.dumps(base_url)}",
-                f"wire_api = {json.dumps(wire_api)}",
-                'env_key = "OPENAI_API_KEY"',
-                "request_max_retries = 8",
-                "stream_max_retries = 8",
-                "stream_idle_timeout_ms = 300000",
-            ]
-            if base_url
-            else []
-        )
-        + [""]
+    settings = codex_settings(
+        execution=execution, workspace=workspace, model=model, effort=effort,
+        base_url=base_url, wire_api=wire_api, web_search=web_search,
+        model_catalog=model_catalog, model_catalog_destination=model_catalog_destination,
     )
+    home.mkdir(parents=True, exist_ok=True)
     config = home / "config.toml"
     if config.exists() and config.read_text(encoding="utf-8") != settings:
         raise ValueError("Codex settings changed within a trial; use a new trial")

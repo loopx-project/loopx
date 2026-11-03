@@ -20,15 +20,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from ...public_safe_text import PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
+
 
 SCHEMA_VERSION = "public_safe_outbound_scan_v0"
 
-# --- rule table (ordered; first matching rule wins per file) ----------------
+# --- rule table -------------------------------------------------------------
+# Every matching rule contributes at most one hit, so a value that satisfies two
+# rules (a labelled provider token) reports both rule ids and one hit each.
 RULES: tuple[dict[str, str], ...] = (
     # credentials
     {"id": "ark_api_key", "label": "Ark/ARK API key", "pattern": r"\b" + "ark" + r"-[0-9a-f]{8,}-[0-9a-f-]{20,}"},
     {"id": "sk_bearer", "label": "sk-/Bearer secret", "pattern": r"\b(" + "sk" + r"-[A-Za-z0-9_-]{8,}|Bearer [A-Za-z0-9._-]{16,})\b"},
     {"id": "aklt_access_key", "label": "AK/SK access key", "pattern": r"\b" + "AKLT" + r"[A-Za-z0-9]{10,}\b"},
+    # A provider token carries its issuer in the prefix, so it needs no label.
+    # The shapes are the canonical owner's own list rather than a second copy:
+    # this scan exists to certify content before publication, and a list that
+    # recognized only some issuers returned `ok: true` for a GitHub PAT, an AWS
+    # access key and a Slack token (Refs #5136).
+    {
+        "id": "provider_token",
+        "label": "provider-issued token",
+        "pattern": r"(?i)(?:" + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE + r")",
+    },
     {"id": "private_key_block", "label": "private key block", "pattern": r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"},
     {"id": "api_key_assignment", "label": "api key assignment", "pattern": r"(?i)\b(api[_-]?key|access[_-]?key|secret)\b\s*[=:]\s*['\"][^'\"]{8,}['\"]"},
     # Private absolute paths: the private roots under whatever separator the

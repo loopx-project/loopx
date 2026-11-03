@@ -30,6 +30,11 @@ def _command(command: str, actions: list[dict] | None = None, **extra) -> dict:
             "commandActions": actions or [{"type": "unknown", "command": command}], **extra}
 
 
+# Split so the literal provider shape is not itself a credential hit for the
+# public boundary scan, the same convention the source fixtures follow.
+GITHUB_TOKEN = "ghp_" + "abcdefghijklmnop123"
+
+
 def test_command_step_names_the_intent_and_keeps_the_full_command_behind_details():
     steps = CodexActivitySteps(protected_paths=["/work/project"])
     item = _command(
@@ -67,9 +72,9 @@ def test_failed_items_are_failed_steps_not_completions():
 def test_credentials_in_commands_are_masked_before_replay():
     title = CodexActivitySteps().started(_command(
         "curl -H 'Authorization: Bearer abc.def' --api-key=k123 https://x.test?q=1 "
-        "&& GH_TOKEN=ghp_abcdefghijklmnop123 gh pr list --password hunter2 sk-proj-abcdefghijklmnop"
+        f"&& GH_TOKEN={GITHUB_TOKEN} gh pr list --password hunter2 sk-proj-abcdefghijklmnop"
     ))["title"]
-    for secret in ("abc.def", "k123", "ghp_abcdefghijklmnop123", "hunter2", "sk-proj-abcdefghijklmnop"):
+    for secret in ("abc.def", "k123", GITHUB_TOKEN, "hunter2", "sk-proj-abcdefghijklmnop"):
         assert secret not in title
     assert "gh pr list" in title and "https://x.test" in title
 

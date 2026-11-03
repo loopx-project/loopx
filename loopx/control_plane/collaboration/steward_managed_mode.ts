@@ -43,10 +43,22 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       && coverage.discovered === null && coverage.verified === 0 && coverage.complete === false
       && context.authorization_scope_id === undefined;
   }
+  // A provider identity read may fail inside the original read-only context
+  // collector, before it publishes any context. Retained legacy errors have no
+  // typed failure code: require the collector's exact phase independently of
+  // the error, plus the strict no-effect evidence below. Current binding and
+  // provider verification still run before a new carrier can be accepted.
+  const identityRefused = original.error_code === "runtime_error"
+    && original.error === "the selected App identity could not be verified"
+    && requireJsonObject(prior.actor, "original watch actor").schema_version === "loopx_steward_managed_actor_v0"
+    && Array.isArray(basis.contexts) && basis.contexts.length === 0
+    && Array.isArray(basis.phases) && basis.phases.length === 1
+    && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
+    && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
       || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
-      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused)
+      || original.status !== "failed" || !(original.error_code === "server_restarted" || scopeRefused || identityRefused)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
       || original.response !== null || original.upstream_turn_id !== null || original.delta_count !== 0
       || prior.work_kind !== "monitor" || request.work_kind !== "monitor" || request.validation_command !== null
@@ -84,6 +96,16 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
   const lineage = requireJsonObject(receipt.lineage, "original report lineage");
   const keys = Object.keys(request).filter(key => key !== "report_quota_recovery");
   const accepting = params.turn == null && params.report_settlement_recovery == null;
+  const history = session.upstream_context_history ?? [];
+  if (!Array.isArray(history)) throw new EffectRuntimeRequestError("invalid native context provenance");
+  const nativeThreads = [session.upstream_thread_id, ...history.map(value => {
+    const item = requireJsonObject(value, "native context provenance");
+    if (item.manager_context_version !== null && (!Number.isSafeInteger(item.manager_context_version)
+        || Number(item.manager_context_version) < 0)) {
+      throw new EffectRuntimeRequestError("invalid native context provenance");
+    }
+    return requireNonEmptyString(item.thread_id, "original native context thread");
+  })];
   if (request.work_kind !== "report" || prior.work_kind !== "report" || prior.report_quota_recovery !== undefined
       || request.resume_turn_key !== undefined || prior.resume_turn_key !== undefined
       || Object.keys(recovery).sort().join() !== "native_observation,original_turn_id"
@@ -107,7 +129,7 @@ function admitReportQuotaRecovery(params: JsonObject, request: JsonObject, sessi
       || ["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].some(key => inspection[key] !== true)
       || inspection.journal_status !== "failed"
       || ![null, true].includes(recorded.host_invoked as null | boolean)
-      || observation.thread_id !== session.upstream_thread_id || typeof observation.thread_id !== "string" || !observation.thread_id
+      || !nativeThreads.includes(observation.thread_id) || typeof observation.thread_id !== "string" || !observation.thread_id
       || observation.turn_id !== original.upstream_turn_id || observation.only_original_user_item !== true
       || observation.codex_error_info !== "usageLimitExceeded" || observation.quota_available !== true
       || typeof observation.quota_observed_at !== "number" || !Number.isFinite(observation.quota_observed_at)
@@ -508,6 +530,9 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
         const prior = requireJsonObject(original.loopx_request, "original rejected request");
         const result = requireJsonObject(requireJsonObject(original.response, "original response").native_loopx, "native rejection");
         const journal = requireJsonObject(proof.inspection, "canonical original Turn inspection");
+        const retained = requireJsonObject(proof.journal, "canonical rejected native Turn");
+        const failure = requireJsonObject(retained.host_failure, "recorded pre-publication rejection");
+        const receipt = requireJsonObject(retained.receipt, "recorded host failure receipt");
         const decision = requireJsonObject(journal.recovery_decision, "original native recovery decision");
         const effects = requireJsonObject(journal.recorded_effects, "original native effects");
         const invocation = requireJsonObject(result.effects, "original invocation effects");
@@ -518,14 +543,22 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
             || Object.keys(prior).length !== keys.length
             || keys.some(key => JSON.stringify(prior[key]) !== JSON.stringify(request[key]))
             || result.schema_version !== "loopx_turn_execution_v0" || result.ok !== false
-            || result.mode !== "run_once" || result.effects_scope !== "current_invocation"
-            || result.error_code !== "stale_goal_authority"
-            || result.error !== "first-party Host runtime rejected: stale_goal_authority"
+            || result.mode !== "run_once" || result.status !== "failed" || result.result_kind !== "host_failure"
+            || result.reason !== "first-party Host runtime rejected: stale_goal_authority"
             || result.resume_turn_key !== request.resume_turn_key
-            || proof.turn_key !== request.resume_turn_key || Object.values(invocation).some(value => value === true)
+            || proof.turn_key !== request.resume_turn_key || retained.turn_key !== request.resume_turn_key
+            || retained.status !== "failed" || retained.result_kind !== "host_failure"
+            || retained.reason !== result.reason || retained.host_result != null
+            || retained.host_attempt_count !== 1 || failure.kind !== "contract_rejected"
+            || failure.schema_version !== "loopx_turn_host_failure_v0" || failure.attempt !== 1 || failure.retryable !== false
+            || JSON.stringify(result.host_failure) !== JSON.stringify(retained.host_failure)
+            || receipt.failed_phase !== "host_execute"
+            || !Array.isArray(retained.completed_phases) || retained.completed_phases.length !== 0
+            || invocation.host_invoked !== true || invocation.state_written !== false
+            || invocation.quota_spent !== false || invocation.scheduler_acknowledged !== false
             || journal.schema_version !== "loopx_turn_journal_inspection_v1" || journal.ok !== true
             || journal.goal_matches !== true || journal.owner_matches !== true || journal.turn_key_matches !== true
-            || journal.journal_consistent !== true || journal.journal_status !== "in_progress"
+            || journal.journal_consistent !== true || journal.journal_status !== "failed"
             || !Array.isArray(journal.completed_phases) || journal.completed_phases.length !== 0
             || proof.host_attempt_count !== 1 || proof.generation_present !== false
             || effects.host_invoked !== null || effects.state_written !== false

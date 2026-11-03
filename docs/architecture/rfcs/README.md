@@ -150,14 +150,15 @@ Paired diffs do not certify translation accuracy.
     transfer, stale-owner races, PostgreSQL authority, successor scheduling and
     App/Lark delivery need separate qualification; no new runtime or state writer.
 
-- [Monorepo Distribution Split v0](monorepo-distribution-split-v0.md)
+- [Monorepo Distribution and Small-Kernel Runtime Composition v0](monorepo-distribution-split-v0.md)
   ([中文版](monorepo-distribution-split-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; tracking [#5072](https://github.com/loopx-project/loopx/issues/5072).
-  - **Current boundary:** Keeps one repository; splits the installed wheel into
-    `loopx-core`, `loopx-workspace` and `packages/` capability distributions,
-    regroups `loopx/` top-level modules with compatibility shims, and pins the
-    top-level module count with an architecture test. No kernel semantics,
-    licence or schema change; multi-repository split remains a non-goal.
+  - **Current boundary:** One design for directory ownership, `loopx-core` /
+    `loopx-workspace` / optional distributions, and minimal/standard runtime
+    composition over one governance implementation. Preserves import
+    compatibility and adds demand-loading, activation, context, managed-task
+    recovery and matched product/benchmark qualification. Original packaging
+    milestones and decisions remain; no runtime, default, licence or schema change.
 
 - [Automatic Execution Admission v0](automatic-execution-admission-v0.md)
   ([中文版](automatic-execution-admission-v0.zh-CN.md))

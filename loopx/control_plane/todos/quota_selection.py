@@ -19,10 +19,11 @@ from .todo_semantics import (
     todo_item_has_removed_continuation_policy, todo_item_is_actionable_open,
     todo_item_next_due_at, todo_item_expires_at, todo_item_is_watch_only_monitor,
     todo_item_task_class, todo_projection_sort_key,
-    todo_summary_monitor_writeback_supported,
+    todo_summary_monitor_writeback_supported, todo_presentation_sort_key,
 )
-from .resume_planning import build_todo_resume_planning_request
+from .resume_planning import build_referenced_todo_resume_planning_request
 from .handoff_note import todo_read_source
+from .summary_item import TODO_SUMMARY_SOURCE_KEYS
 from .user_gate import is_user_gate_todo_item
 from .route_continuation import build_todo_route_continuation_facts
 from .handoff_gate import todo_summary_handoff_gates
@@ -112,6 +113,7 @@ def project_quota_planning(
     source_open_count: Any, agent_identity: dict[str, Any] | None,
     filter_user_gate_blocks_agent: bool, available_capabilities: Any,
     resolve_capacity: bool = False, current_time: str | None = None,
+    summary_kind: str | None = None,
 ) -> dict[str, Any]:
     identity = agent_identity if isinstance(agent_identity, dict) else {}
     profile = identity.get("agent_profile")
@@ -123,11 +125,12 @@ def project_quota_planning(
     observed_at = observed_now.timestamp()
     handoff_gates = todo_summary_handoff_gates(value)
 
-    def encode(item: dict[str, Any]) -> dict[str, Any]:
+    def encode(item: dict[str, Any], *, include_payload: bool = True) -> dict[str, Any]:
         priority, index = todo_projection_sort_key(item)
         due, expires = todo_item_next_due_at(item), todo_item_expires_at(item)
         return {
-            "payload": item, "display_source": todo_read_source(item),
+            **({"payload": item, "display_source": todo_read_source(item)} if include_payload else {}),
+            "presentation": list(todo_presentation_sort_key(item)),
             "claim": normalize_todo_claimed_by(item.get("claimed_by")),
             "bound": normalize_todo_bound_agent(item.get("bound_agent")),
             "blocks": normalize_todo_blocks_agent(item.get("blocks_agent")),
@@ -151,18 +154,42 @@ def project_quota_planning(
         raw = value.get(key)
         return [encode(item) for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
+    def integer_text(raw: Any) -> str | None:
+        try:
+            return str(int(raw)) if raw is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    resume_request = build_referenced_todo_resume_planning_request(
+        value,
+        agent_id=agent,
+        item_limit=8,
+        available_capabilities=(available_capabilities or []) if resolve_capacity else None,
+    )
     try:
         wire = effect_runtime_result("todo.quota_planning.project", {
             "schema_version": "todo_quota_planning_request_v4",
             "current_time": observed_now.isoformat(),
+            **({"summary_request": {
+                "kind": summary_kind, "source": todo_read_source(value),
+                "integer_counts": {"source": integer_text(value.get("completed_without_successor_count")),
+                    "warning": integer_text((value.get("todo_succession_warning") or {}).get("count"))
+                    if isinstance(value.get("todo_succession_warning"), dict) else None},
+                "next_fact": encode({"index": value.get("next_index", 1),
+                    "text": str(value.get("next") or "").strip(),
+                    **({"claimed_by": str(value.get("next_claimed_by") or "").strip()}
+                       if str(value.get("next_claimed_by") or "").strip() else {})}),
+                "source_rows": {key: [encode(row, include_payload=False) if isinstance(row, dict) else None
+                                      for row in value.get(key, [])]
+                                for key in TODO_SUMMARY_SOURCE_KEYS if isinstance(value.get(key), list)},
+            }} if summary_kind else {}),
             "frontier_deadline": value.get("frontier_deadline"),
             "route_items": build_todo_route_continuation_facts(value, handoff_gates=handoff_gates),
             "handoff_items": [{"display": gate,
                 "excluded": normalize_todo_excluded_agents(gate.get("excluded_agents"))}
                 for gate in handoff_gates],
             "source_contract": _closure_source_facts(value),
-            "resume": build_todo_resume_planning_request(value, agent_id=agent, item_limit=8,
-                available_capabilities=(available_capabilities or []) if resolve_capacity else None),
+            "resume": resume_request,
             "selection": {
                 "observed_at": observed_at,
                 "available": normalize_required_capabilities(available_capabilities),
@@ -177,9 +204,11 @@ def project_quota_planning(
                 "frontier_revision_index": value.get("advancement_frontier_revision_index"),
                 "diagnostic_limit": 3, "backlog_limit": 8, "visibility_limit": 16,
             },
-        })
+        }, large_local_snapshot=True)
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
+    if summary_kind:
+        return _decode_quota_summary_wire(wire, value)
     result = _decode_quota_planning_wire(wire)
     if not isinstance(result, dict) or result.get("schema_version") != "todo_quota_planning_v0":
         raise RuntimeError("TypeScript Todo quota planning shape mismatch")
@@ -192,3 +221,67 @@ def project_quota_planning(
     elif result["closure_intent"] is not None:
         raise RuntimeError("TypeScript Todo quota planning closure intent shape mismatch")
     return result
+
+
+def _decode_quota_summary_wire(wire: Any, source: dict[str, Any]) -> dict[str, Any]:
+    """Resolve owner-selected transport references after bounded validation."""
+    error = "invalid TypeScript quota summary wire"
+    if not isinstance(wire, dict) or wire.get("schema_version") != "todo_quota_summary_wire_v1":
+        raise RuntimeError(error)
+    summary, copies, integers = wire.get("summary"), wire.get("source_copies"), wire.get("integer_copies")
+    if not isinstance(summary, dict) or not isinstance(copies, list) or not isinstance(integers, list):
+        raise RuntimeError(error)
+    expanded = len(json.dumps(summary, ensure_ascii=False, separators=(",", ":")).encode())
+    patches: list[tuple[Any, Any, Any]] = []
+    targets: set[tuple[Any, ...]] = set()
+
+    def path(value: Any, *, nonempty: bool = False) -> list[Any]:
+        if (not isinstance(value, list) or (nonempty and not value)
+                or any(type(key) not in (str, int) or isinstance(key, int) and key < 0 for key in value)):
+            raise RuntimeError(error)
+        return value
+
+    def child(parent: Any, key: Any) -> Any:
+        if not (isinstance(parent, dict) and isinstance(key, str)
+                or isinstance(parent, list) and type(key) is int):
+            raise RuntimeError(error)
+        return parent[key]
+
+    try:
+        for copy in [*copies, *integers]:
+            if not isinstance(copy, dict):
+                raise RuntimeError(error)
+            target_path = path(copy.get("target"), nonempty=True)
+            coordinate = tuple(target_path)
+            if coordinate in targets:
+                raise RuntimeError(error)
+            targets.add(coordinate)
+            parent: Any = summary
+            for key in target_path[:-1]:
+                parent = child(parent, key)
+            if child(parent, target_path[-1]) is not None:
+                raise RuntimeError(error)
+            if "source" in copy:
+                original: Any = source
+                for key in path(copy["source"]):
+                    original = child(original, key)
+            else:
+                raw = copy.get("value")
+                if not isinstance(raw, str) or not raw or raw.lstrip("-").strip("0123456789"):
+                    raise RuntimeError(error)
+                original = int(raw)
+            expanded += len(json.dumps(original, ensure_ascii=False, separators=(",", ":")).encode()) - 4
+            if expanded > MAX_LOCAL_SNAPSHOT_BYTES:
+                raise RuntimeError("TypeScript quota summary expanded response is oversized")
+            patches.append((parent, target_path[-1], original))
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise RuntimeError(error) from None
+    if expanded > MAX_LOCAL_SNAPSHOT_BYTES:
+        raise RuntimeError("TypeScript quota summary expanded response is oversized")
+    for parent, key, original in patches:
+        parent[key] = original
+    if (not isinstance(summary.get("work_counts"), dict)
+            or any(not isinstance(summary.get(key), list) for key in (
+                "first_open_items", "first_executable_items", "monitor_open_items", "backlog_items"))):
+        raise RuntimeError(error)
+    return summary

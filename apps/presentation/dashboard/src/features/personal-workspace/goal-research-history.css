@@ -260,6 +260,7 @@
 .research-history-detail .research-finding-exceptions { font-size: var(--text-body); color: var(--pw-muted); margin: 0; }
 .research-recorded-finding > h3 { max-width: none; font-size: var(--text-heading); line-height: var(--leading-heading); margin: 8px 0; }
 .research-reader-states { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.research-reader-return { display: flex; align-items: center; gap: 4px; }
 .research-reader-question { margin-block: 4px 12px; font-size: var(--text-body); }
 .research-reader-question > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; color: var(--pw-muted); }
 .research-reader-question > summary::before { content: "▸"; flex-shrink: 0; }

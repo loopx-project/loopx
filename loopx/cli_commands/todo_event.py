@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from ..command_invocation import cli_option_args, loopx_cli_argv
 from ..control_plane.todos.contract import decision_scope_metadata_value
 from ..file_lock import lock_timeout_error_fields
+from .todo_argument_validation import TODO_OPTION_FIELDS
 
 
 RolloutEventAppender = Callable[..., dict[str, object]]
@@ -18,6 +21,74 @@ TODO_EVENT_KINDS = {
     "supersede": "todo_supersede",
     "archive-completed": "todo_archive_completed",
 }
+
+
+def _original_todo_arguments(args: argparse.Namespace) -> list[str]:
+    """Carry parsed caller inputs; Core still decides whether a retry is legal."""
+    arguments = ["todo", args.todo_command, "--goal-id", args.goal_id]
+    for flag, field in (*TODO_OPTION_FIELDS, ("--project", "project"),
+                        ("--dry-run", "dry_run"), ("--result-file", "result_file")):
+        value = getattr(args, field, None)
+        if isinstance(value, bool):
+            if value:
+                arguments.append(flag)
+        elif isinstance(value, list):
+            for item in value:
+                arguments.extend(cli_option_args(flag, item))
+        elif value is not None:
+            arguments.extend(cli_option_args(flag, value))
+    return arguments
+
+
+def _route_native_recovery(
+    payload: dict[str, object], args: argparse.Namespace, *,
+    registry_path: Path, runtime_root_arg: str | None,
+) -> None:
+    """Adapt native guidance to this CLI without changing its recovery decision."""
+    recovery = payload.get("recovery")
+    if not isinstance(recovery, dict):
+        return
+    route = loopx_cli_argv()
+    routed = dict(recovery)
+    for step, descriptor in recovery.items():
+        if not isinstance(descriptor, dict) or not isinstance(descriptor.get("command"), str):
+            continue
+        try:
+            command = shlex.split(descriptor["command"])
+        except ValueError:
+            continue  # Malformed optional guidance must not hide the refusal.
+        if not command or command[0] != "loopx":
+            continue
+        arguments = descriptor.get("cli_args")
+        if descriptor.get("reference_source") == "claim_operation_id_from_claim":
+            arguments = _original_todo_arguments(args)
+        else:
+            arguments = list(arguments) if isinstance(arguments, list) else command[1:]
+        # The update adapter may already bind selectors. Inspect only the global
+        # prelude, never user prose that happens to resemble an option.
+        start = next((i for i in range(len(arguments) - 1)
+                      if arguments[i:i + 2] == command[1:3]), 0)
+        prelude = arguments[:start]
+        selectors = list(route[1:])
+        for flag, value in (("--registry", str(registry_path)),
+                            ("--runtime-root", runtime_root_arg), ("--format", "json")):
+            if value is not None and not any(part == flag or part.startswith(flag + "=") for part in prelude):
+                selectors.extend(cli_option_args(flag, value))
+        for flag, field in (("--goal-id", "goal_id"), ("--todo-id", "todo_id")):
+            value = descriptor.get(field) or getattr(args, field, None)
+            if flag not in arguments and value is not None:
+                arguments.extend(cli_option_args(flag, value))
+        if arguments[:1] == ["todo"]:
+            for flag, field in (("--agent-id", "agent_id"), ("--role", "role"),
+                                ("--project", "project"), ("--state-file", "state_file")):
+                value = getattr(args, field, None)
+                if flag not in arguments and value is not None:
+                    arguments.extend(cli_option_args(flag, value))
+            if getattr(args, "dry_run", False) and "--dry-run" not in arguments:
+                arguments.append("--dry-run")
+        routed[step] = {**descriptor, "command": shlex.join([*route, *command[1:]]),
+                        "cli_args": [*selectors, *arguments]}
+    payload["recovery"] = routed
 
 
 def todo_error_payload(
@@ -73,6 +144,7 @@ def todo_error_payload(
         payload["error_code"] = exc.code
         if exc.authoring_contract is not None:
             payload["authoring_contract"] = exc.authoring_contract
+    _route_native_recovery(payload, args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     return payload
 
 
@@ -85,6 +157,11 @@ def append_todo_rollout_event(
     append_cli_rollout_event: RolloutEventAppender,
 ) -> None:
     turn_instance_id = getattr(args, "turn_instance_id", None)
+    identity = payload.get("settlement_identity")
+    if turn_instance_id is None and isinstance(identity, Mapping):
+        # Lifecycle reentry carries the TS-verified historical binding; the
+        # opaque completion key is not a Turn id and must never be parsed.
+        turn_instance_id = identity.get("turn_instance_id")
     terminal_closeout = bool(
         turn_instance_id
         and args.todo_command == "complete"

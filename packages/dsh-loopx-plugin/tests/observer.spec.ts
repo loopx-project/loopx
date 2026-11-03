@@ -304,6 +304,65 @@ describe('shadow observer envelopes', () => {
     expect(stats.observed_event_count).toBe(envelopes.length + unsafeCount)
   })
 
+  // Refs #7729: the producer's fail-closed check is a copy of the canonical
+  // owner's shapes (loopx/public_safe_text.py SECRET_LIKE_SURFACE_PATTERN), and
+  // the copy has to refuse every arm that owner refuses. Values are assembled
+  // from parts so no credential-looking literal is committed.
+  it('refuses every canonical credential arm before the first append', async () => {
+    const gh = 'gh' + 'p_'
+    const githubPat = 'github' + '_pat_'
+    const aws = 'A' + 'KIA'
+    const awsSession = 'A' + 'SIA'
+    const slackBot = 'xox' + 'b-'
+    const slackApp = 'xox' + 'p-'
+    const googleKey = 'AI' + 'za'
+    const stripeRestricted = 'r' + 'k_live_'
+    const npmToken = 'np' + 'm_'
+    const pypiToken = 'py' + 'pi-'
+    const drivePath = 'C' + ':/private/notes.txt'
+    // One value per canonical arm, plus the arm variants the copy used to narrow.
+    const refused: ReadonlyArray<readonly [string, string]> = [
+      ['github_classic_floor', gh + '1234567890abcdef'],
+      ['github_classic_floor_plus_three', gh + '1234567890abcdefghi'],
+      ['github_fine_grained', githubPat + '11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789'],
+      ['aws_access_key_id', aws + 'IOSFODNN7EXAMPLE'],
+      ['aws_session_key_id', awsSession + 'IOSFODNN7EXAMPLE'],
+      ['slack_bot_token', slackBot + '123456789012-123456789012-abcdefghijklmnopqrstuvwx'],
+      ['slack_app_token', slackApp + '123456789012-123456789012-abcdefghijklmnopqrstuvwx'],
+      ['google_api_key', googleKey + 'SyA1234567890abcdefghijklmnopqrstuvw'],
+      ['stripe_restricted_key', stripeRestricted + 'abcdefghijklmnopqrstuvwx'],
+      ['npm_token', npmToken + 'abcdefghijklmnopqrstuvwxyz0123456789'],
+      ['pypi_token', pypiToken + 'AgEIcHlwaS5vcmcabcdefghijklmnop'],
+      ['api_key_label_without_floor', 'api' + '_key:abc'],
+      ['access_token_label', 'access' + '_token:abcdefghijkl'],
+      ['refresh_token_label', 'refresh' + '_token:abcdefghijkl'],
+      ['password_label', 'pass' + 'word:abcdefghijkl'],
+      ['secret_label', 'sec' + 'ret:abcdefghijkl'],
+      ['windows_drive_outside_user_profile', drivePath],
+    ]
+    for (const [label, value] of refused) {
+      const { appended, observer } = observerWithCapture()
+      observer.observeSessionEvent(fakeSession(), sessionEvent('tool/call', 1, 1_756_728_001_000, {
+        turn: 1, step: 1, callId: 'call-1', name: value,
+      }))
+      await observer.flush()
+      const stats = parsed(appended).at(-1) as ObserverStats
+      expect(stats.rejected_by_reason, label).toEqual({ public_safety_violation: 1 })
+      expect(appended.flat().join('\n'), label).not.toContain(value)
+    }
+    const accepted = ['skill-python', 'token_count', 'tool/read-file', 'error-timeout']
+    for (const value of accepted) {
+      const { appended, observer } = observerWithCapture()
+      observer.observeSessionEvent(fakeSession(), sessionEvent('tool/call', 1, 1_756_728_001_000, {
+        turn: 1, step: 1, callId: 'call-1', name: value,
+      }))
+      await observer.flush()
+      const stats = parsed(appended).at(-1) as ObserverStats
+      expect(stats.rejected_by_reason, value).toEqual({})
+      expect(appended.flat().join('\n'), value).toContain(value)
+    }
+  })
+
   it('drops with a count while a flush is in flight and the buffer is full', async () => {
     const appended: string[][] = []
     let release: (() => void) | undefined

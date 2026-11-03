@@ -78,7 +78,7 @@ def test_staged_packet_budget_and_lossless_authority(stride):
         control = writer["stride_control"]
         assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
         assert "decision_followthrough" not in control and "decision_value_review" not in control
-        assert "minimal_example" not in control
+        assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
         assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
         assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
@@ -165,7 +165,7 @@ def assert_explore_entry_and_writer(source, entry, writer):
     assert "result_attachment_template" not in graph
     # These obligations apply BEFORE choosing or executing work, not at closeout.
     assert "Read measurement_feedback before repeating a measured route" in graph["result_writeback_guidance"]
-    assert "keep the active task lease through refresh-state" in graph["result_writeback_guidance"]
+    assert "keep its claimed execution through refresh-state" in graph["result_writeback_guidance"]
     assert "Keep raw logs local." in graph["result_writeback_guidance"]
     assert "Capture is optional, not a settlement obligation." in graph["result_writeback_guidance"]
     assert "never invent a shared version" in graph["result_writeback_guidance"]
@@ -193,6 +193,8 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
+    with fixture["state"].open("a") as stream:
+        stream.write("\n## Original additional requirements\nPreserve this final independent stop.\n")
     if not replan:
         fixture["index"].write_text("")
     wake = tmp_path / "wakes" / TURN
@@ -231,6 +233,21 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
         assert str(view_path) in body and str(source_path) not in body
         assert body.endswith("original heartbeat instructions")
         if context_delivery:
+            assert "--defer-context-presentation" in commands[0]
+            assert "--context-delivery" in commands[0]
+            assert not list(native.iterdir()), "Host preflight must not alter native continuity"
+            assert not any(read.get("source") == "goal_state" for read in
+                view["interaction_contract"]["agent_channel"]["required_reads"])
+            delivered = [row["content"] for row in view["interaction_contract"]["agent_channel"]
+                ["work_context"]["sources"] if row.get("source") == "goal_state"]
+            if replan:
+                # This fixture has no bound work: the staged review owns the
+                # original Goal read, not ordinary work-context delivery.
+                core = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
+                assert shlex.split(core["read_action"]) == ["cat", "--", str(fixture["state"].resolve())]
+            else:
+                assert len(delivered) == 1 and delivered[0]["full_source"] is True
+                assert delivered[0]["text"] == fixture["state"].read_text()
             # The optional full/delta transport must present the staged CLI
             # view too. Its full recovery must not restore old inline hints.
             command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
@@ -655,7 +672,18 @@ def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):
     cli_detail = call_progress_cli(reader_fixture, *command[3:])
     assert cli_detail["explore_basis"] == basis
     assert {row["status"] for row in basis["finding_refs"]} >= {"confirmed", "refuted"}
-    _, _, params = _views(enabled)
-    writer = _turn_envelope_result("replan_view", **params, stage="writeback")
+    writer_command = shlex.split(cli_review["next"]["writeback"])
+    writer = call_progress_cli(reader_fixture, *writer_command[3:])
     assert writer["stride_control"]["reference_context_id"] == review["context_id"]
+    control = writer["stride_control"]
+    example = control["minimal_example"]
+    assert set(control["required_fields"]) <= example.keys()
+    assert set(example["previous_review"]) == {
+        "reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson",
+    }
+    assert example["previous_review"]["reference_decision_ref"] == control["previous_decision_ref"]
+    assert {example["previous_review"][key] for key in ("adoption", "information_gain", "goal_gain")} == {"unknown"}
+    assert set(example["explore_review"]) >= {"revision", "disposition", "considered_refs", "reason"}
+    assert example["explore_review"]["revision"] == basis["revision"]
+    assert example["explore_review"]["considered_refs"] == []
     assert json_bytes(writer) <= 16 * 1024

@@ -188,10 +188,9 @@ def assert_selected_agent_todo(
         assert summary["payload_compaction"]["schema_version"] == (
             "quota_cli_todo_summary_compaction_v0"
         ), summary
-        assert "title" not in item, summary
         assert item["text"] == f"[P1] {CANARY_TODO_TITLE}", summary
-    else:
-        assert item["title"] == CANARY_TODO_TITLE, summary
+    # The shared diagnostic projection retains each visible record in full.
+    assert item["title"] == CANARY_TODO_TITLE, summary
     assert item["claimed_by"] == AGENT_ID, summary
     assert item["task_class"] == "advancement_task", summary
     assert "todo_markdown_fallback" not in json.dumps(summary, sort_keys=True), summary
@@ -293,6 +292,8 @@ def assert_scheduler_ack_state_machine(
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -381,6 +382,8 @@ def assert_todo_completion_successor_state_machine(
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -467,6 +470,8 @@ def assert_refresh_and_spend_state_machine(
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",
@@ -485,6 +490,8 @@ def assert_due_monitor_poll_state_machine(root: Path, *, provider: str) -> None:
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         MONITOR_GOAL_ID,
         "--agent-id",
@@ -539,6 +546,8 @@ def assert_due_monitor_poll_state_machine(root: Path, *, provider: str) -> None:
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         MONITOR_GOAL_ID,
         "--agent-id",
@@ -604,6 +613,8 @@ def assert_same_agent_continuation_read_path(root: Path, *, provider: str) -> No
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         CONTINUATION_GOAL_ID,
         "--agent-id",
@@ -680,6 +691,8 @@ def assert_same_agent_continuation_read_path(root: Path, *, provider: str) -> No
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         CONTINUATION_GOAL_ID,
         "--agent-id",
@@ -762,6 +775,8 @@ def run_fixture_canary(root: Path, *, provider: str) -> None:
         runtime_root,
         "quota",
         "should-run",
+        "--context-delivery",
+        "off",
         "--goal-id",
         GOAL_ID,
         "--agent-id",

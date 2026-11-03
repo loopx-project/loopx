@@ -88,6 +88,18 @@ class StewardReports:
             return {"turn_id": turn["turn_id"], "todo_id": request["todo_id"]}
         return None
 
+    def _execution_failed(self, actor: dict[str, Any], window: dict[str, Any]) -> bool:
+        """Observe the current attempt; this grants no cancellation or retry."""
+        from .steward_turn import report_turn
+        turn = report_turn(self.controller.store, actor, window)
+        request = (turn or {}).get("loopx_request") or {}
+        native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
+        return bool(turn and request.get("actor") == actor and request.get("work_kind") == "report"
+            and request.get("report_window_id") == window["window_id"]
+            and request.get("report_subscription_revision") == window["subscription_revision"]
+            and (turn.get("status") in {"failed", "interrupted", "timed_out"}
+                or native.get("status") == "failed"))
+
     def _cancel_failed_window(self, actor: dict[str, Any], window: dict[str, Any],
                               failure: dict[str, str], *, cadence_locked: bool = False) -> None:
         from ..periodic_report.cadence_journal import (
@@ -246,6 +258,7 @@ class StewardReports:
                     config.get("schedule"), now=datetime.now(timezone.utc)) if config.get("enabled") else None,
                 "retained_window_due_at": journal["window"]["due_at"] if journal else None,
                 "generation_id": generation, "delivery_status": delivery or "not_generated",
+                "execution_failed": bool(journal and self._execution_failed(actor, journal["window"])),
                 "publication_verified": bool(journal and self._published_window(journal["window"])),
                 "destination": "original_owner_private_chat_full_body"}
         except (OSError, ValueError, TypeError, KeyError, StopIteration):
@@ -575,9 +588,7 @@ class ManagedSessionReports(StewardReports):
             folder = attempt_directory(self.root, window) if window else None
             from .steward_turn import report_turn
             turn = report_turn(self.controller.store, actor, window) if window else None
-            native = ((turn or {}).get("response") or {}).get("native_loopx") or {}
-            failed = bool(turn and (turn["status"] in {"failed", "interrupted", "timed_out"}
-                or native.get("status") == "failed"))
+            failed = bool(window and self._execution_failed(actor, window))
             published = bool(window and self._published_window(window))
             returned = []
             if published and turn and folder and (folder / "report.md").is_file():

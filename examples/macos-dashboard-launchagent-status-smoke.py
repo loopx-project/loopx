@@ -659,6 +659,16 @@ def main() -> int:
         assert not changed_root.exists(), "selection must not create or migrate a Session store"
         assert native_state.read_text() == '{"session":"retained"}'
 
+        # An explicit disabled interactive wall limit survives upgrade; idle
+        # and startup protection remain independent, and no store is changed.
+        run_script(fake_bin, home, ["install"], schema_version=2,
+                   extra_env={"LOOPX_CHAT_HARD_TIMEOUT_SECONDS": "0"})
+        run_script(fake_bin, home, ["restart"], schema_version=2)
+        unlimited = plistlib.loads(chat_plist.read_bytes())["EnvironmentVariables"]
+        assert unlimited["LOOPX_CHAT_HARD_TIMEOUT_SECONDS"] == "0"
+        assert float(unlimited["LOOPX_CHAT_IDLE_TIMEOUT_SECONDS"]) == 700
+        assert native_state.read_text() == '{"session":"retained"}'
+
         # Legacy generated plists used only a shell export. Preserve quoted
         # paths across upgrades without ever executing their command contents.
         legacy = plistlib.loads(chat_plist.read_bytes())

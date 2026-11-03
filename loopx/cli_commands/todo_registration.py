@@ -45,7 +45,7 @@ def register_todo_command(
         ],
         default=None,
         help=(
-            "Use add to append a checkbox todo, claim to soft-claim by registered "
+            "Use add to append a checkbox todo, claim to prepare execution by registered "
             "agent id, list to read projected todos, update/complete/supersede to transition by todo_id, or "
             "archive-completed to move older completed todos into Completed Work Archive. "
             "Use plan with --text and --agent-id for the existing Goal's model planning checkpoint; the caller owns subsequent execution."
@@ -285,32 +285,17 @@ def register_todo_command(
     todo_parser.add_argument(
         "--claimed-by",
         help=(
-            "For agent todo add/claim/update, assign the soft execution owner to a "
+            "For agent todo add/claim/update, assign the task owner to a "
             "registered public-safe agent id such as codex-main-control. This names "
             "the assignment target, not the lifecycle actor; multi-agent lifecycle "
             "commands still require --agent-id. User todos use --bound-agent or "
             "--goal-bound instead."
         ),
     )
-    todo_parser.add_argument(
-        "--task-lease-idempotency-key",
-        help=(
-            "For todo claim on promoted hard-lease authority, atomically acquire "
-            "the canonical lease and claim. Optional for administrative edits and bounded owner pause/resume; "
-            "when supplied, this proof and the current version are strictly checked. "
-            "Complete, supersede and other execution-fenced updates require the active execution proof."
-        ),
-    )
-    todo_parser.add_argument(
-        "--task-lease-expected-version",
-        type=int,
-        help=(
-            "For promoted todo claim, optionally compare-and-set the canonical "
-            "lease version. For updates with an explicit lease key, supply its current version; "
-            "partial or stale proof is rejected. Complete, supersede and other execution-fenced "
-            "updates require the active lease version when it is effective."
-        ),
-    )
+    # Host orchestration uses explicit generation fencing. Ordinary task callers
+    # use claim_operation_id; do not advertise the host transport as task work.
+    todo_parser.add_argument("--task-lease-idempotency-key", help=argparse.SUPPRESS)
+    todo_parser.add_argument("--task-lease-expected-version", type=int, help=argparse.SUPPRESS)
     todo_parser.add_argument(
         "--bound-agent",
         help=(
@@ -470,6 +455,26 @@ def register_todo_command(
             "For todo list, return the explicit field-only projection and omit "
             "detail lanes; returns at most two items per role, and --limit can "
             "lower but not expand that bound."
+        ),
+    )
+    todo_parser.add_argument(
+        "--summary",
+        dest="todo_summary",
+        action="store_true",
+        help=(
+            "For todo list, show a versioned queue overview with at most eight "
+            "items per role; --limit can lower that bound. Use an exact "
+            "--todo-id read for complete requirements. Cannot combine with "
+            "--thin or --todo-id."
+        ),
+    )
+    todo_parser.add_argument(
+        "--include-archived",
+        dest="include_archived",
+        action="store_true",
+        help=(
+            "For todo list, include archived Todos from canonical SQLite "
+            "authority alongside active Todos."
         ),
     )
     todo_parser.add_argument("--project", help="Project root. Defaults to the registry goal repo.")

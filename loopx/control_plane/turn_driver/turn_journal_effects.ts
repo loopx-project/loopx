@@ -10,6 +10,7 @@ import {
 } from "../effect_runtime_errors.ts";
 import {
   atomicWriteJson,
+  atomicWriteText,
   claimFileMutationLock,
   mutationLockOwner,
   releaseFileMutationLock,
@@ -18,7 +19,7 @@ import {
 } from "../effect_runtime_io.ts";
 import { decideFirstPartyHostRuntime } from "../goals/first_party_host_runtime.ts";
 import { parseExactGoalRef } from "../goals/goal_instance_identity.ts";
-import { requireNonEmptyString as requiredString } from "../runtime_decode.ts";
+import { requireNonEmptyString as requiredString, sourceNumberTokens } from "../runtime_decode.ts";
 import { preparedAttemptViolation } from "./turn_journal_attempt_contract.ts";
 import {
   interpretTurnJournalEffect,
@@ -63,24 +64,52 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableValue);
+type SourceNumbers = WeakMap<object, Map<string, string>>;
+
+function rawNumber(token: string): unknown {
+  const rawJSON = (JSON as typeof JSON & {rawJSON?: (text: string) => unknown}).rawJSON;
+  if (!rawJSON) throw new EffectRuntimeRequestError("Turn journal number preservation requires JSON.rawJSON", "journal_snapshot_invalid");
+  return rawJSON(token);
+}
+
+function stableValue(value: unknown, numbers?: SourceNumbers): unknown {
   if (typeof value !== "object" || value === null) return value;
+  const child = (key: string, item: unknown): unknown => {
+    const token = numbers?.get(value)?.get(key);
+    return token === undefined ? stableValue(item, numbers) : rawNumber(token);
+  };
+  if (Array.isArray(value)) return value.map((item, index) => child(String(index), item));
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, child]) => [key, stableValue(child)]),
+      .map(([key, item]) => [key, child(key, item)]),
   );
 }
 
-function operationId(journal: JsonObject): string {
-  return `sha256:${sha256(JSON.stringify(stableValue(journal)))}`;
+function operationId(journal: JsonObject, numbers?: SourceNumbers): string {
+  return `sha256:${sha256(JSON.stringify(stableValue(journal, numbers)))}`;
 }
 
-function journalWithoutRecoveryAudit(journal: JsonObject): JsonObject {
+function journalWithoutRecoveryAudit(journal: JsonObject, numbers?: SourceNumbers): JsonObject {
   const projected = { ...journal };
+  const fields = numbers?.get(journal);
+  if (fields) numbers?.set(projected, fields);
   delete projected.recovery_audit;
   return projected;
+}
+
+function parseJournal(encoded: string): {journal: JsonObject; numbers: SourceNumbers} {
+  const numbers: SourceNumbers = new WeakMap();
+  const journal = asObject(JSON.parse(encoded, function (key, value: unknown, context?: {source?: string}) {
+    if (typeof value === "number" && Number.isInteger(value) &&
+        context?.source !== undefined && context.source !== JSON.stringify(value)) {
+      const fields = numbers.get(this) ?? new Map<string, string>();
+      fields.set(key, context.source);
+      numbers.set(this, fields);
+    }
+    return value;
+  }));
+  return {journal, numbers};
 }
 
 interface JournalState {
@@ -268,15 +297,17 @@ function requireJournalTransition(
   incoming: JsonObject,
   previous: JournalState,
   next: JournalState,
+  previousNumbers?: SourceNumbers,
+  nextNumbers?: SourceNumbers,
 ): void {
-  if (operationId(asObject(existing.plan)) !== operationId(asObject(incoming.plan))) {
+  if (operationId(asObject(existing.plan), previousNumbers) !== operationId(asObject(incoming.plan), nextNumbers)) {
     conflict("Turn journal transaction plan is immutable", "journal_plan_conflict");
   }
   if (terminalStatuses.has(previous.status)) {
     const auditOnly =
       previous.status === next.status &&
-      operationId(journalWithoutRecoveryAudit(existing)) ===
-        operationId(journalWithoutRecoveryAudit(incoming));
+      operationId(journalWithoutRecoveryAudit(existing, previousNumbers), previousNumbers) ===
+        operationId(journalWithoutRecoveryAudit(incoming, nextNumbers), nextNumbers);
     if (auditOnly) return;
     conflict("Terminal Turn journal tombstones are immutable");
   }
@@ -286,8 +317,8 @@ function requireJournalTransition(
   if (
     previous.status === next.status &&
     ["failed", "scheduler_action_required"].includes(previous.status) &&
-    operationId(journalWithoutRecoveryAudit(existing)) !==
-      operationId(journalWithoutRecoveryAudit(incoming))
+    operationId(journalWithoutRecoveryAudit(existing, previousNumbers), previousNumbers) !==
+      operationId(journalWithoutRecoveryAudit(incoming, nextNumbers), nextNumbers)
   ) {
     conflict("Settled Turn journal state only permits recovery-audit completion");
   }
@@ -318,7 +349,27 @@ export async function commitTurnJournal(
   if (!isAbsolute(path)) {
     throw new EffectRuntimeRequestError("Turn journal path must be absolute");
   }
-  const journal = asObject(params.journal);
+  const source = asObject(params.journal);
+  const tokens = sourceNumberTokens(source, params.source_number_tokens);
+  let originalJson: string | null = null;
+  if (tokens.length) {
+    const numbers = new WeakMap<object, Map<string, string>>();
+    for (const {path, token} of tokens) {
+      let parent: Record<string | number, unknown> = source;
+      for (const key of path.slice(0, -1)) parent = parent[key] as typeof parent;
+      const fields = numbers.get(parent) ?? new Map<string, string>();
+      fields.set(String(path.at(-1)), token);
+      numbers.set(parent, fields);
+    }
+    originalJson = JSON.stringify(source, function (key, value: unknown) {
+      const token = numbers.get(this)?.get(key);
+      return token === undefined ? value : rawNumber(token);
+    }, 2);
+  }
+  // Validate and publish the same isolated snapshot when source spellings are
+  // supplied. Native objects without metadata retain their historical path.
+  const {journal, numbers} = originalJson === null
+    ? {journal: source, numbers: undefined} : parseJournal(originalJson);
   const goalBinding = parseTurnJournalGoalBinding(journal);
   if (goalBinding.kind === "invalid") {
     throw new EffectRuntimeRequestError(
@@ -336,13 +387,14 @@ export async function commitTurnJournal(
       "Turn journal does not carry the expected settlement effect",
     );
   }
-  const incomingOperationId = operationId(journal);
+  const incomingOperationId = operationId(journal, numbers);
   const commit = async (): Promise<JsonObject> =>
     await withFileMutationLock(path, async () => {
       let existing: JsonObject | null = null;
       try {
         const encoded = await readFile(path, "utf8");
-        existing = asObject(JSON.parse(encoded));
+        const previous = parseJournal(encoded);
+        existing = previous.journal;
         const existingState = requireJournalState(existing);
         const existingEffectId = existingState.effectId;
         if (
@@ -354,7 +406,7 @@ export async function commitTurnJournal(
             "journal_effect_conflict",
           );
         }
-        if (operationId(existing) === incomingOperationId) {
+        if (operationId(existing, previous.numbers) === incomingOperationId) {
           return {
             ok: true,
             appended: false,
@@ -363,7 +415,7 @@ export async function commitTurnJournal(
             operation_id: incomingOperationId,
           };
         }
-        requireJournalTransition(existing, journal, existingState, incomingState);
+        requireJournalTransition(existing, journal, existingState, incomingState, previous.numbers, numbers);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
@@ -373,7 +425,8 @@ export async function commitTurnJournal(
       )) {
         conflict("A new Turn journal must begin in progress with no completed phases");
       }
-      await atomicWriteJson(path, journal);
+      if (originalJson === null) await atomicWriteJson(path, journal);
+      else await atomicWriteText(path, `${originalJson}\n`);
       return {
         ok: true,
         appended: true,

@@ -1,6 +1,7 @@
+import {DocumentAttachment, isTextDocument} from "./document-attachment";
 import {useEffect, useRef, useState} from "react";
-import {ChevronRight, ListChecks, RefreshCw, X} from "lucide-react";
-import {fetchChatSession, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
+import {ChevronRight, CircleAlert, ListChecks, RefreshCw, X} from "lucide-react";
+import {fetchChatSessionHistory, fetchChatSessions, requestJson, type ChatImageAttachment, type ChatVisibleMessage, type ChatReplyContext} from "../../data/chat";
 import {z} from "zod";
 import {fetchConversationRequests, type ConversationRequest, type ConversationRequestInventory} from "../../data/conversation-requests";
 import {ContextHelp} from "./context-help";
@@ -124,7 +125,9 @@ function requestStage(row: ConversationRequest, zh: boolean) {
     case "reconcile_reservation": return zh ? "取消待收尾" : "Cancellation settling";
     case "await_return_delivery": return zh ? "待送达" : "Awaiting delivery";
     case "consume_peer_result": case "await_peer_consumption": return zh ? "结果待核对" : "Result awaiting readback";
-    default: return row.decision === "adopt" ? (zh ? "待结论" : "Awaiting conclusion")
+    default: return row.agenda?.remaining_work ? ((row.agenda.pending_return_count ?? 0) > 0
+      ? (zh ? "部分结果待送达" : "Partial result awaiting delivery") : (zh ? "已回部分结果" : "Partial result returned"))
+      : row.decision === "adopt" ? (zh ? "待结论" : "Awaiting conclusion")
       : row.decision === "defer" ? (zh ? "已暂缓" : "Deferred")
       : (zh ? "待回复" : "Awaiting reply");
   }
@@ -132,6 +135,7 @@ function requestStage(row: ConversationRequest, zh: boolean) {
 
 function OriginalImage({attachment, zh}: {attachment: ChatImageAttachment; zh: boolean}) {
   const [failed, setFailed] = useState(false);
+  if (isTextDocument(attachment.mime_type)) return <DocumentAttachment dataUrl={attachment.data_url} name={attachment.name} size={attachment.size} zh={zh}/>;
   return failed ? <p role="status">{zh ? "图片无法显示：" : "Image unavailable: "}{attachment.name}</p>
     : <img src={attachment.data_url} alt={attachment.name} onError={() => setFailed(true)}/>;
 }
@@ -170,9 +174,8 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
     setError(false);
     if (!open || !active) {setMessages(null); return;}
     const abort = new AbortController();
-    void fetchChatSession(row.source_session_id, abort.signal).then(value => {
+    void fetchChatSessionHistory(row.source_session_id, abort.signal).then(value => {
       if (abort.signal.aborted) return;
-      if (value.session.session_id !== row.source_session_id) throw new Error("Original conversation scope changed.");
       const source = value.messages.filter(message => message.turn_id === row.source_turn_id);
       if (!source.length) throw new Error("Original turn unavailable.");
       setMessages(source);
@@ -192,6 +195,38 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
   </details>;
 }
 
+function LinkedRequestWork({row, zh, active, revision}: {row: ConversationRequest; zh: boolean; active: boolean; revision: number}) {
+  const [open, setOpen] = useState(false);
+  const [work, setWork] = useState<ConversationRequest | null>(null);
+  const [error, setError] = useState(false);
+  const content = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open && active && (work || error)) {content.current?.focus(); content.current?.scrollIntoView({block: "nearest"});}
+  }, [open, active, work, error]);
+  useEffect(() => {
+    setWork(null); setError(false);
+    if (!open || !active) return;
+    const abort = new AbortController();
+    void fetchConversationRequests(row.source_session_id, true, 0, abort.signal, row.request_id, 1, true).then(value => {
+      if (abort.signal.aborted) return;
+      const current = value.rows[0];
+      if (!current || current.request_id !== row.request_id || current.goal_id !== row.goal_id || current.agent_id !== row.agent_id
+        || current.source_turn_id !== row.source_turn_id || current.request_revision !== row.request_revision) throw new Error("Request changed");
+      setWork(current);
+    }).catch(() => {if (!abort.signal.aborted) setError(true);});
+    return () => abort.abort();
+  }, [open, active, row.request_id, row.request_revision, row.source_session_id, row.source_turn_id, row.goal_id, row.agent_id, revision]);
+  return <details onToggle={event => setOpen(event.currentTarget.open)}><summary>{zh ? "关联工作与记录" : "Linked work and records"}</summary>
+    <div ref={content} tabIndex={-1}>{error ? <p role="alert">{zh ? "关联记录暂时无法核验，请刷新委派后重试。" : "Linked records cannot be verified. Refresh delegations and retry."}</p>
+      : work ? <><p>{zh ? "请求版本" : "Request revision"} {work.request_revision ?? "—"} · {zh ? ({supplied: "已读取", pending: "待读取", unavailable: "读取未知"}[work.read_status] ?? "读取未知") : work.read_status}
+        {" · "}{zh ? ({adopt: "已采纳", defer: "已暂缓", reject: "未采纳", no_change: "无需调整"}[work.decision] ?? "尚无判断") : work.decision}</p>
+        <ul>{work.linked_todos.map(todo => <li key={todo.todo_id}>{todo.title ?? todo.todo_id} · {todo.status ?? (zh ? "状态未知" : "Unknown")}</li>)}</ul>
+        {work.evidence_refs.map(value => <p key={value}><code>{value}</code></p>)}
+        {work.warnings.length ? <p role="status">{zh ? "部分关联记录需要恢复。" : "Some linked records need recovery."}</p> : null}</>
+        : open ? <p role="status">{zh ? "正在读取关联记录…" : "Loading linked records…"}</p> : null}</div>
+  </details>;
+}
+
 export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {sessionId?: string; ownerFallback: boolean; refreshKey: string}) {
   const {locale} = useWorkspaceI18n();
   const zh = locale === "zh-CN";
@@ -205,33 +240,52 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const [noSession, setNoSession] = useState(false);
   const [revision, setRevision] = useState(0);
   const [originalRevision, setOriginalRevision] = useState(0);
+  const [conversationChanged, setConversationChanged] = useState(false);
   const loadedScope = useRef<string | null>(null);
   const loadedSource = useRef<string | null>(null);
+  const requestedRows = useRef(12);
   const generation = useRef(0);
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const requestAbort = useRef<AbortController | null>(null);
+  const moreButton = useRef<HTMLButtonElement>(null);
+  const pageCountStatus = useRef<HTMLSpanElement>(null);
+  const restorePagingFocus = useRef(false);
   useEffect(() => {
     setOpen(false); setHistory(false); setPages([]); setError(false); setSearch(""); setSearchDraft("");
-  }, [sessionId]);
+    loadedScope.current = null; loadedSource.current = null;
+    requestedRows.current = 12;
+  }, [sessionId, ownerFallback]);
   useEffect(() => {
     if (open) dialog.current?.showModal(); else dialog.current?.close();
   }, [open]);
   useEffect(() => {
+    if (!open) return;
     void load();
     return () => {generation.current++; requestAbort.current?.abort();};
-  }, [sessionId, ownerFallback, history, search, refreshKey, revision]);
+  }, [open, sessionId, ownerFallback, history, search, revision]);
+  useEffect(() => {
+    if (!open) return;
+    // A reading session is refreshed explicitly. Conversation traffic must
+    // neither starve a slow page nor keep its pagination permanently busy.
+    setConversationChanged(true);
+  }, [refreshKey]);
   async function load(offset = 0) {
     const current = ++generation.current;
     requestAbort.current?.abort();
     const abort = new AbortController(); requestAbort.current = abort;
-    setBusy(true); setError(false); setNoSession(false);
+    setBusy(true); setError(false); setNoSession(false); setConversationChanged(false);
     const scope = JSON.stringify([sessionId, ownerFallback, history, search]);
     const sameScope = loadedScope.current === scope;
-    const pageCount = sameScope ? Math.max(1, pages.length) : 1;
+    const loadedRows = pages.reduce((count, page) => count + page.rows.length, 0);
+    // A fresh snapshot or parent refresh must retain the page requested by
+    // More, including while that read has not published its rows yet.
+    requestedRows.current = sameScope
+      ? Math.max(requestedRows.current, offset ? offset + 12 : Math.ceil(loadedRows / 12) * 12) : 12;
+    const refreshRows = requestedRows.current;
     // Keep verified rows during a same-source refresh, but never across scope
     // changes or a failed read. Publish refreshed pages together below.
-    if (!sameScope) {setPages([]); loadedSource.current = null;}
+    if (!sameScope) setPages([]);
     loadedScope.current = scope;
     try {
       let source = sessionId && sessionId !== "new-session-pending" ? sessionId : undefined;
@@ -240,30 +294,47 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
         source = listed.sessions.find(row => row.channel_id === "manager")?.session_id;
       }
       if (current !== generation.current) return;
-      if (!source) {setPages([]); setNoSession(true); return;}
+      if (!source) {
+        // A vanished source is a failed read, not a new empty workspace. Keep
+        // its lineage across filters so retry continues to report the loss.
+        if (loadedSource.current) throw new Error("Previous steward source is unavailable.");
+        setPages([]); setNoSession(true); return;
+      }
       const sameSource = loadedSource.current === source;
-      if (!sameSource) setPages([]);
+      if (!sameSource) {setPages([]); requestedRows.current = 12;}
       loadedSource.current = source;
       const refreshed: ConversationRequestInventory[] = [];
       let cursor: number | null = offset;
-      const limit = offset ? 1 : sameSource ? pageCount : 1;
-      for (let index = 0; index < limit && cursor !== null; index++) {
-        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search);
+      const targetRows = offset ? 12 : sameSource ? refreshRows : 12;
+      // Each HTTP read verifies the whole inventory. Restore the loaded extent
+      // in bounded windows; opening and More still read one normal page.
+      for (let remaining = targetRows; remaining > 0 && cursor !== null; remaining -= 48) {
+        const value = await fetchConversationRequests(source, history, cursor, abort.signal, search, Math.min(48, remaining));
         if (current !== generation.current) return;
         // Returns can reorder a live inventory. A stale More cursor gets one
         // fresh read; mixed snapshots during that read fail visibly for retry.
         if (offset && value.snapshot_digest !== pages[0]?.snapshot_digest) {void load(); return;}
-        if (index && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
+        if (refreshed.length && value.snapshot_digest !== refreshed[0].snapshot_digest) throw new Error("Request snapshot changed.");
         if (value.next_offset !== null && value.next_offset <= cursor) throw new Error("Request paging did not advance.");
         refreshed.push(value); cursor = value.next_offset;
       }
       setPages(previous => offset ? [...previous, ...refreshed] : refreshed);
       if (!offset) setOriginalRevision(value => value + 1);
     } catch {
-      if (current === generation.current && !abort.signal.aborted) {setError(true); setPages([]);}
-    } finally {if (current === generation.current) setBusy(false);}
+      if (current === generation.current && !abort.signal.aborted) {requestedRows.current = 12; setError(true); setPages([]);}
+    } finally {if (current === generation.current) {
+      requestAbort.current = null; setBusy(false);
+    }}
   }
   const page = pages[0], last = pages.at(-1);
+  useEffect(() => {
+    if (!busy && restorePagingFocus.current) {
+      restorePagingFocus.current = false;
+      if (document.activeElement === document.body || document.activeElement === moreButton.current) {
+        (moreButton.current ?? pageCountStatus.current)?.focus({preventScroll: true});
+      }
+    }
+  }, [busy]);
   const unknown = page && (!page.coverage.scan_complete || page.coverage.unreadable > 0);
   const rows = [...new Map(pages.flatMap(value => value.rows).map(row => [row.request_id, row])).values()];
   const recipients = [...new Set(rows.map(row => `${row.goal_id}\n${row.agent_id}`))];
@@ -272,10 +343,11 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
   const applySearch = (value: string) => {
     // Fence immediately, including the interval before the effect starts.
     generation.current++; requestAbort.current?.abort();
+    requestedRows.current = 12;
     setPages([]); setError(false); setBusy(true); setSearch(value.trim());
     setRevision(value => value + 1);
   };
-  const close = () => {generation.current++; requestAbort.current?.abort(); setBusy(false); setOpen(false); trigger.current?.focus();};
+  const close = () => {generation.current++; requestAbort.current?.abort(); requestedRows.current = 12; setBusy(false); setOpen(false); trigger.current?.focus();};
   return <div className="conversation-requests-entry">
     <button ref={trigger} type="button" onClick={() => {setHistory(false); setOpen(true); setRevision(value => value + 1);}}
       aria-haspopup="dialog" aria-label={zh ? `委派，${count} 条待跟进` : `Delegations, ${count} awaiting follow-up`}>
@@ -290,6 +362,7 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
       <nav aria-label={zh ? "委派记录" : "Delegation records"}>
         <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>{zh ? "待跟进" : "Awaiting follow-up"}</button>
         <button type="button" aria-pressed={history} onClick={() => setHistory(true)}>{zh ? "全部记录" : "All records"}</button>
+        {conversationChanged ? <span className="conversation-requests-changed" role="status">{zh ? "对话有更新" : "Conversation updated"}</span> : null}
         <button type="button" disabled={busy} onClick={() => setRevision(value => value + 1)} aria-label={zh ? "刷新委派" : "Refresh delegations"}><RefreshCw size={16}/></button>
       </nav>
       <form className="conversation-requests-search" role="search" onSubmit={event => {event.preventDefault(); applySearch(searchDraft);}}>
@@ -302,39 +375,54 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
       </form>
       <div className="conversation-requests-body" aria-busy={busy}>
         {error ? <p role="alert">{zh ? "委派记录暂时无法核验。" : "Delegation records cannot be verified."} <button type="button" onClick={() => setRevision(value => value + 1)}>{zh ? "重试" : "Retry"}</button></p> : null}
-        {unknown ? <p role="status">{zh ? "部分记录未能读取，数量与列表尚不完整。" : "Some records could not be read. Counts and list are incomplete."}</p> : null}
-        {busy && !rows.length ? <p role="status">{zh ? "正在读取委派…" : "Loading delegations…"}</p> : null}
+        {busy && !rows.length ? <><p role="status">{zh ? "正在读取委派…" : "Loading delegations…"}</p>
+          <div className="conversation-requests-loading" aria-hidden="true">{Array.from({length: 6}, (_, index) => <span key={index}/>)}</div></> : null}
         {!busy && noSession ? <p>{zh ? "尚无可读取的管家会话。" : "No readable steward conversation yet."}</p> : null}
         {!busy && !noSession && !error && page && !unknown && !rows.length ? <p>{search
           ? (zh ? "未找到匹配的委派。" : "No matching delegations.")
           : history ? (zh ? "暂无委派记录。" : "No delegation records.")
             : (zh ? "当前没有待跟进的委派。" : "No delegations awaiting follow-up.")}</p> : null}
-        {!busy && !error && page && search && rows.length ? <p role="status">{zh ? `匹配 ${page.matched} 条${unknown ? "（部分记录）" : ""}` : `${page.matched} matches${unknown ? " (partial records)" : ""}`}</p> : null}
         {recipients.map(recipient => {const [goal, agent] = recipient.split("\n"); return <section key={recipient} className="conversation-requests-group">
           <h3>{agent}<span>{goal}</span></h3>
           {rows.filter(row => row.goal_id === goal && row.agent_id === agent).map(row => <details key={row.request_id} className="conversation-request-row">
             <summary><ChevronRight className="conversation-request-toggle" aria-hidden size={15}/><strong>{row.brief?.purpose ?? (row.read_status === "unavailable" ? (zh ? "交办内容待恢复" : "Brief needs recovery") : row.source_question)}</strong><span>{requestStage(row, zh)}</span>
               {row.last_event_at ? <time dateTime={row.last_event_at} aria-label={zh ? "最近记录" : "Latest record"}>{new Date(row.last_event_at).toLocaleString(locale, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})}</time> : null}</summary>
             <div className="conversation-request-detail">
+              {row.agenda?.remaining_work ? <section>
+                <h4>{zh ? "仍需完成" : "Remaining work"}</h4><p>{row.agenda.remaining_work.summary}</p>
+                <p>{zh ? "继续条件：" : "Continue when: "}{row.agenda.remaining_work.resume_when}</p>
+              </section> : null}
               {row.decision_reason ? <p>{row.decision_reason}</p> : null}
               {row.brief ? <><p>{row.brief.context}</p>
                 {row.brief.constraints.length ? <><h4>{zh ? "约束" : "Constraints"}</h4><ul>{row.brief.constraints.map((value, index) => <li key={index}>{value}</li>)}</ul></> : null}
                 <h4>{zh ? "验收要求" : "Acceptance"}</h4><ul>{row.brief.acceptance.map((value, index) => <li key={index}>{value}</li>)}</ul>
                 <h4>{zh ? "需要回传" : "Expected return"}</h4><p>{row.brief.return_requirement}</p>
                 {row.brief.inputs.length ? <details><summary>{zh ? "输入材料" : "Inputs"}</summary><ul>{row.brief.inputs.map((input, index) => <li key={index}>{input.description} <code>{input.ref}</code></li>)}</ul></details> : null}</> : null}
-              <details><summary>{zh ? "关联工作与记录" : "Linked work and records"}</summary>
-                <p>{zh ? "请求版本" : "Request revision"} {row.request_revision ?? "—"} · {zh ? ({supplied: "已读取", pending: "待读取", unavailable: "读取未知"}[row.read_status] ?? "读取未知") : row.read_status}
-                  {" · "}{zh ? ({adopt: "已采纳", defer: "已暂缓", reject: "未采纳", no_change: "无需调整"}[row.decision] ?? "尚无判断") : row.decision}</p>
-                <ul>{row.linked_todos.map(todo => <li key={todo.todo_id}>{todo.title ?? todo.todo_id} · {todo.status ?? (zh ? "状态未知" : "Unknown")}</li>)}</ul>
-                {row.evidence_refs.map(value => <p key={value}><code>{value}</code></p>)}
-                {row.warnings.length ? <p role="status">{zh ? "部分关联记录需要恢复。" : "Some linked records need recovery."}</p> : null}
-              </details>
+              <LinkedRequestWork row={row} zh={zh} active={open} revision={originalRevision}/>
               <OriginalRequest key={`${row.source_session_id}:${row.source_turn_id}`} row={row} zh={zh} revision={originalRevision} active={open}/>
             </div>
           </details>)}
         </section>;})}
-        {last?.next_offset !== null && last?.next_offset !== undefined ? <button type="button" disabled={busy} onClick={() => void load(last.next_offset!)}>{zh ? "更多记录" : "More records"}</button> : null}
       </div>
+      <footer className="conversation-requests-pagination" aria-label={zh ? "委派分页" : "Delegation pagination"}>
+        <div><span ref={pageCountStatus} tabIndex={-1} role="status" aria-live="polite" aria-atomic="true">{zh
+          ? page && !error ? `已显示 ${rows.length} / ${page.matched}${unknown ? "+" : ""}` : busy ? "正在读取记录…" : "记录数量未知"
+          : page && !error ? `${rows.length} / ${page.matched}${unknown ? "+" : ""} shown` : busy ? "Loading records…" : "Record count unknown"}</span>
+          {page && unknown ? <ContextHelp icon={CircleAlert} label={zh ? "部分委派无法核验" : "Some delegations cannot be verified"}>
+            <p>{page.coverage.unreadable > 0 ? (zh ? `${page.coverage.unreadable} 条记录未能核验。` : `Unverified records: ${page.coverage.unreadable}. `) : ""}
+              {zh ? "数量与列表仍不完整。" : "Counts and list remain incomplete."}
+              {!page.coverage.scan_complete ? (zh ? " 历史扫描尚未完整。" : " The history scan is incomplete.") : ""}</p>
+            {page.coverage.diagnostics.length ? <>
+              <p>{zh ? "原委派记录与来源对话回执指向不同委派；原记录已保留，尚不能判定取消或完成。" : "The source conversation's receipt points to a different delegation. The original records are retained; cancellation or completion cannot be established."}</p>
+              <ul>{page.coverage.diagnostics.map(item => <li key={item.request_id}>
+                {item.agent_id} · {item.goal_id}<br/><code>{item.request_id}</code>
+              </li>)}</ul>
+            </> : null}
+            {page.coverage.unreadable > page.coverage.diagnostics.length ? <p>{zh ? "其它读取缺口未在此列出。" : "Other read gaps are not listed here."}</p> : null}
+          </ContextHelp> : null}
+        </div>
+        {(!page || last?.next_offset !== null && last?.next_offset !== undefined) ? <button ref={moreButton} type="button" aria-disabled={busy || error || !last} onClick={event => {if (!busy && !error && last?.next_offset != null) {restorePagingFocus.current = document.activeElement === event.currentTarget; void load(last.next_offset);}}}>{zh ? "加载下一页" : "Load next page"}</button> : null}
+      </footer>
     </dialog>
   </div>;
 }

@@ -290,7 +290,7 @@ class ManagedSessionTurn:
             "queued_turn_count": len(self.store.queued_turns(actor["session_id"]))})
 
     def inspect(self, session_id: str, *, agent_id: str | None = None,
-                operation_id: str | None = None) -> dict[str, Any]:
+                operation_id: str | None = None, include_calendar_task_sources: bool = False) -> dict[str, Any]:
         session = self.store.load_session(session_id)
         if not session:
             raise KeyError("chat session was not found")
@@ -315,6 +315,11 @@ class ManagedSessionTurn:
             task = SessionCalendarTasks(self.controller).health(session_id)
             if task.get("configured"):
                 result["scheduled_task"] = task
+        if include_calendar_task_sources:
+            if agent_id is not None and agent_id != session.get("managed_agent_id"):
+                raise ValueError("select the original registered Agent for calendar Task sources")
+            from .session_calendar_tasks import SessionCalendarTasks
+            result["calendar_task_sources"] = SessionCalendarTasks(self.controller).source_options(session_id)
         return result
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,

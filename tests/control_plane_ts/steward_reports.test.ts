@@ -306,17 +306,21 @@ test("a retained pre-publication launch refusal can resume only its original nat
   const key = "sha256:" + "a".repeat(64);
   const request = {...prior, resume_turn_key: key};
   const result = {schema_version: "loopx_turn_execution_v0", mode: "run_once", ok: false,
-    error_code: "stale_goal_authority", error: "first-party Host runtime rejected: stale_goal_authority",
-    effects_scope: "current_invocation", effects: {host_invoked: null, state_written: null, quota_spent: null},
+    status: "failed", result_kind: "host_failure", reason: "first-party Host runtime rejected: stale_goal_authority",
+    host_failure: {schema_version: "loopx_turn_host_failure_v0", kind: "contract_rejected", attempt: 1, retryable: false},
+    effects: {host_invoked: true, state_written: false, quota_spent: false, scheduler_acknowledged: false},
     resume_turn_key: key};
   const source = {session_id: p.session.session_id, status: "completed", origin: "native_loopx", loopx_execution: true,
     delta_count: 0, upstream_turn_id: null, loopx_request: prior, response: {native_loopx: result}};
   const inspection = {schema_version: "loopx_turn_journal_inspection_v1", ok: true,
     goal_matches: true, owner_matches: true, turn_key_matches: true, journal_consistent: true,
-    journal_status: "in_progress", completed_phases: [],
+    journal_status: "failed", completed_phases: [],
     recorded_effects: {host_invoked: null, state_written: false, quota_spent: false, scheduler_acknowledged: false},
     recovery_decision: {action: "continue", reinvoke_host: true, resume_from: "host_execute"}};
-  const proof = {original: source, inspection, turn_key: key, host_attempt_count: 1, generation_present: false};
+  const journal = {status: "failed", result_kind: "host_failure", reason: result.reason,
+    turn_key: key, host_attempt_count: 1, completed_phases: [], host_failure: result.host_failure,
+    receipt: {failed_phase: "host_execute"}};
+  const proof = {original: source, inspection, journal, turn_key: key, host_attempt_count: 1, generation_present: false};
   const input = {...p, request, report_launch_recovery: proof,
     report_window: {window_id: prior.report_window_id, subscription_revision: prior.report_subscription_revision,
       goal_id: p.actor.goal_id, agent_id: p.actor.agent_id},
@@ -338,8 +342,12 @@ test("a retained pre-publication launch refusal can resume only its original nat
     {...input, report_launch_recovery: {...proof, original: {...source, upstream_turn_id: "actual-start"}}},
     {...input, report_launch_recovery: {...proof, original: {...source,
       loopx_request: {...prior, todo_id: "todo_other"}}}},
-    ...["transport_lost", "goal_launch_not_allowed", "unknown"].map(error_code => ({...input,
-      report_launch_recovery: {...proof, original: {...source, response: {native_loopx: {...result, error_code}}}}})),
+    ...["transport_lost", "goal_launch_not_allowed", "unknown"].map(reason => ({...input,
+      report_launch_recovery: {...proof, original: {...source, response: {native_loopx: {...result, reason}}}}})),
+    {...input, report_launch_recovery: {...proof, journal: {...journal, status: "in_progress"}}},
+    {...input, report_launch_recovery: {...proof, journal: {...journal, host_result: {result_kind: "wait"}}}},
+    {...input, report_launch_recovery: {...proof, journal: {...journal, host_failure: {...journal.host_failure, kind: "unknown"}}}},
+    {...input, report_launch_recovery: {...proof, journal: {...journal, receipt: {failed_phase: "validation"}}}},
     {...input, report_launch_recovery: {...proof, original: {...source, response: {native_loopx:
       {...result, effects: {state_written: true}}}}}},
     ...["goal_matches", "owner_matches", "turn_key_matches", "journal_consistent"].map(key => ({...input,

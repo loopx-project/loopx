@@ -28,6 +28,7 @@ def main():
     import pytest
     from test_chat_ordinary_project import ordinary
     from test_lark_owner_attention import owner
+    from conftest import _isolated_default_runtime_routes, _isolated_worker_effect_runtime
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.goal_topic_runtime_service import LarkGoalTopicRuntimeService
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
@@ -43,6 +44,18 @@ def main():
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     with TemporaryDirectory(prefix="loopx-owner-source-qa-") as directory, pytest.MonkeyPatch.context() as patch:
         root = Path(directory)
+        # Direct fixture calls do not run pytest's autouse isolation. Reuse it
+        # so the packaged probe never consults personal default runtime routes
+        # or shares an Effect process with another test or installed service.
+        def mktemp(name):
+            path = root / name
+            path.mkdir()
+            return path
+        factory = SimpleNamespace(mktemp=mktemp)
+        isolation = [_isolated_default_runtime_routes.__wrapped__(factory, patch),
+                     _isolated_worker_effect_runtime.__wrapped__(factory)]
+        for fixture in isolation:
+            next(fixture)
         ordinary_fixture = ordinary.__wrapped__(root, patch)
         data = next(ordinary_fixture)
         patch.setattr(manager, "collect_manager_turn_context", collect_manager_turn_context)
@@ -117,7 +130,7 @@ def main():
             for server in servers:
                 server.shutdown()
                 server.server_close()
-            for fixture in (owner_fixture, ordinary_fixture):
+            for fixture in (owner_fixture, ordinary_fixture, *reversed(isolation)):
                 try:
                     next(fixture)
                 except StopIteration:

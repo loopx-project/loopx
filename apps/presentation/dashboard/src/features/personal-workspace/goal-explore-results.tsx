@@ -1,6 +1,6 @@
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {useEffect, useRef, useState} from "react";
-import {ChevronRight, RefreshCw} from "lucide-react";
+import {AlertTriangle, ChevronRight, RefreshCw} from "lucide-react";
 import {fetchExploreResults, readTodoRequest, type ExploreResultPage} from "../../data/chat";
 import {parseExploreFindingSections} from "../../../../../../loopx/control_plane/presentation/explore_timeline.js";
 import {ExploreMeasurements} from "./explore-measurements";
@@ -111,7 +111,13 @@ export function GoalExploreResults({goalId, zh, active = true, readSourceUrl}: {
       {selected ? <div ref={reader} tabIndex={-1} className="goal-team-result-reader" key={selected.finding_id}>
         <h4>{selected.question || selected.finding}</h4>
         <span className="explore-reader-status">{statuses[selected.status] ?? selected.status} · <time dateTime={selected.last_updated_at}>{time(selected.last_updated_at)}</time></span>
-        {selected.measurements ? <ExploreMeasurements measurements={selected.measurements} zh={zh}/> : null}
+        {selected.measurement_error ? <div className="explore-reader-heading explore-measurement-warning" role="note">
+          <span>{zh ? "测量归属有冲突，未参与比较。" : "Measurements excluded: conflicting attribution."}</span>
+          <ContextHelp icon={AlertTriangle} label={zh ? "测量冲突与更正" : "Measurement conflict and correction"}>
+            <p>{selected.measurement_error}</p>
+            <p>{zh ? "请记录者追加执行与测量归属一致的更正结论；原记录仍保留在历史中。" : "Ask the recorder to append a corrected finding with matching execution and measurement references. The original stays in history."}</p>
+          </ContextHelp>
+        </div> : selected.measurements ? <ExploreMeasurements measurements={selected.measurements} zh={zh}/> : null}
         {sections ? <div className="explore-finding-prose">
           <section><h5>{zh ? "观察" : "Observation"}</h5><p>{sections.observation}</p></section>
           {sections.interpretation && !sections.decision ? <section><h5>{zh ? "解读" : "Interpretation"}</h5><p>{sections.interpretation}</p></section> : null}

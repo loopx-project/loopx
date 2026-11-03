@@ -1364,7 +1364,10 @@ def _quota_payload_context(prepared: _QuotaDecisionPreparation, route: _QuotaDec
             if isinstance(prepared.item.get("long_task_cadence_hint"), dict)
             else None,
         "handoff_readiness": prepared.item.get("handoff_readiness"),
-        "goal_boundary": prepared.goal_boundary,
+        "goal_boundary": (
+            {**(prepared.goal_boundary or {}), "handoff_mode": prepared.item["handoff_mode"]}
+            if prepared.item.get("handoff_mode") is not None else prepared.goal_boundary
+        ),
         "plan_summary": prepared.plan.get("summary")
     }
 

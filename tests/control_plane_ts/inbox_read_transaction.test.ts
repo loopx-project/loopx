@@ -220,3 +220,48 @@ test("a large private agenda lets another runtime request finish before the scan
   assert.equal(finished, false);
   assert.equal(((await scanning).unfinished_delegations as JsonObject).incoming_count, 256);
 });
+
+for (const profile of ["legacy", "exact"] as const) {
+  test(`${profile}: a complete result chain preserves its remainder, delivery and corruption boundaries`, async t => {
+    const f = fixture(t, profile), row = f.publish(1);
+    const identity = Object.fromEntries(["request_id", "goal_id", "agent_id", "source_id", "goal_ref"]
+      .filter(key => Object.hasOwn(row, key)).map(key => [key, row[key as keyof typeof row]]));
+    const replies = join(f.base, "replies", row.request_id);
+    for (const folder of [replies, join(f.base, "decisions"), join(f.base, "roundtrips")]) mkdirSync(folder, {recursive: true});
+    writeFileSync(join(f.base, "decisions", row.request_id + ".json"), JSON.stringify({...identity, decision: "adopt"}));
+    writeFileSync(join(f.base, "roundtrips", row.request_id + ".json"), JSON.stringify(identity));
+    const remaining_work = {summary: "Validate the packaged repair", resume_when: "The isolated package is available"};
+    const key = (n: number) => n ? "conclusion-" + String(n).padStart(8, "0") : "conclusion";
+    for (let n = 0; n < 4; n++) {
+      writeFileSync(join(replies, key(n) + ".json"), JSON.stringify({...identity, phase: "conclusion", decision: "adopt",
+        text: "Recorded evidence " + n + "😀".repeat(2000), remaining_work,
+        ...(n ? {result_key: key(n), previous_result_key: key(n - 1), update_id: "evidence-" + n} : {})}));
+      writeFileSync(join(replies, key(n) + ".delivery.json"), JSON.stringify({status: "delivered"}));
+    }
+    const original = sourceBytes(replies);
+    const pending = (await f.call("pending")).result as JsonObject;
+    assert.deepEqual((pending.items as JsonObject[])[0].remaining_work, remaining_work);
+    const agenda = (await f.call("turn_context")).unfinished_delegations as JsonObject;
+    assert.equal(agenda.incoming_count, 1);
+    assert.equal((agenda.items as JsonObject[])[0].step, "review_request_work");
+    assert.deepEqual(sourceBytes(replies), original);
+
+    const damaged = join(replies, key(2) + ".json"), bytes = readFileSync(damaged, "utf8");
+    const corrupt = JSON.parse(bytes);
+    corrupt.previous_result_key = "conclusion";
+    writeFileSync(damaged, JSON.stringify(corrupt));
+    const failed = (await f.call("pending")).result as JsonObject;
+    assert.equal((failed.items as JsonObject[])[0].inbox_state, "receipt_unavailable");
+    const unavailable = (await f.call("turn_context")).unfinished_delegations as JsonObject;
+    assert.equal((unavailable.items as JsonObject[])[0].step, "recover_evidence");
+    writeFileSync(damaged, bytes);
+    assert.deepEqual(sourceBytes(replies), original);
+
+    writeFileSync(join(replies, key(4) + ".json"), JSON.stringify({...identity, phase: "conclusion", decision: "adopt",
+      text: "The requested package passed validation.", result_key: key(4), previous_result_key: key(3), update_id: "validated"}));
+    const queued = (await f.call("turn_context")).unfinished_delegations as JsonObject;
+    assert.equal((queued.items as JsonObject[])[0].step, "await_return_delivery");
+    writeFileSync(join(replies, key(4) + ".delivery.json"), JSON.stringify({status: "delivered"}));
+    assert.deepEqual(((await f.call("turn_context")).unfinished_delegations as JsonObject).items, []);
+  });
+}

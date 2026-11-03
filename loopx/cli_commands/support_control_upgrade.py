@@ -86,6 +86,8 @@ def build_upgrade_plan(
     doctor_payload: dict[str, Any] | None = None,
     registry_path: Path | None = None,
     runtime_root: str | None = None,
+    build_from_source: bool = False,
+    allow_downgrade: bool = False,
 ) -> dict[str, Any]:
     doctor = (
         doctor_payload
@@ -111,8 +113,11 @@ def build_upgrade_plan(
         doctor_payload=doctor,
         registry_path=registry_path,
         runtime_root=runtime_root,
+        build_from_source=build_from_source,
+        allow_downgrade=allow_downgrade,
+        resolve_remote=doctor_payload is None,
     )
-    desktop = desktop_upgrade_plan(selected_ref)
+    desktop = desktop_upgrade_plan(payload.get("source", {}).get("ref") if selected_ref else selected_ref)
     payload["desktop_upgrade"] = desktop
     next_action = payload.get("next_action", {})
     command = next_action.get("command")

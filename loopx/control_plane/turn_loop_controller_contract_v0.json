@@ -2,10 +2,10 @@
   "schema_version": "loop_turn_controller_decision_contract_v0",
   "evaluation": "ordered_checks_then_first_matching_return",
   "qualification": {
-    "receipt": "ValidatedTurnReceipt.from_execution; material settlement, durable completion and host failure qualification remain admission preconditions",
-    "budget": "BoundedTurnBudget; strict integers, finite ranges and nonempty lineage remain admission preconditions",
+    "receipt": "TypeScript qualifyExecution; material settlement, durable completion and host failure qualification remain admission preconditions; Python retains the public value-object API",
+    "budget": "BoundedTurnBudget retains its strict integer public API; exact decimal transport avoids JSON integer rounding; the TS owner checks the reached continuation budget",
     "rejection": "Checks raise ValueError; rejection is not a LoopDisposition. A check is evaluated only if reached and its finite when partition matches.",
-    "result_route_relation": "No unary result-kind to route projection exists. turn_envelope.turnEnvelopeRoute qualifies quota input in TypeScript; decide_loop_disposition combines receipt, quota, causal predecessor and budget. Receipt and budget admission primitives remain Python-owned."
+    "result_route_relation": "No unary result-kind to route projection exists. turn_envelope.turnEnvelopeRoute qualifies quota input in TypeScript; the TS ordered controller combines qualified receipt, quota, causal predecessor and budget. Python transports complete requests; journal recovery remains a separate composed decision."
   },
   "partitions": {
     "receipt_kind": {

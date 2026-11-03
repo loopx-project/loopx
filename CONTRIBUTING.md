@@ -105,6 +105,12 @@ loopx check \
   --scan-path examples/
 ```
 
+The credential rule also rejects unlabeled provider token shapes (GitHub, Slack,
+AWS, Google, Stripe, npm, PyPI, JWT) anywhere in a file. A fixture or example
+that must demonstrate a redaction keeps the value split, for example
+`"ghp_" + "<suffix>"` in Python or a `\u` escape in JSON, so the test still
+exercises the scan without a raw token entering the repository or the PR diff.
+
 ## Local Development
 
 Use the [developer guide](docs/development/README.md) as the stable entry point.
@@ -189,6 +195,7 @@ touch, mention it in the PR instead of fixing it there.
 | `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
 | `package-smoke.yml` | extension package paths | no | extension packages install, entrypoints, and example schemas |
 | `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
+| `runtime-snapshots.yml` | runtime artifact, installer, and updater paths | no | qualified, revision-addressed runtime archives and the main channel pointer |
 | `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
 | `memt-turn.yml` | optional MemT package, Turn driver, lock, and packaging paths | no | explicit optional dependency installation, complete adapter workflow, stdio MCP, and driver binding |
 | `dsh-plugin.yml` | DSH plugin and distribution workflow paths | no | Linux/Windows package install and uninstall, typed host contracts, and Linux real LoopX/web runtime admission |

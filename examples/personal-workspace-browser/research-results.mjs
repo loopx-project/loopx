@@ -134,10 +134,15 @@ export const researchResultsScenario = {
       await refresh.click();
       await catalogRow.click();
       await results.getByText("123456789.1234567891 SYN", {exact: true}).waitFor();
-      await refresh.focus();
+      // Rendering the projection precedes the reader's scheduled focus handoff.
+      // Let that handoff finish before moving focus to the keyboard target.
+      await page.waitForFunction(element => element === document.activeElement,
+        await results.locator("[data-result-reader]").elementHandle());
+      const beforeWrongGoalRead = reads;
       mode = "wrong-goal";
-      await page.keyboard.press("Enter");
+      await refresh.press("Enter");
       await results.getByText(/does not match the requested detail_ref/).waitFor();
+      assert.equal(reads, beforeWrongGoalRead + 1, "Keyboard refresh verifies exactly one projection");
       assert.equal(await results.getByText("123456789.1234567891 SYN", {exact: true}).count(), 0);
       mode = "stale";
       await refresh.click();

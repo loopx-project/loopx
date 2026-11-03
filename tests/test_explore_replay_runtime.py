@@ -1467,6 +1467,74 @@ def test_replay_cost_rejects_non_finite_or_non_numeric_minutes(invalid_minutes) 
         )
 
 
+@pytest.mark.parametrize(
+    "invalid_weight",
+    [True, False, float("nan"), float("inf"), float("-inf"), 10**400, None, "invalid", 0, -1],
+)
+def test_adaptive_planner_rejects_invalid_observation_weights(invalid_weight) -> None:
+    with pytest.raises(ValueError, match="weight must be a finite positive number"):
+        FailureReplayObservation(
+            3, 10, 10.0, ReplayFidelity.EXACT, weight=invalid_weight
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_threshold",
+    [True, False, float("nan"), float("inf"), float("-inf"), 10**400, None, "invalid"],
+)
+def test_adaptive_planner_rejects_invalid_score_thresholds(invalid_threshold) -> None:
+    with pytest.raises(ValueError, match="minimum_score_minutes must be a finite number"):
+        plan_adaptive_replay_points(
+            _planning_trace(),
+            (ReplayPositionCost("planning-event-1", 2, ReplayFidelity.EXACT, 0.0, 0.0),),
+            (FailureReplayObservation(3, 10, 10.0, ReplayFidelity.EXACT),),
+            minimum_score_minutes=invalid_threshold,
+        )
+
+
+@pytest.mark.parametrize(
+    ("weight", "replay_minutes", "repeats", "overflow_field"),
+    [
+        (1e308, 0.0, 2, "eligible_observation_weight"),
+        (10.0, 1e308, 1, "expected_saved_minutes"),
+        (1e308, 0.0, 1, "weighted_suffix_events"),
+    ],
+)
+def test_adaptive_planner_rejects_overflowed_aggregates(
+    weight, replay_minutes, repeats, overflow_field
+) -> None:
+    observation = FailureReplayObservation(
+        3, 10, replay_minutes, ReplayFidelity.EXACT, weight=weight
+    )
+    with pytest.raises(ValueError, match=f"{overflow_field} must be a finite number"):
+        plan_adaptive_replay_points(
+            _planning_trace(),
+            (ReplayPositionCost("planning-event-1", 2, ReplayFidelity.EXACT, 0.0, 0.0),),
+            (observation,) * repeats,
+        )
+
+
+def test_adaptive_planner_preserves_finite_weights_and_negative_thresholds() -> None:
+    import json
+
+    observation = FailureReplayObservation(
+        3, 10, 10.0, ReplayFidelity.EXACT, weight=0.5
+    )
+    candidate = ReplayPositionCost(
+        "planning-event-1", 2, ReplayFidelity.EXACT, 2.0, 0.0
+    )
+    proposals = plan_adaptive_replay_points(
+        _planning_trace(), (candidate,), (observation,), minimum_score_minutes=-1.0
+    )
+
+    assert len(proposals) == 1
+    assert proposals[0].score_minutes == -1.0
+    assert proposals[0].expected_saved_minutes == 1.0
+    assert proposals[0].expected_suffix_events == 8.0
+    assert proposals[0].eligible_observation_weight == 0.5
+    json.dumps(proposals[0].to_record(), allow_nan=False)
+
+
 def test_full_scope_composes_adaptive_children_risk_and_promotion() -> None:
     trace = TraceLog("trace-full-scope", "branch-main")
     prefix = TraceEvent(

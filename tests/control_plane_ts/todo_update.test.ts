@@ -974,7 +974,7 @@ test("administrative copy retains lease history; explicit execution recovery sta
         assert.equal(recovery.lease_state, state);
         assert.equal(recovery.owner_relation, owner === "agent-a" ? "same_owner" : "foreign_owner");
         assert.equal(recovery.action, state === "active" ? owner === "agent-a" ? "inspect_current_proof" : "reconcile_lease_owner"
-          : mode === "soft_claim" ? "resolve_acquire_rejection" : "acquire_fresh_lease");
+          : mode === "soft_claim" ? "resolve_acquire_rejection" : "claim_task");
         assert.equal(JSON.stringify(result).includes("private-execution-key"), false);
         assert.deepEqual(await store.loadAuthority(), before);
         assert.equal((await store.readReceipt(request.operation_id)).status, "missing");

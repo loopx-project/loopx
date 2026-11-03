@@ -20,6 +20,9 @@ coverage/
 htmlcov/
 .playwright-cli/
 output/playwright/
+# Historical browser captures belong in ignored output or PR attachments.
+/examples/personal-workspace-browser/evidence/
+/examples/personal-workspace-browser/screenshots/
 apps/desktop/loopx-control-plane/runtime/
 
 # Local/private operator skills. Generic, reusable contracts belong in docs or

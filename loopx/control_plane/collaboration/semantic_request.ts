@@ -145,6 +145,28 @@ export function normalizeCollaborationRequest(value: unknown): JsonObject {
   return result;
 }
 
+/** One source Turn may address several independent, exact recipients. Syntax is
+ * admitted before any effect; authorization and publication remain per request.
+ * One recipient per source prevents conflicting briefs sharing a request ID.
+ */
+export function normalizeCollaborationHandoff(value: unknown): JsonObject {
+  if (value == null) return {handoff: null};
+  if (!Array.isArray(value)) return {handoff: normalizeCollaborationRequest(value)};
+  if (value.length > 32) throw new EffectRuntimeRequestError("context handoff permits at most 32 recipients");
+  const seen = new Set<string>();
+  const requests = value.map(raw => {
+    const request = normalizeCollaborationRequest(raw);
+    if (!request.goal_id || !request.agent_id || !request.brief) {
+      throw new EffectRuntimeRequestError("each batch recipient requires exact Goal, Agent and semantic brief");
+    }
+    const key = JSON.stringify([request.goal_id, request.agent_id]);
+    if (seen.has(key)) throw new EffectRuntimeRequestError("duplicate context handoff recipient");
+    seen.add(key);
+    return request;
+  });
+  return {handoff: requests.length ? requests : null};
+}
+
 /** Preserve source text while leaving room in the existing 128 KB inbox record. */
 export function normalizeCollaborationSourceContext(input: JsonObject): JsonObject {
   const source = requireNonEmptyString(input.source_message, "source_message");

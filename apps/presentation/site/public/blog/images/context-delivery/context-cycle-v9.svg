@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img">
+  <title>Differential：同一有效周期内复用，失效即完整恢复</title>
+  <desc>在有效周期 A 内，完整基线后仅传递经哈希核验的 Δ1、Δ2；一旦发生上下文压缩或连续性失效，新周期 B 自动重置为完整来源。</desc>
+
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', sans-serif; fill: #0f172a; }
+  .mono { font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  .muted { fill: #475569; }
+  .subtle { fill: #64748b; }
+  .accent { fill: #1d4ed8; }
+  .emerald { fill: #047857; }
+  .amber { fill: #b45309; }
+  .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+  .card-accent { fill: #f8fafc; stroke: #93c5fd; stroke-width: 1.8; }
+  .card-emerald { fill: #f0fdf4; stroke: #86efac; stroke-width: 1.8; }
+  .card-amber { fill: #fffbeb; stroke: #fcd34d; stroke-width: 1.8; }
+  .pill { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1.2; }
+  .divider { stroke: #e2e8f0; stroke-width: 1.5; }
+</style>
+<defs>
+  <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#f8fafc"/>
+    <stop offset="100%" stop-color="#f1f5f9"/>
+  </linearGradient>
+</defs>
+
+  <rect width="1200" height="620" fill="url(#bgGrad)"/>
+  <text x="48" y="64" font-size="34" font-weight="800">Differential：同一有效周期内复用，失效即完整恢复</text>
+
+  <!-- Epoch A -->
+  <rect x="48" y="96" width="1104" height="176" rx="16" class="card"/>
+  <text x="76" y="136" font-size="20" font-weight="700" class="accent">有效周期 A (Continuity Epoch A · 同一会话连续轮次)</text>
+  <rect x="76" y="156" width="300" height="92" rx="12" class="card-accent"/>
+  <text x="98" y="194" font-size="20" font-weight="700">完整来源 (Full Baseline)</text>
+  <text x="98" y="224" font-size="15" class="muted mono">落盘并记录 baseline_sha256</text>
+  <line x1="384" y1="202" x2="430" y2="202" stroke="#2563eb" stroke-width="2.5"/><polygon points="428,196 440,202 428,208" fill="#2563eb"/>
+
+  <rect x="444" y="156" width="300" height="92" rx="12" class="card-emerald"/>
+  <text x="466" y="194" font-size="20" font-weight="700" class="emerald">变化 Δ1 (Verified Delta 1)</text>
+  <text x="466" y="224" font-size="15" class="muted">核验上一轮基线 → 仅交付变更字段</text>
+  <line x1="752" y1="202" x2="798" y2="202" stroke="#2563eb" stroke-width="2.5"/><polygon points="796,196 808,202 796,208" fill="#2563eb"/>
+
+  <rect x="812" y="156" width="308" height="92" rx="12" class="card-emerald"/>
+  <text x="834" y="194" font-size="20" font-weight="700" class="emerald">变化 Δ2 (Verified Delta 2)</text>
+  <text x="834" y="224" font-size="15" class="muted">继续精确追踪结构差异与删除项</text>
+
+  <!-- Continuity Break Banner -->
+  <rect x="140" y="294" width="920" height="54" rx="27" class="card-amber"/>
+  <text x="600" y="328" font-size="18" font-weight="700" class="amber" text-anchor="middle">触发 Compaction / 会话切换 / 基线哈希不匹配 → 拒绝悬空增量，自动切换 Full</text>
+
+  <!-- Epoch B -->
+  <rect x="48" y="370" width="1104" height="176" rx="16" class="card"/>
+  <text x="76" y="410" font-size="20" font-weight="700" class="emerald">新周期 B (Continuity Epoch B · 压缩或跨会话后自动重建基线)</text>
+  <rect x="76" y="430" width="300" height="92" rx="12" class="card-accent"/>
+  <text x="98" y="468" font-size="20" font-weight="700">完整来源 (Full Baseline)</text>
+  <text x="98" y="498" font-size="15" class="muted mono">落盘并记录 baseline_sha256</text>
+  <line x1="384" y1="476" x2="430" y2="476" stroke="#2563eb" stroke-width="2.5"/><polygon points="428,470 440,476 428,482" fill="#2563eb"/>
+
+  <rect x="444" y="430" width="300" height="92" rx="12" class="card-emerald"/>
+  <text x="466" y="468" font-size="20" font-weight="700" class="emerald">变化 Δ1 (Verified Delta 1)</text>
+  <text x="466" y="498" font-size="15" class="muted">核验上一轮基线 → 仅交付变更字段</text>
+
+  <text x="48" y="586" font-size="17" class="subtle">保证模型在任何时候都能精确还原当前完整结构：既不把未变化大字段重复刷屏，也不在压缩后引用已丢失的旧基线。</text>
+</svg>

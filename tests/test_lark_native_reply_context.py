@@ -50,7 +50,10 @@ def test_native_reply_retains_exact_reference_and_original_authority(ordinary, g
         requests = [json.loads(line) for line in ordinary[4].read_text().splitlines()]
         native_input = next(request["params"]["input"] for request in requests if request["method"] == "turn/start")
         assert "local reading preview" in json.dumps(native_input)
-        assert "Current user message: Approved" in json.dumps(native_input)
+        # The original operator material reaches the model verbatim, including
+        # its own line breaks; the prompt is no longer whitespace-collapsed.
+        native_text = "".join(block.get("text", "") for block in native_input)
+        assert "Current user message:\nApproved" in native_text
         # The source and eventual return remain the same canonical conversation.
         transport.reconcile()
         assert all(profile == "notes-app" for profile, _ in provider.writes)

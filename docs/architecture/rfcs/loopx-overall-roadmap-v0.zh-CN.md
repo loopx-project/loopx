@@ -140,8 +140,10 @@ assessment 中有证据绑定的研究综合分析接入指标 → 汇报 → �
 ### 统一契约与 controller/executor 交付
 
 [Controller/executor RFC](controller-executor-unified-contract-v0.zh-CN.md) 细化
-S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择，并纳入
-完整首包与差分上下文。可选 controller 模型独自对接 Core，executor 接收自然语言工作
+S2/S4/S6/S7/S11：用一份受治理工作 schema 替代 quota/Turn packet 格式选择。
+[双层交付设计](controller-executor-unified-contract-v0.zh-CN.md#差分上下文)以跨 Host 默认
+Progressive、仅已资格化 Host 独立 Delta auto，以及当前完整 capture 的未读发现为目标；
+保留显式 off 与分版本迁移。可选 controller 模型独自对接 Core，executor 接收自然语言工作
 和材料；身份、权限、恢复、结算仍归既有 host/Core owner。Session role、执行模式、
 唤醒来源和 benchmark 评估组保持正交。这是设计方向，不是已交付行为或成本收益证据。
 
@@ -150,10 +152,31 @@ Controller 会话的[智能中介作用](controller-executor-unified-contract-v0
 仍归各自 owner。以保留义务及后续验收成果，对照 controller 新增完整成本验收，不能
 用查询次数或文本体积代替。
 
+C6/C8 还拥有[执行期间人机交互](controller-executor-unified-contract-v0.zh-CN.md#human-interaction-during-execution)
+产品目标：executor 忙时 controller 对话不被阻塞；有实质变化时主动循证汇报，并按任务
+提供丰富展现，反馈可追踪到后续工作和产物。经既有 session/request/projection owner
+验收安静/去重汇报、受众限制、可访问降级及 revision/Stop/恢复竞态。这是提议成果，
+不证明当前 runtime 合格，也不增加独立 C1 工作的 gate。保留单会话先行对照，在后续
+opt-in 组中计入全部汇报、展现和人工注意力成本。
+
 C1 的[消费链切换表](controller-executor-unified-contract-v0.zh-CN.md#c1-消费链替换与切换单元)
 覆盖 quota emission、直接生产契约的 Turn 入口和最终 native/structured host prompt。
 共享 capture 不表示这些消费者已统一。资格检查须追踪来源义务经过组合、重建到实际
 最终输入；新准入切换与历史回执重放分别处理。
+
+[固定版本的打包对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
+在真实 File/SQLite fixture 验证 C1 来源/恢复行为，同时记录更大的冷态/累计输出，
+以及尚开放的独立数值 hash 边界。保留这些反证和原成果/完整成本门；文件差分或一次
+结算回执可用，不证明长程收益。
+
+[上下文交付指南](../../guides/context-delivery.zh-CN.md) 解释当前行为和最小双模型对照。
+文档先交付；在 C1/C2/C9 内，用明确版本的 DeepSeek 与强模型，分别对照原 quota 路径，
+固定可比条件并计入完整成本。随后验收受支持 profile 的可回退采用与发布，再决定默认
+范围扩展建议；reference 已有的 Codex 范围默认仍是当前行为，不证明模型收益。
+结果混合或某模型退步时，保留范围化 opt-in 或明确限制。退役须点名已替换的
+producer/consumer，以实际迁移、历史 reader 兼容和回退证据为依据；保留完整快照、
+完整性、权限、身份、停止与恢复。指南、仅 Codex adapter 或更短输出不通过模型／默认
+门。此顺序不阻塞独立获授权工作，也不启动实验。
 
 把该 RFC 的 C1–C9 任务/删除表放在既有工作流内：先验收统一单会话输入，再做角色绑定
 与共享生命周期、replan/结果编写、executor 交流、benchmark 复用、打包 App readback
@@ -710,6 +733,20 @@ Goal 成果页可打开正文；原管家对话仅在已确认团队计划的回
 提案，不晋升 G1 或默认首屏。
 
 ### R3：语义请求与自动回报
+
+**同回合多接收者边界。** 一个 Chat Turn 可通过已有 inbox/return owner 投递逐接收者
+简报。单对象继续兼容；数组保留各 Goal/Agent 的独立授权、重放身份、失败与结论
+读回。部分投递或一方返回不能证明整项请求完成；不新增团队分配或调度器。验收
+跨 Goal 的部分撤权、重启/重放、乱序返回与打包原对话卡片；真实模型的语义选路、
+安装态 App 与 Lark provider 投递仍须分别取证。
+
+**交互任务寿命 checkpoint。** 普通 Codex/ACP Chat 不再设置隐式总时长截止，
+既有无活动/启动检测与停止仍有效。已接收排队输入默认不设 TTL；显式期限、
+队列容量、来源校验和有界 managed-host segment 仍由原 owner 负责。
+合成长活动、显式期限、无活动、排队与服务配置回归只验收此切片。
+保留安装态既有设置及不可变旧失败；实际启用与核对效果后的原超时请求恢复
+仍是独立验收，不据此推断已重放。
+
 
 **S1/S5 注意力 checkpoint。** 本地管家/Goal Turn 无须 Lark 连接，即收到 canonical
 阻塞与具体用户请求。共用 TS 读模型合成同一 Todo 的阻塞/决策；正文 adapter 和

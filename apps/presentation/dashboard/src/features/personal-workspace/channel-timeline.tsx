@@ -1,8 +1,9 @@
+import {DocumentAttachment, isTextDocument} from "./document-attachment";
 import { MessageActivity } from "./message-activity";
 import { GoalDraftCard } from "./goal-draft-card";
 import type { GoalDraft } from "../../../../../../loopx/control_plane/collaboration/goal_draft.js";
 import {Fragment, useLayoutEffect, useRef, useState} from "react";
-import { CollaborationCard } from "./collaboration-card";
+import { CollaborationCards } from "./collaboration-card";
 import {ConversationReplyContext} from "./conversation-requests";
 import { Activity, Bot, Sparkles } from "lucide-react";
 
@@ -196,7 +197,7 @@ export function ChannelTimeline({
         {item.message.role !== "user" ? <span className="personal-message-avatar"><Bot size={17} /></span> : null}
         <div>
           <header><strong>{item.message.role === "user" ? item.message.agentLabel ?? t("common.you") : item.message.agentLabel ?? t("header.manager")}</strong>{item.message.time ? <time>{item.message.time}</time> : null}</header>
-          {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
+          {item.message.attachments?.length ? <div className="personal-message-images">{item.message.attachments.map((attachment) => isTextDocument(attachment.mimeType) ? <DocumentAttachment key={attachment.id} {...attachment} zh={locale === "zh-CN"}/> : <img alt={attachment.name} key={attachment.id} src={attachment.dataUrl} />)}</div> : null}
           {item.message.role === "user" ? <p>{item.message.text}</p> : item.message.text ? <HistoricalMessageText text={item.message.text}
             initiallyCollapsed={Boolean(historical?.has(messageKey(item.message)))}
             focused={Boolean(messageFocus && messageKey(item.message) === focusKey)} zh={locale === "zh-CN"} onRead={onReadMessage}/> : null}
@@ -209,7 +210,7 @@ export function ChannelTimeline({
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
             ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} draft={item.message.goalDraft} onReview={onReviewGoalDraft} onSuggest={onSuggestReply}/> : null}
-          <CollaborationCard request={item.message.collaboration} />
+          <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
               <ReturnDeliveryStatus delivery={item.message.returnDelivery} />
         </div>
       </article>

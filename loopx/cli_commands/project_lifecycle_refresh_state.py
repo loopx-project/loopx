@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ..control_plane.goals.first_party_host_admission import (
     capture_first_party_host_goal_ref,
 )
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+from ..control_plane.goals.vision_checkpoint import prepare_vision_refresh
 from ..control_plane.quota.settlement import (
     attach_settlement_progress,
     read_heartbeat_settlement,
@@ -515,6 +517,21 @@ def handle_refresh_state_command(
                 turn_instance_id=args.turn_instance_id,
             ),
         )
+        if agent_vision_packet is not None and (
+            outcome_update is not None or not merge_agent_vision_patch
+        ):
+            # Reject malformed complete input before any history lock or outcome
+            # refinement. Inline patches without an outcome update still merge
+            # with current history first. Reuse the typed owner; this preflight
+            # cannot authorize a transition or replace the original packet.
+            # Refresh still checks merged history and policy against current
+            # state, including whether a terminal stride is actually enabled.
+            prepare_vision_refresh(
+                agent_vision_packet, goal_id=args.goal_id, agent_id=args.agent_id,
+                existing_agent_vision=None, merge_patch=False,
+                require_path_delta_for_durable_change=False,
+                allow_terminal_stride_path=True,
+            )
         progress_observation = inline_progress_observation(args)
         reward_memory_reflection_json = str(
             getattr(args, "reward_memory_reflection_json", None) or ""
@@ -647,6 +664,17 @@ def handle_refresh_state_command(
                 agent_id=args.agent_id,
                 runtime_root=args.runtime_root,
             )
+            recovery = transition.get("context_recovery")
+            if fmt == "json" and os.name == "posix" and isinstance(recovery, dict):
+                from .context_machine import capture_context_recovery
+
+                reference = capture_context_recovery(recovery,
+                    runtime_root=resolve_runtime_root(load_registry(registry_path), args.runtime_root))
+                transition["context_recovery"] = {
+                    "received_context_id": recovery["received_context_id"],
+                    "current_context_id": recovery["replan_context"]["context_id"],
+                    "instruction": recovery["instruction"], **reference,
+                }
             payload["replan_transition"] = transition
             if transition["next_cli_actions"]:
                 payload["error"] += " Required transition: " + "; ".join(

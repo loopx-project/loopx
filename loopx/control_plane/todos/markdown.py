@@ -13,12 +13,26 @@ def _render_lease_recovery(payload: dict[str, Any]) -> list[str]:
     recovery = payload.get("recovery")
     if not isinstance(recovery, dict) or not recovery.get("reason") or not payload.get("handoff_mode"):
         return []
-    lines = [f"- handoff_mode: `{payload['handoff_mode']}`", f"- recovery: {recovery['reason']}"]
-    for step in ("inspect", "acquire", "retry", "release"):
+    retry = recovery.get("retry")
+    retry_args = retry.get("cli_args", []) if isinstance(retry, dict) else []
+    complete_claim_recovery = (recovery.get("action") == "claim_task"
+        and isinstance(retry_args, list)
+        and any(retry_args[i:i + 2] == ["todo", "complete"] for i in range(len(retry_args) - 1)))
+    lines = ([] if complete_claim_recovery
+        else [f"- handoff_mode: `{payload['handoff_mode']}`"])
+    lines.append(f"- recovery: {recovery['reason']}")
+    for step in ("claim", "inspect", "acquire", "retry", "release"):
         instruction = recovery.get(step)
         if isinstance(instruction, dict) and instruction.get("command"):
             arguments = instruction.get("cli_args")
-            command = shlex.join(["loopx", *arguments]) if isinstance(arguments, list) else instruction["command"]
+            command = instruction["command"]
+            if isinstance(arguments, list):
+                try:
+                    program = shlex.split(command)[0]
+                except (ValueError, IndexError):
+                    pass  # Keep the original diagnostic when guidance is malformed.
+                else:
+                    command = shlex.join([program, *arguments])
             lines.append(f"- {step}: `{command}`")
             if instruction.get("requires_flags"):
                 lines.append(f"  - supply: `{', '.join(instruction['requires_flags'])}`")
@@ -145,12 +159,44 @@ def _render_thin_todo_list(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_queue_summary(payload: dict[str, Any]) -> str:
+    projection = payload["todo_list_summary_projection"]
+    authority = payload.get("authority_read") or {}
+    lines = ["# LoopX Todo List Summary", "",
+             f"- goal_id: `{payload.get('goal_id')}`",
+             f"- shown: `{payload.get('returned_todo_count')}` / `{payload.get('matched_todo_count')}`; omitted: `{payload.get('omitted_todo_count')}`",
+             f"- item_limit_per_role: `{projection['item_limit_per_role']}`", ""]
+
+    def cell(value: Any) -> str:
+        return " ".join(str(value if value is not None else "—").split()).replace("|", "\\|")
+
+    if payload["todos"]:
+        lines.extend(["| Role | Priority | Status | Claimed by | Todo | ID |",
+                      "| --- | --- | --- | --- | --- | --- |"])
+        for item in payload["todos"]:
+            cells = [cell(item.get(key)) for key in (
+                "role", "priority", "status", "claimed_by", "title", "todo_id")]
+            if item.get("title_truncated"):
+                cells[4] += " *"
+            lines.append("| " + " | ".join(cells) + " |")
+    else:
+        lines.append("No matching Todos.")
+    if any(item.get("title_truncated") for item in payload["todos"]):
+        lines.extend(["", r"\* Title truncated; the exact read retains the full requirement."])
+    lines.extend(["", f"- source: `{authority.get('source_authority')}` @ `{authority.get('provider_revision')}`",
+                  f"- full_detail: `{projection['full_detail_cold_paths'][0]}`",
+                  f"- readback: {projection['readback']}"])
+    return "\n".join(lines)
+
+
 def render_todo_markdown(payload: dict[str, Any]) -> str:
     if payload.get("todo_detail_projection"):
         return _render_todo_detail(payload)
     if payload.get("command") == "project-markdown":
         return _render_todo_projection(payload)
     if payload.get("command") == "list":
+        if payload.get("summary"):
+            return _render_queue_summary(payload)
         if payload.get("thin"):
             return _render_thin_todo_list(payload)
 

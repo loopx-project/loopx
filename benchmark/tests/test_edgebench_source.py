@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -64,6 +65,15 @@ def test_frozen_cohort_reuses_source_without_network(repository, tmp_path, monke
 
     monkeypatch.setattr(source, "_git", offline)
     assert source.prepare_source(tmp_path / "logs")[1] == expected
+
+
+def test_transport_rewrite_does_not_change_canonical_source_identity(repository, tmp_path):
+    checkout, receipt = source.prepare_source(tmp_path / "logs")
+    canonical = receipt["repository"]
+    git(checkout, "config", "url.ssh://git@example.invalid/source.insteadOf", canonical)
+    assert git(checkout, "remote", "get-url", "origin") != canonical
+    assert git(checkout, "config", "--local", "--get", "remote.origin.url") == canonical
+    assert source.prepare_source(tmp_path / "logs")[1] == receipt
 
 
 def test_parallel_worker_and_judge_share_one_source(repository, tmp_path):
@@ -206,17 +216,52 @@ def install_test_patch(repository, other_changes=None, *, compact=True):
     return asset
 
 
-def test_bundled_patch_passes_required_public_checks(tmp_path):
-    from loopx.contract import scan_public_boundary
-
+def test_production_default_is_a_reviewed_immutable_source():
     defaults = json.loads(source.DEFAULT_FILE.read_text())
-    _, patch = source._bundled_patch(defaults["compatibility_patch"])
-    asset = tmp_path / "compatibility.patch"
-    asset.write_bytes(patch)
-    git(tmp_path, "init", "-q")
-    git(tmp_path, "add", "--", asset.name)
-    assert git(tmp_path, "diff", "--cached", "--check") == ""
-    assert scan_public_boundary([asset], registry={})["ok"]
+    assert re.fullmatch(r"[0-9a-f]{40}", defaults["ref"])
+    assert defaults == {
+        "repository": "https://github.com/huangruiteng/EdgeBench.git",
+        "ref": "118f9257d39c71d0805bb5b9cd4eb85d13a1e6d2",
+        "compatibility_patch": {
+            "id": "nonfinite-checkpoint-v2",
+            "relative_path": "compatibility/nonfinite-checkpoint-v2.patch",
+            "sha256": "02d21096a2e55f625d3c8beee2335728caf08aa6c75a5a27b1ab412bc46323bf",
+        },
+    }
+
+
+def test_pinned_default_and_patch_advance_only_as_a_reviewed_pair(repository, tmp_path):
+    install_test_patch(repository)
+    defaults = json.loads(source.DEFAULT_FILE.read_text())
+    defaults["ref"] = git(repository, "rev-parse", "HEAD")
+    source.DEFAULT_FILE.write_text(json.dumps(defaults))
+    old_checkout, original = source.prepare_source(tmp_path / "old")
+    old_receipt = (old_checkout.parent / "receipt.json").read_bytes()
+
+    # Even a touched-file change on the remote branch cannot break a new cohort
+    # or silently opt it into an unqualified provider revision.
+    (repository / "sforge/__init__.py").write_text("MARKER = 'new-upstream'\n")
+    git(repository, "add", "sforge/__init__.py")
+    git(repository, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "advance provider")
+    advanced = git(repository, "rev-parse", "HEAD")
+    new_checkout, same = source.prepare_source(tmp_path / "new")
+    assert same == original
+    assert (new_checkout / "sforge/__init__.py").read_text() == "MARKER = 'patched-source'\n"
+
+    # Updating just the pin still fails closed; no partially prepared source
+    # can be consumed by a concurrent worker or judge.
+    defaults["ref"] = advanced
+    source.DEFAULT_FILE.write_text(json.dumps(defaults))
+    with pytest.raises(ValueError, match="preimage differs"):
+        source.prepare_source(tmp_path / "unpaired")
+    assert not (tmp_path / "unpaired" / source.STATE_DIR).exists()
+
+    install_test_patch(repository)
+    _, refreshed = source.prepare_source(tmp_path / "refreshed")
+    assert refreshed["upstream_commit"] == advanced != original["upstream_commit"]
+    assert refreshed["compatibility_patch"]["sha256"] != original["compatibility_patch"]["sha256"]
+    assert source.prepare_source(tmp_path / "old")[1] == original
+    assert (old_checkout.parent / "receipt.json").read_bytes() == old_receipt
 
 
 def test_default_patch_creates_reproducible_clean_source(repository, tmp_path, monkeypatch):

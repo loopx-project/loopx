@@ -2,12 +2,29 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import threading
 import time
 import uuid
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+def selected_context_values(content):
+    """Address selected facts independently of complete parent packaging."""
+    values = {}
+
+    def visit(pointer, value):
+        values[pointer] = value
+        if isinstance(value, (dict, list)):
+            children = value.items() if isinstance(value, dict) else enumerate(value)
+            for key, child in children:
+                visit(pointer + "/" + str(key).replace("~", "~0").replace("/", "~1"), child)
+
+    for item in json.loads(content)["selections"]:
+        visit(item["pointer"], item["value"])
+    return values
 
 
 def delivered_context(request, digest):
@@ -45,7 +62,8 @@ def delivered_context(request, digest):
     return raw.decode().rstrip("\n")
 
 
-def last_context_page(request):
+def last_context_page(request, *, allow_reference=False, allow_selection=False):
+    """Observe the latest tool result; a saved-file reference is not a page."""
     for item in reversed(request["input"]):
         output = item.get("output")
         parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
@@ -56,11 +74,80 @@ def last_context_page(request):
                 value = json.loads(part.split("\nOutput:\n", 1)[-1])
                 if isinstance(value, dict) and value.get("exit_code") == 0:
                     value = json.loads(value["output"])
-                if isinstance(value, dict) and value.get("schema_version") == "context_capture_page_v1":
+                if isinstance(value, dict) and (
+                    value.get("schema_version") == "context_capture_page_v1"
+                    or (allow_selection and value.get("schema_version") == "context_capture_selection_page_v1")
+                    or (allow_reference and value.get("schema_version") == "context_capture_navigation_v1")
+                    or (allow_reference and value.get("mode") in {"full", "delta"}
+                        and all(key in value for key in ("path", "sha256", "command", "target", "recovery")))
+                ):
                     return value
             except (ValueError, KeyError):
-                continue
+                return None
+        if output is not None:
+            # An earlier valid response cannot repair a missing or malformed
+            # current result in the model's input.
+            return None
     return None
+
+
+def native_process_continuation(request, identity, *, code_mode=False):
+    """Follow a yielded native command, using only its latest visible output."""
+    for item in reversed(request["input"]):
+        if (output := item.get("output")) is None:
+            continue
+        parts = [p.get("text", "") for p in output] if isinstance(output, list) else [output]
+        for part in reversed(parts):
+            if not isinstance(part, str):
+                continue
+            try:
+                wrapper = json.loads(part)
+                if isinstance(wrapper, dict) and isinstance(wrapper.get("output"), str):
+                    part = wrapper["output"]
+            except ValueError:
+                pass
+            match = re.search(r"(?m)^Process running with session ID (\d+)\s*$", part)
+            if match:
+                options = {"session_id": int(match[1]), "chars": "", "yield_time_ms": 1000,
+                           "max_output_tokens": 30000}
+                base = {"id": f"fc_process_{identity}", "call_id": f"call_process_{identity}"}
+                if code_mode:
+                    options["max_output_tokens"] = 22000
+                    return {**base, "type": "custom_tool_call", "name": "exec",
+                            "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.write_stdin('
+                                + json.dumps(options) + ')).output);'}
+                return {**base, "type": "function_call", "name": "write_stdin", "arguments": json.dumps(options)}
+        return None  # Never borrow a session from an older result.
+    return None
+
+
+def reference_metadata_oracle(view):
+    """Inspect complete metadata as an oracle, never as a model read receipt."""
+    if view.get("schema_version") == "context_capture_navigation_v1":
+        from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+
+        return read_context_read_reference(view["reference_file"])[1]["navigation"]
+    return view
+
+
+def read_cli_policy_payload(stdout, *, returncode):
+    """Read the current policy capture for tests, without claiming model retention.
+
+    Preserve failed commands and inline/off output. Successful native full/delta
+    navigation uses its complete current recovery, never a cached or delta body.
+    """
+    from loopx.control_plane.turn_driver.decision_capture import (
+        read_context_capture_file,
+        read_context_read_reference,
+    )
+
+    payload = json.loads(stdout)
+    if returncode == 0 and payload.get("mode") in {"full", "delta"} and isinstance(payload.get("recovery"), dict):
+        recovery = payload["recovery"]
+        if "reference_file" in recovery:
+            recovery = read_context_read_reference(recovery["reference_file"])[1]
+        return read_context_capture_file(recovery["path"], recovery["sha256"], private=True)[2]
+    return payload
 
 
 class NativeContextReader:
@@ -92,18 +179,41 @@ class NativeContextReader:
     def follow(self, request):
         if self.pending is None:
             return None
-        page = last_context_page(request)
+        if continuation := native_process_continuation(request, f"{self.identity}_{self.calls + 1}"):
+            self.calls += 1
+            return continuation
+        page = last_context_page(request, allow_reference=True)
         assert page and page["ok"], "Native reader output must reach the model intact"
+        if page.get("schema_version") != "context_capture_page_v1":
+            assert self.pending["descriptor"] is None and "reference" not in self.pending
+            # This fixture voluntarily reads the complete saved input for its
+            # byte oracle. A model-visible reference alone proves no coverage.
+            self.pending["reference"] = page
+            return self.tool(page["command"])
         self.pending["page_calls"] += 1
         if self.pending["descriptor"] is None:
-            assert page["offset"] == 0 and page["mode"] in {"full", "delta"}
-            self.pending["descriptor"] = page
+            assert page["offset"] == 0
+            if reference := self.pending.get("reference"):
+                if "sha256" in reference:
+                    assert page["sha256"] == reference["sha256"]
+                # The generic saved-file reader returns bytes and cursors;
+                # delivery identity stays in the original visible reference.
+                self.pending["descriptor"] = {**reference, **page}
+            else:
+                assert page["mode"] in {"full", "delta"}
+                self.pending["descriptor"] = page
         first = self.pending["descriptor"]
         assert page["sha256"] == first["sha256"]
         if not page["eof"]:
             return self.tool(page["next_command"])
         raw = delivered_context(request, first["sha256"])
         assert len(raw.encode()) in {page["total_bytes"], page["total_bytes"] - 1}
+        if self.pending.get("reference", {}).get("schema_version") == "context_capture_navigation_v1":
+            # Resolve oracle metadata only after complete model-visible byte
+            # coverage; a reference never seeds the retained-input baseline.
+            navigation = reference_metadata_oracle(self.pending["reference"])
+            assert navigation["sha256"] == first["sha256"]
+            first = {**first, **navigation}
         # The original reader owns digest verification. This separate oracle
         # checks the actual complete model input against its declared source.
         assert raw == Path(first["path"]).read_text().rstrip("\n")

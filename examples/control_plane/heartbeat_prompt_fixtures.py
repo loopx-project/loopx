@@ -39,10 +39,9 @@ def normalized(text: str) -> str:
 
 
 def prompt_budget_text(text: str) -> str:
-    return text.replace(GOAL_ID, "<GOAL_ID>").replace(
-        str(ACTIVE_STATE),
-        "<ACTIVE_GOAL_STATE_PATH>",
-    )
+    # Normalize the complete path before its Goal substring, matching the
+    # independently declared authored-guidance measurement contract.
+    return text.replace(str(ACTIVE_STATE), "<ACTIVE_STATE>").replace(GOAL_ID, "<GOAL_ID>")
 
 
 def assert_prompt_budget(label: str, text: str) -> None:

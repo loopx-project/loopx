@@ -84,17 +84,53 @@ class SessionCalendarTasks(ManagedSessionReports):
             row = list_goal_todos(registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
                 runtime_root_arg=str(self.root), todo_id=task["source_todo_id"], role="agent",
                 status="done", read_scope="completed_history").get("todo")
-        if (not row or row.get("status") != "done" or row.get("claimed_by") != actor["agent_id"]
-                or row.get("task_class") != "advancement_task" or row.get("completion_validation_required") is not True
-                or row.get("action_kind") == "generate_periodic_report"
-                or re.fullmatch(r"cadence_[a-f0-9]{64}", row.get("target_key") or "")
-                or actor["agent_id"] in row.get("excluded_agents", [])):
+        return row, self._source_validation(actor, row)
+
+    @staticmethod
+    def _source_candidate(actor, row):
+        return bool(row and row.get("status") == "done" and row.get("claimed_by") == actor["agent_id"]
+                and row.get("task_class") == "advancement_task" and row.get("completion_validation_required") is True
+                and row.get("action_kind") != "generate_periodic_report"
+                and not re.fullmatch(r"cadence_[a-f0-9]{64}", row.get("target_key") or "")
+                and actor["agent_id"] not in row.get("excluded_agents", []))
+
+    def _source_validation(self, actor, row):
+        if not self._source_candidate(actor, row):
             raise ValueError("select this Agent's existing completed Task with independent argv validation")
         declaration = read_completion_validation_declaration(runtime_root=self.root,
             goal_id=actor["goal_id"], todo_id=row["todo_id"], expected_digest=row["completion_validation_sha256"])
         if not declaration or not declaration.get("validation_command_argv"):
             raise ValueError("the existing source task has no independent argv validation")
-        return row, declaration
+        return declaration
+
+    def source_options(self, session_id):
+        """Discover references through the same source admission, without enrolling work.
+
+        Completed-history reads include active and archived native Tasks. The
+        canonical owner drains its snapshot pages before projecting this view;
+        no hot-list limit or private second index determines membership here.
+        """
+        from ...control_plane.todos.list_readback import list_goal_todos
+        try:
+            actor = self.selected(session_id)["actor"]
+            snapshot = list_goal_todos(registry_path=self.controller.registry_path, goal_id=actor["goal_id"],
+                runtime_root_arg=str(self.root), role="agent", status="done", read_scope="completed_history", limit=None)
+            sources = []
+            for row in snapshot["todos"]:
+                if not self._source_candidate(actor, row):
+                    continue
+                # An unreadable or changed declaration must fail the read instead
+                # of turning a source-coverage failure into an empty valid catalog.
+                validation = self._source_validation(actor, row)
+                sources.append({"source_todo_id": row["todo_id"], "title": row.get("title") or row["text"],
+                    "completion_validation_sha256": row["completion_validation_sha256"],
+                    "validation_label": validation.get("validation_label"),
+                    "archived": row.get("archive_state") == "archive"})
+            return {"schema_version": "managed_session_task_sources_v0", "session_id": session_id,
+                "goal_id": actor["goal_id"], "agent_id": actor["agent_id"], "read_only": True,
+                "sources": sources, "authority_read": snapshot["authority_read"]}
+        except OSError as exc:
+            raise RuntimeError("Original managed Task sources are temporarily unreadable") from exc
 
     def admission(self, request):
         actor = request["actor"]

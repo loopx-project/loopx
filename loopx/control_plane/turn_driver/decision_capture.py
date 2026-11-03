@@ -16,6 +16,27 @@ from typing import Any
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
 from ..content_digest import BARE_SHA256_PATTERN
+from .native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES as NATIVE_CONTEXT_PAGE_BYTES,
+    NATIVE_CONTEXT_PAGE_OUTPUT_BYTES as NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_LARGE_OUTPUT_BYTES as NATIVE_CONTEXT_LARGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_HISTORY_TOKENS as NATIVE_CONTEXT_HISTORY_TOKENS,
+    NATIVE_CONTEXT_OUTPUT_ENV as NATIVE_CONTEXT_OUTPUT_ENV,
+    native_context_page_budget as native_context_page_budget,
+)
+
+
+def private_capture_uid() -> int:
+    """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
+
+    POSIX mode bits cannot establish Windows privacy. Check before creating or
+    reading private captures, and before evaluating bounded settlement commands.
+    """
+    getuid = getattr(os, "getuid", None)
+    if os.name != "posix" or not callable(getuid):
+        raise ValueError("private capture validation is unsupported on this platform; "
+                         "use the same Turn command without --max-page-output-bytes")
+    return getuid()
 
 
 def write_decision_capture(
@@ -150,6 +171,28 @@ _CONTEXT_CAPTURE_PAGE_END = (
     "of this same capture with fewer pages or a smaller --page-bytes; do not trust a preview or EOF alone. "
     "Do not rerun admission or ask the owner. File existence and page EOF are not retention proof."
 )
+CONTEXT_CAPTURE_SELECTION_GUIDANCE = (
+    "For known required pointers, repeat --select in one call without listing again. "
+    "For unknown pointers, use --list on the nearest known parent; add --list-depth 2 "
+    "when nested discovery helps, expanding only needed branches. "
+    "Size batches against the combined output budget; avoid selecting both a parent and its children. "
+    "A missing pointer rejects the batch: inspect its parent in this capture before retrying. "
+)
+
+# A durable capture is a source library, not an instruction to import it all.
+CONTEXT_CAPTURE_NAVIGATION_GUIDANCE = (
+    "The complete decision is saved locally. Choose the sections needed for the current decision; "
+    "you do not need to read the whole file or drain all pages before working. "
+    + CONTEXT_CAPTURE_SELECTION_GUIDANCE +
+    "Read applicable goals, acceptance criteria, constraints and stop conditions before dependent work; "
+    "read the current operation/settlement contract before effects, and supporting evidence when verification needs it. "
+    "An index is navigation, not evidence of reading or fresh authority. "
+    "Keep the original Turn/capture/effect identities. After compaction recover only missing necessary facts "
+    "from this capture; never rerun admission or repeat effects just to recover context. "
+    "Saved-file deltas may use unread baseline files; this is not a claim of retained model input. "
+    "Selected/index reads never establish full model-context retention. "
+)
+
 # Native paging verifies capture bytes; the existing codec separately declares
 # its continuity basis. Generic/off readers retain their original obligations
 # without claiming that a native input observer exists.
@@ -168,24 +211,15 @@ CONTEXT_CAPTURE_READ_GUIDANCE = (
 )
 
 
-# Use the existing configured native output profile for every native caller,
-# including App shells that do not inherit the generated environment override.
-# Smaller explicit reader budgets remain available for same-capture recovery.
-NATIVE_CONTEXT_PAGE_BYTES = 64000
-NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 64000
-# Keep the configuration declaration usable by older installed readers too.
-NATIVE_CONTEXT_LARGE_OUTPUT_BYTES = 64000
-NATIVE_CONTEXT_HISTORY_TOKENS = 20000
-NATIVE_CONTEXT_OUTPUT_ENV = "LOOPX_CONTEXT_PAGE_OUTPUT_BYTES"
-
-
-def native_context_page_budget() -> tuple[int, int]:
-    return NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
-
-
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  page_bytes: int | None = None,
-                                 max_page_output_bytes: int | None = None) -> str:
+                                 max_page_output_bytes: int | None = None,
+                                 select: list[str] | None = None,
+                                 selection_sha256: str | None = None,
+                                 list_fields: bool = False,
+                                 list_depth: int | None = None,
+                                 initial_read: bool = False,
+                                 reference_file: Path | None = None) -> str:
     from ...command_invocation import loopx_cli_argv
 
     if page_bytes is None:
@@ -193,9 +227,74 @@ def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
         if max_page_output_bytes is None:
             max_page_output_bytes = NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
     return shlex.join([*loopx_cli_argv(), "--format", "json", "quota", "context-read",
-        "--capture-file", str(path), "--capture-sha256", digest,
+        *(["--reference-file", str(reference_file)] if reference_file is not None
+          else ["--capture-file", str(path), "--capture-sha256", digest]),
         "--offset", str(offset), "--page-bytes", str(page_bytes),
+        *(["--initial-read"] if initial_read else []),
+        *(["--list"] if list_fields else []),
+        *(["--list-depth", str(list_depth)] if list_depth is not None else []),
+        *(argument for pointer in select or [] for argument in ("--select", pointer)),
+        *(["--selection-sha256", selection_sha256] if selection_sha256 is not None else []),
         *(["--max-page-output-bytes", str(max_page_output_bytes)] if max_page_output_bytes is not None else [])])
+
+
+def write_context_read_reference(path: Path, digest: str, *, selection: dict[str, Any] | None = None,
+                                 navigation: dict[str, Any] | None = None) -> Path:
+    """Immutable reader IO metadata, not a new identity or authority store.
+
+    A short filename locates the document; only its complete stored digests are
+    checked. A collision or replaced document fails closed, never overwrites.
+    """
+    payload = {"schema_version": "context_capture_read_reference_v1", "path": str(path), "sha256": digest}
+    if selection is not None:
+        payload["selection"] = selection
+    if navigation is not None:
+        payload["navigation"] = navigation
+    suffix = ("." + hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+              if selection is not None or navigation is not None else "")
+    reference = path.with_name(path.stem + suffix + ".reader.json")
+    try:
+        write_decision_capture(reference, payload)
+    except FileExistsError:
+        existing = read_context_read_reference(str(reference))[1]
+        if existing["path"] != payload["path"]:
+            # Readers resolve parent aliases, while retaining the exact leaf.
+            # Compare that same spelling without rewriting immutable metadata
+            # or treating a different leaf (including a hardlink) as identical.
+            original = Path(existing["path"]).expanduser().absolute()
+            current = path.expanduser().absolute()
+            if original.parent.resolve(strict=True) / original.name == current.parent.resolve(strict=True) / current.name:
+                existing["path"] = payload["path"]
+        if json.dumps(existing, sort_keys=True) != json.dumps(payload, sort_keys=True):
+            raise ValueError("original reader reference changed; restore it without rerunning admission") from None
+    return reference
+
+
+def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
+    """Read one private physical descriptor; the caller verifies capture bytes."""
+    from ..effect_runtime import MAX_REQUEST_BYTES
+
+    uid = private_capture_uid()
+    path = Path(value).expanduser().absolute()
+    path = path.parent.resolve(strict=True) / path.name
+    if path.is_symlink():
+        raise ValueError("reader reference must be a physical file, not a symlink")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077
+                or info.st_size > MAX_REQUEST_BYTES):
+            raise ValueError("reader reference must be a private regular file owned by this user")
+        raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise ValueError("reader reference exceeds the existing transport limit")
+    payload = json.loads(raw)
+    if (not isinstance(payload, dict) or payload.get("schema_version") != "context_capture_read_reference_v1"
+            or not isinstance(payload.get("path"), str) or not isinstance(payload.get("sha256"), str)
+            or BARE_SHA256_PATTERN.fullmatch(payload["sha256"]) is None
+            or ("selection" in payload and not isinstance(payload["selection"], dict))):
+        raise ValueError("reader reference is incomplete or unsupported")
+    return path, payload
 
 
 def read_context_capture_file(value: str, digest: str, *, private: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
@@ -204,6 +303,7 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
 
     if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
         raise ValueError("context-read requires the original capture file and its exact SHA-256")
+    uid = private_capture_uid() if private else None
     path = Path(value).expanduser().absolute()
     # Parent aliases such as macOS /tmp are normal capture locations.
     # Resolve those once, but never follow a substituted final file.
@@ -215,10 +315,10 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
         metadata = os.fstat(stream.fileno())
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
             raise ValueError("capture must be a regular JSON file within the existing transport size limit")
-        if private and (metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
+        if private and (metadata.st_uid != uid or metadata.st_mode & 0o077):
             raise ValueError("native context requires a private capture owned by this user")
-        raw = stream.read(MAX_REQUEST_BYTES + 1)
-    if len(raw) > MAX_REQUEST_BYTES or hashlib.sha256(raw).hexdigest() != digest:
+        raw = stream.read(metadata.st_size + 1)
+    if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:
         raise ValueError("capture digest mismatch; restore the original capture, do not rerun admission")
     payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict):
@@ -228,7 +328,8 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
 
 def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tuple[int, int] | None:
     """Verify reported page bytes, independently of a host's retention claim."""
-    if page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest:
+    if ("selection_sha256" in page or "selected_pointers" in page
+            or page.get("schema_version") != "context_capture_page_v1" or page.get("sha256") != digest):
         return None
     start, content = page.get("offset"), page.get("content")
     if type(start) is not int or start < 0 or not isinstance(content, str) or page.get("ok") is not True:
@@ -245,15 +346,18 @@ def capture_page_range(page: dict[str, Any], *, raw: bytes, digest: str) -> tupl
 
 
 def capture_context_projection(payload: dict[str, Any], *, directory: Path,
-                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE) -> dict[str, Any]:
+                               read_guidance: str = CONTEXT_CAPTURE_READ_GUIDANCE,
+                               filename: str = "projection.json") -> dict[str, Any]:
     """Save the full projection independently of the optional presentation codec."""
-    projection = directory / "projection.json"
+    if filename not in ("projection.json", "required-context.json"):
+        raise ValueError("unsupported captured context filename")
+    projection = directory / filename
     write_decision_capture(projection, payload)
     digest = hashlib.sha256(projection.read_bytes()).hexdigest()
     return {
         "path": str(projection), "sha256": digest,
-        "instruction": "Complete JSON for this original capture. If the baseline is missing, compacted, "
-            "truncated or uncertain, use this full projection before dependent work. "
+        "instruction": "Complete JSON for this captured view. Use it when required content is missing or uncertain; "
+            "compaction alone does not require replay within an existing work Turn. "
             + read_guidance,
         "command": context_capture_read_command(projection, digest),
     }

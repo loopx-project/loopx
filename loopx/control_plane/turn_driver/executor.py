@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AbstractContextManager, nullcontext
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -1458,6 +1459,7 @@ def run_loopx_turn_once(
     terminal_closeout_resolver: TurnEffectResolver | None = None,
     scheduler: Scheduler | None = None,
     post_settlement: PostSettlement | None = None,
+    settlement_admission: Callable[[], AbstractContextManager] | None = None,
     admit_start: Callable[[Mapping[str, Any]], dict[str, Any]] | None = None,
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
@@ -1750,37 +1752,38 @@ def run_loopx_turn_once(
         if terminal is not None:
             return finish_recovery(terminal)
 
-        settled = _typed_settlement_stage(
-            plan,
-            result,
-            completed_phases=completed_phases,
-            journal=journal,
-            persist_journal=persist_journal,
-            effects=effects,
-            writeback=writeback,
-            completion_writeback=completion_writeback,
-            completion_intent=completion_intent,
-            terminal_closeout=terminal_closeout,
-            spend=spend,
-            effect_resolvers=turn_effect_resolvers(
-                writeback=writeback_resolver,
-                spend=spend_resolver,
-                terminal_closeout=terminal_closeout_resolver,
-            ),
-            scheduler=scheduler,
-            post_settlement=post_settlement,
-            source_effects=(
-                goal_admission.turn_effect_admission(
-                    turn_key=turn_key,
-                    journal_path=journal_path,
-                )
-                if goal_admission is not None
-                else None
-            ),
-            persist_source_journal=(
-                persist_source_journal
-                if goal_admission is not None and goal_admission.enabled
-                else None
-            ),
-        )
+        with settlement_admission() if settlement_admission is not None else nullcontext():
+            settled = _typed_settlement_stage(
+                plan,
+                result,
+                completed_phases=completed_phases,
+                journal=journal,
+                persist_journal=persist_journal,
+                effects=effects,
+                writeback=writeback,
+                completion_writeback=completion_writeback,
+                completion_intent=completion_intent,
+                terminal_closeout=terminal_closeout,
+                spend=spend,
+                effect_resolvers=turn_effect_resolvers(
+                    writeback=writeback_resolver,
+                    spend=spend_resolver,
+                    terminal_closeout=terminal_closeout_resolver,
+                ),
+                scheduler=scheduler,
+                post_settlement=post_settlement,
+                source_effects=(
+                    goal_admission.turn_effect_admission(
+                        turn_key=turn_key,
+                        journal_path=journal_path,
+                    )
+                    if goal_admission is not None
+                    else None
+                ),
+                persist_source_journal=(
+                    persist_source_journal
+                    if goal_admission is not None and goal_admission.enabled
+                    else None
+                ),
+            )
         return finish_recovery(settled)

@@ -33,6 +33,28 @@ def delivery_history_window(window_start=None, window_end=None):
     return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
+def _recorded_web_references(references):
+    """Retain exact eligible addresses as unread provenance, without fetching."""
+    citations = []
+    if not isinstance(references, list):
+        return citations
+    for reference in references:
+        if (not isinstance(reference, str) or not PUBLIC_SAFE_REFERENCE_PATTERN.fullmatch(reference)
+                or find_private_text_match(reference)):
+            continue
+        try:
+            validate_public_safe_value(reference)
+            address = urlsplit(reference)
+            if address.scheme not in {"http", "https"} or not address.hostname:
+                continue
+            address.port
+        except ValueError:
+            continue
+        citations.append({"source_ref": reference,
+            "evidence_ref": "sha256:" + hashlib.sha256(reference.encode()).hexdigest()})
+    return citations
+
+
 def _recorded_details(run, *, complete=False):
     """Hydrate existing Core fields; never dereference artifact paths or URLs."""
     observation = run.get("progress_observation")
@@ -72,23 +94,7 @@ def _recorded_details(run, *, complete=False):
     # Exact reads already belong to the original scoped reader. Preserve the
     # recorded provenance too; a digest cannot be reversed into a citation.
     # Shape/disclosure checks are not public-access or publication permission.
-    recorded_refs = delta.get("evidence_refs")
-    citations = []
-    if complete and isinstance(recorded_refs, list):
-        for reference in recorded_refs:
-            if (not isinstance(reference, str) or not PUBLIC_SAFE_REFERENCE_PATTERN.fullmatch(reference)
-                    or find_private_text_match(reference)):
-                continue
-            try:
-                validate_public_safe_value(reference)
-                address = urlsplit(reference)
-                if address.scheme not in {"http", "https"} or not address.hostname:
-                    continue
-                address.port
-            except ValueError:
-                continue
-            citations.append({"source_ref": reference,
-                "evidence_ref": "sha256:" + hashlib.sha256(reference.encode()).hexdigest()})
+    citations = _recorded_web_references(delta.get("evidence_refs")) if complete else []
     return {
         "source": "core_run_index",
         "verification": "recorded_claim_not_independent_verification",

@@ -794,3 +794,29 @@ def test_synthesis_only_citation_uses_existing_reader_and_does_not_execute(works
         read(suffix="/citation", **query, **{**citation,"last_line":3})
     assert w["count"].read_text().splitlines() == ["started"]
     assert json.loads(path.read_text()) == data
+
+
+def test_usage_turn_http_reads_registered_counter_evidence_without_analysis(workspace):
+    from tests.capabilities.test_trajectory_assessment_store import _usage_fixture
+
+    w = workspace
+    capture = w["sources"] / "usage.jsonl"
+    capture.write_text(_usage_fixture())
+    registered = register_pack(runtime_root=w["tmp_path"] / "runtime", owner_goal_id="research-owner",
+        input_path=w["tmp_path"] / "input.json", source_root=w["sources"], title="Captured Turn costs",
+        usage_jsonl="usage.jsonl", usage_session_id="solver-session")
+    query = dict(pack_id=registered["pack_id"], analysis_key=registered["analysis_key"], turn_id="b")
+    result = w["request"](suffix="/usage-turn", **query)
+    assert result["evidence_kind"] == "usage_counters"
+    assert [event["line"] for event in json.loads(result["text"])["events"]] == [3, 5, 6, 7]
+    assert not w["count"].exists(), "Reading costs must not invoke the analysis provider"
+    for invalid in [dict(query, turn_id="unknown"), dict(query, first_line="1"),
+                    dict(query, goal="other-owner"), dict(query, analysis_key="0" * 64)]:
+        with pytest.raises(HTTPError) as error:
+            w["request"](suffix="/usage-turn", **invalid)
+        assert error.value.code in {400, 409}
+    capture.write_text(capture.read_text() + "{}\n")
+    with pytest.raises(HTTPError) as error:
+        w["request"](suffix="/usage-turn", **query)
+    assert error.value.code == 409
+    assert not w["count"].exists()

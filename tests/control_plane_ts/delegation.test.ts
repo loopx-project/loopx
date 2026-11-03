@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnPlanDecision, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
+import {recordDelegationAdoption, decideDelegationStop, decideDelegationWakeObservation, delegationCheckedArtifacts, delegationInventoryItem, delegationInventoryQuery, delegationPreflight, delegationTurnWorkContext, delegationValidationPlan, recoverValidatedDelegationSettlement, selectDelegationBinding, transitionDelegationObservation, verifyDelegationSourceReplay} from "../../loopx/control_plane/collaboration/delegation.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {projectTurnSelectionRejection} from "../../loopx/control_plane/turn_driver/selection_rejection.ts";
 
@@ -8,6 +8,42 @@ const binding = {id: "review", agent_id: "reviewer", todo_id: "todo_review", wor
   requesters: ["coordinator", "analyst"], host_args: ["--host", "dsh"], timeout_seconds: 60, output_refs: ["output.json"]};
 const params = {agent_id: "coordinator", binding_id: "review",
   config: {schema_version: "loopx_local_delegation_v0", bindings: [binding]}};
+
+test("captured delegation work retains original material without Host configuration or surrogate authority", () => {
+  const brief = {schema_version: "collaboration_brief_v0", purpose: "Review", context: "Full original scope",
+    constraints: ["No external writes"], inputs: [], acceptance: ["Check evidence"], return_requirement: "Return here"};
+  const peer = {request_id: "b".repeat(64), goal_id: "goal", agent_id: binding.agent_id,
+    source_kind: "peer", source_agent_id: "coordinator", brief, instruction: "Read before work."};
+  const source = {request_id: "a".repeat(64), goal_id: "goal", agent_id: binding.agent_id,
+    execution_binding_id: binding.id, message: "原始内容\n完整约束 🧭", brief, instruction: "Context grants no additional authority."};
+  const turn = {goal_id: "goal", agent_id: binding.agent_id, todo_id: binding.todo_id,
+    workspace: binding.workspace, turn_instance_id: "original-turn"};
+  const identity = {binding, operation_id: "original-operation", request_id: peer.request_id,
+    source_request_id: source.request_id};
+  const input = {...params, operation_id: identity.operation_id, turn, turn_instance_id: turn.turn_instance_id,
+    record: {identity, status: "prepared", work_context_required: true}, stop: null, peer_request: peer, peer_operation: peer,
+    source_request: source, original_message: source.message};
+  const context = delegationTurnWorkContext(input);
+  assert.deepEqual(context.brief, brief);
+  assert.deepEqual(context.source_request, {request_id: source.request_id, message: source.message, brief,
+    instruction: source.instruction});
+  assert.equal(context.turn_instance_id, turn.turn_instance_id);
+  for (const field of ["config", "binding", "workspace", "host_args", "requesters"])
+    assert.equal(Object.hasOwn(context, field), false);
+  for (const change of [
+    {turn: {...turn, todo_id: "other"}}, {turn: {...turn, agent_id: "other"}},
+    {turn: {...turn, workspace: "/other"}}, {turn: {...turn, turn_instance_id: "other"}},
+    {operation_id: "other"}, {source_request: null}, {original_message: "substituted"},
+    {peer_request: {...peer, source_agent_id: "other"}},
+    {peer_operation: {...peer, brief: {...brief, context: "Changed"}}},
+    {record: {identity}}, {record: {...input.record, status: "stopped"}}, {stop: {}},
+  ]) assert.throws(() => delegationTurnWorkContext({...input, ...change}));
+  const {source_request_id: _source, ...peerIdentity} = identity;
+  const operator = delegationTurnWorkContext({...input, record: {...input.record, identity: peerIdentity},
+    source_request: null, original_message: null});
+  assert.deepEqual(operator.brief, brief);
+  assert.equal(Object.hasOwn(operator, "source_request"), false);
+});
 
 test("source replay requires the original binding, complete brief, peer and return identity", () => {
   const brief = {schema_version: "collaboration_brief_v0", purpose: "Review", context: "Original scope",
@@ -208,7 +244,7 @@ test("same explicit grant contract applies to a coordinator and an ordinary memb
 
 test("malformed operator binding fails before launch", () => {
   for (const patch of [{timeout_seconds: 0}, {timeout_seconds: 5000}, {output_refs: ["../secret"]},
-    {output_refs: ["/secret"]}, {host_args: []}, {todo_id: null}]) {
+    {output_refs: ["/secret"]}, {host_args: []}, {todo_id: ""}]) {
     assert.throws(() => selectDelegationBinding({...params,
       config: {...params.config, bindings: [{...binding, ...patch}]}}));
   }
@@ -481,6 +517,29 @@ test("inventory paging is bounded and never interprets a missing result as accep
   assert.equal(unavailable.artifacts, undefined);
 });
 
+test("ordinary request preflight retains its original subject and validation repair", () => {
+  const ordinary = {...binding, todo_id: null};
+  const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
+  const waiting = delegationPreflight({binding: ordinary, workspace: {state: "available"},
+    authority: {ready: true}, request_required: true});
+  assert.equal(waiting.state, "turn_blocked");
+  assert.equal(waiting.request_required, true);
+  assert.equal(waiting.dispatch_allowed, false);
+  assert.deepEqual(waiting.effects, effects);
+  const params = {binding: ordinary, validation_files_current: false,
+    acceptance: {todo_id: null, state: "unbound", reason: "independent_delegation_validation_required"},
+    preview: {dry_run: true, status: "preview", effects,
+      route: {kind: "ready_for_host", would_invoke_host: true, selected_todo_id: null},
+      managed_executor: {executor: "generic-cli", available: true, unavailable_reason: null, execution_profile: null}}};
+  const refused = delegationPreflight(params);
+  assert.equal(refused.state, "acceptance_unavailable");
+  assert.equal(refused.acceptance_next_action, "review_original_request_validation");
+  assert.equal(refused.dispatch_allowed, false);
+  const todo = delegationPreflight({...params, binding, acceptance: {...params.acceptance, todo_id: binding.todo_id},
+    preview: {...params.preview, route: {...params.preview.route, selected_todo_id: binding.todo_id}}});
+  assert.equal(todo.acceptance_next_action, "review_original_todo_validation");
+});
+
 test("preflight separates task admission, acceptance binding and runtime availability", () => {
   const effects = {host_invoked: false, state_written: false, quota_spent: false, scheduler_acknowledged: false};
   const preview = {dry_run: true, status: "preview", effects,
@@ -681,17 +740,4 @@ test("workspace faults are bounded observations, not authority or launch permits
   const unavailable = {...input, authority: {ready: false, reason: "canonical read failed"}};
   assert.deepEqual(delegationPreflight({...unavailable, workspace: {state: "available"}}),
     delegationPreflight(unavailable));
-});
-
-test("Turn plan decision preserves a rejection and validates a successful transaction", () => {
-  const rejected = delegationTurnPlanDecision({plan: {ok: false,
-    error: "Requested Turn Todo is not accepted by canonical authority"}});
-  assert.deepEqual(rejected, {
-    schema_version: "loopx_delegation_turn_plan_decision_v0", state: "rejected",
-    turn_key: null, reason: "Requested Turn Todo is not accepted by canonical authority",
-  });
-  const turnKey = `sha256:${"a".repeat(64)}`;
-  assert.equal(delegationTurnPlanDecision({plan: {ok: true,
-    transaction: {turn_key: turnKey}}}).turn_key, turnKey);
-  assert.throws(() => delegationTurnPlanDecision({plan: {ok: true, transaction: {}}}));
 });

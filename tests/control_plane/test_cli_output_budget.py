@@ -689,6 +689,8 @@ def _mode_variant_commands(
         + ["todo", "list", "--goal-id", GOAL_ID, "--limit", "3"],
         "todo_list_thin": common
         + ["todo", "list", "--goal-id", GOAL_ID, "--thin"],
+        "todo_list_summary": common
+        + ["todo", "list", "--goal-id", GOAL_ID, "--summary"],
     }
 
 
@@ -747,6 +749,7 @@ def test_manifest_covers_the_declared_agent_facing_surface_set() -> None:
         "heartbeat_prompt_full",
         "todo_list_limited",
         "todo_list_thin",
+        "todo_list_summary",
     }
     assert set(CLI_OUTPUT_MODE_VARIANT_BY_ID) == expected_variants
     assert manifest["mode_variant_count"] == len(expected_variants)
@@ -1295,6 +1298,67 @@ def test_crowded_quota_preserves_long_chain_decision_clauses(
     assert "do not rewrite criteria after failure" in guidance
 
 
+@pytest.mark.parametrize("surface", ["quota_should_run", "loopx_turn_plan"])
+@pytest.mark.parametrize("include_agent_vision", [False, True])
+def test_native_stride_projection_rejects_each_missing_decision_field(
+    tmp_path: Path, surface: str, include_agent_vision: bool,
+) -> None:
+    import copy
+
+    from loopx.control_plane.testing.cli_output_differential import _turn_projection_migration
+
+    with _stable_budget_fixture_root(tmp_path / "stride-projection") as stable_root:
+        project, runtime, registry_path, state_file = _write_fixture(
+            stable_root, SCENARIOS[1], include_agent_vision=include_agent_vision,
+        )
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(
+            project=project, runtime=runtime, registry_path=registry_path,
+            state_file=state_file, output_format="json",
+        )[surface]
+        code, text = _invoke_cli(command)
+    assert code == 0, text
+    payload = json.loads(text)
+
+    def envelope(value):
+        return value["turn_envelope"] if surface == "loopx_turn_plan" else value
+
+    def row(value):
+        return {
+            **measure_cli_output(json.dumps(value, ensure_ascii=False), output_format="json"),
+            "row_id": f"surface/{surface}/crowded/json",
+        }
+
+    base_payload = copy.deepcopy(payload)
+    del envelope(base_payload)["replan_action_packet"]["stride_control"]
+    envelope(base_payload).get("autonomous_replan_obligation", {}).get("replan_context", {}).pop("stride_strategy", None)
+    base = row(base_payload)
+    assert _turn_projection_migration(base, row(payload))[0]
+
+    # Walk the actual native example rather than a hand-written projection.
+    # Each delivered leaf is required for a usable decision (including each
+    # axis reason and all five probe fields). Arrays are atomic fields here.
+    def leaves(value, prefix=()):
+        for key, child in value.items():
+            path = (*prefix, key)
+            if isinstance(child, dict):
+                yield from leaves(child, path)
+            else:
+                yield path
+
+    example = envelope(payload)["replan_action_packet"]["stride_control"]["minimal_example"]
+    paths = list(leaves(example))
+    assert ("next_probe", "cost_bound") in paths
+    assert len(paths) >= 17
+    for path in paths:
+        partial = copy.deepcopy(payload)
+        target = envelope(partial)["replan_action_packet"]["stride_control"]["minimal_example"]
+        for key in path[:-1]:
+            target = target[key]
+        del target[path[-1]]
+        assert not _turn_projection_migration(base, row(partial))[0], path
+
+
 def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
     tmp_path: Path,
 ) -> None:
@@ -1712,10 +1776,48 @@ def test_thin_json_budget_retains_full_supported_scope(tmp_path: Path) -> None:
         )
         payload = measurement["payload"]
         assert scope in payload["task_body"]
-        assert payload["interface_budget"]["max_chars"] == 4200
+        assert payload["interface_budget"]["max_chars"] == 4900
         assert payload["interface_budget"]["within_budget"] is True
         assert "refresh-state --goal-outcome-update-json" in payload["task_body"]
         assert "Local outcomes never replace root continuation, budget or stop criteria." in payload["task_body"]
+
+
+@pytest.mark.parametrize("route_padding, within_budget", [("", True), ("x" * 48, False)])
+def test_thin_budget_covers_complete_capability_and_cli_routes(
+    tmp_path: Path, route_padding: str, within_budget: bool,
+) -> None:
+    # Exercise the actual CLI composition, not a shortened instruction or an
+    # estimated sum. An oversized route must still report a budget failure.
+    with _stable_budget_fixture_root(tmp_path) as root:
+        project, runtime, registry_path, state_file = _write_fixture(root, SCENARIOS[0])
+        import_fixture_authority(registry_path, GOAL_ID)
+        command = _surface_commands(
+            project=project, runtime=runtime, registry_path=registry_path,
+            state_file=state_file, output_format="json",
+        )["heartbeat_prompt_thin"]
+        scope = "x" * 320
+        command[command.index("--agent-scope") + 1] = scope
+        cli_route = f"/opt/loopx/{route_padding}qualified-tools/bin/loopx"
+        command.extend(["--codex-app", "--cli-bin", cli_route])
+        capabilities = ("shell", "filesystem", "network", "external_evidence_poll", "browser")
+        for capability in capabilities:
+            command.extend(["--available-capability", capability])
+        exit_code, text = _invoke_cli(command)
+        assert exit_code == 0, text
+        payload = json.loads(text)
+        body, budget = payload["task_body"], payload["interface_budget"]
+        assert scope in body and body.count(cli_route) >= 2
+        assert all(f"--available-capability {capability}" in body for capability in capabilities)
+        assert "--codex-app" in body and "--runtime-root" in body and "--registry" in body
+        assert "--todo-id <id>" in body and "settlement_plan.ordered_steps" in body
+        assert "ambiguous effects need readback/recovery, not blind retry" in body
+        assert "refresh-state --goal-outcome-update-json" in body
+        assert "Local outcomes never replace root continuation, budget or stop criteria." in body
+        # Preserve the historical 4,500-character failure as a characterized
+        # input; the allowance changes, not the complete emitted instructions.
+        assert budget["budget_char_count"] > 4500
+        assert budget["max_chars"] == 4900
+        assert budget["within_budget"] is within_budget
 
 
 def test_brief_budget_retains_full_commands_on_real_long_paths() -> None:

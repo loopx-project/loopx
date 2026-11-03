@@ -183,7 +183,10 @@ acceptance remain open. Proposed experiments are advice, not execution authority
 
 The [controller/executor RFC](controller-executor-unified-contract-v0.md)
 refines S2/S4/S6/S7/S11: one governed work schema replaces quota/Turn packet
-format choices and incorporates full-first differential context. The optional
+format choices. Its [two-layer delivery design](controller-executor-unified-contract-v0.md#differential-context)
+targets cross-host Progressive by default, independent Delta auto only on
+qualified hosts, and unread-material discovery from the current complete capture;
+explicit off and versioned migration remain protected. The optional
 controller model alone talks to Core; the executor receives natural-language
 work and materials, while existing host/Core owners retain identity, permissions,
 recovery and settlement. Session roles, execution modes, wake sources and
@@ -196,11 +199,40 @@ session. Deterministic composition and exact delta encoding retain their own
 owners. Qualify retained obligations and subsequent accepted work against the
 controller's added complete costs; query counts or text size cannot pass it.
 
+C6/C8 also own the [human interaction during execution](controller-executor-unified-contract-v0.md#human-interaction-during-execution)
+product target: a busy executor does not block the controller conversation;
+meaningful changes prompt evidence-based reports and task-appropriate rich
+views, while feedback remains traceable into subsequent work and artifacts.
+Qualify quiet/deduplicated reporting, audience limits, accessible fallback and
+revision/stop/recovery races through existing session/request/projection owners.
+These are proposed outcomes, not current runtime qualification or extra gates
+on independent C1 work. Preserve single-session comparison first and include
+all reporting, presentation and human-attention costs in the later opt-in arm.
+
 C1's [caller cutover map](controller-executor-unified-contract-v0.md#c1-caller-replacement-and-cutover-unit)
 includes quota emission, the direct Turn producer and the final native/structured
 host prompts. A common capture does not unify those consumers. Qualification
 checks source obligations through composition, reconstruction and actual final
 input; new-admission cutover stays separate from historical receipt replay.
+
+The [pinned packaged comparison](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.md)
+qualifies C1 source/recovery behavior on real File/SQLite fixtures but records
+larger cold/output bytes and an open standalone numeric hash boundary. Preserve
+that counterevidence and the original outcome/full-cost gate; a working saved-file
+delta or once-only receipt does not establish long-horizon benefit.
+
+The [context-delivery guide](../../guides/context-delivery.md) explains current
+behavior and a minimum two-model comparison. Deliver documentation first;
+within C1/C2/C9, qualify a declared DeepSeek model and a declared strong model
+against the original quota path under matched conditions and complete costs.
+Then qualify reversible adoption and release of a supported profile before a
+broader default recommendation. The reference's existing Codex-scoped default
+remains current behavior, not proof of model benefit. Mixed or regressed model results retain scoped opt-in
+or explicit limitations. Retire only named replaced producers/consumers after
+actual migration, historical-reader compatibility and rollback evidence; keep
+full snapshots, integrity, authority, identity, stops and recovery. A guide,
+Codex-only adapter or shorter output does not pass the model/default gate.
+This sequence neither blocks independent authorized work nor starts experiments.
 
 Use that RFC’s C1–C9 task/deletion map within the existing work streams: first
 qualify unified single-session inputs, then role binding and shared lifecycle,
@@ -955,6 +987,25 @@ under frozen rendering/attention budgets, separately from live R7 concurrency.
 Current status is design proposal; no G1 or default-screen promotion.
 
 ### R3: Semantic Requests and Automatic Return
+
+**Multi-recipient conversation boundary.** One Chat Turn can supply independent
+recipient-specific handoffs through the existing inbox/return owner. Single
+objects remain compatible; arrays retain per-Goal/Agent authorization, replay
+identity, failure and conclusion readback. Partial delivery or one returned
+result cannot certify completion of the whole request. This adds no team
+assignment or scheduler. Qualify cross-Goal partial revocation, restart/replay,
+out-of-order returns and packaged original-conversation cards; live semantic
+routing, installed App and Lark provider delivery remain distinct evidence.
+
+**Interactive lifetime checkpoint.** Ordinary Codex/ACP Chat turns have no
+implicit absolute cutoff while their existing idle/startup checks and Stop
+remain active. Accepted queued input has no default TTL; explicitly requested
+limits, queue capacity, source validation and bounded managed-host segments keep
+their owners. Synthetic long-activity, explicit-limit, idle, queue and service
+configuration tests qualify this slice. Existing installed settings and immutable
+old failures are retained; installed activation and effect-aware recovery of an
+original timed-out request remain separate acceptance, not inferred replay.
+
 
 **Bound-conversation status presentation.** The shared display renderer leads
 with canonical execution/recovery state, project and queue/permission facts;

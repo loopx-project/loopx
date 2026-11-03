@@ -545,8 +545,10 @@ def build_live_quota_should_run_decision(
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
     turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    context_navigation: bool = False,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
+    inline_goal_source: bool = False,
 ) -> dict[str, Any]:
     """Build one live CLI decision while keeping host observation injectable."""
     resolved_context = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -824,5 +826,6 @@ def build_live_quota_should_run_decision(
     from ..work_items.context_readback import attach_work_context
 
     attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
-        hook_dispatch=turn_start_hook_dispatch)
+        hook_dispatch=turn_start_hook_dispatch, context_navigation=context_navigation,
+        inline_goal_source=inline_goal_source)
     return payload

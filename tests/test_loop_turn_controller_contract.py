@@ -13,6 +13,10 @@ import pytest
 
 from loopx.control_plane.turn_driver import loop_controller as controller
 from loopx.control_plane.turn_driver.driver import LoopXTurnRoute
+from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+from loopx.control_plane.turn_driver.turn_contract_generated import (
+    TURN_CONTROLLER_CONTRACT as CONTRACT, project_turn_route,
+)
 from loopx.control_plane.turn_driver.host_failure import build_host_failure_record
 from loopx.control_plane.turn_driver.transaction import LoopXTurnResultKind
 from test_loop_turn_loop_controller import (
@@ -23,6 +27,42 @@ from test_loop_turn_loop_controller import (
     _execution,
     _validated_receipt,
 )
+
+
+@pytest.mark.parametrize("field", ["goal_id", "agent_id", "todo_id"])
+@pytest.mark.parametrize("empty", [[], {}, None, False, 0, ""])
+def test_execution_receipt_rejects_empty_lineage_before_qualification(field, empty):
+    execution = _execution()
+    execution["receipt"]["lineage"][field] = empty
+    with pytest.raises(ValueError, match="missing goal/agent/todo lineage"):
+        controller.ValidatedTurnReceipt.from_execution(execution)
+
+
+@pytest.mark.parametrize("field", ["goal_id", "agent_id", "todo_id"])
+def test_execution_receipt_retains_nonempty_lineage(field):
+    execution = _execution()
+    expected = deepcopy(execution["receipt"]["lineage"])
+    expected[field] = "identity-中文"
+    execution["receipt"]["lineage"] = expected
+    assert controller.ValidatedTurnReceipt.from_execution(execution).lineage == expected
+
+
+@pytest.mark.parametrize("source,signature", [(1.0, "1.0"), (1e-7, "1e-07"),
+    (True, "True"), ("sha256:fixture", "sha256:fixture")])
+def test_historical_scalar_route_reaches_public_plan_and_controller(source, signature):
+    envelope = _envelope(should_run=True)
+    envelope["action_signature"].update(source_hash=source, envelope_hash=signature)
+    plan = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    assert plan["route"]["kind"] == "ready_for_host"
+    assert plan["route"]["would_invoke_host"] is True
+    decision = controller.decide_loop_disposition(turn_receipt=None, quota_decision=envelope)
+    assert decision["disposition"] == "run_now"
+    envelope["action_signature"]["envelope_hash"] = "different-signature"
+    rejected = build_loopx_turn_plan(envelope, host="codex-cli", execution_mode="interactive-visible")
+    assert rejected["route"]["kind"] == "contract_error"
+    assert rejected["route"]["would_invoke_host"] is False
+    with pytest.raises(ValueError, match="signature hashes"):
+        controller.decide_loop_disposition(turn_receipt=None, quota_decision=envelope)
 
 
 # ready / capability / repair / replan / user / quiet wait / blocked
@@ -262,20 +302,20 @@ def test_independent_full_decision_cells(row, route, expected):
 def test_contract_projection_covers_all_routes_with_explicit_rejection():
     expected = dict(zip(_ROUTES, _PROJECTED, strict=True))
     expected["contract_error"] = None
-    assert controller._LOOP_CONTROLLER_CONTRACT["route_projection"] == expected
+    assert CONTRACT["route_projection"] == expected
     assert set(expected) == {route.value for route in LoopXTurnRoute}
     for route in LoopXTurnRoute:
         if route is LoopXTurnRoute.CONTRACT_ERROR:
             with pytest.raises(ValueError, match="envelope contract"):
-                controller._route_to_disposition(route)
+                project_turn_route(route)
         else:
             assert (
-                controller._route_to_disposition(route).value == expected[route.value]
+                project_turn_route(route).value == expected[route.value]
             )
 
 
 def test_contract_uses_closed_finite_partitions_and_unique_rules():
-    contract = controller._LOOP_CONTROLLER_CONTRACT
+    contract = CONTRACT
     domains = dict(contract["partitions"])
     domains["route"] = [route.value for route in LoopXTurnRoute]
     domains["receipt_kind"] = ["absent", *[kind.value for kind in LoopXTurnResultKind]]
@@ -330,17 +370,7 @@ def test_bundled_contract_is_the_one_consumed_by_controller():
     path = (
         Path(controller.__file__).parents[1] / "turn_loop_controller_contract_v0.json"
     )
-    assert json.loads(path.read_text()) == controller._LOOP_CONTROLLER_CONTRACT
-
-
-def test_conjunction_does_not_depend_on_json_object_key_order(monkeypatch):
-    contract = deepcopy(controller._LOOP_CONTROLLER_CONTRACT)
-    for rule in contract["rules"]:
-        rule["when"] = dict(reversed(list(rule["when"].items())))
-    monkeypatch.setattr(controller, "_LOOP_CONTROLLER_CONTRACT", contract)
-    for row, outcomes in _ROWS:
-        for route, expected in zip(_ROUTES, outcomes, strict=True):
-            test_independent_full_decision_cells(row, route, expected)
+    assert json.loads(path.read_text()) == CONTRACT
 
 
 # The controller evaluates `rules` in order and stops at the first match, so a
@@ -383,60 +413,9 @@ _RULE_SEQUENCE = (
 def test_contract_rule_sequence_is_pinned():
     """A reordered contract is a different program; regeneration must not hide it."""
 
-    rules = controller._LOOP_CONTROLLER_CONTRACT["rules"]
+    rules = CONTRACT["rules"]
     assert tuple(rule["id"] for rule in rules) == _RULE_SEQUENCE
 
 
-def _decisions_for(contract, monkeypatch):
-    """Every cell's operator-visible decision: the disposition and its reason.
-
-    Two rules can share a disposition and still explain it differently, so the
-    reason is part of the observable decision, not commentary.
-    """
-
-    monkeypatch.setattr(controller, "_LOOP_CONTROLLER_CONTRACT", contract)
-    observed = {}
-    for row, outcomes in _ROWS:
-        for route in _ROUTES:
-            arguments = _cell(row, route)
-            try:
-                payload = controller.decide_loop_disposition(**arguments)
-            except ValueError:
-                observed[(row, route)] = ("reject", "reject")
-            else:
-                observed[(row, route)] = (
-                    payload["disposition"],
-                    str(payload["reason"]),
-                )
-    return observed
-
-
-@pytest.mark.parametrize(
-    "specific, general",
-    [
-        ("progress_exhausted", "progress_route"),
-        ("host_replan", "failed_receipt"),
-        ("host_repair", "failed_receipt"),
-        ("host_retry", "failed_receipt"),
-        ("host_exhausted", "failed_receipt"),
-        ("task_validation_replan", "failed_receipt"),
-    ],
-)
-def test_a_refining_rule_must_precede_the_rule_it_refines(monkeypatch, specific, general):
-    """Moving the specific rule behind the general one must change a real decision.
-
-    This is what `_RULE_SEQUENCE` protects: each pinned precedence is load
-    bearing, so the pin is not a restatement of the shipped file.
-    """
-
-    contract = deepcopy(controller._LOOP_CONTROLLER_CONTRACT)
-    ids = [rule["id"] for rule in contract["rules"]]
-    assert ids.index(specific) < ids.index(general)
-    moved = next(rule for rule in contract["rules"] if rule["id"] == specific)
-    rules = [rule for rule in contract["rules"] if rule["id"] != specific]
-    rules.insert([rule["id"] for rule in rules].index(general) + 1, moved)
-    contract["rules"] = rules
-
-    shipped = _decisions_for(deepcopy(controller._LOOP_CONTROLLER_CONTRACT), monkeypatch)
-    observed = _decisions_for(contract, monkeypatch)
-    assert observed != shipped
+# Rule-mutation sensitivity now runs in turn_loop_controller.test.ts, where the
+# production TS evaluator consumes this contract. Python retains every semantic cell.

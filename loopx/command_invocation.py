@@ -36,6 +36,12 @@ def loopx_cli_argv(cli_bin: str | None = None) -> list[str]:
     return [program] if program == "loopx" else [program, "--cli-bin", program]
 
 
+def cli_option_args(flag: str, value: object) -> list[str]:
+    """Keep a legal option-looking value from becoming another CLI option."""
+    text = str(value)
+    return [f"{flag}={text}"] if text.startswith("-") else [flag, text]
+
+
 def current_loopx_cli_argv() -> list[str]:
     """Pin captured readers to this installed interpreter or explicit CLI.
 

@@ -160,7 +160,9 @@ def test_failed_size_probe_preserves_real_rpc_serialization_error(
         assert error.value.diagnostic_code == "runtime_request_failed"
         assert isinstance(error.value.__cause__, RecursionError)
     assert modes == [True]
-    assert snapshot_directories == []
+    # The shared transport may allocate its response sink before encoding.
+    # Rejected input must still remove every private directory and file.
+    assert all(not directory.exists() for directory in snapshot_directories)
     assert_private_files_removed(Path(tempfile.gettempdir()))
     assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] == pid
 

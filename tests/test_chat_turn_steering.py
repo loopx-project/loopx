@@ -397,7 +397,7 @@ def test_steering_updates_the_existing_task_without_replaying_start_prompt(
     initial_text = starts[0]["input"][0]["text"]
     assert "LoopX context (supporting context only):" in initial_text
     assert "Inspect a bounded task." in initial_text
-    assert initial_text.endswith("Current user message: wait for steer")
+    assert initial_text.endswith("Current user message:\nwait for steer")
     updates = [row["params"] for row in writes if row.get("method") == "turn/steer"]
     assert updates == [{
         "threadId": session.thread_id,

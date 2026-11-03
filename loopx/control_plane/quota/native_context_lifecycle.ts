@@ -36,10 +36,13 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (name !== "SessionStart") return state;
     state = {session_id: session, cwd};
   }
+  const recoveryFile = jsonObject(state.recovery);
+  const fileEpochCurrent = recoveryFile?.continuity_basis === "captured_file"
+    && jsonObject(recoveryFile.target)?.context_epoch === state.context_epoch;
   const invalidate = () => {
     // Reset is idempotent while already invalid. Pre/PostCompact and the
     // subsequent SessionStart(compact) therefore do not rotate three epochs.
-    if (!state.context_epoch || state.candidate || state.pending)
+    if (!state.context_epoch || state.candidate || state.pending || fileEpochCurrent)
       state.context_epoch = requireNonEmptyString(request.new_epoch, "new native context epoch");
     delete state.candidate;
     delete state.pending;
@@ -53,6 +56,17 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     if (same && event.source === "resume" && request.resume_verified === true
         && !state.pending && candidate?.basis === NATIVE_CONTEXT_BASIS
         && candidate.capture_bytes_verified === true) return state;
+    if (same && event.source === "resume" && fileEpochCurrent
+        && !(candidate?.native_resume || (state.candidate && !candidate))) {
+      // Resuming a session is not compaction. File comparison does not depend
+      // on model retention; retire that separate assumption when unverified.
+      // A previously qualified history checkpoint that now fails can include
+      // an unreported compaction/rollback, so conservatively rotate below.
+      delete state.candidate;
+      delete state.pending;
+      delete state.active_call;
+      return state;
+    }
     invalidate();
     return state;
   }
@@ -78,6 +92,7 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   for (const value of pages) {
     const page = jsonObject(value);
     if (!page || page.schema_version !== "context_capture_page_v1") continue;
+    if ("selection_sha256" in page || "selected_pointers" in page || "list_fields" in page) continue;
     const candidate = jsonObject(state.candidate);
     if (!state.pending && candidate?.capture_sha256 === recovery.sha256
         && candidate?.capture_bytes_verified === true

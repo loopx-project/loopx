@@ -399,6 +399,55 @@ def redact_response_markdown(
     )
 
 
+def _review_openings(text: str, code_ticks: int = 0) -> tuple[list[int], int, int | None]:
+    """Locate control markers outside backtick examples and escaped text.
+
+    Skip decoded JSON bodies too: a legacy message can itself quote markers
+    or backticks without creating another envelope or changing code context.
+    """
+    openings = []
+    tokens = re.compile(r"`+|" + re.escape(CHAT_REVIEW_OPEN_TAG))
+    cursor = 0
+    while token := tokens.search(text, cursor):
+        cursor = token.end()
+        value = token.group()
+        if not code_ticks:
+            preceding = token.start() - 1
+            while preceding >= 0 and text[preceding] == "\\":
+                preceding -= 1
+            if (token.start() - 1 - preceding) % 2:
+                continue
+        if value.startswith("`"):
+            if not code_ticks:
+                code_ticks = len(value)
+            elif len(value) == code_ticks:
+                code_ticks = 0
+        else:
+            body_start = len(text) - len(text[cursor:].lstrip())
+            try:
+                _, body_end = json.JSONDecoder().raw_decode(text, body_start)
+            except json.JSONDecodeError:
+                body_end = None
+            if code_ticks:
+                if text[body_start:body_start + 1] == "{":
+                    # Backticks in metadata cannot close a visible example.
+                    # Only release a JSON example after its complete envelope
+                    # and the code delimiter have both arrived.
+                    if body_end is None:
+                        return openings, code_ticks, token.start()
+                    close = len(text) - len(text[body_end:].lstrip())
+                    if not text.startswith(CHAT_REVIEW_CLOSE_TAG, close):
+                        return openings, code_ticks, token.start()
+                    cursor = close + len(CHAT_REVIEW_CLOSE_TAG)
+                if not any(len(ticks.group()) == code_ticks for ticks in re.finditer(r"`+", text[cursor:])):
+                    return openings, code_ticks, token.start()
+            else:
+                openings.append(token.start())
+                if body_end is not None:
+                    cursor = body_end
+    return openings, code_ticks, None
+
+
 class VisibleResponseStreamFilter:
     """Stream safe operator text while withholding the structured review envelope."""
 
@@ -420,6 +469,7 @@ class VisibleResponseStreamFilter:
         self.marker_pending = ""
         self.visible_pending = ""
         self.envelope_started = False
+        self._code_ticks = 0
 
     @staticmethod
     def _protected_root_atoms(root: str) -> tuple[tuple[tuple[str, bool], ...], ...]:
@@ -528,28 +578,36 @@ class VisibleResponseStreamFilter:
         if self.envelope_started:
             return ""
         self.marker_pending += str(chunk or "")
-        marker_at = self.marker_pending.find(CHAT_REVIEW_OPEN_TAG)
-        if marker_at >= 0:
-            visible = self.marker_pending[:marker_at]
-            self.marker_pending = ""
-            self.envelope_started = True
-            return self._accept_visible(visible, final=True)
         suffix_length = 0
         limit = min(len(self.marker_pending), len(CHAT_REVIEW_OPEN_TAG) - 1)
         for length in range(1, limit + 1):
             if self.marker_pending.endswith(CHAT_REVIEW_OPEN_TAG[:length]):
                 suffix_length = length
-        if suffix_length:
-            visible = self.marker_pending[:-suffix_length]
-            self.marker_pending = self.marker_pending[-suffix_length:]
-        else:
-            visible = self.marker_pending
+        cut = len(self.marker_pending) - suffix_length
+        # A delimiter run or escape can straddle chunks, just like the marker.
+        # Keep it whole so one split cannot change which text is code.
+        while cut and self.marker_pending[cut - 1] == "\\":
+            cut -= 1
+        ticks = re.search(r"\\*`+$", self.marker_pending[:cut])
+        if ticks:
+            cut = ticks.start()
+        visible = self.marker_pending[:cut]
+        openings, self._code_ticks, uncertain = _review_openings(visible, self._code_ticks)
+        if openings:
             self.marker_pending = ""
+            self.envelope_started = True
+            return self._accept_visible(visible[:openings[0]], final=True)
+        if uncertain is not None:
+            cut = uncertain
+            visible = visible[:cut]
+        self.marker_pending = self.marker_pending[cut:]
         return self._accept_visible(visible, final=False)
 
     def finish(self) -> str:
         if not self.envelope_started:
-            self.visible_pending += self.marker_pending
+            openings, _, uncertain = _review_openings(self.marker_pending, self._code_ticks)
+            cut = openings[0] if openings else uncertain
+            self.visible_pending += self.marker_pending[:cut]
         self.marker_pending = ""
         return self._accept_visible("", final=True)
 
@@ -764,9 +822,9 @@ def normalize_agent_response(
 ) -> dict[str, Any]:
     """Normalize one structured provider response to the public Chat contract."""
 
-    from .capabilities.manager_context import normalize_request
+    from .control_plane.collaboration.inbox import normalize_handoff
 
-    handoff = normalize_request(payload.get("context_handoff"))
+    handoff = normalize_handoff(payload.get("context_handoff"))
     protected = tuple(protected_paths)
     message = redact_response_markdown(
         str(payload.get("message") or ""),
@@ -812,8 +870,12 @@ def parse_agent_response(
     team_plan_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     protected = tuple(protected_paths)
-    start = raw_text.rfind(CHAT_REVIEW_OPEN_TAG)
+    openings, _, uncertain = _review_openings(raw_text)
+    if uncertain is not None:
+        openings.append(uncertain)
+    start = openings[-1] if openings else -1
     end = raw_text.rfind(CHAT_REVIEW_CLOSE_TAG)
+    visible = raw_text[:openings[0]].strip() if openings else raw_text.strip()
     if start >= 0 and end > start:
         body = raw_text[start + len(CHAT_REVIEW_OPEN_TAG) : end].strip()
         try:
@@ -825,13 +887,26 @@ def parse_agent_response(
             # Resolve only inside a complete envelope, then use the same
             # redaction and typed metadata normalization as legacy responses.
             if payload.get("message") == "":
-                visible = raw_text[:start].split(CHAT_REVIEW_OPEN_TAG, 1)[0].strip()
                 payload = {**payload, "message": visible}
-            return normalize_agent_response(
-                payload,
-                protected_paths=protected,
-                team_plan_context=team_plan_context,
-            )
+            try:
+                return normalize_agent_response(
+                    payload,
+                    protected_paths=protected,
+                    team_plan_context=team_plan_context,
+                )
+            except ValueError:
+                # A bad action envelope must not discard an already generated
+                # answer or turn a formatting failure into a business retry.
+                # Preserve prose, but admit none of the unvalidated actions.
+                answer = payload.get("message")
+                if not isinstance(answer, str) or not answer.strip():
+                    answer = visible
+                if not answer:
+                    raise
+                summary = "答复正文已保留，但操作或委派元数据未通过校验；相关操作和委派尚未提交。"
+                return normalize_agent_response({"message": answer + "\n\n待处理：" + summary,
+                    "gate": {"kind": "response_metadata_invalid", "summary": summary}},
+                    protected_paths=protected)
         key = re.search(r'"message"\s*:\s*', body)
         if key:
             try:
@@ -848,14 +923,13 @@ def parse_agent_response(
                     "protected_action": None,
                     "gate": None,
                 }
-        raw_text = raw_text[:start]
+        raw_text = visible
     elif start >= 0:
         # The review envelope is an authority boundary, not display text.  A
         # provider can finish after emitting a complete JSON object but before
         # emitting the closing tag.  In that case retain only a human-readable
         # answer and fail closed for proposals, gates, and protected actions.
         # Never leak the raw protocol fragment into downstream transports.
-        visible = raw_text[:start].strip()
         body = raw_text[start + len(CHAT_REVIEW_OPEN_TAG) :].strip()
         salvaged_message = ""
         try:

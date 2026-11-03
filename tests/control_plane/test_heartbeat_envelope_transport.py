@@ -82,13 +82,13 @@ def test_capture_preserves_full_dispatcher_and_envelope_needs_explicit_opt_in(tm
     no_memory = dict(args, reward_memory_enabled=False)
     ordinary = build_heartbeat_prompt(**no_memory)
     captured_only = build_heartbeat_prompt(**no_memory, decision_output_root=tmp_path)
-    assert ordinary['interface_budget']['max_chars'] == 4_200
-    assert captured_only['interface_budget']['max_chars'] == 4_200
+    assert ordinary['interface_budget']['max_chars'] == 4_900
+    assert captured_only['interface_budget']['max_chars'] == 4_900
     oversized = build_heartbeat_prompt(
         **no_memory, decision_output_root=tmp_path, turn_envelope=True,
-        agent_scopes=[letter * 320 for letter in 'stu'],
+        agent_scopes=[letter * 320 for letter in 'stuv'],
     )
-    assert oversized['interface_budget']['max_chars'] == 4_600
+    assert oversized['interface_budget']['max_chars'] == 5_300
     assert oversized['interface_budget']['within_budget'] is False
     for overrides in (dict(turn_instance_id=None), dict(thin=False, full=True),
                       dict(runtime_profile='codex_app_ssh_goal')):
@@ -163,7 +163,7 @@ def test_bound_captured_prompt_fits_budget_without_reward_memory(
         assert '--reward-memory-reflection-json' not in body
         assert str(runtime) in body and str(capture) in body
         assert payload['turn_instance_id'] == TURN_ID
-        assert payload['interface_budget']['max_chars'] == 4_600
+        assert payload['interface_budget']['max_chars'] == 5_300
         assert payload['interface_budget']['within_budget'], payload['interface_budget']
         assert len(result.stdout) <= 5_400  # Shipped Agent JSON, not generator metadata.
         assert 'using inline ACK argv' in body
@@ -243,7 +243,7 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
                LOOPX_WAKE_LOG_DIR=str(logs), LOOPX_TURN_ENVELOPE='1' if enabled else '0')
     if context_delivery:
         # No native proof in this CLI fixture: composed capture must still
-        # release ordinary full output and preserve reentry and settlement.
+        # save a full baseline and preserve reentry and settlement.
         (tmp_path / 'context').mkdir(mode=0o700)
         env.update(LOOPX_CONTEXT_DELIVERY='on', LOOPX_EXECUTION_MODE='heartbeat', LOOPX_CODEX_CONTEXT_DIR=str(tmp_path / 'context'))
         # Generated CLI reentry uses this process's environment; preserve the
@@ -260,6 +260,16 @@ def test_real_worker_generated_guard_selection_reentry_and_settle_once(
     first = json.loads(result.stdout)
     assert result.returncode == 0, first
     def complete_page(value):
+        if context_delivery:
+            # This compatibility test elects to read the full saved view.
+            # A manifest only supplies navigation; it is not delivered body.
+            assert value['mode'] == 'full'
+            digest = value['sha256']
+            read = subprocess.run(shlex.split(value['command']), env=env, cwd=project,
+                capture_output=True, text=True, check=True)
+            value = json.loads(read.stdout)
+            assert value['schema_version'] == 'context_capture_page_v1'
+            assert value['sha256'] == digest
         if value.get('schema_version') != 'context_capture_page_v1':
             return value
         digest, body = value['sha256'], b''

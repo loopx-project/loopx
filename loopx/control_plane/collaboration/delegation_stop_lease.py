@@ -38,6 +38,11 @@ def obligation(service, row):
 
     recorded = row.get("task_lease") if isinstance(row.get("task_lease"), dict) else {}
     required = recorded.get("required") is True
+    if row["identity"]["binding"]["todo_id"] is None:
+        if required:
+            raise ValueError("ordinary request cannot erase a required canonical task lease")
+        service._bound(row)  # The saved request must retain its exact operator binding.
+        return None
     if not local_authority_is_promoted(runtime_root=service.root, goal_id=service.goal_id):
         if required:
             raise ValueError("canonical authority disappeared under a required delegation lease")

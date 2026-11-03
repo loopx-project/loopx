@@ -15,8 +15,71 @@ from canonical_authority_fixture import (
 
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
 from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.control_plane.todos.contract import TODO_DECISION_SCOPE_OUTCOME_SCHEMA_VERSION
+from loopx.control_plane.todos.provider_projection import project_current_canonical_todos
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_retired_step_has_one_writable_basis_across_status_and_quota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = fixture._write_fixture(tmp_path)
+    state = fixture._configure_read_only_todo(project)
+    fixture._initialize_fixture_authority(project, runtime, provider=provider)
+    project_current_canonical_todos(registry_path=registry, runtime_root=runtime, goal_id=fixture.GOAL_ID)
+    original_state = state.read_bytes()
+    authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+
+    def run(*args: str) -> dict:
+        code, payload = fixture._run_cli(registry, runtime, *args, cwd=project)
+        assert code == 0, payload
+        return payload
+
+    def current_routes() -> tuple[dict, dict]:
+        status = run("status", "--include-task-graph", "--limit", "1")
+        item = next(row for row in status["attention_queue"]["items"]
+                    if row["goal_id"] == fixture.GOAL_ID)
+        action = next(row for row in item["agent_next_actions"]
+                      if row["agent_id"] == fixture.AGENT_ID)
+        quota = run("quota", "should-run", "--goal-id", fixture.GOAL_ID,
+                    "--agent-id", fixture.AGENT_ID, "--codex-app", "--limit", "1")
+        assert quota["effective_action"] == "normal_run", quota
+        return action, quota["agent_lane_next_action"]
+
+    refresh = ("refresh-state", "--goal-id", fixture.GOAL_ID,
+               "--agent-id", fixture.AGENT_ID, "--no-global-sync", "--suppress-external-sinks")
+    initial, initial_quota = current_routes()
+    old_basis = initial["next_action_basis"]
+    assert initial_quota["next_action_basis"] == old_basis
+    run(*refresh, "--next-action", "Continue the old experiment.", "--next-action-basis", old_basis)
+    guidance = "The evidence invalidated the experiment; choose another method."
+    run(*refresh, "--recommended-action", guidance)
+    # Later observations push the explicit decision outside both recent windows.
+    for _ in range(2):
+        run(*refresh)
+    retired, retired_quota = current_routes()
+    assert "next_step" not in retired
+    assert "next_step" not in retired_quota
+    assert retired["next_action_basis"] == retired_quota["next_action_basis"] != old_basis
+    index = runtime / "goals" / fixture.GOAL_ID / "runs/index.jsonl"
+    before = index.read_bytes()
+    code, rejected = fixture._run_cli(registry, runtime, *refresh,
+        "--next-action", "Continue the old experiment.", "--next-action-basis", old_basis, cwd=project)
+    assert code == 1 and rejected["error_code"] == "next_action_basis_conflict", rejected
+    assert index.read_bytes() == before
+    run(*refresh, "--next-action", "Evaluate the newly supported route.",
+        "--next-action-basis", retired_quota["next_action_basis"])
+    run(*refresh)
+    current, current_quota = current_routes()
+    assert current["next_step"] == current_quota["next_step"] == "Evaluate the newly supported route."
+    assert current["next_action_basis"] == current_quota["next_action_basis"]
+    assert state.read_bytes() == original_state
+    after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=fixture.GOAL_ID)
+    for key in ("provider_revision", "cursor", "todos"):
+        assert after[key] == authority[key]
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

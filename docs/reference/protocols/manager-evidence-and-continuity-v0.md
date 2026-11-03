@@ -450,6 +450,18 @@ readback remain in force, preserving the failed Turn and its original notice.
 仍保留待核对，不能走此路径重放。退避、三次上限、稳定接续身份、失败历史和逐次
 原受众送达读回均保持原约束。
 
+The existing pending count retains delivered quota failures while work remains
+outstanding. A later same-source `/stop` or `/new`, or closure of the original
+Session, retires that backlog from the read-only count without deleting the
+failed Turn or notice. Temporary binding/provider unavailability, backoff and
+retry exhaustion are not retirement evidence. Health reads neither admit
+recovery nor contact a provider.
+
+既有待处理数量保留已送达失败通知、仍未结束的额度失败工作。后续同来源 `/stop`、
+`/new` 或原 Session 关闭后，只读计数不再包含该积压；失败 Turn 和通知仍保留。
+临时绑定／provider 不可用、退避和重试耗尽不代表退休。健康读取不准入恢复，
+也不访问 provider。
+
 Default manager duties allow authorized reads and summaries; reminders use an
 existing authorized destination/subscription. Goal changes, steering,
 cross-Goal dispatch, pause/resume, publishing, and trading keep their existing

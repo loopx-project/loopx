@@ -177,7 +177,7 @@ def test_native_reader_requires_complete_hook_output_even_when_model_saw_page(tm
         name: [{"hooks": [handler]}] for name in ("SessionStart", "PostToolUse")}}))
     publish = workspace / "publish.py"
     publish.write_text(
-        "import json, pathlib, time\n"
+        "import json, pathlib, time, subprocess, shlex\n"
         "from loopx.control_plane.turn_driver.codex_context import project_codex_context\n"
         "from loopx.cli_commands.quota_capture import native_context_capture_view\n"
         f"capture=pathlib.Path({str(capture)!r})\n"
@@ -186,6 +186,10 @@ def test_native_reader_requires_complete_hook_output_even_when_model_saw_page(tm
         f"full=project_codex_context(body,directory={str(root)!r},capture_directory=capture,"
         "goal_id='fixture',agent_id='agent',surface='work_context',capture_id='fixture-capture')\n"
         f"view=native_context_capture_view(full,capture,context_directory={str(root)!r})\n"
+        # Read the returned reference through its real command. The test still
+        # needs an actual page in model input to isolate complete-hook coverage.
+        "view=json.loads(subprocess.run(shlex.split(view['command']),check=True,"
+        "capture_output=True,text=True).stdout)\n"
         "text=json.dumps(view,separators=(',',':'))\n"
         f"pathlib.Path({str(view_file)!r}).write_text(text)\n"
         "print(text,flush=True)\n"

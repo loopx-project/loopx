@@ -66,7 +66,7 @@ def test_file_journal_recovers_each_provider_boundary(
 ):
     """Real Turn entrypoint/File journal with a durable synthetic provider ledger.
 
-    Bound: three ordered effects, one interruption, one unknown readback hold,
+    Bound: three ordered effects, one interruption, repeated unknown readback holds,
     resolution, then exact replay. Host/provider semantics are synthetic; the
     production journal writer, loader, TS reducer and Python interpreter are real.
     """
@@ -167,12 +167,15 @@ def test_file_journal_recovers_each_provider_boundary(
     else:
         assert stored["effect_attempts"][step]["status"] == "prepared"
         assert keys[step] not in stored
-        # An unresolved observation never runs another effect or loses recovery intent.
+        # Explicit retries while readback is unavailable must retain recovery intent.
         before_hold = list(commits)
-        held = run_loopx_turn_once(plan, **common)
-        assert held["settlement_result"]["failure"]["kind"] == "effect_outcome_unknown"
-        assert commits == before_hold
-        assert _journal(runtime)["effect_attempts"] == stored["effect_attempts"]
+        for retry_failed in (False, True):
+            held = run_loopx_turn_once(plan, retry_failed=retry_failed, **common)
+            assert held["status"] == "failed"
+            assert held["settlement_result"]["failure"]["kind"] == "effect_outcome_unknown"
+            assert commits == before_hold
+            assert host_calls == ["host"]
+            assert _journal(runtime)["effect_attempts"] == stored["effect_attempts"]
 
     resumed_plan = load_loopx_turn_plan_from_journal(
         runtime,

@@ -272,7 +272,9 @@ def _goal_capability_options(
         return {option: cadence["count"], **horizon, **({"execution_stride_strategy": cadence["stride_strategy"]}
             if "stride_strategy" in cadence else {})}
     if capability_id == "periodic_report":
-        return {"periodic_report_configuration": config}
+        from .capabilities.periodic_report.goal_configuration import normalize_configuration
+        # Validate the payload before the Session guard reads native sources.
+        return {"periodic_report_configuration": normalize_configuration(config)}
     if capability_id == "reward_memory":
         config_path = config.get("config_path")
         if config_path is not None and not isinstance(config_path, str):

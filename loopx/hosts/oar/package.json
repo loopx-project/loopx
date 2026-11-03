@@ -9,5 +9,6 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": { "@botiverse/oar": "0.75.0" },
+  "overrides": { "undici": "8.12.3" },
   "devDependencies": { "@types/node": "24.3.0", "typescript": "6.0.3" }
 }

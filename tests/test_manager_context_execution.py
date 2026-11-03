@@ -21,7 +21,7 @@ from test_local_delegation import brief, wait, service as delegation_service  # 
 from test_independent_delegation_validation import independent_binding
 
 
-def source(root, registry, *, goal_id, agent_id, requester, binding, source_id="lark:exact-message", semantic_brief=None, chat_root=None):
+def source(root, registry, *, goal_id, agent_id, requester, binding, source_id="lark:exact-message", semantic_brief=None, chat_root=None, original_message=None):
     store = ChatSessionStore(root if chat_root is None else chat_root)
     session = store.create_session(goal_id="loopx-manager", agent_id="codex",
                                    adapter_kind="codex_app_server", upstream_thread_id="original",
@@ -35,7 +35,7 @@ def source(root, registry, *, goal_id, agent_id, requester, binding, source_id="
     _write(_root(root) / "policy.json", policy)
     register_ingress(root, session_id=session["session_id"], client_turn_id=turn["client_turn_id"],
                      channel=session["channel_id"], sender_id="owner", message=turn["message"],
-                     source_id=source_id)
+                     source_id=source_id, source_message=original_message)
     request = {"goal_id": goal_id, "agent_id": agent_id, "execution_binding_id": binding, "brief": brief() if semantic_brief is None else semantic_brief}
     receipt = deliver(root, registry, session=session, turn=turn, request=request)
     return store, session, turn, request, receipt, policy

@@ -164,6 +164,7 @@ test("lost owner observation cannot strand a stopped detached native process", {
   `;
   const cancellation = new AbortController();
   let deliveryFailures = 0;
+  const observedGroups = new Set<number>();
   const result = await runHostProcess({
     argv: [process.execPath, "-e", leader], cwd: directory, input: "",
     timeout_ms: 5000, drain_timeout_ms: 100, stdout_limit_bytes: 4096,
@@ -173,15 +174,144 @@ test("lost owner observation cannot strand a stopped detached native process", {
       cancellation.abort();
     }
   }, cancellation.signal, undefined, {trackDescendants: true, descendants: async observation => {
-    assert.ok(nativePid && observation.process_groups.includes(nativePid));
+    for (const group of observation.process_groups) observedGroups.add(group);
     deliveryFailures++;
     throw new Error("owner pipe disconnected");
   }});
   assert.ok(nativePid, "the native child must have started and been suspended before owner loss");
   assert.ok(deliveryFailures > 0, "the disconnected observation path must actually execute");
+  assert.ok(observedGroups.has(nativePid), "ownership was observed before its delivery failed");
   assert.equal(result.outcome, "cancelled");
   assert.equal(result.output_complete, false, "lost observations cannot be reported as complete");
   assert.equal(result.descendant_cleanup_complete, true);
   await waitForProcessGroupStop(nativePid);
   assert.equal(await readFile(effectPath, "utf8"), "completed native effect");
+});
+
+test("detached groups are registered before an unplanned owner crash", {skip: process.platform === "win32"}, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-oar-crash-"));
+  const pidPath = join(directory, "native.pid"), counterPath = join(directory, "counter");
+  const registeredPath = join(directory, "registered");
+  let nativePid: number | undefined;
+  t.after(async () => {
+    if (nativePid) {
+      try { process.kill(-nativePid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    }
+    await rm(directory, {recursive: true, force: true});
+  });
+  const native = `
+    const fs=require('node:fs');let counter=0;
+    function tick(){fs.writeFileSync(${JSON.stringify(counterPath)},String(++counter));}
+    tick();process.stdout.write('ready');setInterval(tick,10);
+  `;
+  const leader = `
+    const {spawn}=require('node:child_process'),fs=require('node:fs');
+    const native=spawn(process.execPath,['-e',${JSON.stringify(native)}],{detached:true,stdio:['ignore','pipe','ignore']});
+    native.stdout.once('data',()=>{
+      fs.writeFileSync(${JSON.stringify(pidPath)},String(native.pid));
+      const check=setInterval(()=>{
+        if(fs.existsSync(${JSON.stringify(registeredPath)})) process.kill(process.pid,'SIGKILL');
+      },5);
+    });
+    setInterval(()=>{},1000);
+  `;
+  const result = await runHostProcess({
+    argv: [process.execPath, "-e", leader], cwd: directory, input: "",
+    timeout_ms: 5000, drain_timeout_ms: 100, stdout_limit_bytes: 4096,
+  }, async () => {}, undefined, undefined, {trackDescendants: true, descendants: async observation => {
+    nativePid = observation.process_groups[0];
+    await writeFile(registeredPath, "recorded while owner alive");
+  }});
+  assert.ok(nativePid);
+  assert.equal(result.outcome, "exited", "registration cannot depend on timeout or cancellation cleanup");
+  assert.equal(result.signal, "SIGKILL", "registration must happen before cleanup begins");
+  assert.equal(result.descendant_cleanup_complete, false,
+    "an unplanned crash leaves the last discovery window uncertain, even after observed groups stop");
+  assert.equal(result.output_complete, false);
+  await waitForProcessGroupStop(nativePid);
+  assert.equal(Number(await readFile(pidPath, "utf8")), nativePid);
+  const stopped = await readFile(counterPath, "utf8");
+  await delay(120);
+  assert.equal(await readFile(counterPath, "utf8"), stopped, "the registered native process cannot keep writing");
+});
+
+test("an owner crash before first discovery cannot report confirmed cleanup", {skip: process.platform === "win32"}, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-oar-unobserved-"));
+  const pidPath = join(directory, "native.pid");
+  let nativePid: number | undefined;
+  t.after(async () => {
+    if (nativePid) {
+      try { process.kill(-nativePid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      await waitForProcessGroupStop(nativePid);
+    }
+    await rm(directory, {recursive: true, force: true});
+  });
+  const leader = `
+    const {spawn}=require('node:child_process'),fs=require('node:fs');
+    const native=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});
+    fs.writeFileSync(${JSON.stringify(pidPath)},String(native.pid));
+    process.kill(process.pid,'SIGKILL');
+  `;
+  const result = await runHostProcess({
+    argv: [process.execPath, "-e", leader], cwd: directory, input: "",
+    timeout_ms: 5000, drain_timeout_ms: 100, stdout_limit_bytes: 4096,
+  }, async () => {}, undefined, undefined, {trackDescendants: true, spawned: async owner => {
+    // Hold the delivery handoff until the real owner has exited. Discovery then
+    // has no parent relationship to consult, independently of polling cadence.
+    const deadline = performance.now() + 5000;
+    while (true) {
+      try { process.kill(owner.pid, 0); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") break;
+        throw error;
+      }
+      assert.ok(performance.now() < deadline, "the fixture owner must actually exit");
+      await delay(5);
+    }
+    nativePid = Number(await readFile(pidPath, "utf8"));
+  }});
+  assert.ok(nativePid);
+  assert.equal(result.signal, "SIGKILL");
+  assert.equal(result.descendant_cleanup_complete, false);
+  assert.equal(result.output_complete, false);
+});
+
+test("forced owner termination cannot certify the last descendant discovery window", {skip: process.platform === "win32"}, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "loopx-oar-forced-owner-"));
+  let nativePid: number | undefined;
+  t.after(async () => {
+    if (nativePid) {
+      try { process.kill(-nativePid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      await waitForProcessGroupStop(nativePid);
+    }
+    await rm(directory, {recursive: true, force: true});
+  });
+  const leader = `
+    const {spawn}=require('node:child_process');
+    const native=spawn(process.execPath,['-e',"process.stdout.write('ready');setInterval(()=>{},1000)"],
+      {detached:true,stdio:['ignore','pipe','ignore']});
+    native.stdout.once('data',()=>process.stdout.write(String(native.pid)+'\\n'));
+    process.on('SIGTERM',()=>{});setInterval(()=>{},1000);
+  `;
+  const cancellation = new AbortController();
+  const result = await runHostProcess({
+    argv: [process.execPath, "-e", leader], cwd: directory, input: "",
+    timeout_ms: 5000, drain_timeout_ms: 100, stdout_limit_bytes: 4096,
+  }, async output => {
+    if (output.kind === "stdout") {
+      nativePid = Number(output.text.trim());
+      cancellation.abort();
+    }
+  }, cancellation.signal, undefined, {trackDescendants: true});
+  assert.ok(nativePid);
+  assert.equal(result.outcome, "cancelled");
+  assert.equal(result.signal, "SIGKILL");
+  assert.equal(result.descendant_cleanup_complete, false);
+  assert.equal(result.output_complete, false);
+  await waitForProcessGroupStop(nativePid);
 });

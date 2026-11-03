@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -510,6 +511,121 @@ def replace_argument(tokens: list[str], option: str, value: str) -> None:
     tokens[index + 1] = value
 
 
+def is_context_read_command(command: str) -> bool:
+    tokens = loopx_command_tokens(command)
+    if not tokens or "quota" not in tokens:
+        return False
+    index = tokens.index("quota")
+    return tokens[index:index + 2] == ["quota", "context-read"]
+
+
+def replan_view_command_tokens(command: str) -> list[str] | None:
+    """Normalize one captured replan reader without broadening shell authority.
+
+    The production reader is rendered through ``python -m loopx.entrypoint``
+    so it remains independent of the caller's installed console script.  Model
+    behavior hosts otherwise accept only the bounded ``loopx`` console form.
+    Keep this exception local to the read-only replan route and return a
+    console-shaped argv for the existing isolated CLI executor.
+    """
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if any(token in {";", "&&", "||", "|"} for token in tokens):
+        return None
+    normalized: list[str] | None = None
+    if tokens and Path(tokens[0]).name == "loopx":
+        normalized = list(tokens)
+    elif (
+        len(tokens) >= 5
+        and tokens[1] == "-m"
+        and tokens[2] in {"loopx.entrypoint", "loopx.cli"}
+        and Path(tokens[0]).name.startswith("python")
+    ):
+        normalized = ["loopx", *tokens[3:]]
+    if normalized is None or "quota" not in normalized:
+        return None
+    quota = normalized.index("quota")
+    if normalized[quota : quota + 2] != ["quota", "replan-view"]:
+        return None
+    return normalized
+
+
+@dataclass(frozen=True)
+class QuotaToolContext:
+    """Grade the current capture separately from the model's actual stdout.
+
+    This private oracle read is not a model read, a retained baseline or a
+    receipt. Native actors still receive the untouched navigation document;
+    model-selected reads count against the original tool-call budget.
+    """
+
+    packet: dict[str, Any]
+    output: str
+    capture_path: Path | None = None
+    capture_sha256: str | None = None
+
+    @classmethod
+    def from_output(cls, output: str) -> QuotaToolContext:
+        from ..turn_driver.decision_capture import (
+            read_context_capture_file, read_context_read_reference,
+        )
+
+        packet = json.loads(output)
+        if not isinstance(packet, dict):
+            raise ValueError("quota result must be an object")
+        if isinstance(packet.get("interaction_contract"), dict):
+            return cls(packet, output)
+        recovery = packet.get("recovery")
+        if not (packet.get("ok") is True and packet.get("mode") in {"full", "delta"}
+                and isinstance(recovery, dict)):
+            return cls(packet, output)  # The existing semantic oracle rejects it.
+        try:
+            reference = recovery
+            if "reference_file" in recovery:
+                _, reference = read_context_read_reference(recovery["reference_file"])
+                if "selection" in reference:
+                    raise ValueError("quota recovery must identify the complete current capture")
+            if not isinstance(reference.get("path"), str) or not isinstance(reference.get("sha256"), str):
+                raise ValueError("quota recovery requires the original capture and digest")
+            path, _, current = read_context_capture_file(reference["path"], reference["sha256"])
+        except OSError as exc:
+            raise ValueError("the original current quota capture could not be read") from exc
+        # Always resolve current recovery, never the delta's saved baseline.
+        return cls(current, output, path, reference["sha256"])
+
+    def read(self, command: str, *, source_root: Path, project_root: Path) -> str:
+        from ..turn_driver.decision_capture import read_context_read_reference
+
+        tokens = loopx_command_tokens(command)
+        if not is_context_read_command(command) or not tokens or self.capture_path is None:
+            raise ValueError("context read requires the current quota capture")
+        # Bind the host's explicit source, as the other behavior hosts do. The
+        # real CLI below still owns complete argument and selector validation.
+        # Do not import its full presentation/parser graph into the kernel.
+        for option in ("--format", "--capture-file", "--capture-sha256", "--reference-file"):
+            if tokens.count(option) > 1 or any(token.startswith(option + "=") for token in tokens):
+                raise ValueError("context reader requires one literal source argument")
+        if (argument_value(tokens, "--format") != "json"
+                or any(token.partition("=")[0] in {"--codex-context-dir", "--codex-context-root"} for token in tokens)):
+            raise ValueError("context reader must use the original explicit capture")
+        path, digest = argument_value(tokens, "--capture-file"), argument_value(tokens, "--capture-sha256")
+        reference_file = argument_value(tokens, "--reference-file")
+        if reference_file:
+            if path or digest:
+                raise ValueError("context reader cannot mix reference and capture arguments")
+            reader = Path(reference_file).expanduser()
+            _, reference = read_context_read_reference(str(reader if reader.is_absolute() else project_root / reader))
+            path, digest = reference["path"], reference["sha256"]
+        source = Path(path).expanduser() if path else None
+        source = (source if source.is_absolute() else project_root / source) if source else None
+        if not source or source.resolve() != self.capture_path or digest != self.capture_sha256:
+            raise ValueError("context reader does not match the current quota capture")
+        return execute_loopx_cli(command, source_root=source_root, project_root=project_root)
+
+
 def execute_loopx_cli(
     command: str,
     *,
@@ -569,3 +685,28 @@ class LoopxCliExecutionError(RuntimeError):
         # Transient tool feedback only. Durable receipts must never serialize
         # this raw output or infer rollback from the presence of valid JSON.
         self.stdout = stdout
+
+
+def snapshot_disposable_fixture(root: Path) -> dict[str, tuple[Any, ...]]:
+    """Observe all fixture files, never infer production rollback from stdout.
+
+    Contents remain transient hashes. Metadata catches replacement, permission
+    changes and same-byte rewrites; access times do not make reads into writes.
+    Unknown nodes and links fail closed rather than hide effects outside root.
+    """
+    root = root.resolve(strict=True)
+    observed: dict[str, tuple[Any, ...]] = {}
+    for path in (root, *root.rglob("*")):
+        metadata = path.lstat()
+        mode = metadata.st_mode
+        identity = (mode, metadata.st_uid, metadata.st_gid, metadata.st_ino,
+                    metadata.st_mtime_ns, metadata.st_ctime_ns)
+        value: tuple[Any, ...]
+        if stat.S_ISDIR(mode):
+            value = identity
+        elif stat.S_ISREG(mode):
+            value = (*identity, sha256(path.read_bytes()).hexdigest())
+        else:
+            raise ValueError("Disposable fixture contains an unsupported node")
+        observed[str(path.relative_to(root))] = value
+    return observed

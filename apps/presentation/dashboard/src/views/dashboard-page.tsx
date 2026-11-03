@@ -550,6 +550,7 @@ type PersonalManagerMessage = {
   endedAt?: number;
   returnDelivery?: ChatVisibleMessage["return_delivery"];
   collaboration?: ChatVisibleMessage["collaboration"];
+  collaborations?: ChatVisibleMessage["collaborations"];
   reconnect?: boolean;
   role: "assistant" | "user";
   sourceLabel?: string;
@@ -1629,7 +1630,7 @@ function PersonalGoalHome({
                   sourceSessionId: sessionId, sourceCreatedAt: row.created_at,
                   role: "assistant" as const,
                   agentLabel: "协作回执", sourceLabel: "协作回执", text: visibleAgentMessage(row.text), lines: [],
-                  returnDelivery: row.return_delivery, collaboration: row.collaboration,
+                  returnDelivery: row.return_delivery, collaboration: row.collaboration, collaborations: row.collaborations,
                 }));
                 if (updated !== previous) next = { ...next, [targetContextId]: updated };
               }
@@ -1752,7 +1753,7 @@ function PersonalGoalHome({
         attachments: workspaceImageAttachments(message.attachments),
         id: managerMessageId.current++, lines: [],
         role: message.role === "user" ? "user" : "assistant",
-        returnDelivery: message.return_delivery, collaboration: message.collaboration,
+        returnDelivery: message.return_delivery, collaboration: message.collaboration, collaborations: message.collaborations,
         replyContext: message.reply_context,
         sourceLabel: message.role === "user" ? undefined : message.role === "error" ? "本地会话记录"
           : contextId === "manager" ? `恢复的${t("header.manager")}会话` : `恢复的 ${sessionLabels.get(message.session_id ?? "") ?? selectedAgent.label} 会话`,
@@ -2504,7 +2505,7 @@ function PersonalGoalHome({
         if (answer) updateConversationMessage(targetContextId, completedMessageId, {
           sourceMessageId: answer.message_id, sourceSessionId: sessionId,
           sourceCreatedAt: answer.created_at,
-          collaboration: answer.collaboration, returnDelivery: answer.return_delivery,
+          collaboration: answer.collaboration, collaborations: answer.collaborations, returnDelivery: answer.return_delivery,
         });
         if (targetContextId === contextId) void conversationHistory.refresh().catch(() => {});
       }).catch(() => { /* The original conversation remains readable. */ });
@@ -2628,7 +2629,7 @@ function PersonalGoalHome({
           : payloadError?.error_code === "resume_failed"
           ? `原 ${answerIdentityLabel(targetContextId, selectedRoute.label)} 会话无法恢复。本地历史已经保留，请在运行详情里选择“重试恢复”或“开始新 Session”。`
           : payloadError?.delivery_state === "not_delivered" && payloadError.turn_replay_safe === true && !submittedTurnId
-            ? `${locale === "zh-CN" ? "请求未提交；草稿和图片已保留，可以修改后重新发送。" : "Request not submitted. Draft and images retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
+            ? `${locale === "zh-CN" ? "请求未提交；草稿和附件已保留，可以修改后重新发送。" : "Request not submitted. Draft and attachments retained; edit and send again."}\n\n${error instanceof Error ? error.message : ""}`
           : preparationFailed
             ? `${locale === "zh-CN" ? "尚未提交请求。连接执行器失败，可以重新发送。" : "Request not submitted. Could not connect to the executor; you can send again."}\n\n${error instanceof Error ? error.message : ""}`
           : error instanceof Error
@@ -2909,7 +2910,7 @@ function PersonalGoalHome({
         updatedAt: message.updatedAt,
         endedAt: message.endedAt,
         returnDelivery: message.returnDelivery,
-        collaboration: message.collaboration,
+        collaboration: message.collaboration, collaborations: message.collaborations,
         replyContext: message.replyContext,
         goalDraft: message.goalDraft,
         role: message.role,
@@ -3705,8 +3706,13 @@ export function DashboardPage() {
       // A history entry restores source and root together, so the route's
       // restored source outranks the source that is still loaded. Only when
       // the route names no source does the loaded source act as the fallback.
-      const target = requestedStatusUrl
-        ?? (search.statusUrl.trim() || (source.kind === "url" ? source.label : ""));
+      // The app commits the route only from a loaded source, so a route naming
+      // another source came from Back/Forward; it also outranks a re-scope of
+      // the loaded source that is still in flight.
+      const routeUrl = search.statusUrl.trim();
+      const routeRestoresSource = source.kind === "url" && routeUrl !== "" && routeUrl !== source.label;
+      const target = routeRestoresSource ? routeUrl : requestedStatusUrl
+        ?? (routeUrl || (source.kind === "url" ? source.label : ""));
       void loadFromUrl(target || defaultGlobalStatusUrl);
       return;
     }

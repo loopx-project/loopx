@@ -91,6 +91,18 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal((payload.todo as JsonObject).resume_ready, true);
     assert.equal((payload.authority_read as JsonObject).provider_revision, committed.provider_revision);
     assert.equal((await store.loadAuthority()).status, "loaded");
+    const fullQuery = {...request, query: {...request.query, todo_id: null,
+      json_references: false, full_text: true}};
+    const full = (await readTodo(fullQuery)).payload as JsonObject;
+    assert.equal(full.full_text, true);
+    assert.equal((full.todos as JsonObject[])[0].text, body);
+    assert.equal((full.authority_read as JsonObject).provider_revision, committed.provider_revision);
+    const bounded = (await readTodo({...fullQuery, query: {...fullQuery.query, full_text: false}})).payload as JsonObject;
+    assert.equal(bounded.full_text, undefined);
+    assert.notEqual((bounded.todos as JsonObject[])[0].text, body);
+    await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, thin: true}}), /compact presentation/);
+    await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, summary: true}}), /compact presentation/);
+    await assert.rejects(() => readTodo({...fullQuery, query: {...fullQuery.query, full_text: "true"}}), /full_text/);
     const laterTodos = [row("todo_waiting", {status: "blocked", text: "Changed current requirement"}), todos.find(item => item.todo_id === "todo_archived")!]
       .sort((a, b) => String(a.todo_id).localeCompare(String(b.todo_id)));
     const changed = {...projection, todos: laterTodos,

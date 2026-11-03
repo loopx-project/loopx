@@ -405,7 +405,9 @@ export async function checkpointArtifacts(value: unknown): Promise<JsonObject> {
   const deadline = request.deadline_epoch_ms;
   if (deadline !== undefined && (typeof deadline !== "number" || !Number.isFinite(deadline))) throw new Error("checkpoint deadline must be finite");
   function withinDeadline(): void {
-    if (typeof deadline === "number" && Date.now() >= deadline) throw new Error("checkpoint capture window has closed");
+    if (typeof deadline === "number" && Date.now() >= deadline) {
+      throw new EffectRuntimeRequestError("checkpoint capture window has closed", "checkpoint_capture_window_closed");
+    }
   }
   withinDeadline();
   if (request.action === "probe") {

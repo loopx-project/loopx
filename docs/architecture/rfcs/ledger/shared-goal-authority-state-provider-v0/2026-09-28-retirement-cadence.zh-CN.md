@@ -94,7 +94,7 @@ Python 退役收益。调用方清单如下：
 | --- | --- | --- |
 | `authority_core.py` 的 acquire／renew／transfer／release、owner eligibility、handoff transition command facade | 只剩旧 core 测试；真实 lease／handoff adapter 已直接使用完整 native 事务 | 不改持久化命令格式或公共 CLI schema。保留独立的原生 generation、重放、冲突、清理、静止规则测试，并走真实 File／SQLite 入口。 |
 | `task_lease.acquire.decide`、`task_lease.lifecycle.decide`、`coordination.handoff_mode.plan` RPC 注册 | 只剩这些旧 facade／handler 测试；原生事务直接复用同一 TS 规则 | 废弃私有 RPC 明确拒绝；保留仍有 Python 调用方的 `task_lease.owner_eligibility` 和 write-scope overlap。 |
-| `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | 保留真实 Todo mutation authorization 使用的 `todo_snapshot_from_mapping`；不删 store、回执、备份或迁移 reader。 |
+| `local_snapshot.py` 中仅供 lease 的规范化和错误投影 | 已无调用方；原生执行器拥有 lease 事实与错误 | #6396 移除最后一个调用方后，现已删除该模块及其剩余的 `todo_snapshot_from_mapping` 适配器；不删 store、回执、备份或迁移 reader。 |
 
 `authority_core.py` 仍是活跃 Todo bridge；#5395 当时将
 `LeaseAction`／`LeaseModeGateCommand` 保留到 M4 评审。有界 M4 包现退役无人

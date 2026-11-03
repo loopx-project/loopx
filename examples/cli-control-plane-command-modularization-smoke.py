@@ -16,6 +16,7 @@ CLI_RUNTIME_PATH = REPO_ROOT / "loopx" / "cli_runtime.py"
 INIT_PATH = REPO_ROOT / "loopx" / "cli_commands" / "__init__.py"
 TODO_MODULE = REPO_ROOT / "loopx" / "cli_commands" / "todo.py"
 QUOTA_MODULE = REPO_ROOT / "loopx" / "cli_commands" / "quota.py"
+QUOTA_PRESENTATION_MODULE = REPO_ROOT / "loopx" / "cli_commands" / "quota_presentation.py"
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -41,6 +42,7 @@ def assert_source_shape() -> None:
     init_text = INIT_PATH.read_text(encoding="utf-8")
     todo_text = TODO_MODULE.read_text(encoding="utf-8")
     quota_text = QUOTA_MODULE.read_text(encoding="utf-8")
+    quota_presentation_text = QUOTA_PRESENTATION_MODULE.read_text(encoding="utf-8")
 
     assert_contains(init_text, "register_todo_command", "__init__")
     assert_contains(init_text, "handle_todo_command", "__init__")
@@ -61,7 +63,8 @@ def assert_source_shape() -> None:
     assert_contains(runtime_text, "handle_quota_command(", "cli_runtime.py")
     assert_contains(todo_text, "render_todo_markdown", "todo module")
     assert_contains(todo_text, "append_cli_rollout_event", "todo module")
-    assert_contains(quota_text, "render_quota_should_run_markdown", "quota module")
+    assert_contains(quota_text, "from .quota_presentation import", "quota module")
+    assert_contains(quota_presentation_text, "render_quota_should_run_markdown", "quota presentation")
     assert_contains(quota_text, "append_cli_rollout_event", "quota module")
 
 

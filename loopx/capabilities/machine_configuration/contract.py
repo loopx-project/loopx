@@ -89,38 +89,69 @@ class MachineConfigurationRegistry:
 
     def __init__(self) -> None:
         self._namespaces: dict[str, MachineConfigurationNamespace] = {}
+        self._deferred: dict[str, Callable[[], MachineConfigurationNamespace]] = {}
+
+    def _reserve(self, namespace: str) -> None:
+        if namespace in self._namespaces or namespace in self._deferred:
+            raise ValueError(
+                "machine-configuration namespace is already registered: " + namespace
+            )
 
     def register(
         self, contract: MachineConfigurationNamespace
     ) -> MachineConfigurationRegistry:
-        if contract.namespace in self._namespaces:
-            raise ValueError(
-                "machine-configuration namespace is already registered: "
-                + contract.namespace
-            )
+        self._reserve(contract.namespace)
         # Validate public catalog metadata before this registry can own effects.
         # A bad provider template must fail before preview/apply/rollback runs.
         contract.public_descriptor()
         self._namespaces[contract.namespace] = contract
         return self
 
+    def register_deferred(
+        self, namespace: str, load: Callable[[], MachineConfigurationNamespace]
+    ) -> MachineConfigurationRegistry:
+        """Register an owner that is loaded when its namespace is first resolved.
+
+        Readers then import only the namespaces they touch. Resolution applies
+        the same template validation as ``register`` before the owner is
+        returned, so a bad template still fails before that namespace can own a
+        preview, apply or rollback effect.
+        """
+        if not _NAMESPACE_RE.fullmatch(namespace):
+            raise ValueError("machine-configuration namespace is invalid")
+        self._reserve(namespace)
+        self._deferred[namespace] = load
+        return self
+
     def resolve(self, namespace: str) -> MachineConfigurationNamespace:
-        try:
-            return self._namespaces[namespace]
-        except KeyError as exc:
+        contract = self._namespaces.get(namespace)
+        if contract is not None:
+            return contract
+        load = self._deferred.get(namespace)
+        if load is None:
             raise ValueError(
                 f"unsupported machine-configuration namespace: {namespace}"
-            ) from exc
+            )
+        contract = load()
+        if contract.namespace != namespace:
+            raise ValueError(
+                "machine-configuration namespace owner declares another id: "
+                + namespace
+            )
+        contract.public_descriptor()
+        del self._deferred[namespace]
+        self._namespaces[namespace] = contract
+        return contract
 
     @property
     def namespace_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(self._namespaces))
+        return tuple(sorted({*self._namespaces, *self._deferred}))
 
     def public_catalog(self) -> dict[str, Any]:
         return {
             "schema_version": MACHINE_CONFIGURATION_CATALOG_SCHEMA,
             "namespaces": [
-                self._namespaces[namespace].public_descriptor()
+                self.resolve(namespace).public_descriptor()
                 for namespace in self.namespace_ids
             ],
         }
@@ -186,8 +217,15 @@ def _mapping(value: object, label: str) -> dict[str, Any]:
 
 
 def normalize_machine_configuration(
-    raw: object, *, registry: MachineConfigurationRegistry
+    raw: object, *, registry: MachineConfigurationRegistry,
+    namespace_ids: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
+    """Validate a whole document, or its explicitly selected read-only owners.
+
+    Scoped readers still validate the envelope and every selected owner. They
+    neither interpret nor certify sibling settings. Mutation and full inspection
+    keep the default whole-document validation.
+    """
     payload = _mapping(raw, "machine_configuration")
     unknown = sorted(set(payload) - {"schema_version", "namespaces"})
     if unknown:
@@ -201,8 +239,15 @@ def normalize_machine_configuration(
     namespaces = _mapping(payload.get("namespaces"), "machine_configuration.namespaces")
     if not namespaces:
         raise ValueError("machine_configuration.namespaces must not be empty")
+    selected = set(namespaces)
+    if namespace_ids is not None:
+        if not namespace_ids:
+            raise ValueError("machine-configuration read scope must not be empty")
+        for namespace in namespace_ids:
+            registry.resolve(namespace)
+        selected.intersection_update(namespace_ids)
     normalized: dict[str, Any] = {}
-    for namespace in sorted(namespaces):
+    for namespace in sorted(selected):
         contract = registry.resolve(namespace)
         candidate = _mapping(
             namespaces[namespace], f"machine_configuration.namespaces.{namespace}"

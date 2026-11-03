@@ -154,9 +154,19 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Native Windows paired base/head both emit 40,701 JSON chars.
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
-            "crowded": {"json": 42_000, "markdown": 10_500},
-            # Matched canonical base/head both emit 24,820 JSON characters.
-            "multi_agent": {"json": 25_500, "markdown": 7_000},
+            # Inherited Stride adds its complete decision/axis/source contract:
+            # the same native fixture measures 35,597 -> 42,281 characters.
+            # Preserve the original 42,000 failure and the required semantics;
+            # calibrate this regression allowance only, with 219 chars headroom.
+            # No production hard limit or line/collection-growth guard changes.
+            "crowded": {"json": 42_500, "markdown": 10_500},
+            # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
+            # this candidate both emit 25,836 JSON characters (96 matched
+            # surface/mode measurements, no semantic or route differences).
+            # Preserve complete decision facts; calibrate only this synthetic
+            # presentation ceiling. The historical 25,500 failure remains;
+            # line/growth guards and production transport limits are unchanged.
+            "multi_agent": {"json": 26_500, "markdown": 7_000},
         },
         max_lines={
             "small": {"json": 600, "markdown": 190},
@@ -186,11 +196,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         markdown_anchor="# LoopX Turn Plan",
         max_chars={
             "small": {"json": 14_000, "markdown": 600},
-            # Pinned formatter base/head both emit 21,238 chars / 477 lines
-            # with complete vision authoring on the unchanged 36-Todo fixture.
-            # Keep executable evidence/continuation rules; 1,262 chars of
-            # headroom covers presentation variation, not extra Todo growth.
-            "crowded": {"json": 22_500, "markdown": 600},
+            # With an existing vision, the same 36-Todo fixture grows from
+            # 18,955 to 25,319 chars when inheriting the complete Stride contract
+            # (+6,364, identical to the no-vision route). Preserve the 22,500
+            # failure; 26,000 leaves 681 chars without relaxing collection,
+            # line or other-route limits. The earlier formatter observation
+            # was 21,238 chars / 477 lines, before these semantic changes.
+            "crowded": {"json": 26_000, "markdown": 600},
             "multi_agent": {"json": 15_500, "markdown": 600},
         },
         max_lines={
@@ -209,7 +221,11 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         # 35*60 = 2,100 as the per-Todo allowance; the advice adds 673 fixed
         # chars, so 5,400 leaves 154 of headroom without widening per-Todo growth.
         # This is a regression budget, not authority.
-        max_json_fixed_semantic_growth_chars=5_400,
+        # Inherited Stride adds a fixed required-review decision contract;
+        # matched small/crowded output is 10,560/15,492 -> 10,560/21,856.
+        # Keep 35*60 collection growth; 9,300 covers 9,196 fixed chars with
+        # 104 headroom. Retain the earlier 5,400 failure, not a size reduction.
+        max_json_fixed_semantic_growth_chars=9_300,
     ),
     CliOutputBudgetSpec(
         surface_id="status",
@@ -307,12 +323,15 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
         ),
         markdown_anchor="# Heartbeat Automation Prompt",
         max_chars={
-            # Matched Linux output: JSON 3,649 -> 4,172 and Markdown
-            # 5,553 -> 6,076. The supported 320-char scope reaches 4,461
-            # JSON chars. Keep the full outcome guidance and Markdown guard.
-            "small": {"json": 4_500, "markdown": 6_200},
-            "crowded": {"json": 4_500, "markdown": 6_200},
-            "multi_agent": {"json": 4_500, "markdown": 6_200},
+            # Same fixed-path, 320-char scope workload at 9cae3b289 emitted
+            # 4,532 JSON / 6,648 Markdown chars; timed-wait guidance adds 321
+            # chars, retaining the original Turn, due time and fresh admission.
+            # All three scenarios now emit 4,853 / 6,969 chars and 63 Markdown
+            # lines. Preserve historical misses; retain complete instructions,
+            # the current 4,500 body allowance and unchanged line/growth guards.
+            "small": {"json": 5_000, "markdown": 7_100},
+            "crowded": {"json": 5_000, "markdown": 7_100},
+            "multi_agent": {"json": 5_000, "markdown": 7_100},
         },
         max_lines={
             "small": {"json": 18, "markdown": 72},
@@ -605,6 +624,20 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
         max_chars={"json": 20_000, "markdown": 6_000},
         max_lines={"json": 600, "markdown": 60},
     ),
+    CliOutputModeVariantSpec(
+        variant_id="todo_list_summary",
+        parent_surface_id="todo_list",
+        command="todo list --summary",
+        output_formats=("json", "markdown"),
+        semantic_json_keys=(
+            "todos", "summary", "matched_todo_count", "returned_todo_count",
+            "omitted_todo_count", "authority_read", "todo_list_summary_projection",
+            "projection_envelope",
+        ),
+        markdown_anchor="# LoopX Todo List Summary",
+        max_chars={"json": 12_000, "markdown": 8_000},
+        max_lines={"json": 320, "markdown": 40},
+    ),
 )
 
 
@@ -765,12 +798,6 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         qualification="qualified_default",
         surface_id="todo_list",
         rationale="agent work-queue read path",
-    ),
-    CliOutputCommandClassification(
-        command_id="task-lease",
-        qualification="explicit_cold_path_exception",
-        surface_id=None,
-        rationale="explicit per-todo lease lifecycle command family",
     ),
     CliOutputCommandClassification(
         command_id="coordination-shadow",

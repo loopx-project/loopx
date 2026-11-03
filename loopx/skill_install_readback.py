@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 
 from . import __version__
 from .doctor_git import git_metadata_for_root
+from .slash_command_files import MANAGED_MARKER_PREFIX as LOOPX_MANAGED_SLASH_COMMAND_MARKER
 
 SKILL_INSTALL_READBACK_SCHEMA_VERSION = "loopx_skill_install_readback_v1"
 SKILL_INSTALL_READBACK_FILENAME = ".loopx-skill-install.json"
@@ -36,7 +37,6 @@ SKILL_INSTALL_PROFILES = {
         PYTHON_DISTRIBUTION_SKILL_INSTALL_MODE,
     ),
 }
-LOOPX_MANAGED_SLASH_COMMAND_MARKER = "<!-- loopx-managed-slash-command:v1"
 PACKAGED_HOST_SKILL_IDS = [
     "loopx-project",
     "loopx-pr-program",

@@ -10,10 +10,12 @@ import hashlib
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ...chat_store import _read_json
+from ...control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
@@ -136,14 +138,19 @@ class LarkOwnerAttention:
         # Scope enumeration remains all-or-nothing. A failed authority read
         # inside that grant is a missing Goal, never an empty Todo list.
         scope = self.transport.bindings.goal_scope_ids(binding)
-        goals, unavailable = [], []
+        goals, unavailable, failures = [], [], []
         for goal_id in scope:
             try:
-                goals.append({"goal_id": goal_id, "todos": self._goal_todos(goal_id)})
-            except (ValueError, OSError, KeyError, TypeError, RuntimeError):
+                goals.append({"goal_id": goal_id, "todos": self._goal_todos(goal_id),
+                              "failures": self._goal_failures(goal_id)})
+            except (ValueError, OSError, KeyError, TypeError, RuntimeError) as exc:
                 unavailable.append(goal_id)
+                # Only native error codes reach health; exception messages may
+                # contain private paths, credentials or untrusted source text.
+                failures.append({"goal_id": goal_id, "error_code": "canonical_authority_required"
+                                 if isinstance(exc, CanonicalAuthorityRequired) else "source_unavailable"})
         return {"goals": goals, "scope_goal_ids": scope, "unavailable_goal_ids": unavailable,
-                "source_complete": not unavailable}
+                "source_complete": not unavailable, "source_failures": failures}
 
     def _goal_todos(self, goal_id: str) -> list[dict[str, Any]]:
         controller = self.transport.core.controller
@@ -160,6 +167,45 @@ class LarkOwnerAttention:
                 raise ValueError("a native Todo changed while reading")
             todos.append(detail["todo"])
         return todos
+
+    def _goal_failures(self, goal_id: str) -> list[dict[str, Any]]:
+        controller = self.transport.core.controller
+        args = dict(registry_path=controller.registry_path, goal_id=goal_id,
+                    runtime_root_arg=str(controller.coordination_runtime_root), status="blocked")
+        listing = list_goal_todos(**args)
+        if listing.get("ok") is not True or listing.get("todo_count") != len(listing.get("todos", [])):
+            raise ValueError("the native terminal Todo source is incomplete")
+        failures = []
+        for reference in listing["todos"]:
+            # List rows may be compact. Exact reads own complete outcome terms.
+            detail = list_goal_todos(**args, todo_id=reference["todo_id"])
+            if detail.get("ok") is not True or not detail.get("matched") or not isinstance(detail.get("todo"), dict):
+                raise ValueError("a native terminal Todo changed while reading")
+            todo = detail["todo"]
+            if todo.get("status") != "blocked" or todo.get("done") or todo.get("superseded_by"):
+                continue
+            outcomes = [row for row in todo.get("decision_scope_outcomes", [])
+                        if row.get("outcome") in {"reject", "cancel"}]
+            if not outcomes:
+                continue
+            # Without complete timestamps the authoritative list order wins.
+            latest = outcomes[-1]
+            if all(row.get("recorded_at") for row in outcomes):
+                latest = max(enumerate(outcomes), key=lambda pair: (
+                    datetime.fromisoformat(pair[1]["recorded_at"].replace("Z", "+00:00")).timestamp(), pair[0]))[1]
+            failure = {"todo_id": todo["todo_id"], "text": todo["text"], "outcome": latest["outcome"],
+                       "reason": latest.get("reason", todo.get("reason", "")),
+                       "terminal_outcome_count": len(outcomes),
+                       # Only typed identity fields participate; never copy private outcome prose.
+                       "terminal_outcome_identities": sorted(
+                           [{key: row[key] for key in ("decision_scope", "outcome", "source_todo_id")
+                             if key in row} for row in outcomes],
+                           key=lambda row: json.dumps(row, sort_keys=True))}
+            evidence = latest.get("evidence", todo.get("evidence"))
+            if evidence is not None:
+                failure["evidence"] = evidence
+            failures.append(failure)
+        return failures
 
     @staticmethod
     def _plan(state: dict[str, Any], snapshot: dict[str, Any]) -> dict[str, Any]:

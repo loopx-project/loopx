@@ -63,9 +63,12 @@ class ResearchAnalysisRequestMixin:
     def _research_analysis_read(self):
         try:
             query = self._research_analysis_query()
+            usage_turn = urlparse(self.path).path.endswith("/usage-turn")
             citation = urlparse(self.path).path.endswith("/citation")
             required = {"goal_id", "pack_id", "analysis_key", "source_id", "first_line", "last_line"} if citation else {"goal_id"}
-            allowed = (required if citation else {"goal_id", "pack_id"}) | {"output_language"}
+            if usage_turn:
+                required = {"goal_id", "pack_id", "analysis_key", "turn_id"}
+            allowed = (required if citation or usage_turn else {"goal_id", "pack_id"}) | {"output_language"}
             if not required <= query.keys() or query.keys() - allowed or any(len(v) != 1 for v in query.values()):
                 raise ValueError("Use the registered Goal and opaque pack identifiers")
             values = {key: value[0] for key, value in query.items()}
@@ -76,7 +79,11 @@ class ResearchAnalysisRequestMixin:
             runtime = self._research_analysis_scope(goal_id)
             if runtime is None:
                 return
-            if citation:
+            if usage_turn:
+                self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"])
+                result = store.read_usage_turn(runtime_root=runtime, owner_goal_id=goal_id,
+                    output_language=language, **values)
+            elif citation:
                 self._research_analysis_verify_source_goal(runtime, goal_id, values["pack_id"])
                 first = int(values.pop("first_line"))
                 last = int(values.pop("last_line"))

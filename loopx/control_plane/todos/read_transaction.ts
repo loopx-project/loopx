@@ -1,13 +1,14 @@
 /** Canonical provider IO and full-source summaries share one read transaction. */
 import type {JsonObject} from "../effect_program.ts";
-import {requireJsonObject} from "../runtime_decode.ts";
+import {requireBoolean, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
+import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {readCanonicalSnapshot} from "../coordination/canonical_snapshot_page.ts";
 import {readLocalCoordinationTodoSource} from "../coordination/local_authority_read.ts";
 import {LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
   LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA} from "../coordination/coordination_state_contract.generated.ts";
 import {projectCanonicalTodoFields, selectTodoReadFields, projectTodoReadGroup, TODO_READ_RESULT} from "./read_projection.ts";
 import {canonicalTodoReadItems, structureCanonicalTodo} from "./read_codec.ts";
-import {compactTodoReadSummary, compactThinTodoRead, todoReadProjectionContract} from "./read_presentation.ts";
+import {compactTodoReadSummary, compactThinTodoRead, compactTodoQueueSummary, todoReadProjectionContract} from "./read_presentation.ts";
 import {projectTodoContextPage} from "./context_projection.ts";
 import {sealProjectionEnvelope, PROJECTION_ENVELOPE_SEAL_REQUEST} from "../projection_envelope.ts";
 
@@ -36,7 +37,9 @@ export async function readCanonicalTodoProjection(input: JsonObject): Promise<Js
     source_authority: first!.source_authority, provider_revision: snapshot.provider_revision,
     cursor: snapshot.cursor, decision_read_from_provider: true, legacy_fallback_used: false,
     ...(Object.hasOwn(requireJsonObject(first!.metadata, "canonical metadata"), "goal_acceptance_contract") ? {goal_acceptance_work_guards: guards} : {})};
-  const projected = await projectCanonicalTodoFields({...input, todos, retained: requireJsonObject(input.query ?? {}, "Todo query").read_scope === "completed_history",
+  const query = requireJsonObject(input.query ?? {}, "Todo query");
+  const projected = await projectCanonicalTodoFields({...input, todos,
+    retained: query.read_scope === "completed_history" || query.include_archived === true,
     goal_acceptance_contract: canonical.goal_acceptance_contract ?? null,
     goal_acceptance_work_guards: guards});
   if (input.query == null || projected.rejection) return {...projected, canonical};
@@ -57,11 +60,17 @@ export async function readHistoricalTodoProjection(input: JsonObject): Promise<J
 
 async function todoListPayload(input: JsonObject, original: JsonObject[], fields: JsonObject, canonical: JsonObject): Promise<JsonObject> {
   const query = requireJsonObject(input.query, "Todo list query");
-  const sourceName = "file_authority";
+  const fullText = query.full_text === undefined ? false : requireBoolean(query.full_text, "full_text");
+  const summary = query.summary === undefined ? false : requireBoolean(query.summary, "Todo summary view");
+  if (fullText && (query.thin === true || query.json_references === true || summary))
+    throw new EffectRuntimeRequestError("Full Todo body reads cannot use compact presentation");
+  if (summary && (query.thin || query.todo_id)) throw new EffectRuntimeRequestError("Todo summary cannot be combined with thin or exact reads");
+  const sourceName = requireNonEmptyString(canonical.source_authority, "canonical Todo source authority");
   const roles: unknown[] = query.role == null ? ["user", "agent"] : [query.role];
   const select = async (source: JsonObject) => selectTodoReadFields({...input, fields: source.fields,
     field_evaluations: source.field_evaluations, roles, status: query.status ?? null,
-    todo_id: query.todo_id ?? null, agent_id: query.agent_id ?? null, limit: query.limit ?? null, source_name: sourceName});
+    // The queue formatter applies its own row cap and needs the unshortened titles.
+    todo_id: query.todo_id ?? null, agent_id: query.agent_id ?? null, limit: summary ? null : query.limit ?? null, source_name: sourceName});
   let selected = await select(fields);
   if (selected.rejection) return selected;
   let projection = requireJsonObject(selected.projection, "Todo read projection");
@@ -82,7 +91,21 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     }
   }
   let todos = projection.todos as JsonObject[];
-  if (query.todo_id && todos.length === 1) {
+  // Restore only already-selected bodies. Scope, status, archive and limits
+  // remain the existing owner's decisions; all bodies share this source head.
+  if (fullText) {
+    const identity = (row: JsonObject) => JSON.stringify([row.todo_id, row.role, row.archive_state ?? "active"]);
+    const bodies = new Map<string, JsonObject | null>();
+    for (const row of original) {
+      const key = identity(row);
+      bodies.set(key, bodies.has(key) ? null : row);
+    }
+    for (const item of todos) {
+      const source = bodies.get(identity(item));
+      if (!source) throw new Error("Todo detail cannot recover an unambiguous full source body");
+      item.text = String(source.text ?? "");
+    }
+  } else if (query.todo_id && todos.length === 1) {
     const item = todos[0]!;
     const matching = original.filter(row => row.todo_id === query.todo_id && row.role === item.role &&
       (row.archive_state ?? "active") === (item.archive_state ?? "active"));
@@ -90,9 +113,10 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     item.text = String(matching[0]!.text ?? "");
   }
   const matchedCount = todos.length;
-  const hot = query.read_scope !== "completed_history" && query.agent_id && query.limit == null &&
+  const includeArchived = query.read_scope === "completed_history" || query.include_archived === true;
+  const hot = !fullText && !includeArchived && query.agent_id && query.limit == null &&
     query.role == null && query.status == null && query.todo_id == null;
-  if (hot) {
+  if (hot && !summary) {
     const summaries = requireJsonObject(projection.summaries, "Todo summaries");
     for (const [key, summary] of Object.entries(summaries)) summaries[key] = compactTodoReadSummary(
       requireJsonObject(summary, "Todo summary"), key.replace(/_todos$/, ""), null);
@@ -100,7 +124,8 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
   }
   const payload: JsonObject = {ok: true, dry_run: true, read_only: true, command: "list", goal_id: query.goal_id,
     role: query.role ?? "all", status_filter: query.status ?? null, source: sourceName, todo_count: matchedCount,
-    todos, state_file: query.state_file, project: query.project ?? null,
+    todos, ...(fullText ? {full_text: true} : {}), ...(query.include_archived === true ? {include_archived: true} : {}),
+    state_file: query.state_file, project: query.project ?? null,
     authority_read: {source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,
       cursor: canonical.cursor, todo_read_model: canonical.todo_read_model,
       decision_read_from_provider: true, legacy_fallback_used: false}};
@@ -126,7 +151,8 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
   Object.assign(payload, projection.summaries);
   // The existing formatter is composed here, so a public read never calls back
   // across runtimes for fields of the result it just received.
-  const result = query.todo_id ? projectTodoContextPage({detail_payload: payload}) : query.thin ? compactThinTodoRead(payload) :
+  const result = summary ? compactTodoQueueSummary(payload, Boolean(hot)) :
+    query.todo_id ? projectTodoContextPage({detail_payload: payload}) : query.thin ? compactThinTodoRead(payload) :
     query.json_references ? projectTodoContextPage({list_payload: payload}) : payload;
   const shownCount = query.todo_id ? Number(result.todo !== null) : (result.todos as JsonObject[]).length;
   const observed = String(input.read_observed_at);

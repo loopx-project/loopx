@@ -179,13 +179,21 @@ export function PrivateConversationPanel({apps, onOpenOriginal}: {apps: LarkApp[
             : row.owner_attention.last_checked_at === null ? (zh ? "等待首次后台检查" : "Waiting for the first background check")
             : Date.now() / 1000 - row.owner_attention.last_checked_at > 120 ? (zh ? "后台检查尚未恢复，请确认管家服务正在运行。" : "Background checks have not resumed. Check that the steward service is running.")
             : (zh ? `后台自动检查中 · 待发 ${row.owner_attention.pending_count}` : `Background checks active · ${row.owner_attention.pending_count} pending`)}</p> : null}
+          {row.owner_attention.enabled && row.owner_attention.source_failures?.length ? <details>
+            <summary>{zh ? "查看不可读的 Goal" : "View unavailable Goals"}</summary>
+            <ul>{row.owner_attention.source_failures.map(source => <li key={source.goal_id} style={{overflowWrap: "anywhere"}}>
+              <strong>{source.goal_id}</strong>{" · "}{source.error_code === "canonical_authority_required"
+                ? (zh ? "原生待办数据尚未迁移；需由项目维护者先备份并迁移。" : "Native Todo data has not been migrated. The project maintainer must back up and migrate it first.")
+                : (zh ? "来源暂不可读；将自动重查，请检查原项目来源状态。" : "The source is unavailable and will be checked again. Check the original project source.")}
+            </li>)}</ul>
+          </details> : null}
           {row.owner_attention.unconfirmed_count > 0 ? <p role="status">{zh ? "有通知发送结果尚未确认；服务只恢复原回执，不重复发送。" : "A notification receipt is unconfirmed; the service recovers the original receipt without resending."}</p> : null}
         </> : <p role="status">{zh ? "自动通知状态尚未确认，请刷新后重试。" : "Automatic notification state is unavailable. Refresh to retry."}</p>}
       </div> : null}
       {row.recovery_count > 0 ? <p role="status">{zh ? "存在尚未确认的发送回执。服务会读取原回执恢复；不要重新发送同一任务。检查 App 登录、权限和原会话后刷新状态。" : "A send receipt is unconfirmed. The service reads the original receipt to recover; avoid resending the same task. Check this App login, permissions and original Session, then refresh status."}</p> : null}
       {!row.context_available ? <p role="alert">{zh ? "工作区授权已失效；请恢复原工作区或重新选择。旧会话不会移到其它工作区。" : "The workspace grant is unavailable. Restore the original workspace or select a new one; the old Session will not move."}</p> : null}
       {row.context_kind === "project" && row.audience !== "group" ? <PrivateAgentTargets row={row} revision={revision} zh={zh} busy={busy} act={act}/> : null}
-      {row.context_kind === "steward" && row.audience === "owner" && row.executor_endpoint_id === "codex"
+      {row.context_kind === "steward" && row.audience === "owner" && row.managed_steward !== undefined
         ? <StewardManagedMode state={row.managed_steward} zh={zh} busy={busy} available={row.context_available}
             onPrepare={() => void act(() => prepareManagedSteward(row.binding_id))}
             onMonitor={(operation, cadence) => void act(() => configureStewardMonitor(row.binding_id, operation, cadence))}

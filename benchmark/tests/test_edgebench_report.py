@@ -7,10 +7,12 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from benchmark.edgebench.export_report import digest, export, verify, write
+from benchmark.edgebench.result_publication import write_native_result
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -171,6 +173,34 @@ def test_terminal_report_retains_unqualified_status_and_unknowns(trial):
     assert verify(out)["runs"] == 1
     with pytest.raises(ValueError, match="immutable"):
         build(trial)
+
+
+@pytest.mark.parametrize("grading_status", ["pending", "unknown", None, "future-status"])
+def test_report_rejects_explicit_incomplete_grading_before_publication(trial, grading_status):
+    final_path = trial[3] / "final_result.json"
+    final = json.loads(final_path.read_text())
+    final.update(grading_status=grading_status, grading_reason="synthetic_unfinished_grading")
+    write(final_path, final)
+    with pytest.raises(ValueError, match="grading is not complete"):
+        build(trial)
+    assert not trial[2].exists()
+    assert json.loads(final_path.read_text()) == final
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_report_accepts_published_complete_or_legacy_native_grading(trial, legacy):
+    final_path = trial[3] / "final_result.json"
+    payload = json.loads(final_path.read_text())
+    for key in ("run_id", "task", "model"):
+        payload.pop(key)
+    if not legacy:
+        payload.update(grading_status="complete", grading_reason="all_submissions_terminal")
+    final_path.unlink()
+    result = SimpleNamespace(runtime_seconds=payload["runtime_seconds"],
+                             to_dict=lambda: dict(payload))
+    write_native_result(trial[3], result, status="terminal", agent="codex", task="case",
+                        run_id="run", model="model", effort="xhigh")
+    assert verify(build(trial))["runs"] == 1
 
 
 @pytest.mark.parametrize("fault", [None, "profile", "mode", "unknown"])

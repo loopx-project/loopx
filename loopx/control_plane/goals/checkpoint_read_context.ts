@@ -1,9 +1,11 @@
-/** Read basis for a missing-checkpoint supplement, not an execution/permission lease.
+/** Read basis for a missing decision/qualification checkpoint, not an execution/permission lease.
  * The commit effect holds source/index claims and the real provider fence. */
 import type {JsonObject} from "../effect_program.ts";
+import {settlementIdentity} from "../effect_program.ts";
 import {jsonObject, requireJsonObject, requireNonEmptyString} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {isUnqualifiedBlockedReplanWriteback} from "../quota/settlement_phase.ts";
 
 const RECEIPT_SCHEMA = "checkpoint_read_context_v1";
 // Exact presentation fields only. Unknown future fields remain part of the basis.
@@ -75,8 +77,13 @@ function snapshot(request: JsonObject): JsonObject {
 }
 
 const rejected = (code: string, changed: string[] = []): JsonObject => ({
-  ok: false, error_code: code, reread_required: true, changed_components: changed,
-  error: `${code}: run checkpoint-context for the same Goal/Agent/Todo or obligation/Turn, ` +
+  ok: false, error_code: code, reread_required: code !== "checkpoint_context_not_missing", changed_components: changed,
+  error: code === "checkpoint_context_not_missing"
+    ? `${code}: this committed writeback has no missing checkpoint for this recovery. ` +
+      "Preserve the committed writeback and quota receipt; do not repeat this recovery or quota spend. " +
+      "For later authorized work, inspect current state through the normal guard with a fresh Turn identity. " +
+      "This rejection grants no work or completion authority."
+    : `${code}: run checkpoint-context for the same Goal/Agent/Todo or obligation/Turn, ` +
     "read the returned state and judge again; submit its --checkpoint-read-context with only the vision decision. " +
     "Do not repeat implementation, state mutations, or quota spend.",
 });
@@ -88,7 +95,16 @@ export function evaluateCheckpointReadContext(value: unknown): JsonObject {
   if (request.phase === "read") {
     const prior = requireJsonObject(request.prior, "committed writeback");
     const checkpoint = jsonObject(prior.vision_checkpoint);
-    if (checkpoint?.decision !== "missing_required" || checkpoint.satisfied !== false) {
+    const missingQualification = request.writeback_committed === true && request.quota_spend_committed === false &&
+      typeof identity.replan_obligation_id === "string" &&
+      jsonObject(request.semantic_replan_guard)?.selected_obligation_id === identity.replan_obligation_id &&
+      isUnqualifiedBlockedReplanWriteback(prior, settlementIdentity({
+        goal_id: requireNonEmptyString(identity.goal_id, "goal_id"),
+        agent_id: requireNonEmptyString(identity.agent_id, "agent_id"),
+        turn_instance_id: requireNonEmptyString(identity.turn_instance_id, "turn_instance_id"),
+        replan_obligation_id: identity.replan_obligation_id,
+      }));
+    if ((checkpoint?.decision !== "missing_required" || checkpoint.satisfied !== false) && !missingQualification) {
       return rejected("checkpoint_context_not_missing");
     }
     const projected = snapshot(request);

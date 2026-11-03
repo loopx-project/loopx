@@ -15,7 +15,6 @@ from urllib.parse import urlsplit
 
 from ...control_plane.content_digest import BARE_SHA256_PATTERN as _SHA256_PATTERN
 from ...public_safe_text import COMPACT_TOKEN_PATTERN as _PUBLIC_EVIDENCE_ID_PATTERN
-
 from .environment_access import (
     _heredoc_delimiters,
     authorized_task_environment_probe_count,
@@ -34,6 +33,12 @@ BENCHMARK_TASK_ENVIRONMENT_ACCESS_SCHEMA_VERSION = (
 )
 BENCHMARK_TASK_ENVIRONMENT_ACCESS_RECEIPT_SCHEMA_VERSION = (
     "benchmark_task_environment_access_receipt_v0"
+)
+BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION = (
+    "benchmark_task_service_access_v0"
+)
+BENCHMARK_TASK_SERVICE_ACCESS_RECEIPT_SCHEMA_VERSION = (
+    "benchmark_task_service_access_receipt_v0"
 )
 BENCHMARK_RESTRICTED_ACCESS_ADJUDICATION_SCHEMA_VERSION = (
     "benchmark_restricted_access_adjudication_v0"
@@ -134,6 +139,7 @@ _RESTRICTED_ACCESS_REVIEW_CATEGORIES = frozenset(
         "other_trial_request",
         "controller_private_state_request",
         "host_escape_probe",
+        "credential_probe",
     }
 )
 _SENSITIVE_VALUE_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{12,}")
@@ -169,6 +175,7 @@ class NetworkRequestScope(str, Enum):
 
     NONE = "none"
     LOOPBACK = "loopback"
+    TASK_SERVICE = "task_service"
     EXTERNAL = "external"
 
 
@@ -288,6 +295,7 @@ def _validated_policy(
     str,
     dict[str, object] | None,
     dict[str, object] | None,
+    dict[str, object] | None,
 ]:
     if policy is None:
         return (
@@ -295,6 +303,7 @@ def _validated_policy(
             False,
             dict(_DEFAULT_DENIED_ARGUMENT_MARKERS),
             DEFAULT_NETWORK_ACCESS,
+            None,
             None,
             None,
         )
@@ -333,10 +342,13 @@ def _validated_policy(
     task_environment_access = _validated_task_environment_access(
         policy.get("task_environment_access")
     )
+    task_service_access = _validated_task_service_access(
+        policy.get("task_service_access")
+    )
     runtime_policy_projection = {
         key: value
         for key, value in policy.items()
-        if key != "task_environment_access"
+        if key not in {"task_environment_access", "task_service_access"}
     }
     evaluation_protocol = _validated_evaluation_protocol(
         policy.get("evaluation_protocol"),
@@ -348,6 +360,7 @@ def _validated_policy(
         markers,
         raw_network_access,
         task_environment_access,
+        task_service_access,
         evaluation_protocol,
     )
 
@@ -404,6 +417,111 @@ def _validated_task_environment_access(
         "purpose": "task_submission",
         "namespace": namespace,
         "variable_names": variable_names,
+    }
+
+
+def _task_service_origin(value: object) -> str | None:
+    """Normalize an exact container-host task-service origin."""
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    normalized_host = host.rstrip(".").lower()
+    if normalized_host not in {"host.docker.internal", "host.containers.internal"}:
+        return None
+    return f"{parsed.scheme}://{normalized_host}:{port}"
+
+
+def _task_service_request_origin(value: str) -> str | None:
+    """Return a container-host origin for one literal request URL."""
+
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = parsed.hostname
+    if (
+        parsed.scheme not in {"http", "https"}
+        or host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is None
+    ):
+        return None
+    normalized_host = host.rstrip(".").lower()
+    if normalized_host not in {"host.docker.internal", "host.containers.internal"}:
+        return None
+    return f"{parsed.scheme}://{normalized_host}:{port}"
+
+
+def _validated_task_service_access(
+    raw_access: object,
+) -> dict[str, object] | None:
+    if raw_access is None:
+        return None
+    if not isinstance(raw_access, Mapping):
+        raise TypeError("benchmark_task_service_access_invalid")
+    if set(raw_access) != {
+        "schema_version",
+        "authorization_id",
+        "authorization_sha256",
+        "authority",
+        "purpose",
+        "origins",
+    }:
+        raise ValueError("benchmark_task_service_access_fields_invalid")
+    if (
+        raw_access.get("schema_version")
+        != BENCHMARK_TASK_SERVICE_ACCESS_SCHEMA_VERSION
+    ):
+        raise ValueError("benchmark_task_service_access_schema_mismatch")
+    authorization_id = str(raw_access.get("authorization_id") or "").strip()
+    if _PUBLIC_EVIDENCE_ID_PATTERN.fullmatch(authorization_id) is None:
+        raise ValueError("benchmark_task_service_access_authorization_id_invalid")
+    authorization_sha256 = str(raw_access.get("authorization_sha256") or "")
+    if _SHA256_PATTERN.fullmatch(authorization_sha256) is None:
+        raise ValueError("benchmark_task_service_access_authorization_sha256_invalid")
+    if raw_access.get("authority") != "runner":
+        raise ValueError("benchmark_task_service_access_authority_invalid")
+    if raw_access.get("purpose") != "benchmark_task_service":
+        raise ValueError("benchmark_task_service_access_purpose_invalid")
+    raw_origins = raw_access.get("origins")
+    if (
+        not isinstance(raw_origins, list)
+        or not raw_origins
+        or len(raw_origins) > 8
+    ):
+        raise ValueError("benchmark_task_service_access_origins_invalid")
+    origins = tuple(_task_service_origin(value) for value in raw_origins)
+    if (
+        any(origin is None for origin in origins)
+        or len(set(origins)) != len(origins)
+        or tuple(sorted(cast(tuple[str, ...], origins))) != origins
+    ):
+        raise ValueError("benchmark_task_service_access_origins_invalid")
+    return {
+        "authorization_id": authorization_id,
+        "authorization_sha256": authorization_sha256,
+        "authority": "runner",
+        "purpose": "benchmark_task_service",
+        "origins": cast(tuple[str, ...], origins),
     }
 
 
@@ -773,13 +891,23 @@ def _without_patch_stdin_bodies(command: str) -> str:
     return "".join(visible_lines)
 
 
-def _scope_for_url(url: str) -> NetworkRequestScope:
+def _scope_for_url(
+    url: str,
+    *,
+    task_service_origins: frozenset[str] = frozenset(),
+) -> NetworkRequestScope:
+    if _task_service_request_origin(url) in task_service_origins:
+        return NetworkRequestScope.TASK_SERVICE
     if _loopback_http_url(url):
         return NetworkRequestScope.LOOPBACK
     return NetworkRequestScope.EXTERNAL
 
 
-def _network_request_scope(arguments: object) -> NetworkRequestScope:
+def _network_request_scope(
+    arguments: object,
+    *,
+    task_service_origins: frozenset[str] = frozenset(),
+) -> NetworkRequestScope:
     """Classify common shell HTTP requests while preserving argv association."""
 
     scope = NetworkRequestScope.NONE
@@ -795,10 +923,16 @@ def _network_request_scope(arguments: object) -> NetworkRequestScope:
         if _GIT_CLONE_COMMAND_PATTERN.search(text) and _GIT_REMOTE_PATTERN.search(text):
             return NetworkRequestScope.EXTERNAL
         for url in _HTTP_URL_PATTERN.finditer(text):
-            current = _scope_for_url(url.group(0))
+            current = _scope_for_url(
+                url.group(0), task_service_origins=task_service_origins
+            )
             if current is NetworkRequestScope.EXTERNAL:
                 return current
-            scope = current
+            if (
+                current is NetworkRequestScope.TASK_SERVICE
+                or scope is NetworkRequestScope.NONE
+            ):
+                scope = current
 
     # Unknown command/target field names cannot prove safe association. If the
     # same argument object contains a supported network client and literal URLs,
@@ -811,10 +945,16 @@ def _network_request_scope(arguments: object) -> NetworkRequestScope:
         return scope
     for text in leaves:
         for url in _HTTP_URL_PATTERN.finditer(text):
-            current = _scope_for_url(url.group(0))
+            current = _scope_for_url(
+                url.group(0), task_service_origins=task_service_origins
+            )
             if current is NetworkRequestScope.EXTERNAL:
                 return current
-            scope = current
+            if (
+                current is NetworkRequestScope.TASK_SERVICE
+                or scope is NetworkRequestScope.NONE
+            ):
+                scope = current
     return scope
 
 
@@ -1095,6 +1235,7 @@ def build_benchmark_integrity_qualification(
         markers,
         network_access,
         task_environment_access,
+        task_service_access,
         evaluation_protocol,
     ) = _validated_policy(policy)
     adjudication = _validated_restricted_access_adjudication(
@@ -1138,6 +1279,12 @@ def build_benchmark_integrity_qualification(
     observation_count = 0
     invalid_tool_call_count = 0
     authorized_task_environment_probe_count_total = 0
+    authorized_task_service_request_count_total = 0
+    task_service_origins = frozenset(
+        cast(tuple[str, ...], task_service_access["origins"])
+        if task_service_access is not None
+        else ()
+    )
     for index, raw_step in enumerate(steps, start=1):
         if not isinstance(raw_step, Mapping):
             structural_failures.append("trajectory_step_invalid")
@@ -1213,8 +1360,14 @@ def build_benchmark_integrity_qualification(
                         )
                     else:
                         categories.add("credential_probe")
-                network_scope = _network_request_scope(raw_arguments)
-                if network_scope is NetworkRequestScope.LOOPBACK:
+                network_scope = _network_request_scope(
+                    raw_arguments,
+                    task_service_origins=task_service_origins,
+                )
+                if network_scope is NetworkRequestScope.TASK_SERVICE:
+                    categories.add("loopback_network_request")
+                    authorized_task_service_request_count_total += 1
+                elif network_scope is NetworkRequestScope.LOOPBACK:
                     categories.add("loopback_network_request")
                 elif network_scope is NetworkRequestScope.EXTERNAL:
                     categories.add("external_network_request")
@@ -1292,7 +1445,15 @@ def build_benchmark_integrity_qualification(
         for category, count in counts.items()
         if count
         and category not in permitted_network_categories
-        and category not in _RESTRICTED_ACCESS_REVIEW_CATEGORIES
+        and (
+            category not in _RESTRICTED_ACCESS_REVIEW_CATEGORIES
+            # A declared typed environment contract is an exact allowlist.
+            # A broad shell probe bypasses that contract and remains a hard
+            # policy violation.  Without such a contract, a probe alone is a
+            # reviewable suspicion; observed credential values still fail
+            # closed through ``credential_value_observed``.
+            or (category == "credential_probe" and task_environment_access is not None)
+        )
     ]
     restricted_access_review = _build_restricted_access_review(
         counts=counts,
@@ -1412,6 +1573,24 @@ def build_benchmark_integrity_qualification(
             ),
             "raw_names_recorded": False,
             "raw_values_recorded": False,
+        }
+    if task_service_access is not None:
+        origins = cast(tuple[str, ...], task_service_access["origins"])
+        receipt["task_service_access"] = {
+            "schema_version": BENCHMARK_TASK_SERVICE_ACCESS_RECEIPT_SCHEMA_VERSION,
+            "state": (
+                "authorized"
+                if authorized_task_service_request_count_total
+                else "declared"
+            ),
+            "authorization_id": task_service_access["authorization_id"],
+            "authorization_sha256": task_service_access["authorization_sha256"],
+            "authority": task_service_access["authority"],
+            "purpose": task_service_access["purpose"],
+            "authorized_request_count": authorized_task_service_request_count_total,
+            "origin_count": len(origins),
+            "origins_sha256": _sha256_text(_canonical_text(origins)),
+            "raw_origins_recorded": False,
         }
     if compact_evaluation_protocol is not None:
         receipt["evaluation_protocol"] = compact_evaluation_protocol

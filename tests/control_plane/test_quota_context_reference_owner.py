@@ -1,6 +1,5 @@
 """Shared context references preserve full instructions across existing entrypoints."""
 from copy import deepcopy
-import hashlib
 import json
 
 import pytest
@@ -52,10 +51,15 @@ def test_shared_guidance_reaches_existing_readers_without_changing_settlement(ca
     if captured:
         projected = _turn_envelope_result("replan_cli_view", payload=shared)
         assert graph(projected) == graph(source)
-        digest = "sha256:" + hashlib.sha256(json.dumps(shared, ensure_ascii=False,
-            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        # Use the existing source signature, also embedded in captured read
+        # commands. Python's numeric spelling is not its canonical hash codec.
+        digest = envelope["action_signature"]["source_decision_hash"]
         writer = _turn_envelope_result("replan_view", payload=shared, source_hash=digest, stage="writeback")
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
+        changed = deepcopy(shared)
+        changed["reason"] += " Mutated capture."
+        with pytest.raises(RuntimeError, match="matching source hash"):
+            _turn_envelope_result("replan_view", payload=changed, source_hash=digest, stage="writeback")
 
 
 @pytest.mark.parametrize("mutation", ["different", "wrong-step", "wrong-capability", "missing-owner", "short", "wrong-source"])
@@ -158,7 +162,9 @@ def test_context_sharing_uses_one_boundary_and_keeps_explicit_detail(monkeypatch
     task_detail, vision_detail = detail in {"task", "both"}, detail in {"vision", "both"}
     result = compact_quota_should_run_cli_payload(source,
         include_todo_summary_detail=task_detail, include_vision_detail=vision_detail)
-    assert len(calls) == (0 if detail == "both" else 1)
+    # Agent/vision detail leaves the User summary on its default compact path.
+    # That formerly local Python work now shares this single typed request.
+    assert calls == ["reference_context"]
     if task_detail:
         assert result["agent_lane_next_action"]["title"] == title
     else:
@@ -171,6 +177,18 @@ def test_context_sharing_uses_one_boundary_and_keeps_explicit_detail(monkeypatch
     assert result["interaction_contract"]["cli_channel"] == source["interaction_contract"]["cli_channel"]
 
 
+def test_all_explicit_details_need_no_diagnostic_transport(monkeypatch):
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+    from loopx.control_plane.quota import turn_envelope
+    source, _ = packet()
+    def unavailable(*args, **kwargs):
+        raise AssertionError("explicit full summaries and guidance need no projection")
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", unavailable)
+    result = compact_quota_should_run_cli_payload(source, include_todo_summary_detail=True,
+        include_user_todo_summary_detail=True, include_vision_detail=True)
+    assert result == source
+
+
 def test_no_context_sources_needs_no_transport(monkeypatch):
     from loopx.control_plane.quota import turn_envelope
     def unavailable(*args, **kwargs):
@@ -179,3 +197,48 @@ def test_no_context_sources_needs_no_transport(monkeypatch):
     for source in ({"ok": False, "diagnostic": "unavailable"},
                    {"interaction_contract": {"agent_channel": {"work_context": {"sources": []}}}}):
         assert _reference_context(source) is source
+
+
+@pytest.mark.parametrize("value", [1.0, -0.0, 2**60 + 1, float(2**60), 0.000001])
+@pytest.mark.parametrize("entrypoint", ["reference", "diagnostics", "cli-detail"])
+def test_context_sharing_keeps_original_numeric_facts(value, entrypoint):
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+    source, _ = packet()
+    facts = {"future_measurement": value, "nested": [value, False, None]}
+    source["future_facts"] = deepcopy(facts)
+    attachment(source)["future_facts"] = deepcopy(facts)
+    original = json.dumps(source)
+
+    def project(payload):
+        if entrypoint == "cli-detail":
+            return compact_quota_should_run_cli_payload(payload,
+                include_todo_summary_detail=True, include_user_todo_summary_detail=True)
+        return _reference_context(payload, **({"diagnostics": {}} if entrypoint == "diagnostics" else {}))
+
+    shared = project(source)
+    # JSON spelling distinguishes float/int, negative zero and adjacent large
+    # integers; Python equality alone cannot establish that facts survived.
+    assert json.dumps(shared["future_facts"]) == json.dumps(facts)
+    assert json.dumps(attachment(shared)["future_facts"]) == json.dumps(facts)
+    assert graph(shared)["result_writeback_guidance_ref"].endswith("optional_attachments[0].guidance")
+    assert json.dumps(project(shared)) == json.dumps(shared)
+    assert json.dumps(source) == original
+
+
+def test_reference_transport_does_not_return_untouched_material(monkeypatch):
+    from loopx.control_plane.quota import turn_envelope
+    source, _ = packet()
+    body = "Untouched supporting material. " * 2048
+    source["future_facts"] = {"body": body}
+    responses, real = [], turn_envelope._turn_envelope_result
+
+    def observed(operation, **params):
+        result = real(operation, **params)
+        responses.append(json.dumps(result))
+        return result
+
+    monkeypatch.setattr(turn_envelope, "_turn_envelope_result", observed)
+    shared = _reference_context(source)
+    assert shared["future_facts"]["body"] == body
+    assert len(responses) == 1
+    assert body not in responses[0]

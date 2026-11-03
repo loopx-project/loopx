@@ -4,6 +4,11 @@
 对一组候选文本或路径检测：
 
 - 凭据：Ark/ARK api key、`sk-`、`Bearer`、AK/SK、private key 块、`api_key=` 赋值；
+  以及**带发行方前缀、无需标签**的第三方令牌（GitHub `ghp_`/`github_pat_`、AWS
+  `AKIA`/`ASIA`、Slack `xoxb-` 等、Google `AIza`、Stripe `sk_live_`、npm、PyPI、
+  JWT 三段式）。这些形状由 `loopx/public_safe_text.py` 的
+  `PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE` 统一提供，本 capability 复用同一份定义，
+  不再各自维护子集——只识别部分发行方会让其余凭据以 `ok=true` 通过对外门禁。
 - 公司内部信息：内部域名、内部代码托管、内部 MCP 网关、内部文档链接——
   **由部署环境注入**（`PUBLIC_SAFE_CONFIG` 指向一个本地 JSON 文件，见下）；
 - 私有绝对路径：home 目录与 root 挂载等本地绝对路径；

@@ -799,6 +799,14 @@ def collect_manager_turn_context(
             )
         )
 
+    from .capabilities.manager_context.ssh_evidence import grants
+
+    inline_remote = bool(
+        remote_evidence
+        and grants(runtime_root, str(session.get("channel_id") or ""))
+    )
+    bound_steward = conversation_scope(session).get("bound_steward") is True
+
     for attempt in range(2):
         context = manager_turn_context(
             registry_path,
@@ -824,11 +832,30 @@ def collect_manager_turn_context(
             else None
         )
         if before != after or before_scope_id != after_scope_id:
+            if (
+                attempt == 0
+                and not inline_remote
+                and bound_steward
+                and registry_path is not None
+                and before is not None
+                and after is not None
+                and after_scope_id is not None
+                and set(before).issubset(set(after))
+                and manager_authorization_scope_id_for_registry(
+                    registry_path,
+                    before,
+                    runtime_root=runtime_root,
+                    channel_id=session.get("channel_id"),
+                )
+                == before_scope_id
+            ):
+                before, before_scope_id = after, after_scope_id
+                continue
             return unavailable_manager_context("external_authorization_changed")
         # Recollect local, on-demand context once under the original scope.
         # Inline remote collection owns one dial/Turn budget, including failed
         # reads; recollecting it would restart that budget.
-        if (attempt == 0 and not remote_evidence and before_scope_id is not None
+        if (attempt == 0 and not inline_remote and before_scope_id is not None
                 and context.get("warnings") == ["external_authorization_changed"]):
             continue
         break

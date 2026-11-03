@@ -2,8 +2,10 @@
 
 The optional `loopx-codex-provider-routing` provider replaces the recommended CPA
 path with native slots. It has no new Core capability id. Credentials and lifecycle
-stay in this package; Core composes the App transport. Python adapts existing
-private file/process owners; `native_policy.ts` owns availability and selection.
+stay in this package; Core composes the App transport. Its packaged Python owner
+handles credential/file/process IO; `native_policy.ts` owns availability and
+selection. No dotfiles checkout, Personal Apps command or external Python module
+is required.
 
 ## The user task
 
@@ -15,14 +17,99 @@ selects/reopens when the native owner admits it. Enable automatic handoff and
 The page reads back accounts,
 windows, waiting cause and recovery. Tokens and identity claims stay private.
 
+### OpenAI API fallback
+
+Version 0.13.0 adds **OpenAI API keys** on the same Model provider page. Add a
+named project key, read its masked suffix, explicitly check connection, or remove
+it. Keys remain in a separate private mode-0600 file under the same runtime owner;
+browser/CLI responses never return their complete values. Adding a key alone does
+not enable an observer, change the native login or authorize paid model calls.
+
+Enable subscription automatic handoff, then **Use API after subscription exhaustion
+(usage based billing)**. API fallback is a separate, default-off permission.
+Every authorized subscription must have fresh measured exhaustion before the
+native policy selects API. A healthy subscription always ranks first; an unknown
+or failed subscription check cannot opt a request into paid use. While API is
+active, a recovered subscription wins at the existing idle/restart boundary and
+switch cooldown. Model settings and history stay with the same GPT route.
+API and client-restart permission edits retain the existing subscription
+allowlist. API permission can be revoked while automatic routing is off or the
+last key has been removed; enable prerequisites do not prevent revocation.
+
+The packaged native account owner supports `API_KEY_SLOTS_VERSION = 1`. It enrolls
+one loopback relay credential and uses the same launch/account locks, idle checks,
+credential/config transaction, readback and rollback as subscription switching.
+Real OpenAI keys stay in this extension, outside the native account vault. The
+dotfiles adapter imports this owner; it contains no second credential writer.
+The native owner uses the official `openai_base_url` override on the built-in
+`openai` provider and removes that override on subscription return. The provider
+identity stays stable for existing conversations; other custom providers remain
+launchable when they define a top-level Responses API gateway. An API account
+slot records its selected gateway provider; selection restores that provider and
+its model catalog, while a subscription slot selects the built-in `openai`
+provider and removes the managed API endpoint. API and subscription logins are
+therefore never sent to the other route. A custom provider must not shadow the
+built-in `openai` provider, and profile overrides remain ineligible because their
+effective provider cannot be bound safely to the transaction.
+
+A local authenticated transport sends the original selected model and Responses
+body to OpenAI. An explicit upstream quota rejection, 401, 403 or temporary 429 can
+try the next configured key before output. Each key is attempted at most once per
+request, with typed cooldowns; model permission failures are scoped to that model.
+Unknown network effects, ordinary request/server failures and any started stream
+are not retried on another key. No job replay, model substitution or synthetic
+completion is added. There are no background paid probes. The transport survives
+the Chat/App restart used for native handoff; disabling stops new admissions and
+drains already accepted requests before its process exits. With the policy off,
+an existing subscription is never routed through this transport.
+
+**Check connection** only requests the official
+[`GET /v1/models`](https://developers.openai.com/api/reference/resources/models/methods/list).
+It makes no inference call and does not establish spendable quota. Its 401, 403,
+429 and network states remain distinct. A models permission denial does not prove
+inference is unavailable. The App shows per-key actual request outcomes, model,
+last observation time and the last reported rate-window requests/tokens left when
+OpenAI supplies those headers. These are observations of a rate window, not a
+monthly allowance or account balance. OpenAI's
+[`Costs` endpoint](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/costs)
+requires an Admin API key; project keys do not expose an authoritative billing
+balance. The page retains **API balance unavailable** and links to OpenAI usage.
+
+The same private store is available through `loopx-codex-accounts keys-status`,
+`keys-add`, `keys-remove` and `keys-check`. Mutations accept JSON on stdin with
+`expected_revision` from `keys-status`. `keys-add` takes `label` and `api_key`;
+`keys-remove` and `keys-check` take the returned `key_id`. Never pass a key as a
+command-line argument. Native `configure` accepts `api_fallback: true` alongside
+its existing policy fields. A stale revision refuses a mutation; re-read before
+retrying. Removing a saved key does not revoke it at OpenAI. Disable API fallback
+to stop new API requests; select an available subscription through the existing
+native handoff controls. The current native recovery/rollback owner retains any
+incomplete credential transaction.
+
+0.13.0 在同一设置中提供 Key 配置、脱敏回读、只读检查和默认关闭的 API 接续开关。
+订阅始终优先：所有授权订阅均被新鲜观测确认为耗尽后才进入 API；订阅恢复后沿用原有
+空闲、重启、冷却和恢复边界返回。扩展内置唯一原生账号 owner，dotfiles 只导入并映射
+旧配置；LoopX 不依赖 dotfiles。API 上游 Key 留在扩展私有存储，原生槽位只保存本地
+中转凭据，不绕过原事务或复制会话历史。
+顶层 Responses API 网关可以直接启动并参与账号切换。API 槽位记录所选网关，重新选中时
+恢复该 provider 与模型目录；订阅槽位改用内置 `openai`，并移除受管的 API 地址，避免把
+订阅凭据发往网关。自定义 provider 不得覆盖内置 `openai`，profile 覆写仍不参与账号事务。
+Key 轮换依据输出前收到的明确额度、认证、权限或限流错误，每次请求每把 Key 最多
+尝试一次；网络效果不明、普通请求错误和已开始输出的流不会重放，不替换模型，也不做
+后台付费探测。关闭后停止新请求并等待已接收请求结束。App 显示实际请求结果和上次
+限流窗口余量；项目 Key 的账单余额保持未知，连接检查成功也不代表还有可消费额度。
+API 及重启权限的编辑保留原订阅授权范围；关闭自动接续或移除最后一把 Key 后，仍可
+撤销已授予的 API 权限。
+
 **An open native Codex client is an occupied owner, even between turns.** With
 restart permission, the provider requests a normal AppKit quit of only the
 inspected GPT instance, waits for exit and native idle, saves/switches the login,
 then reopens that same route. It never addresses a shared bundle id or quits a
 different route. With the separate force permission below, a refused or timed-out
 normal quit can escalate against that same inspected instance. Otherwise those
-failures, or remaining CLI/file owners, leave credentials unchanged and pause
-automatic shutdowns until a check. Changed process ownership leaves credentials
+failures leave credentials unchanged and pause automatic shutdowns until a check.
+Remaining CLI/file owners wait without consuming that failure budget and resume
+automatically after the blocker releases. Changed process ownership leaves credentials
 unchanged and consumes the bounded retry budget.
 Without this additional permission it continues to wait for closed clients.
 It does not implement hot login replacement, job replay or
@@ -38,12 +125,37 @@ python -m pip install ./packages/loopx-codex-provider-routing
 loopx-codex-accounts status
 ```
 
-The native adapter requires POSIX, the installed **Personal Apps** GPT slot owner
-(`personal-apps` with adjacent `personal_apps.py` and `personal_accounts.py`), its
-registered native GPT route, and the official `codex` CLI. Switching is macOS-only
-in that owner. This package adapts that installation; it ships no second account
-vault or launcher. Other hosts show unavailable. Node 22.18+ or 24+ runs the
-TypeScript selector. Enrol accounts through the native owner's official login.
+The native adapter requires POSIX and the official `codex` CLI; App switching and
+controlled client restart require the macOS Codex App. Other hosts show
+unavailable for those effects. Node 22.18+ or 24+ runs the TypeScript selector.
+The standalone wheel includes the account vault and App IO; it does not require
+LoopX Core to import or use its native CLI.
+
+For a new installation, sign in with ChatGPT in native Codex, close clients using
+that login, then choose **Register current Codex login** on the settings page.
+Registration retains model settings and history and leaves automatic switching
+off. The CLI equivalent is `enroll-current`, taking `expected_revision` and
+`expected_selection` from `status` as JSON on stdin. The default profile reads
+`CODEX_HOME` (otherwise `~/.codex`) and `CODEX_ELECTRON_USER_DATA_PATH` (otherwise
+`~/.loopx/frontends/codex`); the vault lives in
+`~/.loopx/codex-native-accounts/vault`.
+
+When trusted version-1 `~/.config/personal/apps.json` GPT metadata already exists,
+the package reuses that home/frontend, the existing
+`~/.local/state/personal-apps/gpt-accounts` vault and its original locks in place.
+It does not copy credentials or history. An upgrade changes the pinned owner, so
+use **Reconnect** to inspect and accept that owner while retaining the previous
+explicit policy permissions. The updated dotfiles commands import the installed
+package and use those same files and locks. LoopX never imports dotfiles. The
+installed-wheel regression runs without that command, repository or modules:
+
+```sh
+uv run --extra test python -m pytest tests/presentation/test_native_accounts_install.py
+```
+
+新安装无需 dotfiles：先在原生 Codex 登录，关闭使用该登录的客户端，再从设置页登记
+当前登录。登记后自动切换仍关闭。已有个人配置原地复用旧 vault 和锁，不复制凭据、
+SQLite 或会话；升级后通过「重新连接」接受新的扩展 owner。dotfiles 是该扩展的调用方。
 
 Click **Switch automatically when quota runs out** to authorize the listed slots
 as destinations. Installation alone grants no account effect. The App observer
@@ -105,6 +217,61 @@ unreadable live Codex process into a proven exit.
 0.12.10 对进程枚举与文件检查之间新启动、或已独立证明退出的占用，最多进行三次
 只读重扫，再以稳定的新身份清单进入原受控重启流程。PID 复用、仍存活但身份不明及
 持续变化继续等待；重扫不重放退出、凭据事务或业务，也不扩大 VM 的重启权限。
+
+Version 0.12.11 checks for non-restartable holders before quitting the GPT App.
+An existing `other_clients_busy` pause is rechecked automatically; an unchanged
+unmanaged holder waits without repeatedly closing/reopening clients. Normal
+quit refusal, unknown effects and other exhausted failure budgets keep their
+existing recovery boundary. Only numeric read-only directory descriptors are
+excluded from auth consumers. A read-only regular file, missing descriptor type,
+directory writer or warm Codex process still blocks. The native slot owner's idle
+check rechecks these read-only exceptions, followed by another typed handle scan
+under its account locks. This does not restart a VM or claim to inspect a guest's
+cached login; a pinned auth file remains a hold.
+
+Before stopping a discovered Chat service, the provider uses LoopX's existing
+accepted-work reader and ingress lock for its explicit runtime. Queued work,
+including an orphan without an active Session pointer, completing work and
+unreadable state defer the entire handoff before App quit. A new/changed service
+cannot inherit the frozen restart set. The lock remains held through account
+readback and restoration. A standalone observer must run in the same upgraded
+LoopX environment to restart these services; missing Core support waits safely.
+An already loaded archive/bootstrap Core passes its import root to the native
+worker, including detached handoffs; the worker does not rely on its current
+directory to rediscover that owner.
+Prefer the serving App/Chat observer so normal LoopX updates also refresh it;
+retire any separately installed legacy watcher through its original manager.
+
+The enabled switch is durable intent, not a health claim. The settings page and
+native status report the active observer's private, content-free heartbeat,
+ownership lock and loaded provider build. A missing, overdue or older-build
+heartbeat stays visible even when the last quota read succeeded. Quota readiness
+and observer health are separate. Status reads never refresh their own heartbeat.
+Only the lock holder writes it; another App or CLI observer remains a contender.
+
+The existing supervised Chat service owns persistence; no second account daemon
+or duplicate policy is installed. It rehydrates enabled observation on restart
+and upgrade. Tick failures retry in the owner loop, dead threads can restart,
+and a rejected configuration edit reconciles the observer with the persisted
+policy. A stale disable cannot leave `enabled=true` with observation stopped.
+Disabling and service shutdown still fence new effects; an already dispatched
+transaction keeps its normal completion/recovery contract. An unresponsive
+owner remains a visible hold, never permission to steal its lock or replay work.
+
+开关表示持久授权，不等于服务健康。设置页分别展示额度状态和后台观测心跳；缺失、
+过期及旧版本观测保持可见，读取状态不会给自己刷新心跳。复用既有受监督的 Chat 服务，
+重启或升级后恢复已授权观测；检查失败自动重试，线程退出可恢复。配置冲突等失败不会
+让「仍开启」的策略静默停掉观测。关闭或服务退出仍阻止新效果，不抢占未释放的 owner。
+
+0.12.11 在退出 GPT App 前检查无法受控恢复的占用；原 `other_clients_busy` 暂停会
+自动重新检查，阻塞解除后无需手动换号。仅有数字 FD、只读且类型明确为目录的句柄
+不视为认证消费者；认证文件、写句柄、未知类型及缓存登录的 Codex 进程仍阻塞。
+原账号 owner 在事务锁内复查只读例外，并再次核验句柄；不重启 VM，也不据此声称
+已检查 guest 内的认证缓存。停止 Chat 前复用原在途任务读取与 ingress 锁，排队、
+completing 或不可读状态均在退出 App 前等待；恢复期间保持锁与原失败/未知回执。
+已加载的 archive/bootstrap Core 向原 native 子进程传递其加载路径，包含脱离父进程的
+换号任务，避免依赖工作目录或误用旧安装；没有加载 Core 的独立入口仍安全等待。
+观察器应随实际 LoopX 服务升级；独立旧 watcher 通过原管理器退役，避免占住唯一观察权。
 
 Each service's restoration intent is saved privately before unloading. Version
 0.12.7 waits up to five seconds for launchd to finish an acknowledged asynchronous

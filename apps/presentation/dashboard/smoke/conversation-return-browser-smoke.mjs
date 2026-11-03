@@ -12,6 +12,8 @@ import { launchBrowser, loadPlaywright, waitForHttp } from "../../../../examples
 process.env.LOOPX_PERSONAL_WORKSPACE_PACKAGED = "1";
 const { repoRoot, outputDir, port, startServer } = await import("../../../../examples/personal-workspace-browser/fixture.mjs");
 const { openWorkspacePage } = await import("../../../../examples/personal-workspace-browser/scenario-context.mjs");
+await verifyBoundReadRecovery();
+if (process.argv.includes("--bound-permission-only")) process.exit(0);
 const fixture = spawn(resolveTestPython({ repoRoot }), ["-u", "apps/presentation/dashboard/smoke/conversation-history-http-fixture.py", "--manager"],
   { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] });
 const exited = once(fixture, "exit");
@@ -141,4 +143,121 @@ try {
   fixture.stdin.end();
   if (fixture.exitCode === null) await exited;
   lines.close();
+}
+
+async function verifyBoundReadRecovery() {
+  // Exercise the real binding owner as well as the packaged reader. A provider
+  // coming back must not restore a grant the owner explicitly disconnected.
+  const child = spawn(resolveTestPython({repoRoot}), ["-u",
+    "apps/presentation/dashboard/smoke/bound-conversation-http-fixture.py", "--steward"],
+    {cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"]});
+  const exited = once(child, "exit");
+  const lines = createInterface({input: child.stdout});
+  const iterator = lines[Symbol.asyncIterator]();
+  let stderr = "", browser;
+  child.stderr.on("data", chunk => stderr += String(chunk));
+  async function next() {
+    for (;;) {
+      let timer;
+      try {
+        const line = await Promise.race([iterator.next(), new Promise((_, reject) => {
+          timer = setTimeout(() => reject(Error(`Bound fixture timed out: ${stderr}`)), 20_000);
+        })]);
+        assert.equal(line.done, false, stderr);
+        if (line.value.startsWith("{")) return JSON.parse(line.value);
+      } finally {clearTimeout(timer);}
+    }
+  }
+  async function command(value) {child.stdin.write(`${value}\n`); return next();}
+  try {
+    const {origin, bindingId, sessionId} = await next();
+    // The first provider announces its identity before the second has started.
+    // Serving HTTP is the shared fixture's completed-startup boundary.
+    await waitForHttp(`${origin}/api/chat/lark/private-conversations`);
+    await command("populate");
+    const before = await command("inspect");
+    browser = await launchBrowser(loadPlaywright().chromium);
+    const page = await browser.newPage({viewport: {width: 1440, height: 1000}});
+    await page.addInitScript(() => {
+      if (!localStorage.getItem("loopx-pw-locale")) localStorage.setItem("loopx-pw-locale", "zh-CN");
+    });
+    const writes = [], errors = [];
+    page.on("request", request => {if (request.method() !== "GET") writes.push(request.url());});
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`${origin}/chat/?conversationBinding=${bindingId}&conversationSession=${sessionId}&view=conversation`);
+    await page.getByRole("heading", {name: "合成报告 6 / Synthetic report", exact: true}).waitFor();
+    const composer = page.getByLabel("向 LoopX 发送消息"), send = page.getByRole("button", {name: "发送", exact: true});
+    const draft = "Keep this draft in the original conversation; read without sending.";
+    await composer.fill(draft);
+    const notice = page.getByRole("status").filter({hasText: "会话历史暂时无法读取"});
+    // Source discovery can succeed while the original transcript read fails.
+    // Inject only the HTTP outage; the binding and Session stay in real Core.
+    const snapshotRoute = `**/api/chat/sessions/${sessionId}*`;
+    await page.route(snapshotRoute, route => new URL(route.request().url()).pathname === `/api/chat/sessions/${sessionId}`
+      ? route.fulfill({status: 503, json: {ok: false, error: "Synthetic transcript read outage"}})
+      : route.fallback());
+    await page.reload();
+    await notice.waitFor();
+    assert.equal(await send.isDisabled(), true);
+    assert.equal(await page.getByText("今天的工作区很安静", {exact: true}).count(), 0,
+      "A verified source with unreadable history is not an empty workspace");
+    await mkdir(outputDir, {recursive: true});
+    await page.screenshot({path: resolve(outputDir, "conversation-history-unavailable-desktop.png"), animations: "disabled"});
+    await page.unroute(snapshotRoute);
+    await notice.waitFor({state: "hidden"});
+    await page.getByRole("heading", {name: "合成报告 6 / Synthetic report", exact: true}).waitFor();
+    assert.equal(await composer.inputValue(), draft);
+    await command("deny");
+    await notice.waitFor();
+    assert.equal(await send.isDisabled(), true);
+    assert.equal(await composer.inputValue(), draft);
+    await command("recover");
+    await notice.waitFor({state: "hidden"});
+    assert.equal(await send.isEnabled(), true);
+    assert.equal(await composer.inputValue(), draft);
+    assert.equal(await page.getByText("Synthetic private conversation: review the research notes.", {exact: true}).count(), 1);
+    await command("revoke");
+    await notice.waitFor();
+    await command("recover");
+    await notice.getByRole("button", {name: "重试读取", exact: true}).click();
+    await notice.waitFor();
+    assert.equal(await send.isDisabled(), true);
+    assert.equal(await composer.inputValue(), draft);
+    const sourceRead = await page.request.get(`${origin}/api/chat/sessions?conversation_binding_id=${bindingId}`);
+    assert.equal(sourceRead.status(), 409);
+    const connections = await (await page.request.get(`${origin}/api/chat/lark/private-conversations`)).json();
+    assert.ok(!connections.connections.some(row => row.binding_id === bindingId));
+    assert.equal(connections.connections.length, 1, "The other original source remains available");
+    await page.reload();
+    await page.getByRole("alert").filter({hasText: "原会话暂不可用"}).waitFor();
+    await mkdir(outputDir, {recursive: true});
+    await page.screenshot({path: resolve(outputDir, "conversation-binding-unavailable-desktop.png"), animations: "disabled"});
+    assert.equal(await page.getByText("今天的工作区很安静", {exact: true}).count(), 0,
+      "An unreadable original conversation is not an empty workspace");
+    assert.equal(await page.getByTestId("runtime-readiness-line").count(), 0,
+      "A failed source read cannot diagnose a missing execution runtime");
+    assert.ok((await page.locator(".personal-timeline-empty").innerText()).includes("原会话暂不可用"));
+    assert.equal(await composer.inputValue(), draft);
+    assert.equal(await send.isDisabled(), true);
+    assert.equal(await page.getByText("Unrelated desktop conversation — must remain separate.", {exact: true}).count(), 0);
+    assert.equal(await page.getByText("Different private steward: keep this source separate.", {exact: true}).count(), 0);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.ok(await page.locator("body").evaluate(body => body.scrollWidth <= innerWidth + 1));
+    await page.screenshot({path: resolve(outputDir, "conversation-binding-unavailable-narrow.png"), animations: "disabled"});
+    await page.evaluate(() => localStorage.setItem("loopx-pw-locale", "en"));
+    await page.reload();
+    await page.getByRole("alert").filter({hasText: "Original conversation unavailable"}).waitFor();
+    assert.ok((await page.locator(".personal-timeline-empty").innerText()).includes("Original conversation unavailable"));
+    assert.equal(await page.getByTestId("runtime-readiness-line").count(), 0);
+    assert.equal(await page.getByLabel("Send a message to LoopX").inputValue(), draft);
+    assert.deepEqual(await command("inspect"), before, "Reads/retry/reopen preserve all Sessions, original messages and model requests");
+    assert.deepEqual(writes, []);
+    assert.deepEqual(errors, []);
+    console.log("conversation-binding-recovery-browser: passed (real HTTP/Core, source recovery vs revocation, honest unavailable state, retained draft, no fallback or writes)");
+  } finally {
+    await browser?.close();
+    child.stdin.end("stop\n");
+    if (child.exitCode === null) await exited;
+    lines.close();
+  }
 }

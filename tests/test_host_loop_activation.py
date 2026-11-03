@@ -450,10 +450,11 @@ def test_goal_hosts_reuse_thin_dispatch_and_stay_compact() -> None:
             "preserve exact identities/effect ids",
         ):
             assert obligation in payload["task_body"]
-        # Current authority/continuation clauses fit 3,200 normalized
-        # chars on this fixed fixture. Keep a tight regression guard and the
-        # native host's separate hard cap, without shortening those obligations.
-        assert payload["interface_budget"]["budget_char_count"] <= 3_200
+        # The known first-guard choice adds 63 useful normalized characters:
+        # the largest fixed host fixture is 3,262, leaving 38 under this
+        # regression allowance. Keep the native host's hard cap separate.
+        assert "Known new-Turn choice: add `--todo-id <id>` to first guard" in payload["task_body"]
+        assert payload["interface_budget"]["budget_char_count"] <= 3_300
         assert payload["interface_budget"]["max_chars"] == 4_000
         assert payload["interface_budget"]["within_budget"] is True
 

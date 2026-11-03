@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
 from ...file_lock import process_is_alive
+from ...public_safe_text import COMPACT_LABEL_PATTERN as _LABEL
 
 
 CONTEXT_PROVIDER_SERVICE_RECEIPT_SCHEMA_VERSION = (
@@ -22,7 +22,6 @@ _RECEIPT_FIELDS = {
     "pid",
     "observed_at",
 }
-_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$")
 
 
 def _opaque_ref(kind: str, value: str) -> str:

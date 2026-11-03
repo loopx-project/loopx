@@ -192,6 +192,12 @@ the chart. Show one finding at a time with its declared status and full text;
 keep all findings selectable and failed or tentative counts visible. Preserve
 the exact finding on reload and Back. Offer the whole recorded history in place
 and through the existing return action, without letting it bury the chosen text.
+When opening a specific finding, put its parent question in accessible contextual
+help rather than another collapsed title row. Opening a route's question still
+reveals that complete question directly; these two reading intents are distinct.
+
+打开具体结论时，所属研究问题放进可悬浮、聚焦和点按的上下文帮助，避免再堆一行
+折叠标题；从路线打开问题时仍直接显示完整问题，不增加必经操作。
 
 Decision history groups records by their recorded question identity, with the
 question title once above its successive decisions. Matching titles alone do

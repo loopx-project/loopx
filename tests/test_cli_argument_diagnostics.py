@@ -559,7 +559,7 @@ def test_todo_claim_validation_preserves_exact_diagnostics(
     assert str(exc_info.value) == expected
 
 
-@pytest.mark.parametrize("command", ["add", "list", "update", "complete", "supersede"])
+@pytest.mark.parametrize("command", ["add", "list", "supersede"])
 @pytest.mark.parametrize("operation_id", ["retry-one", ""])
 def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, operation_id):
     args = build_parser().parse_args([
@@ -567,6 +567,18 @@ def test_claim_operation_id_is_not_silently_ignored_by_other_commands(command, o
     ])
     with pytest.raises(ValueError, match="supported only by todo claim"):
         validate_shared_todo_options(args)
+
+
+@pytest.mark.parametrize("command", ["update", "complete"])
+@pytest.mark.parametrize("operation_id", ["retry-one", ""])
+def test_managed_claim_reference_is_retained_for_the_execution_owner(command, operation_id):
+    args = build_parser().parse_args([
+        "todo", command, "--goal-id", "example-goal", "--claim-operation-id", operation_id,
+    ])
+    validate_shared_todo_options(args)
+    # Scope validation admits the supported caller without dropping its raw
+    # reference. The native owner still rejects an invalid empty value.
+    assert args.claim_operation_id == operation_id
 
 
 @pytest.mark.parametrize(

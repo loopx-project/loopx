@@ -899,6 +899,7 @@ export type ChatVisibleMessage = {
   /** Client-side lineage added when messages from several Sessions are merged. */
   session_id?: string;
   collaboration?: CollaborationReadback;
+  collaborations?: CollaborationReadback[];
   origin?: string;
   attachments?: ChatImageAttachment[];
   /** Read-only original-source view; text remains the canonical model input. */
@@ -931,6 +932,7 @@ export type ChatReplyContext = {
   };
 };
 
+// Existing attachment wire shape; MIME distinguishes images and UTF-8 documents.
 export type ChatImageAttachment = {
   data_url: string;
   id: string;
@@ -970,22 +972,31 @@ const chatMessagePageSchema = z.object({
 });
 
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
-async function fetchChatSessionHistory(session: ChatSessionSummary): Promise<ChatSessionSnapshot> {
+export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal): Promise<ChatSessionSnapshot> {
+  const sessionId = typeof session === "string" ? session : session.session_id;
+  // A delegation has the original Session ID; pin its first verified page's
+  // scope. History discovery callers keep validating against their own source.
+  let expectedSession = typeof session === "string" ? undefined : session;
   let first: ChatSessionSnapshot | undefined, cursor: string | null = null;
   let total: number | undefined, digest: string | undefined;
   const messages: ChatVisibleMessage[] = [], cursors = new Set<string>(), ids = new Set<string>();
   do {
+    signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
-      `/api/chat/sessions/${encodeURIComponent(session.session_id)}?${query}`, {signal: AbortSignal.timeout(5000)});
-    const sameSource = snapshot.session?.session_id === session.session_id &&
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
+      {signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(5000)]) : AbortSignal.timeout(5000)});
+    signal?.throwIfAborted();
+    const expected = expectedSession;
+    const sameSource = snapshot.session?.session_id === sessionId && (!expected || (
       (["agent_id", "goal_id", "channel_id", "managed_agent_id", "goal_instance_id", "project_ref"] as const)
-        .every(key => (snapshot.session[key] ?? null) === (session[key] ?? null)) &&
-      (snapshot.session.session_mode ?? "managed_runtime") === (session.session_mode ?? "managed_runtime");
+        .every(key => (snapshot.session[key] ?? null) === (expected[key] ?? null)) &&
+      (snapshot.session.session_mode ?? "managed_runtime") === (expected.session_mode ?? "managed_runtime")));
     if (snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1" || !sameSource || !Array.isArray(snapshot.messages)) {
       throw new Error("The original Session scope changed during history read.");
     }
+    expectedSession ??= snapshot.session;
     // Older services return their complete v1 snapshot for this read. A later
     // page cannot silently lose the cursor contract and masquerade as complete.
     if (!Object.hasOwn(snapshot, "message_page")) {
@@ -1386,8 +1397,8 @@ export type LoopXModeSnapshot = {
   settings: Partial<LoopXModeSettings> & { execution_config?: string };
   native: { status: string; tokenBudget?: number; tokensUsed?: number };
   registered_agents: string[]; paused: boolean; recovery_required: boolean;
-  members: Array<{id: string; agent_id: string; todo_id: string}>;
-  deliveries: Array<{operation_id: string; agent_id: string; todo_id: string; status: string}>;
+  members: Array<{id: string; agent_id: string; todo_id: string | null}>;
+  deliveries: Array<{operation_id: string; agent_id: string; todo_id: string | null; status: string}>;
   ingress: Array<{client_ingress_id: string; mode: string; status: string}>;
   turn_id?: string;
 };
@@ -1395,7 +1406,7 @@ export function fetchLoopXMode(sessionId: string) {
   return requestJson<LoopXModeSnapshot>(`/api/chat/sessions/${sessionId}/loopx`);
 }
 export type DelegationInventory = {
-  items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string;
+  items: Array<{record_id: string; operation_id: string | null; agent_id?: string; todo_id?: string | null;
     status: string; worker_active?: boolean; recovery_required: boolean | null;
     artifacts?: Array<{ref: string; sha256: string}>; current_use?: DelegationReadback["current_use"]}>;
   has_more: boolean; next_cursor: string | null; page_readback_complete: boolean;
@@ -1407,15 +1418,15 @@ export type DelegationDependency = {
 };
 export type DelegationAdoption = {
   requester_agent_id: string; consumer_operation_id: string; consumer_request_id: string;
-  consumer_agent_id: string; consumer_todo_id: string; state: "current" | "unavailable";
+  consumer_agent_id: string; consumer_todo_id: string | null; state: "current" | "unavailable";
   source_artifacts: Array<{ref: string; sha256: string}>;
   consumer_artifacts: Array<{ref: string; sha256: string}>;
 };
 export type DelegationReadback = {
-  operation_id: string; request_id: string; agent_id: string; todo_id: string;
+  operation_id: string; request_id: string; agent_id: string; todo_id: string | null;
   status: string; worker_active: boolean; recovery_required: boolean;
   artifacts?: Array<{ref: string; sha256: string; text: string}>; error?: string;
-  validation?: {source: "goal_acceptance" | "todo_validation"; basis_sha256: string;
+  validation?: {source: "goal_acceptance" | "todo_validation" | "request_validation"; basis_sha256: string;
     check_count: number; pinned_file_count: number; checked_at?: string;
     output_versions?: Array<{ref: string; sha256: string}>; oracle_checks?: Array<OracleEvidence & {criterion_id: string}>};
   task_failure?: {stage: "task_postcondition"; status: "failed" | "inconclusive" | "unavailable";
@@ -2754,11 +2765,14 @@ const privateConversationSchema = z.object({
       last_checked_at: z.number().nullable(), error_code: z.string().nullable(),
       source_coverage: z.object({goal_count: z.number().int().nonnegative(),
         read_goal_count: z.number().int().nonnegative(), unavailable_goal_count: z.number().int().nonnegative()}).nullable().optional(),
+      source_failures: z.array(z.object({goal_id: z.string(),
+        error_code: z.enum(["canonical_authority_required", "source_unavailable"])})).optional(),
       pending_count: z.number().int(), unconfirmed_count: z.number().int(), failed_count: z.number().int()}),
     z.object({available: z.literal(false), error_code: z.string()}),
   ]).optional(),
   managed_steward: z.discriminatedUnion("available", [
     z.object({available: z.literal(true), prepared: z.boolean(), scheduling_enabled: z.boolean(),
+      execution_available: z.boolean().optional(), execution_error_code: z.string().optional(),
       goal_active: z.boolean().optional(), monitor: z.object({todo_id: z.string(), status: z.string(),
         cadence_minutes: z.number().int().nullable(), next_due_at: z.string().nullable(),
         last_checked_at: z.string().nullable()}).nullable().optional(),
@@ -2766,12 +2780,13 @@ const privateConversationSchema = z.object({
         z.object({available: z.literal(true), enabled: z.boolean(), configured: z.boolean(),
           schedule: z.record(z.string(), z.unknown()).nullable().optional(), next_due_at: z.string().nullable().optional(),
           retained_window_due_at: z.string().nullable().optional(), generation_id: z.string().nullable().optional(),
-          delivery_status: z.string().optional(), publication_verified: z.boolean().optional(),
+          delivery_status: z.string().optional(), execution_failed: z.boolean().optional(), publication_verified: z.boolean().optional(),
           destination: z.string().optional()}),
         z.object({available: z.literal(false), error_code: z.string()}),
       ]).optional(),
       goal_id: z.string().optional(), agent_id: z.string().optional(), session_id: z.string().optional()}),
-    z.object({available: z.literal(false), error_code: z.string()}),
+    z.object({available: z.literal(false), error_code: z.string(),
+      execution_available: z.boolean().optional(), execution_error_code: z.string().optional()}),
   ]).optional(),
   agent_candidates: z.array(privateAgentSessionSchema).default([]), agent_targets: z.array(privateAgentTargetSchema).default([]),
 });
@@ -2902,7 +2917,8 @@ const exploreResultPageSchema = z.object({
     finding_id: z.string(), finding: z.string(), summary: z.string(), status: z.string(),
     node_id: z.string(), question: z.string(), scope: z.string(), agent_id: z.string(),
     evidence_refs: z.array(z.string()), last_updated_at: z.string(),
-    measurements: z.unknown().transform(normalizeExploreMeasurements).optional(),
+    measurements: z.unknown().transform(value => normalizeExploreMeasurements(value)).optional(),
+    measurement_error: z.string().optional(),
     linked_todos_available: z.boolean().optional(),
     linked_todos: z.array(z.object({
       todo_id: z.string(), text: z.string(), status: z.string(), claimed_by: z.string(),

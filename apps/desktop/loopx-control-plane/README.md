@@ -113,6 +113,54 @@ unknown; this is maintenance of the App's own installation, not proof that one
 source revision is newer. A provably newer runtime remains selected. Both local HTTP services must expose the selected
 artifact's identity before the workspace opens.
 
+Chat readiness uses `/api/chat/readiness`: the loaded service's frozen runtime
+identity and HTTP readiness only. It does not enumerate models, credentials,
+Sessions or Goal state, and grants no work authority. Both native and browser
+launchers retain the original capabilities fallback for older services. The
+native probe keeps its 500 ms deadline, so slow metadata reads cannot multiply
+startup probes into more capability-discovery work. Capability availability and
+original-conversation authorization are still checked by their normal owners.
+
+Chat 就绪探针仅读取已加载服务的固定版本身份，不枚举模型、凭据、会话或 Goal，
+也不授予执行权限。原生与浏览器启动器保留旧服务的完整能力接口兼容路径；原生探针
+仍为 500 毫秒期限，不通过延长期限掩盖问题。能力是否可用、原会话是否获授权，仍由
+原入口单独实时核验。
+
+Opening the selected original conversation is a read-only discovery. It uses a
+fresh provider identity and Core's grant check, then re-reads the exact atomic
+configuration to reject a concurrent selection or revocation. It does not wait
+behind background mutation fences, cache authorization, resume a thread or
+submit work. Sending still uses the existing effect-time admission fences.
+
+打开原管家会话仅做只读发现：实时核验身份及 Core 授权后，再读原子配置，拒绝期间
+发生的选择或撤权变化；不再排队等待后台修改锁，也不缓存授权、恢复线程或提交任务。
+发送消息仍走原有执行时准入与保护锁。
+
+On macOS, adopting a different Chat runtime reuses Core's existing managed
+listener replacement. The loaded original manager supplies its explicit store
+route; the same accepted-work fence protects its queued and active Turns through
+restart. A private bootstrap does not need to match a desktop Python template.
+While work is pending the window explains the wait and retries automatically.
+Unknown manager/store state grants no raw-kill fallback or second consumer.
+`loopx update activate --service chat --port 8767` retries this adoption without
+installing anything; its receipt is a restart request, not readiness proof.
+`loopx update activate` retries the existing managed status/Chat batch.
+
+macOS 切换 Chat 运行时时复用 Core 已有的受管替换入口，由正在运行的原管理器提供
+明确存储路由，并在重启期间保留排队及在途任务保护。私有启动包装无需匹配桌面的
+Python 模板；任务未结束时窗口说明等待原因并自动重试。来源或任务状态未知时，
+不退回直接杀进程，也不启动第二消费者。上述 activate 命令只重试已安装服务的采用，
+不重新安装；返回重启请求后仍需独立核验服务身份与就绪状态。
+
+The startup recovery view distinguishes accepted work from unverified state.
+These before/after images use a synthetic native snapshot to show the copy only;
+they do not establish service readiness or request completion. The managed
+restart fence and independent readiness readback qualify those separately.
+
+| Before: a generic connection failure | After: pending work and automatic continuation |
+| --- | --- |
+| ![Generic startup connection failure](docs/assets/native-chat-wait-before.png) | ![Startup waits for the original request without asking for a restart](docs/assets/native-chat-wait-after.png) |
+
 If anonymous GitHub ancestry lookup is unavailable, the App can reuse an
 existing GitHub CLI login for the same fixed public-repository GET. It never
 starts login or requests account permissions. Each tool has a three-second

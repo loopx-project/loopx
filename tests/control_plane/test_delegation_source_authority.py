@@ -40,6 +40,7 @@ def saved_handoff(delegation_service, monkeypatch, request):  # noqa: F811
     service.registry.write_text(json.dumps(data))
     values = source(service.root, service.registry, goal_id=service.goal_id,
                     agent_id="analyst", requester="lead", binding="analysis",
+                    original_message=request.param if isinstance(getattr(request, "param", None), str) else None,
                     chat_root=root / "source-chat" if getattr(request, "param", False) else None)
     store, session, turn, request, receipt, _ = values
     deliver(service.root, service.registry, session=session, turn=turn,

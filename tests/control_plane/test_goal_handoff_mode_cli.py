@@ -415,6 +415,7 @@ def test_todo_supersede_cli_requires_key_in_hard_lease_and_accepts_it(
     assert exit_code == 1
     assert payload["ok"] is False
     assert payload["error_code"] == "lease_fence_required"
+    assert "recovery" not in payload
 
     exit_code, payload = _run_cli(
         capsys,
