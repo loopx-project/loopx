@@ -54,6 +54,8 @@ function coalescedInitialPointers(context: JsonObject, pointers: string[]): stri
 export function capturedContextSelection(request: JsonObject, initialPointers: string[] = []): JsonObject {
   if (request.recover_selection_errors !== undefined && typeof request.recover_selection_errors !== "boolean")
     throw new EffectRuntimeRequestError("recover-selection-errors must be boolean");
+  if (request.preserve_selection_order !== undefined && typeof request.preserve_selection_order !== "boolean")
+    throw new EffectRuntimeRequestError("preserve-selection-order must be boolean");
   try {
     return resolveSelection(request, initialPointers);
   } catch (error) {
@@ -87,7 +89,10 @@ function resolveSelection(request: JsonObject, initialPointers: string[]): JsonO
   (selectors as string[]).forEach((pointer, index) => {
     if (!argumentsByPointer.has(pointer)) argumentsByPointer.set(pointer, index + 1);
   });
-  const pointers = [...argumentsByPointer.keys()].sort();
+  // Initial navigation follows the owner's priority, including merged parents.
+  // Ordinary explicit selectors retain their canonical order.
+  const pointers = [...argumentsByPointer.keys()];
+  if (request.initial_read !== true) pointers.sort();
   const selections = pointers.map(pointer => {
     const argument = `--select argument ${argumentsByPointer.get(pointer)}`;
     if (pointer !== "" && !pointer.startsWith("/") || /~(?:[^01]|$)/.test(pointer))
@@ -129,6 +134,10 @@ function resolveSelection(request: JsonObject, initialPointers: string[]): JsonO
     }
     return {pointer, path};
   });
+  // A pinned view may record a different rendering order. Validate the same
+  // canonical batch first so rejected reads keep their original diagnostics.
+  if (request.preserve_selection_order === true)
+    selections.sort((left, right) => argumentsByPointer.get(left.pointer)! - argumentsByPointer.get(right.pointer)!);
   // Discovery follows the validated, deduplicated selection. Repeating the root
   // cannot drop its navigation; ordinary explicit reads need no initial plan.
   const navigation = request.list_fields === true && pointers.length === 1 && pointers[0] === ""

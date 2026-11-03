@@ -223,7 +223,6 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
     pointers.push("/" + path.map(key => String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/"));
   };
   for (const field of decisionFields) include(field);
-  include("context_details", "unread_context_index");
   include("agent_lane_next_action", "next_step");
   include("agent_lane_next_action", "next_action_basis");
   include("interaction_contract", "user_channel");
@@ -319,5 +318,8 @@ export function initialContextReadPointers(context: JsonObject, decisionFields: 
       }
     });
   } else include(...planPath); // Unknown plan versions keep their complete obligations.
+  // Keep the complete unread index reachable after current controls, required
+  // sources and settlement obligations; its size must not displace them first.
+  include("context_details", "unread_context_index");
   return pointers;
 }

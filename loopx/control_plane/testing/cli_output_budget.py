@@ -155,11 +155,13 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
             # Retain complete routes/context and bounded host-path headroom;
             # line, per-Todo/fixed growth and all other ceilings stay unchanged.
             # Inherited Stride adds its complete decision/axis/source contract:
-            # the same native fixture measures 35,597 -> 42,281 characters.
+            # the same native fixture measures 35,597 -> 42,281 characters on POSIX
+            # and 42,501 characters on native Windows due to drive and backslash paths.
             # Preserve the original 42,000 failure and the required semantics;
-            # calibrate this regression allowance only, with 219 chars headroom.
-            # No production hard limit or line/collection-growth guard changes.
-            "crowded": {"json": 42_500, "markdown": 10_500},
+            # calibrate this regression allowance to 43,000, leaving bounded headroom
+            # (~499 chars on Windows, ~719 chars on POSIX) without widening collection
+            # or production transport limits.
+            "crowded": {"json": 43_000, "markdown": 10_500},
             # The unchanged 18-Todo / 3-Agent fixture on main ffc90182b and
             # this candidate both emit 25,836 JSON characters (96 matched
             # surface/mode measurements, no semantic or route differences).
