@@ -110,6 +110,15 @@ stale sandbox or prompt state. Changes to unrelated machine capabilities do not 
 manager. A healthy legacy Session already equivalent to an explicit restricted policy is backfilled
 without an unnecessary restart.
 
+When this existing migration starts a fresh Antigravity thread, its first input carries
+the complete supplied visible user/assistant history as JSON data. Earlier constraints,
+message order and significant whitespace survive; a fixed last-16-message window cannot
+replace that history. Subsequent Turns and a successful native resume do not replay it.
+The original Chat store, Session, source permissions and native tool approvals remain the
+owners; this does not transfer history between distinct Sessions, and loading history
+alone dispatches no work. Full migration input can grow. Source/RPC qualification does not establish a
+real model's adoption, token savings or a net cost improvement.
+
 Dashboard shows both machine configuration and current Session readback. CLI/managed Turn,
 Dashboard, and Lark all use the same manager runtime controller. Lark remains an entry point and
 projection of that Session; it does not own a separate profile or permission state. Native

@@ -85,6 +85,12 @@ LoopX 管家最初只有受限的规划会话：它可以读取 LoopX 提供的�
 可见历史启动新线程，避免旧 sandbox 或旧提示词继续生效。其他机器能力的修改不会旋转
 健康的管家会话。旧版、与显式受限策略相同的健康会话只补齐 readback，不做无意义重启。
 
+既有迁移需要新建 Antigravity 线程时，首次输入以 JSON 数据携带所提供的完整可见
+user/assistant 历史，保留早期约束、消息顺序与有意义的空白，不能用最后 16 条消息
+替代。后续 Turn 和成功续接原生线程时不重放这份历史。原 Chat store、Session、
+来源权限和原生工具审批仍各有归属；这不跨不同 Session 转移历史，仅加载历史也不派工。
+完整迁移输入可能增大；源码/RPC 验证不证明真实模型采用、token 节省或净成本改善。
+
 Dashboard 同时显示机器配置和当前会话 readback。CLI/managed Turn、Dashboard 与 Lark
 继续调用同一个 manager runtime controller；Lark 是同源会话的入口和投影，不拥有独立
 profile 或权限状态。原生本人私聊在启动或复用宿主前重新核验 Core 的受众与资源授权；
