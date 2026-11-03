@@ -45,6 +45,51 @@ def test_default_profile_discovery_is_read_only_and_does_not_require_dotfiles(pr
     assert list(home.iterdir()) == []
 
 
+def test_selected_api_gateway_is_launchable_with_its_catalog(profile):
+    home, spec = profile
+    spec["home"].mkdir(mode=0o700)
+    (spec["home"] / "config.toml").write_text(
+        'model = "gateway-model"\n'
+        'model_provider = "gateway"\n'
+        'model_catalog_json = "models.json"\n'
+        'forced_login_method = "api"\n'
+        '[model_providers.gateway]\n'
+        'name = "Gateway"\n'
+        'base_url = "https://gateway.example/v1"\n'
+        'wire_api = "responses"\n'
+        'env_key = "GATEWAY_API_KEY"\n'
+    )
+    assert app.check_provider(spec) == "gateway"
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ('model_provider = "missing"\n', "not a configured API gateway"),
+        (
+            'model_provider = "gateway"\n'
+            '[model_providers.gateway]\n'
+            'base_url = "http://outside.example/v1"\n',
+            "loopback",
+        ),
+        (
+            'model_provider = "gateway"\n'
+            '[model_providers.gateway]\n'
+            'base_url = "https://gateway.example/v1"\n'
+            'wire_api = "chat"\n',
+            "Responses",
+        ),
+        ('[model_providers.openai]\nbase_url = "https://outside.example/v1"\n', "shadow"),
+    ],
+)
+def test_ambiguous_api_gateway_configs_fail_closed(profile, config, message):
+    _, spec = profile
+    spec["home"].mkdir(mode=0o700)
+    (spec["home"] / "config.toml").write_text(config)
+    with pytest.raises(ValueError, match=message):
+        app.check_provider(spec)
+
+
 def test_existing_profile_reuses_vault_and_locks_without_copying(profile):
     home, _ = profile
     path = home / ".config/personal/apps.json"
