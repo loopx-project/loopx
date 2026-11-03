@@ -4,17 +4,28 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from threading import Thread
 from urllib.request import urlopen
 
 import pytest
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import (
+    initialize_canonical_authority,
+    isolate_sqlite_runtime,
+    promoted_create_fixture,
+)
 
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.effect_runtime import restart_effect_runtime
+from loopx.control_plane.post_writeback_composition_retry import (
+    append_composition_retry_receipt,
+    build_composition_retry_receipt,
+    composition_retry_receipt_log_path,
+)
 from loopx.control_plane.quota.blocked_retry import overlay_status_turn_retries
 from loopx.status import active_state_todo_fields
 from loopx.status_server import (
@@ -168,3 +179,99 @@ def test_real_provider_status_projects_wait_without_writes(tmp_path: Path, monke
         assert not list(runtime.rglob("*spend*"))
     finally:
         restart_effect_runtime()
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or getattr(os, "geteuid", lambda: -1)() == 0,
+    reason="requires POSIX directory permissions for an unprivileged user",
+)
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_provider_status_fails_closed_when_retry_journal_parent_is_inaccessible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    goal_id = "goal-a"
+    registry, runtime, _ = promoted_create_fixture(
+        tmp_path,
+        provider=provider,
+    )
+    registry_payload = json.loads(registry.read_text(encoding="utf-8"))
+    registry_payload["goals"][0].update(
+        domain="software", adapter={"kind": "read_only_project_map_v0"}
+    )
+    registry.write_text(json.dumps(registry_payload), encoding="utf-8")
+    receipt = build_composition_retry_receipt(
+        goal_id=goal_id,
+        event_kind="todo_complete",
+        identity={
+            "agent_id": "agent-a",
+            "todo_id": "todo_work",
+            "turn_instance_id": "turn-a",
+            "effect_id": "goal-a:agent-a:todo_work:turn-a",
+        },
+        state_version="revision-a",
+        committed_at="2030-01-01T00:00:00Z",
+        hook_identities=[
+            {"hook_id": "h.one", "capability_id": "cap-one"}
+        ],
+        error_code="source_projection_failed",
+    )
+    journal_path = composition_retry_receipt_log_path(runtime, goal_id)
+    append_composition_retry_receipt(journal_path, receipt)
+
+    def run_status() -> tuple[subprocess.CompletedProcess[str], dict]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.cli",
+                "--registry",
+                str(registry),
+                "--format",
+                "json",
+                "status",
+                "--goal-id",
+                goal_id,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return result, json.loads(result.stdout)
+
+    healthy_result, healthy_payload = run_status()
+    assert healthy_result.returncode == 0, healthy_payload
+    assert healthy_payload["ok"] is True
+    assert (
+        healthy_payload["pending_composition_retry_receipts"]["pending_count"]
+        == 1
+    )
+    assert healthy_payload["pending_composition_retry_receipts"]["pending"][0][
+        "receipt_id"
+    ] == receipt["receipt_id"]
+
+    journal_parent = journal_path.parent
+    original_mode = stat.S_IMODE(journal_parent.stat().st_mode)
+    try:
+        journal_parent.chmod(0)
+        denied_result, denied_payload = run_status()
+    finally:
+        journal_parent.chmod(original_mode)
+
+    assert denied_result.returncode == 1, denied_payload
+    assert denied_payload["ok"] is False
+    assert (
+        denied_payload["error"]
+        == "composition retry receipt journal is unreadable"
+    )
+    assert str(runtime) not in denied_payload["error"]
+    assert denied_payload["attention_queue"]["items"][0]["status"] == (
+        "status_collection_failed"
+    )
+
+    recovered_result, recovered_payload = run_status()
+    assert recovered_result.returncode == 0, recovered_payload
+    assert recovered_payload["ok"] is True
+    assert recovered_payload["pending_composition_retry_receipts"]["pending"][
+        0
+    ]["receipt_id"] == receipt["receipt_id"]
