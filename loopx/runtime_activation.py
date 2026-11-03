@@ -130,12 +130,23 @@ def managed_chat_activation_guard(
     with ExitStack() as locks:
         for root in roots:
             locks.enter_context(chat_runtime_activation_lock(root, timeout_seconds=2.0))
-        for root in roots:
-            if chat_runtime_activation_state(root)["nonterminal_turns"]:
-                raise RuntimeActivationDeferred("chat_work_pending", labels)
         for plist, (label, pid) in (expected_services or {}).items():
             if plist not in plists or _managed_service_pid(plist, label=label) != pid:
                 raise ValueError("chat_service_route_unresolved")
+        for root in roots:
+            if chat_runtime_activation_state(root)["nonterminal_turns"]:
+                from .chat_runtime import ChatRuntimeController
+                from .chat_store import ChatSessionStore
+
+                # Data/lifecycle recovery only: this controller opens no adapter,
+                # starts no queue worker and never resends accepted input. Keep
+                # unrelated completion/compaction out of this scoped repair.
+                store = ChatSessionStore(root, startup_maintenance=False)
+                recovery = ChatRuntimeController(store=store, codex_bin="codex")
+                for session in store.list_sessions():
+                    recovery.recover_exited_turn(str(session["session_id"]))
+                if chat_runtime_activation_state(root)["nonterminal_turns"]:
+                    raise RuntimeActivationDeferred("chat_work_pending", labels)
         yield
 
 

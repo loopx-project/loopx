@@ -51,7 +51,10 @@ from .chat_endpoints import AgentEndpointRegistry
 from .control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from .control_plane.turn_driver.execution_profile import managed_execution_profile
 from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
-from .file_lock import LOCK_HOLDER_DEAD, lock_holder_liveness, try_exclusive_file_lock
+from .file_lock import (
+    LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
+    _lock_id, lock_holder_host_label, lock_holder_liveness, try_exclusive_file_lock,
+)
 from .kiro_cli_goal_mode import (
     KIRO_CLI_BIN,
     KIRO_CLI_CHAT_AGENT_ID,
@@ -107,6 +110,11 @@ SERVER_RESTARTED_MESSAGE = (
     "LoopX Chat restarted before this turn finished. "
     "Your conversation is saved; this turn was not retried automatically. "
     "You can continue with a follow-up in this session."
+)
+WORKER_EXITED_MESSAGE = (
+    "The LoopX Chat execution worker exited before this turn finished. "
+    "Your conversation is saved; execution may have occurred. "
+    "This turn was not retried automatically."
 )
 
 
@@ -1420,6 +1428,13 @@ class ChatRuntimeController:
                     return
                 active_turn_id = str(session.get("active_turn_id") or "")
                 if active_turn_id:
+                    try:
+                        self.recover_exited_turn(session_id, active_turn_id)
+                    except OSError:
+                        # Storage can still be unavailable. Retry only the
+                        # non-executing lifecycle repair, never the old input.
+                        self.closed.wait(0.25)
+                        continue
                     with self.lock:
                         attached = self.adapters.get(session_id)
                     if attached is None or not attached.healthcheck():
@@ -1474,14 +1489,20 @@ class ChatRuntimeController:
                 done_event = threading.Event()
                 with self.lock:
                     self.turn_done_events[(session_id, turn_id)] = done_event
-                self._run_turn(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    message=str(turn.get("message") or ""),
-                    attachments=turn.get("attachments") or [],
-                    adapter=adapter,
-                    done_event=done_event,
-                )
+                try:
+                    self._run_turn(
+                        session_id=session_id,
+                        turn_id=turn_id,
+                        message=str(turn.get("message") or ""),
+                        attachments=turn.get("attachments") or [],
+                        adapter=adapter,
+                        done_event=done_event,
+                    )
+                except OSError:
+                    # _run_turn has released its execution fence/done event.
+                    # A failed error checkpoint must not kill this queue worker;
+                    # the next iteration reconciles the original durable state.
+                    self.closed.wait(0.25)
         finally:
             with self.lock:
                 worker = self.session_queue_threads.get(session_id)
@@ -1527,10 +1548,11 @@ class ChatRuntimeController:
                         self.turn_done_events.pop(key, None)
 
     def recover_exited_turn(self, session_id: str, turn_id: str | None = None) -> None:
-        """Reconcile a killed local worker without starting a provider or replay.
+        """Reconcile a lost local execution without starting a provider or replay.
 
-        The execution lock records its host and PID for the worker's lifetime.
-        No record, a live/foreign holder, or an attached host proves no loss.
+        The kernel fence spans the worker, while the PID spans the service.
+        A failed terminal write can end one worker without ending that PID.
+        Unknown/foreign records and a held execution fence never prove loss.
         """
         session = self.store.load_session(session_id)
         if not session:
@@ -1539,13 +1561,23 @@ class ChatRuntimeController:
         if not turn_id:
             return
         path = self.store.turn_execution_lock_path(session_id, turn_id)
-        if lock_holder_liveness(path)[0] != LOCK_HOLDER_DEAD:
+        state, observed = lock_holder_liveness(path)
+        if (state not in {LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED}
+                or observed.get("host") != lock_holder_host_label()
+                or type(observed.get("pid")) is not int or observed["pid"] <= 0
+                or observed.get("lock_id") != _lock_id(path)
+                or observed.get("agent_id") != "loopx-chat"
+                or observed.get("operation") != "execute_chat_turn"
+                or observed.get("policy") != "single_flight"):
             return
         # Take the execution fence without consuming its death evidence, so
         # dependency failures remain retryable. Recheck under the fence: a
         # replacement may have changed the holder since the first liveness read.
         with try_exclusive_file_lock(path, preserve_holder=True) as ownership:
-            if ownership is None or lock_holder_liveness(path)[0] != LOCK_HOLDER_DEAD:
+            state, current = lock_holder_liveness(path)
+            if (ownership is None or current != observed
+                    or state not in {LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED}
+                    or current.get("host") != lock_holder_host_label()):
                 return
             session = self.store.load_session(session_id)
             turn = self.store.load_turn(session_id, turn_id)
@@ -1553,8 +1585,10 @@ class ChatRuntimeController:
                 session, turn, managed=bool(session and session.get("session_mode") == CHAT_SESSION_MODE_MANAGED),
                 owner_dead=True,
             ):
+                code, message = (("server_restarted", SERVER_RESTARTED_MESSAGE)
+                                 if state == LOCK_HOLDER_DEAD else ("runtime_error", WORKER_EXITED_MESSAGE))
                 self._fail_turn(
-                    session_id, turn_id, "server_restarted", SERVER_RESTARTED_MESSAGE,
+                    session_id, turn_id, code, message,
                     status="failed", expected_statuses={"starting", "running", "interrupting"},
                 )
             else:
@@ -1562,60 +1596,11 @@ class ChatRuntimeController:
                 # and then lost its event, message or claim write. The typed
                 # owner rejects `failed`, so only this narrow completion may
                 # finish that result; it never reopens or replays the Turn.
-                self._complete_recovered_terminalization(
+                self.store.complete_recovered_terminalization(
                     session_id, turn_id, session, turn,
+                    recovery_messages={"server_restarted": SERVER_RESTARTED_MESSAGE,
+                                       "runtime_error": WORKER_EXITED_MESSAGE},
                 )
-
-    def _complete_recovered_terminalization(
-        self,
-        session_id: str,
-        turn_id: str,
-        session: dict[str, Any] | None,
-        turn: dict[str, Any] | None,
-    ) -> None:
-        """Idempotently finish a recovery that already persisted `failed`.
-
-        `_fail_turn` writes the state first and then the terminal event, error
-        message and claim release. A transient store error in those follow-up
-        writes leaves the exact recovery result partially applied, and the
-        typed owner no longer admits the Turn. Repair only that exact result.
-        """
-        if (
-            session is None
-            or turn is None
-            or session.get("session_mode") != CHAT_SESSION_MODE_MANAGED
-            or turn.get("status") != "failed"
-            or turn.get("error_code") != "server_restarted"
-        ):
-            return
-        message = SERVER_RESTARTED_MESSAGE
-        if not any(
-            event.get("kind") == "turn.failed"
-            and (event.get("payload") or {}).get("error_code") == "server_restarted"
-            for event in self.store.events_after(session_id, turn_id, None)
-        ):
-            self.store.append_event(
-                session_id,
-                turn_id,
-                kind="turn.failed",
-                payload={"error_code": "server_restarted", "message": message},
-            )
-        if not any(
-            item.get("turn_id") == turn_id
-            and item.get("role") == "error"
-            and item.get("text") == message
-            for item in self.store.messages(session_id)
-        ):
-            self.store.append_message(
-                session_id, role="error", text=message, turn_id=turn_id,
-            )
-        if session.get("active_turn_id") == turn_id:
-            self.store.release_active_turn(
-                session_id,
-                turn_id,
-                last_activity_at=str(turn.get("completed_at") or utc_now()),
-                last_error_code="server_restarted",
-            )
 
     def _run_turn(
         self,
