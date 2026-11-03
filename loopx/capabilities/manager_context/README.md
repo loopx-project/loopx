@@ -284,6 +284,17 @@ The local Inbox read transaction now lives in
 Goal-instance, request-revision and agenda owners inside one runtime request.
 The Turn hook remains read-only. CLI/MCP reads record the supplied requests and
 peer-return read receipts; they do not adopt requests or consume peer results.
+If the runtime response is lost, a read may already have published some or all
+of those receipts. The CLI returns JSON with `ok=false`, `read_complete=false`
+and exit status 1; MCP returns a tool error containing the same recovery object.
+It retains the original Goal/Agent (and exact Goal instance when bound), read
+arguments, known request revisions and offered peer-result keys. Unknown source
+lists are `null`, distinct from a verified empty list. It never retries, advances
+a cursor or reports an empty Inbox to hide that ambiguity. Inspect those exact
+durable read/delivery receipts using the existing Inbox/status readers, recheck
+the original source and Goal lifetime, then recover the same page with its
+original arguments. An absent receipt does not prove the timed-out writer has
+stopped. This recovery grants no work replay, result consumption or quota spend.
 Python releases the initial Goal lifetime guard for provider enrichment.
 Core Todo and workspace inputs retain their actual IO adapters and provider
 fences. The Host reacquires the Goal guard before native finalization.
