@@ -12,6 +12,10 @@ import re
 import stat
 from contextlib import nullcontext
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..effect_runtime import EffectRuntimeResponseAmbiguous
 
 from .inbox import (
     ENTRY_SCHEMA,
@@ -48,6 +52,35 @@ PEER_INSTRUCTION = (
     "does not change priority, ownership, permissions or interrupt execution. Return an "
     "evidence-backed answer with manager-inbox report."
 )
+
+
+class InboxReadResponseAmbiguous(RuntimeError):
+    """Preserve the read's original receipt addresses without replaying it."""
+
+    def __init__(self, error: EffectRuntimeResponseAmbiguous, *, stage: str,
+                 scope: dict[str, Any], read_arguments: dict[str, Any],
+                 items: list[dict[str, Any]] | None = None,
+                 deliveries: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(str(error))
+        self.result: dict[str, Any] = {
+            "ok": False, "error": str(error), "error_code": error.diagnostic_code,
+            "read_complete": False,
+            "recovery": {
+                "stage": stage, "scope": scope, "read_arguments": read_arguments,
+                "requests": None if items is None else [{key: item[key] for key in (
+                    "goal_id", "agent_id", "goal_ref", "request_id", "request_revision", "request_revision_digest",
+                ) if key in item} for item in items],
+                "peer_returns": None if deliveries is None else [
+                    {"request": item["request"], "result_key": item["key"]} for item in deliveries],
+                "automatic_retry_performed": False,
+                "instruction": (
+                    "Inspect the exact request read receipts and peer result delivery receipts through the existing "
+                    "Inbox/status readers before retrying. A missing receipt does not prove the timed-out writer stopped. "
+                    "Revalidate the same Goal lifetime, source and original read arguments; never advance a cursor to skip recovery. "
+                    "Unknown request/result lists are null, not an empty Inbox. No work, result consumption or quota retry is authorized."
+                ),
+            },
+        }
 
 
 def _goal(registry, goal_id, *agents, require_active=False):
@@ -576,17 +609,24 @@ def read_inbox(
     from .inbox import read_inbox_transaction
     from .turn_context_observation import delegation_read_command
     from .links import receiver_work_observations
+    from ..effect_runtime import EffectRuntimeResponseAmbiguous
 
     read_command = delegation_read_command(root, registry, goal_id, agent_id)
+    read_arguments = {"cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id}
     with collaboration_goal_scope(
         registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=caller_goal_ref,
     ) as goal_scope:
-        snapshot = read_inbox_transaction(root, {
-            "operation": "receiver_read", "goal_id": goal_id, "agent_id": agent_id,
-            "cursor": cursor, "operation_cursor": operation_cursor, "request_id": request_id,
-            "read_command": read_command,
-            "defer_recording": operation_cursor is not None or (root / "chat" / "actions" / "actions.json").is_file(),
-        }, scope=goal_scope)
+        read_scope = {"goal_id": goal_id, "agent_id": agent_id,
+            "goal_ref": dict(goal_scope.caller_goal_ref or {}) if goal_scope.exact else None}
+        try:
+            snapshot = read_inbox_transaction(root, {
+                "operation": "receiver_read", "goal_id": goal_id, "agent_id": agent_id,
+                **read_arguments, "read_command": read_command,
+                "defer_recording": operation_cursor is not None or (root / "chat" / "actions" / "actions.json").is_file(),
+            }, scope=goal_scope)
+        except EffectRuntimeResponseAmbiguous as exc:
+            raise InboxReadResponseAmbiguous(exc, stage="receiver_read", scope=read_scope,
+                read_arguments=read_arguments) from exc
         snapshot.update(goal_id=goal_id, agent_id=agent_id)
         result = _pending_result(root, snapshot, goal_scope, operation_cursor)
         observed_goal = dict(goal_scope.goal)
@@ -603,12 +643,16 @@ def read_inbox(
         with collaboration_goal_scope(
             registry, goal_id=goal_id, agents=(agent_id,), caller_goal_ref=observed_goal_ref,
         ) as goal_scope:
-            final = read_inbox_transaction(root, {
-                "operation": "record_read", "goal_id": goal_id, "agent_id": agent_id,
-                "items": result["items"],
-                "deliveries": snapshot["deliveries"], "work_observations": work,
-                "include_context": request_id is None, "read_command": read_command,
-            }, scope=goal_scope)
+            try:
+                final = read_inbox_transaction(root, {
+                    "operation": "record_read", "goal_id": goal_id, "agent_id": agent_id,
+                    "items": result["items"],
+                    "deliveries": snapshot["deliveries"], "work_observations": work,
+                    "include_context": request_id is None, "read_command": read_command,
+                }, scope=goal_scope)
+            except EffectRuntimeResponseAmbiguous as exc:
+                raise InboxReadResponseAmbiguous(exc, stage="record_read", scope=read_scope,
+                    read_arguments=read_arguments, items=result["items"], deliveries=snapshot["deliveries"]) from exc
     else:
         final = snapshot
         for item in result["items"]:

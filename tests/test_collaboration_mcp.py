@@ -21,6 +21,103 @@ def test_serving_mcp_still_requires_an_explicit_workspace(tmp_path):
     assert "--workspace is required when serving MCP" in result.stderr
 
 
+def test_stdio_lost_read_response_preserves_original_page_and_result_receipts(tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.control_plane.collaboration.inbox import _receipt, _root, acknowledge, pending
+    from loopx.control_plane.collaboration.goal_instance_scope import collaboration_goal_scope
+    from loopx.control_plane.collaboration.peers import request, return_result
+    from loopx.control_plane.projects.registry_codec import source_session_registry_transaction
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry = tmp_path / "registry.json"
+    ref = {"goal_id": "delivery", "goal_instance_id": "ginst_" + "a" * 32}
+    with source_session_registry_transaction(registry, operation="create_inbox_fixture", create=lambda: {
+        "profile_id": "source_session_v1", "goals": [{"id": "delivery", "repo": str(tmp_path),
+        "status": "active", "goal_instance_id": ref["goal_instance_id"],
+        "coordination": {"registered_agents": ["worker", "source"]}}],
+        "session_bindings": [], "session_receipts": [], "lifetime_receipts": [],
+    }) as transaction:
+        transaction.commit(transaction.payload_copy())
+    brief = {"schema_version": "collaboration_brief_v0", "purpose": "Inspect the artifact",
+        "context": "Private source body", "constraints": [], "inputs": [],
+        "acceptance": ["Return checked findings"], "return_requirement": "Reply to the source"}
+    for number in range(22):
+        request(tmp_path, registry, "delivery", "source", "worker", f"check-{number}", brief)
+    # Only the transport reply is faulted: this launches the real stdio server,
+    # with its native request/receipt owner and existing tool registration.
+    launcher = tmp_path / "lost_response.py"
+    launcher.write_text('''from loopx.control_plane.collaboration import inbox
+from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+from loopx.collaboration_mcp import main
+transport = inbox.read_inbox_transaction
+records = 0
+def interrupted(root, query, **kwargs):
+    global records
+    if query["operation"] == "record_read":
+        records += 1
+        if records == 2:
+            transport(root, {**query, "items": query["items"][:1], "deliveries": [],
+                "work_observations": query["work_observations"][:1], "include_context": False}, **kwargs)
+            raise EffectRuntimeResponseAmbiguous("collaboration.inbox.read", timeout=10)
+    return transport(root, query, **kwargs)
+inbox.read_inbox_transaction = interrupted
+main()
+''')
+
+    async def exercise():
+        params = StdioServerParameters(command=sys.executable, args=[str(launcher),
+            "--runtime-root", str(tmp_path), "--registry", str(registry), "--goal-id", "delivery",
+            "--agent-id", "worker", "--workspace", str(tmp_path)])
+        async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
+            await session.initialize()
+            first = await session.call_tool("read_context", {})
+            assert not first.isError
+            page = json.loads(first.content[0].text)
+            assert len(page["items"]) == 20 and page["next_cursor"]
+            cursor = page["next_cursor"]
+            rid = request(tmp_path, registry, "delivery", "worker", "source", "peer-check", brief)["request_id"]
+            acknowledge(tmp_path, "delivery", "source", rid, "adopt", "Check the artifact", registry=registry)
+            return_result(tmp_path, "delivery", "source", rid, "Private peer conclusion", registry=registry)
+            with collaboration_goal_scope(registry, goal_id="delivery", agents=("worker",)) as scope:
+                tail = pending(tmp_path, "delivery", "worker", cursor=cursor, scope=scope)["items"]
+            assert len(tail) == 2
+            failed = await session.call_tool("read_context", {"cursor": cursor})
+            assert failed.isError
+            # FastMCP retains its standard error prefix; the bounded recovery
+            # object is JSON rather than a traceback or successful empty page.
+            error = json.loads(failed.content[0].text.split(": ", 1)[1])
+            assert error["ok"] is False and error["read_complete"] is False
+            recovery = error["recovery"]
+            assert recovery["scope"] == {"goal_id": "delivery", "agent_id": "worker", "goal_ref": ref}
+            assert recovery["read_arguments"] == {"cursor": cursor, "operation_cursor": None, "request_id": None}
+            assert {row["request_id"] for row in recovery["requests"]} == {row["request_id"] for row in tail}
+            assert recovery["peer_returns"] == [{"request": {"request_id": rid, "goal_id": "delivery",
+                "agent_id": "source", "goal_ref": ref}, "result_key": "conclusion"}]
+            assert recovery["automatic_retry_performed"] is False
+            assert "Private source body" not in str(error) and "Private peer conclusion" not in str(error)
+            assert "instruction" not in error and str(tmp_path) not in str(error)
+            before = {path: path.read_bytes() for path in _root(tmp_path).rglob("*.json")}
+            receipts = [_receipt(tmp_path, "reads", row)[0] for row in tail]
+            assert sum(bool(row) for row in receipts) == 1
+            assert {path: path.read_bytes() for path in before} == before
+            assert not (_root(tmp_path) / "replies" / rid / "conclusion.delivery.json").exists()
+            recovered = await session.call_tool("read_context", {"cursor": cursor})
+            assert not recovered.isError
+            assert {row["request_id"] for row in json.loads(recovered.content[0].text)["items"]} == {row["request_id"] for row in tail}
+            assert all(path.read_bytes() == data for path, data in before.items())
+            assert (_root(tmp_path) / "replies" / rid / "conclusion.delivery.json").is_file()
+            assert not list((_root(tmp_path) / "replies").rglob("*.consumed.json"))
+            with source_session_registry_transaction(registry, operation="revoke_fixture_agent") as transaction:
+                changed = transaction.payload_copy()
+                changed["goals"][0]["coordination"]["registered_agents"] = ["source"]
+                transaction.commit(changed)
+            revoked = await session.call_tool("read_context", {"cursor": cursor})
+            assert revoked.isError and "requires registered Agents" in revoked.content[0].text
+            assert '"recovery"' not in revoked.content[0].text
+
+    asyncio.run(exercise())
+
+
 def test_scoped_stdio_tools_do_not_offer_shell_or_sender_override(tmp_path):
     registry = tmp_path / "registry.json"
     config = {
