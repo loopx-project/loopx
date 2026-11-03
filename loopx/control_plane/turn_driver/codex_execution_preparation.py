@@ -6,10 +6,10 @@ the same Todo (and Turn when present) is ready before returning a Host receipt.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
 import json
-from pathlib import Path
 import subprocess
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from ...command_invocation import current_loopx_cli_argv
@@ -84,6 +84,7 @@ def _default_runner(
     return subprocess.run(
         list(command), cwd=str(cwd), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=timeout,
+        check=False,
     )
 
 
