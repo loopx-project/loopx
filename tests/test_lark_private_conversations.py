@@ -541,6 +541,44 @@ def test_original_queue_retains_completed_answer_across_native_cleanup(tmp_path,
         fixture.close()
 
 
+def test_native_capture_io_failure_preserves_the_primary_answer(tmp_path, language_server, monkeypatch, caplog):
+    from test_native_steward_private import steward
+
+    monkeypatch.setenv("LOOPX_MANAGER_MODEL", "gemini-4-argon-high")
+    monkeypatch.setenv("LOOPX_MANAGER_REASONING_EFFORT", "high")
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, *_ = next(fixture)
+    try:
+        binding = transport.bindings.configure(transport_ref="steward-app", project_ref=binding["project_ref"],
+            executor_endpoint_id="antigravity", context_kind="steward")
+        retain = store.retain_native_result
+
+        def blocked_capture(session_id, turn_id, result):
+            (store._session_dir(session_id) / "native-results").write_text("Synthetic occupied artifact directory")
+            return retain(session_id, turn_id, result)
+
+        monkeypatch.setattr(store, "retain_native_result", blocked_capture)
+        language_server.update(plain_text=True, answers={0: "Verified original complete answer."})
+        event = provider.event("steward-app", "original-primary", "Complete original request")
+        transport.admit("steward-app", event)
+        ref = identity_ref(binding["provider_ref"], event["message_id"])
+        row = transport.core.read_request(ref)
+        turn = runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=15)
+        assert turn["status"] == "completed"
+        assert store.native_result(row["session_id"], row["turn_id"]) == {}
+        transport.reconcile_request(transport.root / f"{ref}.json")
+        receipt = json.loads((transport.root / f"{ref}.json").read_text())["deliveries"]["terminal"]
+        body = json.loads(provider.messages[receipt["attempt"]["message_ref"]]["body"]["content"])
+        assert "Verified original complete answer." in "".join(item.get("text", "") for line in body["zh_cn"]["content"] for item in line)
+        assert sum(method == "SendUserCascadeMessage" for method, _ in language_server["calls"]) == 1
+        assert not any(method == "CancelCascadeInvocation" for method, _ in language_server["calls"])
+        warning = [record.getMessage() for record in caplog.records if record.name == "loopx.chat_runtime"]
+        assert any("Native completion capture unavailable: FileExistsError" in message for message in warning)
+        assert all(str(tmp_path) not in message for message in warning)
+    finally:
+        fixture.close()
+
+
 def test_active_original_reply_does_not_wait_for_older_native_result_probes(tmp_path, language_server, monkeypatch):  # noqa: F811
     from concurrent.futures import ThreadPoolExecutor
     from test_native_steward_private import steward
