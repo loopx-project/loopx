@@ -7,7 +7,7 @@ import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts
 import {acceptanceValidationEffects, goalAcceptanceTodoDigest, type AcceptanceCompletionRequirements} from "../goals/acceptance_contract.ts";
 import {normalizeTodoCompletionValidationDeclaration} from "../todos/completion_validation_declaration.ts";
 import {readTurnSelectionRejection, turnSelectionRejectionState} from "../turn_driver/selection_rejection.ts";
-import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
+import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import {PROJECTION_ENVELOPE_SEAL_REQUEST, sealProjectionEnvelope} from "../projection_envelope.ts";
 import {readRequestControl, requestOriginalDigest, requestRevisionDigest} from "./request_control.ts";
 import {EffectiveAction} from "../quota/effective_action.generated.ts";

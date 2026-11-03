@@ -56,6 +56,38 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   Argon tiers must be offered by the local account and match the requested reasoning effort.
   A missing original cascade fails resume without silently starting a replacement. Stop waits
   for the native cascade to become idle; timeout or partial output is not successful completion.
+  During execution, native `IDLE` alone is not completion: it can appear between input, tool
+  and planner steps. LoopX keeps observing the original invocation without resending input;
+  completion requires a final answer with the normal stop marker and all covered current
+  steps to be done, matching native result recovery's completion requirement.
+  Transient idle does not extend the existing no-progress or hard deadline. Permission gates,
+  native errors, unverified stop reasons and another input retain their existing refusal paths.
+- Antigravity manager inputs place the complete original user message before the frozen Core
+  evidence, encoding that message as a JSON string so whitespace and quoted transport markers
+  remain exact. Original-result recovery recognizes both this framing and historical
+  evidence-first inputs, with the same source, input-time, prompt-hash and native terminal
+  checks.
+- A trusted-owner Antigravity manager can read supporting delivery histories progressively
+  through the existing private capture/JSON Pointer CLI. Current Goal, Todo, attention,
+  permission and source-quality fields, including unknown fields, stay inline. Only a known
+  `recent_delivery_history.deliveries` payload is deferred: its window, coverage and source
+  metadata remain visible, with `status=not_read` and an executable read reference. The
+  complete originally supplied Core snapshot remains recoverable. For example,
+  `/goals/0/recent_delivery_history` addresses the first Goal's captured history; use its
+  emitted selection command, or the index command when the address is unknown. This is a
+  frozen snapshot reader, not the Codex-only live `loopx_manager_read` tool or a delta baseline.
+  Before relying on that history, read the required section through its final page. Context
+  loss recovers from the same capture without resending the request or repeating effects.
+- The machine `context_delivery.antigravity_mode=off` preference or host environment
+  `LOOPX_CONTEXT_DELIVERY=off` keeps subsequent native manager inputs fully inline, while
+  `context_delivery.mode` remains the independent Codex preference.
+  Restricted/text-only hosts, invalid settings and unavailable private capture IO also retain
+  that input; no host permission or approval is changed. These references preserve only the
+  already-authorized snapshot, not fresh observation or action authority. Capture files stay
+  private in the Chat store, outside the selected project's checkout. RPC and real CLI
+  fixtures qualify input, recovery and refusal behavior; actual model reads, installed host
+  limits, full costs and long-horizon benefit remain separate qualifications. Codex delta
+  activation and native-hook continuity are unchanged.
 - `trusted_owner` applies to the local private owner-manager and a native private steward
   binding freshly verified by the existing Core conversation owner. That owner checks the
   App, owner principal, private source, current resource grant and frozen Session identity.

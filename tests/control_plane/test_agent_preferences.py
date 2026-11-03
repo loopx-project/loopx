@@ -13,6 +13,29 @@ from tests.control_plane.test_quota_settlement_cli import (
 )
 
 
+def _assert_initial_preferences(payload, directory, expected):
+    from loopx.cli_commands.quota_capture import native_context_capture_view
+    from tests.control_plane.test_context_first_read import read_selection
+
+    directory.mkdir(mode=0o700)
+    sources = payload["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+    index = next(i for i, row in enumerate(sources) if row.get("kind") == "agent_preferences")
+    view = native_context_capture_view(payload, directory)
+    original = Path(view["recovery"]["path"]).read_bytes()
+    _, values = read_selection(view["first_read_command"])
+    prefix = f"/interaction_contract/agent_channel/work_context/sources/{index}/content/current"
+    for field, value in expected.items():
+        wanted = prefix + "/" + field.replace("~", "~0").replace("/", "~1")
+        roots = [root for root in values if wanted == root or wanted.startswith(root + "/")]
+        assert roots, f"Initial read omitted current preference field: {field}"
+        root = max(roots, key=len)
+        actual = values[root]
+        for key in wanted[len(root):].split("/")[1:]:
+            actual = actual[key.replace("~1", "/").replace("~0", "~")]
+        assert actual == value
+    assert Path(view["recovery"]["path"]).read_bytes() == original
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_inactive_preferences_are_silent_and_participating_hook_delivers_current_view(tmp_path, monkeypatch, provider):
     nested = tmp_path / ("workspace  dir" * 12)
@@ -64,6 +87,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     assert any(x["kind"] == "agent_preferences" for x in reads), quota["turn_start_capability_hook_dispatch"]
     assert "designated-reviewer" in json.dumps(quota)
     assert quota["interaction_contract"]["agent_channel"]["required_reads"] == []
+    _assert_initial_preferences(quota, tmp_path / "active-first-read", fresh["current"])
     assert quota["capability_gate"]["action"] == off["capability_gate"]["action"]
     rc, plan = _run_cli(registry, runtime, "turn", "plan", *scope)
     assert rc == 0, plan
@@ -115,6 +139,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
     contents = next(x["content"] for x in next_quota["interaction_contract"]["agent_channel"]["work_context"]["sources"]
         if x.get("kind") == "agent_preferences")
     assert contents["current"]["items"][0]["statement"] == "Do not delegate review."
+    _assert_initial_preferences(next_quota, tmp_path / "corrected-first-read", action_view["current"])
     rc, replay = call("remember", *args, "--execute")
     assert rc == 0 and replay["status"] == "replayed", replay
     assert replay["current"]["items"][0]["statement"] == "Do not delegate review."
@@ -130,6 +155,7 @@ def test_inactive_preferences_are_silent_and_participating_hook_delivers_current
         if x.get("kind") == "agent_preferences")
     assert contents["current"]["items"][0]["state"] == "retired"
     assert contents["current"]["items"][0]["statement"] is None
+    _assert_initial_preferences(quota, tmp_path / "retired-first-read", later["current"])
     rc, history = call("history")
     assert rc == 0 and len(history["events"]) == 3, history
     alias = tmp_path / "global-registry.json"

@@ -892,6 +892,49 @@ def _turn_projection_migration(
 ) -> tuple[dict[str, int], list[str]]:
     old_paths = set(base.get("json_shape_paths") or [])
     new_paths = set(candidate.get("json_shape_paths") or [])
+    # Inherited Stride now supplies the existing bounded decision contract on
+    # the required-review route. Only absence -> complete projection receives
+    # this one-time allowance; later growth, removed facts and other paths do not.
+    stride_routes = {
+        "surface/quota_should_run/crowded/json": ("$", 6_800),
+        "surface/loopx_turn_plan/crowded/json": ("$.turn_envelope", 6_500),
+    }
+    stride_route = stride_routes.get(str(base.get("row_id")))
+    if stride_route and candidate.get("row_id") == base.get("row_id"):
+        root, bound = stride_route
+        control = f"{root}.replan_action_packet.stride_control"
+        strategy = f"{root}.autonomous_replan_obligation.replan_context.stride_strategy"
+        required = {f"{control}.{key}" for key in (
+            "schema_version", "strategy_version", "reference_context_id",
+            "reference_obligation_id", "required_fields", "rule",
+            "minimal_example.schema_version", "minimal_example.strategy_version",
+            "minimal_example.reference_context_id", "minimal_example.reference_obligation_id",
+            "minimal_example.basis", "minimal_example.action",
+            *[f"minimal_example.axes.{axis}.{field}"
+              for axis in ("work_slice", "route_distance", "validation_scope")
+              for field in ("plan", "reason")],
+            *[f"minimal_example.next_probe.{field}" for field in (
+                "scope", "prediction", "adoption_criterion", "cost_bound", "minimum_evidence",
+            )],
+        )}
+        # Optional review blocks are required in full once projected. Presence
+        # of representative leaves cannot qualify a truncated decision example.
+        for review, fields in (
+            ("previous_review", ("reference_decision_ref", "adoption", "information_gain",
+                                 "goal_gain", "evidence_refs", "lesson")),
+            ("explore_review", ("revision", "disposition", "considered_refs", "reason")),
+        ):
+            prefix = f"{control}.minimal_example.{review}"
+            if any(path == prefix or path.startswith(prefix + ".") for path in new_paths):
+                required.update(f"{prefix}.{field}" for field in fields)
+        added = new_paths - old_paths
+        if (base.get("format") == candidate.get("format") == "json"
+            and control not in old_paths and required <= new_paths and old_paths <= new_paths
+            and all(path == control or path.startswith(control + ".") or path == strategy
+                    for path in added)):
+            return {metric: bound for metric in ("chars", "utf8_bytes", "compact_payload_chars")}, [
+                "inherited Stride decision context enabled; bounded one-time JSON growth"
+            ]
     profile = "$.turn_envelope.contract_capsule.execution_profile"
     restored = {f"{profile}.{field}" for field in (
         "small_scale_streak_threshold", "outcome_floor", "outcome_floor.configured",
