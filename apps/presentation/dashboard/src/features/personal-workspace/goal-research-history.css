@@ -93,10 +93,13 @@
 @media (max-width: 640px) {
   .research-history-heading { flex-wrap: wrap; gap: 12px; }
   .research-history-controls { --research-control-height: 44px; width: 100%; column-gap: 4px; }
+  .research-history-controls button { min-height: 44px; min-width: 44px; }
   .research-history-canvas { max-height: 350px; }
   .research-history-detail { padding: 20px; }
   .research-history-read-error, .research-history-empty { flex-wrap: wrap; }
   .research-history-read-error > button, .research-history-empty > button { margin-inline-start: 30px; }
+  .research-history-meta { flex-direction: column; align-items: flex-start; gap: 6px; }
+  .research-display-language { width: 100%; justify-content: space-between; }
 }
 @media (prefers-reduced-motion: reduce) { .research-history * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
