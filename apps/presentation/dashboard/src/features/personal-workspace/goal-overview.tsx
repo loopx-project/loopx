@@ -157,7 +157,7 @@ function WorkerReadback({goal, zh, onViewTasks}: {goal: WorkspaceGoal; zh: boole
       return <div className="goal-overview-worker-row" key={row.agent_id}>
         <div className="goal-overview-worker-status">
           <strong>{statusTitle}</strong>
-          <ContextHelp label={zh ? "执行状态与范围说明" : "Execution status and scope guidance"}>
+          <ContextHelp label={zh ? "执行记录范围" : "Execution record scope"}>
             <p>{statusExplanation}</p>
             <p className="goal-overview-note">{zh ? "此记录不证明 Goal 达成；完整费用未知。" : "This record does not establish Goal completion. Complete costs are unknown."}</p>
           </ContextHelp>
