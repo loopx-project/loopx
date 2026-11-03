@@ -312,6 +312,20 @@ def resolve_antigravity_model_placeholder(
     return canonical, placeholder
 
 
+def _native_user_input_text(step: dict[str, Any]) -> str | None:
+    """Read the one native text item; any redundant response must agree."""
+    content = step.get("userInput")
+    if not isinstance(content, dict):
+        return None
+    items = content.get("items")
+    prompt = (items[0].get("text") if isinstance(items, list) and len(items) == 1
+              and isinstance(items[0], dict) else None)
+    if (not isinstance(prompt, str) or items != [{"text": prompt}]
+            or ("userResponse" in content and content["userResponse"] != prompt)):
+        return None
+    return prompt
+
+
 class AntigravityAdapter:
     """Local text Chat and trusted-owner Steward over LanguageServerService.
 
@@ -377,9 +391,8 @@ class AntigravityAdapter:
             created = datetime.fromisoformat(metadata["createdAt"])
             if not datetime.fromisoformat(started_at) <= created <= datetime.fromisoformat(completed_at):
                 return None
-            content = user.get("userInput") or {}
-            prompt = content.get("userResponse")
-            if (not isinstance(prompt, str) or content.get("items") != [{"text": prompt}]):
+            prompt = _native_user_input_text(user)
+            if prompt is None:
                 return None
             if not manager_input_matches(prompt, message=message, request_ref=request_ref):
                 return None
@@ -892,7 +905,7 @@ class AntigravityAdapter:
                 if self._read_only_review:
                     inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
                     execution = (inputs[0].get("metadata") or {}).get("executionId") if len(inputs) == 1 else None
-                    if (not execution or (inputs[0].get("userInput") or {}).get("userResponse") != full_prompt
+                    if (not execution or _native_user_input_text(inputs[0]) != full_prompt
                             or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"
                             or any(step.get("status") != "CORTEX_STEP_STATUS_DONE"
                                 or (step.get("metadata") or {}).get("executionId") != execution for _, step in current_steps)):

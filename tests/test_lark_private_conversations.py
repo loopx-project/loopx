@@ -501,7 +501,7 @@ def test_active_original_reply_does_not_wait_for_older_native_result_probes(tmp_
 
 @pytest.mark.parametrize("fault", [None, "wrong-target", "changed-brief", "other-action", "still-invalid",
     "revoked", "new-input", "stop", "unknown-send", "post-enqueue-crash", "reservation-crash", "revoke-during-review",
-    "tool-call", "tool-step", "mixed-execution", "missing-stop"])
+    "tool-call", "tool-step", "mixed-execution", "missing-stop", "conflicting-input", "response-only", "extra-input"])
 def test_original_queue_reviews_only_unsubmitted_native_handoffs(tmp_path, language_server, monkeypatch, fault):  # noqa: F811
     from copy import deepcopy
     from concurrent.futures import ThreadPoolExecutor
