@@ -4,6 +4,8 @@ import importlib
 import json
 import os
 from pathlib import Path
+import plistlib
+import re
 import sqlite3
 import subprocess
 import sys
@@ -219,6 +221,96 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(bound['loopx_model_provider'], 'gateway')
         self.assertEqual(cfg['model_provider'], 'gateway')
         self.assertEqual(cfg['model_catalog_json'], 'models.json')
+
+    def test_quoted_and_backslash_gateway_providers_survive_switch_and_independent_readback(self):
+        host_module = importlib.import_module('loopx_codex_provider_routing.native_host')
+        cases = [
+            ('gateway"quoted', '"gateway\\"quoted"'),
+            (r'gateway\provider', "'gateway\\provider'"),
+        ]
+        for index, (provider, table_key) in enumerate(cases):
+            with self.subTest(provider=provider):
+                case_home = self.home / f'case-{index}'
+                case_home.mkdir()
+                codex = case_home / '.codex'
+                codex.mkdir(mode=0o700)
+                case_bundle = case_home / 'Applications/Codex.app/Contents/MacOS/Codex'
+                case_bundle.parent.mkdir(parents=True)
+                case_bundle.write_text('#!/bin/sh\nexit 0\n')
+                case_bundle.chmod(0o755)
+                (case_bundle.parents[1] / 'Info.plist').write_bytes(
+                    plistlib.dumps({'CFBundleExecutable': 'Codex'})
+                )
+                gateway = (
+                    f'model = "gateway-model"\n'
+                    f'model_provider = {table_key}\n'
+                    f'model_catalog_json = "models.json"\n'
+                    f'[model_providers.{table_key}]\n'
+                    f'base_url = "https://gateway.example/v1"\n'
+                    f'wire_api = "responses"\n'
+                )
+                config_path = codex / 'config.toml'
+                config_path.write_text(gateway)
+                config_path.chmod(0o600)
+                accounts.atomic(codex / 'auth.json', self.a)
+                with patch.dict(
+                    os.environ,
+                    {
+                        'CODEX_HOME': str(codex),
+                        'CODEX_ELECTRON_USER_DATA_PATH': str(case_home / 'frontend'),
+                    },
+                ), patch.object(host_module.shutil, 'which', return_value=str(case_bundle)):
+                    adapter = host_module.discover(user_home=case_home)
+                    host = host_module.NativeHost(adapter, user_home=case_home, reconcile_services=False)
+                    host.manager.idle = lambda: None
+                    host.enroll_api(
+                        'openai-api',
+                        'sk-loopx-relay-synthetic-local-token',
+                        'http://127.0.0.1:32100/v1',
+                    )
+                    enrolled = host.enroll_current(host.revision())
+                    self.assertEqual(enrolled['active_slot'], 'primary')
+                    self.assertEqual(apps.check_provider(host.spec), 'openai')
+                    switched = host.switch('openai-api', enrolled['selection_revision'], reopen=False)
+                    self.assertEqual(switched['active_slot'], 'openai-api')
+                    self.assertTrue(switched['current_login_matches'])
+                    self.assertFalse(switched['recovery_required'])
+                    # Independent readback via a fresh NativeHost and check_provider.
+                    reader = host_module.NativeHost(adapter, user_home=case_home, reconcile_services=False)
+                    readback = reader.status()
+                    self.assertEqual(readback['active_slot'], 'openai-api')
+                    self.assertEqual(readback['api_slot'], 'openai-api')
+                    self.assertTrue(readback['current_login_matches'])
+                    self.assertFalse(readback['recovery_required'])
+                    self.assertEqual(apps.check_provider(reader.spec), provider)
+                    # Also verify inserting model_provider when omitted under subscription.
+                    back = host.switch('primary', readback['selection_revision'], reopen=False)
+                    self.assertEqual(back['active_slot'], 'primary')
+                    omitted = re.sub(r'^model_provider\s*=.*\n', '', config_path.read_text(), flags=re.M)
+                    config_path.write_text(omitted)
+                    reinserted = host.switch('openai-api', back['selection_revision'], reopen=False)
+                    self.assertEqual(reinserted['active_slot'], 'openai-api')
+                    self.assertEqual(apps.check_provider(reader.spec), provider)
+                    self.assertTrue(reader.status()['current_login_matches'])
+
+    def test_multiline_or_unparseable_setting_syntax_fails_before_transaction(self):
+        self.current()
+        self.manager.enroll_api('api', api_key='sk-loopx-relay-synthetic-local-token',
+                                base_url='http://127.0.0.1:32100/v1')
+        multiline = (
+            'model_provider = "openai"\n'
+            'cli_auth_credentials_store = "file"\n'
+            'forced_login_method = """\n'
+            'chatgpt"""\n'
+        )
+        self.manager.config.write_text(multiline)
+        before_auth = self.manager.auth.read_bytes()
+        before_active = self.manager.active.read_bytes()
+        with self.assertRaises(ValueError):
+            self.manager.switch('api')
+        self.assertFalse(self.manager.pending.exists())
+        self.assertEqual(self.manager.auth.read_bytes(), before_auth)
+        self.assertEqual(self.manager.active.read_bytes(), before_active)
 
     def test_ambiguous_routes_and_profiles_are_not_converted(self):
         for raw in (b'model_provider="optional_http"\n',

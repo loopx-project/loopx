@@ -186,6 +186,12 @@ def routed_auth(raw, provider):
     return encoded(obj)
 
 
+def toml_string(value):
+    if not isinstance(value, str) or any(ord(c) < 0x20 or ord(c) == 0x7f for c in value):
+        raise ValueError('Invalid TOML setting value')
+    return json.dumps(value, ensure_ascii=False)
+
+
 def file_config(raw, auth=None):
     try:
         text = raw.decode()
@@ -233,13 +239,26 @@ def file_config(raw, auth=None):
         head = re.sub(pattern, '', head, flags=re.M)
     for key, value in settings:
         pattern = rf'^{key}\s*=.*$'
+        rendered = f'{key} = {toml_string(value)}'
         if key in cfg:
             if len(re.findall(pattern, head, re.M)) != 1:
                 raise ValueError('Nonstandard auth setting syntax requires local review')
-            head = re.sub(pattern, f'{key} = "{value}"', head, flags=re.M)
+            head = re.sub(pattern, lambda _: rendered, head, flags=re.M)
         else:
-            head = f'{key} = "{value}"\n' + head
-    return (head + tail).encode()
+            head = f'{rendered}\n' + head
+    converted = (head + tail).encode()
+    try:
+        updated = tomllib.loads(converted.decode())
+    except (ValueError, UnicodeError):
+        raise ValueError('Nonstandard auth setting syntax requires local review') from None
+    expected_base_url = endpoint if mode == 'api' and target_provider == 'openai' else (
+        None if mode == 'chatgpt' else cfg.get('openai_base_url'))
+    if (provider_route(updated) != target_provider
+            or updated.get('cli_auth_credentials_store') != 'file'
+            or updated.get('forced_login_method') != mode
+            or updated.get('openai_base_url') != expected_base_url):
+        raise ValueError('Nonstandard auth setting syntax requires local review')
+    return converted
 
 
 class Accounts:
