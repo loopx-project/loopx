@@ -933,10 +933,15 @@ update is not required merely because GitHub reports `BEHIND`: the gate also
 reads GitHub's independent `mergeable` result and permits a conflict-free
 `MERGEABLE` head when every other check passes. `CONFLICTING` or `DIRTY` still
 requires repair; `BEHIND` with missing or unknown mergeability remains unverified.
-Branch protection may still require a separately authorized admin bypass. An admin
-bypass may satisfy GitHub's author-owned
-self-review limitation, but it never overrides this capability gate or supplies
-user merge authority.
+Branch protection may still require a separately authorized admin bypass. An
+explicit maintainer admin bypass may override a `ready=false` readiness or
+GitHub policy hold, including GitHub's author-owned self-review limitation. It
+does not make missing exact-head review, required validation, unresolved review
+threads or findings, a changed head, or an unmergeable conflict optional, and
+it never supplies merge authority by itself.
+The `admin_bypass_overrides_this_gate` authority field describes whether every
+blocker on this exact observation is in that override scope; it is false when
+non-bypassable review, thread, head, or mergeability evidence is missing.
 
 `pull_request_merge_readiness_observation_v0` is the Goal-scoped scheduling
 receipt for that gate. It persists only the exact-head material fingerprint and
@@ -1262,10 +1267,14 @@ The packet should let a reviewer move through PRs in order:
 7. Treat `metadata_risk_hint` only as queue-ordering metadata. It must not be
    copied as the final risk judgement.
 8. Recheck the exact head, then decide `approve`, `request changes`, `defer`, or
-   `merge after checks`. Immediately before merge, require
-   `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` to
-   return `ready=true`. Add `--goal-id GOAL` only for already Goal-managed work;
-   standalone delivery requires no registration or binding.
+   `merge after checks`. Immediately before merge, run
+   `loopx pr-review --check-merge-readiness NUMBER@HEAD_OID` and record its
+   result. Add `--goal-id GOAL` only for already Goal-managed work; standalone
+   delivery requires no registration or binding. `ready=true` permits the
+   normal path. Explicit maintainer authorization may use admin bypass to
+   override a `ready=false` readiness or GitHub policy hold, but never missing
+   exact-head review, required validation, unresolved findings or threads, a
+   changed head, an unmergeable conflict, or absent merge authority.
 
 A response that only lists `Open` and `Merged` PRs, scale, and recommended next
 order is incomplete for `/loopx-pr-review`; it should continue into the

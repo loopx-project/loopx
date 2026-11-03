@@ -1062,7 +1062,42 @@ def test_merge_readiness_binds_review_body_checks_and_threads_to_exact_head() ->
     assert ready["ready"] is True, ready
     assert ready["blocking_reasons"] == [], ready
     assert ready["authority"]["grants_merge_authority"] is False, ready
+    assert ready["authority"]["admin_bypass_overrides_this_gate"] is True, ready
+    assert ready["authority"]["admin_bypass_scope"] == (
+        "readiness_and_github_review_policy"
+    ), ready
     assert ready["review_conclusion"]["verdict"] == "APPROVE", ready
+
+
+def test_explicit_admin_bypass_may_override_a_readiness_policy_hold() -> None:
+    pr = _merge_ready_pr(review_decision="REVIEW_REQUIRED")
+    pr["mergeStateStatus"] = "BLOCKED"
+    readiness = merge_readiness_module.build_pr_merge_readiness_packet(
+        pull_request=pr,
+        repository="owner/repo",
+        expected_exact_head=f"4110@{HEAD_1}",
+        reviewer_login="maintainer",
+        review_threads=_complete_review_threads(),
+        source="fixture",
+        wait_for_ci=False,
+    )
+
+    assert readiness["ready"] is False, readiness
+    assert readiness["blocking_reasons"] == ["github_review_decision_not_approved"]
+    assert readiness["admin_bypass_required"] is True
+    assert readiness["authority"] == {
+        "grants_merge_authority": False,
+        "admin_bypass_overrides_this_gate": True,
+        "admin_bypass_scope": "readiness_and_github_review_policy",
+        "admin_bypass_requires": [
+            "explicit_user_or_maintainer_merge_authorization",
+            "valid_exact_head_review_and_required_validation",
+            "complete_review_threads_without_unresolved_findings",
+            "open_unchanged_mergeable_head",
+        ],
+        "required_timing": "immediately_before_merge",
+        "head_change_action": "restart_review_and_rerun_gate",
+    }
 
 
 def test_merge_readiness_rejects_review_text_for_pre_update_head() -> None:
@@ -1083,6 +1118,7 @@ def test_merge_readiness_rejects_review_text_for_pre_update_head() -> None:
 
     assert stale["ready"] is False, stale
     assert "current_head_review_missing_or_invalid" in stale["blocking_reasons"]
+    assert stale["authority"]["admin_bypass_overrides_this_gate"] is False
     assert (
         "review_body_missing_standalone_bilingual_format"
         in (stale["review_conclusion"]["invalid_reasons"])

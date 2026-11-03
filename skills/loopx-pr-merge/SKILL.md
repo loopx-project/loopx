@@ -34,16 +34,18 @@ authorized: a diff read, green CI, or pull-request metadata is not a substitute.
    remote reviewed head. The source-checkout `loopx canary premerge` includes
    the same direct blocking check. A failed check holds merge regardless of CI
    waiting or authorized admin bypass. Working-tree changes cannot satisfy it.
-4. Immediately before the merge, run `loopx --format json pr-review --repo
-   OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`. Merge only when it
-   returns `ready=true` for that unchanged head. For work already managed by a
-   Goal, pass `--goal-id GOAL` to retain its configured CI policy and record the
-   compact readiness observation. Standalone work needs no Goal, registration
-   or binding; its readiness check performs no Goal write.
+4. Record the readiness result immediately before merge: run `loopx --format
+   json pr-review --repo OWNER/REPO --check-merge-readiness NUMBER@HEAD_OID`.
+   `ready=true` permits the normal merge path. With explicit maintainer
+   authorization, admin bypass may override a readiness or GitHub policy hold.
+   The bypass does not replace valid exact-head review,
+   required validation, complete review threads without unresolved findings, an
+   open unchanged mergeable head, or the separately granted merge authority.
+   For Goal-managed work, pass `--goal-id GOAL` to retain its configured CI
+   policy and record the compact readiness observation. Standalone work needs
+   no Goal, registration or binding; its readiness check performs no Goal write.
 
-A rebase or head update restarts review, and admin bypass never overrides this
-gate: it needs explicit owner authorization and never substitutes for the
-evidence.
+A rebase or head update restarts review and readiness qualification.
 
 ## Configured CI Waiting
 
@@ -82,11 +84,13 @@ Control-plane, runtime and product surfaces require explicit maintainer merge
 authorization. This includes behavior in `loopx/**`, `apps/**` or `packages/**`,
 permissions or authority, persisted state/receipts, quota/scheduler/todo rules,
 and CLI/API contracts. Propose and review the exact head, pass required
-validation, and obtain ready merge-readiness for that unchanged head. Only then
-may an explicitly authorized merge or delivery batch use admin bypass. Small
-diffs, green CI or published reviews do not grant merge authority. Unclear
-affected boundaries use the same authorization rule; without it, leave the
-merge to the maintainer. Bypass never replaces review, validation or readiness.
+validation, and run readiness for that unchanged head. An explicit maintainer
+authorization may then use admin bypass when readiness remains false for a
+readiness or GitHub policy hold. Small diffs, green CI or published reviews do
+not grant merge authority. Unclear affected boundaries use the same
+authorization rule; without it, leave the merge to the maintainer. Bypass never
+replaces exact-head review, validation, thread/finding resolution or merge
+authority.
 
 Maintainers may self-merge single-purpose, low-risk public-doc, contributor
 metadata, test, example or narrow-cleanup PRs when all these conditions hold:

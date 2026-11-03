@@ -87,7 +87,7 @@ def main() -> int:
         "Read the published review back",
         "Route approval, merge, self-merge, and admin bypass to `loopx-pr-merge`",
         "--check-merge-readiness NUMBER@HEAD_OID",
-        "admin bypass never overrides this gate",
+        "admin bypass may override a readiness or GitHub policy hold",
         "Full PR Review And Bilingual Format",
         "findings-only or blocker-only body is incomplete",
         "Cover every changed surface and key symbols",
@@ -161,9 +161,9 @@ def main() -> int:
         "loopx --format json pr-review --state all",
         "agent_response_contract.review_execution_contract",
         "--check-merge-readiness NUMBER@HEAD_OID",
-        "ready=true",
+        "Record the readiness result",
         "completion_gate",
-        "admin bypass never overrides this gate",
+        "admin bypass may override a readiness or GitHub policy hold",
         "A merge decision without this evidence is not authorized",
     ):
         assert phrase in merge_text, phrase
