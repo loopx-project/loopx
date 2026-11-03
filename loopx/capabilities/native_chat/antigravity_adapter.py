@@ -150,8 +150,13 @@ def _rpc_post(
 
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None,
+    *, deadline: float | None = None,
 ) -> dict[str, Any] | None:
-    """Discover a running local Antigravity language_server endpoint and CSRF token."""
+    """Discover a running local endpoint without reusing an availability verdict.
+
+    Readiness can bound the whole observation, including process listing. An
+    execution caller without that deadline retains the existing phase limits.
+    """
     source_env = os.environ if env is None else env
     explicit_url = str(source_env.get("ANTIGRAVITY_LS_URL") or "").strip()
     explicit_token = str(source_env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
@@ -160,12 +165,15 @@ def discover_antigravity_language_server(
             return None
         try:
             explicit_url = _local_url(explicit_url)
+            timeout = 2.5 if deadline is None else min(2.5, deadline - time.monotonic())
+            if timeout <= 0:
+                return None
             _rpc_post(
                 explicit_url,
                 explicit_token,
                 "GetCascadeModelConfigData",
                 {},
-                timeout=2.5,
+                timeout=timeout,
             )
             return {
                 "url": explicit_url.rstrip("/"),
@@ -176,6 +184,9 @@ def discover_antigravity_language_server(
         except (CodexChatAgentError, ValueError):
             return None
 
+    process_timeout = 3.0 if deadline is None else min(3.0, deadline - time.monotonic())
+    if process_timeout <= 0:
+        return None
     try:
         ps_out = subprocess.check_output(
             ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
@@ -183,7 +194,7 @@ def discover_antigravity_language_server(
             encoding="utf-8",
             errors="replace",
             stderr=subprocess.DEVNULL,
-            timeout=3.0,
+            timeout=process_timeout,
         )
     except Exception:
         return None
@@ -202,7 +213,8 @@ def discover_antigravity_language_server(
         if token_match:
             candidates.append((pid, token_match.group(1)))
 
-    deadline = time.monotonic() + 4.0
+    discovery_deadline = time.monotonic() + 4.0
+    deadline = min(discovery_deadline, deadline) if deadline is not None else discovery_deadline
     for pid, token in candidates:
         if time.monotonic() >= deadline:
             break
@@ -244,7 +256,9 @@ def probe_antigravity_endpoint(
     env: Mapping[str, str] | None = None,
 ) -> tuple[bool, str, str]:
     """Return `(available, command_display, detail)` for `/api/chat/capabilities`."""
-    discovered = discover_antigravity_language_server(env=env)
+    # The four-second discovery allowance covers this whole advisory read,
+    # rather than beginning again after a slow process-listing phase.
+    discovered = discover_antigravity_language_server(env=env, deadline=time.monotonic() + 4.0)
     if discovered is not None:
         return (
             True,
@@ -751,13 +765,43 @@ class AntigravityAdapter:
                                     delta_chunk = text[len(prev_text) :]
                                 else:
                                     delta_chunk = text
-                                emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
+                                    if not prev_text:
+                                        combined_marker = stream_filter.marker_pending + delta_chunk.lstrip()
+                                        continues_control_tag = bool(
+                                            combined_marker
+                                            and (
+                                                combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                                or CHAT_REVIEW_OPEN_TAG.startswith(combined_marker)
+                                            )
+                                        )
+                                        if (
+                                            continues_control_tag
+                                            and not combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                            and step_status != "CORTEX_STEP_STATUS_DONE"
+                                        ):
+                                            continue
+                                        prior_texts = [
+                                            val
+                                            for idx, val in sorted(emitted_text_by_step.items())
+                                            if idx != step_idx and val
+                                        ]
+                                        if (
+                                            prior_texts
+                                            and not delta_chunk.startswith("\n")
+                                            and not continues_control_tag
+                                        ):
+                                            last_prior = prior_texts[-1]
+                                            if not last_prior.endswith("\n"):
+                                                delta_chunk = "\n\n" + delta_chunk
+                                            elif not last_prior.endswith("\n\n"):
+                                                delta_chunk = "\n" + delta_chunk
                                     visible_delta = stream_filter.feed(delta_chunk)
                                     if visible_delta:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
+                                emitted_text_by_step[step_idx] = text
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
                             err_obj = step.get("errorMessage") or {}
                             err_msg = str(
@@ -791,6 +835,16 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 planner = final.get("plannerResponse") or {}
+                # Native IDLE can occur between input, tool and planner steps.
+                # Keep observing this invocation; only a finished answer after
+                # all current work settles can close it. The existing idle and
+                # hard deadlines, permission gates and cancellation still apply.
+                if (planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
+                        and (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
+                        or (planner.get("stopReason") is None and not self._read_only_review)
+                        or any(step.get("status") in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}
+                               for _, step in current_steps))):
+                    continue
                 if self._read_only_review:
                     inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
                     execution = (inputs[0].get("metadata") or {}).get("executionId") if len(inputs) == 1 else None
@@ -802,8 +856,9 @@ class AntigravityAdapter:
                                                   gate=None, error_code="upstream_transport_failure")
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
+                        or any(step.get("status") != "CORTEX_STEP_STATUS_DONE" for _, step in current_steps)
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
-                        or planner.get("stopReason") not in {None, "STOP_REASON_STOP_PATTERN"}):
+                        or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"):
                     raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",
                                               gate=None, error_code="upstream_transport_failure")
                 break

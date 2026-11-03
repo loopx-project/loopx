@@ -3,7 +3,9 @@ import {requestJson} from "./chat";
 import {requestBriefSchema} from "./request-control";
 
 const rowSchema = z.object({request_id: z.string(), goal_id: z.string(), agent_id: z.string(),
-  unfinished: z.boolean(), agenda: z.object({step: z.string()}).passthrough().nullable(),
+  unfinished: z.boolean(), agenda: z.object({step: z.string(),
+    pending_return_count: z.number().int().nonnegative().optional(),
+    remaining_work: z.object({summary: z.string(), resume_when: z.string()}).optional()}).passthrough().nullable(),
   control_state: z.string().nullable(),
   brief: requestBriefSchema.nullable().optional(), source_question: z.string(), request_revision: z.number().int().positive().nullable(),
   read_status: z.string(), decision: z.string(), decision_reason: z.string().nullable().optional(),

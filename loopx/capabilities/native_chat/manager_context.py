@@ -66,7 +66,7 @@ def native_manager_context(context: dict[str, Any], adapter: object, *, runtime_
         setting = (configuration or {}).get("namespaces", {}).get("context_delivery")
         if setting is None:
             setting = registry.resolve("context_delivery").public_descriptor()["configuration_template"]
-        if setting["mode"] == "off":
+        if setting.get("antigravity_mode", "on") == "off":
             return context
         private_capture_uid()
         # A new 0700 directory in Chat's existing private store, not the selected

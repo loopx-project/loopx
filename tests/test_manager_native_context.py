@@ -94,7 +94,11 @@ def test_unqualified_or_disabled_native_capture_keeps_full_inline_parity(tmp_pat
         from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
 
         configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
-            "context_delivery": {"schema_version": "context_delivery_machine_defaults_v0", "mode": "off"}}}
+            "context_delivery": {
+                "schema_version": "context_delivery_machine_defaults_v0",
+                "mode": "on",
+                "antigravity_mode": "off",
+            }}}
         registry = build_builtin_machine_configuration_registry()
         plan = configure_machine_configuration(runtime_root=tmp_path, configuration=configuration,
                                                  registry=registry, execute=False)
@@ -119,3 +123,67 @@ def test_unqualified_or_disabled_native_capture_keeps_full_inline_parity(tmp_pat
     original = deepcopy(context)
     assert native_manager_context(context, adapter, runtime_root=tmp_path, capture_root=tmp_path) is context
     assert context == original and not list(tmp_path.glob("manager-context-*"))
+
+
+@pytest.mark.parametrize("codex_mode", ["on", "off"])
+@pytest.mark.parametrize("antigravity_mode", [None, "on", "off"])
+def test_codex_and_antigravity_context_preferences_operate_independently(
+    tmp_path, monkeypatch, codex_mode, antigravity_mode,
+):
+    import argparse
+    import os
+
+    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
+    from loopx.capabilities.machine_configuration.store import (
+        configure_machine_configuration, read_machine_configuration,
+    )
+    from loopx.cli_commands.context_machine import apply_context_machine_options
+
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
+    monkeypatch.delenv("LOOPX_EXECUTION_MODE", raising=False)
+    namespace = {"schema_version": "context_delivery_machine_defaults_v0", "mode": codex_mode}
+    if antigravity_mode is not None:
+        namespace["antigravity_mode"] = antigravity_mode
+    expected_antigravity = "on" if antigravity_mode is None else antigravity_mode
+    registry = build_builtin_machine_configuration_registry()
+    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {"context_delivery": namespace}}
+    plan = configure_machine_configuration(
+        runtime_root=tmp_path, configuration=configuration, registry=registry, execute=False,
+    )
+    applied = configure_machine_configuration(
+        runtime_root=tmp_path, configuration=configuration, registry=registry,
+        execute=True, expected_plan_revision=plan["plan_revision"],
+    )
+    assert applied["readback_verified"] is True
+    stored = read_machine_configuration(tmp_path, registry=registry, namespace_ids=("context_delivery",))
+    assert stored["namespaces"]["context_delivery"] == {
+        "schema_version": "context_delivery_machine_defaults_v0",
+        "mode": codex_mode,
+        "antigravity_mode": expected_antigravity,
+    }
+
+    args = argparse.Namespace(
+        quota_command="context-config", context_delivery=None, codex_app=True, trae_app=False,
+        runtime_profile=None, host_surface=None, scheduler_owner=None, execution_mode=None,
+        format="json", codex_context_dir=None, codex_context_root=None,
+        decision_handoff_socket=None, decision_output_dir=None, decision_output_root=None,
+    )
+    if codex_mode == "on" and os.name != "posix":
+        with pytest.raises(ValueError, match="unavailable on this platform"):
+            apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
+    else:
+        apply_context_machine_options(args, registry_path=tmp_path / "absent.json", runtime_root_arg=str(tmp_path))
+        assert args.context_delivery == codex_mode
+
+    capture_root = tmp_path / "captures"
+    capture_root.mkdir()
+    context = _context()
+    original = deepcopy(context)
+    result = native_manager_context(context, _adapter(), runtime_root=tmp_path, capture_root=capture_root)
+    if expected_antigravity == "off":
+        assert result is context and result == original
+        assert not list(capture_root.glob("manager-context-*"))
+    else:
+        assert result is not context
+        assert result["goals"][0]["recent_delivery_history"]["status"] == "not_read"
+        assert _read(result["context_read"]["recovery_command"]) == original

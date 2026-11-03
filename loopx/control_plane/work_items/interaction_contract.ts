@@ -242,7 +242,7 @@ export function selectPrimaryActionInstruction(value: unknown, mode: string): st
   if (mode === "autonomous_replan") {
     const lifecycle = object("lifecycle");
     if (requireBoolean(lifecycle.present, "lifecycle.present")) return text(lifecycle, "action") ||
-      "settle the exact completed Todo lifecycle or link a real runnable successor; do not create lifecycle-only filler";
+      "follow the exact Todo lifecycle recovery actions; preserve independent work and gates, and do not add links to terminal Todos or create lifecycle-only filler";
     const packet = object("replan_packet");
     if (requireBoolean(packet.settlement_only, "settlement_only")) return text(packet, "rule");
     if (requireBoolean(packet.has_required_outcome, "has_required_outcome") && requireBoolean(packet.has_successor_command, "has_successor_command")) {

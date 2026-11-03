@@ -57,3 +57,99 @@ test("gate projection consumes source eligibility without reclassifying quota", 
   samples[0].gate_source_facts.eligible = true;
   assert.equal((projectGlobalGates({...request(), samples}).gates as JsonObject[])[0].owner, "controller");
 });
+
+test("one goal retains its runnable peer, late gate and unique source counts in either order", () => {
+  const samples = Array.from({length: 9}, (_, index) => {
+    const agent = `agent-${index + 1}`, ready = index === 0, gated = index === 8;
+    const gate = {todo_id: "todo_gate", task_class: "user_gate", text: "Approve synthetic output?",
+      unblocks_todo_id: "todo_held", _display: {text: "Approve synthetic output?"}};
+    const quota: JsonObject = {ok: true, goal_id: "synthetic", state: gated ? "operator_gate" : "eligible",
+      normal_delivery_allowed: ready, agent_identity: {agent_id: agent},
+      ...(ready ? {selected_todo: {todo_id: "todo_ready"}, agent_lane_next_action: {todo_id: "todo_ready", agent_id: agent}} : {}),
+      ...(gated ? {gate_id: "todo_gate", selected_todo: {todo_id: "todo_held"},
+        agent_lane_next_action: {todo_id: "todo_held", agent_id: agent},
+        user_todo_summary: {open_count: 1, first_open_items: [gate], gate_open_items: [gate]}} : {})};
+    return {item: {goal_id: "synthetic"}, quota, gate_source_facts: {formal_gate: gated ? gate : null, eligible: gated}};
+  });
+  for (const ordered of [samples, [...samples].reverse()]) {
+    const input = {...request(), samples: [...ordered, samples[8]]}, before = structuredClone(input);
+    const summary = projectGlobalSummary(input), gates = projectGlobalGates(input);
+    assert.deepEqual((summary.lanes as JsonObject[]).map(row => [row.agent_id, row.top_todo_id]), [["agent-1", "todo_ready"]]);
+    assert.equal((summary.summary as JsonObject).open_gate_count, 1);
+    assert.equal((gates.summary as JsonObject).open_gate_count, 1);
+    assert.equal((summary.todos as JsonObject[]).length, 2);
+    assert.deepEqual((gates.gates as JsonObject[])[0].blocks, ["todo_held"]);
+    for (const payload of [summary, gates]) {
+      const sources = (payload.projection_envelope as JsonObject).sources as JsonObject[];
+      assert.equal(sources.find(row => row.source_id === "goal_quota")!.item_count, 1);
+    }
+    assert.deepEqual(input, before);
+  }
+});
+
+test("an unavailable peer stays visible as source degradation without hiding healthy work", () => {
+  const input = {...request(), samples: [
+    {item: {goal_id: "synthetic"}, quota: {ok: false, state: "quota_unavailable"}},
+    {item: {goal_id: "synthetic"}, quota: {ok: true, state: "normal_run", normal_delivery_allowed: true,
+      agent_identity: {agent_id: "healthy-peer"}, agent_lane_next_action: {todo_id: "todo_ready"}}},
+  ]};
+  const payload = projectGlobalSummary(input);
+  assert.equal((payload.lanes as JsonObject[])[0].agent_id, "healthy-peer");
+  const envelope = payload.projection_envelope as JsonObject;
+  assert.equal(envelope.alert, true);
+  assert.equal((envelope.sources as JsonObject[]).find(row => row.source_id === "goal_quota")!.unreadable_count, 1);
+});
+
+test("foreign-only Todo notifications do not duplicate gates; applicable and unknown scope survive", () => {
+  for (const [scope, expected] of [
+    [{agent_id: "peer-a", current_agent_blocking_open_count: 0, other_agent_scoped_open_count: 1}, 0],
+    [{agent_id: "peer-a", current_agent_blocking_open_count: 1, other_agent_scoped_open_count: 1}, 1],
+    [{agent_id: "peer-a", other_agent_scoped_open_count: 1}, 1],
+  ] as const) {
+    const quota = {source: "active_state", status: "active_state_user_gate",
+      interaction_contract: {user_channel: {action_required: true}},
+      user_todo_summary: {agent_scope_filter: scope}};
+    const sample = {item: {goal_id: "synthetic"}, quota, gate_source_facts: {formal_gate: null, eligible: true}};
+    const input = {...request(), samples: [sample]};
+    assert.equal((projectGlobalSummary(input).gates as JsonObject[]).length, expected);
+    assert.equal((projectGlobalGates(input).gates as JsonObject[]).length, expected);
+  }
+});
+
+for (const [name, origin] of [
+  ["unknown source", {}],
+  ["ordinary user Todo", {source: "active_state", status: "active_state_user_todo"}],
+  ["another source", {source: "latest_run", status: "active_state_user_gate"}],
+  ["explicit decision", {source: "active_state", status: "active_state_user_gate", gate_id: "distinct-decision"}],
+] as const) {
+  test(`foreign Todo counts preserve a required decision from ${name}`, () => {
+    const question = "Confirm independent recovery?";
+    const quota = {...origin, interaction_contract: {user_channel: {
+      action_required: true, question, _display: {question},
+    }}, user_todo_summary: {agent_scope_filter: {
+      agent_id: "peer-a", current_agent_blocking_open_count: 0, other_agent_scoped_open_count: 1,
+    }}};
+    const sample = {item: {goal_id: "synthetic"}, quota}, before = structuredClone(sample);
+    const input = {...request(), samples: [{...sample, gate_source_facts: {formal_gate: null, eligible: true}}]};
+    for (const result of [projectGlobalSummary(input), projectGlobalGates(input),
+      projectGlobalSummary({...request(), samples: [sample]})]) {
+      const gates = result.gates as JsonObject[];
+      assert.equal(gates.length, 1);
+      assert.equal(gates[0].question, question);
+    }
+    assert.deepEqual(sample, before);
+  });
+}
+
+test("a formal gate survives foreign Todo scope counts", () => {
+  const gate = {todo_id: "todo_current_gate", task_class: "user_gate", unblocks_todo_id: "todo_current_work"};
+  const sample = {item: {goal_id: "synthetic"}, gate_source_facts: {formal_gate: gate, eligible: true},
+    quota: {source: "active_state", status: "active_state_user_gate", user_todo_summary: {agent_scope_filter: {
+      agent_id: "peer-a", current_agent_blocking_open_count: 0, other_agent_scoped_open_count: 1,
+    }}}};
+  for (const project of [projectGlobalSummary, projectGlobalGates]) {
+    const gates = project({...request(), samples: [sample]}).gates as JsonObject[];
+    assert.equal(gates.length, 1);
+    assert.deepEqual(gates[0].blocks, ["todo_current_work"]);
+  }
+});

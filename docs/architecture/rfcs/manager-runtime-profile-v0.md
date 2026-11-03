@@ -56,6 +56,12 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   Argon tiers must be offered by the local account and match the requested reasoning effort.
   A missing original cascade fails resume without silently starting a replacement. Stop waits
   for the native cascade to become idle; timeout or partial output is not successful completion.
+  During execution, native `IDLE` alone is not completion: it can appear between input, tool
+  and planner steps. LoopX keeps observing the original invocation without resending input;
+  completion requires a final answer with the normal stop marker and all covered current
+  steps to be done, matching native result recovery's completion requirement.
+  Transient idle does not extend the existing no-progress or hard deadline. Permission gates,
+  native errors, unverified stop reasons and another input retain their existing refusal paths.
 - Antigravity manager inputs place the complete original user message before the frozen Core
   evidence, encoding that message as a JSON string so whitespace and quoted transport markers
   remain exact. Original-result recovery recognizes both this framing and historical
@@ -72,8 +78,9 @@ These defaults do not change ordinary Goal Chat models or grant other Agents too
   frozen snapshot reader, not the Codex-only live `loopx_manager_read` tool or a delta baseline.
   Before relying on that history, read the required section through its final page. Context
   loss recovers from the same capture without resending the request or repeating effects.
-- The existing machine `context_delivery.mode=off` or host environment
-  `LOOPX_CONTEXT_DELIVERY=off` keeps subsequent native manager inputs fully inline.
+- The machine `context_delivery.antigravity_mode=off` preference or host environment
+  `LOOPX_CONTEXT_DELIVERY=off` keeps subsequent native manager inputs fully inline, while
+  `context_delivery.mode` remains the independent Codex preference.
   Restricted/text-only hosts, invalid settings and unavailable private capture IO also retain
   that input; no host permission or approval is changed. These references preserve only the
   already-authorized snapshot, not fresh observation or action authority. Capture files stay

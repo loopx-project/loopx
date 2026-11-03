@@ -1231,6 +1231,17 @@ The TurnEnvelope owner retains the top-level decision-field vocabulary and
 supplies it to Progressive selection. Moving the selector does not duplicate
 that vocabulary across owners or relax its semantic module budget.
 
+Native Progressive supporting-material discovery now has a bounded precursor:
+an unconfirmed index binds exact deferred-field pointers to the current complete
+projection. Initial reads and file-backed warm deltas expose the complete index,
+without requiring an old packet or model retention. Selected reads do not clear
+its conservative coverage status or create a second ledger. Current-source CLI
+reads qualify transport into a synthetic next artifact, including changed and
+reordered material and unavailable predecessors; they do not establish natural
+model adoption. All-host defaults, other omitted material, trusted Host coverage,
+writer/reader cutover and §9's outcome/full-cost comparison remain open. Index
+overhead participates in the existing full-versus-folded byte guard.
+
 C1's inventory is part of its usable replacement, not a standalone architecture
 framework. C3/C4/C5 can proceed independently once C1's contract is stable;
 C7 can prepare measurements before C6 but cannot claim two-session outcomes.

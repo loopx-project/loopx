@@ -10,6 +10,7 @@ from .control_plane.projection_envelope_facts import (
 )
 from .control_plane.runtime.time import now_utc, now_utc_iso
 from .control_plane.todos.user_gate import open_user_gate_todo_items
+from .global_todos import is_unregistered_agent_scope_miss, registered_goal_agents
 from .presentation.markdown import as_dict as _as_dict
 from .presentation.markdown import as_list as _as_list
 from .presentation.public_safety import public_safe_boundary, redact_public_text
@@ -98,6 +99,24 @@ def _quota_matches_agent_scope(
         return False
     identity = _as_dict(quota_payload.get("agent_identity"))
     return str(identity.get("agent_id") or "") == agent_id
+
+
+def _build_goal_quotas(
+    status_payload: dict[str, Any], *, goal_id: str, agent_id: str | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Collect complete scoped facts; the TS projection selects the visible lane."""
+    payload = _build_goal_quota(status_payload, goal_id=goal_id, agent_id=agent_id)
+    if is_unregistered_agent_scope_miss(payload, agent_id=agent_id):
+        return [], False
+    if agent_id is not None or payload.get("ok") is False:
+        return [payload], False
+    agents = registered_goal_agents(
+        status_payload, goal_id, payload, prefer_queue_recommendation=True,
+    )
+    if not agents:
+        return [payload], False
+    return [_build_goal_quota(status_payload, goal_id=goal_id, agent_id=agent)
+            for agent in agents], True
 
 
 def _global_gates_request() -> dict[str, Any]:
@@ -259,18 +278,22 @@ def _read_samples(status: dict[str, Any], *, agent_id: str | None,
         if not goal_id or goal_id in seen:
             continue
         seen.add(goal_id)
-        quota = _build_goal_quota(status, goal_id=goal_id, agent_id=agent_id)
-        sample = {"item": _read_facts(item), "quota": _read_facts(quota)}
-        facts = _gate_source_facts(item, quota, agent_id) if gates_only else None
-        if facts is not None:
-            sample["gate_source_facts"] = _read_facts(facts)
-        samples.append(sample)
-        if not gates_only or not _quota_matches_agent_scope(quota, agent_id=agent_id):
-            continue
-        if facts is not None and facts["eligible"]:
-            found += 1
-            if found >= limit:
-                break
+        quotas, scoped_reads = _build_goal_quotas(status, goal_id=goal_id, agent_id=agent_id)
+        for quota in quotas:
+            sample = {"item": _read_facts(item), "quota": _read_facts(quota)}
+            scoped_agent = (_as_dict(quota.get("agent_identity")).get("agent_id")
+                            if scoped_reads else agent_id)
+            facts = (_gate_source_facts(item, quota, scoped_agent)
+                     if gates_only or scoped_reads else None)
+            if facts is not None:
+                sample["gate_source_facts"] = _read_facts(facts)
+            samples.append(sample)
+            if not gates_only or not _quota_matches_agent_scope(quota, agent_id=agent_id):
+                continue
+            if facts is not None and facts["eligible"]:
+                found += 1
+        if gates_only and found >= limit:
+            break
     return samples
 
 
