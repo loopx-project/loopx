@@ -537,6 +537,9 @@ R0 可以先于目录移动交付，但不代表内核合格。R3/R4 可选，�
 - **变化：** `host-mode-plan` 经 `cli_runtime` 使用原有 registrar 与 handler，
   合法请求不再加载完整 CLI 或 Chat 依赖图。非法语法保留完整 parser 的诊断路径。
   宿主选择器、预览命令、readiness 与 authority 规则均不移动、不改变。
+- **M1 集成：** [#7878](https://github.com/loopx-project/loopx/pull/7878) 已在
+  `ffe84a693` 合入：17 个仅内部使用的 Chat owner 位于 `loopx/chat/`，顶层模块
+  数量和预算均为 128（该移动组之前为 145）。这是结构变化，不代表性能或完整 M1 合格。
 - **证据：** `tests/test_cli_entrypoint.py` 覆盖仅加载 owner 的 help、JSON 与
   Markdown 一致性、宿主不可用预览、非法请求及零进程、网络或文件写入激活。
   独立安装的 wheel 在没有 Node 或实时 registry 时验证 help、ready／unavailable

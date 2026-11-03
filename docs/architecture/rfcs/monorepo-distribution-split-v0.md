@@ -745,6 +745,10 @@ Approval needs a reviewed decision, not implementation progress or silence.
   `cli_runtime`, without loading the full CLI or Chat graph on valid requests.
   Rejected syntax retains the full-parser diagnostic path. The host selector,
   preview commands, readiness and authority rules do not move or change.
+- **M1 integration:** [#7878](https://github.com/loopx-project/loopx/pull/7878)
+  is merged at `ffe84a693`: 17 internal-only Chat owners are under `loopx/chat/`,
+  with the top-level count and budget both 128 (145 before this move group).
+  This is a structural delta, not a performance or full-M1 qualification.
 - **Evidence:** `tests/test_cli_entrypoint.py` checks owner-only help, JSON and
   Markdown parity, unavailable-host previews, invalid requests and zero process,
   network or file-write activation. A separately installed wheel exercises help,
