@@ -836,6 +836,15 @@ class AntigravityAdapter:
             if saw_running_or_new_step and status == "CASCADE_RUN_STATUS_IDLE" and observed_total == total_steps:
                 final = current_steps[-1][1] if current_steps else {}
                 planner = final.get("plannerResponse") or {}
+                if (final.get("status") == "CORTEX_STEP_STATUS_CANCELED"
+                        and all(step.get("status") in {"CORTEX_STEP_STATUS_DONE", "CORTEX_STEP_STATUS_CANCELED"}
+                                for _, step in current_steps)):
+                    # A settled cancellation cannot produce a final answer.
+                    # Do not cancel this already-idle invocation again or replay
+                    # its unknown effects; let Core record the original failure.
+                    self._active_turn_id = None
+                    raise CodexChatAgentError("Antigravity ended with a cancelled step; execution may have occurred.",
+                                              gate=None, error_code="upstream_transport_failure")
                 # Native IDLE can occur between input, tool and planner steps.
                 # Keep observing this invocation; only a finished answer after
                 # all current work settles can close it. The existing idle and

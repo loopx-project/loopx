@@ -10,6 +10,7 @@ from ..capabilities.manager_context import (
     configure_evidence_scope,
 )
 from ..control_plane.projects.registry_codec import load_project_registry
+from ..control_plane.collaboration.peers import InboxReadResponseAmbiguous
 from ..presentation.answer_instruction import collaboration_answer_instruction
 
 
@@ -346,6 +347,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 request_revision=getattr(args, "request_revision", None),
                 request_revision_digest=getattr(args, "request_digest", None),
             )
+    except InboxReadResponseAmbiguous as exc:
+        result = exc.result
     except (OSError, ValueError) as exc:
         result = {"ok": False, "error": str(exc)}
     print(json.dumps(result, ensure_ascii=False, indent=2))

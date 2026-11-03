@@ -68,6 +68,7 @@ from .control_plane.collaboration.source_grant_observation import (
 )
 from .control_plane.collaboration.source_policy_fence import source_policy_fence
 from .control_plane.collaboration.peers import (
+    InboxReadResponseAmbiguous,
     _goal,
     consume_return,
     read_inbox,
@@ -237,15 +238,20 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         Follow next_cursor for later requests. Omit cursor to start a fresh scan.
         Pages are live; reading all pages does not complete outstanding work.
         """
-        result = read_inbox(
-            root,
-            registry,
-            goal_id,
-            agent_id,
-            workspace=workspace,
-            cursor=cursor,
-            caller_goal_ref=caller_goal_ref,
-        )
+        try:
+            result = read_inbox(
+                root,
+                registry,
+                goal_id,
+                agent_id,
+                workspace=workspace,
+                cursor=cursor,
+                caller_goal_ref=caller_goal_ref,
+            )
+        except InboxReadResponseAmbiguous as exc:
+            from mcp.server.fastmcp.exceptions import ToolError
+
+            raise ToolError(json.dumps(exc.result, ensure_ascii=False)) from exc
         result["instruction"] += " " + collaboration_answer_instruction()
         return result
 
