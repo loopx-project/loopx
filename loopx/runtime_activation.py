@@ -248,7 +248,7 @@ def activate_runtime_services(*, service: str = "all", port: int = 8767,
         if runtime_executable is not None:
             if service != "all":
                 raise ValueError("service_runtime_route_unverified")
-            from .managed_service_runtime import align_managed_runtime
+            from .hosts.managed_service_runtime import align_managed_runtime
             return {**payload, "ok": True, **align_managed_runtime(runtime_executable)}
         if service == "chat":
             observed = replace_managed_loopx_chat("127.0.0.1", port, restart_managed=True)
@@ -362,7 +362,7 @@ def restart_services_for_runtime_activation(
             "restart_status": "skipped_custom_installation",
         }
     try:
-        from .managed_service_runtime import align_managed_runtime, has_runtime_binding
+        from .hosts.managed_service_runtime import align_managed_runtime, has_runtime_binding
         if sys.platform == "darwin" and has_runtime_binding():
             # Preserve the existing pending-work result even when the new
             # installation cannot yet be qualified. Alignment rechecks under

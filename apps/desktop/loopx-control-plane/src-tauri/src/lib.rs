@@ -54,14 +54,8 @@ fn maintenance_origin(url: &Url) -> String {
 // echo verbatim into the boot surface, where it names the recovery panel's
 // actionable diagnostics instead of a misleading fixed message.
 fn boot_failure_message(error: &str) -> String {
-    if matches!(
-        error,
-        "service_runtime_alignment_unavailable"
-            | "service_runtime_route_unverified"
-            | "service_runtime_alignment_failed"
-            | "service_runtime_rollback_failed"
-    ) {
-        return "服务版本尚未对齐；请展开「恢复与更新」查看原因。".to_string();
+    if services::runtime_alignment_error(error) {
+        return "正在自动恢复本地服务，完成后会打开工作区。".to_string();
     }
     if error == "chat_work_pending" {
         return "管家正在处理请求，完成后会自动连接工作区。".to_string();
@@ -343,10 +337,6 @@ pub fn run() {
                                     | "runtime_pairing_required"
                                     | "runtime_selection_invalid"
                                     | "runtime_selection_unavailable"
-                                    | "service_runtime_alignment_unavailable"
-                                    | "service_runtime_alignment_failed"
-                                    | "service_runtime_route_unverified"
-                                    | "service_runtime_rollback_failed"
                             ) {
                                 150
                             } else {

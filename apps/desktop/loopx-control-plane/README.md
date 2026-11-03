@@ -215,12 +215,21 @@ new CLI runtime; other managed services retain their existing restart behavior.
 来源可验证时才切换。切换保留原数据、账号和启动参数，并确认两个 HTTP 服务都使用
 目标版本；失败恢复原配置，中断由本地记录恢复。已匹配的服务直接复用，不反复重启。
 
-If alignment cannot complete, the startup clock stops and **Recovery & updates**
-shows the cause. **Reconnect** retries through the native supervisor without
-clearing the remembered runtime or reloading only the web page. Persistent
-alignment failures wait for that action or repair; pending Chat work keeps its
-automatic retry. A legacy Core without alignment support needs an update; it
-does not authorize falling back to terminating its services.
+If alignment cannot complete, the native supervisor automatically retries with
+increasing delays (2, 4, 8, 16, 32, then at most 60 seconds between attempts).
+The cooldown starts after an attempt finishes; it does not expire while a slow
+attempt is still running. Each attempt rediscovers the runtime and reuses the
+same manager/Chat fences and interrupted-handoff recovery. There is no permanent
+retry-count latch. Once the services qualify, the workspace opens without a
+click or reload. The startup screen shows the next automatic retry; waiting is
+visually idle, with details available in **Recovery & updates**. **Retry now**
+is optional and resets the delay through the native supervisor, preserving the
+selected runtime. Pending Chat work retains its existing automatic retry.
+
+恢复是默认流程：暂时切换失败会自动退避重试，中断的切换会先恢复原服务。服务就绪后
+自动进入工作区，无需点击按钮；「立即重试」只是跳过等待的可选入口。自定义来源仍需
+可验证，已有请求仍受保护；检查更新、安装重启和显式运行时选择保留原有边界。旧 Core
+尚不支持对齐时会继续检测可用运行时，不回退到反复终止旧服务。
 
 开发诊断可使用 `loopx --format json update activate --service all
 --runtime-executable /absolute/path/to/loopx`：这是会切换服务的操作，保留原工作区和
@@ -673,9 +682,11 @@ disposable labels; the manager, Core processes, HTTP and stores are real. The
 fixture uses temporary registry/account directories and ports, removes its own
 services afterwards, and never unloads the machine's standard services. It
 checks the target identity, original registry and repeated alignment without
-PID changes. Unit cases cover busy Chat, changed configuration, unsupported
-shells, failed startup/rollback and interrupted handoff. Native tests separately
-cover exact identity/readiness receipts and waiting for an explicit reconnect.
+PID changes, including a real manager failure followed by rollback and successful
+recovery. Unit cases cover busy Chat, changed configuration, unsupported shells,
+failed startup/rollback and interrupted handoff. Native tests cover exact
+identity/readiness receipts, automatic recovery without user input, capped
+backoff after slow attempts, and preservation of update admission.
 
 This installs only in the disposable root. The second test uses an explicit
 local launch pin to route the production supervisor's two services to its own

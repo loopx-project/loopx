@@ -8,12 +8,12 @@ let timingObservedAt = pageStarted;
 let bootState = null;
 let observedEnvironment = null;
 const runtimeRecoveryTitles = {
-  service_runtime_alignment_unavailable: "请更新 LoopX 以连接现有服务",
-  service_runtime_route_unverified: "系统服务配置需要恢复",
-  service_runtime_alignment_failed: "服务版本切换未完成",
-  service_runtime_rollback_failed: "系统服务需要恢复",
+  service_runtime_alignment_unavailable: "正在等待可用的运行时",
+  service_runtime_route_unverified: "正在核验系统服务",
+  service_runtime_alignment_failed: "正在恢复本地服务",
+  service_runtime_rollback_failed: "正在恢复原服务",
 };
-function serviceRecoveryRequired(state) {
+function serviceRecoveryPending(state) {
   return state?.phase === "service_error" && Object.hasOwn(runtimeRecoveryTitles, state.details?.code);
 }
 function renderStartup(result) {
@@ -42,13 +42,20 @@ function renderStartup(result) {
     status.textContent = state.phase === "service_error"
       ? serviceTitles[state.details?.code] || titles.service_error
       : titles[state.phase];
-    panel.dataset.state = "loading";
-    panel.setAttribute("aria-busy", "true");
+    const waiting = serviceRecoveryPending(state);
+    panel.dataset.state = waiting ? "waiting" : "loading";
+    panel.setAttribute("aria-busy", String(!waiting));
   }
   updateStartupElapsed();
 }
 function updateStartupElapsed() {
-  if (["error", "runtime_required"].includes(bootState?.phase) || serviceRecoveryRequired(bootState)) {
+  if (serviceRecoveryPending(bootState)) {
+    const remaining = Math.max(0, (bootState.details.retry_after_ms ?? 0) - (performance.now() - timingObservedAt));
+    bootElapsed.textContent = remaining > 0 ? `${Math.ceil(remaining / 1000)} 秒后自动重试` : "正在重新连接";
+    bootDetail.textContent = "恢复后会自动打开工作区，无需手动操作。";
+    return;
+  }
+  if (["error", "runtime_required"].includes(bootState?.phase)) {
     bootElapsed.textContent = "等待恢复";
     bootDetail.textContent = "启动已停止等待。可在下方恢复，不必反复重开 App。";
     return;
@@ -68,13 +75,13 @@ function updateStartupElapsed() {
 }
 setInterval(updateStartupElapsed, 1000);
 window.loopxBootFailed = (message) => {
-  if (bootState?.phase === "connecting") return;
+  if (bootState?.phase === "connecting" || serviceRecoveryPending(bootState)) return;
   panel.dataset.state = "error";
   panel.setAttribute("aria-busy", "false");
   status.textContent = message;
 };
 window.loopxBootRetrying = () => {
-  if (["error", "runtime_required"].includes(bootState?.phase)) return;
+  if (["error", "runtime_required"].includes(bootState?.phase) || serviceRecoveryPending(bootState)) return;
   panel.dataset.state = "loading";
   panel.setAttribute("aria-busy", "true");
   status.textContent = "正在重新连接本地控制面";
@@ -111,10 +118,10 @@ const labels = {
   error: "更新未完成。请重试检查，或修复当前版本。Goal 数据不会被删除。",
 };
 const errors = {
-  service_runtime_alignment_unavailable: "当前运行时尚不支持服务版本对齐。请更新 LoopX CLI 后重新连接。现有服务未被停止。",
-  service_runtime_route_unverified: "系统服务配置已变化或使用自定义启动方式，无法自动对齐。请通过原安装方式恢复服务后重新连接。",
-  service_runtime_alignment_failed: "服务版本切换未完成，已尝试恢复原配置。可点击「重新连接」重试。",
-  service_runtime_rollback_failed: "服务版本切换与恢复均未完成。请保留诊断信息，通过原安装方式恢复系统服务。",
+  service_runtime_alignment_unavailable: "当前运行时尚不支持服务版本对齐。App 会自动重新检测可用运行时；现有服务保持运行。",
+  service_runtime_route_unverified: "系统服务来源暂时无法验证。App 会自动复查，来源确认后继续连接；自定义配置保持不变。",
+  service_runtime_alignment_failed: "服务版本切换未完成，已尝试恢复原配置。App 会自动重试。",
+  service_runtime_rollback_failed: "原服务尚未恢复。App 会自动重试恢复，并保留诊断信息。",
   chat_work_pending: "管家正在处理已有请求，完成后会自动切换服务并连接工作区。无需强退或重复发送。",
   chat_state_unverified: "暂时无法核验管家服务的任务状态。连接会自动重试；请保留诊断信息。",
   chat_service_unverified: "管家服务切换尚未确认。连接会自动重试；可保留诊断信息，或通过原安装方式更新 LoopX。",
@@ -306,19 +313,19 @@ async function refresh() {
   }
 }
 function escalateFromSnapshot(state) {
-  const terminal = TERMINAL_PHASES.includes(state?.phase) || serviceRecoveryRequired(state);
+  const terminal = TERMINAL_PHASES.includes(state?.phase);
   terminalRounds = terminal ? terminalRounds + 1 : 0;
   if (terminal && terminalRounds >= ERROR_ESCALATION_ROUNDS) escalated = true;
   if (!escalated) return;
   if (terminal) {
     panel.dataset.state = "error";
     panel.setAttribute("aria-busy", "false");
-    status.textContent = serviceRecoveryRequired(state) ? runtimeRecoveryTitles[state.details.code]
-      : `${codeText(state?.details?.code, state?.phase)} 详见下方「恢复与更新」面板，可复制诊断信息反馈。`;
+    status.textContent = `${codeText(state?.details?.code, state?.phase)} 详见下方「恢复与更新」面板，可复制诊断信息反馈。`;
     bootDetail.textContent = "启动已停止等待。可在下方恢复，不必反复重开 App。";
     document.querySelector(".recovery").open = true;
   } else {
     escalated = false;
+    if (serviceRecoveryPending(state)) return;
     panel.dataset.state = "loading";
     panel.setAttribute("aria-busy", "true");
     status.textContent = "正在重新连接本地控制面";

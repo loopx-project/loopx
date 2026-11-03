@@ -20,7 +20,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_PROBE_RESPONSE_BYTES: u64 = 1024 * 1024;
 
-pub(crate) fn runtime_recovery_required(code: &str) -> bool {
+pub(crate) fn runtime_alignment_error(code: &str) -> bool {
     matches!(
         code,
         "service_runtime_alignment_unavailable"

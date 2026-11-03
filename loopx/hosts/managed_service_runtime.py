@@ -19,8 +19,8 @@ import time
 import urllib.error
 import urllib.request
 
-from .file_lock import exclusive_file_lock, write_bytes_atomic, write_json_atomic
-from . import runtime_activation as activation
+from ..file_lock import exclusive_file_lock, write_bytes_atomic, write_json_atomic
+from .. import runtime_activation as activation
 
 
 def _literal_arguments(command: str) -> list[str]:

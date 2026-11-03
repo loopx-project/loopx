@@ -16,13 +16,16 @@ import uuid
 import pytest
 
 from loopx import runtime_activation as activation
-from loopx.managed_service_runtime import _retarget, align_managed_runtime
+from loopx.hosts import managed_service_runtime as managed_runtime
+from loopx.hosts.managed_service_runtime import _retarget, align_managed_runtime
 from loopx.chat_store import ChatSessionStore
 
 
 @pytest.fixture
 def managed(tmp_path, monkeypatch):
-    monkeypatch.setattr("loopx.managed_service_runtime._verify_services", lambda *_: None)
+    if sys.platform == "win32":
+        pytest.skip("macOS launchd fixture executes POSIX launchers")
+    monkeypatch.setattr("loopx.hosts.managed_service_runtime._verify_services", lambda *_: None)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
     root = tmp_path / "original data"
     agents = tmp_path / "Library/LaunchAgents"
@@ -122,7 +125,7 @@ def test_startup_readback_failure_restores_both_original_services(managed, monke
     before = {p: p.read_bytes() for p in agents.glob("*.plist")}
     def unavailable(*_):
         raise RuntimeError("service_runtime_alignment_failed")
-    monkeypatch.setattr("loopx.managed_service_runtime._verify_services", unavailable)
+    monkeypatch.setattr("loopx.hosts.managed_service_runtime._verify_services", unavailable)
     with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
         align_managed_runtime(str(target))
     assert {p: p.read_bytes() for p in before} == before
@@ -130,7 +133,7 @@ def test_startup_readback_failure_restores_both_original_services(managed, monke
 
 
 def test_process_interruption_recovers_before_reapplying(managed, monkeypatch):
-    from loopx import managed_service_runtime as runtime
+    from loopx.hosts import managed_service_runtime as runtime
 
     _, agents, target, loaded, calls, _ = managed
     original_write = runtime.write_bytes_atomic
@@ -211,6 +214,7 @@ def test_custom_shell_effects_are_not_rewritten(shell):
         _retarget({"ProgramArguments": ["/bin/sh", "-c", shell]}, "/new/loopx", "/new/python")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS launcher uses POSIX paths")
 def test_direct_launcher_retains_environment_and_arguments():
     original = {"ProgramArguments": ["/old/loopx", "chat", "--runtime-root", "/original"],
         "EnvironmentVariables": {"CODEX_HOME": "/account"}}
@@ -298,6 +302,22 @@ def test_real_manager_switches_core_and_preserves_original_workspace(tmp_path, m
             result = launchctl(["launchctl", "bootstrap", domain, str(agents / f"com.loopx.{kind}.plist")], capture_output=True)
             assert result.returncode == 0, result.stderr
         before = ready()
+        # A transient manager failure must restore the running original pair;
+        # the next guarded attempt can then recover without data/config edits.
+        launch = managed_runtime._launchctl
+        interrupted = False
+
+        def fail_once(*args):
+            nonlocal interrupted
+            if args[0] == "bootstrap" and args[-1].endswith("com.loopx.chat.plist") and not interrupted:
+                interrupted = True
+                raise RuntimeError("service_runtime_alignment_failed")
+            return launch(*args)
+
+        monkeypatch.setattr(managed_runtime, "_launchctl", fail_once)
+        with pytest.raises(RuntimeError, match="service_runtime_alignment_failed"):
+            align_managed_runtime(str(target))
+        assert ready() == before
         started = time.monotonic()
         result = align_managed_runtime(str(target))
         after = ready()
