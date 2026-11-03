@@ -273,11 +273,12 @@ def test_real_manager_switches_core_and_preserves_original_workspace(tmp_path, m
         payload = {"Label": f"com.loopx.{kind}", "ProgramArguments": args, "RunAtLoad": True,
             "KeepAlive": True, "EnvironmentVariables": {"HOME": str(home), "LOOPX_USAGE_PING": "0",
                 "CODEX_HOME": str(home / ".codex"), "PATH": os.environ.get("PATH", "")},
-            "StandardErrorPath": str(tmp_path / f"{kind}.log")}
+            "StandardErrorPath": str(tmp_path / f"{kind}.log"),
+            "StandardOutPath": str(tmp_path / f"{kind}.out.log")}
         (agents / f"com.loopx.{kind}.plist").write_bytes(plistlib.dumps(payload))
 
-    def read(kind, path):
-        with urllib.request.urlopen(f"http://127.0.0.1:{ports[kind]}{path}", timeout=2) as response:
+    def read(kind, path, *, timeout=2):
+        with urllib.request.urlopen(f"http://127.0.0.1:{ports[kind]}{path}", timeout=timeout) as response:
             return json.load(response)
 
     def ready():
@@ -304,13 +305,18 @@ def test_real_manager_switches_core_and_preserves_original_workspace(tmp_path, m
         assert before[0] != after[0]
         assert after == (result["runtime_identity"], result["runtime_identity"])
         assert read("chat", "/api/chat/sessions")["sessions"] == []
-        assert read("status", "/status.json")["registry"] == str(registry)
+        # This full cold projection checks data routing, after readiness was
+        # qualified separately. Its provider cost is not the startup budget.
+        projection_started = time.monotonic()
+        assert read("status", "/status.json", timeout=15)["registry"] == str(registry)
+        projection_seconds = time.monotonic() - projection_started
         pids = [activation._managed_service_pid(agents / f"com.loopx.{k}.plist") for k in ports]
         for _ in range(3):
             assert align_managed_runtime(str(target))["restarted_services"] == []
             assert ready() == after
         assert pids == [activation._managed_service_pid(agents / f"com.loopx.{k}.plist") for k in ports]
         print(json.dumps({"alignment_seconds": round(alignment_seconds, 3),
+            "cold_projection_seconds": round(projection_seconds, 3),
             "including_three_repeats_seconds": round(time.monotonic() - started, 3),
             "old_version": before[0]["package_version"], "new_version": after[0]["package_version"],
             "repeat_alignment_restarts": 0, "original_registry_retained": True}))
