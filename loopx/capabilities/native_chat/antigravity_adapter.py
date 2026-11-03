@@ -756,13 +756,43 @@ class AntigravityAdapter:
                                     delta_chunk = text[len(prev_text) :]
                                 else:
                                     delta_chunk = text
-                                emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
+                                    if not prev_text:
+                                        combined_marker = stream_filter.marker_pending + delta_chunk.lstrip()
+                                        continues_control_tag = bool(
+                                            combined_marker
+                                            and (
+                                                combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                                or CHAT_REVIEW_OPEN_TAG.startswith(combined_marker)
+                                            )
+                                        )
+                                        if (
+                                            continues_control_tag
+                                            and not combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                            and step_status != "CORTEX_STEP_STATUS_DONE"
+                                        ):
+                                            continue
+                                        prior_texts = [
+                                            val
+                                            for idx, val in sorted(emitted_text_by_step.items())
+                                            if idx != step_idx and val
+                                        ]
+                                        if (
+                                            prior_texts
+                                            and not delta_chunk.startswith("\n")
+                                            and not continues_control_tag
+                                        ):
+                                            last_prior = prior_texts[-1]
+                                            if not last_prior.endswith("\n"):
+                                                delta_chunk = "\n\n" + delta_chunk
+                                            elif not last_prior.endswith("\n\n"):
+                                                delta_chunk = "\n" + delta_chunk
                                     visible_delta = stream_filter.feed(delta_chunk)
                                     if visible_delta:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
+                                emitted_text_by_step[step_idx] = text
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
                             err_obj = step.get("errorMessage") or {}
                             err_msg = str(

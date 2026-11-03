@@ -728,3 +728,176 @@ def test_another_native_input_is_neither_adopted_nor_cancelled(tmp_path, languag
     assert error.value.error_code == "upstream_transport_failure"
     assert not language_server["cancelled"].is_set()
     assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
+
+
+def test_multistep_planner_responses_insert_paragraph_breaks_between_steps(tmp_path, language_server, monkeypatch):
+    frames = [
+        {
+            "at": 1.0,
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+                    "plannerResponse": {
+                        "response": "正在读取当前会话的最新消息内容。",
+                        "toolCalls": [{"name": "read_file"}],
+                    },
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_VIEW_FILE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+                },
+            ],
+        },
+        {
+            "at": 2.0,
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+                    "plannerResponse": {
+                        "response": "正在读取当前会话的最新消息内容。",
+                        "toolCalls": [{"name": "read_file"}],
+                    },
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_VIEW_FILE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 3}},
+                    "plannerResponse": {
+                        "response": "最终结论：首读展开边界合理。\n\n<loopx-review-json>"
+                        + json.dumps({"message": "", "proposals": [], "context_handoff": [], "gate": None})
+                        + "</loopx-review-json>",
+                        "stopReason": "STOP_REASON_STOP_PATTERN",
+                    },
+                },
+            ],
+        },
+    ]
+    _native_clock(monkeypatch, language_server, frames)
+    events: list[tuple[str, dict[str, Any]]] = []
+    result = adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn(
+        "检查首读体积", lambda kind, data: events.append((kind, data))
+    )
+    streamed = "".join(data.get("text", "") for kind, data in events if kind == "answer.delta")
+    assert streamed == "正在读取当前会话的最新消息内容。\n\n最终结论：首读展开边界合理。\n\n"
+    assert result["message"] == "最终结论：首读展开边界合理。"
+
+
+def test_multistep_planner_responses_preserve_split_control_marker_across_steps(
+    tmp_path, language_server, monkeypatch
+):
+    from loopx.extensions.lark.private_progress import project_progress
+
+    envelope_tail = (
+        "json>"
+        + json.dumps(
+            {
+                "message": "",
+                "proposals": [],
+                "context_handoff": [],
+                "gate": {"kind": "PROTOCOL_ONLY_SENTINEL", "summary": "PROTOCOL_ONLY_SENTINEL"},
+            }
+        )
+        + "</loopx-review-json>"
+    )
+    frames = [
+        {
+            "at": 1.0,
+            "status": "CASCADE_RUN_STATUS_RUNNING",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+                    "plannerResponse": {
+                        "response": "首段安全可见输出。<loopx-review-",
+                    },
+                },
+            ],
+        },
+        {
+            "at": 2.0,
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "steps": [
+                {
+                    "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 0}},
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 1}},
+                    "plannerResponse": {
+                        "response": "首段安全可见输出。<loopx-review-",
+                    },
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 2}},
+                    "plannerResponse": {
+                        "response": envelope_tail,
+                        "stopReason": "STOP_REASON_STOP_PATTERN",
+                    },
+                },
+                {
+                    "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                    "status": "CORTEX_STEP_STATUS_DONE",
+                    "metadata": {"sourceTrajectoryStepInfo": {"stepIndex": 3}},
+                    "plannerResponse": {
+                        "response": "首段安全可见输出。<loopx-review-" + envelope_tail,
+                        "stopReason": "STOP_REASON_STOP_PATTERN",
+                    },
+                },
+            ],
+        },
+    ]
+    _native_clock(monkeypatch, language_server, frames)
+    events: list[tuple[str, dict[str, Any]]] = []
+    result = adapter_for(tmp_path, runtime_profile="trusted_owner").start_turn(
+        "检查跨步骤控制标签隐藏", lambda kind, data: events.append((kind, data))
+    )
+    streamed = "".join(data.get("text", "") for kind, data in events if kind == "answer.delta")
+    assert streamed == "首段安全可见输出。"
+    assert "PROTOCOL_ONLY_SENTINEL" not in streamed
+    assert "<loopx-review-" not in streamed
+
+    progress_state: dict[str, Any] = {}
+    progress_text = project_progress(
+        progress_state,
+        [
+            {"event_id": idx, "kind": kind, "payload": data}
+            for idx, (kind, data) in enumerate(events, 1)
+        ],
+    )
+    assert "PROTOCOL_ONLY_SENTINEL" not in (progress_text or "")
+    assert "PROTOCOL_ONLY_SENTINEL" not in str(progress_state.get("answer") or "")
+    assert result["message"] == "首段安全可见输出。"
+    assert len([1 for method, _ in language_server["calls"] if method == "SendUserCascadeMessage"]) == 1
