@@ -76,6 +76,54 @@ def test_completed_controller_point_cannot_retry_a_failed_boundary_with_later_wo
     assert attempts == [True] and marker.read_bytes() == original
 
 
+@pytest.mark.skipif(os.name != "posix" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                   reason="Requires real unprivileged directory permission denial")
+def test_completed_attempt_survives_artifact_index_permission_recovery(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from benchmark.runtime import checkpoint
+
+    declaration = tmp_path / "request.json"
+    destination = tmp_path / "checkpoints" / "point"
+    index = destination.parent / ".completed-attempts"
+    index.mkdir(parents=True)
+    declaration.write_text(json.dumps({"destination": str(destination), "point_metadata": {},
+        "components": [{"id": "workspace", "source_path": str(tmp_path / "workspace")}],
+        "controller_handoff": True, "native_session": True, "loopx_state": True, "evaluation_opportunity": True}))
+    env = {"LOOPX_CHECKPOINT_REQUEST": str(declaration), "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"),
+        "LOOPX_RUNTIME_ROOT": str(tmp_path / "runtime"), "LOOPX_REGISTRY": str(tmp_path / "registry"),
+        "LOOPX_GOAL_ID": "source", "LOOPX_AGENT_ID": "agent"}
+    monkeypatch.setattr("benchmark.runtime.checkpoint_continuation.restored_capture_gate",
+                        lambda *a, **k: {"capture_allowed": True})
+    monkeypatch.setattr(checkpoint, "read_heartbeat_settlement", lambda *a, **k:
+        SimpleNamespace(progress={"state": "settled"},
+                        identity=SimpleNamespace(value=SimpleNamespace(effect_id=k["turn_instance_id"]))))
+    monkeypatch.setattr(checkpoint, "research_participants",
+                        lambda *a: pytest.fail("A missed original point must not read later source state"))
+    first = {"ok": True, "stage": "execute", "mode": "heartbeat", "turn_id": "original"}
+    index.chmod(0o500)
+    try:
+        checkpoint.capture_after_wake(env, first)
+    finally:
+        index.chmod(0o700)
+    assert first["checkpoint"]["reason"] == "capture_failed"
+    assert first["checkpoint"]["error_kind"] == "PermissionError" and not list(index.iterdir())
+    witness = tmp_path / "wakes/original/checkpoint-completed-request.json"
+    original = witness.read_bytes()
+    for turn, changed_destination in (("original", True), ("later-work", False)):
+        if changed_destination:
+            request = json.loads(declaration.read_text())
+            request["destination"] = str(destination.with_name("another-point"))
+            declaration.write_text(json.dumps(request))
+        else:
+            request["destination"] = str(destination)
+            declaration.write_text(json.dumps(request))
+        later = {**first, "turn_id": turn}
+        checkpoint.capture_after_wake(env, later)
+        assert later["checkpoint"]["reason"] == "destination_already_attempted_no_replay"
+        assert later["ok"] and not later["checkpoint"]["captured"]
+    assert not list(index.iterdir()) and witness.read_bytes() == original
+
+
 @pytest.mark.parametrize("response", ["captured", "failed", "foreign", "timeout"])
 def test_original_request_only_and_cleanup_after_missed_point(tmp_path, response):
     mailbox = tmp_path / "checkpoint-controller"

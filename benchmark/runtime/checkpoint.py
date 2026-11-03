@@ -118,36 +118,64 @@ def _prior_replan_guard_seen(env: dict[str, str], current: Path, obligation_id: 
     return False
 
 
-def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_sha256: str) -> bool:
-    """A controller export lives outside this guest; retain its first attempt here.
-
-    The declared destination names one point, including a missed or uncertain
-    capture. A new wake or repaired source cannot replace it with later state.
-    This private Host transport index grants no work or restore authority.
-    """
-    attempts = destination.parent / ".completed-attempts"
-    attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if attempts.resolve() != attempts:
-        raise ValueError("completed capture attempt directory must be physical")
-    marker = attempts / (hashlib.sha256(destination.name.encode()).hexdigest() + ".json")
+def _write_checkpoint_attempt(path: Path, value: dict[str, str]) -> bool:
+    """Retain a private first-attempt record, including interrupted writes."""
     try:
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
-        if marker.is_symlink():
+        if path.is_symlink():
             raise ValueError("completed capture attempt must not be a symlink")
         return False
     with os.fdopen(descriptor, "w") as stream:
-        json.dump({"destination": destination.name, "settlement_effect_id": effect_id,
-                   "request_sha256": request_sha256}, stream)
+        json.dump(value, stream)
         stream.flush()
         os.fsync(stream.fileno())
-    for parent in (attempts, attempts.parent, attempts.parent.parent):
+    for parent in (path.parent, path.parent.parent, path.parent.parent.parent):
         directory = os.open(parent, os.O_RDONLY)
         try:
             os.fsync(directory)
         finally:
             os.close(directory)
     return True
+
+
+def _mark_completed_capture_attempt(destination: Path, effect_id: str, request_sha256: str,
+                                    wake_root: Path, turn_id: str) -> bool:
+    """Use the original wake witness when the artifact-side index was unavailable.
+
+    A controller export lives outside this guest. The declared destination names
+    one point, including a missed or uncertain capture; later work cannot replace
+    it. These private Host records grant no work or restore authority.
+    """
+    if (not wake_root.is_absolute() or wake_root.resolve() != wake_root or
+            not turn_id or Path(turn_id).name != turn_id):
+        raise ValueError("completed capture requires its physical owned wake")
+    for prior in sorted(wake_root.glob("*/checkpoint-completed-request.json")):
+        if prior.resolve(strict=True) != prior:
+            raise ValueError("completed capture wake witness must be physical")
+        value = json.loads(prior.read_bytes())
+        if (not isinstance(value, dict) or
+                set(value) != {"destination", "settlement_effect_id", "request_sha256"} or
+                any(not isinstance(item, str) or not item for item in value.values())):
+            raise ValueError("completed capture wake witness is incomplete")
+        if prior.parent.name == turn_id or value["destination"] == str(destination):
+            return False
+    wake = wake_root / turn_id
+    wake.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if wake.resolve() != wake:
+        raise ValueError("completed capture wake must be physical")
+    value = {"destination": str(destination), "settlement_effect_id": effect_id,
+             "request_sha256": request_sha256}
+    # This existing wake log owner is independent of the optional artifact
+    # directory. Index permission recovery cannot erase the original attempt.
+    if not _write_checkpoint_attempt(wake / "checkpoint-completed-request.json", value):
+        return False
+    attempts = destination.parent / ".completed-attempts"
+    attempts.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if attempts.resolve() != attempts:
+        raise ValueError("completed capture attempt directory must be physical")
+    marker = attempts / (hashlib.sha256(destination.name.encode()).hexdigest() + ".json")
+    return _write_checkpoint_attempt(marker, value)
 
 
 def capture_before_replan(env: dict[str, str], receipt: dict[str, Any], body: str) -> str:
@@ -360,7 +388,8 @@ def capture_after_wake(env: dict[str, str], receipt: dict[str, Any], *,
             raise ValueError("checkpoint settlement identity is unavailable")
         request_sha256 = hashlib.sha256(raw).hexdigest()
         if request.get("controller_handoff") and supplied_request is None:
-            if not _mark_completed_capture_attempt(destination, identity.effect_id, request_sha256):
+            if not _mark_completed_capture_attempt(destination, identity.effect_id, request_sha256,
+                    Path(env["LOOPX_WAKE_LOG_DIR"]), receipt["turn_id"]):
                 receipt["checkpoint"]["reason"] = "destination_already_attempted_no_replay"
                 return
         # Only this returned typed owner decision admits the capture boundary.

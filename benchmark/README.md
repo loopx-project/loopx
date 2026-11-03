@@ -260,7 +260,9 @@ refuses capture. The preparation and writer barrier share the original
 existing bounded completion allowance within that phase. Failure keeps the
 source's settled outcome and records a missed point. Each destination is attempted
 once, including failures or uncertain replies: a later wake cannot replace that
-point. A separately declared new point needs a fresh destination. An exhausted
+point. Its original wake retains an immutable declaration witness before the
+artifact-side attempt index is written, so index permission recovery cannot
+erase the missed point. A separately declared new point needs a fresh destination. An exhausted
 original phase rejects before reading the declaration or any source. Omitting the declaration
 keeps ordinary execution unchanged; no new operator trigger is accepted.
 

@@ -972,7 +972,9 @@ allowance after writer release. Ordinary file-only captures keep their 30-second
 window. A missed point continues the source and does not authorize a signal-based
 handoff or relabel a later state. The Host retains the first attempt per declared
 destination, even on failure or a lost reply; replay cannot replace its original
-settled source, and an exhausted phase performs no declaration/source reads.
+settled source. The original wake retains its declaration before the optional
+artifact-side index is written; index permission recovery cannot admit later
+state at the missed point. An exhausted phase performs no declaration/source reads.
 The joint native qualification has an explicit
 `settled_work` variant; deterministic inference qualifies mechanical adoption,
 not a scientific advantage or live rollout.
