@@ -334,14 +334,23 @@ def project_chat_return_deliveries(root, session_id, messages, *, source_store=N
 
 
 def project_chat_session_snapshot(root, store, session_id, *, registry,
-                                  message_limit=None, message_cursor=None):
+                                  message_limit=None, message_cursor=None, turn_id=None):
     """Project return delivery state into one existing Chat snapshot."""
 
     snapshot = (store.session_snapshot(session_id, strict_messages=True) if message_limit is not None
                 else store.session_snapshot(session_id))
+    if turn_id is not None:
+        if message_limit is None:
+            raise ValueError("a selected original Turn requires paged history")
+        turn = store.load_turn(session_id, turn_id)
+        if not turn or turn.get("session_id") != session_id or turn.get("turn_id") != turn_id:
+            raise ValueError("original Turn is unavailable from this Session")
+        # OriginalRequest already displays only this Turn. Select it before
+        # paging/projection, retaining every message and the strict journal read.
+        snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
     from .chat_history import page_chat_messages
     page = (page_chat_messages(session_id, snapshot["messages"], limit=message_limit,
-                              cursor=message_cursor) if message_limit is not None else None)
+                              cursor=message_cursor, turn_id=turn_id) if message_limit is not None else None)
     context_messages = snapshot["messages"]
     if page is not None:
         context_messages = context_messages[:page["message_page"]["total"]]

@@ -345,6 +345,33 @@ def test_return_delivery_readback_survives_a_separate_history_page(flow):  # noq
     assert sum(bool(row.get("collaboration")) for row in rows) == 1
 
 
+def test_turn_history_matches_full_history_collaboration_and_returns(flow):  # noqa: F811
+    from loopx.capabilities.manager_context import acknowledge
+    from loopx.capabilities.manager_context.roundtrip import drain, report, project_chat_session_snapshot
+
+    root, registry, store, create = flow
+    session, turn, receipt = create(brief=_history_page_brief())
+    sid, tid = session["session_id"], turn["turn_id"]
+    store.append_message(sid, role="agent", text="Original commitment", turn_id=tid)
+    acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Keep original audience")
+    report(root, "research", "worker", receipt["request_id"], "conclusion", "Original conclusion")
+    drain(root, registry, store, lambda *_: pytest.fail("A private App return cannot send to a provider"))
+    store.append_message(sid, role="user", text="Unrelated history")
+    whole = project_chat_session_snapshot(root, store, sid, registry=registry)
+    expected = [row for row in whole["messages"] if row.get("turn_id") == tid]
+    cursor, rows = None, []
+    while True:
+        page = project_chat_session_snapshot(root, store, sid, registry=registry,
+            message_limit=1, message_cursor=cursor, turn_id=tid)
+        rows.extend(page["messages"])
+        cursor = page["message_page"]["next_cursor"]
+        if cursor is None:
+            break
+    assert rows == expected
+    assert sum(bool(row.get("collaboration")) for row in rows) == 1
+    assert rows[-1].get("return_delivery"), "Scoped history retains actual return delivery readback"
+
+
 def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordinary, monkeypatch):  # noqa: F811
     from urllib.parse import urlencode
     from loopx.chat_server import ChatHTTPServer
@@ -386,6 +413,63 @@ def test_original_history_pages_freeze_append_boundary_and_keep_full_rows(ordina
         patch.setattr(store, "messages", unreadable)
         code, unavailable = request(path + "?message_limit=200")
     assert code == 503 and "private journal path" not in json.dumps(unavailable)
+
+
+def test_original_turn_history_keeps_complete_rows_and_scope_fences(ordinary, monkeypatch):  # noqa: F811
+    from urllib.parse import urlencode
+    from loopx.chat_server import ChatHTTPServer
+
+    store, runtime, contexts, request, capture, _, _ = ordinary
+    monkeypatch.setattr(ChatHTTPServer, "runtime_root", store.root.parent, raising=False)
+    monkeypatch.setattr(ChatHTTPServer, "registry_path", runtime.registry_path, raising=False)
+    _, opened = request("/api/chat/sessions", {
+        "context_kind": "project", "project_ref": contexts.available()[0]["project_ref"],
+    })
+    sid = opened["session_id"]
+    for i in range(430):
+        store.append_message(sid, role="user", text=f"Unrelated history {i}")
+    turn, _ = store.create_turn(sid, client_turn_id="selected-original", message="完整原始要求" * 3000, origin="web")
+    tid = turn["turn_id"]
+    for i in range(202):
+        store.append_message(sid, role="agent", text=f"Original response {i}", turn_id=tid,
+            attachments=[{"name": "original.png", "data_url": "data:image/png;base64,AA=="}] if i == 201 else None)
+    store.update_turn(sid, tid, status="completed", response={"message": "Original response 201"})
+    path = f"/api/chat/sessions/{sid}"
+    before = capture.read_bytes()
+    whole = request(path)[1]
+    expected = [row for row in whole["messages"] if row.get("turn_id") == tid]
+    recovered, recover = [], runtime.recover_exited_turn
+    def observe_recovery(source):
+        recovered.append(source)
+        return recover(source)
+    monkeypatch.setattr(runtime, "recover_exited_turn", observe_recovery)
+    query = {"message_limit": 200, "turn_id": tid}
+    code, first = request(path + "?" + urlencode(query))
+    assert code == 200 and first["message_page"]["turn_id"] == tid
+    assert len(first["messages"]) == 200 and first["message_page"]["total"] == len(expected) == 203
+    cursor = first["message_page"]["next_cursor"]
+    store.append_message(sid, role="agent", text="Outside the frozen original prefix", turn_id=tid)
+    code, rest = request(path + "?" + urlencode({**query, "message_cursor": cursor}))
+    assert code == 200 and rest["message_page"]["next_cursor"] is None
+    assert first["messages"] + rest["messages"] == expected
+    assert recovered == [], "A historical Turn read must not recover the Session's active execution"
+    assert capture.read_bytes() == before, "A scoped read cannot execute or recover model work"
+    assert "turn_id" not in request(path + "?message_limit=200")[1]["message_page"]
+    assert recovered == [sid], "An unscoped Chat refresh keeps its ordinary recovery behavior"
+    other, _ = store.create_turn(sid, client_turn_id="other-original", message="Other question", origin="web")
+    store.update_turn(sid, other["turn_id"], status="completed", response={"message": "Other answer"})
+    for selected in [None, other["turn_id"]]:
+        wrong = {"message_limit": 200, "message_cursor": cursor, **({"turn_id": selected} if selected else {})}
+        assert request(path + "?" + urlencode(wrong))[0] == 400
+    for invalid in ["turn_id=missing", "message_limit=200&turn_id=missing", "message_limit=200&turn_id=..",
+                    "message_limit=200&turn_id=", "message_limit=200&turn_id=a&turn_id=b"]:
+        assert request(path + "?" + invalid)[0] == 400
+    journal = store._session_dir(sid) / "messages.jsonl"
+    original = journal.read_bytes()
+    journal.write_bytes(original + b'{invalid record}\n')
+    assert request(path + "?" + urlencode(query))[0] == 400
+    journal.write_bytes(original)
+    assert request(path + "?" + urlencode(query))[1]["message_page"]["total"] == 204
 
 
 def test_app_steward_corrupt_legacy_configuration_never_falls_back(tmp_path):

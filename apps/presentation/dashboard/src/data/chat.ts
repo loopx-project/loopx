@@ -969,10 +969,11 @@ const chatMessagePageSchema = z.object({
   schema_version: z.literal("loopx_chat_message_page_v1"),
   offset: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
   snapshot_sha256: z.string().regex(/^[a-f0-9]{64}$/), next_cursor: z.string().min(1).max(1024).nullable(),
+  turn_id: z.string().min(1).optional(),
 });
 
 /** Hydrate one complete original prefix; partial pages never become a snapshot. */
-export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal): Promise<ChatSessionSnapshot> {
+export async function fetchChatSessionHistory(session: ChatSessionSummary | string, signal?: AbortSignal, turnId?: string): Promise<ChatSessionSnapshot> {
   const sessionId = typeof session === "string" ? session : session.session_id;
   // A delegation has the original Session ID; pin its first verified page's
   // scope. History discovery callers keep validating against their own source.
@@ -983,6 +984,7 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
   do {
     signal?.throwIfAborted();
     const query = new URLSearchParams({message_limit: "200"});
+    if (turnId !== undefined) query.set("turn_id", turnId);
     if (cursor !== null) query.set("message_cursor", cursor);
     const snapshot = await requestJson<ChatSessionSnapshot>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?${query}`,
@@ -1001,12 +1003,13 @@ export async function fetchChatSessionHistory(session: ChatSessionSummary | stri
     // page cannot silently lose the cursor contract and masquerade as complete.
     if (!Object.hasOwn(snapshot, "message_page")) {
       if (cursor !== null) throw new Error("The history page contract changed during read.");
-      return snapshot;
+      return turnId === undefined ? snapshot : {...snapshot, messages: snapshot.messages.filter(row => row.turn_id === turnId)};
     }
     const parsed = chatMessagePageSchema.safeParse(snapshot.message_page);
     if (!parsed.success) throw new Error("The original history page could not be verified.");
     const page = parsed.data, end = messages.length + snapshot.messages.length;
-    if (page.offset !== messages.length || snapshot.messages.length > 200 || end > page.total
+    if (page.turn_id !== turnId || (turnId !== undefined && snapshot.messages.some(row => row.turn_id !== turnId))
+      || page.offset !== messages.length || snapshot.messages.length > 200 || end > page.total
       || (total !== undefined && total !== page.total) || (digest !== undefined && digest !== page.snapshot_sha256)
       || (page.next_cursor !== null) !== (end < page.total)
       || (page.next_cursor !== null && (!snapshot.messages.length || cursors.has(page.next_cursor)))) {

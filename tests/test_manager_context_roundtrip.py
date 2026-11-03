@@ -113,14 +113,15 @@ def private_snapshot(frozen_private_reply, tmp_path):
         thread.join(timeout=2)
 
 
-def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path, private_snapshot):
+@pytest.mark.parametrize("scoped", [False, True])
+def test_frozen_private_reply_projects_original_text_without_mutating_model_input(frozen_private_reply, tmp_path, private_snapshot, scoped):
     store, session, turn, _, _, _, source_text, parent = frozen_private_reply
     before = {str(p): p.read_bytes() for p in store.root.rglob("*") if p.is_file()}
     # The core projection carries no provider history; the composition root joins it.
     generic = project_chat_session_snapshot(tmp_path, store, session["session_id"], registry=tmp_path / "absent.json",
                                           message_limit=1)
     assert "reply_context" not in generic["messages"][0]
-    snapshot = private_snapshot(message_limit=1)
+    snapshot = private_snapshot(message_limit=1, **({"turn_id": turn["turn_id"]} if scoped else {}))
     message = snapshot["messages"][0]
     assert message["text"] == turn["message"]
     assert message["reply_context"]["source_text"] == source_text
