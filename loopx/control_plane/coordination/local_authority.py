@@ -142,6 +142,12 @@ def local_authority_is_promoted(*, runtime_root: Path, goal_id: str) -> bool:
     return True
 
 
+def claim_worktree_candidate() -> Path | None:
+    """Locate the caller; the TS lease owner still verifies physical isolation."""
+    worktree = _git_worktree_root(Path.cwd())
+    return worktree if worktree is not None and (worktree / ".git").is_file() else None
+
+
 def claim_canonical_todo_if_promoted(
     *,
     registry_path: Path,
@@ -164,9 +170,7 @@ def claim_canonical_todo_if_promoted(
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     # This is only a candidate location. The lease owner observes physical
     # isolation and the current canonical scopes before granting execution.
-    worktree = _git_worktree_root(Path.cwd()) if manage_execution else None
-    if worktree is not None and not (worktree / ".git").is_file():
-        worktree = None
+    worktree = claim_worktree_candidate() if manage_execution else None
     result = effect_runtime_result(
         LOCAL_COORDINATION_TODO_CLAIM_METHOD,
         {

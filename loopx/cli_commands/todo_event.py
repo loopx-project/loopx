@@ -78,7 +78,7 @@ def _route_native_recovery(
             value = descriptor.get(field) or getattr(args, field, None)
             if flag not in arguments and value is not None:
                 arguments.extend(cli_option_args(flag, value))
-        if arguments[:1] == ["todo"]:
+        if step in {"claim", "retry"} and arguments[start:start + 2] == command[1:3]:
             for flag, field in (("--agent-id", "agent_id"), ("--role", "role"),
                                 ("--project", "project"), ("--state-file", "state_file")):
                 value = getattr(args, field, None)
