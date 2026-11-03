@@ -346,7 +346,7 @@ def test_cli_links_generated_core_id_and_reads_live_state(tmp_path, monkeypatch,
     assert archived["todo"]["archive_state"] == "archive"
     assert archived["todo"]["status"] == "done"
     follow = cli("manager-inbox", "read", "--goal-id", "goal-a", "--agent-id", "agent-a")["items"][0]["receiver_followthrough"]
-    assert follow["step"] == "return_answer"
+    assert follow["step"] == "review_request_work"
     assert [(t["todo_id"], t["title"], t["status"]) for t in follow["linked_todos"]] == [
         (tid, "[P1] Verified current work", "done")
     ]

@@ -125,7 +125,9 @@ function requestStage(row: ConversationRequest, zh: boolean) {
     case "reconcile_reservation": return zh ? "取消待收尾" : "Cancellation settling";
     case "await_return_delivery": return zh ? "待送达" : "Awaiting delivery";
     case "consume_peer_result": case "await_peer_consumption": return zh ? "结果待核对" : "Result awaiting readback";
-    default: return row.decision === "adopt" ? (zh ? "待结论" : "Awaiting conclusion")
+    default: return row.agenda?.remaining_work ? ((row.agenda.pending_return_count ?? 0) > 0
+      ? (zh ? "部分结果待送达" : "Partial result awaiting delivery") : (zh ? "已回部分结果" : "Partial result returned"))
+      : row.decision === "adopt" ? (zh ? "待结论" : "Awaiting conclusion")
       : row.decision === "defer" ? (zh ? "已暂缓" : "Deferred")
       : (zh ? "待回复" : "Awaiting reply");
   }
@@ -386,6 +388,10 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
             <summary><ChevronRight className="conversation-request-toggle" aria-hidden size={15}/><strong>{row.brief?.purpose ?? (row.read_status === "unavailable" ? (zh ? "交办内容待恢复" : "Brief needs recovery") : row.source_question)}</strong><span>{requestStage(row, zh)}</span>
               {row.last_event_at ? <time dateTime={row.last_event_at} aria-label={zh ? "最近记录" : "Latest record"}>{new Date(row.last_event_at).toLocaleString(locale, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})}</time> : null}</summary>
             <div className="conversation-request-detail">
+              {row.agenda?.remaining_work ? <section>
+                <h4>{zh ? "仍需完成" : "Remaining work"}</h4><p>{row.agenda.remaining_work.summary}</p>
+                <p>{zh ? "继续条件：" : "Continue when: "}{row.agenda.remaining_work.resume_when}</p>
+              </section> : null}
               {row.decision_reason ? <p>{row.decision_reason}</p> : null}
               {row.brief ? <><p>{row.brief.context}</p>
                 {row.brief.constraints.length ? <><h4>{zh ? "约束" : "Constraints"}</h4><ul>{row.brief.constraints.map((value, index) => <li key={index}>{value}</li>)}</ul></> : null}

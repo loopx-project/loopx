@@ -1079,8 +1079,8 @@ def derive_goal_frontier_replan_obligation_from_summaries(
                     "priority": "P0",
                     "todo_ids": settlement_todo_ids,
                     "text": (
-                        "settle the exact completed Todos through no-follow-up or "
-                        "link each to a real runnable successor"
+                        "settle the completed scope using its original completion identity, or "
+                        "record a genuine dependency on the mutable successor; do not update terminal links"
                     ),
                 },
                 {
@@ -1100,8 +1100,10 @@ def derive_goal_frontier_replan_obligation_from_summaries(
             recommended_action=(
                 "settle the exact completed Todo(s) "
                 f"{settlement_summary} through loopx todo complete --no-follow-up "
-                "when no real work remains; otherwise link a real runnable successor. "
-                "do not invent a user gate or add a lifecycle-only filler Todo"
+                "with the original completion identity when no follow-up remains in that scope. "
+                "Independent open/deferred work remains active. For genuine dependent work, "
+                "record its real readiness dependency on the mutable successor, preserving gates; "
+                "never add links to a terminal Todo; do not invent a user gate or lifecycle-only filler Todo"
             ),
             extra_fields={
                 "resolution_mode": TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE,

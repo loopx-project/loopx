@@ -21,6 +21,154 @@ import loopx.chat_runtime as chat_runtime
 import pytest
 
 
+@pytest.mark.parametrize("failure_kind", ["agent", "timeout", "runtime"])
+@pytest.mark.parametrize("control_unavailable", [False, True])
+def test_failed_worker_preserves_original_error_and_drains_followup(tmp_path, monkeypatch, failure_kind, control_unavailable):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import chat_turn_acceptance
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    store = ChatSessionStore(tmp_path / "chat")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    first, _ = store.create_queued_turn(sid, client_turn_id="original", message="Keep original request.")
+    following, _ = store.create_queued_turn(sid, client_turn_id="following", message="Independent follow-up.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    calls, failed = [], []
+    allowed = chat_turn_acceptance.managed_turn_execution_allowed
+
+    def checked(session, turn):
+        if control_unavailable and failed and turn["turn_id"] == first["turn_id"]:
+            raise EffectRuntimeResponseAmbiguous("chat.turn.execution_allowed", timeout=10)
+        return allowed(session, turn)
+
+    class Adapter:
+        upstream_thread_id = "saved-thread"
+
+        def capabilities(self):
+            return {}
+
+        def healthcheck(self):
+            return True
+
+        def interrupt_turn(self):
+            pass
+
+        def close_session(self):
+            pass
+
+        def start_turn(self, message, event_sink):
+            calls.append(message)
+            event_sink("turn.started", {"upstream_turn_id": "native-" + str(len(calls))})
+            if len(calls) == 1:
+                failed.append(True)
+                if failure_kind == "runtime":
+                    raise ValueError("Original provider failure.")
+                error = chat_agent.CodexChatTimeoutError if failure_kind == "timeout" else chat_agent.CodexChatAgentError
+                raise error("Original provider failure.", gate=None, error_code="response_timeout" if failure_kind == "timeout" else "upstream_transport_failure")
+            return {"message": "Follow-up completed."}
+
+    adapter = Adapter()
+    monkeypatch.setattr(chat_turn_acceptance, "managed_turn_execution_allowed", checked)
+    monkeypatch.setattr(runtime, "_ensure_adapter", lambda *a, **kw: adapter)
+    try:
+        runtime._drain_session_queue(session_id=sid, work_dir=tmp_path, objective="Research")
+        result = store.load_turn(sid, first["turn_id"])
+        assert result["status"] == ("timed_out" if failure_kind == "timeout" else "failed")
+        assert result["error"] == "Original provider failure."
+        assert result["error_code"] == {"agent": "upstream_transport_failure", "timeout": "response_timeout", "runtime": "runtime_error"}[failure_kind]
+        assert store.load_turn(sid, following["turn_id"])["status"] == "completed"
+        assert store.load_session(sid)["active_turn_id"] is None
+        assert calls == ["Keep original request.", "Independent follow-up."]
+        assert sum(row["kind"] == "turn.failed" for row in store.events_after(sid, first["turn_id"], None)) == 1
+        assert [row["text"] for row in store.messages(sid) if row["role"] == "error"] == ["Original provider failure."]
+    finally:
+        runtime.close()
+
+
+def test_transport_retry_refuses_unavailable_control_without_sending(tmp_path, monkeypatch):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import chat_turn_acceptance
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    store = ChatSessionStore(tmp_path / "chat")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="original", message="Keep original request.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    adapter = SimpleNamespace(healthcheck=lambda: True)
+    runtime.adapters[sid] = adapter
+
+    def unavailable(*args):
+        raise EffectRuntimeResponseAmbiguous("chat.turn.execution_allowed", timeout=10)
+
+    monkeypatch.setattr(chat_turn_acceptance, "managed_turn_execution_allowed", unavailable)
+    try:
+        assert not runtime._prepare_transport_retry(sid, turn["turn_id"], adapter, {}, {"serverOverloaded": {}})
+        assert not any(row["kind"] == "transport.retry_planned" for row in store.events_after(sid, turn["turn_id"], None))
+        assert store.load_turn(sid, turn["turn_id"]) == turn
+    finally:
+        runtime.adapters.clear()
+        runtime.close()
+
+
+@pytest.mark.parametrize("status", ["interrupting", "completed"])
+@pytest.mark.parametrize("failure_kind", ["agent", "timeout", "runtime"])
+def test_late_provider_failure_preserves_concurrent_stop_or_completion(tmp_path, monkeypatch, status, failure_kind):
+    from loopx.chat_store import ChatSessionStore
+    from loopx.control_plane import chat_turn_acceptance
+    from loopx.control_plane.effect_runtime import EffectRuntimeResponseAmbiguous
+
+    store = ChatSessionStore(tmp_path / "chat")
+    sid = store.create_session(goal_id="fixture", agent_id="codex",
+        adapter_kind="codex_app_server", upstream_thread_id="saved-thread")["session_id"]
+    turn, _ = store.create_turn(sid, client_turn_id="original", message="Keep original request.")
+    runtime = chat_runtime.ChatRuntimeController(store=store, codex_bin="unused")
+    allowed = chat_turn_acceptance.managed_turn_execution_allowed
+    preserved, effects = [], []
+
+    def checked(session, current):
+        if preserved:
+            raise EffectRuntimeResponseAmbiguous("chat.turn.execution_allowed", timeout=10)
+        return allowed(session, current)
+
+    def fail(message, event_sink):
+        if status == "interrupting":
+            store.begin_turn_interrupt(sid, turn["turn_id"], expected_statuses={"starting", "running"})
+        else:
+            store.update_turn(sid, turn["turn_id"], status="completing", response={"message": "Saved answer."})
+            store.finalize_managed_turn_completion(sid, turn["turn_id"])
+        preserved.append((store.session_snapshot(sid), store.load_turn(sid, turn["turn_id"])))
+        if failure_kind == "runtime":
+            raise ValueError("Late error.")
+        error = chat_agent.CodexChatTimeoutError if failure_kind == "timeout" else chat_agent.CodexChatAgentError
+        raise error("Late error.", gate=None)
+
+    adapter = SimpleNamespace(upstream_thread_id="saved-thread", start_turn=fail,
+        healthcheck=lambda: True, interrupt_turn=lambda: effects.append("cancel"))
+    monkeypatch.setattr(chat_turn_acceptance, "managed_turn_execution_allowed", checked)
+    try:
+        runtime._run_turn(session_id=sid, turn_id=turn["turn_id"], message=turn["message"], attachments=[], adapter=adapter)
+        after, (before, original_turn) = store.session_snapshot(sid), preserved[0]
+        # Closing the event buffer finishes activity timestamps, not ownership.
+        for view in (before, after):
+            for field in ("updated_at", "last_activity_at"):
+                view["session"].pop(field)
+            if view["active_turn"] is not None:
+                for field in ("first_event_at", "last_activity_at"):
+                    view["active_turn"].pop(field)
+        assert after == before
+        observed_turn = store.load_turn(sid, turn["turn_id"])
+        for record in (original_turn, observed_turn):
+            for field in ("first_event_at", "last_activity_at"):
+                record.pop(field)
+        assert observed_turn == original_turn
+        assert not effects
+        assert not any(row["kind"] == "turn.failed" for row in store.events_after(sid, turn["turn_id"], None))
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("mode", ["chat", "execution", "structured", "review"])
 def test_native_turn_preserves_operator_material(monkeypatch, tmp_path, mode):
     material = "  修复下面的代码，保留字面值：\r\n```python\r\nif ready:\r\n\tprint('a  b')\r\n```\n\nname:\u00a0value  \n"

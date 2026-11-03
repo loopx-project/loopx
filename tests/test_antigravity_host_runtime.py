@@ -726,6 +726,21 @@ def test_bind_session_and_bind_agent_thread_preserve_sidecar_policy_and_reject_f
         ["CRON_TZ=UTC */5 * * * *", "python export_notes.py"],
         ["CRON_TZ=UTC */5 * * * *", "python export_loopx_notes.py"],
         ["CRON_TZ=UTC */5 * * * *", "python /opt/host_runtime/export_notes.py"],
+        [
+            "CRON_TZ=UTC */5 * * * *",
+            "python",
+            "export_notes.py",
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            "sidecar-tick",
+        ],
+        [
+            "CRON_TZ=UTC */5 * * * *",
+            "/usr/local/bin/custom-runner",
+            "-m",
+            "loopx.agy_goal_mode.host_runtime",
+            "sidecar-tick",
+        ],
     ):
         foreign_sidecar = {
             "builtin": "schedule",
@@ -902,3 +917,112 @@ def test_bind_session_and_bind_agent_thread_preserve_sidecar_policy_and_reject_f
     assert mcp_ctx["agent_id"] == SCOPED_AGENT_ID
     assert Path(mcp_ctx["registry"]).resolve() == registry_path.resolve()
 
+
+def test_liveness_and_sidecar_tick_fail_closed_when_trajectory_summary_unavailable(
+    tmp_path, monkeypatch
+):
+    from loopx.capabilities.native_chat import antigravity_adapter as provider
+
+    monkeypatch.setenv("ANTIGRAVITY_LS_ADDRESS", "127.0.0.1:4321")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "token-xyz")
+    args = bound(tmp_path)
+    args.agy_home = str(tmp_path / "agy-home")
+    args.sidecar_config = str(tmp_path / "sidecar.json")
+    args.agentapi = "agentapi"
+
+    wake_cmds: list[list[str]] = []
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda cmd, **_kw: (
+            wake_cmds.append(list(cmd))
+            or subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_run_core_json",
+        lambda _a, _cmd: {"should_run": True, "effective_action": "normal_run"},
+    )
+
+    # 1. Initial check: GetAllCascadeTrajectories raises (e.g. HTTP 503) -> fail closed, no wake
+    def rpc_summary_error(_url, _token, method, _payload, **_):
+        if method == "GetCascadeTrajectory":
+            return {
+                "trajectory": {"cascadeId": "native-chat"},
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "numTotalSteps": 4,
+            }
+        raise RuntimeError("HTTP 503 Service Unavailable")
+
+    monkeypatch.setattr(provider, "_rpc_post", rpc_summary_error)
+    liveness_err = runtime._inspect_conversation_liveness("native-chat")
+    assert liveness_err["alive"] is True
+    assert liveness_err["idle"] is False
+    assert liveness_err["summary_available"] is False
+    assert liveness_err["reason"] == "trajectory_summary_unavailable"
+    res_err = runtime.sidecar_tick(args)
+    assert res_err["decision"] == "noop"
+    assert res_err["reason"] == "trajectory_summary_unavailable"
+    assert wake_cmds == []
+
+    # 2. Initial check: GetAllCascadeTrajectories omits conversation_id -> fail closed, no wake
+    monkeypatch.setattr(
+        provider,
+        "_rpc_post",
+        lambda _url, _token, method, _payload, **_: (
+            {
+                "trajectory": {"cascadeId": "native-chat"},
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "numTotalSteps": 4,
+            }
+            if method == "GetCascadeTrajectory"
+            else {"trajectorySummaries": {"other-session": {"status": "CASCADE_RUN_STATUS_IDLE"}}}
+        ),
+    )
+    res_missing = runtime.sidecar_tick(args)
+    assert res_missing["decision"] == "noop"
+    assert res_missing["reason"] == "trajectory_summary_unavailable"
+    assert wake_cmds == []
+
+    # 3. Pre-wake recheck: initial summary succeeds (idle, not canceled), but recheck summary fails -> no wake
+    summary_calls = 0
+
+    def rpc_recheck_summary_fails(_url, _token, method, _payload, **_):
+        nonlocal summary_calls
+        if method == "GetCascadeTrajectory":
+            return {
+                "trajectory": {"cascadeId": "native-chat"},
+                "status": "CASCADE_RUN_STATUS_IDLE",
+                "numTotalSteps": 4,
+            }
+        summary_calls += 1
+        if summary_calls == 1:
+            return {
+                "trajectorySummaries": {
+                    "native-chat": {
+                        "status": "CASCADE_RUN_STATUS_IDLE",
+                        "latestExecutorTerminationReason": "",
+                    }
+                }
+            }
+        raise RuntimeError("HTTP 503 on pre-wake recheck")
+
+    monkeypatch.setattr(provider, "_rpc_post", rpc_recheck_summary_fails)
+    res_recheck = runtime.sidecar_tick(args)
+    assert res_recheck["decision"] == "noop"
+    assert res_recheck["reason"] == "session_state_changed_before_wake"
+    assert wake_cmds == []
+
+
+def test_stop_hook_skips_in_place_recovery_when_session_steps_exceed_ceiling(
+    tmp_path, monkeypatch
+):
+    args = bound(tmp_path)
+    monkeypatch.setattr(runtime, "_admitted", lambda _a: True)
+    monkeypatch.setattr(
+        runtime,
+        "_native_input",
+        lambda _a, _t: ("anchor-bloated", "CASCADE_RUN_STATUS_IDLE", 401),
+    )
+    assert runtime.stop_hook(args, event()) == {}

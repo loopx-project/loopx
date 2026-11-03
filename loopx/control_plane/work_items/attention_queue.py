@@ -240,7 +240,11 @@ def build_attention_queue(
             item = active_state_item
         else:
             item = context.goal_attention(goal)
-            if not item:
+            if not item or (
+                current_status_run is None
+                and item.get("status") == "unknown"
+                and active_state_item
+            ):
                 item = active_state_item
         if item:
             item, projection_warning = _reconcile_active_state_item(

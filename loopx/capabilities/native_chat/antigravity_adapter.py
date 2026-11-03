@@ -26,7 +26,8 @@ from ...chat import (
     parse_agent_response,
 )
 from ...chat_agent import CodexChatAgentError, _turn_prompt
-from ...presentation.codex_activity import CodexActivitySteps
+from .antigravity_activity import AntigravityActivity
+from .manager_input import manager_input_matches
 
 
 ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-argon-high"
@@ -83,17 +84,6 @@ def _check_hard_timeout(value: float | None) -> None:
         raise ValueError("Antigravity hard timeout must be finite and positive")
 
 
-_ITEM_STARTED_LABELS: dict[str, str] = {
-    "reasoning": "Agent 正在思考",
-    "contextCompaction": "Agent 正在压缩会话上下文",
-    "commandExecution": "Agent 正在执行命令",
-    "mcpToolCall": "Agent 正在调用工具",
-    "dynamicToolCall": "Agent 正在调用工具",
-    "webSearch": "Agent 正在检索",
-    "fileChange": "Agent 正在修改文件",
-}
-
-
 class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str,
                          headers: Any, newurl: str) -> None:
@@ -145,16 +135,10 @@ def _rpc_post(
             data = json.loads(raw) if raw.strip() else {}
             return data if isinstance(data, dict) else {}
     except urllib.error.HTTPError as exc:
-        err_code = (
-            "antigravity_transport_error"
-            if exc.code in {499, 502, 503, 504}
-            and method in {"GetCascadeTrajectory", "GetCascadeTrajectorySteps"}
-            else "antigravity_rpc_error"
-        )
         raise CodexChatAgentError(
             f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}",
             gate=None,
-            error_code=err_code,
+            error_code="antigravity_rpc_error",
         ) from exc
     except Exception as exc:
         raise CodexChatAgentError(
@@ -166,8 +150,13 @@ def _rpc_post(
 
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None,
+    *, deadline: float | None = None,
 ) -> dict[str, Any] | None:
-    """Discover a running local Antigravity language_server endpoint and CSRF token."""
+    """Discover a running local endpoint without reusing an availability verdict.
+
+    Readiness can bound the whole observation, including process listing. An
+    execution caller without that deadline retains the existing phase limits.
+    """
     source_env = os.environ if env is None else env
     explicit_url = str(source_env.get("ANTIGRAVITY_LS_URL") or "").strip()
     explicit_token = str(source_env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
@@ -176,12 +165,15 @@ def discover_antigravity_language_server(
             return None
         try:
             explicit_url = _local_url(explicit_url)
+            timeout = 2.5 if deadline is None else min(2.5, deadline - time.monotonic())
+            if timeout <= 0:
+                return None
             _rpc_post(
                 explicit_url,
                 explicit_token,
                 "GetCascadeModelConfigData",
                 {},
-                timeout=2.5,
+                timeout=timeout,
             )
             return {
                 "url": explicit_url.rstrip("/"),
@@ -192,13 +184,17 @@ def discover_antigravity_language_server(
         except (CodexChatAgentError, ValueError):
             return None
 
-    ps_bin = shutil.which("ps") or ("/bin/ps" if Path("/bin/ps").exists() else "ps")
+    process_timeout = 3.0 if deadline is None else min(3.0, deadline - time.monotonic())
+    if process_timeout <= 0:
+        return None
     try:
         ps_out = subprocess.check_output(
-            [ps_bin, "-u", str(os.getuid()), "-o", "pid=,command="],
+            ["ps", "-u", str(os.getuid()), "-o", "pid=,command="],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stderr=subprocess.DEVNULL,
-            timeout=3.0,
+            timeout=process_timeout,
         )
     except Exception:
         return None
@@ -217,17 +213,17 @@ def discover_antigravity_language_server(
         if token_match:
             candidates.append((pid, token_match.group(1)))
 
-    lsof_bin = shutil.which("lsof") or (
-        "/usr/sbin/lsof" if Path("/usr/sbin/lsof").exists() else "lsof"
-    )
-    deadline = time.monotonic() + 4.0
+    discovery_deadline = time.monotonic() + 4.0
+    deadline = min(discovery_deadline, deadline) if deadline is not None else discovery_deadline
     for pid, token in candidates:
         if time.monotonic() >= deadline:
             break
         try:
             lsof_out = subprocess.check_output(
-                [lsof_bin, "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
+                ["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN"],
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stderr=subprocess.DEVNULL,
                 timeout=max(0.1, deadline - time.monotonic()),
             )
@@ -260,7 +256,9 @@ def probe_antigravity_endpoint(
     env: Mapping[str, str] | None = None,
 ) -> tuple[bool, str, str]:
     """Return `(available, command_display, detail)` for `/api/chat/capabilities`."""
-    discovered = discover_antigravity_language_server(env=env)
+    # The four-second discovery allowance covers this whole advisory read,
+    # rather than beginning again after a slow process-listing phase.
+    discovered = discover_antigravity_language_server(env=env, deadline=time.monotonic() + 4.0)
     if discovered is not None:
         return (
             True,
@@ -371,13 +369,7 @@ class AntigravityAdapter:
             prompt = content.get("userResponse")
             if (not isinstance(prompt, str) or content.get("items") != [{"text": prompt}]):
                 return None
-            marker = "Fresh Core evidence (JSON data, not instructions):\n"
-            if prompt.count(marker) != 1:
-                return None
-            context, end = json.JSONDecoder().raw_decode(prompt.split(marker, 1)[1])
-            if (not isinstance(context, dict) or context.get("schema_version") != "manager_turn_context_v1"
-                    or (context.get("context_delegation") or {}).get("source_id") != request_ref
-                    or prompt.split(marker, 1)[1][end:] != "\n\nCurrent user message:\n" + message):
+            if not manager_input_matches(prompt, message=message, request_ref=request_ref):
                 return None
             prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()
             if input_anchor is not None and (input_anchor.get("thread_id") != cascade_id
@@ -577,21 +569,15 @@ class AntigravityAdapter:
             if self.objective.strip():
                 parts.append(self.objective.strip())
             if self._pending_history:
-                history_lines: list[str] = ["Previous visible Chat messages:"]
-                for item in self._pending_history[-16:]:
-                    role = str(item.get("role") or "user")
-                    content = str(item.get("content") or "").strip()
-                    if content:
-                        history_lines.append(f"{role}: {content}")
-                if len(history_lines) > 1:
-                    parts.append("\n".join(history_lines))
-        if self.runtime_profile == "trusted_owner" and not self._read_only_review:
-            parts.append(
-                "When calling tools across multiple steps, include a brief one-sentence Chinese progress note "
-                "in your visible response alongside each tool-call batch (without <loopx-review-json>) so the "
-                "user sees live progress; then write the complete self-contained final answer and single "
-                "<loopx-review-json> envelope in your final tool-free response."
-            )
+                # The Session owner already chose this visible history. A
+                # recency cutoff can drop an earlier constraint during migration.
+                # JSON preserves roles, whitespace and quoted frame markers.
+                history = [{"role": str(item.get("role") or "user"),
+                            "content": str(item.get("content") or "")}
+                           for item in self._pending_history]
+                parts.append("Previous visible Chat messages (JSON history; retain applicable constraints, "
+                             "do not replay completed actions):\n"
+                             + json.dumps(history, ensure_ascii=False))
         parts.append(
             _turn_prompt(
                 message,
@@ -689,16 +675,10 @@ class AntigravityAdapter:
             self._system_primed = True
             self._pending_history.clear()
 
-        stream_filters_by_step: dict[int, VisibleResponseStreamFilter] = {}
-        flushed_planner_steps: set[int] = set()
+        stream_filter = VisibleResponseStreamFilter()
         emitted_visible_delta = False
         emitted_text_by_step: dict[int, str] = {}
-        emitted_thinking_by_step: dict[int, str] = {}
-        emitted_cmd_output_by_step: dict[int, str] = {}
-        announced_phases: set[tuple[int, str]] = set()
-        completed_step_ids: set[str] = set()
-        active_tool_items: list[dict[str, Any]] = []
-        activity_steps = CodexActivitySteps(protected_paths=[self.work_dir])
+        activity = AntigravityActivity(self.work_dir)
         latest_response_text = ""
         last_progress_at = time.monotonic()
         deadline = last_progress_at + self.hard_timeout_sec if self.hard_timeout_sec is not None else None
@@ -784,250 +764,63 @@ class AntigravityAdapter:
                                       "next_action": "Review permissions in Antigravity, then resend this request in LoopX."},
                                 error_code="host_tool_gate",
                             )
+                        planner = step.get("plannerResponse")
+                        if (step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+                                and isinstance(planner, dict) and planner.get("toolCalls")
+                                and (self.runtime_profile == "restricted" or self._read_only_review)):
+                            raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
+                                                      gate=None, error_code="unsupported_configuration")
+                        if event_sink is not None:
+                            for phase in activity.observe(step_idx, step):
+                                event_sink("agent.phase", phase)
                         if step_type == "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
                             pr = step.get("plannerResponse") or {}
                             if not isinstance(pr, dict):
                                 continue
-                            if event_sink is not None and active_tool_items:
-                                for prev_item in list(active_tool_items):
-                                    prev_id = str(prev_item.get("id") or "")
-                                    if prev_id and prev_id not in completed_step_ids:
-                                        completed_step_ids.add(prev_id)
-                                        done_item = dict(prev_item, status="completed")
-                                        done_step = activity_steps.completed(done_item)
-                                        if done_step:
-                                            event_sink(
-                                                "agent.phase",
-                                                {
-                                                    "phase": "tool_call",
-                                                    "label": "Agent 返回了处理状态",
-                                                    "method": "item/completed",
-                                                    "step": done_step,
-                                                },
-                                            )
-                                active_tool_items.clear()
-                            thinking = str(pr.get("thinking") or "").strip()
-                            think_item_id = f"agy_think_{step_idx}"
-                            if thinking:
-                                if (step_idx, "thinking") not in announced_phases:
-                                    announced_phases.add((step_idx, "thinking"))
-                                    started_step = activity_steps.started(
-                                        {"id": think_item_id, "type": "reasoning", "summary": []}
-                                    )
-                                    if event_sink is not None:
-                                        event_sink(
-                                            "agent.phase",
-                                            {
-                                                "phase": "thinking",
-                                                "label": _ITEM_STARTED_LABELS["reasoning"],
-                                                "method": "item/started",
-                                                **({"step": started_step} if started_step else {}),
-                                            },
-                                        )
-                                prev_think = emitted_thinking_by_step.get(step_idx, "")
-                                think_delta = (
-                                    thinking[len(prev_think) :]
-                                    if thinking.startswith(prev_think)
-                                    else thinking
-                                )
-                                emitted_thinking_by_step[step_idx] = thinking
-                                if think_delta and event_sink is not None:
-                                    delta_step = activity_steps.reasoning_delta(
-                                        think_item_id, think_delta, summary=True
-                                    )
-                                    if delta_step:
-                                        event_sink(
-                                            "agent.phase",
-                                            {
-                                                "phase": "thinking",
-                                                "label": "Agent 正在思考",
-                                                "method": "item/reasoning/summaryTextDelta",
-                                                "step": delta_step,
-                                            },
-                                        )
-                                if (
-                                    step_status == "CORTEX_STEP_STATUS_DONE"
-                                    and think_item_id not in completed_step_ids
-                                ):
-                                    completed_step_ids.add(think_item_id)
-                                    done_step = activity_steps.completed(
-                                        {"id": think_item_id, "type": "reasoning", "summary": [thinking]}
-                                    )
-                                    if done_step and event_sink is not None:
-                                        event_sink(
-                                            "agent.phase",
-                                            {
-                                                "phase": "thinking",
-                                                "label": "Agent 返回了处理状态",
-                                                "method": "item/completed",
-                                                "step": done_step,
-                                            },
-                                        )
-                            tool_calls = pr.get("toolCalls") or []
-                            if tool_calls and (self.runtime_profile == "restricted" or self._read_only_review):
-                                raise CodexChatAgentError("Antigravity did not honor text-only Chat.",
-                                                          gate=None, error_code="unsupported_configuration")
-                            if isinstance(tool_calls, list) and tool_calls and (step_idx, "tool") not in announced_phases:
-                                announced_phases.add((step_idx, "tool"))
-                                for tc_idx, tc in enumerate(tool_calls):
-                                    if not isinstance(tc, dict):
-                                        continue
-                                    tool_name = str(tc.get("name") or "tool")
-                                    tool_id = str(tc.get("id") or f"agy_tool_{step_idx}_{tc_idx}")
-                                    raw_args = tc.get("argumentsJson")
-                                    parsed_args: dict[str, Any] = {}
-                                    if isinstance(raw_args, str) and raw_args.strip():
-                                        try:
-                                            loaded = json.loads(raw_args)
-                                            if isinstance(loaded, dict):
-                                                parsed_args = loaded
-                                        except ValueError:
-                                            pass
-                                    if tool_name == "run_command":
-                                        cmd_str = str(
-                                            parsed_args.get("CommandLine")
-                                            or parsed_args.get("toolSummary")
-                                            or "run_command"
-                                        )
-                                        item_obj: dict[str, Any] = {
-                                            "id": tool_id,
-                                            "type": "commandExecution",
-                                            "command": cmd_str,
-                                            "status": "inProgress",
-                                        }
-                                        phase_label = _ITEM_STARTED_LABELS["commandExecution"]
-                                    else:
-                                        server_name = str(parsed_args.get("ServerName") or "antigravity")
-                                        inner_tool = str(parsed_args.get("ToolName") or tool_name)
-                                        item_obj = {
-                                            "id": tool_id,
-                                            "type": "mcpToolCall",
-                                            "server": server_name,
-                                            "tool": inner_tool,
-                                            "status": "inProgress",
-                                        }
-                                        phase_label = f"正在调用 {inner_tool}"
-                                    active_tool_items.append(item_obj)
-                                    started_step = activity_steps.started(item_obj)
-                                    if event_sink is not None:
-                                        event_sink(
-                                            "agent.phase",
-                                            {
-                                                "phase": "tool_call",
-                                                "label": phase_label,
-                                                "method": "item/started",
-                                                **({"step": started_step} if started_step else {}),
-                                            },
-                                        )
                             text = str(pr.get("modifiedResponse") or pr.get("response") or "")
                             if text:
-                                step_filter = stream_filters_by_step.setdefault(
-                                    step_idx, VisibleResponseStreamFilter()
-                                )
                                 prev_text = emitted_text_by_step.get(step_idx, "")
                                 if text.startswith(prev_text):
                                     delta_chunk = text[len(prev_text) :]
                                 else:
                                     delta_chunk = text
-                                emitted_text_by_step[step_idx] = text
                                 latest_response_text = text
                                 if delta_chunk and event_sink is not None:
-                                    visible_delta = step_filter.feed(delta_chunk)
+                                    if not prev_text:
+                                        combined_marker = stream_filter.marker_pending + delta_chunk.lstrip()
+                                        continues_control_tag = bool(
+                                            combined_marker
+                                            and (
+                                                combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                                or CHAT_REVIEW_OPEN_TAG.startswith(combined_marker)
+                                            )
+                                        )
+                                        if (
+                                            continues_control_tag
+                                            and not combined_marker.startswith(CHAT_REVIEW_OPEN_TAG)
+                                            and step_status != "CORTEX_STEP_STATUS_DONE"
+                                        ):
+                                            continue
+                                        prior_texts = [
+                                            val
+                                            for idx, val in sorted(emitted_text_by_step.items())
+                                            if idx != step_idx and val
+                                        ]
+                                        if (
+                                            prior_texts
+                                            and not delta_chunk.startswith("\n")
+                                            and not continues_control_tag
+                                        ):
+                                            last_prior = prior_texts[-1]
+                                            if not last_prior.endswith("\n"):
+                                                delta_chunk = "\n\n" + delta_chunk
+                                            elif not last_prior.endswith("\n\n"):
+                                                delta_chunk = "\n" + delta_chunk
+                                    visible_delta = stream_filter.feed(delta_chunk)
                                     if visible_delta:
                                         emitted_visible_delta = True
                                         event_sink("answer.delta", {"text": visible_delta})
-                                if (
-                                    step_status == "CORTEX_STEP_STATUS_DONE"
-                                    and tool_calls
-                                    and step_idx not in flushed_planner_steps
-                                ):
-                                    flushed_planner_steps.add(step_idx)
-                                    if event_sink is not None:
-                                        step_tail = step_filter.finish()
-                                        if step_tail:
-                                            emitted_visible_delta = True
-                                            event_sink("answer.delta", {"text": step_tail + "\n\n"})
-                        elif step_type == "CORTEX_STEP_TYPE_RUN_COMMAND":
-                            rc = step.get("runCommand") or {}
-                            if not isinstance(rc, dict):
-                                continue
-                            cmd_item_id = f"agy_cmd_{step_idx}"
-                            cmd_str = str(rc.get("commandLine") or rc.get("command") or "command")
-                            if (step_idx, "run_command") not in announced_phases:
-                                announced_phases.add((step_idx, "run_command"))
-                                if not active_tool_items:
-                                    started_step = activity_steps.started(
-                                        {
-                                            "id": cmd_item_id,
-                                            "type": "commandExecution",
-                                            "command": cmd_str,
-                                            "status": "inProgress",
-                                        }
-                                    )
-                                    if event_sink is not None:
-                                        event_sink(
-                                            "agent.phase",
-                                            {
-                                                "phase": "tool_call",
-                                                "label": _ITEM_STARTED_LABELS["commandExecution"],
-                                                "method": "item/started",
-                                                **({"step": started_step} if started_step else {}),
-                                            },
-                                        )
-                            target_id = (
-                                str(active_tool_items[0].get("id"))
-                                if active_tool_items
-                                else cmd_item_id
-                            )
-                            combined_out = str(rc.get("combinedOutput") or "")
-                            if combined_out:
-                                prev_out = emitted_cmd_output_by_step.get(step_idx, "")
-                                out_delta = (
-                                    combined_out[len(prev_out) :]
-                                    if combined_out.startswith(prev_out)
-                                    else combined_out
-                                )
-                                emitted_cmd_output_by_step[step_idx] = combined_out
-                                if out_delta and event_sink is not None:
-                                    delta_step = activity_steps.activity_delta(
-                                        target_id, out_delta, kind="command"
-                                    )
-                                    if delta_step:
-                                        event_sink(
-                                            "agent.phase",
-                                            {
-                                                "phase": "tool_call",
-                                                "label": "Agent 收到命令新输出",
-                                                "method": "item/commandExecution/outputDelta",
-                                                "step": delta_step,
-                                            },
-                                        )
-                            if (
-                                step_status == "CORTEX_STEP_STATUS_DONE"
-                                and target_id not in completed_step_ids
-                            ):
-                                completed_step_ids.add(target_id)
-                                exit_code = rc.get("exitCode")
-                                done_step = activity_steps.completed(
-                                    {
-                                        "id": target_id,
-                                        "type": "commandExecution",
-                                        "command": cmd_str,
-                                        "status": "completed",
-                                        "exitCode": exit_code if isinstance(exit_code, int) else 0,
-                                        "aggregatedOutput": combined_out,
-                                    }
-                                )
-                                if done_step and event_sink is not None:
-                                    event_sink(
-                                        "agent.phase",
-                                        {
-                                            "phase": "tool_call",
-                                            "label": "Agent 返回了处理状态",
-                                            "method": "item/completed",
-                                            "step": done_step,
-                                        },
-                                    )
+                                emitted_text_by_step[step_idx] = text
                         elif step_type == "CORTEX_STEP_TYPE_ERROR_MESSAGE":
                             # The native trajectory also records recoverable
                             # API attempts and cleared errors. The native host
@@ -1063,6 +856,16 @@ class AntigravityAdapter:
                     error.native_error_info = detail
                     raise error
                 planner = final.get("plannerResponse") or {}
+                # Native IDLE can occur between input, tool and planner steps.
+                # Keep observing this invocation; only a finished answer after
+                # all current work settles can close it. The existing idle and
+                # hard deadlines, permission gates and cancellation still apply.
+                if (planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
+                        and (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE" or planner.get("toolCalls")
+                        or (planner.get("stopReason") is None and not self._read_only_review)
+                        or any(step.get("status") in {"CORTEX_STEP_STATUS_GENERATING", "CORTEX_STEP_STATUS_RUNNING"}
+                               for _, step in current_steps))):
+                    continue
                 if self._read_only_review:
                     inputs = [step for _, step in current_steps if step.get("type") == "CORTEX_STEP_TYPE_USER_INPUT"]
                     execution = (inputs[0].get("metadata") or {}).get("executionId") if len(inputs) == 1 else None
@@ -1074,20 +877,18 @@ class AntigravityAdapter:
                                                   gate=None, error_code="upstream_transport_failure")
                 if (final.get("type") != "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
                         or final.get("status") != "CORTEX_STEP_STATUS_DONE" or planner.get("toolCalls")
+                        or any(step.get("status") != "CORTEX_STEP_STATUS_DONE" for _, step in current_steps)
                         or not str(planner.get("modifiedResponse") or planner.get("response") or "").strip()
-                        or planner.get("stopReason") not in {None, "STOP_REASON_STOP_PATTERN"}):
+                        or planner.get("stopReason") != "STOP_REASON_STOP_PATTERN"):
                     raise CodexChatAgentError("Antigravity ended without a verified final response; execution may have occurred.",
                                               gate=None, error_code="upstream_transport_failure")
                 break
 
         if event_sink is not None:
-            for s_idx, sf in sorted(stream_filters_by_step.items()):
-                if s_idx in flushed_planner_steps:
-                    continue
-                tail = sf.finish()
-                if tail:
-                    emitted_visible_delta = True
-                    event_sink("answer.delta", {"text": tail})
+            tail = stream_filter.finish()
+            if tail:
+                emitted_visible_delta = True
+                event_sink("answer.delta", {"text": tail})
 
         if not latest_response_text.strip():
             raise CodexChatAgentError(

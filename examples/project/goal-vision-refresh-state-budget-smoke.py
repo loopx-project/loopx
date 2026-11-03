@@ -62,6 +62,8 @@ def write_fixture(root: Path) -> tuple[Path, Path, Path]:
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file,
+                        # This fixture isolates vision authoring from Stride review.
+                        "execution_profile": {"stride_strategy": "off"},
                         "adapter": {"kind": "fixture", "status": "connected-read-only"},
                         "authority_sources": [],
                         "coordination": {

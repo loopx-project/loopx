@@ -13,7 +13,7 @@ from .quota_presentation import (
     _quota_renderer as _quota_renderer,
 )
 from .quota_capture import (
-    bind_capture_selection_transport, capture_decision, handoff_decision,
+    bind_capture_selection_transport, budgeted_settlement_result, capture_decision, handoff_decision,
     handle_native_context_command, handle_replan_view, prepare_quota_capture, native_context_capture_view,
     native_context_activation, model_context_reference,
 )
@@ -337,6 +337,25 @@ def _emit_quota_result(
             turn_id=_effective_spend_turn_instance_id(payload, heartbeat_turn_id=heartbeat_turn_id),
             started_at=usage_quota_started,
         )
+    if (args.quota_command == "spend-slot" and args.format == "json" and context is not None
+            and getattr(args, "max_page_output_bytes", None) is not None):
+        try:
+            view = budgeted_settlement_result(payload, runtime_root=context.runtime_root,
+                output_bytes=args.max_page_output_bytes)
+        except QuotaDecisionTransportError as exc:
+            # Transport failure cannot replace an already evaluated refusal or
+            # committed receipt. Preserve unknown controls as well as identity;
+            # only the bulky diagnostic snapshots are omitted on this fallback.
+            view = {key: value for key, value in payload.items() if key not in ("before", "after")}
+            view["result_delivery_error"] = {"error_code": exc.error_code, "reason": str(exc),
+                "recommended_action": "Preserve the original result controls and Turn identity. "
+                    "Repair capture privacy or remove --max-page-output-bytes and read back the "
+                    "same operation; do not repeat admission or assume it did not commit.",
+                "omitted_diagnostics": [key for key in ("before", "after") if key in payload]}
+            print_payload(view, args.format, _quota_renderer(args, failure=True))
+            return 1
+        print_payload(view, args.format, _quota_renderer(args, failure=payload.get("ok") is not True))
+        return 0 if payload.get("ok") is True else 1
     try:
         context_delivery_enabled = native_context_activation(args)["enabled"]
     except QuotaCommandValidationError:

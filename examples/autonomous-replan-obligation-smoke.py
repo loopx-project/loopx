@@ -173,6 +173,8 @@ def write_fixture(
                     {
                         "id": GOAL_ID,
                         "domain": "autonomous-replan-fixture",
+                        # Isolate progress/cadence semantics from optional structured work-shape review.
+                        "execution_profile": {"stride_strategy": "off"},
                         "status": "active",
                         "repo": str(project),
                         "state_file": state_file,

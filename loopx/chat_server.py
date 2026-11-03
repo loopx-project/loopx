@@ -1660,14 +1660,14 @@ class ChatRequestHandler(
                 "state": "ready", "runtime_identity": self.server.runtime_identity})
             return
         if path == CHAT_CAPABILITIES_PATH:
-            # The steward section is composed by its own owner so the model
-            # arguments, the availability verdict and the readback cannot
-            # disagree about which executor and credential they describe.
+            # The channel and adapter rows share one fresh endpoint observation;
+            # separate requests and execution retain their own discovery.
+            adapters = self.server.runtime_controller.capabilities()
             capabilities = {
                 "ok": True,
                 "schema_version": "loopx_chat_capabilities_v1",
                 "manager": manager_capabilities_projection(
-                    self.server.runtime_controller, self.server.chat_store
+                    self.server.runtime_controller, self.server.chat_store, endpoint_capabilities=adapters,
                 ),
                 "runtime_identity": self.server.runtime_identity,
                 "agent_backend": "multi_adapter",
@@ -1681,7 +1681,7 @@ class ChatRequestHandler(
                 "typed_actions": True,
                 "attached_session_broker": True,
                 "action_kinds": sorted(ACTION_KINDS),
-                "adapters": self.server.runtime_controller.capabilities(),
+                "adapters": adapters,
                 "lark_cli": self.server.lark_cli_resolution.public_snapshot(),
             }
             add_goal_subagent_capability(capabilities, server=self.server)
@@ -1705,6 +1705,7 @@ class ChatRequestHandler(
             "/api/chat/explore-results": self._explore_results,
             RESEARCH_ANALYSIS_PATH: self._research_analysis_read,
             RESEARCH_ANALYSIS_PATH + "/citation": self._research_analysis_read,
+            RESEARCH_ANALYSIS_PATH + "/usage-turn": self._research_analysis_read,
             CHAT_SESSIONS_PATH: self._list_sessions,
             CHAT_ACTIONS_PATH: self._action_list,
             CHAT_GOAL_CONTEXTS_PATH: self._goal_contexts,

@@ -180,6 +180,9 @@ def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] |
     return hashlib.sha256(anchor.encode()).hexdigest(), status, total
 
 
+MAX_STOP_HOOK_RECOVERY_STEPS = 400
+
+
 def stop_hook(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]:
     if (
         event.get("conversationId") != args.conversation_id
@@ -192,7 +195,15 @@ def stop_hook(args: argparse.Namespace, event: dict[str, Any]) -> dict[str, Any]
     if not isinstance(text, str) or not text:
         return {}
     native = _native_input(args, text)
-    if native is None or not _admitted(args) or _native_input(args, text) != native:
+    max_steps = int(
+        getattr(args, "max_recovery_steps", None) or MAX_STOP_HOOK_RECOVERY_STEPS
+    )
+    if (
+        native is None
+        or native[2] > max_steps
+        or not _admitted(args)
+        or _native_input(args, text) != native
+    ):
         return {}
     with _state(args) as state:
         if not _reserve_retry(state, native[0]):
@@ -489,32 +500,51 @@ def _inspect_conversation_liveness(conversation_id: str) -> dict[str, Any]:
         }
     status = str(traj.get("status") or "")
     termination_reason = ""
+    summary_available = False
     try:
         all_resp = _rpc_post(
             url, token, "GetAllCascadeTrajectories", {}, timeout=2
         )
-        summary = ((all_resp or {}).get("trajectorySummaries") or {}).get(
-            conversation_id
+        summaries = (all_resp or {}).get("trajectorySummaries")
+        summary = (
+            summaries.get(conversation_id)
+            if isinstance(summaries, dict)
+            else None
         )
         if isinstance(summary, dict):
+            summary_available = True
             termination_reason = str(
                 summary.get("latestExecutorTerminationReason") or ""
             )
             if not status:
                 status = str(summary.get("status") or "")
     except Exception:
-        pass
+        summary_available = False
 
     user_canceled = (
         termination_reason == "EXECUTOR_TERMINATION_REASON_USER_CANCELED"
     )
     running = status == "CASCADE_RUN_STATUS_RUNNING"
-    idle = status == "CASCADE_RUN_STATUS_IDLE"
+    raw_idle = status == "CASCADE_RUN_STATUS_IDLE"
+    if raw_idle and not summary_available:
+        return {
+            "alive": True,
+            "running": False,
+            "idle": False,
+            "user_canceled": False,
+            "summary_available": False,
+            "status": status,
+            "termination_reason": "",
+            "num_total_steps": traj.get("numTotalSteps"),
+            "reason": "trajectory_summary_unavailable",
+        }
+    idle = raw_idle and summary_available
     return {
-        "alive": running or idle,
+        "alive": running or raw_idle,
         "running": running,
         "idle": idle,
         "user_canceled": user_canceled,
+        "summary_available": summary_available,
         "status": status,
         "termination_reason": termination_reason,
         "num_total_steps": traj.get("numTotalSteps"),
@@ -662,7 +692,11 @@ def sidecar_tick(args: argparse.Namespace) -> dict[str, Any]:
         return {
             "ok": True,
             "decision": "noop",
-            "reason": "session_not_idle",
+            "reason": (
+                "trajectory_summary_unavailable"
+                if liveness.get("reason") == "trajectory_summary_unavailable"
+                else "session_not_idle"
+            ),
             "goal_id": goal_id,
             "agent_id": agent_id,
             "conversation_id": conversation_id,
@@ -797,6 +831,41 @@ ANTIGRAVITY_SIDECAR_MARKER_NAME = ".loopx-managed-sidecar.json"
 ANTIGRAVITY_SIDECAR_MARKER_SCHEMA_VERSION = "loopx_managed_antigravity_sidecar_v0"
 
 
+_PYTHON_SIMPLE_FLAGS = frozenset(
+    {
+        "-b",
+        "-bb",
+        "-B",
+        "-d",
+        "-E",
+        "-i",
+        "-I",
+        "-O",
+        "-OO",
+        "-P",
+        "-q",
+        "-s",
+        "-S",
+        "-u",
+        "-v",
+        "-x",
+    }
+)
+_PYTHON_ARG_FLAGS = frozenset({"-W", "-X", "--check-hash-based-pycs"})
+
+
+def _is_python_executable_token(token: str) -> bool:
+    name = Path(token).name.lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name in {"python", "python3", "pypy", "pypy3"}:
+        return True
+    if name.startswith("python3.") or name.startswith("python2."):
+        suffix = name.split(".", 1)[1]
+        return bool(suffix) and all(ch.isdigit() or ch == "t" for ch in suffix)
+    return False
+
+
 def _is_loopx_structured_heartbeat_args(existing_args: list[Any]) -> bool:
     """Return True only when `args` is a policy-only cron entry or a canonical LoopX heartbeat argv."""
     if not existing_args:
@@ -806,7 +875,18 @@ def _is_loopx_structured_heartbeat_args(existing_args: list[Any]) -> bool:
         return False
     if len(tokens) == 1:
         return True
-    for idx in range(1, len(tokens) - 2):
+    if _is_python_executable_token(tokens[1]):
+        idx = 2
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if tok in _PYTHON_SIMPLE_FLAGS:
+                idx += 1
+            elif tok in _PYTHON_ARG_FLAGS:
+                idx += 2
+            elif (tok.startswith("-W") or tok.startswith("-X")) and len(tok) > 2:
+                idx += 1
+            else:
+                break
         if tokens[idx : idx + 3] == [
             "-m",
             "loopx.agy_goal_mode.host_runtime",

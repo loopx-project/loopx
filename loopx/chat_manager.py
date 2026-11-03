@@ -309,7 +309,10 @@ def operator_credential_pair(controller: Any) -> dict[str, str]:
     return operator_provider_host_credential(runtime_root)
 
 
-def manager_capabilities_projection(controller: Any, store: Any) -> dict[str, Any]:
+def manager_capabilities_projection(
+    controller: Any, store: Any, *,
+    endpoint_capabilities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Compose the steward section of the shared chat capabilities payload.
 
     Every steward entry point resolves the same three things -- this machine's
@@ -328,6 +331,7 @@ def manager_capabilities_projection(controller: Any, store: Any) -> dict[str, An
         controller,
         machine_defaults=machine_defaults,
         environ=credential["environ"],
+        endpoint_capabilities=endpoint_capabilities,
     )
     return manager_runtime_capability_projection(
         controller,
@@ -397,14 +401,18 @@ def _manager_eligible_endpoints(
     return [str(item) for item in raw if str(item)]
 
 
-def _controller_endpoint_availability(controller: Any) -> dict[str, bool]:
-    resolver = getattr(controller, "capabilities", None)
-    if not callable(resolver):
-        return {}
-    try:
-        rows = resolver()
-    except Exception:  # noqa: BLE001 - availability readback must remain advisory.
-        return {}
+def _controller_endpoint_availability(
+    controller: Any, *, endpoint_capabilities: list[dict[str, Any]] | None = None,
+) -> dict[str, bool]:
+    rows = endpoint_capabilities
+    if rows is None:
+        resolver = getattr(controller, "capabilities", None)
+        if not callable(resolver):
+            return {}
+        try:
+            rows = resolver()
+        except Exception:  # noqa: BLE001 - availability readback must remain advisory.
+            return {}
     if not isinstance(rows, list):
         return {}
     return {
@@ -432,6 +440,7 @@ def manager_executor_allocation(
     *,
     machine_defaults: Mapping[str, Any] | None = None,
     environ: dict[str, str] | None = None,
+    endpoint_capabilities: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Resolve one bounded steward executor choice and explain why it won.
 
@@ -452,7 +461,9 @@ def manager_executor_allocation(
     )
     policy = _manager_selection_policy(defaults)
     eligible = _manager_eligible_endpoints(defaults)
-    availability = _controller_endpoint_availability(controller)
+    availability = _controller_endpoint_availability(
+        controller, endpoint_capabilities=endpoint_capabilities,
+    )
     requested = str(requested_endpoint or "").strip()
     reason = ""
 

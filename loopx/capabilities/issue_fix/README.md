@@ -869,6 +869,12 @@ until verified. The public
 pilot applies that evidence order without introducing a repository-specific
 control path.
 
+The optional [repository-context pilot](../../../examples/repository-context-pilot/README.md)
+compares Rune's no-model MCP retrieval with direct search on pinned public issue
+source. It exports source-checked advisory evidence through this same input and
+reads it back through `workflow-plan`. This is a reproducible experiment; it
+does not enable Rune, change default context or qualify a production provider.
+
 They also accept either `--repository-memory-json
 <compact-search-read-result.json>` or a configured context provider. The
 provider path is deliberately layered: the reusable LoopX context-provider

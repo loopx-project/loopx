@@ -16,6 +16,27 @@ from typing import Any
 from ..quota.turn_envelope import bind_turn_decision_capture
 from ..quota.error_codes import QuotaCommandValidationError
 from ..content_digest import BARE_SHA256_PATTERN
+from .native_context_profile import (
+    NATIVE_CONTEXT_PAGE_BYTES as NATIVE_CONTEXT_PAGE_BYTES,
+    NATIVE_CONTEXT_PAGE_OUTPUT_BYTES as NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_LARGE_OUTPUT_BYTES as NATIVE_CONTEXT_LARGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_HISTORY_TOKENS as NATIVE_CONTEXT_HISTORY_TOKENS,
+    NATIVE_CONTEXT_OUTPUT_ENV as NATIVE_CONTEXT_OUTPUT_ENV,
+    native_context_page_budget as native_context_page_budget,
+)
+
+
+def private_capture_uid() -> int:
+    """Fail closed until this IO boundary has a qualified non-POSIX ACL reader.
+
+    POSIX mode bits cannot establish Windows privacy. Check before creating or
+    reading private captures, and before evaluating bounded settlement commands.
+    """
+    getuid = getattr(os, "getuid", None)
+    if os.name != "posix" or not callable(getuid):
+        raise ValueError("private capture validation is unsupported on this platform; "
+                         "use the same Turn command without --max-page-output-bytes")
+    return getuid()
 
 
 def write_decision_capture(
@@ -190,21 +211,6 @@ CONTEXT_CAPTURE_READ_GUIDANCE = (
 )
 
 
-# Use the existing configured native output profile for every native caller,
-# including App shells that do not inherit the generated environment override.
-# Smaller explicit reader budgets remain available for same-capture recovery.
-NATIVE_CONTEXT_PAGE_BYTES = 64000
-NATIVE_CONTEXT_PAGE_OUTPUT_BYTES = 64000
-# Keep the configuration declaration usable by older installed readers too.
-NATIVE_CONTEXT_LARGE_OUTPUT_BYTES = 64000
-NATIVE_CONTEXT_HISTORY_TOKENS = 20000
-NATIVE_CONTEXT_OUTPUT_ENV = "LOOPX_CONTEXT_PAGE_OUTPUT_BYTES"
-
-
-def native_context_page_budget() -> tuple[int, int]:
-    return NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES
-
-
 def context_capture_read_command(path: Path, digest: str, *, offset: int = 0,
                                  page_bytes: int | None = None,
                                  max_page_output_bytes: int | None = None,
@@ -251,6 +257,14 @@ def write_context_read_reference(path: Path, digest: str, *, selection: dict[str
         write_decision_capture(reference, payload)
     except FileExistsError:
         existing = read_context_read_reference(str(reference))[1]
+        if existing["path"] != payload["path"]:
+            # Readers resolve parent aliases, while retaining the exact leaf.
+            # Compare that same spelling without rewriting immutable metadata
+            # or treating a different leaf (including a hardlink) as identical.
+            original = Path(existing["path"]).expanduser().absolute()
+            current = path.expanduser().absolute()
+            if original.parent.resolve(strict=True) / original.name == current.parent.resolve(strict=True) / current.name:
+                existing["path"] = payload["path"]
         if json.dumps(existing, sort_keys=True) != json.dumps(payload, sort_keys=True):
             raise ValueError("original reader reference changed; restore it without rerunning admission") from None
     return reference
@@ -260,6 +274,7 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     """Read one private physical descriptor; the caller verifies capture bytes."""
     from ..effect_runtime import MAX_REQUEST_BYTES
 
+    uid = private_capture_uid()
     path = Path(value).expanduser().absolute()
     path = path.parent.resolve(strict=True) / path.name
     if path.is_symlink():
@@ -267,7 +282,7 @@ def read_context_read_reference(value: str) -> tuple[Path, dict[str, Any]]:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(descriptor, "rb") as stream:
         info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077
                 or info.st_size > MAX_REQUEST_BYTES):
             raise ValueError("reader reference must be a private regular file owned by this user")
         raw = stream.read(MAX_REQUEST_BYTES + 1)
@@ -288,6 +303,7 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
 
     if not isinstance(digest, str) or BARE_SHA256_PATTERN.fullmatch(digest) is None or not value:
         raise ValueError("context-read requires the original capture file and its exact SHA-256")
+    uid = private_capture_uid() if private else None
     path = Path(value).expanduser().absolute()
     # Parent aliases such as macOS /tmp are normal capture locations.
     # Resolve those once, but never follow a substituted final file.
@@ -299,7 +315,7 @@ def read_context_capture_file(value: str, digest: str, *, private: bool = False)
         metadata = os.fstat(stream.fileno())
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REQUEST_BYTES:
             raise ValueError("capture must be a regular JSON file within the existing transport size limit")
-        if private and (metadata.st_uid != os.getuid() or metadata.st_mode & 0o077):
+        if private and (metadata.st_uid != uid or metadata.st_mode & 0o077):
             raise ValueError("native context requires a private capture owned by this user")
         raw = stream.read(metadata.st_size + 1)
     if len(raw) != metadata.st_size or hashlib.sha256(raw).hexdigest() != digest:

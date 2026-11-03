@@ -1,7 +1,10 @@
 """Real receipt/store journeys: a Turn agenda does not complete or replay work."""
 import json
 import os
+from pathlib import Path
 import shlex
+import subprocess
+import sysconfig
 
 import pytest
 
@@ -96,14 +99,32 @@ def test_separate_agent_has_no_access_to_another_receivers_agenda(flow):
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("delivery", ["host_envelope", pytest.param("native_files",
     marks=pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX"))])
-def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider, delivery):
+@pytest.mark.parametrize("partial", [False, True], ids=["unanswered", "partial"])
+def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monkeypatch, provider, delivery, partial):
     from control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-    from loopx.control_plane.testing.canary_harness import run_json_cli_result, write_fixture_registry
+    from loopx.control_plane.testing.canary_harness import write_fixture_registry
     from loopx.control_plane.todos.active_state_todo_parser import parse_todo_source
     from loopx.control_plane.todos.goal_todo_projection import retained_todo_summary_fields
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
+    # A module launched from the checkout can mask a stale inherited package.
+    # Exercise the installed console from the fixture project instead.
+    stale_package = tmp_path / "stale-release" / "loopx"
+    stale_package.mkdir(parents=True)
+    (stale_package / "__init__.py").write_text('raise RuntimeError("wrong source checkout")\n')
+    monkeypatch.setenv("PYTHONPATH", str(stale_package.parent))
+    console = Path(sysconfig.get_path("scripts")) / ("loopx.exe" if os.name == "nt" else "loopx")
+    assert console.is_file(), "Install this checkout's console with uv sync --extra test."
+
+    def run_console(*arguments):
+        result = subprocess.run([str(console), "--registry", str(registry),
+            "--runtime-root", str(root), "--format", "json", *arguments], cwd=tmp_path,
+            env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+            capture_output=True, text=True, encoding="utf-8", timeout=90)
+        assert result.stdout.strip(), result.stderr
+        return result.returncode, json.loads(result.stdout)
+
     root, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"
     text = ("---\nstatus: active\n---\n# Goal\n## Objective\nQualify the report.\n## Agent Todo\n"
         "- [ ] [P1] Inspect the current report and return findings.\n"
@@ -125,6 +146,10 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
     acknowledge(root, "research", "worker", receipt["request_id"], "adopt", "Continue the linked work", registry=registry)
     from loopx.control_plane.collaboration.links import link
     link(root, registry, "research", "worker", receipt["request_id"], ["todo_artifact"], [])
+    remaining_work = {"summary": "Validate the packaged repair", "resume_when": "The isolated package is available"}
+    if partial:
+        report(root, "research", "worker", receipt["request_id"], "conclusion", "The implementation is ready.",
+            remaining_work=remaining_work, registry=registry)
     before = {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")}
     if delivery == "native_files":
         from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
@@ -138,9 +163,9 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
         presentation = ["--turn-envelope"] if delivery == "host_envelope" else [
             "--codex-app", "--context-delivery", "on", "--decision-output-root", str(tmp_path / "captures"),
             "--codex-context-root", str(tmp_path / "context")]
-        code, packet = run_json_cli_result("quota", "should-run", "--goal-id", "research",
+        code, packet = run_console("quota", "should-run", "--goal-id", "research",
             "--agent-id", "worker",  "--turn-instance-id", turn_id,
-            *presentation, registry_path=registry, runtime_root=root)
+            *presentation)
         assert code == 0, (packet.get("error_code"), packet.get("reason"), packet.get("recovery"))
         if delivery == "native_files":
             if turn_id == "agenda-turn-one":
@@ -153,9 +178,11 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
                 command = packet["recovery"]["command"] + " --initial-read"
             words = shlex.split(command)
             assert words[0] == "loopx"
-            code, page = run_json_cli_result(*words[1:], registry_path=registry, runtime_root=root)
+            code, page = run_console(*words[1:])
             assert code == 0 and page["ok"] and page["eof"], page
-            values = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+            from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+            values = selected_context_values(page["content"])
             pointer = next(key for key in values if key.endswith("/content/unfinished_delegations"))
             content = {"unfinished_delegations": values[pointer],
                 "read_complete": values[pointer.removesuffix("unfinished_delegations") + "read_complete"]}
@@ -168,6 +195,7 @@ def test_actual_cli_guards_and_host_envelopes_preserve_the_agenda(tmp_path, monk
         row = content["unfinished_delegations"]["items"][0]
         assert row["request_id"] == receipt["request_id"]
         assert row["todo_ids"] == ["todo_artifact"] and row["step"] == "review_request_work"
+        assert row.get("remaining_work") == (remaining_work if partial else None)
         assert any("manager-inbox read" in item["command"] for item in required_reads)
         assert "Continue the linked work" not in json.dumps(content)
     assert {p.relative_to(root): p.read_bytes() for p in _root(root).rglob("*.json")} == before

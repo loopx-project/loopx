@@ -19,6 +19,79 @@ const current = {schema_version: "loopx_chat_conversation_bindings_v0", revision
 const request = {current, expected_revision: 0, operation: "configure", binding: row, observation,
   available_projects: [project]};
 
+test("Core preparation failures resume through one bounded original-source queue, never from missing native evidence", () => {
+  for (const endpoint of ["codex", "antigravity"]) {
+    const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: endpoint};
+    const configured = planConversationBinding({...request, binding: selected}).state;
+    const source = {source_ref: "e".repeat(24), sender_ref: row.operator_ref, private_human_message: true};
+    const context = resolveBoundConversation({current: configured, binding_id: row.binding_id,
+      observation, available_projects: [project], ...source}).context;
+    const ref = "f".repeat(24), client = `external-${ref}`;
+    const session = {session_id: "original", goal_id: "loopx-manager", agent_id: endpoint,
+      upstream_mode: endpoint === "codex" ? "chat" : "default", status: "ready", upstream_thread_id: "native", active_turn_id: null,
+      channel_id: `manager.external.native.${row.binding_id}.${source.source_ref}`, steward_context: context};
+    const failed = {session_id: "original", turn_id: "failed", client_turn_id: client, message: "Original request",
+      status: "failed", delta_count: 0, response: null, upstream_turn_id: null, error_code: "manager_authorization_unavailable",
+      completed_at: "2026-01-01T00:00:00Z"};
+    const proof = {kind: "core_context_preparation_failure", session_id: "original", turn_id: "failed", events: [
+      {event_id: "one", kind: "turn.queued"}, {event_id: "two", kind: "agent.phase", phase: "manager_context"},
+      {event_id: "three", kind: "manager.context", schema_version: "manager_turn_context_v1"},
+      {event_id: "four", kind: "turn.failed", error_code: failed.error_code}]};
+    const packet = {request: {request_ref: ref, command: null, status: "accepted", delivery_verified: true,
+      message: failed.message, origin: "lark", binding_id: row.binding_id, session_id: "original", turn_id: "failed", source},
+      binding: selected, current_session: session, context_recovery: {version: 21, failed_turn: failed,
+        observed_at: "2026-01-01T00:10:00Z", steering_observed: false, stop_observed: false, attachments_present: false,
+        source_verified: true, queued_input_present: false, later_equivalent_input_present: false,
+        preparation_scope_available: true, preparation_observation: proof}};
+    const plan = planBoundConversationRequest(packet);
+    assert.equal(plan.recovery_eligible, true);
+    assert.equal(plan.preparation_attempt, 1);
+    assert.equal(plan.client_turn_id, `${client}-recovery-21-preparation-1`);
+    assert.deepEqual(plan.native_thread_ids, []);
+    for (const change of [{source_verified: false}, {stop_observed: true}, {steering_observed: true},
+      {attachments_present: true}, {queued_input_present: true}, {later_equivalent_input_present: true},
+      {later_equivalent_input_present: null}, {preparation_scope_available: false}, {observed_at: "2026-01-01T00:00:59Z"},
+      {preparation_observation: null}, {preparation_observation: {...proof, events: []}},
+      {preparation_observation: {...proof, events: [...proof.events, {event_id: "native", kind: "turn.started"}]}},
+      {preparation_observation: {...proof, turn_id: "another"}},
+      {native_observation: {effects_observed: true}},
+      ...[{upstream_turn_id: "native-started"}, {delta_count: 1}, {response: {}}, {client_turn_id: "foreign"}]
+        .map(value => ({failed_turn: {...failed, ...value}}))]) {
+      assert.notEqual(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, true);
+    }
+    const reservation = {version: 21, failed_turn_id: "failed", preparation_attempt: 1, client_turn_id: plan.client_turn_id};
+    const admitted = {session_id: "original", turn_id: "already-admitted", client_turn_id: plan.client_turn_id,
+      message: failed.message, origin: "lark", attachments: [], status: "completed"};
+    const crash = {...packet, request: {...packet.request, context_recovery: reservation},
+      current_session: {...session, status: "busy", active_turn_id: "already-admitted"},
+      context_recovery: {...packet.context_recovery, admitted_turn: admitted, stop_observed: true,
+        later_equivalent_input_present: true, queued_input_present: true, preparation_observation: null}};
+    assert.equal(planBoundConversationRequest(crash).admitted_turn_id, admitted.turn_id);
+    assert.equal(planBoundConversationRequest({...crash, context_recovery: {...crash.context_recovery,
+      admitted_turn: {...admitted, message: "Different intent"}}}).recovery_eligible, false);
+    const next = {...packet, request: {...packet.request, turn_id: "next", context_recovery: reservation},
+      context_recovery: {...packet.context_recovery, failed_turn: {...failed, turn_id: "next", client_turn_id: plan.client_turn_id},
+        preparation_observation: {...proof, turn_id: "next"}}};
+    assert.equal(planBoundConversationRequest(next).preparation_attempt, 2);
+    assert.equal(planBoundConversationRequest(next).not_before, "2026-01-01T00:02:00.000Z");
+    for (const error of ["host_gate", "usage_limit_exceeded", "upstream_transport_failure"]) {
+      const dispatched = {...next, context_recovery: {...next.context_recovery,
+        failed_turn: {...next.context_recovery.failed_turn, error_code: error, upstream_turn_id: "native-started"},
+        native_observation: {thread_id: "native", turn_id: "native-started", pre_execution_routing_timeout: true,
+          codex_error_info: "other", only_pre_execution_items: true}}};
+      assert.equal(planBoundConversationRequest(dispatched).recovery_candidate, false);
+      assert.equal(planBoundConversationRequest({...dispatched, request: {...dispatched.request,
+        context_recovery: undefined, context_recovery_history: [reservation]}}).recovery_candidate, false);
+    }
+    const lastClient = `${client}-recovery-21-preparation-3`;
+    assert.equal(planBoundConversationRequest({...next, request: {...next.request,
+      context_recovery: {...reservation, preparation_attempt: 3, client_turn_id: lastClient}},
+      context_recovery: {...next.context_recovery, failed_turn: {...next.context_recovery.failed_turn, client_turn_id: lastClient}}}).recovery_candidate, false);
+    assert.equal(planBoundConversationRequest({...packet, request: {...packet.request,
+      context_recovery: {...reservation, work_attempt: 1}}}).recovery_candidate, false);
+  }
+});
+
 test("native terminal recovery adopts a result without Turn admission or lost failure provenance", () => {
   const selected = {...row, context_kind: "steward", grant: "portfolio_read", goal_ids: [], executor_endpoint_id: "antigravity"};
   const configured = planConversationBinding({...request, binding: selected}).state;
@@ -65,7 +138,9 @@ test("native terminal recovery adopts a result without Turn admission or lost fa
     {failed_turn: {...failed, error_code: "host_gate"}}, {failed_turn: {...failed, status: "interrupted"}}]) {
     assert.equal(planBoundConversationRequest({...packet, context_recovery: {...packet.context_recovery, ...change}}).recovery_eligible, false);
   }
-  for (const change of [{status: "closed"}, {session_mode: "attached_host"}, {agent_id: "codex"}]) {
+  for (const change of [{status: "closed"}, {session_mode: "attached_host"}, {agent_id: "codex"},
+    {status: "busy", active_turn_id: "current"}, {status: "ready", active_turn_id: "current"},
+    {status: "busy", active_turn_id: null}]) {
     assert.equal(planBoundConversationRequest({...packet, current_session: {...session, ...change}}).recovery_candidate, false);
   }
   assert.throws(() => planBoundConversationRequest({...packet,

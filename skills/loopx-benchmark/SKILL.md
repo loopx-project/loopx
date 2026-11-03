@@ -125,6 +125,18 @@ separate: fewer bytes, calls or tokens are not proof of a better task outcome.
    analysis. Do not substitute profiler hotspots for outcome evidence or require
    profiling to inspect duplicate content and unnecessary interactions.
 
+For recorded model-request totals, use `loopx benchmark trajectory-pack-register`
+with `--usage-jsonl` and `--usage-session-id`, then read
+`solver_usage.projection.request_coverage`. Registration does not run an analyzer;
+an unfinished final Turn requires the explicit `--include-incomplete-usage`
+option. Live-tail `usage_cumulative` and `token_count` observations retain the
+native session-counter basis, which may exclude compaction. Only verified
+`request_coverage.all_requests` supplies the reconciled recorded-request total;
+retain its `counter_basis`, capture window and limitations. Compaction is a
+subset and its mirrored record is not another request. Do not add either to
+the session totals. Missing or unavailable coverage remains unknown. This
+source selection does not rewrite Goal accounting or establish billing coverage.
+
 ## Experiment sequence
 
 1. **Read the experiment board before launching or selecting a case.**

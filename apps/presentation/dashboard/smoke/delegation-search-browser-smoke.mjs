@@ -239,9 +239,24 @@ try {
     assert.equal(await english.getByRole('button', {name: 'Load next page', exact: true}).count(), 0);
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), '13 / 13 shown');
     await english.getByRole('button', {name: 'Awaiting follow-up', exact: true}).click(); await rows(11);
+    // A useful reply can retain actual work even after delivery. Its later
+    // append-only result resolves this request, without settling its neighbors.
+    await fixture('report-partial');
+    await english.getByRole('button', {name: 'Refresh delegations', exact: true}).click();
+    await english.getByRole('searchbox', {name: 'Search delegations'}).fill('核对账单导出的字段映射');
+    await english.getByRole('searchbox', {name: 'Search delegations'}).press('Enter');
+    await rows(1);
+    await english.getByText('Partial result returned', {exact: true}).waitFor();
+    await english.locator('.conversation-request-row > summary').click();
+    await english.getByRole('heading', {name: 'Remaining work', exact: true}).waitFor();
+    assert.ok(await english.getByText('在隔离安装包中验证账单字段映射与失败恢复。', {exact: true}).isVisible());
+    await fixture('complete-partial');
+    await english.getByRole('button', {name: 'Refresh delegations', exact: true}).click(); await rows(0);
+    await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(1);
+    await english.getByText('Returned', {exact: true}).waitFor();
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, returned history, stale response, Escape/focus, workspace isolation, narrow layout, English, source refusal/recovery and read-only receipts; original-reader POST delta zero, Chat/receipt state unchanged and no new Turns.');
+    console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, partial/final returned history, stale response, Escape/focus, workspace isolation, narrow layout, English and source refusal/recovery; explicit fixture reports update return state, original-reader POST delta zero and no new Turns.');
   }
 } catch (error) {
   if (page) {await page.screenshot({path: resolve(output, 'failure.png')}).catch(() => {}); await writeFile(resolve(output, 'failure.txt'), await page.locator('body').innerText());}
