@@ -6,8 +6,8 @@
 <meta property="og:type" content="article"><meta property="og:site_name" content="LoopX"><meta property="og:locale" content="zh_CN"><meta property="og:title" content="Agent 读上下文，也需要一套“查书”的方法"><meta property="og:description" content="从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。"><meta property="og:url" content="https://loopx-project.github.io/loopx/blog/zh/context-delivery/"><meta name="twitter:card" content="summary"><link rel="icon" href="data:,"><link rel="stylesheet" href="../../blog.css">
 </head><body><a class="skip-link" href="#main">跳至正文</a>
 <header class="site-header"><a class="brand" href="../../../?lang=zh"><span class="product-mark" aria-hidden="true"><i></i><i></i></span>LoopX</a><nav aria-label="主导航"><a href="../">Blog</a><a href="../../../docs/book/">文档</a></nav><div class="header-actions"><a class="language" href="../../context-delivery/" lang="en" hreflang="en">EN</a><a class="github" href="https://github.com/loopx-project/loopx">GitHub ↗</a></div></header>
-<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time></div></div>
-<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
+<main id="main"><div class="article-heading"><a class="back" href="../">← 全部文章</a><p class="eyebrow">Context delivery</p><h1>Agent 读上下文，也需要一套“查书”的方法</h1><p class="lead">从一个语音任务理解渐进式读取、JSON Pointer、精确共享、compaction 周期内的结构化差分，以及失效后的完整恢复。</p><div class="byline"><a href="https://github.com/loopx-project/loopx">LoopX</a><span>·</span><time datetime="2026-11-01">2026 年 11 月 1 日</time><span>·</span><span>11 月 3 日更新实证</span></div></div>
+<div class="article-layout"><aside class="toc"><details><summary>本文目录</summary><nav aria-label="本文目录"><a href="#example">用“管家读语音”串起一次工作</a><a href="#known-paths">知道位置，直接一次读齐</a><a href="#discover">不知道结构，查相关目录，再往下读</a><a href="#requirements">要求先看见，证明它的材料再展开</a><a href="#sharing">同一份交付里的相同记录，保留一个完整位置</a><a href="#cycle">下一轮继续，交付这次改变了什么</a><a href="#native-path">开启后，默认交付的是一个读取入口</a><a href="#recovery">压缩或读取失败，恢复上下文，也保留原工作</a><a href="#evidence">这些数据说明了什么</a><a href="#ablation-evidence">真实模型与多题消融实证</a><a href="#reproduce">用同一份材料动手读一遍</a></nav></details></aside><article class="prose"><p>Agent 做长任务，资料会越来越多：原目标、后来追加的约束、试过的方案、失败的实验、当前做到哪里。每次继续都把整份材料再塞一遍，重复会不断累积；只留一段摘要，又可能找不回决定所依赖的原话。</p>
 <p>LoopX 的 context delivery 把这件事拆开做：<strong>完整资料保存下来，当前决定需要的事实先读，支持材料沿问题展开；同一个有效 compaction 周期内，再精确复用没有变化的结构。</strong></p>
 <p>本文以已发布的 <a href="https://github.com/loopx-project/loopx/tree/v2.2.0">LoopX 2.2.0</a> Codex 原生路径为准。受支持的 POSIX Codex App／SSH 会话与新的 benchmark heartbeat 默认开启 context delivery；已有关闭设置继续生效，也可以显式关闭。开启后完整内容先保存，Agent 收到当前读取入口。具体发布与验证范围见 <a href="https://github.com/loopx-project/loopx/releases/tag/v2.2.0">2.2.0 版本说明</a>；下文的合成测量仍保留原始实验版本与条件。</p>
 <p>可以把它想成查一本厚书：capture 是完整保存的那本书，目录告诉我们章节在哪，JSON Pointer 是书内地址。渐进式读取决定这一刻翻到多深；差分决定下一轮哪些内容可以沿用。</p>
@@ -174,7 +174,7 @@ sample-2：转写正确，却回复到了另一对话
 <h2 id="native-path">开启后，默认交付的是一个读取入口</h2>
 <p>把前面的动作接回产品，当前支持的 Codex 原生 quota 路径是：</p>
 
-<figure class="diagram"><p class="diagram-label">同一次捕获，从保存到读取</p><a href="../../images/context-delivery/context-native-path-v10.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的路径图"><img src="../../images/context-delivery/context-native-path-v10.svg" alt="Context Delivery 开启后的默认机制路径：完整原始捕获 projection.json、必要视图 required-context.json、小文件引用与按问题逐层选读" width="1360" height="1020" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><pre style="padding:0;margin:0;border:0;background:transparent"><code class="language-text">decision-&lt;id&gt;/
+<figure class="diagram"><p class="diagram-label">同一次捕获，从保存到读取</p><pre><code class="language-text">decision-&lt;id&gt;/
 ├─ projection.json        原始捕获
 ├─ required-context.json  必要视图
 ├─ delivery.json          full/delta
@@ -205,7 +205,67 @@ loopx --format json quota context-read \
 <h2 id="evidence">这些数据说明了什么</h2>
 <p>这组例子把三个收益来源分开了：<strong>少重复搬当前用不上的历史，少发本可合并的读取请求，少重复交付已经核验的不变结构。</strong> 完整来源、要求与恢复路径贯穿其中。</p>
 <p>上面的 reader 数字包含实际 CLI 响应中的分页元数据；本机路径长度会影响少量封装字节。原生投影数字比较捕获正文，周期表比较编码层，三种口径分别列出。示例脚本可复算这些值与完整还原结果。</p>
-<p>放回真实长程任务，还要把必要补读、恢复、缓存命中、模型输入输出、工具调用、等待与人工介入一起算进去；效果则看是否漏掉约束、做错决定，最后交付了什么。这个合成例子测清了机械路径，真实模型收益仍需可比任务验证。</p>
+<p>放回真实长程任务，还要把必要补读、恢复、缓存命中、模型输入输出、工具调用、等待与人工介入一起算进去；效果则看是否漏掉约束、做错决定，最后交付了什么。前面的语音合成例子测清了机械路径，下面补入真实 18 小时长程任务上的多题与分层消融观察。</p>
+<h3 id="ablation-evidence">真实模型与多题消融实证：收益链路与边界反例</h3>
+<p>在 <strong>EdgeBench ANN 向量检索优化（<code>gpt-6.1-sol / xhigh</code>，18h，约束 <code>Recall@10 ≥ 0.95</code>）</strong>与跨题消融中，我们将 <code>Context Delivery</code>（渐进读取与周期差分）与 <code>Stride</code>（基于证据差分的步长控制）拆开对照，同时统计控制包选中字节、主会话模型输入 Token 与局部/早窗反例（基于 <code>@shangzh0</code> 归档轨迹与控制面回执复算）：</p>
+<figure class="diagram"><p class="diagram-label">多题消融与分层计量审计</p><a href="../../images/context-delivery/context-delivery-ablation-zh.svg" target="_blank" rel="noopener" aria-label="打开完整尺寸的 Context Delivery 与 Stride 消融图"><img src="../../images/context-delivery/context-delivery-ablation-zh.svg" alt="Context 渐进式交付与 Stride 步幅控制消融：ANN 18h 峰值吞吐 QPS 对比与分层 Token/字节节省及边界反例" width="1180" height="860" loading="lazy" style="width:100%;height:auto;border-radius:10px;margin:8px 0 12px 0"></a><figcaption>上图（A）：ANN 18h 六臂峰值有效吞吐 QPS（<code>Recall@10 ≥ 0.95</code>）。下图（B）：相对 <code>Context off</code> 的分层字节与主会话输入 Token 节省（左，负值）及诚实披露的局部/早窗开销与跨题反例（右，正值）。点击查看原图。</figcaption></figure>
+<div class="table-scroll" role="region" tabindex="0" aria-label="ANN 18h 与分层计量消融对照表"><table>
+<thead>
+<tr>
+<th>观测维度或实验臂</th>
+<th style="text-align:right">对照数值</th>
+<th>口径与解释</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ANN 18h：Official / Single / Native-Goal</td>
+<td style="text-align:right">5,753 / 5,706 / 4,372 QPS</td>
+<td>Official 在 1.05h 触顶后进入长平台期</td>
+</tr>
+<tr>
+<td>ANN 18h：Explore · Context off</td>
+<td style="text-align:right">5,766 QPS（+0.2%）</td>
+<td>11.37h 触顶；全量上下文重复投递消耗较多主会话预算</td>
+</tr>
+<tr>
+<td>ANN 18h：Explore · Context on</td>
+<td style="text-align:right">6,020 QPS（+4.6%）</td>
+<td>14.43h 触顶；渐进选读与周期差分释放后程上下文余量</td>
+</tr>
+<tr>
+<td>ANN 18h：Explore · Context on + Stride</td>
+<td style="text-align:right"><strong>7,159 QPS（+24.4%）</strong></td>
+<td>9.19h 突破（<code>QT_8bit_direct</code> HNSW-SQ8，<code>Recall@10 = 0.9585</code>）</td>
+</tr>
+<tr>
+<td>控制包字节：24 个 Delta 事件 / 46 个配对事件</td>
+<td style="text-align:right">−74.25% / −38.54%</td>
+<td>配对总选中字节由 3,089,841 B 降至 1,898,889 B（Stride 臂 34 事件为 −25.75%）</td>
+</tr>
+<tr>
+<td>主会话输入 Token：全 18h 未缓存 / 总输入</td>
+<td style="text-align:right">−12.07% / −7.46%</td>
+<td>未缓存输入 8.57M → 7.53M（16h 公共窗口为 −7.91%）；总输入 272.03M → 251.74M</td>
+</tr>
+<tr>
+<td><strong>边界反例 1：</strong><code>project+read</code> 进程 stdout</td>
+<td style="text-align:right">+57% ~ +83%（1.57×–1.83×）</td>
+<td>CLI JSON 封装与分页导航使进程 stdout 高于被选中的原始文件字节</td>
+</tr>
+<tr>
+<td><strong>边界反例 2：</strong>前 2h 早窗未缓存输入 Token</td>
+<td style="text-align:right">+304.7%（0.25M → 1.00M）</td>
+<td>早窗首次建立基线与分步选读存在前置开销，需在更长周期内摊薄</td>
+</tr>
+<tr>
+<td><strong>边界反例 3：</strong>跨题 Historical Grid（越低越好）</td>
+<td style="text-align:right">Official 1967 &lt; Off 2054 &lt; On+Stride 2088 &lt; On 2242</td>
+<td>不同时长与资源条件下的历史跨题反例；保留负向观察，不作跨题因果外推</td>
+</tr>
+</tbody>
+</table></div>
+<p>这组双轨实证说明：<strong>控制包裁剪率（−74.25% / −38.54%）不能直接等同于整轮模型 Token 节省（未缓存 −12.07%、总输入 −7.46%），更不能掩盖前 2 小时早窗的前置建索引开销（4.05×）和跨题反例。</strong> Context Delivery 的真实价值在于长周期（如 10h–18h）内延缓上下文膨胀、配合 Stride 将省下的注意力转化为后程有效实验（参见 <a href="../edgebench-feedback-and-memory/#later-common-windows">EdgeBench 后程突破与五臂归因</a>）。</p>
 <p>2.2.0 已交付完整来源、文件入口、批量选择、目录深度、适用验收分层、精确共享、周期差分与恢复。更广的候选、偏好、Explore 按决策阶段统一交付及全入口一致性仍有未完成部分。在「设置 → 本机 → 能力 → 差分上下文 → Codex」可以关闭，已有 off 会保留；单次命令或新 benchmark trial 可用 <code>--context-delivery off</code>。Trial 不继承本机开关，已有冻结 trial 不被重写。默认策略下，普通 CLI、不支持的宿主和非 heartbeat benchmark 保留原完整路径；显式请求不支持的 on 会明确拒绝，hooks 不可用时使用完整交付。保存配置、实际安装与模型采用分别核验。</p>
 <h2 id="reproduce">用同一份材料动手读一遍</h2>
 <p><a href="../../context-delivery/example.py">example.py</a> 完整生成这个合成语音任务，调用现有 reader、渐进投影与差分 owner，逐项核对选择值、目录地址、全部 10 条要求、共享引用与完整恢复。程序不注册 Goal，不做准入或结算，也不调用模型或语音服务。</p>
