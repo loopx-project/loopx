@@ -25,7 +25,6 @@ _JS_SIMPLE_ESCAPES = {
     "r": "\r",
     "t": "\t",
     "v": "\v",
-    "0": "\0",
 }
 _JS_ESCAPE_HINT_RE = re.compile(
     r"\\(?:u\{?[0-9a-fA-F]|x[0-9a-fA-F]|[0-7]|[_$A-Za-z]|\r?\n)"
@@ -109,6 +108,31 @@ def _decode_js_escape_text(raw: str) -> str | None:
             output.append(chr(int(digits, 16)))
             index += 4
             continue
+        if nxt in "01234567":
+            # Legacy octal escape (non-strict JS strings). A lone \0 is NUL;
+            # \062 is one character "2", not NUL plus "62".
+            if nxt == "0" and (
+                index + 2 >= length or raw[index + 2] not in "01234567"
+            ):
+                output.append(chr(0))
+                index += 2
+                continue
+            cursor = index + 1
+            digits = ""
+            max_digits = 3 if nxt in "0123" else 2
+            while (
+                cursor < length
+                and len(digits) < max_digits
+                and raw[cursor] in "01234567"
+            ):
+                digits += raw[cursor]
+                cursor += 1
+            code = int(digits, 8)
+            if code > 0xFF:
+                return None
+            output.append(chr(code))
+            index = cursor
+            continue
         if nxt in _JS_SIMPLE_ESCAPES:
             output.append(_JS_SIMPLE_ESCAPES[nxt])
             index += 2
@@ -118,25 +142,6 @@ def _decode_js_escape_text(raw: str) -> str | None:
             continue
         if nxt == "\r":
             index += 3 if index + 2 < length and raw[index + 2] == "\n" else 2
-            continue
-        if nxt in "01234567":
-            # Legacy octal escape (non-strict JS strings); \0 alone is NUL.
-            if nxt == "0" and (
-                index + 2 >= length or raw[index + 2] not in "01234567"
-            ):
-                output.append("\0")
-                index += 2
-                continue
-            cursor = index + 1
-            digits = ""
-            while cursor < length and len(digits) < 3 and raw[cursor] in "01234567":
-                digits += raw[cursor]
-                cursor += 1
-            code = int(digits, 8)
-            if code > 0xFF:
-                return None
-            output.append(chr(code))
-            index = cursor
             continue
         # NonEscapeCharacter: the escaped character has no special meaning.
         output.append(nxt)
@@ -174,6 +179,19 @@ _REGEX_ALLOWED_AFTER_WORDS = frozenset(
 )
 
 
+def _regex_starts_at(code: str, index: int) -> bool:
+    """Heuristic: does a slash at ``index`` start a regex literal, not division?"""
+    prefix = code[:index].rstrip()
+    previous_char = prefix[-1] if prefix else ""
+    word_match = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)$", prefix)
+    previous_word = word_match.group(1) if word_match else ""
+    return (
+        not prefix
+        or previous_char in _REGEX_ALLOWED_AFTER
+        or previous_word in _REGEX_ALLOWED_AFTER_WORDS
+    )
+
+
 def _regex_literal_spans(code: str) -> list[tuple[int, int]]:
     """Return heuristic regex-literal spans in stripped code.
 
@@ -187,16 +205,7 @@ def _regex_literal_spans(code: str) -> list[tuple[int, int]]:
         if code[index] != "/":
             index += 1
             continue
-        prefix = code[:index].rstrip()
-        previous_char = prefix[-1] if prefix else ""
-        word_match = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)$", prefix)
-        previous_word = word_match.group(1) if word_match else ""
-        starts_regex = (
-            not prefix
-            or previous_char in _REGEX_ALLOWED_AFTER
-            or previous_word in _REGEX_ALLOWED_AFTER_WORDS
-        )
-        if not starts_regex:
+        if not _regex_starts_at(code, index):
             index += 1
             continue
         cursor = index + 1
@@ -895,6 +904,89 @@ def _extract_module_string_name_refs(
     return refs
 
 
+def _find_template_expression_end(text: str, start: int) -> int:
+    """Return the closing brace index for a template ``${...}`` expression."""
+    cursor = start
+    depth = 1
+    length = len(text)
+    while cursor < length:
+        char = text[cursor]
+        if char in _TS_QUOTE_CHARS:
+            cursor = _skip_js_string_literal(text, cursor)
+            continue
+        if text.startswith("//", cursor):
+            cursor += 2
+            while cursor < length and text[cursor] not in "\r\n\u2028\u2029":
+                cursor += 1
+            continue
+        if text.startswith("/*", cursor):
+            close = text.find("*/", cursor + 2)
+            cursor = length if close == -1 else close + 2
+            continue
+        if char == "/" and _regex_starts_at(text, cursor):
+            regex_cursor = cursor + 1
+            in_class = False
+            closed = False
+            while regex_cursor < length:
+                regex_char = text[regex_cursor]
+                if regex_char == "\\":
+                    regex_cursor += 2
+                    continue
+                if regex_char in "\r\n\u2028\u2029":
+                    break
+                if regex_char == "[":
+                    in_class = True
+                elif regex_char == "]":
+                    in_class = False
+                elif regex_char == "/" and not in_class:
+                    closed = True
+                    break
+                regex_cursor += 1
+            if not closed:
+                return -1
+            cursor = regex_cursor + 1
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return cursor
+        cursor += 1
+    return -1
+
+
+def _template_interpolation_ranges(
+    text: str, index: int
+) -> tuple[list[tuple[int, int]], int]:
+    """Collect executable ``${...}`` ranges in a template literal.
+
+    Returns the expression ranges and the index just past the closing backtick.
+    Interpolation bodies are scanned independently so destructuring reads inside
+    them cannot be erased when the template is treated as a string value.
+    """
+    ranges: list[tuple[int, int]] = []
+    cursor = index + 1
+    length = len(text)
+    while cursor < length:
+        char = text[cursor]
+        if char == "\\":
+            cursor += 2
+            continue
+        if char == "`":
+            return ranges, cursor + 1
+        if text.startswith("${", cursor):
+            expression_start = cursor + 2
+            expression_end = _find_template_expression_end(text, expression_start)
+            if expression_end == -1:
+                return ranges, length
+            ranges.append((expression_start, expression_end))
+            cursor = expression_end + 1
+            continue
+        cursor += 1
+    return ranges, length
+
+
 def _extract_static_property_key_refs(
     text: str, target_symbols: set[str]
 ) -> tuple[set[str], str]:
@@ -909,8 +1001,6 @@ def _extract_static_property_key_refs(
     if not target_symbols:
         return set(), ""
     groups = _scan_js_bracket_groups(text)
-    if not groups:
-        return set(), ""
     refs: set[str] = set()
     incomplete_reason = ""
     index = 0
@@ -936,7 +1026,9 @@ def _extract_static_property_key_refs(
             if parsed is None:
                 # Dynamic template: an executable static property read cannot be
                 # resolved; only relevant when it is a pattern property key.
-                next_index = _skip_js_string_literal(text, index)
+                interpolation_ranges, next_index = _template_interpolation_ranges(
+                    text, index
+                )
                 group = _enclosing_object_group(groups, index)
                 if group is not None:
                     kind = _classify_js_group(groups, groups.index(group), text)
@@ -951,6 +1043,13 @@ def _extract_static_property_key_refs(
                             incomplete_reason = (
                                 "a static property key cannot be classified as object literal or destructuring read"
                             )
+                for expression_start, expression_end in interpolation_ranges:
+                    inner_refs, inner_reason = _extract_static_property_key_refs(
+                        text[expression_start:expression_end], target_symbols
+                    )
+                    refs.update(inner_refs)
+                    if inner_reason and not incomplete_reason:
+                        incomplete_reason = inner_reason
                 index = next_index
                 continue
             next_index = parsed.next_index

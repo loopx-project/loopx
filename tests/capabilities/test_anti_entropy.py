@@ -2277,3 +2277,346 @@ def test_typescript_destructuring_real_cli_exit_code(
         capture_output=True,
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        "const api = require('./service.cjs');\nconsole.log(api['old_api\\062']());\n",
+        "const api = require('./service.cjs');\nconsole.log(api['old_api'+'\\062']());\n",
+    ),
+)
+def test_typescript_octal_numeric_property_key_blocks_retirement(
+    tmp_path: Path, caller: str
+) -> None:
+    """Legacy octal escapes decode to the executable property name they read."""
+    diff = """
+--- a/service.cjs
++++ b/service.cjs
+@@ -1,2 +1,2 @@
+-function old_api2() { return 1; }
+-module.exports = { old_api2 };
++function new_api2() { return 2; }
++module.exports = { new_api2 };
+"""
+    basis = RetirementBasis(target_symbols=("old_api2",))
+    workspace = _make_workspace(
+        tmp_path / "ws_octal_property",
+        {
+            "service.cjs": "function new_api2() { return 2; }\nmodule.exports = { new_api2 };\n",
+            "client.cjs": caller,
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        "const api = require('./service.cjs');\nconsole.log('old_api\\062');\n",
+        "const api = require('./service.cjs');\nconsole.log(api.new_api2());\n",
+    ),
+)
+def test_typescript_octal_ordinary_string_and_migrated_pass(
+    tmp_path: Path, caller: str
+) -> None:
+    """A non-executable string and a migrated call must not become false references."""
+    diff = """
+--- a/service.cjs
++++ b/service.cjs
+@@ -1,2 +1,2 @@
+-function old_api2() { return 1; }
+-module.exports = { old_api2 };
++function new_api2() { return 2; }
++module.exports = { new_api2 };
+"""
+    basis = RetirementBasis(target_symbols=("old_api2",))
+    workspace = _make_workspace(
+        tmp_path / "ws_octal_control",
+        {
+            "service.cjs": "function new_api2() { return 2; }\nmodule.exports = { new_api2 };\n",
+            "client.cjs": caller,
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api2",)
+
+
+def test_typescript_template_interpolation_destructuring_blocks_retirement(
+    tmp_path: Path,
+) -> None:
+    """Executable ${...} template interpolation must be analyzed, not skipped as text."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    caller = (
+        "import * as api from './service.mjs';\n"
+        "console.log(`${(() => { const { ['old_api']: invoke } = api; "
+        "return invoke(); })()}`);\n"
+    )
+    workspace = _make_workspace(
+        tmp_path / "ws_template_interpolation",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": caller,
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        "import * as api from './service.mjs';\nconsole.log(`plain old_api text`);\n",
+        "import * as api from './service.mjs';\nconsole.log(`${api.new_api()}`);\n",
+    ),
+)
+def test_typescript_template_interpolation_ordinary_and_migrated_pass(
+    tmp_path: Path, caller: str
+) -> None:
+    """Plain template text and migrated interpolation produce no false reference."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_template_control",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": caller,
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        "const api = require('./service.cjs');\nconsole.log(api['old_api\\062']());\n",
+        "const api = require('./service.cjs');\nconsole.log(api['old_api'+'\\062']());\n",
+        "import * as api from './service.mjs';\nconsole.log(`${(() => { const { ['old_api']: invoke } = api; return invoke(); })()}`);\n",
+    ),
+)
+def test_typescript_octal_and_template_real_cli_exit_code(
+    tmp_path: Path, caller: str
+) -> None:
+    """Reviewer-shaped real CLI cases for both new P2s reject."""
+    import subprocess
+    import sys
+
+    if "service.cjs" in caller:
+        ext = ".cjs"
+        service_new = "function new_api2() { return 2; }\nmodule.exports = { new_api2 };\n"
+        target = "old_api2"
+        diff = """
+--- a/service.cjs
++++ b/service.cjs
+@@ -1,2 +1,2 @@
+-function old_api2() { return 1; }
+-module.exports = { old_api2 };
++function new_api2() { return 2; }
++module.exports = { new_api2 };
+"""
+    else:
+        ext = ".mjs"
+        service_new = "export function new_api() { return 2; }\n"
+        target = "old_api"
+        diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    workspace = _make_workspace(
+        tmp_path / "ws_review3_cli",
+        {
+            "service" + ext: service_new,
+            "client" + ext: caller,
+        },
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "loopx.cli",
+            "anti-entropy",
+            "verify",
+            "--diff-file",
+            "-",
+            "--basis-json",
+            '{"target_symbols": ["' + target + '"]}',
+            "--workspace",
+            str(workspace),
+            "--format",
+            "json",
+        ],
+        input=diff.encode("utf-8"),
+        capture_output=True,
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize(
+    "caller",
+    (
+        "import * as api from './service.mjs';\nconsole.log(`${`pre${(() => { const { ['old_api']: f } = api; return f(); })()}`}`);\n",
+        "import * as api from './service.mjs';\nconsole.log(`${`a${`b${(() => { const { ['old_api']: f } = api; return f(); })()}`}`}`);\n",
+    ),
+)
+def test_typescript_nested_template_interpolation_blocks_retirement(
+    tmp_path: Path, caller: str
+) -> None:
+    """Nested executable templates must recurse into their own interpolations."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 'OLD'; }
++export function new_api() { return 'NEW'; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_nested_template",
+        {
+            "service.mjs": "export function new_api() { return 'NEW'; }\n",
+            "client.mjs": caller,
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_nested_template_plain_text_passes(tmp_path: Path) -> None:
+    """Nested plain template text is not executable and passes."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 'OLD'; }
++export function new_api() { return 'NEW'; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_nested_plain",
+        {
+            "service.mjs": "export function new_api() { return 'NEW'; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "console.log(`${`plain old_api text`}`);\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+def test_typescript_annex_b_octal_trailing_digit_is_not_malformed(
+    tmp_path: Path,
+) -> None:
+    """\\400 is Annex B \\40 + '0', not a malformed escape requiring AE004."""
+    diff = """
+--- a/service.cjs
++++ b/service.cjs
+@@ -1,2 +1,2 @@
+-function old_api() { return 1; }
+-module.exports = { old_api };
++function new_api() { return 2; }
++module.exports = { new_api };
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_annex_b_octal",
+        {
+            "service.cjs": "function new_api() { return 2; }\nmodule.exports = { new_api };\n",
+            "client.cjs": "console.log('old_api\\400');\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
+
+
+def test_typescript_template_interpolation_regex_brace_blocks_retirement(
+    tmp_path: Path,
+) -> None:
+    """A regex literal brace must not truncate an executable template expression."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 'OLD'; }
++export function new_api() { return 'NEW'; }
+"""
+    caller = (
+        "import * as api from './service.mjs';\n"
+        "console.log(`${ (() => { return /}/.test('x'); })() + "
+        "(() => { const { ['old_api']: f } = api; return f(); })() }`);\n"
+    )
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_template_regex",
+        {
+            "service.mjs": "export function new_api() { return 'NEW'; }\n",
+            "client.mjs": caller,
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_typescript_template_interpolation_division_passes(tmp_path: Path) -> None:
+    """A division slash in interpolation is not a regex literal or a reference."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 'OLD'; }
++export function new_api() { return 'NEW'; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_template_division",
+        {
+            "service.mjs": "export function new_api() { return 'NEW'; }\n",
+            "client.mjs": (
+                "import * as api from './service.mjs';\n"
+                "console.log(`${ 1 / 2 }`);\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "passed", f"findings: {receipt.findings}"
+    assert receipt.retired_symbols == ("old_api",)
