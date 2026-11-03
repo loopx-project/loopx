@@ -108,6 +108,8 @@ def register_update_command(
         help="With update activate, retry installed managed services (default: all).")
     update_parser.add_argument("--port", type=int,
         help="With update activate --service chat, select its loopback port (default: 8767).")
+    update_parser.add_argument("--runtime-executable",
+        help="With update activate --service all, align managed services with this qualified runtime while retaining their data and account routes.")
     update_parser.add_argument(
         "--archive-url",
         help="Explicit tarball URL passed to the installer as LOOPX_ARCHIVE_URL.",
@@ -148,16 +150,19 @@ def handle_update_command(
             if upgrade or any((args.check, args.dry_run, args.execute, args.rollback,
                     args.repo, args.ref, args.archive_url, args.installed_doctor_json,
                     args.operation_id, args.source, args.allow_downgrade, args.background)):
-                raise ValueError("use update activate only with --service and --port; no installation is performed")
+                raise ValueError("use update activate only with --service, --port and --runtime-executable; no installation is performed")
             if args.port is not None and args.service != "chat":
                 raise ValueError("--port requires update activate --service chat")
+            if args.runtime_executable is not None and args.service == "chat":
+                raise ValueError("--runtime-executable requires update activate --service all")
             from ..runtime_activation import activate_runtime_services
-            payload = activate_runtime_services(service=args.service or "all", port=args.port if args.port is not None else 8767)
+            options = {"runtime_executable": args.runtime_executable} if args.runtime_executable is not None else {}
+            payload = activate_runtime_services(service=args.service or "all", port=args.port if args.port is not None else 8767, **options)
             print_payload(payload, output_format(args), lambda value:
                 f"Managed service activation: {value['status']} ({value.get('reason') or 'verify service readiness'})")
             return 0 if payload.get("ok") else 1
-        if getattr(args, "service", None) is not None or getattr(args, "port", None) is not None:
-            raise ValueError("--service and --port require update activate")
+        if any(getattr(args, name, None) is not None for name in ("service", "port", "runtime_executable")):
+            raise ValueError("--service, --port and --runtime-executable require update activate")
         if args.update_action == "status":
             if any((args.check, args.dry_run, args.execute, args.rollback, args.repo, args.ref, args.archive_url,
                     getattr(args, "source", False), getattr(args, "allow_downgrade", False), getattr(args, "background", False))):

@@ -984,3 +984,48 @@ fn declared_machine_source_remains_authoritative_while_unloaded() {
         ServiceKind::Status
     ));
 }
+#[test]
+#[cfg(unix)]
+fn runtime_alignment_requires_exact_identity_and_keeps_recovery_codes() {
+    use std::os::unix::process::ExitStatusExt;
+    let identity = serde_json::json!({"release_id":"selected"});
+    let output = |payload: serde_json::Value, exit| {
+        Some(std::process::Output {
+            status: std::process::ExitStatus::from_raw(exit),
+            stdout: serde_json::to_vec(&payload).unwrap(),
+            stderr: vec![],
+        })
+    };
+    let mut payload = serde_json::json!({"schema_version":"loopx_runtime_service_activation_v1",
+        "service":"all", "ok":true, "status":"aligned", "readiness_verified":true, "runtime_identity":identity});
+    assert!(managed_runtime_alignment_result(output(payload.clone(), 0), Some(&identity)).is_ok());
+    assert!(managed_runtime_alignment_result(output(payload.clone(), 1), Some(&identity)).is_err());
+    payload["readiness_verified"] = false.into();
+    assert!(managed_runtime_alignment_result(output(payload.clone(), 0), Some(&identity)).is_err());
+    payload["readiness_verified"] = true.into();
+    payload["runtime_identity"] = serde_json::json!({"release_id":"old"});
+    assert!(managed_runtime_alignment_result(output(payload.clone(), 0), Some(&identity)).is_err());
+    for reason in [
+        "chat_work_pending",
+        "chat_state_unverified",
+        "service_runtime_route_unverified",
+        "service_runtime_alignment_failed",
+        "service_runtime_rollback_failed",
+    ] {
+        payload["ok"] = false.into();
+        payload["status"] = "deferred".into();
+        payload["reason"] = reason.into();
+        assert_eq!(
+            managed_runtime_alignment_result(output(payload.clone(), 1), Some(&identity))
+                .unwrap_err()
+                .to_string(),
+            reason
+        );
+    }
+    assert_eq!(
+        managed_runtime_alignment_result(None, Some(&identity))
+            .unwrap_err()
+            .to_string(),
+        "service_runtime_alignment_unavailable"
+    );
+}
