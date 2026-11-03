@@ -24,7 +24,7 @@ from loopx.control_plane.turn_driver import (  # noqa: E402
 from tests.control_plane.canonical_authority_fixture import (  # noqa: E402
     initialize_canonical_source_fixture,
 )
-from tests.control_plane.host_process_fixture import write_python_host_fixture  # noqa: E402
+from tests.control_plane.codex_app_server_fixture import write_codex_app_server_fixture  # noqa: E402
 
 
 GOAL_ID = "loopx-turn-real-cli-e2e"
@@ -127,7 +127,7 @@ def _write_fixture(root: Path, *, turn_count: int) -> tuple[Path, Path, Path, Pa
 
 def _write_fake_codex(root: Path) -> Path:
     executable = root / "fake-codex"
-    executable = write_python_host_fixture(
+    executable = write_codex_app_server_fixture(
         executable,
         f"""#!/usr/bin/env python3
 import json

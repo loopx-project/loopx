@@ -7,6 +7,26 @@
 与 [Desktop Execution Frontends](./desktop-execution-frontends-v0.zh-CN.md) 的共同目标。
 [English](./harness-selection-dsh-pi-v0.md)
 
+## OAR 集成检查点（2026-10-28）
+
+由 LoopX 启动的有界 Codex、DSH Turn、DSH Chat 分段，以及显式选择的 Pi
+generic-cli Turn，现统一使用 `@botiverse/oar@0.75.0` 管理会话、事件、控制和清理。
+[运行时安装说明](../../../loopx/hosts/oar/README.md)记录了精确依赖、显式安装命令及
+该可选运行时的 Node.js 24 要求；Core 的 Node.js 22.22.3 最低要求不变。
+
+Codex 使用 OAR 原生 app-server 适配器，保留请求的沙箱权限与不透明的恢复会话标识。
+Pi 使用 OAR 配套的子进程运行时。上游 OAR 尚无 DSH 运行时，因此 LoopX 通过薄层
+TypeScript 运行时连接原有固定版本的 Python SDK worker。Turn、独立验证、quota
+和工作结算仍由现有 owner 决定；输出不完整、控制请求被拒、原生执行失败或未确认
+清理完成，均不能成为成功结果。
+
+本检查点的范围是有界执行集成。已经运行的 Pi/DSH 内部插件保留同一会话中的行为。
+原生 Codex Chat 与 Codex/DSH operation transport 继续使用现有适配器，直到 OAR
+具备对应的动态工具、历史注入与后台控制契约；后续扩展由运行时适配器 owner 先完成
+这些契约的验证。本检查点不升级下文 L1、Mode B、重启恢复或长程效果的结论，带日期
+的历史表格仍保留原证据范围。DSH Chat 默认运行时现在公开真实的中断能力，显式
+自定义 runner 则仍可能只支持丢弃返回结果。
+
 ## 决策
 
 保留 **DSH 作为 L1 首个事件源**，但不据此宣布它已成为生产 Mode B 的最终首选。

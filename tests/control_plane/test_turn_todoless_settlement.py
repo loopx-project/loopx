@@ -16,7 +16,7 @@ from loopx.control_plane.todos.active_state_todo_parser import parse_active_stat
 from loopx.control_plane.quota.turn_envelope import build_turn_envelope, turn_envelope_action_signature_document
 from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
 from loopx.control_plane.turn_driver.executor import validate_loopx_turn_host_result
-from tests.control_plane.host_process_fixture import write_python_host_fixture
+from tests.control_plane.codex_app_server_fixture import write_codex_app_server_fixture
 from test_quota_settlement_cli import (
     AGENT_ID, GOAL_ID, _classification_count, _configure_autonomous_replan_fixture,
     _initialize_git_checkout, _run_cli, _write_fixture,
@@ -105,7 +105,7 @@ if not failed.exists():
     print(json.dumps({"type": "error", "error": {"code": "rate_limit_exceeded"}}), flush=True)
     raise SystemExit(9)
 (root / "plan.json").write_text''')
-    return write_python_host_fixture(tmp_path / "fixture-codex", f"#!{sys.executable}\n" + source.lstrip())
+    return write_codex_app_server_fixture(tmp_path / "fixture-codex", f"#!{sys.executable}\n" + source.lstrip())
 
 
 def _run_turn(project, runtime, registry, host, *, turn=None, resume=None, valid=True, retry=False):

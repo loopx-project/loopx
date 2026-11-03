@@ -25,6 +25,7 @@ import importlib.util
 import json
 import os
 import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -226,42 +227,67 @@ def run_dsh_turn(
     runtime_bin: str | None,
     request_timeout_seconds: float | None,
     env: Mapping[str, str] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
-    """Run one bounded DeepSeek Harness session through the Python SDK.
+    """Run the existing bounded SDK segment under the shared OAR owner.
 
-    Returns the terminal outcome (final response, finish reason, events)
-    instead of only the final response: the SDK reports provider failures
-    through ``RunResult.finish_reason`` and the last ``turn/end`` event
-    rather than raising a Python exception.
+    Native result and failure facts survive the transport unchanged. OAR owns
+    lifecycle and observation; the existing adapter owns Turn interpretation.
+    No dependency installation or alternative runtime is selected here.
     """
+    from ..hosts.oar.bridge import run_oar_turn
+    from ..hosts.oar import dsh_worker
+    from ..control_plane.turn_driver.host_failure import HOST_FAILURE_KINDS
 
-    try:
-        from deepseek_harness import DeepSeekHarness, DeepSeekHarnessConfig
-    except ImportError as exc:
-        raise RuntimeError(
-            "deepseek-harness-sdk is required; install it with "
-            "`python -m pip install 'loopx[deepseek-harness]'`"
-        ) from exc
+    if reasoning_effort is not None:
+        reasoning_effort = require_supported_reasoning_effort(reasoning_effort)
+    native_results: list[dict[str, Any]] = []
+    native_failures: list[dict[str, Any]] = []
 
-    config = build_sdk_config(
-        provider=provider,
-        model=model,
-        reasoning_effort=(
-            require_supported_reasoning_effort(reasoning_effort)
-            if reasoning_effort is not None
-            else None
-        ),
-        workspace=workspace,
-        dsh_home=session_root,
-        max_tokens=max_tokens,
-        cordis=cordis,
-        runtime_bin=runtime_bin,
-        request_timeout_seconds=request_timeout_seconds,
-        env=env,
-    )
-    with DeepSeekHarness(DeepSeekHarnessConfig(**config)) as harness:
-        result = harness.run(prompt, session_id=session_id)
-    return normalize_runner_outcome(result)
+    def observe(record: dict[str, Any]) -> None:
+        if record.get("type") != "native":
+            return
+        frame = _mapping(record.get("frame"))
+        body = _mapping(frame.get("body"))
+        native = body.get("native")
+        if frame.get("kind") == "frame" and isinstance(native, dict):
+            if body.get("type") == "dsh/result":
+                native_results.append(native)
+            elif body.get("type") == "dsh/error":
+                native_failures.append(native)
+
+    observed = run_oar_turn({
+        "runtime": "dsh", "cwd": str(workspace), "prompt": prompt,
+        "resume": session_id, "model": model,
+        **({"effort": reasoning_effort} if reasoning_effort is not None else {}),
+        "env": dict(env or {}),
+        "dsh": {
+            "python_executable": sys.executable, "worker_path": str(Path(dsh_worker.__file__).resolve()),
+            "provider": provider, "dsh_home": str(session_root), "max_tokens": max_tokens,
+            "cordis": str(cordis.expanduser().resolve()) if cordis else None,
+            "runtime_bin": runtime_bin, "request_timeout_seconds": request_timeout_seconds,
+        },
+    }, project=workspace, timeout_seconds=request_timeout_seconds,
+        on_record=observe, cancel_event=cancel_event)
+    if observed["outcome"] == "timeout":
+        raise TimeoutError("DSH execution exceeded the bounded segment timeout")
+    if observed["outcome"] != "exited":
+        raise BuiltInHostError("dsh_runtime_" + observed["outcome"], failure_kind="transport_lost")
+    if native_failures:
+        failure_kind = native_failures[-1].get("failure_kind")
+        raise BuiltInHostError("dsh_sdk_failed", failure_kind=(failure_kind if failure_kind in HOST_FAILURE_KINDS else "unknown"))
+    if (len(native_results) != 1 or not observed["output_complete"]
+            or _mapping(observed.get("oar_result")).get("error")):
+        raise BuiltInHostError("dsh_runtime_result_unconfirmed", failure_kind="transport_lost")
+    outcome = normalize_runner_outcome(native_results[0])
+    if outcome["finish_reason"] in {"completed", "stop"}:
+        if _mapping(observed.get("turn_outcome")).get("kind") != "completed" or observed["returncode"] != 0:
+            raise BuiltInHostError("dsh_runtime_completion_unconfirmed", failure_kind="transport_lost")
+    elif outcome["finish_reason"] == "aborted":
+        raise BuiltInHostError("dsh_runtime_aborted", failure_kind="unknown")
+    elif outcome["finish_reason"] not in {"error", "max-tokens"}:
+        raise DshHostResultError("DSH did not report a recognized terminal outcome")
+    return outcome
 
 
 def terminal_error_reason(outcome: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -502,6 +528,8 @@ def _execute_turn_host_request(
             "dsh_host_result_rejected",
             failure_kind="contract_rejected",
         ) from exc
+    except BuiltInHostError:
+        raise
     except Exception as exc:  # noqa: BLE001 - adapter fails closed at boundary
         raise BuiltInHostError(
             "dsh_execution_failed",

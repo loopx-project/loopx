@@ -958,6 +958,11 @@ def collect_doctor(
 
     decision_context_capture = collect_capture_host_diagnostics(selected_runtime_root)
     typescript_control_plane = collect_effect_runtime_readiness(deep=deep)
+    # These bounded model hosts are optional. Their Node 24+ dependency must
+    # not raise Core's Node requirement or make unrelated CLI work unavailable.
+    from .hosts.oar.installation import inspect_installation
+
+    oar_runtime = inspect_installation()
     typescript_runtime_required = True
     deep_validation = None
     if deep:
@@ -1121,6 +1126,12 @@ def collect_doctor(
             "ok": bool(typescript_control_plane.get("ready")),
             "detail": str(typescript_control_plane.get("status")),
         },
+        {
+            "id": "oar_runtime_ready",
+            "required": False,
+            "ok": oar_runtime.get("ready") is True,
+            "detail": str(oar_runtime.get("reason") or "Optional bounded host runtime is ready"),
+        },
     ]
     from .desktop_installation import desktop_installation_status
 
@@ -1178,6 +1189,7 @@ def collect_doctor(
         "runtime_projection_routes": runtime_projection_routes,
         "decision_context_capture": decision_context_capture,
         "typescript_control_plane": typescript_control_plane,
+        "oar_runtime": oar_runtime,
         "install_freshness": install_freshness,
         "upgrade_hint": install_freshness,
         "skill": {
@@ -1258,6 +1270,11 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
     typescript_runtime_lifecycle = (
         typescript_control_plane.get("runtime_lifecycle")
         if isinstance(typescript_control_plane.get("runtime_lifecycle"), dict)
+        else {}
+    )
+    oar_runtime = (
+        payload.get("oar_runtime")
+        if isinstance(payload.get("oar_runtime"), dict)
         else {}
     )
     lines = [
@@ -1421,6 +1438,20 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         recommended_action = typescript_control_plane.get("recommended_action")
         if recommended_action:
             lines.append(f"- recommended_action: {recommended_action}")
+    if oar_runtime:
+        lines.extend([
+            "",
+            "## Optional OAR Host Runtime",
+            "",
+            "Used by bounded Codex Turns, DeepSeek Harness segments and the Pi host. "
+            "Core commands and native Codex Chat do not require this dependency.",
+            "",
+            f"- ready: `{oar_runtime.get('ready')}`",
+            f"- oar_version: `{oar_runtime.get('oar_version')}`",
+        ])
+        for name in ("node", "runtime_directory", "reason", "next_action"):
+            if oar_runtime.get(name):
+                lines.append(f"- {name}: {oar_runtime[name]}")
     if payload.get("agent_type") == "zcode":
         lines.extend(["", "## ZCode Skill Delivery"])
         for name, skill in sorted((payload.get("skills") or {}).items()):

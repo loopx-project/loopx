@@ -245,6 +245,22 @@ def _run_turn(args: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="loopx-steward-managed-chat-") as directory:
         root = Path(directory)
+        # The synthetic steward deliberately exercises the restricted DSH
+        # profile. The default trusted-owner profile requires native Codex.
+        configuration = root / "store" / "machine" / "configuration.json"
+        configuration.parent.mkdir(parents=True)
+        configuration.write_text(
+            json.dumps({
+                "schema_version": "loopx_machine_configuration_v0",
+                "namespaces": {
+                    "manager_runtime": {
+                        "schema_version": "manager_runtime_profile_v0",
+                        "runtime_profile": "restricted",
+                    },
+                },
+            }),
+            encoding="utf-8",
+        )
         store = ChatSessionStore(root / "store")
         # A real registry keeps this on the collected path the steward actually
         # runs, instead of the registry-unavailable envelope.
@@ -382,8 +398,9 @@ def _assert_segment_is_read_only(
 
     The channel pins ``DSH_PERMISSION_MODE=read-only`` for its own segments. This
     asks the mock model to call the shell tool against a path outside the
-    segment workspace, then asserts the tool *ran* and was refused, so the
-    boundary is enforced rather than merely requested in the prompt.
+    segment workspace and verifies the tool's refusal. A host without a usable
+    sandbox must refuse execution entirely; report that separately from a
+    write denied by an available sandbox.
     """
 
     target = _sandbox_probe_path()
@@ -422,8 +439,13 @@ def _assert_segment_is_read_only(
         and message.get("role") == "tool"
         and message.get("tool_call_id") == "call_sandbox_probe"
     ]
+    backend_unavailable = any(
+        "no sandbox backend is usable" in str(result)
+        and "refusing to run the command unconfined" in str(result)
+        for result in tool_results
+    )
     _assert(
-        any(
+        backend_unavailable or any(
             "denied" in str(result) or "not permitted" in str(result)
             for result in tool_results
         ),
@@ -433,6 +455,7 @@ def _assert_segment_is_read_only(
         "permission_mode": STEWARD_SEGMENT_ENV["DSH_PERMISSION_MODE"],
         "write_attempted": True,
         "write_denied": True,
+        "enforcement": "backend_unavailable" if backend_unavailable else "sandbox_denied",
     }
 
 

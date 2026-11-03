@@ -369,8 +369,10 @@ def test_real_turn_cli_memory_projection_and_settlement(tmp_path: Path, monkeypa
                 },
             )
     capture = tmp_path / "host-capture.json"
+    from tests.control_plane.codex_app_server_fixture import write_codex_app_server_fixture
+
     host = tmp_path / "fixture-codex"
-    host.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
+    host = write_codex_app_server_fixture(host, f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 schema = json.loads(pathlib.Path(args[args.index('--output-schema') + 1]).read_text())
@@ -387,8 +389,7 @@ result = {'schema_version': 'loopx_turn_result_v0', 'turn_key': request['turn_ke
 result['reward_memory_reflection_json'] = '{"status":"no_evidence"}'
 pathlib.Path(args[args.index('--output-last-message') + 1]).write_text(json.dumps(result))
 print(json.dumps({'type': 'thread.started', 'thread_id': 'fixture-memory-session'}))
-''', encoding="utf-8")
-    host.chmod(0o755)
+''')
     host_args = ["--host", "codex-cli", "--codex-bin", str(host)]
     if host_kind == "dsh":
         runner = tmp_path / "fixture_dsh_runner.py"

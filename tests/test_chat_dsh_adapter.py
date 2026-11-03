@@ -61,6 +61,13 @@ def _adapter(runner: _Runner, tmp_path: Path) -> DshChatAdapter:
     )
 
 
+def test_interrupt_capability_names_the_actual_runner_contract(tmp_path: Path) -> None:
+    adapter = _adapter(_Runner({}), tmp_path)
+    assert adapter.capabilities()["interrupt"] is False
+    adapter.runner = None
+    assert adapter.capabilities()["interrupt"] is True
+
+
 def test_a_segment_carries_the_resolved_profile_and_a_read_only_boundary(
     tmp_path: Path,
 ) -> None:
@@ -108,6 +115,25 @@ def test_an_empty_final_message_fails_closed(tmp_path: Path) -> None:
         _adapter(runner, tmp_path).start_turn("status please", lambda *_args: None)
 
     assert raised.value.error_code == MANAGED_HOST_CHAT_FAILED
+
+
+@pytest.mark.parametrize("reason_source", ["field", "event"])
+def test_a_terminal_error_cannot_publish_nonempty_text(
+    tmp_path: Path, reason_source: str,
+) -> None:
+    terminal = {"finish_reason": "error"} if reason_source == "field" else {
+        "events": [{"type": "turn/end", "data": {"reason": {
+            "kind": "error", "error": {"message": "fixture provider failure"},
+        }}}],
+    }
+    adapter = _adapter(_Runner({"final_response": _envelope("unaccepted answer"), **terminal}), tmp_path)
+    events: list[str] = []
+    with pytest.raises(CodexChatAgentError) as raised:
+        adapter.start_turn("status please", lambda kind, _payload: events.append(kind))
+
+    assert raised.value.error_code == MANAGED_HOST_CHAT_FAILED
+    assert adapter.history == []
+    assert not any(kind.startswith("answer.") for kind in events)
 
 
 @pytest.mark.parametrize("final_response", ["", _envelope("truncated answer")])

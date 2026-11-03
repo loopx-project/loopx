@@ -1,0 +1,94 @@
+name: OAR Runtime Integration
+
+on:
+  pull_request:
+    paths:
+      - "loopx/hosts/oar/**"
+      - "loopx/control_plane/turn_driver/**"
+      - "loopx/dsh_goal_mode/**"
+      - "loopx/chat_dsh.py"
+      - "tests/test_oar_*.py"
+      - "examples/loopx-steward-managed-chat-smoke.py"
+      - "examples/loopx-turn-codex-cli-e2e-smoke.py"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - ".github/workflows/oar-runtime.yml"
+  push:
+    branches: [main]
+    paths:
+      - "loopx/hosts/oar/**"
+      - "loopx/control_plane/turn_driver/**"
+      - "loopx/dsh_goal_mode/**"
+      - "loopx/chat_dsh.py"
+      - "tests/test_oar_*.py"
+      - "examples/loopx-steward-managed-chat-smoke.py"
+      - "examples/loopx-turn-codex-cli-e2e-smoke.py"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - ".github/workflows/oar-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oar-runtime-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LOOPX_USAGE_PING: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set OAR runtime cache
+        run: echo "LOOPX_OAR_HOME=$RUNNER_TEMP/loopx-oar" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            loopx/hosts/oar/package-lock.json
+            apps/presentation/dashboard/package-lock.json
+      - name: Install locked runtime and Python test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -e '.[test,deepseek-harness]' build
+          npm ci --ignore-scripts --prefix loopx/hosts/oar
+      - name: Check runtime contracts and real transport fixtures
+        run: |
+          npm --prefix loopx/hosts/oar run typecheck
+          npm --prefix loopx/hosts/oar test
+          python -m pytest -q --no-cov tests/test_oar_*.py
+          python examples/loopx-turn-codex-cli-e2e-smoke.py
+          python examples/loopx-steward-managed-chat-smoke.py
+      - name: Build the installable distribution
+        run: |
+          python scripts/chat_bundle.py build --install
+          python -m build --wheel
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          with ZipFile(next(Path("dist").glob("loopx-*.whl"))) as wheel:
+              names = wheel.namelist()
+              assert not any("/node_modules/" in name for name in names)
+              for name in ("runtime.ts", "stdio.ts", "dsh.ts", "dsh_worker.py", "package.json", "package-lock.json"):
+                  assert "loopx/hosts/oar/" + name in names
+          PY
+      - name: Qualify the installed wheel outside the source checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/oar-wheel-env"
+          for wheel in dist/loopx-*.whl; do
+            "$RUNNER_TEMP/oar-wheel-env/bin/python" -m pip install --disable-pip-version-check "$wheel[deepseek-harness]" pytest
+          done
+          mkdir -p "$RUNNER_TEMP/oar-wheel-check/tests"
+          cp tests/test_oar_pi_host.py tests/test_oar_dsh_chat.py "$RUNNER_TEMP/oar-wheel-check/tests/"
+          cd "$RUNNER_TEMP/oar-wheel-check"
+          "$RUNNER_TEMP/oar-wheel-env/bin/python" -m loopx.hosts.oar install
+          "$RUNNER_TEMP/oar-wheel-env/bin/python" -m loopx.hosts.oar status
+          "$RUNNER_TEMP/oar-wheel-env/bin/python" -m pytest -q tests -k 'real_pi or default_dsh_chat_interrupt'

@@ -3,7 +3,7 @@
 import {spawn, type ChildProcessWithoutNullStreams} from "node:child_process";
 import {setTimeout as delay} from "node:timers/promises";
 import {StringDecoder} from "node:string_decoder";
-import {waitForProcessGroupStop} from "./host_process_group.ts";
+import {HostDescendantTracker, waitForProcessGroupStop} from "./host_process_group.ts";
 
 export interface HostProcessRequest {
   argv: string[];
@@ -21,6 +21,7 @@ export interface HostProcessResult {
   output_complete: boolean;
   cleanup_scope: "process_group" | "process_tree_best_effort";
   group_signal_sent: boolean;
+  descendant_cleanup_complete?: boolean;
 }
 export type HostProcessOutput = {kind: "stdout" | "stderr"; text: string};
 /** The group this owner will clean up, reported once the Host is spawned.
@@ -54,12 +55,15 @@ function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signa
 export type HostProcessHooks = {
   spawned?: (item: HostProcessSpawned) => Promise<void>;
   openInput?: (write: (text: string) => Promise<void>) => void;
+  /** SDKs such as OAR own additional detached groups below this Host. */
+  trackDescendants?: boolean;
+  descendants?: (item: {kind: "descendants"; process_groups: number[]}) => Promise<void>;
 };
 
 export async function runHostProcess(request: HostProcessRequest,
   output: (item: HostProcessOutput) => Promise<void>, signal?: AbortSignal,
   terminationGraceMs = HOST_PROCESS_TERMINATE_GRACE_MS,
-  {spawned, openInput}: HostProcessHooks = {}): Promise<HostProcessResult> {
+  {spawned, openInput, trackDescendants, descendants}: HostProcessHooks = {}): Promise<HostProcessResult> {
   const base: HostProcessResult = {kind: "result", outcome: "spawn_failed", returncode: null, signal: null,
     output_complete: true, cleanup_scope: process.platform === "win32" ? "process_tree_best_effort" : "process_group",
     group_signal_sent: false};
@@ -69,6 +73,10 @@ export async function runHostProcess(request: HostProcessRequest,
   let outcome: HostProcessResult["outcome"] = "exited";
   let complete = true, forcedDrain = false, stdoutBytes = 0;
   let cleanup: Promise<void> | undefined;
+  const tracker = trackDescendants && process.platform !== "win32"
+    ? new HostDescendantTracker(child,
+      async groups => { await descendants?.({kind: "descendants", process_groups: groups}); },
+      () => stop("cancelled")) : undefined;
   const clean = () => cleanup ??= (async () => {
     if (process.platform === "win32") {
       if (!child.pid) return;
@@ -83,15 +91,26 @@ export async function runHostProcess(request: HostProcessRequest,
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       return;
     }
+    // Observe before signalling: detached SDK descendants would otherwise be
+    // reparented and invisible after their OAR owner exits. A second observation
+    // covers a runtime still opening during the graceful shutdown window.
+    await tracker?.observe();
+    tracker?.signal("SIGTERM");
     // Always signal the owned group, including after the leader's exit.
     const sent = signalGroup(child, "SIGTERM");
     base.group_signal_sent ||= sent;
     if (sent) {
       await delay(terminationGraceMs);
+      await tracker?.observe();
+      tracker?.signal("SIGKILL");
       signalGroup(child, "SIGKILL");
       // KILL delivery is asynchronous. Closed pipes and a reaped leader do not
       // establish that descendants have stopped executing or writing.
       await waitForProcessGroupStop(child.pid!);
+    }
+    if (tracker) {
+      base.descendant_cleanup_complete = await tracker.finish();
+      complete &&= tracker.outputComplete && base.descendant_cleanup_complete;
     }
   })();
   const stop = (reason: HostProcessResult["outcome"]) => {
@@ -106,6 +125,11 @@ export async function runHostProcess(request: HostProcessRequest,
     child.once("error", () => { outcome = "spawn_failed"; resolve(); });
     child.once("exit", (code, sig) => {
       base.returncode = code; base.signal = sig;
+      // Polling can retain known groups but cannot recover children spawned
+      // between the final observation and an unplanned owner crash.
+      // An orderly nonzero exit can carry an OAR failed-turn cleanup receipt;
+      // the Python owner separately requires that typed receipt before drain.
+      if (sig !== null) tracker?.unexpectedExit();
       // Descendants may hold inherited pipes forever after the leader exits.
       drainTimer = setTimeout(() => {
         complete = false; forcedDrain = true;
@@ -140,6 +164,7 @@ export async function runHostProcess(request: HostProcessRequest,
       process_group: process.platform === "win32" ? null : child.pid}); }
     catch { complete = false; stop("cancelled"); }
   }
+  await tracker?.start();
   if (openInput) {
     // The private preflight transport retains stdin between read-only requests.
     // It owns framing/backpressure, not child lifetime or process-group cleanup.
@@ -158,8 +183,13 @@ export async function runHostProcess(request: HostProcessRequest,
     await reads;
     if (drainTimer) clearTimeout(drainTimer);
     await clean();
+    if (tracker) {
+      base.descendant_cleanup_complete = Boolean(base.descendant_cleanup_complete && tracker.ownershipConfirmed);
+      complete &&= tracker.outputComplete && base.descendant_cleanup_complete;
+    }
     return {...base, outcome, output_complete: complete};
   } finally {
+    await tracker?.stop();
     if (deadline) clearTimeout(deadline);
     if (drainTimer) clearTimeout(drainTimer);
     signal?.removeEventListener("abort", abort);

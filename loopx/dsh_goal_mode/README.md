@@ -5,6 +5,12 @@ LoopX-governed goal loop. LoopX keeps authority (goal/todo state, quota,
 validation); the adapter only translates one governed Turn into one bounded
 dsh work segment and shapes the reply into a typed result.
 
+Bounded execution now uses the shared [OAR runtime](../hosts/oar/README.md).
+Install it once with Node.js 24+ using `python -m loopx.hosts.oar install`, in
+addition to `loopx[deepseek-harness]`. The Python SDK runs in a supervised worker;
+existing DSH configuration and signed request/result contracts remain in place.
+The separate native DSH plugin keeps its existing same-session integration.
+
 ## Surface
 
 The `deepseek-harness` host surface (aliases: `deepseek_harness`,
@@ -53,8 +59,8 @@ a non-ASCII request (`invalid request JSON on stdin`) and dies in the final
 
 ## In-process host (`--host dsh`)
 
-`loopx turn run-once --host dsh` runs the same adapter inside the CLI process
-instead of a generic subprocess. Provider failures then reach the Turn
+`loopx turn run-once --host dsh` calls the same typed adapter directly inside
+the CLI process; its SDK execution is supervised through OAR. Provider failures reach the Turn
 journal as typed `loopx_turn_host_failure_v0` kinds instead of collapsing to
 `unknown` through a bare nonzero exit, so bounded same-Turn retry stays
 available. Both failure shapes are covered: a raised transport exception and

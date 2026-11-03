@@ -22,9 +22,9 @@ from loopx.control_plane.projects.registry_codec import (
 from loopx.control_plane.turn_driver.codex_cli import (
     CODEX_CLI_SESSION_SCHEMA_VERSION,
     CODEX_STDIO_MCP_SERVER_SCHEMA_VERSION,
+    CodexFailureObservation,
     _diagnostic_failure_category,
     _event_failure_categories,
-    _event_failure_category,
     _prompt,
     _select_failure_category,
     codex_cli_result_schema,
@@ -36,9 +36,9 @@ from loopx.control_plane.turn_driver.executor import BuiltInHostError
 from loopx.control_plane.turn_driver.subagent_execution_topology import (
     OPAQUE_REF_PATTERN,
 )
+from tests.control_plane.codex_app_server_fixture import write_codex_app_server_fixture
 from tests.control_plane.host_process_fixture import (
     COUNTER_PROCESS_SOURCE,
-    write_python_host_fixture,
 )
 
 
@@ -159,13 +159,9 @@ if os.environ.get("FAKE_CODEX_FAIL") == "1":
         print(failure_event, flush=True)
     if failure_stderr and not stderr_first:
         print(failure_stderr, file=sys.stderr, flush=True)
-    hold_pipe_seconds = os.environ.get("FAKE_CODEX_HOLD_PIPE_SECONDS")
-    if hold_pipe_seconds:
-        subprocess.Popen([
-            sys.executable,
-            "-c",
-            f"import time; time.sleep({float(hold_pipe_seconds)!r})",
-        ])
+    overflow_chars = os.environ.get("FAKE_CODEX_STDERR_OVERFLOW")
+    if overflow_chars:
+        print("x" * int(overflow_chars), file=sys.stderr, flush=True)
     if os.environ.get("FAKE_CODEX_FAILURE_CATEGORY") == "model":
         print("This model requires a newer version of Codex.", file=sys.stderr)
     if os.environ.get("FAKE_CODEX_FAILURE_CATEGORY") == "session":
@@ -210,7 +206,7 @@ output_path.write_text(json.dumps({
     "validation_evidence": ["check:fixture-validation"]
 }), encoding="utf-8")
 """
-    executable = write_python_host_fixture(
+    executable = write_codex_app_server_fixture(
         executable,
         source.replace(
             "__COUNTER_PROCESS_SOURCE__",
@@ -335,9 +331,9 @@ def test_codex_cli_failure_envelopes_match_real_protocol_shapes() -> None:
     assert fixture["schema_version"] == "loopx_codex_failure_envelopes_v1"
     for case in fixture["cases"]:
         assert case["source"]
-        assert _event_failure_category(case["event"]) == case["expected"], case[
-            "name"
-        ]
+        observer = CodexFailureObservation()
+        observer.observe_event(case["event"])
+        assert observer.category() == (case["expected"] or "exit_nonzero"), case["name"]
 
 
 def test_codex_cli_unknown_structured_code_blocks_message_fallback() -> None:
@@ -349,7 +345,9 @@ def test_codex_cli_unknown_structured_code_blocks_message_fallback() -> None:
         },
     }
 
-    assert _event_failure_category(event) == "unknown"
+    observer = CodexFailureObservation()
+    observer.observe_event(event)
+    assert observer.category() == "unknown"
 
 
 @pytest.mark.parametrize("event_type", ["error", "turn.failed"])
@@ -357,12 +355,18 @@ def test_codex_cli_unknown_structured_code_blocks_message_fallback() -> None:
 def test_codex_cli_message_only_subscription_limit_is_not_a_transient_retry(event_type, apostrophe) -> None:
     message = f"You{apostrophe}ve hit your usage limit. Try again after the reset."
     event = {"type": event_type, "error": {"message": message}}
-    assert _event_failure_category(event) == "quota_exhausted"
+    observer = CodexFailureObservation()
+    observer.observe_event(event)
+    assert observer.category() == "quota_exhausted"
     # A present discriminator still wins over familiar prose.
     event["error"]["code"] = "future_provider_failure"
-    assert _event_failure_category(event) == "unknown"
+    observer = CodexFailureObservation()
+    observer.observe_event(event)
+    assert observer.category() == "unknown"
     event["error"]["code"] = "rate_limit_exceeded"
-    assert _event_failure_category(event) == "rate_limited"
+    observer = CodexFailureObservation()
+    observer.observe_event(event)
+    assert observer.category() == "rate_limited"
 
 
 @pytest.mark.parametrize(
@@ -422,7 +426,9 @@ def test_codex_cli_specific_quota_code_wins_over_http_429() -> None:
         },
     }
 
-    assert _event_failure_category(event) == "quota_exhausted"
+    observer = CodexFailureObservation()
+    observer.observe_event(event)
+    assert observer.category() == "quota_exhausted"
 
 
 def test_codex_cli_prompt_isolates_subagent_instructions_to_enabled_request() -> None:
@@ -493,26 +499,26 @@ def test_codex_cli_host_starts_then_resumes_opaque_session(
 
     assert first["turn_key"] == first_request["turn_key"]
     assert second["turn_key"] == second_request["turn_key"]
-    argv_rows = [
-        json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert "resume" not in argv_rows[0]
-    assert "resume" in argv_rows[1]
-    assert "session-fixture-0001" in argv_rows[1]
-    for argv in argv_rows:
-        assert argv[argv.index("--model") + 1] == "gpt-5.6-sol"
-        config_values = [
-            argv[index + 1]
-            for index, value in enumerate(argv)
-            if value == "-c"
-        ]
-        assert 'model_reasoning_effort="xhigh"' in config_values
-    resume_argv = argv_rows[1]
-    assert resume_argv[resume_argv.index("-c") + 1] == (
-        f'sandbox_mode="{sandbox}"'
-    )
-    assert resume_argv[resume_argv.index("-C") + 1] == str(project)
-    assert resume_argv.index("-C") < resume_argv.index("resume")
+    # Inspect the actual app-server wire, not the synthetic scenario's
+    # compatibility argv. OAR must keep the same native session and controls.
+    native = [json.loads(line) for line in Path(str(log_path) + ".rpc").read_text().splitlines()]
+    opens = [row for row in native if row.get("method") in {"thread/start", "thread/resume"}]
+    assert [row["method"] for row in opens] == ["thread/start", "thread/resume"]
+    assert opens[1]["params"]["threadId"] == "session-fixture-0001"
+    for row in opens:
+        assert row["params"]["model"] == "gpt-5.6-sol"
+        assert row["params"]["cwd"] == str(project)
+        assert row["params"]["approvalPolicy"] == "never"
+    assert opens[0]["params"]["config"]["model_reasoning_effort"] == "xhigh"
+    assert any(row.get("method") == "thread/settings/update" and row["params"]["effort"] == "xhigh"
+               for row in native)
+    for row in native:
+        if "launch" in row:
+            argv = row["launch"]
+            values = [argv[i + 1] for i, value in enumerate(argv[:-1]) if value == "-c"]
+            assert [value for value in values if value.startswith("sandbox_mode=")][-1] == f'sandbox_mode="{sandbox}"'
+        elif row.get("method") == "turn/start":
+            assert row["params"]["outputSchema"] == codex_cli_result_schema(first_request)
 
     envelope = first_request["turn_envelope"]
     assert isinstance(envelope, dict)
@@ -1066,7 +1072,9 @@ def test_codex_cli_host_materializes_bound_mcp_tools_for_fresh_and_resume(
         timeout_seconds=5,
     )
 
-    for argv in map(json.loads, log_path.read_text(encoding="utf-8").splitlines()):
+    launches = [row["launch"] for row in map(json.loads, Path(str(log_path) + ".rpc").read_text().splitlines()) if "launch" in row]
+    assert len(launches) == 2
+    for argv in launches:
         config_values = [
             argv[index + 1]
             for index, value in enumerate(argv)
@@ -1237,7 +1245,7 @@ def test_codex_cli_host_preserves_observed_session_after_timeout(
 ) -> None:
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
-    monkeypatch.setenv("FAKE_CODEX_SLEEP", "2")
+    monkeypatch.setenv("FAKE_CODEX_SLEEP", "30")
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
     project.mkdir()
@@ -1249,7 +1257,7 @@ def test_codex_cli_host_preserves_observed_session_after_timeout(
             runtime_root=runtime_root,
             project=project,
             codex_bin=str(executable),
-            timeout_seconds=0.1,
+            timeout_seconds=3,
         )
 
     envelope = request["turn_envelope"]
@@ -1448,11 +1456,9 @@ def test_codex_cli_host_fails_closed_when_output_observation_is_incomplete(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "loopx.control_plane.turn_driver.codex_cli.OUTPUT_DRAIN_TIMEOUT_SECONDS",
-        0.01,
-    )
-    monkeypatch.setenv("FAKE_CODEX_HOLD_PIPE_SECONDS", "0.2")
+    # Native pipes now belong to OAR. Overflow the actual bounded diagnostic
+    # reader so an incomplete observation cannot authorize a retry.
+    monkeypatch.setenv("FAKE_CODEX_STDERR_OVERFLOW", str(1_048_577))
     error, _runtime_root = _capture_fake_codex_failure(
         tmp_path,
         monkeypatch,
@@ -1467,9 +1473,28 @@ def test_codex_cli_host_fails_closed_when_output_observation_is_incomplete(
     assert error.recovery_kind is None
 
 
+def test_codex_cli_host_does_not_retry_rpc_rejection_from_familiar_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executable, log_path = _fake_codex(tmp_path)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
+    monkeypatch.setenv("FAKE_CODEX_TURN_ERROR", json.dumps({
+        "code": -32603, "message": "Too many requests; retry later.",
+        "data": {"code": "future_non_retryable_code"},
+    }))
+    with pytest.raises(BuiltInHostError) as captured:
+        run_codex_cli_host(_request(), runtime_root=tmp_path / "runtime", project=tmp_path,
+                          codex_bin=str(executable), timeout_seconds=5)
+    assert captured.value.reason == "codex_cli_unknown"
+    assert captured.value.failure_kind == "unknown"
+    assert captured.value.recovery_kind is None
+
+
+@pytest.mark.parametrize("failure_phase", ["open", "turn"])
 def test_codex_cli_host_discards_missing_resume_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
 ) -> None:
     executable, log_path = _fake_codex(tmp_path)
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log_path))
@@ -1485,9 +1510,17 @@ def test_codex_cli_host_discards_missing_resume_session(
         timeout_seconds=5,
     )
 
-    monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
-    monkeypatch.setenv("FAKE_CODEX_FAILURE_CATEGORY", "session")
-    with pytest.raises(RuntimeError, match="codex_cli_session_missing"):
+    if failure_phase == "open":
+        monkeypatch.setenv("FAKE_CODEX_OPEN_ERROR", json.dumps({
+            "code": -32600, "message": "no rollout found for thread id session-fixture-0001",
+        }))
+    else:
+        monkeypatch.setenv("FAKE_CODEX_FAIL", "1")
+        monkeypatch.setenv("FAKE_CODEX_FAILURE_CATEGORY", "session")
+    # A rejected open cannot attest Session disposal. Its transport remains
+    # unknown while the exact typed missing target still invalidates the binding.
+    reason = "codex_cli_unknown" if failure_phase == "open" else "codex_cli_session_missing"
+    with pytest.raises(BuiltInHostError, match=reason):
         run_codex_cli_host(
             _request(
                 turn_key="sha256:" + "f" * 64,
@@ -1502,6 +1535,34 @@ def test_codex_cli_host_discards_missing_resume_session(
     envelope = first_request["turn_envelope"]
     assert isinstance(envelope, dict)
     assert codex_cli_session_binding(runtime_root, envelope) is None
+
+
+@pytest.mark.parametrize(("failure", "category"), [
+    ("auth", "auth_failed"), ("quota", "quota_exhausted"),
+    ("rate_limited", "rate_limited"), ("overloaded", "provider_overloaded"),
+    ("invalid_request", "unknown"),
+])
+def test_codex_cli_host_classifies_typed_oar_startup_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, category: str,
+) -> None:
+    from loopx.control_plane.turn_driver import codex_cli
+
+    def startup_failure(config, **kwargs):
+        outcome = {"kind": "failed", "failure": failure, "reason": "Too many requests"}
+        kwargs["on_record"]({"type": "result", "result": {
+            "sessionId": None, "outcome": outcome,
+            "error": {"name": "RuntimeFailureError", "message": outcome["reason"]},
+        }})
+        return {"returncode": 1, "outcome": "exited", "output_complete": True,
+                "turn_outcome": outcome, "final_response": None}
+
+    monkeypatch.setattr(codex_cli, "run_oar_turn", startup_failure)
+    with pytest.raises(BuiltInHostError) as captured:
+        run_codex_cli_host(_request(), runtime_root=tmp_path / "runtime", project=tmp_path,
+                          codex_bin=sys.executable)
+    assert captured.value.reason == "codex_cli_" + category
+    assert captured.value.recovery_kind is None
+    assert _session_files(tmp_path / "runtime") == []
 
 
 def test_native_input_observation_is_opt_in_and_does_not_change_host_result(tmp_path, monkeypatch):
@@ -1600,7 +1661,7 @@ def test_codex_cli_reaps_descendants_after_result_or_timeout(
         monkeypatch.setenv("FAKE_CODEX_SLEEP", "30")
     try:
         kwargs = dict(runtime_root=tmp_path / "runtime", project=tmp_path,
-                      codex_bin=str(executable), timeout_seconds=1 if timeout else 5)
+                      codex_bin=str(executable), timeout_seconds=3 if timeout else 5)
         if timeout:
             with pytest.raises(BuiltInHostError, match="codex_cli_timeout"):
                 run_codex_cli_host(_request(), **kwargs)
