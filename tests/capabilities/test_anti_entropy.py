@@ -2045,6 +2045,9 @@ _DESTRUCTURING_FORMS = (
     "const { ['old_api'] /* key */ : fn } = api; fn();",
     "const {\n  ['old_api']: fn\n} = api; fn();",
     "const { // key\n  ['old_api']: fn } = api; fn();",
+    "let { 'old_api': fn } = api; fn();",
+    "const note = \"r\";\nlet { 'old_api': fn } = api; fn();",
+    "let { ['old\u005fapi']: fn } = api; fn();",
 )
 
 
@@ -2085,6 +2088,7 @@ _OBJECT_LITERAL_FORMS = (
     "const v = !{ 'old_api': 1 };",
     "const v = true && { 'old_api': 1 };",
     "const config = { 'new_api': 1 };",
+    "export default { 'old_api': 1 };",
 )
 
 
@@ -2139,6 +2143,61 @@ def test_typescript_ambiguous_static_property_key_reports_ae004(
     ae004 = next(f for f in receipt.findings if f.rule_id.startswith("AE004"))
     assert "property key" in ae004.message.lower()
     assert "old_api" not in receipt.retired_symbols
+
+
+def test_typescript_string_import_name_blocks_retirement(tmp_path: Path) -> None:
+    """A static string import name is an executable reference to the exported name."""
+    diff = """
+--- a/service.mjs
++++ b/service.mjs
+@@ -1,2 +1,2 @@
+-export function old_api() { return 1; }
++export function new_api() { return 2; }
+"""
+    basis = RetirementBasis(target_symbols=("old_api",))
+    workspace = _make_workspace(
+        tmp_path / "ws_string_import",
+        {
+            "service.mjs": "export function new_api() { return 2; }\n",
+            "client.mjs": (
+                "import { 'old_api' as fn } from './service.mjs';\n"
+                "console.log(fn());\n"
+            ),
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
+
+
+def test_python_nfkc_target_variant_matches_ascii_source(tmp_path: Path) -> None:
+    """A declared NFKC-variant target still matches the ASCII AST identity."""
+    target = "old_\uff41\uff50\uff49"
+    diff = """
+--- a/service.py
++++ b/service.py
+@@ -1,2 +1,2 @@
+-def old_api():
+-    return 1
++def new_api():
++    return 2
+"""
+    basis = RetirementBasis(target_symbols=(target,))
+    workspace = _make_workspace(
+        tmp_path / "ws_python_nfkc_target",
+        {
+            "service.py": "def new_api():\n    return 2\n",
+            "legacy.py": "def old_api():\n    return 3\n",
+            "client.py": "import legacy\nprint(legacy.old_api())\n",
+        },
+    )
+
+    receipt = evaluate_diff_hygiene(diff, basis, workspace=workspace)
+    assert receipt.verdict == "rejected", f"findings: {receipt.findings}"
+    assert any(f.rule_id.startswith("AE002") for f in receipt.findings)
+    assert receipt.retired_symbols == ()
 
 
 def test_typescript_dynamic_destructuring_key_reports_ae004(tmp_path: Path) -> None:

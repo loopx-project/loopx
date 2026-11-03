@@ -935,12 +935,12 @@ def _skip_js_string_literal(text: str, index: int) -> int:
     cursor = index + 1
     while cursor < length:
         char = text[cursor]
-        if char == "\\\\":
+        if char == "\\":
             cursor += 2
             continue
         if char == quote:
             return cursor + 1
-        if quote != "`" and char in "\\r\\n\\u2028\\u2029":
+        if quote != "`" and char in "\r\n\u2028\u2029":
             return cursor
         cursor += 1
     return length
@@ -957,7 +957,7 @@ def _scan_js_bracket_groups(text: str) -> list[_JsBracketGroup]:
         char = text[index]
         if text.startswith("//", index):
             newline = index + 2
-            while newline < length and text[newline] not in "\\r\\n\\u2028\\u2029":
+            while newline < length and text[newline] not in "\r\n\u2028\u2029":
                 newline += 1
             index = newline
             continue
@@ -1063,7 +1063,7 @@ def _classify_js_group(
             kind = "params"
         else:
             kind = "expression"
-    elif group.open_char in "{[": 
+    elif group.open_char in "{[":
         if before_word in ("const", "let", "var"):
             kind = "pattern"
         elif before_char == "(" and parent_kind in ("params", "catch", "for_header"):
@@ -1092,6 +1092,7 @@ def _classify_js_group(
             "instanceof",
             "of",
             "in",
+            "default",
         ):
             kind = "literal"
         else:
@@ -1115,6 +1116,79 @@ def _enclosing_object_group(
         ):
             best = group
     return best
+
+
+def _extract_module_string_name_refs(
+    text: str, target_symbols: set[str]
+) -> set[str]:
+    """Collect static string names in import/export clauses.
+
+    ``import { 'old_api' as fn } from './service'`` and re-exports name the
+    imported binding with a string literal; the name is an executable reference
+    even though it is not a property-key token.
+    """
+    refs: set[str] = set()
+    index = 0
+    length = len(text)
+    while index < length:
+        if text.startswith("//", index):
+            index += 2
+            while index < length and text[index] not in "\r\n\u2028\u2029":
+                index += 1
+            continue
+        if text.startswith("/*", index):
+            close = text.find("*/", index + 2)
+            index = length if close == -1 else close + 2
+            continue
+        if text[index] in _TS_QUOTE_CHARS:
+            index = _skip_js_string_literal(text, index)
+            continue
+        keyword = None
+        for candidate in ("import", "export"):
+            if text.startswith(candidate, index):
+                after = index + len(candidate)
+                if after >= length or not (
+                    text[after].isalnum() or text[after] in "_$"
+                ):
+                    keyword = candidate
+                    break
+        if keyword is None:
+            index += 1
+            continue
+        clause_start, ok = _skip_js_trivia(text, index + len(keyword))
+        if not ok or clause_start >= length or text[clause_start] != "{":
+            index += len(keyword)
+            continue
+        cursor = clause_start + 1
+        depth = 1
+        while cursor < length and depth:
+            char = text[cursor]
+            if char in _TS_QUOTE_CHARS:
+                parsed = (
+                    _parse_static_template(text, cursor)
+                    if char == "`"
+                    else _parse_static_string(text, cursor)
+                )
+                if parsed is not None and parsed.resolved and parsed.value in target_symbols:
+                    refs.add(parsed.value)
+                cursor = _skip_js_string_literal(text, cursor)
+                continue
+            if text.startswith("//", cursor):
+                cursor += 2
+                while cursor < length and text[cursor] not in "\r\n\u2028\u2029":
+                    cursor += 1
+                continue
+            if text.startswith("/*", cursor):
+                close = text.find("*/", cursor + 2)
+                cursor = length if close == -1 else close + 2
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            cursor += 1
+        index = cursor
+    return refs
 
 
 def _extract_static_property_key_refs(
@@ -1472,6 +1546,7 @@ def _extract_ts_refs_with_syntax_check(
     full_text = "\n".join(lines)
     stripped_text, is_clean = _tokenize_ts_code(full_text)
     stripped_lines = stripped_text.splitlines()
+    refs.update(_extract_module_string_name_refs(full_text, target_symbols))
     property_refs, property_incomplete_reason = _extract_static_property_key_refs(
         full_text, target_symbols
     )
@@ -1646,12 +1721,15 @@ def _content_may_reference(content: str, symbols: set[str], *, is_ts: bool) -> b
     if any(symbol in content for symbol in symbols):
         return True
     if not is_ts:
+        normalized_symbols = _normalized_python_symbols(symbols)
+        if any(normalized in content for normalized in normalized_symbols):
+            return True
         if content.isascii():
             return False
         normalized_content = unicodedata.normalize("NFKC", content)
         return any(
             normalized in normalized_content
-            for normalized in _normalized_python_symbols(symbols)
+            for normalized in normalized_symbols
         )
     # A composed static member key (parentheses, concatenation, template,
     # comments/newlines, String(...)) need not contain the literal symbol, so
@@ -1722,13 +1800,13 @@ def _scan_workspace(workspace: Path, symbols: tuple[str, ...]) -> _WorkspaceEvid
                     # as still defined to avoid false certification. NFKC keeps
                     # the check aligned with Python identifier identity.
                     normalized_content = unicodedata.normalize("NFKC", content)
-                    for target, normalized in _normalized_python_symbols(
+                    for normalized, target in _normalized_python_symbols(
                         symbol_set
                     ).items():
                         if normalized in normalized_content:
                             evidence.defined_symbols.setdefault(target, set()).add(rel)
                     continue
-                for target, normalized in _normalized_python_symbols(symbol_set).items():
+                for normalized, target in _normalized_python_symbols(symbol_set).items():
                     if normalized in defs:
                         evidence.defined_symbols.setdefault(target, set()).add(rel)
                     if normalized in refs:
