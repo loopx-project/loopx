@@ -87,7 +87,10 @@ function resolveSelection(request: JsonObject, initialPointers: string[]): JsonO
   (selectors as string[]).forEach((pointer, index) => {
     if (!argumentsByPointer.has(pointer)) argumentsByPointer.set(pointer, index + 1);
   });
-  const pointers = [...argumentsByPointer.keys()].sort();
+  // Initial navigation follows the owner's priority, including merged parents.
+  // Ordinary explicit selectors retain their canonical order.
+  const pointers = [...argumentsByPointer.keys()];
+  if (request.initial_read !== true) pointers.sort();
   const selections = pointers.map(pointer => {
     const argument = `--select argument ${argumentsByPointer.get(pointer)}`;
     if (pointer !== "" && !pointer.startsWith("/") || /~(?:[^01]|$)/.test(pointer))

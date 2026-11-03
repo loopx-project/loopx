@@ -204,6 +204,13 @@ An unselected child, including optional or unknown material, prevents that merge
 the selected facts and obligations stay identical. Explicit selectors and index
 entries keep their original addresses. The option is read-only and exclusive with explicit
 selectors or discovery; unknown schemas use generic discovery.
+Initial selections retain the typed owner's priority rather than alphabetical
+pointer order. Current controls, required sources and settlement obligations
+precede the complete unread-material index. A coalesced parent keeps
+its first selected child's position; explicit selectors retain canonical order.
+This reorders the same selected facts without reducing the total body or
+guaranteeing that all requirements fit one page. Earlier initial-selection
+digests still reject a changed profile; recover from the original full capture.
 The concrete first read replaces the broad scalar preview and root index when it
 fits; unknown schemas or a tight reference budget keep generic discovery. Warm
 deltas keep their existing reader, and disabled native delivery is unchanged.
@@ -235,6 +242,10 @@ activation defaults, saved files, Delta and full-read receipts are unchanged.
 显式选读或索引混用；续页保留短选项和固定的选读摘要，profile 改变则拒绝混读。
 首读可把已经完整选中的同级内容合并为其完整父节点，减少地址重复；任何未选中的
 可选或未知内容都会阻止合并，选中事实和义务不变。显式选读和索引仍保留原地址。
+首读按 TypeScript owner 的优先顺序呈现，不再按指针字母序重排；当前控制条件、必读
+来源和结算义务先于完整的未读材料索引。合并父节点保留首个已选子节点的位置，
+显式选读仍按既有规范排序。这只调整相同事实的顺序，不缩减总正文，也不保证全部
+要求能放入一页。旧首读选读摘要遇到 profile 变化仍拒绝混读，可从原完整捕获恢复。
 首读也给出现有验收材料地址和当前结算义务。仅明确 `required=false` 的附件延后完整
 说明与模板，使用前须读原附件；未知计划保留全文。首读分页不重复正文中的指针，
 选读摘要仍阻止将它记作完整输入。

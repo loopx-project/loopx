@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 import shlex
+import subprocess
+import sys
 
 import pytest
 
@@ -70,6 +72,75 @@ def read_selection(command):
     page = read_context_capture(args)
     assert page["ok"] and page["eof"]
     return page, selected_context_values(page["content"])
+
+
+@pytest.mark.parametrize("output_limit", [8192, 64000])
+def test_cli_initial_pages_prioritize_required_facts_and_keep_the_complete_index(tmp_path, decision, output_limit):
+    goal = decision["interaction_contract"]["agent_channel"]["work_context"]["sources"][0]["content"]
+    goal["text"] = "Complete current Goal; retain the final stop."
+    decision["context_details"] = {"unread_context_index": {
+        "coverage_confirmed": False, "pointers": [f"/history/{i}" for i in range(6000)]}}
+    view = native_context_capture_view(decision, tmp_path)
+    raw = Path(view["recovery"]["path"]).read_bytes()
+    registry, runtime = tmp_path / "absent-registry.json", tmp_path / "absent-runtime"
+    base = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(registry),
+        "--runtime-root", str(runtime), "--format", "json"]
+
+    def invoke(command):
+        words = shlex.split(command)
+        result = subprocess.run([*base, *words[words.index("quota"):]], cwd=tmp_path,
+            capture_output=True, text=True, check=False)
+        return result.returncode, json.loads(result.stdout)
+
+    words = shlex.split(view["first_read_command"])
+    for option in ("--page-bytes", "--max-page-output-bytes"):
+        words[words.index(option) + 1] = str(output_limit)
+    command = shlex.join(words)
+    content, pages = b"", []
+    while True:
+        code, page = invoke(command)
+        assert code == 0 and page["ok"] and page["offset"] == len(content), page
+        assert len((json.dumps(page, ensure_ascii=False, separators=(",", ":")) + "\n").encode()) <= output_limit
+        assert capture_page_range(page, raw=raw, digest=view["recovery"]["sha256"]) is None
+        pages.append(page)
+        content += page["content"].encode()
+        if page["eof"]:
+            break
+        command = page["next_command"]
+    assert len(pages) > 1
+    first = pages[0]["content"]
+    for value in (decision["goal_boundary"]["stop_condition"], goal["text"],
+            "This new obligation must remain visible.", "This attachment is required."):
+        assert value in first
+    rows = json.loads(content)["selections"]
+    assert rows[-1] == {"pointer": "/context_details/unread_context_index",
+        "value": decision["context_details"]["unread_context_index"]}
+    values = selected_context_values(content)
+    assert values["/goal_boundary"] == decision["goal_boundary"]
+    assert values["/interaction_contract/agent_channel/work_context/sources/0/content/text"] == goal["text"]
+    # The earlier canonical ordering is a different selection, never a cursor
+    # that can be silently continued through a reordered view of this capture.
+    legacy = json.dumps({"schema_version": "context_capture_selection_v1",
+        "selections": sorted(rows, key=lambda row: row["pointer"])},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    digest = hashlib.sha256(legacy).hexdigest()
+    assert digest != pages[0]["selection_sha256"]
+    original = view["recovery"]["command"]
+    code, rejected = invoke(original + " --initial-read --selection-sha256 " + digest
+        + " --offset " + str(pages[0]["next_offset"]))
+    assert code != 0 and not rejected["ok"] and "digest changed" in rejected["reason"]
+    assert "content" not in rejected
+    restored = b""
+    command = original
+    while True:
+        code, page = invoke(command)
+        assert code == 0 and page["offset"] == len(restored), page
+        restored += page["content"].encode()
+        if page["eof"]:
+            break
+        command = page["next_command"]
+    assert restored == raw == Path(view["recovery"]["path"]).read_bytes()
+    assert not registry.exists() and not runtime.exists()
 
 
 def test_initial_read_coalesces_whole_contract_with_exact_values_and_unknown_obligations(tmp_path, decision):
