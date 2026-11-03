@@ -78,7 +78,7 @@ def test_staged_packet_budget_and_lossless_authority(stride):
         control = writer["stride_control"]
         assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
         assert "decision_followthrough" not in control and "decision_value_review" not in control
-        assert "minimal_example" not in control
+        assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
         assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
         assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
@@ -672,7 +672,18 @@ def test_explore_uses_its_own_incremental_budget_and_real_result_log(tmp_path):
     cli_detail = call_progress_cli(reader_fixture, *command[3:])
     assert cli_detail["explore_basis"] == basis
     assert {row["status"] for row in basis["finding_refs"]} >= {"confirmed", "refuted"}
-    _, _, params = _views(enabled)
-    writer = _turn_envelope_result("replan_view", **params, stage="writeback")
+    writer_command = shlex.split(cli_review["next"]["writeback"])
+    writer = call_progress_cli(reader_fixture, *writer_command[3:])
     assert writer["stride_control"]["reference_context_id"] == review["context_id"]
+    control = writer["stride_control"]
+    example = control["minimal_example"]
+    assert set(control["required_fields"]) <= example.keys()
+    assert set(example["previous_review"]) == {
+        "reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson",
+    }
+    assert example["previous_review"]["reference_decision_ref"] == control["previous_decision_ref"]
+    assert {example["previous_review"][key] for key in ("adoption", "information_gain", "goal_gain")} == {"unknown"}
+    assert set(example["explore_review"]) >= {"revision", "disposition", "considered_refs", "reason"}
+    assert example["explore_review"]["revision"] == basis["revision"]
+    assert example["explore_review"]["considered_refs"] == []
     assert json_bytes(writer) <= 16 * 1024
