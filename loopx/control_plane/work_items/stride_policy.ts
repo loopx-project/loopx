@@ -1,4 +1,4 @@
-/** One opt-in work and research stride strategy; all execution authority retains its owners. */
+/** One work and research stride strategy; all execution authority retains its owners. */
 import {createHash} from "node:crypto";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
 import schema from "../stride_strategy_schema.json" with {type: "json"};
@@ -91,7 +91,9 @@ function comparisonCandidates(value: unknown): JsonObject[] {
 /** Agent interpretations are structured claims, not certified evidence or authority. */
 export function normalizeStrideDecision(value: unknown, bounded: BoundedText = text):
   [JsonObject | null, Record<string, number>] {
-  if (value === undefined) return [null, {}];
+  // Compact run history records absent optional decisions as JSON null.
+  // Absence is not a proposal and cannot satisfy an enabled stride review.
+  if (value == null) return [null, {}];
   const input = requireJsonObject(value, "stride_decision");
   // Off-mode transport and historical readback retain both earlier v1 shapes.
   // An enabled fresh review requires the current concrete-plan schema.
@@ -194,7 +196,6 @@ export function normalizeStrideDecision(value: unknown, bounded: BoundedText = t
 
 /** Historical read codec only, never a selectable strategy or new proposal. */
 export function normalizeRecordedStrideDecision(value: unknown): JsonObject | null {
-  if (value == null) return null;
   return normalizeStrideDecision(value)[0];
 }
 function normalizeHistoricalStrideDecision(value: unknown, bounded: BoundedText): [JsonObject, Record<string, number>] {
@@ -404,7 +405,7 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     attachment: "agent_vision.stride_decision", requires_evidence_linked_path: true,
     required_on_periodic_review: true,
     rule: "Enabled periodic and observed-stall reviews require a current evidence-linked Vision path and stride decision before any settlement, including progress/successor/blocker/terminal exits. " +
-      "Each axis needs plan/reason: grow useful completed scope on a supported route; switch names reference method and changed mechanism; verify resolves a grow-or-switch question. Size a coherent accepted deliverable or complete interpretable experiment, including engineering/maintenance; preserve authority and settlement boundaries. " +
+      "Each axis needs plan/reason: grow useful completed scope on a supported route; switch names reference method and changed mechanism; verify resolves a grow-or-switch question. Apply these plans to the actual Todo scope and acceptance using the existing Todo authoring/update commands, then record the verified IDs in todo_delta. Retain unfinished useful work; do not create successor microtasks merely to count progress. On grow, consolidate fragmented setup, implementation, integration and decisive validation into a coherent accepted deliverable or complete interpretable experiment, including engineering/maintenance. The next admitted work must execute that scope, method and validation plan; changing review frequency or repeating the proposal is not adoption. Keep the configured review interval and preserve dependencies, acceptance, risk, authority and per-Turn settlement boundaries. " +
       "Review the exact previous decision's adoption/information/goal gain and delivered Explore sources in their review fields. Missing/omitted/unread/unprojected evidence stays unknown, not exhausted. Guidance adds no fields/gates; the example is syntax, not an action recommendation. Claims certify no authority, execution or utility. Other legal outcomes cannot bypass a due review.",
   };
 }

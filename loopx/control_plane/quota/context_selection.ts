@@ -3,13 +3,50 @@ import {requireJsonObject} from "../runtime_decode.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import type {JsonObject} from "../effect_program.ts";
 
+/** Initial navigation may share a complete parent instead of repeating every
+ * child address. The selected facts stay exact; unselected children prevent
+ * sharing. Explicit selectors and discovery keep their original addresses. */
+function coalescedInitialPointers(context: JsonObject, pointers: string[]): string[] {
+  if (pointers.length < 2) return pointers;
+  const selected = new Set(pointers), positions = new Map<string, number>(), visited = new Set<string>();
+  pointers.forEach((pointer, position) => {
+    if (!positions.has(pointer)) positions.set(pointer, position);
+    for (let index = 0; index < pointer.length; index++) {
+      if (pointer[index] !== "/") continue;
+      const parent = pointer.slice(0, index);
+      if (!positions.has(parent)) positions.set(parent, position);
+    }
+  });
+  const visit = (value: unknown, pointer: string): {complete: boolean; pointers: string[]} => {
+    if (selected.has(pointer)) {
+      visited.add(pointer);
+      return {complete: true, pointers: [pointer]};
+    }
+    if (!positions.has(pointer) || value === null || typeof value !== "object")
+      return {complete: false, pointers: []};
+    const children = Object.entries(value).map(([key, child]) =>
+      visit(child, pointer + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1")));
+    const complete = children.length > 0 && children.every(child => child.complete);
+    const fields = children.flatMap(child => child.pointers);
+    // A single child needs no wrapper; grouping it can increase output bytes.
+    return {complete, pointers: complete && fields.length > 1 ? [pointer] : fields};
+  };
+  const result = visit(context, "").pointers;
+  // Keep malformed/missing or overlapping addresses for the ordinary validator;
+  // an optimization must not turn a rejected read into a successful subset.
+  // A merged parent takes its first selected child's navigation position.
+  return visited.size === selected.size
+    ? result.sort((left, right) => positions.get(left)! - positions.get(right)!) : pointers;
+}
+
 export function capturedContextSelection(request: JsonObject, initialPointers: string[] = []): JsonObject {
   const context = requireJsonObject(request.context, "captured context");
   if (request.initial_read !== undefined && typeof request.initial_read !== "boolean")
     throw new EffectRuntimeRequestError("initial-read must be boolean");
   if (request.initial_read === true && (request.select !== undefined || request.list_fields === true || request.list_depth !== undefined))
     throw new EffectRuntimeRequestError("initial-read cannot be combined with select or list");
-  const selectors = request.initial_read === true ? initialPointers : request.select;
+  const initial = request.initial_read === true ? coalescedInitialPointers(context, initialPointers) : [];
+  const selectors = request.initial_read === true ? initial : request.select;
   if (request.initial_read === true && !(selectors as string[]).length)
     throw new EffectRuntimeRequestError("initial-read is unavailable for this capture schema; use generic discovery");
   if (!Array.isArray(selectors) || !selectors.length || selectors.some(value => typeof value !== "string"))
@@ -64,7 +101,9 @@ export function capturedContextSelection(request: JsonObject, initialPointers: s
     }
     return {pointer, path};
   });
-  const initial = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
-    ? initialPointers : [];
-  return {selections, ...(initial.length ? {initial_read_pointers: initial} : {})};
+  // Discovery follows the validated, deduplicated selection. Repeating the root
+  // cannot drop its navigation; ordinary explicit reads need no initial plan.
+  const navigation = request.list_fields === true && pointers.length === 1 && pointers[0] === ""
+    ? coalescedInitialPointers(context, initialPointers) : [];
+  return {selections, ...(navigation.length ? {initial_read_pointers: navigation} : {})};
 }

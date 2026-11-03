@@ -1213,7 +1213,9 @@ class LarkPrivateConversations:
         stream = presentation_stream(record)
         events = self.core.controller.store.events_after(session_id or record["session_id"],
             turn_id or record["turn_id"], stream.get("cursor"))
-        text = project_progress(stream, events)
+        text = project_progress(stream, events, owner_private=(
+            record.get("source", {}).get("private_human_message") is True
+            and record.get("event", {}).get("chat_type") == "p2p"))
         if text:
             # Journal the exact presentation the sender freezes, not the raw
             # Core text. The same conversion also recovers older draft proofs.
@@ -1792,7 +1794,10 @@ class LarkPrivateConversations:
                             retry_info = next((event.get("payload", {}).get("retry", {}).get("codex_error_info")
                                 for event in reversed(events) if event.get("kind") == "agent.phase"
                                 and event.get("payload", {}).get("method") == "error"), None)
-                        response = manager_failure_reply(turn, retry_info=retry_info)[1] + " 原会话已保留。"
+                        preparation_recovery = (record["source"].get("private_human_message") is True
+                            and selected["binding"].get("context_kind") == "steward" and not native.get("agent_target"))
+                        response = manager_failure_reply(turn, retry_info=retry_info,
+                            preparation_recovery=preparation_recovery)[1] + " 原会话已保留。"
                     else:
                         response = str((turn.get("response") or {}).get("message") or "") if turn["status"] == "completed" else (
                             "本次执行已停止。" if turn["status"] == "interrupted" else

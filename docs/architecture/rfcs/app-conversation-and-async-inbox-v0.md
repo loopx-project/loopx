@@ -878,6 +878,14 @@ receipt → observed work or actionable failure → readable answer in the same 
   upstream observations; never simulate phases, expose hidden reasoning, or
   infer progress from elapsed time. A period without new events has an explicit
   waiting caption, not an invented failure or continually changing animation.
+- The original private Lark owner can read the latest qualified public reasoning
+  summary (up to 1,200 characters) and four redacted activity titles alongside
+  the existing answer stream. Recent steps precede a potentially long summary.
+  Group and unqualified projections retain coarse
+  labels. Antigravity reports observed thinking spans and native command/tool
+  steps through the shared activity contract; its raw `thinking` field is not a
+  public summary, and planner completion is not tool completion. Final answers
+  still replace the draft on the original source-bound post.
 - Generate the visible answer once, then append a complete hidden review envelope
   with `message: ""`. The production parser reuses the preceding Markdown and
   applies the same redaction and typed metadata normalization. Legacy nonempty
@@ -1694,6 +1702,20 @@ without provider identity IO for every historical failure. This is a queue hint;
 admission still re-resolves current App/owner/grant and exact source/native proof
 under the existing fences before reserving or enqueueing any continuation.
 
+A steward request that fails locally with `manager_authorization_unavailable`
+can also qualify on Codex or Antigravity. Core must record exactly the queued,
+manager-context phase, context snapshot and failed events, with distinct IDs,
+no upstream Turn, response, deltas, steering or attachments. Missing events alone
+do not prove safety. Current source and binding verification remain mandatory.
+The original worker reserves at most three deterministic continuations, after
+one, two and four minutes from each failure, through the existing Session queue.
+A stop, pending newer input, an equivalent later human resubmission, another
+recovery kind or contradictory native evidence blocks new work. Repairing the
+correlation of an already admitted continuation does not dispatch it again.
+The original failure and its delivery remain recorded; a qualified private
+steward notice describes conditional recovery rather than promising a replay.
+Unknown failures after native dispatch remain holds.
+
 Source verification accepts both ordinary text and text-only rich posts. A post
 must retain its original provider rendering, an explicit empty attachment
 inventory and the same admitted text after intake whitespace normalization.
@@ -1824,6 +1846,10 @@ delivery remains separate. Model completion, material intake and an intermediate
 card cannot substitute for final-message readback.
 
 ### Recovering a native result after Core failure
+
+Historical native-result discovery waits while the same Core Session is busy
+or has an active Turn, leaving shared reply workers available for current
+progress. Already verified result metadata keeps its existing correlation owner.
 
 An Antigravity owner request can finish natively while Core retains a transport
 failure. The original reply worker may adopt that existing answer, without

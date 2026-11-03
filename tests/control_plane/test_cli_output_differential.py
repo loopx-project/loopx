@@ -2045,3 +2045,47 @@ def test_objective_replan_cost_is_complete_once_and_carrier_scoped():
         assert _compare_row(base, {**head, "chars": 1769})["failures"]
     assert not observe(prior + " " + " ".join(reversed(clauses)))["objective_replan_after"]
     assert not observe(json.dumps({"prior": prior, "clauses": clauses}))["objective_replan_after"]
+
+
+@pytest.mark.parametrize("surface,root,growth", [
+    ("quota_should_run", "$", 6684),
+    ("loopx_turn_plan", "$.turn_envelope", 6364),
+])
+def test_inherited_stride_projection_growth_is_one_time_and_bounded(surface, root, growth):
+    from loopx.control_plane.testing.cli_output_differential import _compare_row
+
+    control = f"{root}.replan_action_packet.stride_control"
+    paths = [control, *[f"{control}.{key}" for key in (
+        "schema_version", "strategy_version", "reference_context_id", "reference_obligation_id",
+        "required_fields", "rule", "minimal_example.schema_version", "minimal_example.strategy_version",
+        "minimal_example.reference_context_id", "minimal_example.reference_obligation_id",
+        "minimal_example.basis", "minimal_example.action",
+        *[f"minimal_example.axes.{axis}.{field}"
+          for axis in ("work_slice", "route_distance", "validation_scope")
+          for field in ("plan", "reason")],
+        *[f"minimal_example.next_probe.{field}" for field in (
+            "scope", "prediction", "adoption_criterion", "cost_bound", "minimum_evidence",
+        )],
+    )]]
+    base = _row(row_id=f"surface/{surface}/crowded/json")
+    candidate = {**base, "json_shape_paths": [*base["json_shape_paths"], *paths]}
+    for metric in ("chars", "utf8_bytes", "compact_payload_chars"):
+        candidate[metric] += growth
+    result = _compare_row(base, candidate)
+    assert not result["failures"] and result["review_signals"]
+    assert _compare_row({**base, "json_shape_paths": candidate["json_shape_paths"]}, candidate)["failures"]
+    assert _compare_row(base, {**candidate, "json_shape_paths": candidate["json_shape_paths"][:-1]})["failures"]
+    assert _compare_row(base, {**candidate, "json_shape_paths": [*candidate["json_shape_paths"], "$.unrelated"]})["failures"]
+    assert _compare_row(base, {**candidate, "json_shape_paths": paths})["failures"]
+    for metric in ("chars", "utf8_bytes", "lines", "compact_payload_chars"):
+        assert _compare_row(base, {**candidate, metric: base[metric] + result["allowances"][metric] + 1})["failures"]
+    for review, fields in (
+        ("previous_review", ("reference_decision_ref", "adoption", "information_gain", "goal_gain", "evidence_refs", "lesson")),
+        ("explore_review", ("revision", "disposition", "considered_refs", "reason")),
+    ):
+        review_paths = [f"{control}.minimal_example.{review}.{field}" for field in fields]
+        complete = {**candidate, "json_shape_paths": [*candidate["json_shape_paths"], *review_paths]}
+        assert not _compare_row(base, complete)["failures"]
+        for missing in review_paths:
+            partial = {**complete, "json_shape_paths": [p for p in complete["json_shape_paths"] if p != missing]}
+            assert _compare_row(base, partial)["failures"], missing

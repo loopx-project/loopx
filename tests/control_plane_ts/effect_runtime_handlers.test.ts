@@ -228,3 +228,31 @@ test("preauthorized lease fence has no standalone runtime handler", async () => 
     /unsupported Effect runtime method/,
   );
 });
+
+for (const retired of [
+  "todo.field_update.plan",
+  "todo.public_update.plan",
+  "todo.claim.decide",
+  "todo.external_wait.plan",
+  "quota.automation_cadence.schedule",
+  "work_item.planning_horizon.project",
+  "work_item.planning_inventory.project",
+  "work_item.planning_inventory.detail",
+  "goal.vision_wait.coverage",
+  "task_lease.owner_eligibility",
+  "coordination.ownership_observation",
+  "coordination.local_authority.legacy_writer_fence.engage",
+  "scheduler.monitor_successor.plan",
+  "coordination.local_authority_shadow.record",
+  "coordination.runtime_shadow.commit_entry",
+  "governed_capability.validate_admission",
+  "governed_capability.settlement_status",
+  "collaboration.delegation.turn_plan",
+  "settlement.receipt_bound_terminal_phase",
+]) {
+  test(`unused leaf RPC ${retired} fails closed`, async () => {
+    assert.equal(handlers.has(retired), false);
+    await assert.rejects(dispatchEffectRuntimeMethod(handlers, retired, {}),
+      {code: "unsupported_method"});
+  });
+}

@@ -1414,6 +1414,8 @@ export async function terminalLifecycleLocalCoordinationTodo(
         completion_policy_request:
           input.completion_policy_request === null || input.completion_policy_request === undefined
             ? null : requireJsonObject(input.completion_policy_request, "completion_policy_request"),
+        auto_archive_completed: input.auto_archive_completed === undefined
+          ? true : Boolean(input.auto_archive_completed),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
       }, async () => await authoritySourcesCurrent() && researchEvidence.current(),

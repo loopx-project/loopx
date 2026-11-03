@@ -117,6 +117,56 @@ def test_native_preparation_is_visible_without_answer_or_private_labels():
         "phase": "unrecognized", "label": "private output"}}]) is None
 
 
+def test_public_summary_and_recent_tools_are_private_owner_only_and_bounded():
+    events = [{"event_id": "summary", "kind": "agent.phase", "payload": {
+        "method": "item/reasoning/summaryTextDelta", "step": {"id": "summary", "kind": "reasoning",
+        "state": "running", "reasoning_summary": True, "detail": "公开摘要。" * 500}}}]
+    events += [{"event_id": str(index), "kind": "agent.phase", "payload": {
+        "method": "item/started", "step": {"id": str(index), "kind": "tool", "state": "running",
+        "title": f"read_{index}", "detail": "not a tool result"}}} for index in range(7)]
+    state = {}
+    view = project_progress(state, events, owner_private=True)
+    assert "思考摘要" in view and "公开摘要" in view and "read_6" in view and "read_0" not in view
+    assert view.index("read_6") < view.index("思考摘要")
+    assert len(state["public_summary"]) == 1200 and len(state["activities"]) == 4
+    assert "not a tool result" not in view
+    events += [{"event_id": "raw", "kind": "agent.phase", "payload": {
+        "method": "item/reasoning/textDelta", "step": {"id": "raw", "kind": "reasoning",
+        "state": "running", "reasoning_summary": True, "detail": "hidden reasoning"}}}]
+    assert "hidden reasoning" not in project_progress(state, events[-1:], owner_private=True)
+    assert "公开摘要" not in project_progress(state, [], owner_private=False)
+    assert "activities" not in state and "public_summary" not in state
+    assert "公开摘要" not in project_progress({}, events)
+
+
+def test_original_private_post_shows_native_public_summary_before_final_answer(ordinary):  # noqa: F811
+    fake = ordinary[-2]
+    # Feed the real Codex protocol reader, not hand-built presentation state.
+    source = fake.read_text()
+    anchor = '            continue\n        response ='
+    summary_event = {"method": "item/reasoning/summaryTextDelta", "params": {
+        "threadId": "durable-thread", "itemId": "public-summary", "summaryIndex": 0,
+        "delta": "先核对原始请求与已保存结果。"}}
+    injection = '            print(json.dumps(dict(' + repr(summary_event) + ', params=dict(' + repr(summary_event["params"]) + ', turnId=active_turn))), flush=True)\n'
+    assert anchor in source
+    fake.write_text(source.replace(anchor, injection + anchor))
+    store, runtime, provider, transport, row = start(ordinary)
+    try:
+        draft = provider.writes[0][1]
+        assert "思考摘要" in draft and "先核对原始请求与已保存结果" in draft
+        assert "source.txt" in draft and "synthetic private reasoning" not in draft
+        assert store.load_turn(row["session_id"], row["turn_id"])["status"] == "running"
+        transport.reconcile()
+        assert len(provider.writes) == 1
+        runtime.adapters[row["session_id"]].steer_turn("finish", store.load_turn(row["session_id"], row["turn_id"])["upstream_turn_id"])
+        assert runtime.wait_for_turn(session_id=row["session_id"], turn_id=row["turn_id"], timeout_sec=10)["status"] == "completed"
+        transport.reconcile()
+        assert provider.edits[-1][2] == "Steered response."
+        assert len(provider.writes) == 1
+    finally:
+        runtime.close()
+
+
 def test_observed_tool_progress_changes_the_view_without_exposing_output_or_inventing_activity():
     state = {}
     for kind, method, observed in [
@@ -147,11 +197,12 @@ def test_output_activity_updates_the_original_post_then_preserves_terminal_answe
             store.append_event(sid, tid, kind="agent.phase", payload={
                 "method": "item/commandExecution/outputDelta", "step": {
                     "id": "read", "kind": "command", "state": "running", "verb": "read",
-                    "title": "private command", "duration_ms": duration}})
+                    "title": "source.txt", "detail": "private command output", "duration_ms": duration}})
             allow_update(transport, row)
             transport.reconcile()
             assert f"已运行 {duration // 1000} 秒" in provider.edits[-1][2]
             assert "第一段回答" in provider.edits[-1][2] and "private" not in provider.edits[-1][2]
+            assert "source.txt" in provider.edits[-1][2]
         count = len(provider.edits)
         allow_update(transport, row)
         transport.reconcile()

@@ -138,15 +138,15 @@
 
   <rect x="938" y="631" width="364" height="84" rx="8" class="card"/>
   <text x="952" y="653" font-size="12.5" font-weight="700">② 已知 Pointer 单次批量读取 (3 处 1,362 B)</text>
-  <text x="952" y="675" font-size="10.3" class="emerald mono"><tspan x="952" dy="0">--reference-file "$REC" --select /goal/objective</tspan><tspan x="952" dy="16"> --select /goal/constraints</tspan></text>
+  <text x="952" y="675" font-size="10.3" class="emerald mono"><tspan x="952" dy="0">quota context-read --reference-file "$REC" \</tspan><tspan x="952" dy="16">  --select /goal/objective --select /goal/constraints</tspan></text>
 
   <rect x="938" y="725" width="364" height="84" rx="8" class="card"/>
   <text x="952" y="747" font-size="12.5" font-weight="700">③ 陌生子树先展开两层目录 (1,283 B)</text>
-  <text x="952" y="769" font-size="10.4" class="accent mono"><tspan x="952" dy="0">--reference-file "$REC" --select /providers --list</tspan><tspan x="952" dy="16"> --list-depth 2</tspan></text>
+  <text x="952" y="769" font-size="10.4" class="accent mono"><tspan x="952" dy="0">quota context-read --reference-file "$REC" \</tspan><tspan x="952" dy="16">  --select /providers --list --list-depth 2</tspan></text>
 
   <rect x="938" y="819" width="364" height="84" rx="8" class="card"/>
   <text x="952" y="841" font-size="12.5" font-weight="700">④ 沿 supporting_material_pointer 追回原证据</text>
-  <text x="952" y="863" font-size="10.1" class="amber mono"><tspan x="952" dy="0">--capture-file projection.json --select</tspan><tspan x="952" dy="16"> "$PTR/requirements/2/agent_review/note"</tspan></text>
+  <text x="952" y="863" font-size="10.1" class="amber mono"><tspan x="952" dy="0">quota context-read --capture-file projection.json \</tspan><tspan x="952" dy="16">  --select "$PTR/requirements/2/agent_review/note"</tspan></text>
 
   <text x="40" y="955" font-size="14.5" font-weight="600" class="muted"><tspan x="40" dy="0">核心路径不变量：即使 delivery.json 为 mode: "delta"，recovery.reference_file 仍直指当前 required-context.json，支持直接 --select 任意当前事实；context_details 直通原始</tspan><tspan x="40" dy="21"> projection.json。</tspan></text>
 </svg>

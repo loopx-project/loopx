@@ -447,15 +447,15 @@ def test_todo_succession_gap_prefers_exact_lifecycle_settlement() -> None:
     assert obligation is not None
     assert obligation["resolution_mode"] == "todo_lifecycle_settlement"
     assert obligation["guidance_actions"][0] == "record_no_followup"
-    assert obligation["todo_actions"][0] == {
+    action = obligation["todo_actions"][0]
+    assert "original completion identity" in action["text"]
+    assert "mutable successor" in action["text"]
+    assert "do not update terminal links" in action["text"]
+    assert {key: value for key, value in action.items() if key != "text"} == {
         "action": "settle",
         "role": "agent",
         "priority": "P0",
         "todo_ids": ["todo_111111111111", "todo_222222222222"],
-        "text": (
-            "settle the exact completed Todos through no-follow-up or link each "
-            "to a real runnable successor"
-        ),
     }
     assert "todo_111111111111, todo_222222222222" in obligation[
         "recommended_action"
