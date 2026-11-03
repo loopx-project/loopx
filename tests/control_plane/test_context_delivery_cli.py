@@ -72,7 +72,35 @@ def test_relocated_current_source_overlay_crosses_the_real_typed_codec(tmp_path,
 
 
 @pytest.mark.parametrize("body", ["plain text " * 900, '汉🙂"\\\t\n' * 700])
-@pytest.mark.parametrize("limit", [1600, 7000])
+def test_reader_rejects_budget_too_small_for_reader_program_metadata(
+    tmp_path, monkeypatch, body,
+):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    capture = tmp_path / "original.json"
+    raw = (json.dumps({"requirements": body}, ensure_ascii=False) + "\n").encode()
+    capture.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    limit = 1600
+    response = subprocess.run(
+        [sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota",
+         "context-read", "--capture-file", str(capture),
+         "--capture-sha256", digest, "--page-bytes", "8192",
+         "--max-page-output-bytes", str(limit)],
+        capture_output=True, cwd=Path(__file__).resolve().parents[2], check=False,
+    )
+    assert response.returncode == 1
+    assert len(response.stdout) <= limit
+    rejected = json.loads(response.stdout)
+    assert rejected["ok"] is False and "content" not in rejected
+    assert "same capture" in rejected["reason"]
+    assert capture.read_bytes() == raw
+    assert _heartbeat_receipt_count(runtime, "reader-budget") == 0
+    assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("body", ["plain text " * 900, '汉🙂"\\\t\n' * 700])
+@pytest.mark.parametrize("limit", [4096, 7000])
 def test_reader_bounds_actual_json_stdout_and_preserves_every_byte(tmp_path, monkeypatch, body, limit):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)

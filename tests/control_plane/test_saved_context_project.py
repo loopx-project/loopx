@@ -500,7 +500,7 @@ def test_checkpoint_preflight_selection_inherits_native_transport(tmp_path, monk
 
 
 @pytest.mark.skipif(not os.environ.get("LOOPX_NATIVE_CHECKPOINT_BIN"), reason="Explicit native Codex; loopback inference only")
-@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive", "app_progressive_large"])
+@pytest.mark.parametrize("host", ["app_server", "benchmark", "benchmark_progressive", "app_machine", "app_code_mode", "app_progressive", "app_progressive_large", "app_program_route", "app_code_mode_program_route"])
 def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, monkeypatch, host):
     from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime, read_fixture_todos
     from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
@@ -519,6 +519,10 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     benchmark = host in ("benchmark", "benchmark_progressive")
     progressive = host in ("app_progressive", "benchmark_progressive", "app_progressive_large")
     large_capture = host == "app_progressive_large"
+    routed_program = host.endswith("_program_route")
+    code_mode = host.startswith("app_code_mode")
+    if routed_program and os.name == "nt":
+        pytest.skip("POSIX console alias and controlled PATH")
     unicode_requirement = "保留原始目标、范围与停止条件🙂\n" * 120
     supporting_material = "资料🙂" * 390_000 if large_capture else ""
     binary, env, workspace, home = _native_fixture(tmp_path)
@@ -555,6 +559,20 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     cache.mkdir(mode=0o700)
     program = os.environ.get("LOOPX_NATIVE_CONTEXT_CLI") or str(Path(sys.executable).with_name("loopx"))
     cli = [program, "--cli-bin", program]
+    wrong_runtime = workspace / "wrong-runtime"
+    if routed_program:
+        bin_dir = workspace / "candidate bin"
+        bin_dir.mkdir()
+        poison = bin_dir / "loopx"
+        poison.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
+                          f"Path({str(wrong_runtime)!r}).touch()\nraise SystemExit(97)\n")
+        poison.chmod(0o755)
+        candidate = bin_dir / "candidate's cli"
+        candidate.symlink_to(Path(program))
+        cli = ([sys.executable, "-m", "loopx.entrypoint"] if code_mode
+               else [str(candidate), "--cli-bin", str(candidate)])
+        cli += ["--registry", str(registry), "--runtime-root", str(runtime)]
+        env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
     from loopx.control_plane.turn_driver.codex_context import codex_context_configuration
     configuration = codex_context_configuration(str(context), goal_id=GOAL_ID, agent_id=AGENT_ID, cli_argv=cli, scenario="codex_app_heartbeat")
     if host == "app_machine":
@@ -571,13 +589,27 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
     read_offsets = {}
     actual_turn = None
     rejected_read = False
+    reading_initial = False
+    initial_content = {}
 
     def response(request, number, message):
-        nonlocal phase, queue, actual_turn, receipts, rejected_read
+        nonlocal phase, queue, actual_turn, receipts, rejected_read, reading_initial
         try:
             if continuation := native_process_continuation(request, f"projection_{number}",
-                    code_mode=host == "app_code_mode"):
+                    code_mode=code_mode):
                 return continuation
+            if reading_initial:
+                name = phase.removesuffix("_read")
+                page = last_context_page(request, allow_selection=True)
+                assert page and page["ok"] and page["offset"] == len(initial_content[name])
+                initial_content[name] += page["content"].encode()
+                assert len(initial_content[name]) == (page["total_bytes"] if page["eof"] else page["next_offset"])
+                if page["eof"]:
+                    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+                    assert selected_context_values(initial_content[name].decode())["/goal_id"] == GOAL_ID
+                    reading_initial = False
+                else:
+                    queue.insert(0, page["next_command"])
             if rejected_read:
                 output = [item["output"] for item in request["input"]
                     if item.get("type") in ("function_call_output", "custom_tool_call_output")][-1]
@@ -632,6 +664,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                 # guessing offsets from the capture size. This keeps each
                 # request's real page budget and avoids overlapping reads.
                 queue.append(navigation["command"])
+                if routed_program and descriptor["mode"] == "full":
+                    # Execute the returned initial navigation unchanged inside
+                    # real native tools, then retain the existing full-source
+                    # oracle and lifecycle proof. PATH's ambient CLI must fail.
+                    initial_content[name] = b""
+                    reading_initial = True
+                    queue.insert(0, navigation["first_read_command"])
                 if progressive:
                     # Exercise the actual small reference and selective public
                     # reader in native model input; never consume either file in full.
@@ -704,14 +743,19 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
                     if benchmark:
                         return message
                     return response(request, number, message)
-            if host == "app_code_mode":
+            arguments = {"cmd": command, "max_output_tokens": 22000}
+            if routed_program:
+                # A login shell may replace the controlled PATH before it
+                # executes the otherwise unchanged generated reader command.
+                arguments["login"] = False
+            if code_mode:
                 return {"type": "custom_tool_call", "id": f"fc_{number}", "call_id": f"call_{number}",
                     "name": "exec", "input": '// @exec: {"max_output_tokens":24000}\ntext((await tools.exec_command('
-                        + json.dumps({"cmd": command, "max_output_tokens": 22000}) + ')).output);'}
+                        + json.dumps(arguments) + ')).output);'}
             # Match the generated native profile's 64000-byte page transport;
             # the old 3000-token tool cap truncated its valid JSON first page.
             return {"type": "function_call", "id": f"fc_{number}", "call_id": f"call_{number}",
-                "name": "exec_command", "arguments": json.dumps({"cmd": command, "max_output_tokens": 22000})}
+                "name": "exec_command", "arguments": json.dumps(arguments)}
         except Exception as error:
             errors.append(error)
             return message
@@ -759,11 +803,13 @@ def test_native_saved_preflight_uses_lifecycle_without_guard_replay(tmp_path, mo
             config.write_text(overrides + config.read_text())
             with (home / "config.toml").open("a") as config:
                 config.write("[sandbox_workspace_write]\nnetwork_access=true\n")
-            if host == "app_code_mode":
+            if code_mode:
                 config = home / "config.toml"
                 config.write_text(config.read_text().replace("[features]\n", "[features]\ncode_mode=true\n"))
             _app_server(binary, env, workspace, home, True, sandbox="workspace-write")
-    assert not errors and phase == "done", errors
+    assert not errors and phase == "done", (errors, phase, wrong_runtime.exists())
+    if routed_program:
+        assert set(initial_content) == {"cold"} and not wrong_runtime.exists()
     if benchmark:
         turns = [json.loads(raw)["heartbeat_receipt"]["turn_instance_id"] for _, raw in sources]
         assert len(set(turns)) == 2
