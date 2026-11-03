@@ -1,5 +1,6 @@
 """Real CLI policy readback and App scheduling projections; no live automation mutation."""
 
+import json
 from pathlib import Path
 
 from examples.control_plane.quota_plan_fixtures import (
@@ -128,7 +129,19 @@ def test_policy_configured_by_real_cli_reaches_quota_app_hint(tmp_path: Path):
         **kwargs,
     )
     assert code == 0, guard
-    assert guard["scheduler_hint"]["codex_app"]["recommended_interval_minutes"] >= 1440
+    if guard.get("schema_version") == "context_capture_navigation_v1":
+        code, page = run_json_cli_result(
+            "quota", "context-read", "--reference-file", guard["reference_file"],
+            "--select", "/scheduler_hint", "--page-bytes", "64000",
+            "--max-page-output-bytes", "64000", **kwargs,
+        )
+        assert code == 0 and page["eof"] is True, page
+        selected = json.loads(page["content"])["selections"]
+        assert len(selected) == 1 and selected[0]["pointer"] == "/scheduler_hint"
+        scheduler = selected[0]["value"]
+    else:
+        scheduler = guard["scheduler_hint"]
+    assert scheduler["codex_app"]["recommended_interval_minutes"] >= 1440
 
 
 def test_human_policy_readback_renders_owner_timestamp_without_countdown():
