@@ -244,7 +244,9 @@ try {
     await fixture('report-partial');
     await english.getByRole('button', {name: 'Refresh delegations', exact: true}).click();
     await english.getByRole('searchbox', {name: 'Search delegations'}).fill('核对账单导出的字段映射');
-    await english.getByRole('searchbox', {name: 'Search delegations'}).press('Enter');
+    // Wait for the actual submit control: a refresh can start after the click
+    // settles, so Enter while its submit button is disabled would be ignored.
+    await english.getByRole('button', {name: 'Search', exact: true}).click();
     await rows(1);
     await english.getByText('Partial result returned', {exact: true}).waitFor();
     await english.locator('.conversation-request-row > summary').click();
@@ -254,6 +256,53 @@ try {
     await english.getByRole('button', {name: 'Refresh delegations', exact: true}).click(); await rows(0);
     await english.getByRole('button', {name: 'All records', exact: true}).click(); await rows(1);
     await english.getByText('Returned', {exact: true}).waitFor();
+    // A slow filter read must not erase the last readable view or relabel its
+    // rows/counts. Hold a real backend response, then challenge cancellation.
+    await english.getByRole('button', {name: 'Clear', exact: true}).click(); await settled(); await rows(12);
+    await page.setViewportSize({width: 390, height: 844});
+    const allRecords = english.getByRole('button', {name: 'All records', exact: true});
+    const followUp = english.getByRole('button', {name: 'Awaiting follow-up', exact: true});
+    const shownBeforeSwitch = await english.locator('.conversation-request-row > summary > strong').allTextContents();
+    const countBeforeSwitch = await english.locator('.conversation-requests-pagination [role=status]').innerText();
+    async function holdFollowUp() {
+      let seen, release, finished;
+      const observed = new Promise(resolve => seen = resolve), held = new Promise(resolve => release = resolve);
+      const completed = new Promise(resolve => finished = resolve);
+      let heldOnce = false;
+      await page.route('**/api/chat/request-inventory?*', async route => {
+        if (new URL(route.request().url()).searchParams.get('view') !== 'unfinished' || heldOnce) return route.continue();
+        heldOnce = true;
+        const response = await route.fetch(); seen(); await held;
+        try {await route.fulfill({response});} catch { /* cancelled read */ } finally {finished();}
+      });
+      return {observed, release, completed};
+    }
+    const delayedSwitch = await holdFollowUp();
+    await followUp.click(); await delayedSwitch.observed;
+    assert.deepEqual(await english.locator('.conversation-request-row > summary > strong').allTextContents(), shownBeforeSwitch);
+    assert.equal(await english.locator('.conversation-requests-pagination [role=status]').innerText(), countBeforeSwitch);
+    assert.equal(await allRecords.getAttribute('aria-pressed'), 'true', 'Selected tab describes the published rows');
+    assert.equal(await followUp.getAttribute('aria-busy'), 'true', 'The requested view exposes its unfinished read');
+    assert.ok(await english.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    await page.screenshot({path: resolve(output, 'view-switch-narrow.png')});
+    await allRecords.click(); await settled();
+    delayedSwitch.release(); await delayedSwitch.completed;
+    await page.unroute('**/api/chat/request-inventory?*');
+    await rows(12); assert.equal(await allRecords.getAttribute('aria-pressed'), 'true');
+    await followUp.click(); await rows(11);
+    assert.equal(await followUp.getAttribute('aria-pressed'), 'true');
+    await fixture('fault'); await allRecords.click(); await settled(); await rows(0);
+    await english.getByRole('alert').waitFor();
+    await english.getByText('Record count unknown', {exact: true}).waitFor();
+    await fixture('recover'); await english.getByRole('button', {name: 'Retry', exact: true}).click(); await rows(12);
+    const interruptedSwitch = await holdFollowUp();
+    await followUp.click(); await interruptedSwitch.observed;
+    await page.keyboard.press('Escape');
+    interruptedSwitch.release(); await interruptedSwitch.completed;
+    await page.unroute('**/api/chat/request-inventory?*');
+    await page.getByRole('button', {name: /Delegations,.*awaiting follow-up/}).click();
+    assert.equal(await allRecords.getAttribute('aria-pressed'), 'false', 'Reopening cannot briefly show a historical view as the default');
+    await rows(11);
     assert.equal(writes.some(path => /request-(?:inventory|control)|team-work/.test(path)), false);
     assert.deepEqual(errors, []);
     console.log('PASS: packaged search, pre-pagination match, count, complete original across real pages, long body, corrupt journal and later-page failure/recovery, close/reopen, clear/paging, changed-snapshot More, partial/final returned history, stale response, Escape/focus, workspace isolation, narrow layout, English and source refusal/recovery; explicit fixture reports update return state, original-reader POST delta zero and no new Turns.');
