@@ -251,11 +251,19 @@ def build_turn_scoped_cli_settlement_plan(
         f"{lifecycle_actor_args}{turn_arg}{goal_ref_arg} --evidence '<validated evidence>'"
     )
     terminal_closeout = ordinary_completion + " --no-follow-up"
-    writeback = (
-        f"{cli_prefix} refresh-state --goal-id {shlex.quote(goal_id)} "
-        "--classification <validated_progress> --delivery-batch-scale <scale> "
-        f"--delivery-outcome <outcome>{boundary_arg}{binding_arg}{turn_arg}{goal_ref_arg}"
-        f"{scoped_cli_args}{writeback_path_args}"
+
+    def writeback_command(boundary: str) -> str:
+        return (
+            f"{cli_prefix} refresh-state --goal-id {shlex.quote(goal_id)} "
+            "--classification <validated_progress> --delivery-batch-scale <scale> "
+            f"--delivery-outcome <outcome>{boundary}{binding_arg}{turn_arg}{goal_ref_arg}"
+            f"{scoped_cli_args}{writeback_path_args}"
+        )
+
+    writeback = writeback_command(boundary_arg)
+    semantic_writeback = (
+        writeback_command(" --delivery-boundary semantic_closeout")
+        + " --agent-vision-json <file>"
     )
     spend = (
         f"{cli_prefix} quota spend-slot --goal-id {shlex.quote(goal_id)} --slots 1 "
@@ -272,6 +280,7 @@ def build_turn_scoped_cli_settlement_plan(
         "command_templates": {
             **({"todo_claim": task_claim} if todo_id else {}),
             "todo_completion": ordinary_completion, "durable_writeback": writeback,
+            "semantic_closeout": semantic_writeback,
             "quota_spend": spend, "terminal_closeout": terminal_closeout,
         },
     })
@@ -284,6 +293,7 @@ def build_turn_scoped_cli_settlement_plan(
             expected_receipt=row["expected_receipt"], command_template=row.get("command_template"),
             conditional=row.get("conditional", False), command_condition=row.get("command_condition"),
             vision_authoring=row.get("vision_authoring"),
+            semantic_closeout_command_template=row.get("semantic_closeout_command_template"),
         ) for row in payload["ordered_steps"]
     ), _runtime_payload=payload)
 
