@@ -367,12 +367,10 @@ def render_todo_markdown(payload: dict[str, Any]) -> str:
             lines.extend(["", "```sh", command, "```"])
     correctness = payload.get("local_state_write_correctness")
     if isinstance(correctness, dict):
-        intent = correctness.get("write_intent") if isinstance(correctness.get("write_intent"), dict) else {}
-        apply_result = (
-            correctness.get("apply_result")
-            if isinstance(correctness.get("apply_result"), dict)
-            else {}
-        )
+        intent_value = correctness.get("write_intent")
+        intent = intent_value if isinstance(intent_value, dict) else {}
+        apply_result_value = correctness.get("apply_result")
+        apply_result = apply_result_value if isinstance(apply_result_value, dict) else {}
         lines.extend(
             [
                 "",

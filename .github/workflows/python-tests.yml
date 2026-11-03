@@ -305,6 +305,15 @@ jobs:
       - name: Type-check kernel contracts
         run: python -m mypy
 
+      # Preserve the kernel gate above, including its import traversal. This
+      # additive boundary checks the adapters strictly and analyzes legacy
+      # imports for types without claiming their implementations are qualified.
+      - name: Type-check Todo CLI adapters
+        run: >-
+          python -m mypy --no-incremental --follow-imports=silent
+          loopx/cli_commands/todo_event.py
+          loopx/control_plane/todos/markdown.py
+
       - name: Qualify agent-facing CLI output
         env:
           # Compare the tested revision to its event base, even after main moves
