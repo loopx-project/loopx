@@ -486,3 +486,45 @@ def test_default_turn_deadline_is_optional_and_real_transport_accepts_none(tmp_p
     )
     assert result["outcome"] == "exited"
     assert result["returncode"] == 0
+
+
+@pytest.mark.parametrize("broken_observation", ["not-json", "[]"])
+def test_host_bridge_parser_failure_closes_reader_without_claiming_cleanup(broken_observation):
+    from loopx.control_plane.turn_driver.host_bridge_transport import GuardedHostBridge
+
+    source = """
+import json, sys
+print(json.dumps({"kind": "ready"}), flush=True)
+sys.stdin.readline()
+for line in (sys.argv[1], sys.argv[1], '{"kind":"stdout","text":"diagnostic"}',
+             '{"kind":"result","outcome":"exited"}'):
+    print(line, flush=True)
+"""
+    with subprocess.Popen([sys.executable, "-u", "-c", source, broken_observation],
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8") as process:
+        bridge = GuardedHostBridge(process, deadline=time.monotonic() + 5, cleanup_timeout=.2)
+        try:
+            bridge.send("{}\n")
+            process.wait(timeout=5)
+            with pytest.raises((json.JSONDecodeError, RuntimeError)):
+                bridge.next(deadline=time.monotonic() + 5)
+            with pytest.raises(RuntimeError, match="cleanup unconfirmed"):
+                bridge.cancel()
+            bridge.close_output()
+            assert not bridge.reader.is_alive()
+            assert bridge.output.closed
+            bridge.close_output()
+            # A dead bridge or reclaimed pipe cannot establish the Host's exit.
+            assert bridge.not_launched is False and bridge.result is None
+        finally:
+            # Keep a failing baseline from stranding its producer in the test runner.
+            import queue
+            for _ in range(4):
+                if not bridge.reader.is_alive():
+                    break
+                try:
+                    bridge.pending.get(timeout=.2)
+                except queue.Empty:
+                    pass
+                bridge.reader.join(timeout=.2)

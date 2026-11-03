@@ -21,19 +21,27 @@ class GuardedHostBridge:
         self.output = process.stdout
         self.process, self.deadline, self.cleanup_timeout = process, deadline, cleanup_timeout
         self.pending: queue.Queue[str | BaseException | None] = queue.Queue(maxsize=1)
+        self._stop_reading = threading.Event()
         self.requested = self.cancelled = self.not_launched = False
         self.result: dict[str, Any] | None = None
         self.reader = threading.Thread(target=self._read, name="loopx-host-bridge-reader", daemon=True)
         self.reader.start()
 
+    def _publish(self, item: str | BaseException | None) -> bool:
+        if self._stop_reading.is_set():
+            return False
+        self.pending.put(item)
+        return not self._stop_reading.is_set()
+
     def _read(self) -> None:
         try:
             for line in self.output:
-                self.pending.put(line)
+                if not self._publish(line):
+                    break
         except BaseException as error:
-            self.pending.put(error)
+            self._publish(error)
         finally:
-            self.pending.put(None)
+            self._publish(None)
 
     def next(self, *, deadline: float | None = None) -> dict[str, Any] | None:
         try:
@@ -94,6 +102,13 @@ class GuardedHostBridge:
             raise RuntimeError("managed Host bridge cleanup unconfirmed") from error
 
     def close_output(self) -> None:
+        self._stop_reading.set()
+        # No caller remains to consume frames after cleanup fails. Release the
+        # one blocked producer before joining; this does not certify Host exit.
+        try:
+            self.pending.get_nowait()
+        except queue.Empty:
+            pass
         self.reader.join(timeout=self.cleanup_timeout)
         if not self.reader.is_alive():
             self.output.close()
