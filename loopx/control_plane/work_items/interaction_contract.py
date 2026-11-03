@@ -1500,6 +1500,9 @@ def _attach_interaction_required_reads(
 def _attach_interaction_post_writeback_actions(
     contract: dict[str, Any], payload: dict[str, Any]
 ) -> None:
+    preparation = payload.get("execution_preparation")
+    if isinstance(preparation, Mapping) and preparation.get("state") != "ready":
+        return
     goal_boundary = (
         payload.get("goal_boundary")
         if isinstance(payload.get("goal_boundary"), Mapping)
@@ -1573,6 +1576,37 @@ def _attach_interaction_vision_wait_state(
         "automatic_resume": vision_wait_state.get("automatic_resume") is True,
         "spend_policy": "no spend while the exact resume condition is pending",
     }
+
+
+def _attach_interaction_execution_preparation(
+    contract: dict[str, Any], payload: dict[str, Any],
+) -> None:
+    preparation = payload.get("execution_preparation")
+    if not isinstance(preparation, dict):
+        return
+    contract["agent_channel"]["execution_preparation"] = preparation
+    contract["cli_channel"]["execution_preparation"] = preparation
+    state = preparation.get("state")
+    if state == "ready":
+        return
+    reason = str(preparation.get("reason") or "Selected Todo execution is not prepared.")
+    contract["agent_channel"]["delivery_allowed"] = False
+    contract["agent_channel"]["primary_action"] = reason
+    if state != "claim_required":
+        return
+    claim = preparation.get("claim")
+    command = claim.get("command_line") if isinstance(claim, dict) else None
+    if isinstance(command, str) and command:
+        contract["agent_channel"]["must_attempt"] = True
+        contract["agent_channel"]["quiet_noop_allowed"] = False
+        contract["agent_channel"]["primary_action"] = (
+            f"Run the atomic execution preparation action: {command}"
+        )
+        contract["cli_channel"]["next_cli_actions"] = [command]
+        for key in (
+            "settlement_plan", "quota_spend_source", "replan_settlement_contract",
+        ):
+            contract["cli_channel"].pop(key, None)
 
 
 def _interaction_fallback_policy_required(payload: Mapping[str, object], *, mode: str) -> bool:
@@ -1713,6 +1747,7 @@ def _build_interaction_contract_projection(
             registry_path=registry_path,
         ),
     }
+    _attach_interaction_execution_preparation(contract, payload)
     response_plan = _build_interaction_response_plan(
         user_channel=user_channel,
         agent_channel=agent_channel,

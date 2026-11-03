@@ -1404,6 +1404,20 @@ completeness counters remain authoritative for omissions. Consumers that need
 the complete open source follow `detail_refs.full_todo_list` rather than
 assuming either bounded projection is exhaustive.
 
+After a new Turn has selected one Todo, `quota should-run` also checks that
+Todo's canonical hard lease. `execution_preparation_v0` is `ready` only for a
+matching active lease. A missing, released, or expired lease produces
+`claim_required` with one ordinary managed claim and
+`host_execution_allowed=true`; a capable Host may execute it before launching
+the model, then must rerun the guard and observe the same Todo as `ready`.
+The read-only guard never acquires authority itself, and the claim still
+atomically rechecks current ownership, write scopes, physical workspace and
+lease generation. Foreign ownership, conflicting leases, or unreadable
+canonical authority fail closed. Explicit action selection and receipt-bound
+recovery keep their existing identities and are never replaced by automatic
+preparation. Hosts without this integration expose only the claim command for
+the Agent to execute, avoiding unrelated context reads or delivery work first.
+
 Correctly typed future work is handled earlier. A higher-priority
 `continuous_monitor` with a valid future `next_due_at` is not executable; quota
 selects the next ready advancement todo and records the future monitor under

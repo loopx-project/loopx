@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from datetime import timedelta
+import json
+
+import pytest
+
+from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+from loopx.control_plane.runtime.time import now_utc, utc_isoformat
+from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
+from loopx.control_plane.quota.execution_preparation import (
+    apply_selected_todo_execution_preparation,
+)
+
+
+GOAL = "goal-execution-preparation"
+TODO = "todo_execution_preparation"
+AGENT = "agent-a"
+
+
+def _todo() -> dict[str, object]:
+    return {
+        "schema_version": "todo_item_v0",
+        "todo_id": TODO,
+        "role": "agent",
+        "source_section": "Agent Todo",
+        "archive_state": "active",
+        "text": "Deliver one validated synthetic change",
+        "status": "open",
+        "done": False,
+        "task_class": "advancement_task",
+        "priority": "P1",
+        "claimed_by": AGENT,
+        "index": 1,
+    }
+
+
+def _lease(*, owner: str = AGENT, status: str = "active", expired: bool = False) -> dict[str, object]:
+    at = now_utc()
+    return {
+        "schema_version": "task_lease_v0",
+        "goal_id": GOAL,
+        "todo_id": TODO,
+        "owner": owner,
+        "idempotency_key": f"{owner}-execution",
+        "write_scopes": [],
+        "acquire_ttl_seconds": 600,
+        "version": 2,
+        "lease_epoch": 1,
+        "status": status,
+        "acquired_at": utc_isoformat(at - timedelta(seconds=120)),
+        "updated_at": utc_isoformat(at - timedelta(seconds=120)),
+        "expires_at": utc_isoformat(at - timedelta(seconds=60) if expired else at + timedelta(seconds=600)),
+        **({"released_at": utc_isoformat(at)} if status == "released" else {}),
+    }
+
+
+def _run(tmp_path, monkeypatch, provider: str, leases: list[dict[str, object]]):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime = tmp_path / "runtime"
+    registry = tmp_path / "registry.json"
+    state = tmp_path / "state.md"
+    state.write_text(
+        "---\nstatus: active\n---\n# Goal\n\n## Objective\n"
+        "Deliver one validated synthetic change.\n\n## Next Action\n"
+        "Run the selected Todo.\n",
+        encoding="utf-8",
+    )
+    write_fixture_registry(
+        project=tmp_path,
+        runtime_root=runtime,
+        registry_path=registry,
+        goal_id=GOAL,
+        domain="execution-preparation",
+        adapter_kind="generic_project_goal_v0",
+        state_file=str(state),
+        registered_agents=[AGENT, "agent-b"],
+        quota_allowed_slots=None,
+        extra_goal_fields={"coordination": {
+            "registered_agents": [AGENT, "agent-b"],
+            "handoff_mode": "hard_lease",
+        }},
+    )
+    projection = build_todo_runtime_shadow_projection(
+        goal_id=GOAL,
+        todos=[_todo()],
+        leases=leases,
+        handoff_mode="hard_lease",
+    )
+    initialize_canonical_authority(
+        runtime, GOAL, projection, state_path=state, provider=provider,
+    )
+    code, packet = run_json_cli_result(
+        "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        registry_path=registry, runtime_root=runtime,
+    )
+    assert code == 0, json.dumps(packet, ensure_ascii=False, indent=2)
+    return packet
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    "leases,reason_code",
+    [
+        ([], "task_lease_missing"),
+        ([_lease(status="released")], "task_lease_released"),
+        ([_lease(expired=True)], "task_lease_expired"),
+    ],
+)
+def test_should_run_requires_one_atomic_claim_before_delivery(
+    tmp_path, monkeypatch, provider, leases, reason_code,
+):
+    packet = _run(tmp_path, monkeypatch, provider, leases)
+    preparation = packet["execution_preparation"]
+    assert preparation["state"] == "claim_required"
+    assert preparation["reason_code"] == reason_code
+    assert preparation["claim"]["host_execution_allowed"] is True
+    assert preparation["claim"]["command_line"].startswith("loopx todo claim ")
+    assert packet["should_run"] is True
+    assert packet["normal_delivery_allowed"] is False
+    assert packet["selected_todo"]["claim_required_before_work"] is True
+    contract = packet["interaction_contract"]
+    assert contract["agent_channel"]["must_attempt"] is True
+    assert contract["agent_channel"]["delivery_allowed"] is False
+    assert contract["cli_channel"]["next_cli_actions"][0] == preparation["claim"]["command_line"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_matching_active_lease_preserves_delivery(tmp_path, monkeypatch, provider):
+    packet = _run(tmp_path, monkeypatch, provider, [_lease()])
+    assert packet["execution_preparation"]["state"] == "ready"
+    assert packet["normal_delivery_allowed"] is True
+    assert packet["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_projected_claim_prepares_the_same_todo_for_a_fresh_guard(
+    tmp_path, monkeypatch, provider,
+):
+    before = _run(tmp_path, monkeypatch, provider, [])
+    claim_args = before["execution_preparation"]["claim"]["cli_args"]
+
+    claim_code, claim = run_json_cli_result(
+        *claim_args,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert claim_code == 0, json.dumps(claim, ensure_ascii=False, indent=2)
+
+    guard_code, after = run_json_cli_result(
+        "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
+        registry_path=tmp_path / "registry.json",
+        runtime_root=tmp_path / "runtime",
+    )
+    assert guard_code == 0, json.dumps(after, ensure_ascii=False, indent=2)
+    assert after["selected_todo"]["todo_id"] == TODO
+    assert after["execution_preparation"]["state"] == "ready"
+    assert after["normal_delivery_allowed"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_foreign_active_lease_blocks_without_claim_action(tmp_path, monkeypatch, provider):
+    packet = _run(tmp_path, monkeypatch, provider, [_lease(owner="agent-b")])
+    preparation = packet["execution_preparation"]
+    assert preparation["state"] == "blocked_by_conflict"
+    assert preparation["reason_code"] == "active_lease_owned_by_other_agent"
+    assert "claim" not in preparation
+    assert packet["should_run"] is False
+    assert packet["normal_delivery_allowed"] is False
+
+
+@pytest.mark.parametrize("boundary", ["selection", "receipt"])
+def test_preparation_does_not_replace_selection_or_receipt_identity(
+    monkeypatch, boundary,
+):
+    from loopx.control_plane.quota import execution_preparation as module
+
+    monkeypatch.setattr(
+        module,
+        "project_selected_todo_execution_preparation",
+        lambda **_kwargs: pytest.fail("preparation must wait for the current binding"),
+    )
+    payload = {
+        "should_run": True,
+        "selected_todo": {"todo_id": TODO},
+    }
+    if boundary == "selection":
+        payload["action_portfolio"] = {
+            "selection_policy": {"requires_explicit_turn_binding": True},
+        }
+    apply_selected_todo_execution_preparation(
+        payload,
+        runtime_root="/synthetic/runtime",
+        goal_id=GOAL,
+        agent_id=AGENT,
+        receipt_bound=boundary == "receipt",
+    )
+    assert "execution_preparation" not in payload
