@@ -66,6 +66,7 @@ PENDING_CHECK_STATES = {
 }
 PASSING_CHECK_STATES = {"NEUTRAL", "SKIPPED", "SUCCESS"}
 BRANCH_REPLAN_MERGE_STATES = {"BEHIND", "DIRTY"}
+_VERIFIED_REQUESTED_REPOSITORY_FIELD = "_loopx_verified_requested_repository"
 
 _REVIEW_RESPONSE_QUERY = """
 query($owner:String!,$name:String!,$number:Int!){
@@ -909,6 +910,37 @@ def fetch_github_pr_lifecycle_payload(
     payload = json.loads(result.stdout)
     if not isinstance(payload, dict):
         raise ValueError("GitHub PR lifecycle fetch must return a JSON object")
+    provider_reference = normalise_github_issue_reference(
+        repo=repo,
+        issue_ref=f"pull_{number}",
+        url=str(payload.get("url") or ""),
+    )
+    if (
+        provider_reference.get("kind") != "pull_request"
+        or provider_reference.get("number") != number
+    ):
+        raise ValueError("GitHub PR lifecycle provider identity mismatch")
+    if str(provider_reference["repo"]).lower() != repo.lower():
+        redirect = subprocess.run(
+            ["gh", "repo", "view", repo, "--json", "nameWithOwner"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+        )
+        if redirect.returncode != 0:
+            raise RuntimeError("GitHub repository redirect verification failed")
+        redirect_payload = json.loads(redirect.stdout)
+        canonical_repo = (
+            str(redirect_payload.get("nameWithOwner") or "").strip().lower()
+            if isinstance(redirect_payload, dict)
+            else ""
+        )
+        if canonical_repo != str(provider_reference["repo"]).lower():
+            raise ValueError("GitHub PR lifecycle provider identity mismatch")
+        payload[_VERIFIED_REQUESTED_REPOSITORY_FIELD] = canonical_repo
     if _upper_label(payload.get("reviewDecision")) == "CHANGES_REQUESTED":
         payload.update(
             _fetch_github_review_response_metadata(
@@ -919,6 +951,31 @@ def fetch_github_pr_lifecycle_payload(
             )
         )
     return payload
+
+
+def validate_github_pr_provider_identity(
+    reference: Mapping[str, Any], provider_payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate one exact PR response, including a provider-verified repo rename."""
+
+    expected_repo = str(reference.get("repo") or "").strip().lower()
+    expected_number = reference.get("number")
+    provider_reference = normalise_github_issue_reference(
+        repo=expected_repo,
+        issue_ref=f"pull_{expected_number}",
+        url=str(provider_payload.get("url") or ""),
+    )
+    if (
+        provider_reference.get("kind") != "pull_request"
+        or provider_reference.get("number") != expected_number
+    ):
+        raise ValueError("PR dependency provider identity mismatch")
+    provider_repo = str(provider_reference.get("repo") or "").strip().lower()
+    if provider_repo != expected_repo and str(
+        provider_payload.get(_VERIFIED_REQUESTED_REPOSITORY_FIELD) or ""
+    ).strip().lower() != provider_repo:
+        raise ValueError("PR dependency provider identity mismatch")
+    return provider_reference
 
 
 def build_issue_fix_pr_lifecycle_monitor_packet(

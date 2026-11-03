@@ -15,6 +15,7 @@ from loopx.capabilities.issue_fix.pr_lifecycle import (
 def _changes_requested_payload() -> dict[str, object]:
     return {
         "state": "OPEN",
+        "url": "https://github.com/example/project/pull/3258",
         "reviewDecision": "CHANGES_REQUESTED",
         "mergeStateStatus": "BLOCKED",
         "headRefOid": "b" * 40,
@@ -164,3 +165,32 @@ def test_review_response_fetch_timeout_fails_closed() -> None:
         provider_payload=payload,
     )
     assert packet["transition"]["action_kind"] == "issue_fix_review_changes_replan"
+
+
+def test_fetch_metadata_verifies_repository_redirect() -> None:
+    lifecycle = {
+        "state": "MERGED",
+        "mergedAt": "2026-10-01T00:00:00Z",
+        "url": "https://github.com/new-owner/project/pull/3258",
+    }
+    redirect = {"nameWithOwner": "new-owner/project"}
+    responses = [
+        subprocess.CompletedProcess([], 0, json.dumps(lifecycle), ""),
+        subprocess.CompletedProcess([], 0, json.dumps(redirect), ""),
+    ]
+
+    with patch(
+        "loopx.capabilities.issue_fix.pr_lifecycle.subprocess.run",
+        side_effect=responses,
+    ) as run:
+        payload = fetch_github_pr_lifecycle_payload(
+            {"repo": "old-owner/project", "number": 3258},
+            timeout_seconds=5,
+            compact=True,
+        )
+
+    assert run.call_count == 2
+    assert run.call_args_list[1].args[0] == [
+        "gh", "repo", "view", "old-owner/project", "--json", "nameWithOwner",
+    ]
+    assert payload["_loopx_verified_requested_repository"] == "new-owner/project"

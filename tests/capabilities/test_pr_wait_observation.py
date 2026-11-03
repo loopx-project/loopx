@@ -99,6 +99,45 @@ def test_executing_turn_observes_dependency_before_business_quota(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_executing_turn_resumes_verified_repository_redirect(
+    tmp_path, monkeypatch, provider,
+):
+    from loopx.capabilities.issue_fix import pr_lifecycle
+    from loopx.rollout_event_log import load_rollout_events, rollout_event_log_path
+
+    registry, runtime, project, todo_id, argv = _native_wait_turn(
+        tmp_path, monkeypatch, provider,
+    )
+    calls = []
+
+    def fetch(reference, **kwargs):
+        calls.append(reference)
+        return {
+            "state": "MERGED",
+            "mergedAt": "2026-10-01T00:00:00Z",
+            "url": "https://github.com/new-owner/repo/pull/42",
+            "_loopx_verified_requested_repository": "new-owner/repo",
+        }
+
+    monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
+    _, result = _invoke_turn([*argv, "--turn-instance-id", "renamed-repository"])
+
+    after = list_goal_todos(
+        registry_path=registry, goal_id="goal-a", todo_id=todo_id,
+    )["todo"]
+    assert after["resume_ready"] is True, result
+    assert _observation(result)["merged_count"] == 1
+    events = load_rollout_events(rollout_event_log_path(runtime, "goal-a"))
+    merge = next(event for event in events if event["event_kind"] == "pr_merge")
+    assert merge["code_refs"]["pr_ref"] == "new-owner/repo#42"
+    assert merge["source_refs"] == [
+        {"kind": "pull_request", "ref": "owner/repo#42"},
+    ]
+    assert len(calls) == 1
+    assert not (project / "host-started").exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_turn_observes_dependencies_synchronized_during_turn_start(tmp_path, monkeypatch, provider):
     from loopx.capabilities.issue_fix import pr_lifecycle
     from loopx.cli_commands import lark_inbox

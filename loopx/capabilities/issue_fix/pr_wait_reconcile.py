@@ -77,10 +77,9 @@ def _reconcile_locked(
         try:
             metadata = pr_lifecycle.fetch_github_pr_lifecycle_payload(reference,
                 timeout_seconds=fetch_timeout_seconds, compact=True)
-            # A provider redirect or malformed success must never attest another
-            # repository's identically numbered dependency. No default OPEN.
-            if str(metadata.get("url") or "").lower().rstrip("/") != target["url"].lower():
-                raise ValueError("PR dependency provider identity mismatch")
+            # A verified GitHub rename may preserve this dependency through an
+            # alias; a malformed response or unrelated same-number PR may not.
+            pr_lifecycle.validate_github_pr_provider_identity(reference, metadata)
             state = str(metadata.get("state") or "").upper()
             if state not in {"OPEN", "CLOSED", "MERGED"}:
                 raise ValueError("PR dependency provider state unavailable")
