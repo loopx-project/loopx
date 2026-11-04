@@ -50,11 +50,20 @@ def test_selected_merge_proof_survives_capture_and_actual_host_adoption(
     monkeypatch.setattr(pr_lifecycle, "fetch_github_pr_lifecycle_payload", fetch)
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     if observer_entry == "heartbeat":
+        # Native capture is a thin-host transport. Keep its full-mode refusal
+        # separate from the explicitly supported compatibility presentation.
+        code, refused = _invoke_turn([
+            *prefix, "heartbeat-prompt", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
+            "--codex-app", "--available-capability", "external_evidence_poll", "--full",
+        ])
+        assert code == 1 and refused["ok"] is False, refused
+        assert "requires thin mode" in refused["error"] and calls == []
         prompts = []
         for mode in ("full", "thin"):
             code, prompt = _invoke_turn([
                 *prefix, "heartbeat-prompt", "--goal-id", "loopx-turn-fixture", "--agent-id", "codex-fixture",
                 "--codex-app", "--available-capability", "external_evidence_poll", f"--{mode}",
+                *(["--context-delivery", "off"] if mode == "full" else []),
             ])
             assert code == 0, prompt
             prompts.append(prompt)
