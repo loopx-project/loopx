@@ -2357,3 +2357,16 @@ def test_invalid_remote_error_envelope_fails_as_bounded_internal_error() -> None
     assert isinstance(error, effect_runtime.EffectRuntimeInternalError)
     assert error.diagnostic_code == "invalid_error_envelope"
     assert "/private/path" not in str(error)
+
+
+def test_remote_request_details_preserve_first_message_and_reject_malformed_transport() -> None:
+    payload = {"kind": "request_rejected", "code": "invalid_request", "message": "first failure",
+               "details": ["second failure", "third failure"]}
+    error = effect_runtime._remote_runtime_error(payload)
+    assert isinstance(error, effect_runtime.EffectRuntimeRejected)
+    assert str(error) == "first failure"
+    assert error.details == ("second failure", "third failure")
+    for malformed in (None, "detail", [1], ["x" * 241], ["x"] * 129):
+        error = effect_runtime._remote_runtime_error(payload | {"details": malformed})
+        assert isinstance(error, effect_runtime.EffectRuntimeInternalError)
+        assert error.diagnostic_code == "invalid_error_envelope"

@@ -203,6 +203,26 @@ def test_runtime_budget_rejection_keeps_actionable_suggestion() -> None:
     assert len(str(error.value)) <= 240
 
 
+def test_runtime_budget_rejection_preserves_first_error_and_additional_details() -> None:
+    packet = {
+        "vision_patch": {"vision_summary": "x" * 421, "last_patch_summary": "y" * 241},
+        "path_delta": {"outcome": "continue", "prior_assumption": "Retain the objective.",
+                       "observed_reality": "Fresh evidence.", "retained": ["a", "b", "c", "d"]},
+    }
+    original = json.dumps(packet, sort_keys=True)
+    with pytest.raises(vision_checkpoint.GoalVisionBudgetError) as error:
+        vision_checkpoint.prepare_vision_refresh(
+            packet, goal_id="goal-main", agent_id="codex-main",
+            existing_agent_vision=None, merge_patch=False,
+            require_path_delta_for_durable_change=False,
+        )
+    assert (error.value.field, error.value.used, error.value.limit) == ("vision_summary", 421, 420)
+    assert error.value.suggestion == "x" * 93 + "..."
+    assert "last_patch_summary uses 241 chars; limit is 240" in str(error.value)
+    assert "path_delta.retained has 4 items; limit is 3" in str(error.value)
+    assert json.dumps(packet, sort_keys=True) == original
+
+
 @pytest.mark.parametrize(
     "malformed",
     [

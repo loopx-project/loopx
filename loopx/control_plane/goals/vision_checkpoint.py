@@ -44,15 +44,17 @@ class GoalVisionBudgetError(ValueError):
 
 
 def _raise_rejection(exc: EffectRuntimeRejected) -> NoReturn:
+    message = "\n".join((str(exc), *exc.details))
     if exc.diagnostic_code == GOAL_VISION_BUDGET_ERROR:
-        message = str(exc)
         matched = _VISION_BUDGET_MESSAGE.match(message)
         if matched:
             suggestion = None
             suggestion_prefix = matched.group(0) + _VISION_BUDGET_SUGGESTION_MARKER
             if message.startswith(suggestion_prefix):
                 try:
-                    candidate = json.loads(message[len(suggestion_prefix) :])
+                    # The first diagnostic retains its compatibility payload;
+                    # further independent violations follow on separate lines.
+                    candidate = json.loads(message[len(suggestion_prefix) :].split("\n", 1)[0])
                 except json.JSONDecodeError:
                     candidate = None
                 if isinstance(candidate, str):
@@ -64,7 +66,7 @@ def _raise_rejection(exc: EffectRuntimeRejected) -> NoReturn:
                 suggestion=suggestion,
                 message=message,
             ) from None
-    raise ValueError(str(exc)) from None
+    raise ValueError(message) from None
 
 
 def prepare_vision_refresh(

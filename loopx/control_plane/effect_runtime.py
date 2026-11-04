@@ -173,12 +173,14 @@ class EffectRuntimeRejected(EffectRuntimeRemoteError):
         message: str,
         *,
         diagnostic_code: str = "invalid_request",
+        details: tuple[str, ...] = (),
     ) -> None:
         super().__init__(
             message,
             error_kind="request_rejected",
             diagnostic_code=diagnostic_code,
         )
+        self.details = details
 
 
 class EffectRuntimeConflict(EffectRuntimeRemoteError):
@@ -1211,7 +1213,14 @@ def _remote_runtime_error(value: object) -> EffectRuntimeRemoteError:
     )
     rendered = rendered[:240] or "TypeScript Effect runtime request failed"
     if kind == "request_rejected":
-        return EffectRuntimeRejected(rendered, diagnostic_code=code)
+        details = value.get("details", [])
+        if (not isinstance(details, list) or len(details) > 128
+                or any(not isinstance(detail, str) or len(detail) > 240 for detail in details)):
+            return EffectRuntimeInternalError(
+                "TypeScript Effect runtime returned invalid request validation details",
+                diagnostic_code="invalid_error_envelope",
+            )
+        return EffectRuntimeRejected(rendered, diagnostic_code=code, details=tuple(details))
     if kind == "conflict":
         return EffectRuntimeConflict(rendered, diagnostic_code=code)
     if kind == "io_transient":
