@@ -463,3 +463,25 @@ test("status compaction fallback enumerates composed titles, identities, referen
     assert.match(String(edge.edge_id), /^edge_[a-z0-9_]+$/);
   }
 });
+
+test("status accepts lower-case agent identities derived from approved source facts", () => {
+  const values = {
+    "synthetic-goal": {"120": "synthetic-goal", "80": "synthetic-goal"},
+    "todo_root": {"120": "todo_root"}, "Review todo_root": {"160": "Review todo_root"},
+    "open": {"80": "open"}, "todo_done:todo_parent": {"240": "todo_done:todo_parent"},
+    "todo_parent": {"120": "todo_parent"}, "Review todo_parent": {"160": "Review todo_parent"},
+    "done": {"80": "done"}, "Builder": {"80": "Builder"}, "Reviewer": {"80": "Reviewer"},
+  };
+  const result = projectStatusTaskGraph({
+    schema_version: STATUS_TASK_GRAPH_REQUEST, goal_id: "synthetic-goal",
+    summaries: {agent: {items: [
+      statusTodo("todo_root", {resume_when: "todo_done:todo_parent"}),
+      statusTodo("todo_parent", {status: "done", done: true, successor_todo_ids: ["todo_root"],
+        handoff_note: {from_agent: "builder", to_agent: "reviewer", status: "done"}}),
+    ]}, user: {}},
+    max_status_todos_per_role: 8, latest_runs: [], public_texts: values,
+    fallback_time: "2026-11-02T12:00:00Z",
+  });
+  assert.equal(statusNodes(result).find(node => node.kind === "handoff")?.title,
+    "Handoff from builder to reviewer");
+});

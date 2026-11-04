@@ -434,6 +434,7 @@ function publicTextCodec(request: JsonObject): {
 } {
   const texts = requireJsonObject(request.public_texts, "public text codecs");
   const composedTexts = new Set<string>();
+  const foldedTexts = new Set<string>();
   const composed = (value: string, parts: unknown[] = []): string => {
     for (const part of parts) {
       const text = String(part);
@@ -448,6 +449,10 @@ function publicTextCodec(request: JsonObject): {
       if (typeof text === "string") composed(text);
     }
   }
+  for (const source of Object.keys(texts)) {
+    const folded = source.toLowerCase();
+    if (folded !== source) foldedTexts.add(folded);
+  }
   const safe: PublicText = (value, limit) => {
     if (!truthy(value)) return null;
     const text = String(value);
@@ -459,6 +464,13 @@ function publicTextCodec(request: JsonObject): {
       }
       if (result) composed(result);
       return result as string | null;
+    }
+    // Agent identities are normalized case-insensitively by the existing
+    // handoff owner. The lower-case form is still derived from an approved
+    // source fact; accept it only without inventing or recompacting text.
+    if (foldedTexts.has(text) && Array.from(text).length <= limit) {
+      composed(text);
+      return text;
     }
     if (!composedTexts.has(text)) {
       throw new EffectRuntimeRequestError(`Missing public text facts for display cap ${limit}`);

@@ -147,3 +147,22 @@ def test_empty_display_text_does_not_steal_selection(monkeypatch):
     output = status.build_task_graph_projection({"goal_id": "graph-fixture", "agent_todos": {
         "items": [todo("todo_empty", text="  "), todo("todo_visible")]}}, goal={"id": "graph-fixture"})
     assert output["nodes"][0]["refs"] == {"todo_ids": ["todo_visible"]}
+
+
+def test_large_status_note_uses_the_existing_snapshot_transport(monkeypatch):
+    arguments = deepcopy(cases()["handoff_evidence"])
+    parent = arguments["item"]["agent_todos"]["items"][1]
+    parent.pop("evidence", None)
+    parent["note"] = "Public note " + "x" * 4_300_016
+    calls = []
+    real = task_graph.effect_runtime_result
+
+    def observe(method, params, **kwargs):
+        calls.append((method, kwargs.get("large_local_snapshot", False)))
+        return real(method, params, **kwargs)
+
+    monkeypatch.setattr(task_graph, "effect_runtime_result", observe)
+    monkeypatch.setattr(task_graph, "now_utc_iso", lambda: NOW)
+    output = status.build_task_graph_projection(**arguments)
+    assert output["nodes"]
+    assert calls == [("work_item.task_graph.status", True)]
